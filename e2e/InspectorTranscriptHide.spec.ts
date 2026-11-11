@@ -35,12 +35,19 @@ async function scrollHalfway(scroller: Locator): Promise<number> {
 
 /**
  * Wheel up over the transcript until the reader is clear of the end, as a
- * reader keeps scrolling. WebKit animates a wheel scroll, and an offset
- * correction in the same frames cancels the animation: in the fanout
- * scenario the list's height shrinks as it starts to move, the browser clamps
- * the offset, and the first tick left the reader at the end (4 of 4 WebKit
- * runs in the Playwright image; most of CI's Mobile shell (webkit) runs on
- * pull requests). The next tick scrolls normally.
+ * reader keeps scrolling.
+ *
+ * WebKit can swallow the first tick from the end: the list's height shrinks
+ * as the wheel animation starts, the browser clamps the offset, and the clamp
+ * cancels the animation, leaving the reader at the end (fanout: 4 of 4 WebKit
+ * runs in the Playwright image, failing most of CI's Mobile shell (webkit)
+ * runs on pull requests; the building scenario: 1 of 68). A Safari reader
+ * loses that tick too, so it is a product defect, not test timing. It is
+ * tracked in to-do 7766
+ * (docs/todo/transcripts-and-observation/7766-webkit-first-wheel-tick-swallowed-at-end.md),
+ * which also records why the retry covers every view: a single-tick
+ * assertion on the views that usually keep it would fail CI intermittently.
+ * When 7766 is fixed, replace the retry with one tick and assert it.
  */
 async function wheelUpFromEnd(page: Page, bottomGap: () => Promise<number>): Promise<void> {
   await expect(async () => {

@@ -15,10 +15,14 @@ OpenCode and Grok steer in
 worker-surface follow-ups (root changes on other nodes, adopting feature
 plans) in
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md);
-live qualification of the gap tools (`resolve_conflicts`, PR wakes,
-`stop_worker_turn`, `get_worker_changes`, `fork_worker`, schedule edits,
-worker slash commands, `answer_worker_question`) in
-[1021-coordinator-gap-tools-follow-ups.md](../todo/coordinator-and-multi-review/1021-coordinator-gap-tools-follow-ups.md).
+the gap tools (`resolve_conflicts`, PR wakes, `stop_worker_turn`,
+`get_worker_changes`, `fork_worker`, schedule edits, worker slash commands,
+`answer_worker_question`) pass the live suite's `gap-tools` case on a fake
+model, on this node and through a leaf
+([agent-testing.md](../development/agent-testing.md#coordinator-gap-tools-on-this-node-and-a-leaf-fake-model)),
+and their real-provider, GitHub and answer-relay runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(1021 (retired)).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -3134,7 +3138,12 @@ rollup (passing, failing, running, neutral/skipped, none), merge conflicts and r
 sends nothing; an unknown mergeability keeps the last known conflict state.
 The first known conflict state is silent. Every later change sends one notice naming what changed. A merge or close
 is reported once and ends the watch; a pull request already
-settled at its first reading ends silently. *Finished work only* (`off`)
+settled at its first reading ends silently. A closed pull request that is
+later reopened is therefore not reported: ending the watch keeps the sweep's
+reads bounded, and a coordinator that needs to know starts a new watch
+(`get_environment` shows the pull request open again). This was decided on
+2026-11-01 (to-do 1021 (retired) task 6); revisit it only if a coordinator
+workflow is seen to lose a reopened pull request. *Finished work only* (`off`)
 records changes without notices, and with no main conversation open the change
 is recorded without a notice, as for other status notices. Disabled messaging also records changes quietly.
 **Deleted pull requests.** A 404 alone cannot tell a deleted pull request
@@ -3572,7 +3581,11 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 `docker exec` in a running container): the patch applies whole or not at
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
-The coordinator never sees the patch.
+The coordinator never sees the patch. `mise run test:agent:coordinator:surfaces-fake`
+runs a reject and two approvals (a local and a container worker) end to end
+in the browser client on a loopback fake model, together with
+`open_worker_browser` on the container worker
+([agent-testing.md](../development/agent-testing.md#coordinator-worker-surfaces-fake-model)).
 
 **Answering a worker's question.** A delegated worker waiting on a question
 needs a person, and the coordinator cannot answer for them, but it can save

@@ -40,7 +40,7 @@ import type {
   ProviderTabMail,
   ProviderWorkerMail,
 } from "./agent-provider-contract.js";
-import type { OpenCodeSilenceClock } from "./opencode-observation-stream.js";
+import type { OpenCodeSilenceClock } from "./opencode-stream-silence.js";
 import { abortableSleep } from "./abortable-timing.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";

@@ -1017,7 +1017,18 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 `<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
-(the profile setup is in the spec's header), and
+(the profile setup is in the spec's header).
+`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
+OpenCode 2: it turns the profile's preview setting on for the run and back off
+afterwards, and adds a `steer` case (a prompt queued from the composer while a
+turn runs is steered into it from its queue strip, then checked again after a
+reload) that every other platform records as skipped. `mise run
+verify:opencode2:real-stack` runs exactly that against the running profile
+named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
+`no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
+overrides the list). Start the profile with `--fixture --no-agent-credentials
+--agent-platforms opencode --headless`.
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
 container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
@@ -1693,6 +1704,27 @@ A spec that restarts a profile builds the launcher's arguments with
 `devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
+
+### Loopback plan-usage origin
+
+A spec that scripts Claude or Codex account usage on a separate-process
+profile (to-do 7542 (retired), task 1) starts the profile with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN=http://127.0.0.1:<port>`. The launcher
+passes it to the isolated backend, which then reads `/api/oauth/usage`
+(Claude) and `/backend-api/codex/usage` (Codex) from that origin instead of
+the providers' hosts, so fixture tokens never leave the machine. The backend
+honours it only with flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`,
+a non-default data directory and a bare loopback origin
+(`agentTestUsageOrigin` in `apps/backend/src/core/agent-test-fixtures.ts`);
+anything else reads the real endpoints.
+
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`, under the same gate
+(`agentTestAnthropicOrigin`), starts every Claude bridge of the isolated
+backend with `ANTHROPIC_BASE_URL` set to that loopback origin and the CLI's
+nonessential traffic off. A coordinator's Claude needs it: its private
+configuration directory never holds the profile's `settings.json`, so
+pointing that file at a fake model reaches every Claude session except the
+coordinator's.
 
 ### Multi-client, restarts and an older backend (fake model)
 
@@ -2522,7 +2554,56 @@ ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE=<leaf>
 ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
 --config e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts`.
 It attaches the leaf, adds projects and changes both profiles' messaging and
-Pi settings, so reset both afterwards.
+Pi settings, so reset both afterwards. The link setup it shares with the
+notice suite below is in `coordinator-two-node-support.ts`.
+
+### Coordinator usage-limit notices between two profiles (fixture accounts)
+
+`mise run test:agent:coordinator:notice-live` runs the coordinator notice
+hierarchy's live checks (to-do 7542 (retired), tasks 2 to 4) on two real
+backends with no login and nothing billed. The runner
+(`apps/desktop/scripts/test-agent-coordinator-notice-live.ts`) first starts
+`e2e/agent-testing/coordinator-notice-fake-model.ts` on loopback, then two
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms claude,pi` profiles with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` and
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN` naming it (see
+[Loopback plan-usage origin](#loopback-plan-usage-origin)) and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-notice-live.spec.ts` with
+`suiteRestartsProfiles` (the spec stops and starts both profiles itself),
+then stops and resets both and stops the provider.
+
+The spec writes, inside each profile only: Claude `settings.json` in
+`agent-credentials/claude/` (every account directory links it), which sends
+the pinned CLI's model calls to the provider and its other HTTPS traffic to
+a closed loopback proxy; fixture Claude accounts in `agent-accounts/claude/`
+with their registry (`backend-store.ts`); and, on the leaf, Pi's
+`models.json` for the leaf's Pi main coordinator. The provider
+(`coordinator-notice-fake-model-script.ts`) refuses a call that carries a
+run marker on a limited login with the API's plan-limit error, answers
+everything else with one line, scripts Pi's `launch_environment`, and
+answers usage reads per fixture token. Then:
+
+- **Task 2.** A leaf native tab, a delegated worker (launched by the leaf's
+  Pi coordinator) and a build pipeline on one limited account; the provider
+  parks their refusals until all three have asked. The command node's Claude
+  coordinator must be woken once with one notice listing one of each, and
+  the leaf's coordinator must get none.
+- **Task 3.** The command node's coordinator on its own entry of the leaf
+  tab's limited login, automatic switching on, a second account with
+  headroom. The command node must move there, unpinned, before the wake, and
+  no call may run on the limited login.
+- **Task 4.** The command node is stopped, a leaf tab stops on a third
+  limited login, the leaf profile is stopped and started, then the command
+  node is started. Its coordinator must be woken exactly once with that stop.
+
+The provider keeps counts and facts only (accounts, markers, session kinds
+each notice lists), never a prompt or token. A pass proves routing,
+grouping, the move and the outbox across restarts on real backends, not a
+real provider's refusal wording (the manual-test checklist holds that) or a
+link between two machines. The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-notice-live/summary.json`.
 
 ### Coordinator gap tools on this node and a leaf (fake model)
 

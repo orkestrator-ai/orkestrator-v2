@@ -1,5 +1,6 @@
 /**
- * Trial values for this client's data-saving preference (todo 0052). They are
+ * Trial values for this client's data-saving preference (to-do 0052, retired;
+ * measured in docs/development/remote-bandwidth.md). They are
  * experiment values, kept together so a measured change edits one place. Each
  * applies only while the preference is on and only to this client's reads;
  * invalidations, explicit refreshes, resume and reconnect still read at once.

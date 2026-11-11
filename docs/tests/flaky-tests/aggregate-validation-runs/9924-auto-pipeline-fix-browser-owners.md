@@ -303,3 +303,19 @@ The subsequent merge retained main’s claim 9920 and moved this case to 9924,
 the next number after the highest file and claim in use. Both sets of
 streaming-find observations were retained in case 0767 and its index.
 Earlier validation commands and historical IDs above remain unchanged.
+
+## WebKit-scroll review round 2 recurrence — 2026-11-11
+
+Branch `webkit-scroll-fix-d230c4f38350-r1`, base
+`498b68766f5c9f357a3a86782406d1e9e0977559`, head `7fac685f4` (a scroll-hook
+change for callers that pass `viewKey`; the coordinator-actions fixture does
+not use the hook). `ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name browser-rerun -- mise run test:browser`,
+at host load average about 30, failed `e2e/CoordinatorActions.spec.ts:368`
+on desktop: `page.goto` of a second page in the same context exceeded the
+30 s test timeout (line 383). The suite was stopped by the 30-minute group
+deadline at 1849 of 1852 cases. The complete owner alone at the same load
+failed the same case on mobile the same way (33 passed, 1 failed, 114.6 s);
+a second complete owner run, at load about 22 to 28, passed (exit 0, 54.4 s):
+`ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name owner-CoordinatorActions-2 -- bunx playwright test --config e2e/playwright.config.ts e2e/CoordinatorActions.spec.ts --retries=0`.
+Intermittent under load; the cause is not established. No assertion or
+timeout changed.

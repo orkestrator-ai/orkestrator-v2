@@ -1,7 +1,7 @@
 # Checkout template copy races Git's background maintenance lock
 
 - **ID:** 9936
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-10
 - **Base:** `53340356c51e6bdb6f86cb6d806575218bbbc6bd`.
 - **Observed head:** the uncommitted dead-code removal branch
@@ -86,6 +86,34 @@ appears and disappears) before changing the fixture.
 
 The fix proposed under Hypothesis still applies; it was not attempted here.
 
+## Recurrence — 2026-11-11 (SQLite activity metrics branch)
+
+- **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; head `9530616a0` on
+  branch `sqlite-storage-tuning-d0d420a0c5e2-r1`, which changes only storage
+  instrumentation, the deletion scrub, diagnostics types and docs, not the
+  fixture or the failing tests. `mise run flaky:recurrence -- 9936 --base
+  498b68766` answered `open`.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+  default-tests-skip-guards -- mise run test` (macOS, 18 CPUs, load average
+  about 34–39, git 2.56.0). Backend group: 18334 pass, 7 fail.
+- **Failing tests with `ENOENT … lstat '<tmp>/ork-checkout-template-XXXXXX/.git/objects/maintenance.lock'`:**
+  - `production coordinator and leaf RPC share the raw/turn activity probe and exact session lookup` (`worker-session-activity.test.ts`, 1111 ms)
+  - `real scoped credentials prompt and launch jobs in leaf-only environments with durable delegations` (`control-mcp-node-auth.test.ts`, 272 ms)
+  - `a command node's coordinator sending to a leaf > an agent tab there can open the image from the path its own node wrote` (`coordinator-mail-attachments-nodes.test.ts`, 364 ms)
+  - `coordinator deliverNow > a busy native worker gets the message steered into its running turn` (`coordinator-deliver-now.test.ts`, 522 ms)
+- **Reruns:** the runner's one-file reruns passed `worker-session-activity`,
+  `control-mcp-node-auth` and `coordinator-mail-attachments-nodes`.
+  `coordinator-deliver-now` failed its runner rerun with the same
+  `maintenance.lock` error inside `MailWorld.create()` (28 pass, 1 fail),
+  then passed alone twice: `mise run test:logged -- --name
+  deliver-now-rerun-N -- mise exec -- bun --cwd=apps/backend test --preload
+  ../../tests/setup-node.ts src/core/coordinator-deliver-now.test.ts
+  --parallel=1` (11.9 s each). Failing alone under load fits the hypothesis
+  (the race is with Git's detached maintenance, not with sibling test files).
+- **Evidence:** `orkestrator-test-run.tVTJUs/` under the host temporary
+  directory (`workspace-…-toolchain.log.gz`,
+  `rerun-apps-backend-src-core-coordinator-deliver-now-test-ts.log.gz`).
+
 ## Recurrence 2026-11-11 (coordinator tab-group review repairs)
 
 - **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; `mise run flaky:recurrence -- 9936 --base 498b68766…` answered `open`.
@@ -108,3 +136,46 @@ The fix proposed under Hypothesis still applies; it was not attempted here.
   each of the other three alone with `--parallel=1` passed (1.5 s, 4.8 s,
   2.1 s). So two loaded files are
   enough to hit it, which fits the hypothesis above.
+
+## Recurrence and resolution (2026-11-11)
+
+Observed again on branch `webkit-scroll-fix-d230c4f38350-r1` (base
+`498b68766f5c9f357a3a86782406d1e9e0977559`, which does not touch the fixture),
+in `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+on macOS while two other worktrees ran their own aggregate suites. Five backend
+tests failed with the same `maintenance.lock` ENOENT:
+`a nonzero hold survives sweeps and expires at its bound`
+(`coordinator-background-work.test.ts`), `real scoped credentials prompt and
+launch jobs …` (`control-mcp-node-auth.test.ts`), `approved create-project
+maps choices …` (`nodes/node-coordination-project-copy.test.ts`),
+`answer-worker-question approval > approving unchanged …`
+(`nodes/node-worker-answer.test.ts`) and `a remote stop runs on the node …`
+(`coordinator-worker-turns-remote.test.ts`). The runner's solo reruns hit the
+group deadline before giving a verdict.
+
+**Reproduced** before the fix: those five files run on their own
+(`bun --cwd=apps/backend test <five files> --parallel=2`) failed once with the
+same ENOENT (30 pass, 1 fail), so the race does not need the aggregate suite.
+
+**Root cause:** the hypothesis above. The template's `git commit` starts
+detached auto-maintenance, which creates and removes
+`.git/objects/maintenance.lock` while `fs.cp` lists and copies the directory.
+
+**Fix:** `committedCheckoutTemplate` sets `maintenance.auto=false` and
+`gc.auto=0` in the template before committing; copies inherit the config.
+
+**Verification:** after the fix, those five files plus the four other owners
+named above (`coordinator-mail-attachments`, `coordinator-node-tickets`,
+`node-coordination-agents-md`, `coordinator-status-wakes-graph`) passed in
+five consecutive runs with `--parallel=4`. None of them logged a `maintenance.lock` error.
+
+**Second template (same day).** The next `mise run test` on the same branch
+failed `fingerprints content changes even when HEAD and dirty paths stay the
+same (bun)` in `apps/backend/src/core/review-worktree-fingerprint.test.ts`
+with the same ENOENT, from that file's own template
+(`ork-review-fingerprint-template-*`, built with `git commit` and copied with
+`fs.cp`); the aggregate runner's rerun of the unchanged file passed alone in
+7.5 s. That template now sets the same two keys before committing, and the
+file passed three consecutive solo runs afterwards.
+`environment-move.test.ts` also commits in a template it then copies with
+`fs.cp`; it has not been observed failing this way and was not changed.

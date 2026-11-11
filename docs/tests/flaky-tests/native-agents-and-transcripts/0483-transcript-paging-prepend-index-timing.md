@@ -115,3 +115,7 @@ original tool position` case kept prepend index 1 at
 skipped, one failed in 6.3 m. It was not among the failures of the preparation's
 nine-worker browser suite, which passed it. Root cause remains unconfirmed.
 Status stays open. No assertion, timeout or skip changed.
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Branch `transcript-history-efficiency-60750035e24d-r1` (base `498b68766f5c`, validated at `b0dc43135`): this case failed in the completed rerun of `mise run test:logged -- --name browser -- mise run test:browser` (11 failed, 1,681 passed; full list in [0382](../web-ui/0382-component-browser-parallel-load.md)). The branch changes `TranscriptScrollController.holdPlaceAcrossReflow`, which this owner runs. The complete ToolGroupFold, TranscriptPaging and MailTiles owners then passed together with one worker, with that change in place (exit 0, 337.3 s). `mise run flaky:recurrence -- 0483 --base 498b68766f5c` reported a recurrence. Status stays open. No assertion, timeout or skip changed.

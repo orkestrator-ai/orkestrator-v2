@@ -202,7 +202,8 @@ read that sees a change outside the coordinator (an announced revision, a
 checkpoint, a mutation) calls `noteActivity()` to restore its base cadence.
 Variants today: C01 running/blocked/cancelling/recovering 1 s; C02 quiet
 backoff through 10, 15 and 30 s on a watched worktree, 10 s otherwise; C05
-quiet backoff through 8, 15 and 30 s. These are trial values (todo 0052).
+quiet backoff through 8, 15 and 30 s. These are trial values, measured live in
+[remote-bandwidth.md](../development/remote-bandwidth.md#data-saving-in-real-browsers-2026-11-11).
 
 ### Rollback switches
 
@@ -253,7 +254,7 @@ the running attempt.
 | B16 | `multi-review-tick`, `multi-review-lease-renewal` | `multi-review-service.ts` | Keyed per-workflow 1 s passes, 30 s discovery. Controller lease 15 s, renewed every 5 s (critical). The keyed driver is the only one: the legacy 1 s whole-store tick was removed on 2026-10-25, and the rollback `WorkflowDueScheduler` (the same per-workflow due times with a 15 s reconciliation scan) on 2026-11-10 (todo 0048 task 13). |
 | B17 | `feature-planning-tick` | `feature-planning.ts` | Keyed per-record 1 s passes, 30 s discovery. A pass reads its plan as one row (`getFeaturePlan`), not the whole feature-plan store. |
 | B18 | `tmux-poll` | `tmux-poll.ts` | One `docker exec` per read, change-only writes. On `claude-state-signal` images the hooks ring the backend, which reads on each ring plus a 30 s safety read (2 reads a minute idle); a change the safety read finds unannounced returns the container to 1 s. A container where terminal Claude never ran (no state file) also costs 2 reads a minute. Older images, and containers whose doorbell has not rung, keep the 1 s poll, which dominates their idle cost; recurring diagnostics count them (`signals`). See [container-lifecycle.md](container-lifecycle.md#claude-terminal-state-signal-claude-state-signal3). |
-| B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. |
+| B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. A capture is one `tmux capture-pane`, or one `docker exec` in a container (about 60 to 70 ms of CPU on Linux, 2026-11-11). The loop stops only on an explicit detach, the environment's tmux cleanup or shutdown, so a terminal whose client reloaded or vanished keeps capturing ([to-do 7745](../todo/transcripts-and-observation/7745-tmux-interactive-capture-orphans.md)). |
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
 | B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
 | B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. Once a connection has sent `server.heartbeat` (every 10 s from `opencode serve` 1.19.5), 35 s with no frame (`OPENCODE_EVENT_STREAM_SILENCE_MS`, `OpenCodeStreamSilenceWatchdog`) aborts it onto the same loss path and logs `monitor.silent`; an OpenCode that never sends the heartbeat gets no deadline, since it is legitimately silent while idle. Heartbeats count as liveness, not drift. The 2.x provider reads a different stream and has no watchdog yet (to-do 7559). |
@@ -373,7 +374,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | Recovery after a deliberately missed hint | Safety scans and discovery passes | Unchanged or better | Required before reducing any polling |
 
 With data saving on, the client accepts slower backstops for what it shows
-(todo 0052): approval and question visibility (≤ 2 s) and turn completion
+([remote-bandwidth.md](../development/remote-bandwidth.md)): approval and question visibility (≤ 2 s) and turn completion
 (≤ 3 s) keep their budgets, because both arrive through observation
 invalidations that read at once and the responsive backstop is 1 s. The Files
 panel accepts ≤ 2 s after an announced revision on a watched worktree and

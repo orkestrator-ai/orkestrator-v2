@@ -143,6 +143,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",
+  // The gateway compression mode (`off`, `body`, `on`), so an isolated profile
+  // can measure the rollback against the default
+  // (docs/development/remote-bandwidth.md). A
+  // mode switch, never a credential.
+  "ORKESTRATOR_GATEWAY_COMPRESSION",
   // `off` skips the startup container-to-host probe, as other disposable test
   // backends do: each spec run is a new data directory, so its probe network
   // would belong to an owner no reaper revisits, and its result dialog takes

@@ -80,6 +80,17 @@ function sameExecution(a: PublicExecutionState | undefined, b: PublicExecutionSt
   );
 }
 
+const TURN_ENDED_WITHOUT_OUTCOME = "The turn ended but its outcome was not recorded";
+
+/** Whether an observation said the run's turn had ended, whatever its outcome. */
+function executionEnded(execution: PublicExecutionState | undefined): boolean {
+  if (!execution) return false;
+  return (
+    execution.state === "unsupported" ||
+    (execution.state === "unknown" && execution.reason === TURN_ENDED_WITHOUT_OUTCOME)
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -426,6 +437,13 @@ async function evaluateRun(
   // Steering input for the running turn also joins the journal, so a later
   // ID while the session is busy does not prove this turn ended.
   const ended = activity === "idle" || (laterTurn && activity === "unknown") || rolledOver;
+  // A run already seen to end stays ended once a later turn is in the
+  // journal: that turn keeping the session busy is not this one running
+  // again. Without this, every ended run whose outcome had aged out of the
+  // session's bounded outcome list went back to `running` with each later
+  // turn and to `unknown` when it finished, a record write each way for
+  // every such run (to-do 7562).
+  if (!ended && laterTurn && executionEnded(record.execution)) return null;
   if (!ended) {
     return settle({ state: activity === "working" || laterTurn ? "running" : "pending" }, accepted);
   }
@@ -486,7 +504,7 @@ async function evaluateRun(
       {
         state: "unknown",
         evidence: "none",
-        reason: "The turn ended but its outcome was not recorded",
+        reason: TURN_ENDED_WITHOUT_OUTCOME,
       },
       { state: "unknown", ...accepted },
     );

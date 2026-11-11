@@ -649,7 +649,11 @@ record (with one provider status read when the turn has visibly ended,
 coalesced across concurrent waiters). An idle environment, another tab's
 completion, a dropped client or the agent's wording are never evidence. A
 later steering input does not end a turn while the session is busy. Missing
-evidence stays `unknown`. A provider whose status reads idle after a failed
+evidence stays `unknown`. A run once observed to have ended (`unknown` because
+its outcome was not recorded, or `unsupported`) stays ended while a later turn
+keeps the session busy: that turn is not this run running again, and
+re-observing it writes nothing (to-do 7562 found every such run flipping to
+`running` and back with each later turn, one record write each way). A provider whose status reads idle after a failed
 turn (OpenCode keeps the error on the request's last assistant message) is
 asked for that request's terminal error before an idle turn counts as
 completed; an unreadable answer is retried, never settled as success. A turn

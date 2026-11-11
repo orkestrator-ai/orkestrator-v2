@@ -413,6 +413,49 @@ describe("session.prompt", () => {
     expect((await receipt(harness, started.result.runId)).state).toBe("succeeded");
   });
 
+  test("a run seen to end without an outcome stays ended while a later turn runs", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "ended-0");
+    const { tabId, sessionId } = started.result;
+    const providerSession = stub.sends[0]!.sessionId;
+    stub.setStatus(async () => "idle");
+    setActivity(service, "claude", tabId, providerSession, "idle");
+    expect((await receipt(harness, started.result.runId)).state).toBe("succeeded");
+    const prompt = async (requestId: string) => {
+      const response = await harness.call<{ runId: string }>(
+        "session.prompt",
+        { sessionId, prompt: `prompt ${requestId}` },
+        { requestId },
+      );
+      if (!response.ok) throw new Error(`session.prompt failed: ${response.error.code}`);
+      return response.result.runId;
+    };
+
+    // The turn ends and nothing records how: the run is unknown, not running.
+    const runId = await prompt("ended-1");
+    stub.setStatus(async () => "missing");
+    setActivity(service, "claude", tabId, providerSession, "idle");
+    const ended = await receipt(harness, runId);
+    expect(ended.state).toBe("unknown");
+    expect(ended.execution).toMatchObject({ state: "unknown", evidence: "none" });
+
+    // A later turn keeps the session busy. The first run's turn is not
+    // running again, and observing it writes nothing (to-do 7562: every such
+    // run flipped to running and back with each later turn, a write each).
+    stub.setStatus(async () => "idle");
+    await prompt("ended-2");
+    setActivity(service, "claude", tabId, providerSession, "working");
+    const records = harness.storage.publicOperations;
+    const before = await records.getPublicOperation(runId);
+    const during = await receipt(harness, runId);
+    expect(during.state).toBe("unknown");
+    expect(during.execution?.state).toBe("unknown");
+    expect(await records.getPublicOperation(runId)).toEqual(before);
+    setActivity(service, "claude", tabId, providerSession, "idle");
+    expect((await receipt(harness, runId)).execution?.state).toBe("unknown");
+    expect(await records.getPublicOperation(runId)).toEqual(before);
+  });
+
   test("an unknown dispatch is parked, blocks other prompts, and retries under the same key", async () => {
     const { harness, service, stub } = await setup();
     const started = await startSession(harness, "amb-1");

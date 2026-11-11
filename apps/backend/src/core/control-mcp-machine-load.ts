@@ -5,6 +5,7 @@ import {
   type MachineUnavailableReason,
 } from "@orkestrator/protocol/machine-load";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { runWithTimeout, WorkTimeoutError } from "./abortable-timing.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
@@ -44,27 +45,28 @@ export async function readNodeMachineLoad(
   if (!node.available) {
     return unavailable("offline", `${node.name} is not connected, so its load is unknown.`);
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<MachineLoadView>((resolve) => {
-    timer = setTimeout(
-      () =>
-        resolve(
-          unavailable("timeout", `${node.name} did not report its load within ${timeoutMs} ms.`),
-        ),
-      timeoutMs,
-    );
-    (timer as { unref?: () => void }).unref?.();
-  });
-  const read = invoke<{ outcome?: string; result?: unknown }>("invoke_on_node", {
-    nodeId: node.nodeId,
-    command: MACHINE_LOAD_COMMAND,
-    args: {},
-  }).then(
+  // The deadline aborts the routed request, so the node sees its caller go
+  // away rather than answering a list that has already been returned.
+  return runWithTimeout(
+    (signal) =>
+      invoke<{ outcome?: string; result?: unknown }>(
+        "invoke_on_node",
+        { nodeId: node.nodeId, command: MACHINE_LOAD_COMMAND, args: {} },
+        { signal },
+      ),
+    { timeoutMs },
+  ).then(
     (routed) =>
       routed?.outcome === "ok"
         ? viewOf(routed.result)
         : unavailable("error", `The connection to ${node.name} was lost before it answered.`),
     (error: unknown) => {
+      if (error instanceof WorkTimeoutError) {
+        return unavailable(
+          "timeout",
+          `${node.name} did not report its load within ${timeoutMs} ms.`,
+        );
+      }
       if (incompatibility(error, MACHINE_LOAD_COMMAND)?.code === "unknown-command") {
         compatibilityPathUsage.record("machine-load.older-node");
         return unavailable(
@@ -79,5 +81,4 @@ export async function readNodeMachineLoad(
       return unavailable("error", `${node.name} could not report its load.`);
     },
   );
-  return Promise.race([read, timedOut]).finally(() => clearTimeout(timer));
 }

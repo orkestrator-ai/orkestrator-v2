@@ -559,7 +559,11 @@ describe("remote gateway", () => {
     expect(authenticated.json()).toEqual({
       result: { command: "get_projects", args: { projectId: "project-1" } },
     });
-    expect(backend.invoke).toHaveBeenCalledWith("get_projects", { projectId: "project-1" });
+    expect(backend.invoke).toHaveBeenCalledWith(
+      "get_projects",
+      { projectId: "project-1" },
+      { signal: expect.any(AbortSignal) },
+    );
 
     const badCommand = await requestUrl(`${info!.url}__orkestrator/invoke`, {
       method: "POST",

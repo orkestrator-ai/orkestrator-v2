@@ -23,7 +23,7 @@ any row's status.
 | Folder | backlog | blocked | requires user input | done | Total | Covers |
 | --- | --- | --- | --- | --- | --- | --- |
 | [Agent engines and provider SDKs](agent-engines/0000-index.md) | 11 | 10 | 0 | 0 | 21 | How native agent sessions run across providers: interactions and permissions, steer and interrupt, accounts and sign-in, model parameters, session lifecycle and history, and SDK surfaces not yet adopted. |
-| [Backend structure](backend-structure/0000-index.md) | 4 | 0 | 0 | 0 | 4 | Refactors of the backend's internal structure: storage repositories, the native agent service, runtime state ownership, domain folders and the Claude bridge prompt stream. |
+| [Backend structure](backend-structure/0000-index.md) | 3 | 1 | 0 | 0 | 4 | Refactors of the backend's internal structure: storage repositories, the native agent service, runtime state ownership, domain folders and the Claude bridge prompt stream. |
 | [CLI and slash commands](cli-and-slash-commands/0000-index.md) | 3 | 1 | 0 | 0 | 4 | The public `orkestrator` CLI and the slash-command catalogue: live qualification. |
 | [Containers and environments](containers-and-environments/0000-index.md) | 10 | 9 | 0 | 0 | 19 | Docker environment containers: platform qualification, rebuild state, network and credential isolation, resource budgets, state observation and cleanup. |
 | [Coordinator and Multi Review](coordinator-and-multi-review/0000-index.md) | 13 | 8 | 0 | 0 | 21 | The two multi-agent features: the Coordinator (read-only enforcement, async delegation, agent mail) and Multi Review (reviewer panels, consolidation, the flow graph). |

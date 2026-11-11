@@ -65,6 +65,8 @@ describe("list_nodes over Control MCP", () => {
   let sampler: MachineLoadSampler;
   let clock: number;
   const routedCommands: string[] = [];
+  /** The signal each routed call arrived with, through the coordinator's scoped invoker. */
+  const routedSignals: Array<AbortSignal | undefined> = [];
 
   /** Each fake node: its answer to `get_machine_load`, as a routed call would give it. */
   const answers = new Map<string, () => Promise<unknown>>();
@@ -73,6 +75,7 @@ describe("list_nodes over Control MCP", () => {
     dataDir = await mkdtemp(path.join(tmpdir(), "orkestrator-machine-load-"));
     clock = Date.UTC(2026, 9, 31, 12);
     routedCommands.length = 0;
+    routedSignals.length = 0;
     answers.clear();
     let busy = 0;
     sampler = new MachineLoadSampler({
@@ -103,7 +106,11 @@ describe("list_nodes over Control MCP", () => {
     const context = { machineLoad: sampler } as unknown as CommandContext;
     server = new ControlMcpServer(
       dataDir,
-      async <T>(command: string, args: Record<string, unknown> = {}) => {
+      async <T>(
+        command: string,
+        args: Record<string, unknown> = {},
+        options?: { signal?: AbortSignal },
+      ) => {
         switch (command) {
           case MACHINE_LOAD_COMMAND:
             return (await commands.get(command)!(args, context)) as T;
@@ -140,6 +147,7 @@ describe("list_nodes over Control MCP", () => {
           case "invoke_on_node": {
             const nodeId = String(args.nodeId);
             routedCommands.push(`${nodeId}:${String(args.command)}`);
+            routedSignals.push(options?.signal);
             const answer = answers.get(nodeId);
             if (!answer) throw new Error(`Unexpected node ${nodeId}`);
             return { outcome: "ok", result: await answer() } as T;
@@ -271,6 +279,17 @@ describe("list_nodes over Control MCP", () => {
     const perMachine = Buffer.byteLength(JSON.stringify(machineOf(listed, "bk_new")));
     expect(perMachine).toBeLessThan(600);
   });
+
+  test("each routed load read reaches the backend with its deadline's signal", async () => {
+    answerAllHealthy();
+    await listNodes();
+    expect(routedSignals).toHaveLength(3);
+    for (const signal of routedSignals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      // Answered in time, so none was aborted.
+      expect(signal!.aborted).toBe(false);
+    }
+  });
 });
 
 describe("list_nodes with a node that never answers", () => {
@@ -333,6 +352,34 @@ describe("reading one node's load", () => {
       reason: "timeout",
       detail: "Build box did not report its load within 5 ms.",
     });
+  });
+
+  test("the timeout aborts the routed request's signal", async () => {
+    let seen: { args: unknown; signal?: AbortSignal } | undefined;
+    const invoke = ((command: string, args: unknown, options?: { signal?: AbortSignal }) => {
+      expect(command).toBe("invoke_on_node");
+      seen = { args, ...(options?.signal ? { signal: options.signal } : {}) };
+      return new Promise(() => undefined);
+    }) as never;
+    const view = await readNodeMachineLoad(invoke, node, 5);
+    expect(view).toMatchObject({ status: "unavailable", reason: "timeout" });
+    expect(seen?.args).toEqual({ nodeId: "bk_leaf", command: MACHINE_LOAD_COMMAND, args: {} });
+    expect(seen?.signal?.aborted).toBe(true);
+  });
+
+  test("an answer in time leaves the signal unaborted", async () => {
+    let signal: AbortSignal | undefined;
+    const invoke = (async (
+      _command: string,
+      _args: unknown,
+      options?: { signal?: AbortSignal },
+    ) => {
+      signal = options?.signal;
+      return { outcome: "ok", result: { bogus: true } };
+    }) as never;
+    const view = await readNodeMachineLoad(invoke, node, 1_000);
+    expect(view).toMatchObject({ status: "unavailable", reason: "error" });
+    expect(signal?.aborted).toBe(false);
   });
 
   test("a rejection after the timeout is handled, not an unhandled rejection", async () => {

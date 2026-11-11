@@ -40,3 +40,55 @@ window by a loaded host) would satisfy `startsWith("ps ")` without the
 create listing owned ports. Reproduce it first (for example under
 `scripts/test-under-contention.ts`) and log which caller issued the `ps`
 before changing the test; do not loosen the assertion.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `da475cb5e`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9963 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes only `apps/backend` MCP
+evidence, provider-read and transcript-artifact code, their tests and docs;
+it does not touch this file or the container create path.
+
+- **Command:** `mise run test:logged -- --name address-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, host
+  load average about 60.
+- **Suite counts:** backend 18,578 passed and 3 failed (flakes 9963 and 9978);
+  web 14,572 passed and 7 failed (flake 9932); protocol, desktop, web-public,
+  toolchain, CLI, root, bridge and lockfile groups passed.
+- **Failure:** `host ports of a new container > a rootful create leaves automatic ports to Docker and adds no label`
+  (234.5 ms) failed at line 177, `expect(...some(entry => entry.startsWith("ps "))).toBe(false)`,
+  Received true: the same fake-Docker `ps ` entry as the first observation.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent before it
+  reached this file. A manual
+  `mise run test:logged -- --name rerun-backend-alone -- bun --cwd=apps/backend test ./src/core/coordinator-status-wakes-pr.test.ts ./tests/project-git-mirror-create.test.ts ./tests/container-rootless-host-ports-create.test.ts`
+  passed (19.4 s).
+
+Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `b307c086f`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9963 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes backend read cancellation
+(node routing, node link, provider reads, transcript artifacts) and does not
+touch this file or the container create path.
+
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, with
+  the shared host queueing behind other worktrees' runs.
+- **Suite counts:** backend 18,593 passed and 1 failed (this case); web 14,570
+  passed and 9 failed (flake 9932); desktop failed 2 cases in
+  `apps/desktop/tests/invoke-envelope-ipc.test.ts`, a real test expectation
+  this branch made stale and fixed in the same change; root, bridge and
+  lockfile groups passed.
+- **Failure:** `host ports of a new container > a rootful create leaves automatic ports to Docker and adds no label`
+  (190.2 ms) failed at line 177, Received true: the same fake-Docker `ps `
+  entry as before.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent before it
+  reached this file. A manual
+  `NODE_ENV=test mise run test:logged -- --name rootful-create-alone-test-env -- bun --cwd=apps/backend test ./tests/container-rootless-host-ports-create.test.ts`
+  passed (0.6 s).
+
+Status stays open; no assertion, timeout or skip changed.

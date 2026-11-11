@@ -31,7 +31,7 @@ import {
 import { CoordinatorPollTracker } from "./control-mcp-poll-guard.js";
 import { isRecord, type JsonRecord } from "./control-mcp-tool-support.js";
 import { DEFAULT_CONTROL_MCP_PORT } from "../fixed-ports.js";
-import type { ControlMcpInvoker } from "./control-shared-actions.js";
+import type { ControlMcpInvoker, InvokeOptions } from "./control-shared-actions.js";
 import {
   callToolInProcess,
   listToolsInProcess,
@@ -542,6 +542,7 @@ export class ControlMcpServer {
     const invoke: ControlMcpInvoker = async <T>(
       command: string,
       args: Record<string, unknown> = {},
+      options?: InvokeOptions,
     ) => {
       const projectId = typeof args.projectId === "string" ? args.projectId : undefined;
       if (projectId && projectId !== coordinatorScope.projectId) {
@@ -615,7 +616,7 @@ export class ControlMcpServer {
       // denied command cannot reach a leaf by being wrapped.
       if (command === "invoke_on_node" && denied.has(String(args.command ?? "")))
         throw new Error("Coordinator capability denied");
-      return this.invoke<T>(command, args);
+      return this.invoke<T>(command, args, options);
     };
     return { ok: true, invoke };
   }

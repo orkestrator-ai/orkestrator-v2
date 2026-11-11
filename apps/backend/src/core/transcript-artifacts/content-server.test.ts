@@ -199,6 +199,30 @@ describe("artifact content server", () => {
     ).rejects.toThrow();
   });
 
+  test("hands the load a live signal and answers 503 when the load fails", async () => {
+    const target = await start();
+    const signals: AbortSignal[] = [];
+    const capability = mint(target, {
+      load: async (signal) => {
+        signals.push(signal);
+        return BYTES;
+      },
+    });
+    expect((await get(capability.url)).status).toBe(200);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[0]?.aborted).toBe(false);
+
+    const failing = mint(target, {
+      load: async () => {
+        throw new Error("disk gone");
+      },
+    });
+    const failed = await get(failing.url);
+    expect(failed.status).toBe(503);
+    expect(failed.body).not.toContain("hi");
+  });
+
   test("re-checks authorization on every request and fails closed", async () => {
     const target = await start();
     let allowed = true;

@@ -47,6 +47,7 @@ import type { AddressInfo } from "node:net";
 
 import { INTERACTIVE_HTML_POLICY } from "@orkestrator/protocol/rich-content-policy";
 
+import { runWithTimeout } from "../abortable-timing.js";
 import { hostsShareSite } from "../host-site.js";
 import type { ArtifactContentServer } from "./contracts.js";
 import { sha256Hex } from "./dependency-manifest.js";
@@ -135,7 +136,8 @@ interface Capability {
   contentSecurityPolicy: string;
   /** Ancestors permitted to frame the shell (snapshotted at mint, like the document's). */
   shellFrameAncestors: readonly string[];
-  load: () => Promise<Uint8Array>;
+  /** `signal` aborts when the load's deadline fires; the read should stop then. */
+  load: (signal: AbortSignal) => Promise<Uint8Array>;
   authorize?: () => Promise<boolean>;
   expiresAt: number;
   generation: string;
@@ -315,7 +317,8 @@ export class LoopbackArtifactContentServer implements ArtifactContentServer {
     revision: number;
     preparedSha256: string;
     contentSecurityPolicy: string;
-    load: () => Promise<Uint8Array>;
+    /** Re-reads the prepared bytes; `signal` aborts at the load deadline. */
+    load: (signal: AbortSignal) => Promise<Uint8Array>;
     authorize?: () => Promise<boolean>;
     ttlMs?: number;
   }): { url: string; shellUrl: string; expiresAt: string; generation: string } {
@@ -438,7 +441,11 @@ export class LoopbackArtifactContentServer implements ArtifactContentServer {
     }
   }
 
-  /** True only for an explicit `true` within the bound; errors and timeouts deny. */
+  /**
+   * True only for an explicit `true` within the bound; errors and timeouts
+   * deny. The checks read in-process state and hold nothing to release, so
+   * the bound decides the answer rather than cancelling anything.
+   */
   private async authorized(entry: Capability): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -561,19 +568,15 @@ export class LoopbackArtifactContentServer implements ArtifactContentServer {
     const entry = await this.admit(capability, response);
     if (!entry) return;
     let bytes: Uint8Array;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      bytes = await Promise.race([
-        Promise.resolve().then(() => entry.load()),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error("load timeout")), LOAD_TIMEOUT_MS);
-        }),
-      ]);
+      // The deadline aborts the load's signal, so a slow read stops too.
+      bytes = await runWithTimeout((signal) => entry.load(signal), {
+        timeoutMs: LOAD_TIMEOUT_MS,
+        message: "load timeout",
+      });
     } catch {
       this.error(response, 503, "Unavailable");
       return;
-    } finally {
-      if (timer) clearTimeout(timer);
     }
     // Revoked while loading, or the stored bytes no longer match the capability.
     if (!this.capabilities.has(capability)) {

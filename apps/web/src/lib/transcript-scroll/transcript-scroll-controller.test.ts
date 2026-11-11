@@ -491,6 +491,39 @@ describe("transcript reading ownership", () => {
     expect(rect.top).toBe(200);
   });
 
+  test("a match box lost after its index navigation reissues it on the row's bound, then stops", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    // The row was not rendered when find began: the navigation went by index.
+    expect(view.controller.navigateTo({ kind: "row", index: 9, key: "k9" }, "find")).toBe(true);
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+    // The row mounted, find refined onto its match box, and the row left the
+    // rendered window again: the box no longer resolves.
+    view.controller.retarget(
+      "find",
+      {
+        kind: "rect",
+        rect: () => null,
+        row: { kind: "row", index: 9, key: "k9", align: "center" },
+      },
+      view.controller.generation,
+    );
+    // An index navigation was already issued, so the box waits a few frames
+    // before going back by index, exactly as a row target would.
+    for (let index = 0; index < 7; index += 1) frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+    frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(2);
+    expect(view.scrollToIndex.mock.calls[1]![0]).toMatchObject({ index: 9, align: "center" });
+    for (let index = 0; index < 8; index += 1) frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(3);
+    // The reissue bound holds: no more index navigations, and the budget ends it.
+    for (let index = 0; index < 40 && view.controller.currentOwner === "find"; index += 1) frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(3);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().lastOutcome).toBe("unresolved");
+  });
+
   test("a match box with no row to return to waits out its budget", () => {
     const frame = controlledFrames();
     const view = harness();

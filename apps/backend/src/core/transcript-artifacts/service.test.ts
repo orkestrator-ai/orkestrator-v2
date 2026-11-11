@@ -246,6 +246,47 @@ describe("artifact lifecycle per kind", () => {
     ).rejects.toMatchObject({ error: { code: "invalid_input" } });
   });
 
+  test("a failed write of the document text still verifies and publishes, without search-text (5780)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const text = "Only the stored text holds this";
+    h.runner.staticSearchText = text;
+    const textBytes = new TextEncoder().encode(text);
+    const store = h.service.store;
+    const writeAsset = store.writeAsset.bind(store);
+    let refused = 0;
+    store.writeAsset = async (environmentId, bytes) => {
+      if (
+        bytes.byteLength === textBytes.byteLength &&
+        bytes.every((byte, index) => byte === textBytes[index])
+      ) {
+        refused += 1;
+        throw new Error("disk full");
+      }
+      return writeAsset(environmentId, bytes);
+    };
+    try {
+      const { published, operation } = await createPreviewPublish("html-static");
+      expect(refused).toBe(1);
+      expect(operation.evidence.captures).toHaveLength(1);
+      const effective = await h.service.readRepresentation({
+        ...scope,
+        publicationId: published.publicationId,
+        representation: "effective-html",
+      });
+      expect(effective.representation).toBe("effective-html");
+      await expect(
+        h.service.readRepresentation({
+          ...scope,
+          publicationId: published.publicationId,
+          representation: "search-text",
+        }),
+      ).rejects.toMatchObject({ error: { code: "invalid_input" } });
+      expect(h.service.metrics.total("search_text_unstored")).toBe(1);
+    } finally {
+      store.writeAsset = writeAsset;
+    }
+  });
+
   test("interactive HTML records the prepared document, probes and a live session", async () => {
     const { published } = await createPreviewPublish("html-interactive");
     const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };

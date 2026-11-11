@@ -948,8 +948,9 @@ with the publication. After serializing the effective HTML, the preview worker r
 document) and returns it bounded to the 64 Ki limit; the runner refuses a longer
 one, and the backend keeps it as a UTF-8 asset referenced from the revision's
 `derived` row (`searchTexts`, keyed by the receipt's effective hash, kept by the
-collector) and serves it as the `search-text` representation. A failed read loses
-only the stored text, never the verification. The walk is a copy of the frame's,
+collector) and serves it as the `search-text` representation. A failed read, or a
+failed write of the text asset, loses only the stored text, never the verification
+(a failed write counts `search_text_unstored`). The walk is a copy of the frame's,
 not a shared function, because each is serialized into a page on its own;
 `static-html-document-text.test.ts` runs the design runtime's serializer, the copy
 and the real presentation runtime over the reference, hostile and edge-case
@@ -965,7 +966,13 @@ agree; a frame that reports first keeps its text. Each document is read at most
 once per Find session, two at a time and at most 64 per session; nothing is read
 until the reader searches, nothing is framed, and a read that crosses a clear of
 protected content (`artifactRequestEpoch`) or a newer session generation is
-discarded. The hosted client and the `staticPresentation` switch read nothing,
+discarded. A session records its generation when it starts
+(`noteArtifactScopeGeneration`), so a resumed conversation whose cards are all
+offscreen still accepts its own reads and fences the previous generation's. A card
+the reader switched to Saved preview or Source renders no body search root, so its
+document is not indexed (`cardsShowDocument` reads the occurrence's remembered view
+choice, checked when the document is offered and again before its text is stored):
+Find never counts a match it cannot highlight. The hosted client and the `staticPresentation` switch read nothing,
 because their cards never show the text. A publication verified before the text
 was stored, and an older backend, answer `invalid_input`; such a document counts
 once its card has shown it, as before. There is no backfill: one would launch a

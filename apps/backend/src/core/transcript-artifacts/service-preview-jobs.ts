@@ -289,7 +289,7 @@ export class ArtifactPreviewJobs {
         }
         const searchText =
           typeof result.searchText === "string" && result.searchText.length > 0
-            ? await store(new TextEncoder().encode(result.searchText), "text/plain")
+            ? await this.storeSearchText(store, result.searchText)
             : undefined;
         return {
           ok: true,
@@ -540,6 +540,23 @@ export class ArtifactPreviewJobs {
         : {}),
       assets: captures,
     };
+  }
+
+  /**
+   * Keep a static document's text for Find. It is optional: a failed write
+   * leaves the publication without `search-text` (its card's frame reports the
+   * text once shown) and never fails the verification it rides on.
+   */
+  private async storeSearchText(
+    store: (bytes: Uint8Array, mimeType: string) => Promise<ArtifactOutputRef>,
+    text: string,
+  ): Promise<ArtifactOutputRef | undefined> {
+    try {
+      return await store(new TextEncoder().encode(text), "text/plain");
+    } catch {
+      this.ctx.metrics.increment("search_text_unstored");
+      return undefined;
+    }
   }
 
   private countBlocked(blocked: Record<string, number>): void {

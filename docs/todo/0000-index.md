@@ -25,7 +25,7 @@ any row's status.
 | [Agent engines and provider SDKs](agent-engines/0000-index.md) | 14 | 9 | 0 | 0 | 23 | How native agent sessions run across providers: interactions and permissions, steer and interrupt, accounts and sign-in, model parameters, session lifecycle and history, and SDK surfaces not yet adopted. |
 | [Backend structure](backend-structure/0000-index.md) | 4 | 0 | 0 | 0 | 4 | Refactors of the backend's internal structure: storage repositories, the native agent service, runtime state ownership, domain folders and the Claude bridge prompt stream. |
 | [CLI and slash commands](cli-and-slash-commands/0000-index.md) | 4 | 0 | 0 | 0 | 4 | The public `orkestrator` CLI and the slash-command catalogue: missing features, catalogue cleanup and live qualification. |
-| [Containers and environments](containers-and-environments/0000-index.md) | 19 | 8 | 0 | 0 | 27 | Docker environment containers: platform qualification, rebuild state, network and credential isolation, resource budgets, state observation and cleanup. |
+| [Containers and environments](containers-and-environments/0000-index.md) | 12 | 9 | 0 | 0 | 21 | Docker environment containers: platform qualification, rebuild state, network and credential isolation, resource budgets, state observation and cleanup. |
 | [Coordinator and Multi Review](coordinator-and-multi-review/0000-index.md) | 26 | 4 | 0 | 0 | 30 | The two multi-agent features: the Coordinator (read-only enforcement, async delegation, agent mail) and Multi Review (reviewer panels, consolidation, the flow graph). |
 | [Cross-cutting](cross-cutting/0000-index.md) | 35 | 17 | 0 | 0 | 52 | Work that spans the product: CI and test health, live provider and platform qualification, mixed-version support, dependency upgrades, and remote host upgrades. |
 | [Design canvas](design-canvas/0000-index.md) | 3 | 0 | 0 | 0 | 3 | The design canvas and its agent tools: qualification evidence, operation recovery edges, design-to-agent conversation links and accessibility findings. |
@@ -33,4 +33,4 @@ any row's status.
 | [Service previews and web annotations](previews-and-annotations/0000-index.md) | 6 | 3 | 0 | 0 | 9 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |
 | [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 20 | 3 | 0 | 0 | 23 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
 | [Manual test](manual-test/0000-index.md) | 0 | 0 | 1 | 0 | 1 | One checklist of everything that needs you: manual tests and live checks first, then decisions, approvals and outward actions, each naming its source to-do and task. |
-| **Total** | 135 | 44 | 1 | 0 | 180 | |
+| **Total** | 128 | 45 | 1 | 0 | 174 | |

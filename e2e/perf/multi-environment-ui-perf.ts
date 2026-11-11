@@ -802,6 +802,7 @@ async function main(): Promise<void> {
         }
       }
       await sleep(options.settleSeconds * 1000);
+      await clearDialogs();
       const start = hostSample();
       const probeContainerCpuPercent = containerCpu(busyContainers);
 

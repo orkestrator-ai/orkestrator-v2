@@ -245,6 +245,84 @@ exit 0
     );
   });
 
+  test("a daemon that stops answering is waited out, not read as an exited container", async () => {
+    // The first two probes find no daemon at all (a daemon restart); then it
+    // answers again and the same container's boot is ready (live-restore).
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+count_file="$FAKE_DOCKER_LOG.count"
+count=$(cat "$count_file" 2>/dev/null || echo 0)
+if [ "$1" = exec ]; then
+  count=$((count + 1))
+  echo "$count" > "$count_file"
+fi
+if [ "$count" -le 2 ]; then
+  printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\\n' >&2
+  exit 1
+fi
+[ "$1" = exec ] && printf '%s\\n5000\\n' '${record({})}'
+exit 0
+`,
+      async (log) => {
+        expect(await waitForContainerBoot("container-1", { pollMs: 1 })).toBe(
+          "0b0b0b0b-1111-2222-3333-444444444444",
+        );
+        const calls = await log.read();
+        expect(calls).toContain("inspect");
+        expect(calls).not.toContain("cp container-1");
+      },
+    );
+    // A daemon that never comes back within the budget times out, as any
+    // unfinished boot does; it is never reported as the container exiting.
+    await withDockerScript(
+      `#!/bin/sh
+printf 'failed to connect to the docker API at unix:///var/run/docker.sock: dial unix /var/run/docker.sock: connect: no such file or directory\\n' >&2
+exit 1
+`,
+      async () => {
+        const failure = await waitForContainerBoot("container-1", {
+          pollMs: 1,
+          timeoutMs: 50,
+        }).catch((e) => e);
+        expect(failure).toBeInstanceOf(ContainerInitializationError);
+        expect((failure as ContainerInitializationError).reason).toBe("timed-out");
+      },
+    );
+  });
+
+  test("a docker inspect that times out is waited out, not read as an exited container", async () => {
+    // A hung daemon: the first two probes fail and the inspect asking whether
+    // the container still runs never answers, so it times out. That says
+    // nothing about the container, whose boot is then found ready.
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+count_file="$FAKE_DOCKER_LOG.count"
+count=$(cat "$count_file" 2>/dev/null || echo 0)
+if [ "$1" = exec ]; then
+  count=$((count + 1))
+  echo "$count" > "$count_file"
+fi
+if [ "$count" -le 2 ]; then
+  [ "$1" = inspect ] && exec sleep 5
+  printf 'Error response from daemon: context deadline exceeded\\n' >&2
+  exit 1
+fi
+[ "$1" = exec ] && printf '%s\\n5000\\n' '${record({})}'
+exit 0
+`,
+      async (log) => {
+        expect(
+          await waitForContainerBoot("container-1", { pollMs: 1, inspectTimeoutMs: 100 }),
+        ).toBe("0b0b0b0b-1111-2222-3333-444444444444");
+        const calls = await log.read();
+        expect(calls).toContain("inspect");
+        expect(calls).not.toContain("cp container-1");
+      },
+    );
+  });
+
   test("a legacy image bypasses readiness, while an unanswered probe remains gated", async () => {
     await withDockerScript(
       `#!/bin/sh

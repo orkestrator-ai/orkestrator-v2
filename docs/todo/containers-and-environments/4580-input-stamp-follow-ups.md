@@ -56,4 +56,4 @@ What the input stamps (to-do 1202 task 15 (retired 2026-11-10), DK-14) left. See
 - to-do 1202 efficiency follow-ups, task 15 (retired 2026-11-10).
 - Closing check of E25 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which replaced the 0490 Container start report.
 - [6740 input staging follow-ups](6740-input-staging-follow-ups.md).
-- [0018 container network and credential isolation](0018-container-network-and-credential-isolation.md).
+- To-do 0018 (retired 2026-11-11): container network and credential isolation, now described in [container lifecycle](../../architecture/container-lifecycle.md#isolation-constraints).

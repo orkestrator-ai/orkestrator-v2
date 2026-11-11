@@ -13,10 +13,11 @@ import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
  * - `webAnnotationGcEveryTicks`: how many web annotation reconcile ticks (3 s
  *   each) pass between garbage-collection passes, which remove settled
  *   evidence (`WEB_ANNOTATION_GC_EVERY_TICKS`, 100).
- * - `coordinatorRepairIntervalMs`: the delay before the next coordinator
- *   repair pass, which closes delegations whose worker environment stopped
- *   (`MAINTENANCE_JOB_MS`, 60 s). It applies from the pass after the file is
- *   read, so the pass already scheduled keeps its delay.
+ * - `coordinatorRepairIntervalMs`: the period between coordinator repair
+ *   passes, which close delegations whose worker environment stopped
+ *   (`MAINTENANCE_JOB_MS`, 60 s). The job checks it every second
+ *   (`coordinator-repair-job.ts`), so it applies within a second of the file
+ *   being written, not after the pass already scheduled.
  *
  * A spec arms them by writing `{"containerTreeMaxAgeMs": 2000}` (either key,
  * or both) to `<data dir>/agent-test-fixtures/timing.json`, and removes the

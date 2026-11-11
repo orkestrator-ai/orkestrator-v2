@@ -34,9 +34,9 @@ export type BackendTiming = {
   /** Reconcile ticks between web annotation collection passes, 1–100 (production 100). */
   webAnnotationGcEveryTicks?: number;
   /**
-   * The delay before the next coordinator repair pass, which closes a stopped
-   * worker's delegation, 1 000–60 000 ms (production 60 000). The pass already
-   * scheduled when the file is written keeps its delay.
+   * The period between coordinator repair passes, which close a stopped
+   * worker's delegation, 1 000–60 000 ms (production 60 000). It applies
+   * within a second of the file being written.
    */
   coordinatorRepairIntervalMs?: number;
 };

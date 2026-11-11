@@ -92,3 +92,29 @@ touch this file or the container create path.
   passed (0.6 s).
 
 Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (main CI)
+
+Observed 2026-11-11 in `main` CI run 43093113394 (job "Tests (backend)",
+head `963ffa6ab`, PR #2176), which changes agent-testing specs and does not
+touch this file or the container create path. Recorded from branch
+`fix-ci-main-1727044b99e3-r1`, base `51456e887`
+(`mise run flaky:recurrence -- 9963 --base 51456e887` answered "open. Record
+the failure as a recurrence").
+
+- **Command:** `mise run test:full` with `ORKESTRATOR_TEST_GROUPS=backend`
+  (two backend workers) on the GitHub-hosted Linux x64 runner.
+- **Failure:** line 177, Received true (30.35 ms): the same fake-Docker `ps `
+  entry.
+- **Isolated rerun:** the runner's automatic rerun reported `FAILED ALONE`
+  in 9 ms, but it never ran the file: under GitHub Actions Bun prints each
+  file header as `::group::tests/…:`, and the runner took that marker as
+  part of the path. That parser is fixed in the same change
+  (`scripts/test-all.ts`, `BUN_FILE_HEADER`). Run alone locally,
+  `bun test --preload ../../tests/setup-node.ts tests/container-rootless-host-ports-create.test.ts`
+  in `apps/backend` passed 3/3 (three repetitions).
+- **Diagnostics:** the assertion now compares the `ps ` lines themselves
+  with `[]` rather than a boolean, so the next failure names the `ps`
+  command (and so its caller, from its filters). Its strength is unchanged.
+
+Status stays open.

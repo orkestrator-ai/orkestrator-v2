@@ -173,8 +173,9 @@ describe("host ports of a new container", () => {
     expect(published(workload)).toContain("127.0.0.1::3000/tcp");
     expect(published(workload)).toContain("127.0.0.1:45173:5173/tcp");
     expect(label(workload)).toBeNull();
-    // No owned-port listing on a rootful daemon.
-    expect(docker.split("\n").some((entry) => entry.startsWith("ps "))).toBe(false);
+    // No owned-port listing on a rootful daemon. The lines themselves are
+    // compared so a failure names which `ps` was issued (flake 9963).
+    expect(docker.split("\n").filter((entry) => entry.startsWith("ps "))).toEqual([]);
   });
 
   test("a rootless create fixes every automatic port, labels them, and keeps ingress", async () => {

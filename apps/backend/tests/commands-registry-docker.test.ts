@@ -560,12 +560,10 @@ exit 1
           await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
           const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
-          // Each start syncs the GitHub credential, then restricts the
-          // container's Claude login (the host has no usable one here). The
-          // restrict is handed only digests of host tokens, never a token
-          // (#2150).
-          const restrict = '{"hostTokens":{}}\n--sync--\n';
-          expect(input).toBe(`rotated-token\n--sync--\n${restrict}\n--sync--\n${restrict}`);
+          // Each start syncs only the GitHub credential: no agent platform is
+          // enabled, so no Claude restrict or sign-out drop is piped (those
+          // payloads are owned by agent-accounts-containers*.test.ts).
+          expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
           const calls = await fs.readFile(logs.all, "utf8");
           expect(calls.match(/start container-1/g)).toHaveLength(2);
           expect(

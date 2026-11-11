@@ -537,6 +537,8 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
         ORKESTRATOR_GATEWAY_COMPRESSION: "body",
         CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES: "262144",
+        ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN: "http://127.0.0.1:43123",
+        ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN: "http://127.0.0.1:43124",
       },
       "2.8.2",
       {
@@ -576,6 +578,9 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.ORKESTRATOR_GATEWAY_COMPRESSION).toBe("body");
     // And Cursor's trim threshold, so a short run can reach the producer bound.
     expect(isolated.CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES).toBe("262144");
+    // And the loopback usage origin a two-backend account spec scripts.
+    expect(isolated.ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN).toBe("http://127.0.0.1:43123");
+    expect(isolated.ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN).toBe("http://127.0.0.1:43124");
     expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
     expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");

@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (289 items): run each check under
+1. **Manual tests and live checks** (294 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -75,14 +75,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
-| Containers and environments | 22 | 9 |
-| Coordinator and Multi Review | 77 | 6 |
-| Cross-cutting | 70 | 20 |
+| Containers and environments | 24 | 9 |
+| Coordinator and Multi Review | 78 | 6 |
+| Cross-cutting | 71 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 289 | 53 |
+| **Total** | 294 | 53 |
 
 ## Outstanding work
 
@@ -396,6 +396,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[1030](../coordinator-and-multi-review/1030-coordinator-machine-load.md) task 7 (user part): `buildCommit` from real release builds.** After the first desktop release and CLI publish built from a commit at or after `533acf703`, install them on a command node and on a second real machine linked as its leaf. Ask the main coordinator to call `list_nodes`. Check each node's `buildCommit` is the commit its release was built from and `version` is still shown. Record: both releases, the commits reported and pass/fail, in 1030 task 7.
 - [ ] **[1090](../coordinator-and-multi-review/1090-cursor-reviewer-cannot-start-on-standalone-backend.md) task 1: Cursor reviewer on a standalone backend.** On a standalone backend running a release that includes #1491 (v2.34.5-beta or later) with a signed-in Cursor account, run a Build Pipeline whose review panel includes a Cursor reviewer. Pass when the Cursor reviewer starts and reports in every round (no "cursor bridge directory not found", no could-not-start notice). If this was the host's first Cursor use since the upgrade, note how long the reviewer's start took (it includes the bridge runtime install, which task 2 measures). Record: host, release, pipeline id, pass/fail and the first start's duration, in 1090.
 - [ ] **2900 (retired) task 1: coordinator node mail across two real machines.** With the user's approval to touch both real installations, link two real machines (for example arktech-mini commanding beelink), or two nodes over a tailnet or an SSH-forwarded link. Have the command node's main coordinator call `list_mailboxes` with the leaf's `nodeId`, then `send_message` with `nodeId` and `toEnvironmentId: "coordinator"`; the leaf's coordinator should answer with `replyToMessageId`. Also drop and restore the link once while an answer waits in the leaf's outbox and check it is collected on reconnect. Behaviour: [coordinator.md](../../architecture/coordinator.md#coordinators-on-two-nodes). Record: machines, builds, link type, and whether the round trip and reconnect collection worked; reply to the coordinator.
+- [ ] **7542 (retired) tasks 2 to 4: usage-limit stop notices across two real machines with real accounts.** The routing, grouping, move and restart behaviour passed on two `dev:test` profiles with fixture accounts (`mise run test:agent:coordinator:notice-live`, 2026-11-11); what it cannot show is a real provider's refusal and a link between two machines. With the user's approval to touch both real installations, attach a leaf to a command node that has the same repository and run a Claude tab on the leaf until the provider refuses it. Check: one wake on the command node's main coordinator listing it, none on the leaf's; then repeat with the link down across a leaf restart (one notice after reconnect), and with the command node's coordinator on the same email as the stopped tab plus another included account (it moves first, unpinned). Behaviour: [coordinator.md](../../architecture/coordinator.md#usage-limit-stop-notices). Record: machines, builds, provider and each of the three results; reply to the coordinator.
 - [ ] **2900 (retired) task 2: real model at the loop bound.** With approval for billed turns, on two linked nodes (two `dev:test` profiles on one host are enough), set `autonomousWakeBudget` to 3 on both and prompt the command node's coordinator, on a real model, to keep asking the leaf's coordinator questions. Check the fourth answer is `inject-held` with `loop-budget-exhausted`, the command node's coordinator gets exactly one "Worker mail held: loop budget" notice, and note whether the real model replies or starts new messages, batches, and obeys the notice. Record: provider and model, the number of exchanges, the held message and the model's behaviour at the notice; reply to the coordinator.
 - [ ] **7400 (retired) task 2: Cursor coordinator's reads on a live turn.** On a host with a Cursor login, start a throwaway `dev:test` profile and give its coordinator a fixture data directory (the launcher sets `ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR`); in the checkout put a link to a fixture file in it and one to the directory. In one read-only Cursor coordinator turn ask it to read the fixture file directly, read it through each link, grep the checkout for the file's contents, glob `**/*.json`, list the data directory's parent, and read and grep an ordinary checkout file. Expect the first four refused or filtered with a reason naming the data directory, and the rest answered normally. Behaviour: [coordinator.md](../../architecture/coordinator.md#provider-qualification). Record: Cursor SDK version, each request's outcome; reply to the coordinator.
 - [ ] **0315 (retired) task 1: a real pipeline end to end.** Setup: `mise run dev:test --profile pipeline-qa --fixture --agent-platforms cursor,pi` in a long-lived terminal; wait for `status: "ready"` in `mise run dev:status --profile pipeline-qa --json`; `mise run dev:login --profile pipeline-qa`; in `testProject` add a failing `src/sum.test.ts` (asserting `sum(2, 2) === 5` against a correct `sum`) and a ticket whose criterion is "`bun test` passes, including `src/sum.test.ts`, without editing the test". Launch a fan-out pipeline (Cursor on every step, reviewers Cursor and Pi, `--max-iterations 2`). Check each pass appends nodes to the right, faded steps match what runs, round 1's Prepare keeps its failing chips after Fix 2, the PR node shows the PR and checks after Ship, and switching tabs and reloading restores selection and transcript. If Build fixes the test first time, break `sum` by hand and restart Verify, noting "failure induced". Afterwards `mise run dev:stop --profile pipeline-qa` then `mise run dev:reset --profile pipeline-qa`. Behaviour: [build-pipeline-view.md](../../architecture/build-pipeline-view.md). Record: profile, providers and models, pipeline id, pass/fail per point; reply to the coordinator.

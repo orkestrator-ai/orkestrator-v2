@@ -470,7 +470,11 @@ logical stores.
 ### After a restart
 
 A reconciler (startup pass, environment change events, 15 s sweep, and every
-`run get`) settles active operations from authoritative state:
+`run get`) settles active operations from authoritative state. The sweep and
+environment passes skip a prompt run whose turn was seen to end with a later
+turn in its session until its record changes, its environment is gone or the
+full pass every 10 minutes; `run get` always observes it
+([recurring work](recurring-work.md), B31):
 
 | Operation in flight | After a backend restart |
 | --- | --- |

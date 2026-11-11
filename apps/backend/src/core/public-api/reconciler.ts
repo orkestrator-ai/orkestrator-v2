@@ -5,6 +5,7 @@ import type { PublicOperationRecord } from "./operation-ledger.js";
 import { publicEnvironmentSummary } from "./summaries.js";
 import type { OperationPatch, PublicActionContext } from "./types.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 
 const log = createLogger("public-api");
 
@@ -289,17 +290,30 @@ export async function reconcileOperation(
 }
 
 const RECONCILE_INTERVAL_MS = 15_000;
+/**
+ * The periodic pass observes every active run, settled or not, at least this
+ * often. Between full passes a settled run is re-observed when its record
+ * changes, when its environment is gone, or when a client reads it.
+ */
+export const RECONCILE_FULL_PASS_MS = 10 * 60 * 1000;
 
 /**
  * One reconciler per storage instance: a startup pass, a pass whenever an
  * environment changes, and a bounded periodic sweep. Collection of retired
  * namespaces runs on the same timer at the retention cadence.
+ *
+ * A run whose last observation found its turn ended with a later turn in its
+ * session (`markRunSettled` in `run-observer.ts`) cannot change while its
+ * record and environment stay as they were, so passes skip it between full
+ * passes. Every skip is counted as a `public-operation-reconcile` cache hit,
+ * every observed record as a miss.
  */
 export class PublicOperationReconciler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running: Promise<void> | null = null;
   private pendingEnvironments = new Set<string>();
   private lastCollection = 0;
+  private lastFullPass = Number.NEGATIVE_INFINITY;
   private unsubscribe: (() => void) | null = null;
 
   constructor(private context: PublicActionContext) {}
@@ -332,13 +346,16 @@ export class PublicOperationReconciler {
 
   private schedule(all = false): void {
     if (!this.timer) return;
+    recurringWorkMetrics.requested("public-operation-reconcile");
     if (this.running) {
+      recurringWorkMetrics.coalesced("public-operation-reconcile");
       if (all) this.pendingEnvironments.add("*");
       return;
     }
     const environments = all ? null : new Set(this.pendingEnvironments);
     this.pendingEnvironments.clear();
-    this.running = this.pass(environments)
+    this.running = recurringWorkMetrics
+      .observe("public-operation-reconcile", () => this.pass(environments))
       .catch((error: unknown) => {
         log.warn("reconcile.pass-failed", { error: formatLogError(error) });
       })
@@ -353,14 +370,38 @@ export class PublicOperationReconciler {
 
   async pass(environments: Set<string> | null = null): Promise<void> {
     const context = this.context;
+    const reconciliations = context.command.runtime.publicApi;
     const active = await context.command.storage.publicOperations.listActivePublicOperations();
+    const full =
+      environments === null && context.now() - this.lastFullPass >= RECONCILE_FULL_PASS_MS;
+    if (full) {
+      this.lastFullPass = context.now();
+      reconciliations.retainSettledRuns(new Set(active.map((record) => record.operationId)));
+    }
+    const present = new Map<string, Promise<boolean>>();
+    const environmentPresent = (id: string): Promise<boolean> => {
+      let known = present.get(id);
+      if (!known) {
+        known = context.command.storage.getEnvironment(id).then((environment) => !!environment);
+        present.set(id, known);
+      }
+      return known;
+    };
     for (const record of active) {
+      const environmentId = record.resources.environmentId;
+      if (environments && !(environmentId && environments.has(environmentId))) continue;
       if (
-        environments &&
-        !(record.resources.environmentId && environments.has(record.resources.environmentId))
+        !full &&
+        reconciliations.isRunSettled(record) &&
+        // A pass for a changed environment still settles the runs of one
+        // that is gone; a Coordinator has no environment row, so its runs
+        // are skipped only by the periodic pass.
+        (environments === null || (environmentId && (await environmentPresent(environmentId))))
       ) {
+        recurringWorkMetrics.cacheHit("public-operation-reconcile");
         continue;
       }
+      recurringWorkMetrics.cacheMiss("public-operation-reconcile");
       await reconcileOperation(record, context);
     }
     if (context.now() - this.lastCollection > 60 * 60 * 1000) {

@@ -881,9 +881,14 @@ on revocation described above.
   alone, since it has lapsed too. A container that used an added account
   already had its copy removed by the account switch path. Claude's host login
   is removed at the next container start (`buildDropHostClaudeLoginCommand`):
-  `claudeAiOauth` and every `mcpOAuth` entry without a refresh token go, an
-  MCP login the container made itself keeps its access token, and a file left
-  with no login is deleted. The host reads as signed out
+  every host copy goes, a login the container made itself (`claudeAiOauth` or
+  an `mcpOAuth` server) keeps its access token, and a file left with no login
+  is deleted. A login the container made is one still holding a refresh token
+  (a push never carries one) or, once stripped, one whose access-token SHA-256
+  the strip recorded in `.credentials.json.orkestrator-owned`; the restrict
+  and drop commands write that record before stripping, so the login survives
+  every later start. If `flock` or the locked pass fails, the drop falls back
+  to the strip-only pass rather than deleting the file. The host reads as signed out
   (`hostClaudeSignedOut`) only when every place the login is looked up says
   so: each `.credentials.json` absent or holding no login, and on macOS a
   metadata-only `security find-generic-password` (no `-w`, so no access

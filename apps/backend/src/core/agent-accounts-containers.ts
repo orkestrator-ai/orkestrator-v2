@@ -899,38 +899,94 @@ export async function activeClaudeCredentials(
 }
 
 /**
+ * Node source shared by the restrict and drop commands, run with `file` bound
+ * to the container's credential file. Stripping a refresh token erases the only
+ * sign that a login was made inside the container, so whoever strips one
+ * records the login in a sidecar first (`<file>.orkestrator-owned`): a map from
+ * slot (`claudeAiOauth`, or `mcpOAuth/<server>`) to the SHA-256 digest of the
+ * access token kept, never a token. A later drop keeps an access-only entry
+ * whose digest is recorded, and drops every other one as the host's copy. The
+ * sidecar is written before the credential, so an interrupted pass leaves the
+ * refresh token in place to be recorded again rather than an unrecorded entry.
+ */
+const CLAUDE_OWNED_LOGINS_SCRIPT = `
+const crypto = require("crypto");
+const ownedFile = file + ".orkestrator-owned";
+const accessDigest = (entry) =>
+  entry && typeof entry === "object" && typeof entry.accessToken === "string" && entry.accessToken
+    ? crypto.createHash("sha256").update(entry.accessToken).digest("hex")
+    : undefined;
+const hasRefreshToken = (entry) =>
+  !!entry && typeof entry === "object" && typeof entry.refreshToken === "string" && !!entry.refreshToken.trim();
+const readOwned = () => {
+  try {
+    if (!fs.lstatSync(ownedFile).isFile()) return {};
+    const value = JSON.parse(fs.readFileSync(ownedFile, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+};
+const writeOwned = (owned) => {
+  if (Object.keys(owned).length === 0) {
+    fs.rmSync(ownedFile, { force: true });
+    return;
+  }
+  const temporary = ownedFile + "." + process.pid + ".tmp";
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(owned), { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, ownedFile);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+};`;
+
+/** The sidecar recording which access-only Claude logins the container made itself. */
+export function claudeOwnedLoginsFile(credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE): string {
+  return `${credentialFile}.orkestrator-owned`;
+}
+
+/**
  * Remove every refresh token from the container's own Claude credential, in
  * place. For when the host has no usable access token to hand over: a copy
  * imported before containers were access-only, or through a host mount, must
- * not keep the host's refresh token while it waits. An unreadable file is
- * removed rather than kept whole.
+ * not keep the host's refresh token while it waits. An entry that had a
+ * refresh token is recorded as the container's own first
+ * (`CLAUDE_OWNED_LOGINS_SCRIPT`), so a later host sign-out keeps it. An
+ * unreadable file is removed rather than kept whole.
  */
 export function buildRestrictContainerClaudeCredentialCommand(
   credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,
 ): string {
+  const script = `
+const fs = require("fs");
+// Eval has no script-path argument: the target after -- is argv[1].
+const file = process.argv[1];
+${CLAUDE_OWNED_LOGINS_SCRIPT}
+const login = JSON.parse(fs.readFileSync(file, "utf8"));
+if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
+const owned = readOwned();
+const stripped = [];
+const strip = (slot, entry) => {
+  if (!entry || typeof entry !== "object" || !("refreshToken" in entry)) return;
+  const digest = hasRefreshToken(entry) ? accessDigest(entry) : undefined;
+  if (digest) owned[slot] = digest;
+  stripped.push(entry);
+};
+strip("claudeAiOauth", login.claudeAiOauth);
+if (login.mcpOAuth && typeof login.mcpOAuth === "object") {
+  for (const [key, entry] of Object.entries(login.mcpOAuth)) strip("mcpOAuth/" + key, entry);
+}
+if (stripped.length === 0) process.exit(0);
+writeOwned(owned);
+for (const entry of stripped) delete entry.refreshToken;
+const temporary = file + "." + process.pid + ".tmp";
+fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
+fs.renameSync(temporary, file);`;
   return `
   credential_file=${quoteShell(credentialFile)}
   if [ -f "$credential_file" ] && [ ! -L "$credential_file" ]; then
-    node -e '
-      const fs = require("fs");
-      // Eval has no script-path argument: the target after -- is argv[1].
-const file = process.argv[1];
-      const login = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
-      let changed = false;
-      const strip = (entry) => {
-        if (entry && typeof entry === "object" && "refreshToken" in entry) {
-          delete entry.refreshToken;
-          changed = true;
-        }
-      };
-      strip(login.claudeAiOauth);
-      if (login.mcpOAuth && typeof login.mcpOAuth === "object") Object.values(login.mcpOAuth).forEach(strip);
-      if (!changed) process.exit(0);
-      const temporary = file + "." + process.pid + ".tmp";
-      fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
-      fs.renameSync(temporary, file);
-    ' -- "$credential_file" 2>/dev/null || rm -f "$credential_file" "$credential_file".*.tmp
+    node -e ${quoteShell(script)} -- "$credential_file" 2>/dev/null || rm -f "$credential_file" "$credential_file".*.tmp
   fi
   true
 `;
@@ -940,12 +996,15 @@ const RESTRICT_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
 
 /**
  * Remove the host's Claude login from a container after the host signed out.
- * The subscription login (`claudeAiOauth`) is always the host's (see
- * `buildMergeContainerClaudeCredentialCommand`), so it goes; so does every MCP
- * entry without a refresh token, which is an access-only copy of the host's.
- * An MCP entry that still has a refresh token keeps its access token, with
- * the refresh token stripped as the restrict command does. A file left with
- * no login is removed, as is an unreadable one; a symlink is never followed.
+ * A login entry (`claudeAiOauth`, or an `mcpOAuth` server) the container made
+ * itself stays with only its access token: one that still holds a refresh
+ * token, which a backend push never carries, or an access-only one whose
+ * digest an earlier strip recorded (`CLAUDE_OWNED_LOGINS_SCRIPT`), so repeated
+ * starts keep it. Every other entry is an access-only copy of the host's and
+ * goes. A file left with no login is removed, as is an unreadable one; a
+ * symlink is never followed. When `flock` or the locked pass fails, the
+ * command falls back to the restrict command's strip-only pass rather than
+ * deleting the file, so a tool failure never costs the container's own logins.
  */
 export function buildDropHostClaudeLoginCommand(
   credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,
@@ -954,6 +1013,7 @@ export function buildDropHostClaudeLoginCommand(
 const fs = require("fs");
 // Eval has no script-path argument: the target after -- is argv[1].
 const file = process.argv[1];
+${CLAUDE_OWNED_LOGINS_SCRIPT}
 try {
   if (!fs.lstatSync(file).isFile()) process.exit(0);
 } catch {
@@ -965,19 +1025,35 @@ try {
 } catch {}
 if (!login || typeof login !== "object" || Array.isArray(login)) {
   fs.rmSync(file, { force: true });
+  writeOwned({});
   process.exit(0);
 }
-delete login.claudeAiOauth;
+const recorded = readOwned();
+const owned = {};
+// Whether the entry is the container's own; records it and strips its refresh token if so.
+const keep = (slot, entry) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const digest = accessDigest(entry);
+  if (hasRefreshToken(entry)) {
+    if (digest) owned[slot] = digest;
+    delete entry.refreshToken;
+    return true;
+  }
+  if (digest && recorded[slot] === digest) {
+    owned[slot] = digest;
+    delete entry.refreshToken;
+    return true;
+  }
+  return false;
+};
+if (!keep("claudeAiOauth", login.claudeAiOauth)) delete login.claudeAiOauth;
 const servers = login.mcpOAuth && typeof login.mcpOAuth === "object" && !Array.isArray(login.mcpOAuth) ? login.mcpOAuth : {};
 for (const [key, entry] of Object.entries(servers)) {
-  if (!entry || typeof entry !== "object" || typeof entry.refreshToken !== "string" || !entry.refreshToken.trim()) {
-    delete servers[key];
-  } else {
-    delete entry.refreshToken;
-  }
+  if (!keep("mcpOAuth/" + key, entry)) delete servers[key];
 }
 if (Object.keys(servers).length > 0) login.mcpOAuth = servers;
 else delete login.mcpOAuth;
+writeOwned(owned);
 if (Object.keys(login).length === 0) {
   fs.rmSync(file, { force: true });
   process.exit(0);
@@ -991,7 +1067,9 @@ try {
 }`;
   return `credential_file=${quoteShell(credentialFile)}
 if [ -e "$credential_file" ] && [ ! -L "$credential_file" ]; then
-  flock -x "$credential_file.orkestrator-lock" node -e ${quoteShell(script)} -- "$credential_file" 2>/dev/null || rm -f "$credential_file"
+  if ! flock -x "$credential_file.orkestrator-lock" node -e ${quoteShell(script)} -- "$credential_file" 2>/dev/null; then
+    # The drop could not run: strip in place instead, as the start did before.${buildRestrictContainerClaudeCredentialCommand(credentialFile)}
+  fi
 fi
 true
 `;

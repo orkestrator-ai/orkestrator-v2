@@ -8,7 +8,16 @@
  * shows as two calls carrying it. A prompt containing `[hold:<id>]` is parked
  * until `release(<id>)`, which places a turn at "provider is working" for as
  * long as a scenario needs (a restart, a disconnect). A parked call whose
- * client goes away is recorded as `aborted`.
+ * client goes away is recorded as `aborted`. A prompt containing
+ * `[stream:<n>]` is answered as `n` further fixture lines, one text delta
+ * every `STREAM_DELTA_INTERVAL_MS`, so a turn streams for a while and the
+ * transcript is patched many times (`remote-bandwidth-live.spec.ts` measures
+ * those bytes).
+ * A prompt containing `[bash:<word>]` is answered with one `Bash` tool call
+ * that writes `<word>.txt` in the working directory (a write, because Claude
+ * Code runs a read-only command such as a bare `printf` without asking), so a
+ * session in an "ask" mode parks an approval; the CLI's follow-up with the
+ * tool result is answered like any other call.
  *
  * Runs under Node (the Playwright spec) as well as Bun: `node:http` only.
  * Prompts are kept in memory for the run; they are fixture strings, and never
@@ -33,6 +42,8 @@ export interface FakeModelCall {
   context: string[];
   receivedAt: number;
   answeredAt?: number;
+  /** When a `[stream:<n>]` answer wrote its last frame. */
+  streamedAt?: number;
   aborted?: boolean;
 }
 
@@ -51,6 +62,12 @@ export interface FakeAnthropicModel {
 const MAX_CALLS = 2_000;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const HOLD_PATTERN = /\[hold:([a-z0-9-]{1,64})\]/i;
+const STREAM_PATTERN = /\[stream:(\d{1,5})\]/i;
+const BASH_PATTERN = /\[bash:([a-z0-9-]{1,64})\]/i;
+/** The most deltas one `[stream:<n>]` answer sends. */
+export const MAX_STREAM_DELTAS = 2_000;
+/** The pause between two deltas of a streamed answer. */
+export const STREAM_DELTA_INTERVAL_MS = 25;
 
 function textOfContent(content: unknown): string {
   if (typeof content === "string") return content;
@@ -124,6 +141,130 @@ export function messageStreamFrames(id: string, model: string, text: string): st
 
 export function answerFor(prompt: string): string {
   return `Answer to: ${prompt}`;
+}
+
+/** The word a `[bash:<word>]` prompt asks the `Bash` tool to print, if any. */
+export function bashWordOf(prompt: string): string | undefined {
+  return BASH_PATTERN.exec(prompt)?.[1];
+}
+
+/** Whether the request's last user message carries a tool result (a follow-up). */
+export function endsWithToolResult(body: unknown): boolean {
+  const messages = (body as { messages?: unknown } | null)?.messages;
+  if (!Array.isArray(messages)) return false;
+  const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
+  return (
+    last?.role === "user" &&
+    Array.isArray(last.content) &&
+    last.content.some((block) => (block as { type?: unknown } | null)?.type === "tool_result")
+  );
+}
+
+/** One assistant message that calls `Bash` once, as streamed SSE frames. */
+export function toolUseStreamFrames(id: string, model: string, command: string): string {
+  const events: Array<{ type: string } & Record<string, unknown>> = [
+    messageStart(id, model),
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: `toolu_${id}`, name: "Bash", input: {} },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ command, description: "Print a fixture word" }),
+      },
+    },
+    { type: "content_block_stop", index: 0 },
+    {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    },
+    { type: "message_stop" },
+  ];
+  return events.map(frame).join("");
+}
+
+/** The number of extra lines a `[stream:<n>]` prompt asks for, bounded. */
+export function streamDeltaCountOf(prompt: string): number {
+  const match = STREAM_PATTERN.exec(prompt);
+  return match ? Math.min(MAX_STREAM_DELTAS, Number(match[1])) : 0;
+}
+
+/**
+ * The text deltas of a streamed answer: `answerFor(prompt)` first, then one
+ * build-log-like fixture line per delta (repetitive, as real output is), so
+ * the joined answer still starts with `answerFor(prompt)`.
+ */
+export function streamedAnswerDeltas(prompt: string, count: number): string[] {
+  const deltas = [answerFor(prompt)];
+  for (let index = 1; index <= count; index += 1) {
+    deltas.push(
+      `\n- step ${index} of ${count}: compiled module-${index % 37} in ${(index * 7) % 113} ms, ` +
+        `all checks passed for package-${index % 11}`,
+    );
+  }
+  return deltas;
+}
+
+function frame(event: { type: string } & Record<string, unknown>): string {
+  return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function messageStart(id: string, model: string) {
+  return {
+    type: "message_start",
+    message: {
+      id,
+      type: "message",
+      role: "assistant",
+      model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  };
+}
+
+const MESSAGE_END_EVENTS: Array<{ type: string } & Record<string, unknown>> = [
+  { type: "content_block_stop", index: 0 },
+  {
+    type: "message_delta",
+    delta: { stop_reason: "end_turn", stop_sequence: null },
+    usage: { output_tokens: 1 },
+  },
+  { type: "message_stop" },
+];
+
+/**
+ * Writes one assistant text message as paced SSE frames, one text delta per
+ * `intervalMs`. Stops early, without throwing, when the client goes away.
+ */
+async function writePacedStream(
+  response: ServerResponse,
+  id: string,
+  model: string,
+  deltas: readonly string[],
+  intervalMs: number,
+): Promise<void> {
+  response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+  response.write(frame(messageStart(id, model)));
+  response.write(
+    frame({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+  );
+  for (const [index, text] of deltas.entries()) {
+    if (response.destroyed) return;
+    if (index > 0) await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    response.write(
+      frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }),
+    );
+  }
+  if (response.destroyed) return;
+  response.end(MESSAGE_END_EVENTS.map(frame).join(""));
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
@@ -202,7 +343,32 @@ export async function startFakeAnthropicModel(port = 0): Promise<FakeAnthropicMo
       }
       const model = String((body as { model?: unknown }).model ?? "claude-haiku-4-5");
       const text = answerFor(prompt);
+      const streamDeltas = streamDeltaCountOf(prompt);
+      const bashWord = endsWithToolResult(body) ? undefined : bashWordOf(prompt);
       call.answeredAt = Date.now();
+      if (bashWord && (body as { stream?: unknown }).stream === true) {
+        response
+          .writeHead(200, { "content-type": "text/event-stream" })
+          .end(
+            toolUseStreamFrames(
+              `msg_fake_${counter}`,
+              model,
+              `printf ${bashWord} > ${bashWord}.txt`,
+            ),
+          );
+        return;
+      }
+      if ((body as { stream?: unknown }).stream === true && streamDeltas > 0) {
+        await writePacedStream(
+          response,
+          `msg_fake_${counter}`,
+          model,
+          streamedAnswerDeltas(prompt, streamDeltas),
+          STREAM_DELTA_INTERVAL_MS,
+        );
+        call.streamedAt = Date.now();
+        return;
+      }
       if ((body as { stream?: unknown }).stream === true) {
         response
           .writeHead(200, { "content-type": "text/event-stream" })

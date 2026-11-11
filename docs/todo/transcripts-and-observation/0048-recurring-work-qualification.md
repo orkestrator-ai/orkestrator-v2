@@ -2572,7 +2572,7 @@ collide with other tasks' decisions.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and
-  [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
+  0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the
   container Files panel status exec and `containerRevertFileCommand`'s inline

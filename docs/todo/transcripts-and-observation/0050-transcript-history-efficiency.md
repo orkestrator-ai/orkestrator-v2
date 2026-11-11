@@ -423,8 +423,8 @@ dispatch hold and found no product defect.
    loopback, or a container port on the same host. For comparison, the
    backend-to-client hop already patches the same 40-observation streams down
    to 29 to 44 KB in total. About 0.5 ms of CPU per changed read does not pay
-   for a second incremental protocol. Reopen it with
-   [0052](0052-remote-client-bandwidth.md) if a bridge ever runs remote from
+   for a second incremental protocol. Reopen it, with the remote bandwidth
+   record in [remote-bandwidth.md](../../development/remote-bandwidth.md), if a bridge ever runs remote from
    its backend.
 9. **Closed (2026-10-24): per-message provider revisions are not justified.**
    Workload `f` (a changed read of a 100-message window with one changing
@@ -1196,7 +1196,7 @@ considered, the choice, and why.
      incremental protocol or per-message revisions from five bridges.
    - Pros: no speculative protocol work.
    - Cons: a remote-bridge deployment would need the question reopened
-     (pointer left to 0052).
+     (pointer left to [remote-bandwidth.md](../../development/remote-bandwidth.md), which replaced 0052).
 9. **Browser gate method (item 7).**
    - Options: a new fixture mounting `useNativeAgentSession` against a fake
      gateway; extend the existing rich-transcript perf gate.
@@ -1508,7 +1508,7 @@ All three checked on 2026-10-24.
 
 ## Related
 
-- [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): remote bytes,
+- 0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): remote bytes,
   encoded patch bytes and multi-client runs.
 - [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md): reviewer
   transcripts, progress probes and the multi-review benchmark.

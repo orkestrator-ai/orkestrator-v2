@@ -1681,6 +1681,49 @@ Measurements land in `evidence-multi-client-*.json` beside the run, judged
 against the latency budgets in
 [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
 
+### Remote bandwidth matrix (fake model)
+
+`e2e/agent-testing/remote-bandwidth-live.spec.ts` runs the single-host remote
+bandwidth matrix ([remote-bandwidth.md](remote-bandwidth.md)): several headless browser clients on one
+Claude session and one environment's terminals, per gateway compression mode
+(`on`, `body`), terminal transport (the shared SSE stream, the opt-in
+WebSocket) and link (loopback, and a 512 kbit/s link with 40 ms each way). The
+provider is the profile's real Claude CLI sent to the loopback model
+(`fake-anthropic-model.ts`); a `[stream:<n>]` prompt streams `n` lines at
+25 ms and a `[bash:<word>]` prompt makes one `Bash` call, so a session under
+an "ask" policy parks a real approval. Nothing logs in and nothing is billed.
+
+Each client reaches the gateway through its own loopback link
+(`remote-bandwidth-meter.ts`), which counts exact wire bytes per request class
+(event streams, invokes, WebSocket, other) and shapes the slow-link cells.
+The spec also diffs the gateway's `/metrics` per cell; its gzip counters cover
+browser listeners only, while its stream totals include the profile's own
+headless Electron window. It restarts the profile once per mode with
+`ORKESTRATOR_GATEWAY_COMPRESSION`, which agent-test backends accept for this.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile rbw52 --fixture --no-agent-credentials --agent-platforms claude --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=rbw52 ORKESTRATOR_AGENT_TEST_LIVE_REMOTE_BANDWIDTH=1 \
+ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43252 \
+  mise run test:logged -- --name remote-bandwidth -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  remote-bandwidth-live.spec.ts --workers=1
+mise run dev:stop --profile rbw52
+mise run dev:reset --profile rbw52
+```
+
+`ORKESTRATOR_AGENT_TEST_BANDWIDTH_MODES` (default `on,body`), `_PARTS`
+(`matrix,data-saving`), `_CLIENTS` (3), `_ROUNDS` (3) and `_IDLE_MS` (20000)
+narrow or lengthen a run.
+Cells: idle, a streamed agent turn (first-update and completion latency per
+client), terminal bursts of redundant build output in the visible and in a
+background terminal tab and of random printable output, and, in `on` mode,
+data saving off and on side by side (a running turn, an idle view, the Files
+panel, completion and approval latency). Evidence lands in `evidence-remote-bandwidth-*.json`
+beside the run: numbers and cell labels only.
+
 ### Live second node scope (two profiles)
 
 `e2e/agent-testing/playwright.scope-proof.config.ts` proves that one renderer

@@ -58,3 +58,10 @@ test("a refused storage lookup leaves the switch usable and does not reload", ()
   fireEvent.click(toggle);
   expect(reload).toHaveBeenCalledTimes(1);
 });
+
+test("in the iOS app it names Safari's Web Inspector", () => {
+  applyRendererLogLevel();
+  render(<RendererDebugSettings reload={() => undefined} desktop={false} iosApp />);
+  expect(screen.getByText(/Safari's Web Inspector on a Mac/)).toBeTruthy();
+  expect(screen.queryByText(/Your browser's developer tools/) === null).toBe(true);
+});

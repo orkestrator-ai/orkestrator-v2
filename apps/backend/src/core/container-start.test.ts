@@ -208,6 +208,30 @@ describe("startDockerContainer", () => {
     );
   });
 
+  test("a backend-chosen port still held after every retry is a typed port-conflict", async () => {
+    const collision = () => new CommandFailedError(ROOTLESSKIT_IN_USE);
+    const fixture = scriptedRun(
+      Array.from({ length: PORT_COLLISION_RETRIES + 1 }, collision),
+      backendOnly,
+      { backendLabel: "38917,38919" },
+    );
+    const error = await startDockerContainer("abc", {
+      run: fixture.run,
+      sleep: async () => undefined,
+    }).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(parseContainerLifecycleError(error)).toMatchObject({ code: "port-conflict" });
+    expect((error as Error).message).toContain("Host port 38917, which Orkestrator chose");
+    expect((error as Error).message).toContain("rebuild the environment");
+    expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(
+      PORT_COLLISION_RETRIES + 1,
+    );
+    // Reconnected after the last attempt too, so a later start publishes.
+    expect(fixture.attached()).toBe(true);
+  });
+
   test("a Docker-chosen port collision retries without pausing", async () => {
     const pauses: number[] = [];
     const fixture = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE), "ok"], automaticOnly);

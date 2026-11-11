@@ -371,6 +371,12 @@ pause instead of recreating the container.
   restarts, and a start that finds one held waits for it a few seconds
   (task 4). Containers created earlier keep Docker's automatic ports, and
   with them the collisions past three retries, until they are rebuilt.
+- Chosen ports never repeat a port the same create fixes, a port labelled on
+  another container of the same owner, or one this backend chose in the
+  last 30 minutes (task 4). A program outside Orkestrator that keeps a
+  stopped container's port bound still blocks that container's start: after
+  the same-port retries it fails with a `port-conflict` that says to stop the
+  holder or rebuild the environment.
 
 ## Outstanding work
 
@@ -451,6 +457,33 @@ Chose: the `orkestrator-backend-host-ports` label lists the chosen ports,
 and a labelled port the bindings do not fix is ignored. Why: once published
 they look exactly like ports the user fixed, which the start path must keep
 refusing to retry.
+
+### Chosen ports avoid ports another container or the same create already claims (task 4)
+
+Chose: before probing, collect the host ports the same request fixes (by
+protocol), the ports labelled on every container of the backend's owner
+(`docker ps -a`, running or stopped) and the ports this process chose in
+the last 30 minutes, and refuse a probe result that matches one, holding it
+so the next probe cannot return it (at most 32 probes per mapping). Why: a
+stopped container's fixed port holds no host socket, and neither does a
+fixed port Docker has not bound yet, so the kernel alone would hand them
+out again and the later start would fail on the same port every time. The
+in-process reservation covers the window before a newly created container
+appears in `docker ps`, so two concurrent creates cannot receive the same
+port. A listing Docker cannot answer is logged
+(`host-ports.owned-list-failed`) and treated as no ports rather than
+failing the create. Alternative: a persisted reservation registry of
+chosen ports, which would duplicate what the label already records on the
+container itself and could drift from Docker's state.
+
+### A backend-chosen port held past the retries says to rebuild (task 4)
+
+Chose: when the same-port retries run out, the start fails with a
+`port-conflict` that names the port and says to stop its holder or rebuild
+the environment, which chooses new ports. Why: the user's port mappings are
+not the cause, so the generic "change the port mappings" advice was wrong
+for this case. Recreating the runtime automatically stays out of the start
+path for the reason in the decision above.
 
 ## Related
 

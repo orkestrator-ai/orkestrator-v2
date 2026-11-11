@@ -1113,11 +1113,17 @@ therefore chooses every automatic host port itself when it creates a
 runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
 the host, where the kernel sees every socket and prefers odd ports for
 `bind` (outbound `connect` prefers even ones), publishes the result as a
-fixed port and lists it in the `orkestrator-backend-host-ports` label. The
+fixed port and lists it in the `orkestrator-backend-host-ports` label. A
+stopped container's ports hold no host socket, so the choice also refuses
+the ports the same create fixes, the ports labelled on every container of
+the same owner (`docker ps -a`) and, for the window before a new container
+exists, the ports this backend chose in the last 30 minutes. The
 port then stays the container's own across starts and daemon restarts. A
 collision on a labelled port is retried on the same port after a pause
 (1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
-go; a port the user fixed is still never retried. Rootful daemons keep
+go; one still held after the retries is a `port-conflict` that says to stop
+the holder or rebuild the environment, which chooses new ports. A port the
+user fixed is still never retried. Rootful daemons keep
 Docker's own automatic ports, since they see the host's sockets, and a
 container created before this keeps them until it is rebuilt.
 

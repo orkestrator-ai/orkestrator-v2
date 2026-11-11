@@ -174,7 +174,11 @@ import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { createLogger } from "@orkestrator/protocol/logger";
-import { backendHostPortLabelArguments, chooseBackendHostPorts } from "./container-host-ports.js";
+import {
+  backendHostPortLabelArguments,
+  chooseBackendHostPorts,
+  listOwnedBackendHostPorts,
+} from "./container-host-ports.js";
 
 const dockerLog = createLogger("docker");
 
@@ -204,6 +208,21 @@ export function publishedPortArguments(
   );
   if (entryPort && !entryMapped) args.push("-p", `127.0.0.1::${entryPort}/tcp`);
   return args;
+}
+
+/**
+ * The ports other containers of this owner were given by the backend. A
+ * listing Docker cannot answer is logged and treated as none: the create
+ * itself then reports the daemon, and this process's own recent choices are
+ * still refused.
+ */
+async function ownedBackendHostPorts(owner: string): Promise<number[]> {
+  try {
+    return await listOwnedBackendHostPorts(owner, runCommand);
+  } catch {
+    dockerLog.warn("host-ports.owned-list-failed", {});
+    return [];
+  }
 }
 
 export interface CreateContainerIdentity {
@@ -603,9 +622,13 @@ export async function createDockerContainer(
   // Rootless Docker draws automatic ports in its own namespace, blind to the
   // host's sockets, so the backend chooses them on the host instead and
   // labels them for the start path (to-do 7549 task 4). The label travels
-  // with the `-p` arguments to whichever container owns the namespace.
+  // with the `-p` arguments to whichever container owns the namespace. A
+  // stopped container's chosen ports hold no host socket, so the ports every
+  // owned container is labelled with are refused as well.
   const backendHostPorts = topology.rootless
-    ? await chooseBackendHostPorts(requestedPublishArgs)
+    ? await chooseBackendHostPorts(requestedPublishArgs, {
+        reserved: await ownedBackendHostPorts(dockerOwner),
+      })
     : { publishArguments: requestedPublishArgs, chosen: [] };
   const publishArgs = [
     ...backendHostPorts.publishArguments,

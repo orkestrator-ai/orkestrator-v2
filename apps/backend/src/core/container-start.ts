@@ -239,6 +239,23 @@ export const PORT_COLLISION_RETRIES = 3;
  */
 export const PORT_HOLD_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000];
 
+/**
+ * A backend-chosen port still held after every same-port retry. The port is
+ * fixed for the container's life, so freeing it or rebuilding (which chooses
+ * new ports) is the way out; the user's port mappings are not the cause.
+ */
+export function backendPortHeldError(message: string): ContainerLifecycleError {
+  const port = collidingHostPort(message);
+  const which =
+    port === null
+      ? "A host port Orkestrator chose for this environment"
+      : `Host port ${port}, which Orkestrator chose for this environment,`;
+  return new ContainerLifecycleError(
+    "port-conflict",
+    `${which} is still held by another program after ${PORT_COLLISION_RETRIES} retries. Stop that program and start the environment again, or rebuild the environment so it is given new ports.`,
+  );
+}
+
 export async function startDockerContainer(
   containerId: string,
   options: {
@@ -274,9 +291,11 @@ export async function startDockerContainer(
       await restoreNetwork(containerId, inspection, run).catch(() => {
         throw error;
       });
-      if (retry >= PORT_COLLISION_RETRIES) throw error;
       const retryKind = portCollisionRetry(message, inspection.bindings);
       if (retryKind === "none") throw error;
+      if (retry >= PORT_COLLISION_RETRIES) {
+        throw retryKind === "same-port" ? backendPortHeldError(message) : error;
+      }
       collision = error;
       network = inspection.network;
       log.warn("start.port-collision-retrying", {

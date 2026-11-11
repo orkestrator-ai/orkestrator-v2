@@ -99,16 +99,19 @@ function createHarness(
   let windowDestroyed = false;
   let hostZoomFactor = 1;
   let windowFocused = true;
-  const window = Object.assign(new EventEmitter(), {
-    isDestroyed: () => windowDestroyed,
-    isFocused: () => windowFocused,
-    contentView,
-    webContents: {
-      getZoomFactor: () => hostZoomFactor,
-      focus: mock(() => undefined),
-      isDestroyed: () => false,
-    },
-  });
+  const createWindow = () =>
+    Object.assign(new EventEmitter(), {
+      isDestroyed: () => windowDestroyed,
+      isFocused: () => windowFocused,
+      contentView,
+      webContents: {
+        getZoomFactor: () => hostZoomFactor,
+        focus: mock(() => undefined),
+        isDestroyed: () => false,
+      },
+    });
+  const window = createWindow();
+  let currentWindow = window;
   const emitState = mock(() => undefined);
   const emitOpenLink = mock(() => undefined);
   const openExternal = mock(() => undefined);
@@ -127,7 +130,7 @@ function createHarness(
     WebContentsViewCtor: FakeView as never,
     browserSession: { id: "preview-session" } as never,
     menu,
-    getWindow: () => (windowAvailable ? (window as never) : null),
+    getWindow: () => (windowAvailable ? (currentWindow as never) : null),
     emitState,
     emitOpenLink,
     openExternal,
@@ -157,6 +160,11 @@ function createHarness(
     },
     setWindowFocused(value: boolean) {
       windowFocused = value;
+    },
+    /** Make `getWindow` answer a new window (the old one stays alive). */
+    replaceWindow() {
+      currentWindow = createWindow();
+      return currentWindow;
     },
     setHostZoomFactor(value: number) {
       hostZoomFactor = value;
@@ -666,6 +674,55 @@ describe("BrowserPreviewManager", () => {
     expect(harness.window.listenerCount("focus")).toBe(1);
     harness.manager.destroyAll();
     expect(harness.window.listenerCount("focus")).toBe(0);
+  });
+
+  test("a background window's focus wait forgets a closed preview and follows a replaced window", async () => {
+    const harness = createHarness();
+    const nextTask = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const second = { ...input, tabId: "browser-2", url: "http://localhost:3001/" };
+    await harness.manager.attach({ ...input, visible: false });
+    await harness.manager.attach({ ...second, visible: false });
+    const [first, other] = harness.views.map((view) => view.webContents);
+    const takeFocus = (contents: FakeWebContents) => {
+      contents.focused = true;
+      contents.emit("focus");
+    };
+
+    // Two hidden previews queue on one wait, with one window listener.
+    harness.setWindowFocused(false);
+    takeFocus(first!);
+    takeFocus(other!);
+    await nextTask();
+    expect(harness.window.listenerCount("focus")).toBe(1);
+
+    // Closing one leaves the other waiting; closing the last stops the wait.
+    harness.manager.destroy(input.tabId);
+    expect(harness.window.listenerCount("focus")).toBe(1);
+    harness.manager.destroy(second.tabId);
+    expect(harness.window.listenerCount("focus")).toBe(0);
+    harness.setWindowFocused(true);
+    harness.window.emit("focus");
+    await nextTask();
+    expect(harness.window.webContents.focus).not.toHaveBeenCalled();
+
+    // A preview that waited on a window the manager no longer uses moves its
+    // wait to the current window, and only that window's return acts.
+    await harness.manager.attach({ ...input, visible: false });
+    const reopened = harness.views.at(-1)!.webContents;
+    harness.setWindowFocused(false);
+    takeFocus(reopened);
+    await nextTask();
+    expect(harness.window.listenerCount("focus")).toBe(1);
+    const replacement = harness.replaceWindow();
+    takeFocus(reopened);
+    await nextTask();
+    expect(harness.window.listenerCount("focus")).toBe(0);
+    expect(replacement.listenerCount("focus")).toBe(1);
+    harness.setWindowFocused(true);
+    replacement.emit("focus");
+    await nextTask();
+    expect(replacement.webContents.focus).toHaveBeenCalledTimes(1);
+    expect(harness.window.webContents.focus).not.toHaveBeenCalled();
   });
 
   test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {

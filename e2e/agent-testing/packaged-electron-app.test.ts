@@ -14,6 +14,7 @@ import {
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  stopPackagedAppThenRemoveProfile,
 } from "./packaged-electron-app";
 import packaged from "./playwright.packaged-electron.config";
 import electron from "./playwright.electron.config";
@@ -239,4 +240,64 @@ test("global setup keeps a mixed Electron suite guarded despite the opt-in", () 
   } finally {
     problem.mockRestore();
   }
+});
+
+describe("packaged spec cleanup", () => {
+  const steps = (snapshot: (app: string) => number[]) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      steps: {
+        snapshot: (app: string) => {
+          calls.push(`snapshot ${app}`);
+          return snapshot(app);
+        },
+        close: async (app: string, owned: number[]) => {
+          calls.push(`close ${app} ${owned.join(",")}`);
+        },
+        release: async () => {
+          calls.push("release");
+        },
+        waitForStopped: async (owned: number[]) => {
+          calls.push(`wait ${owned.join(",")}`);
+        },
+        removeProfile: async () => {
+          calls.push("remove profile");
+        },
+      },
+    };
+  };
+
+  test("stops a launched app's snapshotted tree before removing the profile", async () => {
+    const run = steps(() => [41, 42]);
+    await stopPackagedAppThenRemoveProfile("app", run.steps);
+    expect(run.calls).toEqual([
+      "snapshot app",
+      "close app 41,42",
+      "release",
+      "wait 41,42",
+      "remove profile",
+    ]);
+  });
+
+  test("keeps the profile when a launched app's process tree cannot be snapshotted", async () => {
+    const run = steps(() => {
+      throw new Error("ps failed");
+    });
+    const failure = await stopPackagedAppThenRemoveProfile("app", run.steps).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map((error: Error) => error.message)).toEqual([
+      "ps failed",
+      "Cannot remove profile without an owned-process snapshot",
+    ]);
+    expect(run.calls).toEqual(["snapshot app", "release"]);
+  });
+
+  test("removes the profile of a run that never launched an app", async () => {
+    const run = steps(() => [1]);
+    await stopPackagedAppThenRemoveProfile<string>(null, run.steps);
+    expect(run.calls).toEqual(["release", "wait ", "remove profile"]);
+  });
 });

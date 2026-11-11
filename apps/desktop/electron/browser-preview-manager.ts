@@ -854,6 +854,14 @@ export class BrowserPreviewManager {
     this.windowFocusWait.previews.set(tabId, preview);
   }
 
+  /** A preview that is removed no longer waits for the window to return. */
+  private forgetWindowFocusWait(tabId: string, preview: ManagedPreview): void {
+    const wait = this.windowFocusWait;
+    if (wait?.previews.get(tabId) !== preview) return;
+    wait.previews.delete(tabId);
+    if (wait.previews.size === 0) this.stopWaitingForWindowFocus();
+  }
+
   private stopWaitingForWindowFocus(): void {
     const wait = this.windowFocusWait;
     if (!wait) return;
@@ -1056,6 +1064,7 @@ export class BrowserPreviewManager {
     this.pins.onRemoved(tabId);
     this.stopSessionImport(preview);
     this.previews.delete(tabId);
+    this.forgetWindowFocusWait(tabId, preview);
     this.clipboardUserActivations.delete(preview.view.webContents);
     if (preview.service)
       this.options.transport?.release(preview.service.key, preview.service.holderId);

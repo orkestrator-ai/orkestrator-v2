@@ -55,6 +55,7 @@ import {
   designChromiumEnvironment,
   packagedAppExecutable,
   packagedLaunchEnvironment,
+  stopPackagedAppThenRemoveProfile,
 } from "./packaged-electron-app";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -699,25 +700,19 @@ test("packaged Linux on X11: Ctrl+Shift+/ and Ctrl+K from the composer, a browse
       contentType: "image/png",
     });
   }, [
-    async () => {
-      let owned: number[] | undefined = app ? undefined : [];
-      await withCleanup(async () => {
-        if (app) {
-          owned = electronProcessTree(app);
-          await closeElectron(app, owned);
-        }
-      }, [
-        async () => {
+    () =>
+      // Keeps the profile unless the launched app's process tree is proven stopped.
+      stopPackagedAppThenRemoveProfile(app, {
+        snapshot: (launched) => electronProcessTree(launched),
+        close: (launched, owned) => closeElectron(launched, owned),
+        release: async () => {
           await contentServer?.close().catch(() => undefined);
           await new Promise<void>((resolve) =>
             previewServer ? previewServer.close(() => resolve()) : resolve(),
           );
-          // Retain the profile if forced termination could not prove the tree stopped.
-          if (!owned) throw new Error("Cannot remove profile without an owned-process snapshot");
-          await waitForStopped(owned, 0);
-          await rm(temporaryRoot, { recursive: true, force: true });
         },
-      ]);
-    },
+        waitForStopped: (owned) => waitForStopped(owned, 0),
+        removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
+      }),
   ]);
 });

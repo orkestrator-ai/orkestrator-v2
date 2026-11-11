@@ -74,6 +74,9 @@ branch `fix-ci-main-1727044b99e3-r1`, base `51456e887`
 - **Failure:** `[mobile-chromium] Build Pipeline keeps a reader's place across another node`,
   line 220, expected 12046, received 11550 — the same fixed received value
   as every earlier mobile failure. 13 of 14 passed.
+- **Again on the next main head:** run 43101971793 (head `51456e887`,
+  PR #2179, an Actions-panel context menu) failed the same test at the same
+  line, expected 12065, received 11550; 13 of 14 passed.
 - **Isolated rerun:** not run; this host has no Linux WebKit image set up for
   the spec. The earlier Docker runs above remain the reproduction.
 

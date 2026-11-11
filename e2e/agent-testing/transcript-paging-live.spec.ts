@@ -1297,7 +1297,8 @@ test.describe("live transcript paging", () => {
         expectedRevision: layout?.revision ?? 0,
         layout: {
           version: PANE_LAYOUT_VERSION,
-          containerId: null,
+          // A container environment's layout is fenced to its container.
+          containerId: environment.containerId ?? null,
           activePaneId: "paging-pane",
           root: {
             kind: "leaf",

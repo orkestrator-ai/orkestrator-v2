@@ -34,6 +34,8 @@ export type DeltaTotals = {
   estimatedDeltaBytes: number;
   changedRows: number;
   rows: number;
+  /** v2 snapshots whose head row was part-trimmed (`messageWindow.omittedParts`). */
+  trimmedHeads: number;
 };
 
 export type CounterSample = { at: number; label: string; route: RouteTotals; delta: DeltaTotals };
@@ -57,6 +59,7 @@ export function createCounter() {
     estimatedDeltaBytes: 0,
     changedRows: 0,
     rows: 0,
+    trimmedHeads: 0,
   };
   /** Per session (hashed), the last snapshot's row digests by row id digest. */
   const lastRows = new Map<string, Map<string, string>>();
@@ -64,9 +67,14 @@ export function createCounter() {
   const lastState = new Map<string, string>();
   function recordSnapshot(sessionKey: string, body: Buffer, gzip: boolean): number {
     const text = (gzip ? gunzipSync(body) : body).toString("utf8");
-    const parsed = JSON.parse(text) as { status?: string; value?: { messages?: unknown[] } };
+    const parsed = JSON.parse(text) as {
+      status?: string;
+      value?: { messages?: unknown[]; messageWindow?: { omittedParts?: unknown } };
+    };
     if (parsed.status !== "snapshot" || !Array.isArray(parsed.value?.messages)) return text.length;
     const messages = parsed.value.messages;
+    const omittedParts = parsed.value.messageWindow?.omittedParts;
+    if (typeof omittedParts === "number" && omittedParts > 0) delta.trimmedHeads += 1;
     const previous = lastRows.get(sessionKey);
     const current = new Map<string, string>();
     let changedBytes = 0;

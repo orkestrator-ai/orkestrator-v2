@@ -23,9 +23,33 @@
  * counts, bytes and milliseconds in
  * `output/agent-testing/<run id>/conditional-reads.json`; no prompt, row
  * content, token or session id is written.
+ *
+ * `E10_SCENARIO` picks the scripted turn (default `baseline`):
+ *
+ * - `large-window`: 26 rounds of 30 KB each, measured once ten rounds have
+ *   streamed, so the bridge's window sits near its 512 KiB bound (to-do 6680
+ *   task 1).
+ * - `trimmed-head`: one response that streams 20 KB a second for 150 s,
+ *   measured once it is past 600,000 characters, so the head row alone is over
+ *   the window and is part-trimmed. Recovery reads (`/messages`) are counted
+ *   per window and over the whole turn, and the first viewer is captured to
+ *   `output/visual-previews/` while it streams (to-do 6260 task 3).
+ *
+ * `E10_READY_CHARS` moves the trimmed head's measuring point.
+ *
+ * `E10_PLATFORM=codex` runs the same scenario on the profile's pinned Codex
+ * instead (start the profile with `--agent-platforms claude,codex`). The spec
+ * writes a made-up API key (`auth.json`) and an `openai_base_url` into the
+ * profile's own Codex home (`<dataDir>/agent-credentials/codex`, never the
+ * host's), pointing it at `conditional-reads-codex-model.ts`, a loopback
+ * Responses WebSocket, and restores both files at the end.
+ *
+ * Those two write `conditional-reads-<scenario>.json` and add a `turn` block:
+ * the bridge totals from the turn starting to it going idle.
  */
 import { expect, test, fetchModulesOutsideChromium, type Page, type Request } from "./browser-test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createInterface } from "node:readline";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -35,7 +59,12 @@ import {
   withCleanup,
 } from "./conditional-reads-measurement";
 import type { CounterFile } from "./conditional-reads-bridge-counter";
-import { startFakeModel } from "./conditional-reads-fake-model";
+import {
+  startFakeModel,
+  type FakeModel,
+  type FakeModelOptions,
+} from "./conditional-reads-fake-model";
+import { snapshotFixtureFiles } from "./codex-fixture-files";
 
 type Status = {
   status: string;
@@ -66,6 +95,74 @@ const WINDOW_MS = Number(process.env.E10_WINDOW_MS ?? 20_000);
 const IDLE_WINDOW_MS = Number(process.env.E10_IDLE_WINDOW_MS ?? 30_000);
 const TAB_ID = "e10-tab";
 const MARKER = "E10-BASELINE-TURN";
+
+type Scenario = "baseline" | "large-window" | "trimmed-head";
+const SCENARIO = (process.env.E10_SCENARIO ?? "baseline") as Scenario;
+/** The scripted turn, and when its measured state is reached. */
+const SCENARIOS: Record<
+  Scenario,
+  {
+    rounds: number;
+    responseMs: number;
+    deltaChars: number;
+    readyCalls?: number;
+    readyChars?: number;
+  }
+> = {
+  baseline: { rounds: 18, responseMs: 5_000, deltaChars: 120 },
+  "large-window": { rounds: 26, responseMs: 5_000, deltaChars: 600, readyCalls: 10 },
+  "trimmed-head": { rounds: 1, responseMs: 150_000, deltaChars: 2_000, readyChars: 600_000 },
+};
+const PLATFORM = process.env.E10_PLATFORM === "codex" ? "codex" : "claude";
+const scripted = {
+  ...SCENARIOS[SCENARIO],
+  // Start measuring later in the trimmed head, to separate row size from viewers.
+  ...(process.env.E10_READY_CHARS ? { readyChars: Number(process.env.E10_READY_CHARS) } : {}),
+};
+const resultFile = `conditional-reads${PLATFORM === "codex" ? "-codex" : ""}${
+  SCENARIO === "baseline" ? "" : `-${SCENARIO}`
+}.json`;
+
+/**
+ * `conditional-reads-codex-model.ts` under Bun (specs run under Node, which
+ * has no WebSocket server), with the same progress counters as the Claude
+ * model.
+ */
+async function startCodexModel(options: FakeModelOptions): Promise<FakeModel> {
+  const child = spawn(
+    "bun",
+    [
+      path.join(import.meta.dirname, "conditional-reads-codex-model.ts"),
+      String(options.rounds),
+      String(options.responseMs),
+      String(options.deltaMs),
+      String(options.deltaChars),
+    ],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  let rounds = 0;
+  let streamed = 0;
+  const lines = createInterface({ input: child.stdout! });
+  const origin = await new Promise<string>((resolve, reject) => {
+    child.once("exit", () => reject(new Error("the Codex loopback model exited")));
+    lines.on("line", (line) => {
+      if (line.startsWith("http://")) resolve(line);
+      else if (line.startsWith("round ")) rounds = Number(line.slice(6));
+      else if (line.startsWith("streamed ")) streamed = Number(line.slice(9));
+    });
+  });
+  return {
+    origin,
+    conversationCalls: () => rounds,
+    streamedChars: () => streamed,
+    stop: async () => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      child.kill();
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+    },
+  };
+}
 const outputDirectory = path.join(repositoryRoot, "output", "agent-testing", runId);
 const counterDirectory = path.join(outputDirectory, "bridge-counters");
 
@@ -112,6 +209,13 @@ function toolchainBinDir(status: Status): string {
 
 /** Counter files of bridges an earlier run started; they keep writing while they live. */
 const earlierBridges = new Set<string>();
+
+/** Exact head-row recovery reads: the legacy whole-transcript route. */
+function recoveryReads(bridge: ReturnType<typeof readCounters>): number {
+  return Object.entries(bridge.routes)
+    .filter(([label]) => label.startsWith("GET /session/:id/messages"))
+    .reduce((total, [, value]) => total + value.count, 0);
+}
 
 function readCounters(from: number, to: number) {
   const files = existsSync(counterDirectory)
@@ -200,7 +304,7 @@ async function openViewer(page: Page, status: Status, fixture: Project, environm
   // Startup notices arrive late: the profile has no Claude login (the CLI's
   // key is in its own settings) and no Docker for this run.
   const dismiss = page.getByRole("button", {
-    name: /^Continue Without (Docker|GitHub CLI|Claude)$/,
+    name: /^Continue Without (Docker|GitHub CLI|Claude|Codex)$/,
   });
   const dockerNotice = page.getByRole("dialog").filter({
     has: page.getByRole("heading", {
@@ -231,30 +335,46 @@ async function turnPhase(invoke: Invoke, identity: Record<string, unknown>): Pro
 test.describe("E10 baseline: conditional reads and deltas", () => {
   test.skip(!OPT_IN, "Set ORKESTRATOR_AGENT_TEST_E10_BASELINE=1 on a credential-free profile");
 
-  test("a streaming Claude turn against a loopback model", async ({ page, browser }) => {
+  test.skip(!(SCENARIO in SCENARIOS), "E10_SCENARIO is baseline, large-window or trimmed-head");
+
+  test("a streaming turn against a loopback model", async ({ page, browser }) => {
     test.setTimeout(10 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
     const status = profileStatus();
     const claudeConfigDir = path.join(status.dataDir!, "agent-credentials", "claude");
     const settingsFile = path.join(claudeConfigDir, "settings.json");
+    const codexHome = path.join(status.dataDir!, "agent-credentials", "codex");
+    const codexFiles = [path.join(codexHome, "auth.json"), path.join(codexHome, "config.toml")];
     const wrapper = path.join(toolchainBinDir(status), "bun");
-    expect(existsSync(settingsFile), "the profile already has Claude settings").toBe(false);
+    if (PLATFORM === "claude") {
+      expect(existsSync(settingsFile), "the profile already has Claude settings").toBe(false);
+    } else {
+      // A credential-free profile has no Codex login to overwrite.
+      expect(existsSync(codexFiles[0]!), "the profile already has a Codex login").toBe(false);
+    }
     expect(existsSync(wrapper), "the profile toolchain already has a bun").toBe(false);
 
     const realBun = execFileSync("mise", ["which", "bun"], {
       cwd: repositoryRoot,
       encoding: "utf8",
     }).trim();
-    const results: Record<string, unknown> = { profile, windowMs: WINDOW_MS };
+    const results: Record<string, unknown> = {
+      profile,
+      platform: PLATFORM,
+      scenario: SCENARIO,
+      windowMs: WINDOW_MS,
+      scripted,
+    };
     let ownsSettings = false;
     let ownsWrapper = false;
-    const model = await startFakeModel({
+    let restoreCodex: (() => void) | undefined;
+    const model = await (PLATFORM === "codex" ? startCodexModel : startFakeModel)({
       marker: MARKER,
-      rounds: Number(process.env.E10_ROUNDS ?? 18),
-      responseMs: 5_000,
+      rounds: Number(process.env.E10_ROUNDS ?? scripted.rounds),
+      responseMs: scripted.responseMs,
       deltaMs: 100,
-      deltaChars: 120,
+      deltaChars: scripted.deltaChars,
     });
     await withCleanup(
       async () => {
@@ -263,19 +383,36 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
         // A bridge from an earlier run rewrites its file within a second.
         await page.waitForTimeout(1_500);
         for (const name of readdirSync(counterDirectory)) earlierBridges.add(name);
-        mkdirSync(claudeConfigDir, { recursive: true });
-        ownsSettings = true;
-        writeFileSync(
-          settingsFile,
-          JSON.stringify({
-            env: {
-              ANTHROPIC_BASE_URL: model.origin,
-              ANTHROPIC_API_KEY: "sk-ant-e10-fixture-only",
-              CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-              DISABLE_AUTOUPDATER: "1",
-            },
-          }),
-        );
+        if (PLATFORM === "codex") {
+          mkdirSync(codexHome, { recursive: true });
+          restoreCodex = snapshotFixtureFiles(codexFiles);
+          writeFileSync(codexFiles[0]!, JSON.stringify({ OPENAI_API_KEY: "sk-e10-fixture-only" }), {
+            mode: 0o600,
+          });
+          const earlier = existsSync(codexFiles[1]!)
+            ? readFileSync(codexFiles[1]!, "utf8").replace(/^openai_base_url = .*\n/m, "")
+            : "";
+          // A top-level key goes before any table.
+          writeFileSync(
+            codexFiles[1]!,
+            `openai_base_url = ${JSON.stringify(model.origin)}\n${earlier}`,
+            { mode: 0o600 },
+          );
+        }
+        if (PLATFORM === "claude") mkdirSync(claudeConfigDir, { recursive: true });
+        ownsSettings = PLATFORM === "claude";
+        if (ownsSettings)
+          writeFileSync(
+            settingsFile,
+            JSON.stringify({
+              env: {
+                ANTHROPIC_BASE_URL: model.origin,
+                ANTHROPIC_API_KEY: "sk-ant-e10-fixture-only",
+                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+                DISABLE_AUTOUPDATER: "1",
+              },
+            }),
+          );
         ownsWrapper = true;
         writeFileSync(
           wrapper,
@@ -321,7 +458,7 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
                   displayTitle: "E10 baseline",
                   nativeAgentData: {
                     environmentId: environment.id,
-                    platform: "claude",
+                    platform: PLATFORM,
                     isLocal: true,
                   },
                 },
@@ -331,7 +468,7 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
         });
         const identity = {
           environmentId: environment.id,
-          agent: "claude" as const,
+          agent: PLATFORM,
           logicalSessionKey: `env-${environment.id}:${TAB_ID}`,
         };
         const answers: Answer[] = [];
@@ -339,19 +476,38 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
         await openViewer(page, status, fixture!, environment);
 
         const composeBar = page.getByTestId("shared-native-compose-bar");
-        const composer = composeBar.getByRole("textbox", { name: /^Message Claude/ });
+        const composer = composeBar.getByRole("textbox", {
+          name: PLATFORM === "codex" ? /^Message Codex/ : /^Message Claude/,
+        });
         await composer.fill(`${MARKER}: stream the scripted baseline turn.`);
         await composer.press("Enter");
         await expect.poll(() => model.conversationCalls(), { timeout: 120_000 }).toBeGreaterThan(0);
         await expect
           .poll(() => turnPhase(invoke, identity), { timeout: 60_000, intervals: [500] })
           .toBe("running");
+        const turnFrom = Date.now();
         await page.waitForTimeout(5_000);
+        if (scripted.readyCalls) {
+          await expect
+            .poll(() => model.conversationCalls(), { timeout: 5 * 60_000, intervals: [1_000] })
+            .toBeGreaterThanOrEqual(scripted.readyCalls);
+        }
+        if (scripted.readyChars) {
+          await expect
+            .poll(() => model.streamedChars(), { timeout: 5 * 60_000, intervals: [1_000] })
+            .toBeGreaterThanOrEqual(scripted.readyChars);
+        }
 
         console.info("E10: measuring one viewer");
         const oneFrom = Date.now();
         await page.waitForTimeout(WINDOW_MS);
         const oneTo = Date.now();
+        if (SCENARIO === "trimmed-head") {
+          // What the first viewer shows while the part-trimmed head streams.
+          const previews = path.join(repositoryRoot, "output", "visual-previews");
+          mkdirSync(previews, { recursive: true });
+          await page.screenshot({ path: path.join(previews, `e10-trimmed-head-${runId}.png`) });
+        }
         // The counter files are flushed once a second.
         await page.waitForTimeout(1_200);
         const oneAfter = readCounters(oneFrom, oneTo);
@@ -359,6 +515,8 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
           seconds: (oneTo - oneFrom) / 1_000,
           renderer: answersBetween(answers, oneFrom, oneTo),
           bridge: oneAfter,
+          recoveryReads: recoveryReads(oneAfter),
+          streamedChars: model.streamedChars(),
           phaseAtEnd: await turnPhase(invoke, identity),
           modelCalls: model.conversationCalls(),
         };
@@ -382,6 +540,8 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
           seconds: (twoTo - twoFrom) / 1_000,
           renderer: answersBetween(answers, twoFrom, twoTo),
           bridge: twoAfter,
+          recoveryReads: recoveryReads(twoAfter),
+          streamedChars: model.streamedChars(),
           phaseAtEnd: await turnPhase(invoke, identity),
           modelCalls: model.conversationCalls(),
         };
@@ -391,7 +551,17 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
         await expect
           .poll(() => turnPhase(invoke, identity), { timeout: 5 * 60_000, intervals: [1_000] })
           .toBe("idle");
+        const turnTo = Date.now();
         await page.waitForTimeout(5_000);
+        if (SCENARIO !== "baseline") {
+          const turn = readCounters(turnFrom, turnTo);
+          results.turn = {
+            seconds: (turnTo - turnFrom) / 1_000,
+            bridge: turn,
+            recoveryReads: recoveryReads(turn),
+            streamedChars: model.streamedChars(),
+          };
+        }
         console.info("E10: measuring idle");
         const idleFrom = Date.now();
         await page.waitForTimeout(IDLE_WINDOW_MS);
@@ -414,13 +584,22 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
             name !== "idle",
           );
         }
+        if (SCENARIO === "trimmed-head") {
+          for (const name of ["oneViewer", "twoViewers"]) {
+            const window = results[name] as { bridge: ReturnType<typeof readCounters> };
+            expect(
+              window.bridge.delta.trimmedHeads,
+              `${name} measured no part-trimmed head`,
+            ).toBeGreaterThan(0);
+          }
+        }
         results.modelCalls = model.conversationCalls();
       },
       async () => {
         try {
           mkdirSync(outputDirectory, { recursive: true });
           writeFileSync(
-            path.join(outputDirectory, "conditional-reads.json"),
+            path.join(outputDirectory, resultFile),
             `${JSON.stringify(results, null, 2)}\n`,
           );
         } finally {
@@ -429,6 +608,7 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
           } finally {
             try {
               if (ownsSettings) rmSync(settingsFile, { force: true });
+              restoreCodex?.();
             } finally {
               await model.stop();
             }

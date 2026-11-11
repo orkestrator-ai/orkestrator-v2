@@ -1089,7 +1089,7 @@ export const UPKEEP_RELEASE_PAUSE_MS = 5;
  * reads the pages it moves while it holds the write lock, and a backend writer
  * waits behind it with the event loop held. With four processes fsyncing beside
  * it, steps of a 1 GiB release held the lock for up to 2.5 s and backend writes
- * waited up to 4.2 s (to-do 7210 task 4). On an idle disk a step takes under
+ * waited up to 4.2 s (storage.md, "Migrations"; to-do 7210 task 4, retired). On an idle disk a step takes under
  * 60 ms, so a stop there only moves the rest to the next check.
  */
 export const UPKEEP_RELEASE_SLOW_STEP_MS = 100;

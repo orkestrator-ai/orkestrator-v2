@@ -48,7 +48,10 @@ import type {
   GatewayEventClient,
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
-import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-projection-encoding.js";
+import {
+  isSpliceableResult,
+  spliceEncodedJsonBytes,
+} from "./core/native-agent-projection-encoding.js";
 import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 import type { CommandInvocation } from "./core/commands-context.js";
 import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
@@ -178,13 +181,15 @@ export class GatewayHandlers {
         : this.ctx.backend.invoke(command, invokeArgs, invocation));
       // A transcript answer's rows were each encoded already to size and hash
       // them; splice those encodings in rather than serializing them again.
-      const responseBody = isSpliceableResult(result)
-        ? `{"result":${spliceEncodedJson(result)}}`
-        : JSON.stringify({ result });
+      // Either way the body is encoded to bytes once, here, and its length
+      // read from the buffer rather than by scanning the string again.
+      const responseBody =
+        (isSpliceableResult(result) ? spliceEncodedJsonBytes({ result }) : undefined) ??
+        Buffer.from(JSON.stringify({ result }));
       this.ctx.metrics.recordInvoke(
         command,
         requestBytes,
-        Buffer.byteLength(responseBody),
+        responseBody.byteLength,
         Math.max(0, Date.now() - startedAt),
         true,
       );

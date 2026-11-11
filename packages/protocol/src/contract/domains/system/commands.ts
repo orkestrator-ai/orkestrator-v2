@@ -245,7 +245,7 @@ export const reconcileWorkflowSchedulingCommand = defineCommand({
   critical: [],
 });
 
-/** A desktop window's new renderer error counts, into the essential log. */
+/** A renderer's new error counts (a desktop window's or a browser tab's), into the essential log. */
 export const recordRendererErrorsCommand = defineCommand({
   domain: systemDomain,
   name: RECORD_RENDERER_ERRORS_COMMAND,
@@ -253,7 +253,10 @@ export const recordRendererErrorsCommand = defineCommand({
   access: "admin",
   read: false,
   // Parsed by the recorder, which keeps its own message for a malformed batch.
-  args: Schema.Struct({ entries: optionalUnknown }),
+  // `client` (optional, a renderer's upload id) gives each renderer its own
+  // share of the per-minute bound; an older backend ignores it and applies
+  // only the shared bound.
+  args: Schema.Struct({ entries: optionalUnknown, client: optionalUnknown }),
   result: RecordRendererErrorsResultSchema,
   critical: [],
 });

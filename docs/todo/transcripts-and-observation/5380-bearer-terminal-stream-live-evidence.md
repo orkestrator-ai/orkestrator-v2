@@ -34,6 +34,6 @@ Every web client shares one terminal stream; the bearer and cross-origin paths r
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, `nextHopProtocol` from a real Tailscale Serve client and a hosted client) moved there on 2026-11-10.
 - to-do 1202 efficiency follow-ups, task 4 (retired 2026-11-10) (GW-3)
-- [0052 remote client bandwidth](0052-remote-client-bandwidth.md)
+- 0052 remote client bandwidth (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md))
 - Efficiency report, A (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), GW-3
 - [Remote gateway, event stream reconnects](../../architecture/remote-gateway.md#event-stream-reconnects)

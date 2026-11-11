@@ -41,6 +41,7 @@ import {
   type PlanUsageCache,
 } from "./plan-usage-cache.js";
 import { asRecord } from "./agent-provider-runtime.js";
+import { agentTestUsageOrigin } from "./agent-test-fixtures.js";
 import { resolveCursorApiKey, resolveOpenCodeZenApiKey } from "./commands-validation.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import {
@@ -61,6 +62,25 @@ export type { PlanUsagePlatform };
 export const OPENCODE_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/codex/usage";
+
+/**
+ * Where `platform`'s usage is read from: the provider's endpoint, or the same
+ * path on an isolated agent-test profile's loopback usage server
+ * (`agentTestUsageOrigin`), which a production backend never honours.
+ */
+export function planUsageUrl(
+  context: CommandContext,
+  platform: "claude" | "codex",
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const real = platform === "claude" ? CLAUDE_USAGE_URL : CODEX_USAGE_URL;
+  const origin = agentTestUsageOrigin({
+    runtimeFlavor: context.runtimeFlavor,
+    dataDir: () => context.storage.getDataDir(),
+    env,
+  });
+  return origin ? new URL(new URL(real).pathname, origin).toString() : real;
+}
 
 /** Re-exported so callers keep one import site for the Cursor REST base. */
 export { CURSOR_API_BASE };
@@ -621,6 +641,8 @@ async function defaultCodexAuthFile(context: CommandContext): Promise<string | u
 
 export type PlanUsageReaderDependencies = {
   fetchImpl?: FetchLike;
+  /** Read for the agent-test usage origin (`planUsageUrl`); `process.env` by default. */
+  env?: NodeJS.ProcessEnv;
   now?: () => number;
   /** The snapshot cache to serve from; a fresh one per reader by default. */
   cache?: PlanUsageCache;
@@ -664,6 +686,8 @@ type CursorTokenCache = { entry?: { apiKey: string; token: string; expiresAt: nu
 
 type ReaderRuntime = {
   fetchImpl: FetchLike;
+  /** Read for the agent-test usage origin; `process.env` outside tests. */
+  env: NodeJS.ProcessEnv;
   now: () => number;
   claudeToken: (context: CommandContext, now: number) => Promise<string | undefined>;
   codexAuth: (context: CommandContext) => Promise<string | undefined>;
@@ -743,13 +767,17 @@ async function readClaudePlanUsage(
       nowIso,
     );
   }
-  const response = await requestJson(runtime.fetchImpl, CLAUDE_USAGE_URL, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "anthropic-beta": CLAUDE_OAUTH_BETA,
-      Accept: "application/json",
+  const response = await requestJson(
+    runtime.fetchImpl,
+    planUsageUrl(context, "claude", runtime.env),
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "anthropic-beta": CLAUDE_OAUTH_BETA,
+        Accept: "application/json",
+      },
     },
-  });
+  );
   const { status, body } = response;
   if (status === 401 || status === 403) {
     return unavailableSnapshot(
@@ -794,13 +822,17 @@ async function readCodexPlanUsage(
     );
   }
   const accountId = chatGptAccountId(tokens);
-  const response = await requestJson(runtime.fetchImpl, CODEX_USAGE_URL, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-      ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+  const response = await requestJson(
+    runtime.fetchImpl,
+    planUsageUrl(context, "codex", runtime.env),
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+      },
     },
-  });
+  );
   const { status, body } = response;
   if (status === 401 || status === 403) {
     return unavailableSnapshot(
@@ -931,6 +963,7 @@ export function createPlanUsageReader(
   const rateLimits = new Map<PlanUsagePlatform, { until: number; snapshot: PlanUsageSnapshot }>();
   const runtime: ReaderRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
+    env: overrides.env ?? process.env,
     now,
     claudeToken: overrides.credentials?.claude ?? defaultClaudeOAuthToken,
     codexAuth: overrides.credentials?.codex ?? defaultCodexAuthFile,
@@ -1041,11 +1074,12 @@ export async function readAgentAccountPlanUsage(
   context: CommandContext,
   platform: "claude" | "codex",
   credential: string | undefined,
-  overrides: { fetchImpl?: FetchLike; now?: () => number } = {},
+  overrides: { fetchImpl?: FetchLike; now?: () => number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<{ snapshot: PlanUsageSnapshot; retryAfterMs?: number }> {
   const now = overrides.now ?? Date.now;
   const runtime: ReaderRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
+    env: overrides.env ?? process.env,
     now,
     claudeToken: async () => credential,
     codexAuth: async () => credential,

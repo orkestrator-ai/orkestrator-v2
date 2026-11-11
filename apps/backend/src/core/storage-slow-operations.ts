@@ -41,6 +41,17 @@ export const SLOW_STORAGE_LOG_INTERVAL_MS = 10_000;
 export const SLOW_STORAGE_ALWAYS_LOG_MS = 5_000;
 export const RECENT_SLOW_STORAGE_OPERATIONS = 32;
 export const MAX_SLOW_STORAGE_SERIES = 64;
+/**
+ * Every call's time, slow or not, is summed into buckets of this width by the
+ * monotonic time it ended, so a stall line can say how much of its window
+ * SQLite took in calls each under the threshold (to-do 7562: a busy run's
+ * stalls were the event-loop thread waiting on disk with no call reaching
+ * 250 ms). A window's sum is exact to one bucket at either edge.
+ */
+export const STORAGE_CALL_BUCKET_MS = 250;
+/** Buckets kept: 32 s, longer than any stall worth attributing. */
+export const STORAGE_CALL_BUCKETS = 128;
+const STORAGE_DATABASE_NAMES: readonly StorageDatabaseName[] = ["main", "ledger", "other"];
 
 export type StorageDatabaseName = "main" | "ledger" | "other";
 export type TransactionMode = "deferred" | "immediate" | "exclusive";
@@ -182,6 +193,12 @@ export class SlowStorageOperations {
   private readonly series = new Map<string, Series>();
   private overflowed = 0;
   private readonly recent: RecentOperation[] = [];
+  /** Bucket number each slot holds; a slot from an older lap reads as empty. */
+  private readonly callBucket = new Float64Array(STORAGE_CALL_BUCKETS).fill(-1);
+  private readonly callCount = new Float64Array(STORAGE_CALL_BUCKETS);
+  private readonly callMs = Object.fromEntries(
+    STORAGE_DATABASE_NAMES.map((name) => [name, new Float64Array(STORAGE_CALL_BUCKETS)]),
+  ) as Record<StorageDatabaseName, Float64Array>;
 
   constructor(
     readonly thresholdMs = SLOW_STORAGE_OPERATION_MS,
@@ -266,8 +283,47 @@ export class SlowStorageOperations {
   }
 
   /**
+   * Counts one outermost statement or transaction of any length. A slot check
+   * and two additions: this runs for every SQLite call the backend makes.
+   */
+  recordCall(database: StorageDatabaseName, durationMs: number, endedAtMs: number): void {
+    if (!Number.isFinite(durationMs) || !Number.isFinite(endedAtMs)) return;
+    const bucket = Math.floor(endedAtMs / STORAGE_CALL_BUCKET_MS);
+    const slot = bucket % STORAGE_CALL_BUCKETS;
+    if (this.callBucket[slot] !== bucket) {
+      this.callBucket[slot] = bucket;
+      this.callCount[slot] = 0;
+      for (const name of STORAGE_DATABASE_NAMES) this.callMs[name][slot] = 0;
+    }
+    this.callCount[slot]! += 1;
+    this.callMs[database][slot]! += Math.max(0, durationMs);
+  }
+
+  /** Every call that ended in `fromMs`–`toMs`, at bucket resolution. */
+  private callsIn(fromMs: number, toMs: number): EventLoopStallContext | undefined {
+    const first = Math.floor(fromMs / STORAGE_CALL_BUCKET_MS);
+    const last = Math.floor(toMs / STORAGE_CALL_BUCKET_MS);
+    let calls = 0;
+    const ms: Record<StorageDatabaseName, number> = { main: 0, ledger: 0, other: 0 };
+    for (let bucket = Math.max(first, last - STORAGE_CALL_BUCKETS + 1); bucket <= last; bucket++) {
+      const slot = bucket % STORAGE_CALL_BUCKETS;
+      if (this.callBucket[slot] !== bucket) continue;
+      calls += this.callCount[slot]!;
+      for (const name of STORAGE_DATABASE_NAMES) ms[name] += this.callMs[name][slot]!;
+    }
+    if (calls === 0) return undefined;
+    return {
+      storageCalls: calls,
+      storageCallMs: Math.round(ms.main + ms.ledger + ms.other),
+      storageMainCallMs: Math.round(ms.main),
+      storageLedgerCallMs: Math.round(ms.ledger),
+    };
+  }
+
+  /**
    * The longest slow operation overlapping `fromMs`–`toMs` (monotonic), as
-   * stall-line fields, plus how much slow storage time fell in the window.
+   * stall-line fields, plus how much slow storage time fell in the window,
+   * and every call's count and time in the window ({@link recordCall}).
    */
   stallContext({
     fromMs,
@@ -284,8 +340,10 @@ export class SlowStorageOperations {
       totalMs += Math.min(operation.endedAtMs, toMs) - Math.max(startedAtMs, fromMs);
       if (!longest || operation.durationMs > longest.durationMs) longest = operation;
     }
-    if (!longest) return undefined;
+    const calls = this.callsIn(fromMs, toMs);
+    if (!longest) return calls;
     return {
+      ...calls,
       storageMs: totalMs,
       storageDatabase: longest.database,
       storageOp: longest.op,
@@ -342,7 +400,10 @@ interface TransactionState extends SqliteConnectionTiming {
 
 /**
  * Times every statement (`query`, `prepare`, `run`, `exec`) and outermost
- * transaction on `db`, reporting those at or over the recorder's threshold.
+ * transaction on `db`, reporting those at or over the recorder's threshold
+ * and counting each outermost call (a statement outside a transaction, or a
+ * whole transaction) into the recorder's call buckets
+ * ({@link SlowStorageOperations.recordCall}).
  * Only the outermost transaction is timed (bun:sqlite turns a nested one into
  * a savepoint), and its time is split: `begin` and `commit` are the time
  * before and after its body, which is where the write lock and the WAL sync
@@ -381,6 +442,14 @@ export function instrumentSqliteConnection(
   const slow = (sample: Omit<SlowStorageSample, "database">): void => {
     try {
       recorder.record({ ...sample, database });
+    } catch {
+      // Evidence must never fail the call it describes.
+    }
+  };
+
+  const call = (ms: number, endedAt: number): void => {
+    try {
+      recorder.recordCall(database, ms, endedAt);
     } catch {
       // Evidence must never fail the call it describes.
     }
@@ -426,6 +495,7 @@ export function instrumentSqliteConnection(
         const endedAt = now();
         const ms = endedAt - startedAt;
         if (completed) count(classify(args), result, ms);
+        if (state.depth === 0) call(ms, endedAt);
         if (state.depth > 0) {
           state.sqlMs += ms;
           if (ms > state.slowestMs) {
@@ -517,6 +587,7 @@ export function instrumentSqliteConnection(
         const endedAt = now();
         const ms = endedAt - startedAt;
         if (committed) countTransaction(store, endedAt, marks);
+        call(ms, endedAt);
         if (ms >= recorder.thresholdMs) {
           const ran = !Number.isNaN(marks.bodyStartedAt);
           const bodyEndedAt = Number.isNaN(marks.bodyEndedAt) ? endedAt : marks.bodyEndedAt;

@@ -258,6 +258,26 @@ existing DOM focus restoration.
 The search does not return native focus to a preview or artifact it was
 opened from: closing it leaves focus in the window.
 
+**A hidden preview never keeps keyboard focus.** Electron focuses a view's
+WebContents when it loads a URL, whether or not the view is shown. A
+background tab's browser preview loads in a hidden view, so opening an
+environment whose layout holds one used to move native focus to that
+invisible page: the composer on show kept its caret, but typing went nowhere
+(found by the packaged Linux run, 2026-11-11). `BrowserPreviewManager` now
+answers a hidden or zero-sized preview's `focus` event by focusing the
+window's own renderer one task later (focusing inside the event has no
+effect), if the hidden preview still has focus then. Only the renderer's
+WebContents is focused, never the window, so nothing is raised or activated.
+A shown preview keeps the focus it is given.
+
+**A design frame returns focus to its field.** While the dialog has focus,
+Chromium leaves a design frame with no focused element, and the dialog's
+close restores focus to the frame's `<iframe>`, not to the field inside it.
+The design runtime remembers the element that last took focus in the frame
+and, when the frame regains focus with nothing focused, focuses it again
+(skipped once it has left the document). A click or Tab into the frame moves
+focus after this runs, so it still decides where focus lands.
+
 ## Browser-client limits
 
 The parent document cannot intercept keys in uncooperative cross-origin
@@ -273,7 +293,9 @@ is the fallback on macOS.
 
 - Protocol: matcher on both modifiers and layouts, catalog reachability, and
   the claim table for each platform and focus; serialized design bootstraps
-  before and after production minification, including macOS text editing.
+  before and after production minification, including macOS text editing; a
+  design frame regaining focus with nothing focused returns it to its last
+  field (`design-runtime.test.ts`).
 - Renderer: the router from composer, terminal and contenteditable on macOS
   and Windows, a workspace shortcut reaching only the workspace on show,
   main's `app-shortcut` event, pending delivery; the search from the composer, a terminal and text
@@ -285,7 +307,9 @@ is the fallback on macOS.
   shell, macOS artifact Ctrl+K stays with the surface; preview routing follows
   `fromPreviews`; app documents, previews and unknown contents keep unclaimed
   keys; Ctrl+Shift+/ toggles like ⌘⇧/; ⌘, and Ctrl+, from an artifact view reach the
-  window's shell on macOS and Linux.
+  window's shell on macOS and Linux. A hidden or zero-sized browser preview
+  that takes focus hands it back to the window's renderer one task later, and
+  a shown one keeps it (`browser-preview-manager.test.ts`).
 - Settings: `GlobalSettingsHost.test.tsx` (⌘,, Ctrl+, and the menu's request open
   Settings and leave an open page where it is), the menu template on all three
   platforms, and the mobile drawer giving way to Settings and the bug report sheet.
@@ -305,8 +329,8 @@ is the fallback on macOS.
   layout and accelerators on `linux` and `win32`, Ctrl and AltGr Electron input,
   platform detection, and Ctrl key caps.
 
-Packaged native OS qualification remains in
-[0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md).
+Packaged native OS qualification is recorded under
+[Packaged native qualification](#packaged-native-qualification).
 
 `e2e/agent-testing/application-menu-electron.spec.ts` builds the production
 template in a disposable Electron process, checks resolved role labels and
@@ -315,6 +339,91 @@ accelerators, and invokes the built menu callbacks. With
 to navigate View, checks repeated selection, accelerator registration,
 the real About panel, and resumed typing. The native-menu workflow runs this
 on Linux/Xvfb and Windows and retains menu defaults and About screenshots.
+
+## Packaged native qualification
+
+Electron specs that use Chromium input exercise `before-input-event` but not
+the operating system's own key handling. These checks press real keys (X11
+XTEST through `xdotool`) in a packaged build.
+
+**Linux, X11 (Xvfb, no window manager, US layout).** On 2026-10-31 a packaged
+build of `931e5541` passed the sidebar, terminal and Monaco rows (Ctrl+Shift+/
+opens, a separate press closes, Escape closes, typing resumes; Ctrl+K opens
+search from the sidebar and Monaco and reaches the shell from a terminal;
+Ctrl+Shift+K deletes Monaco's line without the dialog) and the whole menu-bar
+row (File, Edit, View, Window and Help with no macOS-only item; View ›
+Keyboard Shortcuts… shows `Ctrl+Shift+/` and opens from Alt, Right, Right,
+Down, End, Enter; choosing it again keeps the dialog; Close Tab has no key;
+Super+H does nothing; Ctrl+Q quits; Help › About opens). On 2026-11-11
+`e2e/agent-testing/packaged-native-shortcuts-electron.spec.ts` passed five
+repetitions out of five on a packaged linux-arm64 build of `498b68766` (2.37.5-beta,
+Electron 45.2.3) for the remaining surfaces, with the hidden-preview and
+design-frame focus fixes under [Returning to a native view](#returning-to-a-native-view)
+in place (without them the composer and design-frame rows failed). Every row also types afterwards and checks the keys arrived:
+
+| Surface | Checked |
+| --- | --- |
+| Composer (an unassigned agent tab) | Ctrl+Shift+/ opens with search focused and a separate press closes; Escape closes; Ctrl+K opens the window's search, which takes typing; a background browser tab's hidden preview loads without taking focus from it |
+| Browser preview | Ctrl+Shift+/ opens and a separate press closes; Escape and an outside pointer click close; View › Keyboard Shortcuts… from the keyboard opens it, and choosing it again keeps it open and refocuses search; typing resumes in the page's field after each; Ctrl+K stays with the page |
+| Interactive artifact view | Ctrl+Shift+/ opens and a separate press or Escape closes, typing resumes in the artifact's field; Ctrl+K opens the window's search |
+| Design frame (a field in the frame) | Ctrl+Shift+/ opens and a separate press or Escape closes, typing resumes in the field; Ctrl+K opens the window's search |
+
+The spec is opt-in and skips unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`. Run
+it only on a disposable X display, because the keys go to whichever window has
+X focus. It needs `xdotool`, `setxkbmap`, ImageMagick's `import` and, for
+design workspaces, a Chromium the backend can find (`/usr/bin/chromium` or
+`ORKESTRATOR_DESIGN_CHROMIUM_PATH`). The app runs on a disposable agent-test
+profile with gateway port 0 and starts no agent; the artifact is served by the
+test's own `LoopbackArtifactContentServer` and the preview page by a loopback
+server. The 2026-11-11 run used a Debian trixie arm64 Docker container on a Mac
+holding the source tree, Xvfb and those tools, so nothing ran on the host's
+desktop:
+
+```bash
+mise run package:linux:unpacked:test
+Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp &
+DISPLAY=:99 ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1 \
+mise run test:logged -- --name packaged-native-shortcuts -- \
+  bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts \
+  packaged-native-shortcuts-electron.spec.ts
+```
+
+The run gives the window X focus itself (there is no window manager) and puts
+DOM focus on each surface before its first press, as a click would. It does
+not cover Wayland, input methods or a window manager's focus policy.
+
+**Still owed, by a person** (items in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)):
+the matrix below on a packaged macOS build, with a Cyrillic input source;
+the same matrix on a Linux Wayland desktop; and the macOS About panel. Record
+per row the OS and display server or compositor, packaged commit, keyboard
+layout or input source, surface, the separate-press result and the
+resumed-typing result.
+
+- ⌘⇧/ (Ctrl+Shift+/ on Linux) with focus in the sidebar, composer, terminal,
+  Monaco, browser/service preview, interactive artifact and design frame: one
+  press opens, an immediate separate press closes.
+- View › Keyboard Shortcuts… opens the dialog in the window's renderer while a
+  preview has focus; choosing it again keeps the dialog and refocuses search.
+- A dialog opened from a preview closes with Escape, the chord and an outside
+  pointer click, and typing resumes in that preview. Hidden or disposed
+  previews never regain focus.
+- With Monaco focused, ⌘⇧K (Ctrl+Shift+K on Linux) deletes the current line
+  without opening the dialog, and typing stays in the editor.
+- Linux only, the in-window menu bar: the row recorded above for X11.
+- ⌘K from the sidebar, composer, Monaco, an interactive artifact and a design
+  frame opens the window's search, which takes typing; Ctrl+K does the same on
+  Linux. On macOS, Ctrl+K stays with a focused text field (composer, Monaco, a
+  design frame's input) and with an interactive artifact. In a terminal Ctrl+K
+  reaches the shell and ⌘K opens search. In a browser preview ⌘K stays with
+  the page.
+- macOS only, with a Cyrillic input source: ⌘⇧ and the physical `Slash` key
+  open the dialog when it reports a non-ASCII character; on a layout that
+  types ASCII the typed `/` or `?` wins, and a different ASCII character on
+  `Slash` does not open it.
+
+The to-do that tracked this, 0325, was retired on 2026-11-11 (read it with
+`git show 498b68766:docs/todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md`).
 
 ## Terminal mouse selection
 

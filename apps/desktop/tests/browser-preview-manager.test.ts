@@ -53,6 +53,12 @@ class FakeWebContents extends EventEmitter {
   isDestroyed() {
     return this.destroyed;
   }
+
+  focused = false;
+
+  isFocused() {
+    return this.focused;
+  }
 }
 
 function createHarness(
@@ -95,7 +101,11 @@ function createHarness(
   const window = {
     isDestroyed: () => windowDestroyed,
     contentView,
-    webContents: { getZoomFactor: () => hostZoomFactor },
+    webContents: {
+      getZoomFactor: () => hostZoomFactor,
+      focus: mock(() => undefined),
+      isDestroyed: () => false,
+    },
   };
   const emitState = mock(() => undefined);
   const emitOpenLink = mock(() => undefined);
@@ -550,6 +560,48 @@ describe("BrowserPreviewManager", () => {
     harness.manager.destroy(input.tabId);
     expect(harness.manager.focusWebContents(contents.id)).toBe(false);
     expect(harness.manager.ownsWebContents(contents.id)).toBe(false);
+  });
+
+  test("a hidden preview that takes focus gives it back to the window's renderer", async () => {
+    const harness = createHarness();
+    const nextTask = () => new Promise<void>((resolve) => setImmediate(resolve));
+    // A background tab's preview: attached hidden, so loading its URL can
+    // focus a view nobody can see (Electron focuses a view on loadURL).
+    await harness.manager.attach({ ...input, visible: false });
+    const contents = harness.views[0]!.webContents;
+    const takeFocus = () => {
+      contents.focused = true;
+      contents.emit("focus");
+    };
+    takeFocus();
+    // Not from inside the event: Electron ignores a focus move made there.
+    expect(harness.window.webContents.focus).not.toHaveBeenCalled();
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(1);
+
+    // Focus that already moved on by the next task is left where it went.
+    takeFocus();
+    contents.focused = false;
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(1);
+
+    // A shown preview keeps the focus it was given.
+    harness.manager.setVisible(input.tabId, true);
+    takeFocus();
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(1);
+
+    // Shown but with no area (not laid out yet) counts as hidden.
+    harness.manager.setBounds(input.tabId, { x: 0, y: 0, width: 0, height: 0 });
+    takeFocus();
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(2);
+
+    // A preview destroyed before the next task is not acted on.
+    takeFocus();
+    harness.manager.destroy(input.tabId);
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(2);
   });
 
   test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {

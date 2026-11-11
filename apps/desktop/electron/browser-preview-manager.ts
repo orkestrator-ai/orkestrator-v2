@@ -799,12 +799,27 @@ export class BrowserPreviewManager {
 
   focusWebContents(id: number): boolean {
     const preview = [...this.previews.values()].find((item) => item.view.webContents.id === id);
-    if (!preview || preview.view.webContents.isDestroyed() || !preview.view.getVisible())
+    if (!preview || preview.view.webContents.isDestroyed() || !this.canHoldFocus(preview))
       return false;
-    const bounds = preview.view.getBounds();
-    if (bounds.width <= 0 || bounds.height <= 0) return false;
     preview.view.webContents.focus();
     return true;
+  }
+
+  /** See the `focus` listener in `installListeners`. */
+  private returnFocusFromHiddenPreview(tabId: string, preview: ManagedPreview): void {
+    const contents = preview.view.webContents;
+    if (this.previews.get(tabId) !== preview || contents.isDestroyed()) return;
+    if (this.canHoldFocus(preview) || !contents.isFocused()) return;
+    const window = this.options.getWindow();
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+    window.webContents.focus();
+  }
+
+  /** A preview can hold keyboard focus only while it is shown with an area. */
+  private canHoldFocus(preview: ManagedPreview): boolean {
+    if (!preview.view.getVisible()) return false;
+    const bounds = preview.view.getBounds();
+    return bounds.width > 0 && bounds.height > 0;
   }
 
   consumeClipboardWriteUserActivation(webContents: WebContents, requestingUrl: string): boolean {
@@ -1062,6 +1077,20 @@ export class BrowserPreviewManager {
   private installListeners(tabId: string, preview: ManagedPreview): void {
     const contents = preview.view.webContents;
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // Electron gives a view's WebContents keyboard focus when it loads a URL,
+    // hidden or not. On packaged Linux a background tab's preview took focus
+    // from the composer on show as it loaded, so typing went to an invisible
+    // page. A hidden preview never keeps focus: it goes back to the
+    // window's own renderer, which owns whatever is on show. Only the
+    // renderer's WebContents is focused, never the window, so this cannot
+    // raise or activate it. Focusing from inside the event does nothing (the
+    // move is still in progress), so it happens one task later, if the hidden
+    // preview still has focus then. See docs/architecture/keyboard-shortcuts.md,
+    // "Returning to a native view".
+    contents.on("focus", () => {
+      if (this.previews.get(tabId) !== preview || this.canHoldFocus(preview)) return;
+      setImmediate(() => this.returnFocusFromHiddenPreview(tabId, preview));
+    });
     contents.on("before-input-event", (event, input) => {
       const shortcut = appShortcutForInput(input);
       if (shortcut && appShortcut(shortcut).fromPreviews) {

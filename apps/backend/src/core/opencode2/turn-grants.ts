@@ -3,8 +3,9 @@
  * reviewer shell rules and workflow-result tools
  * (docs/todo/agent-engines/0008-opencode-v2.md, phase 5).
  *
- * The 1.x broker's semantics (`opencode-workflow-result-broker.ts`), on 2.x
- * session permissions:
+ * The retired 1.x broker's semantics
+ * (`git show 5f4e27b1c:apps/backend/src/core/opencode-workflow-result-broker.ts`),
+ * on 2.x session permissions:
  *
  * - **Granted under the dispatch lock, right before the prompt.** `begin`
  *   writes the turn's rules and an owner record (`orkestrator.turn`:

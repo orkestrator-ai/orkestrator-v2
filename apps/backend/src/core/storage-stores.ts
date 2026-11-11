@@ -17,6 +17,7 @@ import {
   RETIRED_LEGACY_STORES,
   queueLoopedReviewSessions,
   retireLoopedReviewsMigration,
+  retireOpenCode2SessionsMigration,
 } from "./storage-retired-features.js";
 import {
   WEB_ANNOTATION_STORE_LAYOUT,
@@ -90,6 +91,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "feature-plans": { kind: "array", owner: ownerField("projectId") },
   "linear-auth": { kind: "document" },
   "linear-completion-comments": { kind: "array", key: "pipelineId" },
+  "linear-board-links": { kind: "array", key: "key" },
+  "linear-sync": { kind: "document" },
+  "linear-issue-creates": { kind: "array", key: "requestKey" },
   "github-completion-comments": { kind: "array", key: "pipelineId" },
   "preview-services": { kind: "envelope", collections: ["definitions"] },
   "preview-settings": { kind: "document" },
@@ -133,9 +137,6 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).
   "coordinator-watched-pull-requests": { kind: "record", owner: ownerField("projectId") },
-  // OpenCode 2.x sessions workflows created, one row per environment
-  // (`storage-opencode2-sessions.ts`).
-  "opencode2-sessions": { kind: "record", owner: ownerField("environmentId") },
 };
 
 /**
@@ -273,6 +274,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   retireLoopedReviewsMigration,
   buildPipelineReviewReportUpgradeMigration,
   moveChangeLedgerMigration,
+  retireOpenCode2SessionsMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

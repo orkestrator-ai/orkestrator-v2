@@ -781,7 +781,10 @@ esac
         expect(gateway).toContain("-e NETWORK_MODE=restricted");
         expect(gateway).toContain("-e ALLOWED_DOMAINS=one.example");
         expect(gateway).toContain("-e ORKESTRATOR_NETWORK_POLICY=3");
-        expect(gateway).toMatch(/-e ORKESTRATOR_INGRESS_PORTS=3000,4096,4097/);
+        expect(gateway).toMatch(/-e ORKESTRATOR_INGRESS_PORTS=3000,4097,/);
+        // OpenCode 1.x's retired port is no longer published; 2.x's is.
+        expect(gateway).not.toContain("::4096/tcp");
+        expect(gateway).toContain("-p 127.0.0.1::4102/tcp");
         // The workload joins it by id and holds nothing of the namespace.
         expect(workload).toContain(`--network container:${gatewayId}`);
         expect(workload).toMatch(

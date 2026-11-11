@@ -11,7 +11,9 @@ This analysis predates the completed code and live checks recorded below.
 The current state and qualification evidence supersede its proposed choices.
 The task statuses were brought up to date on 2026-11-10 (against `main` at
 `04639b12b`): every code task is done, and only live runs remain (Cursor,
-Grok and OpenCode, as listed under Needs verification).
+Grok and OpenCode, as listed under Needs verification). On 2026-11-11 the
+OpenCode question (task 4) became obsolete when OpenCode 1.x was retired;
+only the Cursor and Grok runs in the manual-test checklist remain.
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
@@ -27,9 +29,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    back to `prepared` and send it again under the same id. Status: done
    (2026-10-27; code item 2).
 4. **OpenCode same-id deduplication** (Needs verification): does OpenCode
-   deduplicate a `promptAsync` that reuses a message id? Status: open (read
-   the pinned server source; no code depends on it: OpenCode never answers
-   `absent`).
+   deduplicate a `promptAsync` that reuses a message id? Status: done
+   (obsolete: OpenCode 1.x retired 2026-11-11, see
+   [0008](../agent-engines/0008-opencode-v2.md) "OpenCode 1.x retired
+   (2026-11-11)"; the OpenCode 2 provider never re-posts an ambiguous prompt,
+   so no message id is reused).
 
 ### 1. Make Build Pipeline's same-id redispatch at-most-once
 
@@ -195,6 +199,12 @@ moves the reviewer back to `prepared` through the same `commit(transition)`
 
 ### 4. OpenCode same-id deduplication
 
+Obsolete since 2026-11-11: the 1.x provider and its tests below were removed
+with OpenCode 1.x (`git show 5f4e27b1c:apps/backend/src/core/opencode-provider.ts`).
+The OpenCode 2 provider (`apps/backend/src/core/opencode2/provider.ts`) never
+re-posts an ambiguous attempt, so the question no longer arises. The analysis
+below is kept as history.
+
 **Problem.** The provider retries an ambiguous `promptAsync` with the same
 `messageID` (`apps/backend/src/core/opencode-provider.ts:648`, `:684`), trusting
 OpenCode to treat it as the same message. If OpenCode instead starts a second
@@ -242,7 +252,9 @@ found.
   backend reads it as `unknown`, and an older bridge never sends it.
 - **All five HTTP bridges answer `absent`**, only while the session's journal
   is complete and holds no record of the id. OpenCode (backend-side provider)
-  never does. The durable rule is in
+  never did on 1.x; since 2026-11-11 the OpenCode 2 provider answers `absent`
+  only for a request it saw refused with a definitive 4xx in this process
+  (`dispatchStatus` in `apps/backend/src/core/opencode2/provider.ts`). The durable rule is in
   [`bridges/AGENTS.md`](../../../bridges/AGENTS.md) and
   [platform inconsistencies](../../architecture/platform-inconsistencies.md);
   each bridge's `AGENTS.md` names its marker.
@@ -513,8 +525,9 @@ they record why each choice was made.
 
 ## Needs verification
 
-- Whether OpenCode deduplicates a `promptAsync` that reuses a message id.
-  OpenCode still never answers `absent`, so nothing here depends on it.
+- ~~Whether OpenCode deduplicates a `promptAsync` that reuses a message id.~~
+  Obsolete (task 4): OpenCode 1.x was retired on 2026-11-11, and OpenCode 2
+  never re-posts an ambiguous prompt.
 
 ## Related
 

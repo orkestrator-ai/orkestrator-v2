@@ -11,12 +11,7 @@ import {
   SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
   UNAPPLIED_NETWORK_RESTRICTION_NOTE,
 } from "./native-agent-execution-policy.js";
-import {
-  effectiveOpenCodePolicy,
-  openCodeAgentFor,
-  openCodeCoordinatorAgent,
-  openCodePermissionRules,
-} from "./opencode-provider-helpers.js";
+import { effectiveOpenCodePolicy, openCodePermissionRules } from "./opencode2/policy-rules.js";
 
 describe("resolveNativeAgentExecutionPolicy", () => {
   const host = { environmentType: "local" as const, networkAccessMode: "full" as const };
@@ -485,49 +480,5 @@ describe("OpenCode execution policy translation", () => {
       networkAccess: "restricted",
     });
     expect(rules.at(-1)).toEqual({ permission: "read", pattern: "*", action: "deny" });
-  });
-
-  test("the coordinator runs OpenCode's read-only agent whatever the caller asked for", () => {
-    expect(
-      openCodeCoordinatorAgent({
-        id: "coordinator-read-only",
-        sandbox: "provider",
-        approvals: "deny",
-        projectResources: true,
-        networkAccess: "restricted",
-      }),
-    ).toBe("plan");
-    expect(
-      openCodeCoordinatorAgent({
-        id: "interactive-host",
-        sandbox: "provider",
-        approvals: "ask",
-        projectResources: true,
-        networkAccess: "full",
-      }),
-    ).toBeUndefined();
-    expect(openCodeCoordinatorAgent(undefined)).toBeUndefined();
-  });
-
-  test("a slash command keeps OpenCode's own agent resolution", () => {
-    const interactive = {
-      id: "interactive-host" as const,
-      sandbox: "provider" as const,
-      approvals: "ask" as const,
-      projectResources: true,
-      networkAccess: "full" as const,
-    };
-    // Naming a fallback for a command would override one that declares its own.
-    expect(openCodeAgentFor(interactive, {})).toBeUndefined();
-    expect(openCodeAgentFor(interactive, {}, "build")).toBe("build");
-    expect(openCodeAgentFor(interactive, { executionAgent: "reviewer" }, "build")).toBe("reviewer");
-    // The coordinator override outranks anything the caller chose.
-    expect(
-      openCodeAgentFor(
-        { ...interactive, id: "coordinator-read-only" },
-        { executionAgent: "reviewer" },
-        "build",
-      ),
-    ).toBe("plan");
   });
 });

@@ -148,6 +148,34 @@ describe("createDesktopNodeClient", () => {
     expect(command.resolvePreviewUrl).toBeUndefined();
   });
 
+  test("a leaf's loopback link for the external browser goes through the leaf's own route", async () => {
+    const host = fakeHost();
+    const gateway = host.raw.nodes.gateway as ReturnType<typeof mock>;
+    gateway.mockImplementation(async (nodeId: string) => ({
+      nodeId,
+      commandNode: false,
+      baseUrl: "http://127.0.0.1:45001",
+    }));
+    const leaf = open(host) as NodeClient & {
+      resolveExternalLoopbackUrl: (url: string) => Promise<string>;
+    };
+    await expect(leaf.resolveExternalLoopbackUrl("http://localhost:3000/start?x=1")).resolves.toBe(
+      "http://127.0.0.1:45001/__orkestrator/proxy/loopback/3000/start?x=1",
+    );
+    expect(gateway).toHaveBeenLastCalledWith(LEAF);
+
+    // No route (the scope is not open, or it is reconnecting): refused, never
+    // resolved against the window's gateway.
+    gateway.mockImplementation(async () => null);
+    await expect(leaf.resolveExternalLoopbackUrl("http://localhost:3000/")).rejects.toThrow(
+      "reconnecting",
+    );
+    gateway.mockImplementation(async () => ({ nodeId: LEAF, baseUrl: null }));
+    await expect(leaf.resolveExternalLoopbackUrl("http://localhost:3000/")).rejects.toThrow(
+      "reconnecting",
+    );
+  });
+
   test("an event for node B never reaches a node-A client", () => {
     const host = fakeHost();
     const a = open(host, LEAF);

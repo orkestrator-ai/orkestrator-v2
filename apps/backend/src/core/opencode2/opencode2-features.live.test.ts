@@ -7,7 +7,7 @@ import {
   type OpenCode2Fixture,
 } from "../../../../../scripts/opencode2-steer-probe.js";
 import { OpenCode2Client } from "./client.js";
-import { mirrorOpenCode2Credential } from "./credentials.js";
+import { keepActiveOpenCode2Credential, removeOpenCode2Credentials } from "./credentials.js";
 import { OpenCode2Provider } from "./provider.js";
 
 /**
@@ -223,17 +223,19 @@ liveTest(
 );
 
 liveTest(
-  "a mirrored credential connects its provider on 2.x, and its removal disconnects it",
+  "a signed-in credential connects its provider on 2.x, and its removal disconnects it",
   async () => {
     const p = provider!;
     const connected = async () =>
       ((await p.authStatus()).providers ?? []).some((entry) => entry.id === "anthropic");
     expect(await connected()).toBe(false);
-    expect(
-      await mirrorOpenCode2Credential(client!, "anthropic", { type: "key", key: FAKE_KEY }),
-    ).toBe("written");
+    // As Settings → OpenCode signs a provider in and out.
+    await client!.api("POST", "/api/integration/anthropic/connect/key", "key connect", {
+      body: { key: FAKE_KEY },
+    });
+    await keepActiveOpenCode2Credential(client!, "anthropic");
     await until(connected, 15_000);
-    expect(await mirrorOpenCode2Credential(client!, "anthropic", undefined)).toBe("removed");
+    expect(await removeOpenCode2Credentials(client!, "anthropic")).toBe(1);
     await until(async () => !(await connected()), 15_000);
   },
   60_000,

@@ -154,7 +154,7 @@ describe("the change ledger's own file (report 0760)", () => {
 
     const main = openBackendDatabase(directory);
     open.push(main);
-    expect(main.schemaVersion()).toBe(CHANGE_LEDGER_MOVE_MIGRATION_VERSION);
+    expect(main.schemaVersion()).toBeGreaterThanOrEqual(CHANGE_LEDGER_MOVE_MIGRATION_VERSION);
     expect(tables(main.db).filter((name) => name.startsWith("change_"))).toEqual([]);
     expect(main.readStore("kanban")?.value).toEqual([{ id: "t1", projectId: "p1", title: "Kept" }]);
 

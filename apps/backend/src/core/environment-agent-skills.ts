@@ -4,9 +4,10 @@ import { claudeInstalledPluginIdEnablement } from "@orkestrator/protocol/node/cl
  * A self-contained scanner executed inside the selected environment.
  *
  * Local environments run it with the backend's Bun executable and containers
- * run it with Node. OpenCode supplies its own resolved skill catalogue on
- * stdin; Claude and Codex are scanned here because neither exposes an
- * equivalent read-only catalogue command.
+ * run it with Node. Every provider's skill directories are scanned here:
+ * OpenCode 2 has no read-only catalogue command (1.x's `opencode debug
+ * skill` is gone), so its project, user and shared directories are scanned
+ * like the others.
  */
 export const ENVIRONMENT_AGENT_SKILLS_SCRIPT = String.raw`
 const fs = require("node:fs");
@@ -547,79 +548,16 @@ async function scanRoot(entry, allowedRoots, errors) {
   return { root, skills };
 }
 
-function parseOpenCodeInput() {
-  if (provider !== "opencode") return [];
-  try {
-    const raw = fs.readFileSync(0, "utf8");
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(0, maxSkills) : [];
-  } catch { return []; }
-}
-
 function matchingSpec(filePath, specs) {
   return specs
     .filter((entry) => inside(entry.spec.path, filePath))
     .sort((a, b) => b.spec.path.length - a.spec.path.length)[0];
 }
 
-async function listOpenCode(plan, preparedPlan, errors) {
-  const catalog = parseOpenCodeInput();
-  const rootMap = new Map();
-  for (const entry of preparedPlan.prepared) {
-    rootMap.set(entry.spec.path, {
-      path: entry.spec.path,
-      label: displayPath(entry.spec.path),
-      scope: entry.spec.scope,
-      exists: !!entry.realPath && !entry.blocked,
-      skillCount: 0,
-      truncated: false,
-    });
-  }
-  const skills = [];
-  const seenFiles = new Set();
-  const cwdReal = await realpathIfPresent(cwd);
-  for (const item of catalog) {
-    if (!item || typeof item !== "object" || typeof item.location !== "string" || typeof item.name !== "string") continue;
-    const normalized = path.normalize(item.location);
-    if (!path.isAbsolute(normalized) || path.basename(normalized) !== "SKILL.md") continue;
-    const realFile = await realpathIfPresent(normalized);
-    if (!realFile || seenFiles.has(realFile)) continue;
-    const known = matchingSpec(normalized, preparedPlan.prepared);
-    if (known) {
-      if (!preparedPlan.allowedRoots.some((root) => inside(root, realFile))) {
-        errors.push({ path: displayPath(normalized), message: "Refusing a project skill file that resolves outside trusted agent roots" });
-        continue;
-      }
-    } else if (inside(cwd, normalized) && (!cwdReal || !inside(cwdReal, realFile))) {
-      errors.push({ path: displayPath(normalized), message: "Refusing a project-configured skill file that resolves outside the project" });
-      continue;
-    }
-    seenFiles.add(realFile);
-    const scope = known ? known.spec.scope : inside(cwd, normalized) ? "project" : "user";
-    const rootPath = known ? known.spec.path : path.dirname(normalized);
-    if (!rootMap.has(rootPath)) {
-      rootMap.set(rootPath, { path: rootPath, label: displayPath(rootPath), scope, exists: true, skillCount: 0, truncated: false });
-    }
-    rootMap.get(rootPath).skillCount += 1;
-    skills.push({
-      id: normalized,
-      name: item.name.trim(),
-      description: typeof item.description === "string" ? Array.from(item.description).slice(0, 512).join("") : "",
-      filePath: normalized,
-      location: displayPath(path.dirname(normalized)),
-      scope,
-      shadowed: false,
-    });
-  }
-  skills.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.location.localeCompare(b.location));
-  return { provider, roots: [...rootMap.values()], skills, errors: errors.drain() };
-}
-
 async function list() {
   const plan = await rootPlan();
   const errors = createErrorSink();
   const preparedPlan = await preparePlan(plan, errors);
-  if (provider === "opencode") return listOpenCode(plan, preparedPlan, errors);
   const results = [];
   for (const entry of preparedPlan.prepared) results.push(await scanRoot(entry, preparedPlan.allowedRoots, errors));
   const seenNames = new Set();
@@ -669,22 +607,6 @@ async function read() {
   // preparePlan records blocked project roots on the way through.
   const errors = createErrorSink();
   const preparedPlan = await preparePlan(plan, errors);
-  if (provider === "opencode") {
-    const catalog = parseOpenCodeInput();
-    const listed = catalog.some((item) => item && typeof item.location === "string" && path.normalize(item.location) === normalized);
-    if (!listed) throw new Error("Refusing to read a file outside OpenCode's resolved skill catalogue");
-    const realFile = await realpathIfPresent(normalized);
-    if (!realFile) throw new Error("Skill file no longer exists");
-    const known = matchingSpec(normalized, preparedPlan.prepared);
-    if (known && !preparedPlan.allowedRoots.some((root) => inside(root, realFile))) {
-      throw new Error("Refusing to read a skill file that resolves outside trusted agent roots");
-    }
-    const cwdReal = await realpathIfPresent(cwd);
-    if (!known && inside(cwd, normalized) && (!cwdReal || !inside(cwdReal, realFile))) {
-      throw new Error("Refusing to read a project-configured skill file that resolves outside the project");
-    }
-    return readBounded(normalized);
-  }
   const lexical = matchingSpec(normalized, preparedPlan.prepared);
   if (!lexical || lexical.blocked) throw new Error("Refusing to read a file outside the environment's agent skill directories");
   const realFile = await authorizedRealPath(normalized, preparedPlan.allowedRoots);

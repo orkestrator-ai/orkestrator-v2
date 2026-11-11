@@ -1,12 +1,9 @@
-import {
-  buildTerminalAgentLaunchCommand,
-  parseTerminalOpenCodeLaunchCommand,
-} from "@orkestrator/protocol/terminal-agent-launch";
+import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { resolveOpenCode2TerminalCommand } from "./opencode2/terminal-launch.js";
+import { containerOpenCodeTerminalCommand } from "./opencode2/container-terminal-launch.js";
 import { writeOpenCode2HostConfig } from "./opencode2/server.js";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
-import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
   bootstrapTerminalSessionCommand,
@@ -662,21 +659,16 @@ export function registerTerminalCommands(
       bootstrapDataHash,
       () => {
         const config = runtime.terminals.sessionConfig(id)!;
-        // Only the canonical managed OpenCode launch gets the private database.
-        // Plain commands and the shared interactive shell keep the user's defaults.
-        const openCodePrefix = buildTerminalAgentLaunchCommand({ tabType: "opencode" })!;
-        const legacy =
-          config.kind === "local" &&
-          config.openCodeDatabase &&
-          (terminalData === openCodePrefix ||
-            terminalData.startsWith(`${openCodePrefix} `) ||
-            terminalData.startsWith(`${openCodePrefix}\n`))
-            ? `OPENCODE_DB=${quoteShell(config.openCodeDatabase)} ${terminalData}`
-            : terminalData;
+        // A container's OpenCode tab runs its image's 2.x TUI (opencode2/container-terminal-launch.ts).
+        if (config.kind === "container") {
+          return containerOpenCodeTerminalCommand(terminalData, config.user);
+        }
+        // Only the canonical OpenCode launch is rewritten. Plain commands and
+        // the shared interactive shell keep the user's defaults.
         const openCodeLaunch =
           config.kind === "local" ? parseTerminalOpenCodeLaunchCommand(terminalData) : null;
-        if (config.kind !== "local" || !openCodeLaunch) return legacy;
-        // A new tab follows "Use OpenCode 2 for new sessions" (opencode2/terminal-launch.ts).
+        if (config.kind !== "local" || !openCodeLaunch) return terminalData;
+        // The managed OpenCode TUI with the host server's storage (opencode2/terminal-launch.ts).
         return resolveOpenCode2TerminalCommand(
           {
             storage: context.storage,
@@ -686,7 +678,9 @@ export function registerTerminalCommands(
           },
           config.environmentId,
           openCodeLaunch,
-        ).then((v2) => (v2 === undefined ? legacy : `${v2}${openCodeLaunch.lineEnding}`));
+        ).then((line) =>
+          line === undefined ? terminalData : `${line}${openCodeLaunch.lineEnding}`,
+        );
       },
       context,
     );
@@ -880,10 +874,6 @@ export function registerTerminalCommands(
       // applies to terminals opened after it.
       const accountEnvironment = await activeAgentAccountShellEnvironment(context);
       const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
-      if (storedConfig?.kind === "local") {
-        storedConfig.openCodeDatabase =
-          hostOpenCodeDatabaseEnvironment(launchEnvironment).OPENCODE_DB;
-      }
       if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
         stripInheritedAgentCredentials(launchEnvironment);
       }

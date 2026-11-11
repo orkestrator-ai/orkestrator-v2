@@ -3,15 +3,15 @@
  * (see `agentPlatformForToolchain`), and the container image carries the same
  * versions (see `tests/unit/version-drift.test.ts`).
  *
- * `opencode2` is OpenCode 2.x, pinned beside the 1.x `opencode` while the
- * OpenCode platform moves to it (docs/todo/agent-engines/0008-opencode-v2.md).
- * It is a second binary of the `opencode` platform, not a platform of its own.
+ * `opencode2` is OpenCode 2.x, the `opencode` platform's only binary. The
+ * name is the toolchain's, not a platform's: it kept the name it had while it
+ * was installed beside OpenCode 1.x, so installed toolchain directories stay
+ * where they are.
  */
 export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.319",
   codex: "0.167.0",
   grok: "1.0.77",
-  opencode: "1.19.5",
   opencode2: "2.2.6",
   pi: "1.5.0",
 } as const;
@@ -59,10 +59,10 @@ const TOOLCHAIN_PLATFORM_OVERRIDES: Readonly<Partial<Record<AgentToolchainName, 
  * The agent platform whose selection installs this tool.
  *
  * Toolchain names and agent platform ids used to coincide, and the selection
- * filters compared them directly. OpenCode needs two binaries (1.x and 2.x)
- * under one platform, so every such filter goes through this instead:
- * enabling `opencode` installs both `opencode` and `opencode2`. Support tools
- * and unknown names map to themselves; no platform has their id.
+ * filters compared them directly. OpenCode's binary is named `opencode2`, so
+ * every such filter goes through this instead: enabling `opencode` installs
+ * `opencode2`. Support tools and unknown names map to themselves; no platform
+ * has their id.
  */
 export function agentPlatformForToolchain(name: string): string {
   return Object.hasOwn(TOOLCHAIN_PLATFORM_OVERRIDES, name)
@@ -178,8 +178,6 @@ export const PI_RELEASE_BASE =
   `https://github.com/earendil-works/pi/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.pi}` as const;
 export const GH_RELEASE_BASE =
   `https://github.com/cli/cli/releases/download/v${PINNED_SUPPORT_TOOL_VERSIONS.gh}` as const;
-export const OPENCODE_RELEASE_BASE =
-  `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}` as const;
 
 export const CODEX_CODE_MODE_HOST_FILE_NAME = "codex-code-mode-host";
 
@@ -249,12 +247,12 @@ function claudeArchiveUrl(target: string): string {
  * OpenCode 2.x publishes each platform's native binary as its own npm package
  * (`@opencode/cli-<target>`, the optional dependencies of `@opencode/cli`),
  * with the executable at `package/bin/opencode`. It is installed as
- * `opencode2` so it can share an activation directory with the 1.x
- * `opencode`. These are the glibc builds; upstream also publishes `-musl` and
- * `-baseline` variants, which nothing here uses.
+ * `opencode2`, the name it had beside OpenCode 1.x. These are the glibc
+ * builds; upstream also publishes `-musl` and `-baseline` variants, which
+ * nothing here uses.
  *
- * The darwin binaries are published with a valid signature, so unlike the 1.x
- * release zips they need no local re-signing.
+ * The darwin binaries are published with a valid signature, so they need no
+ * local re-signing.
  */
 function openCode2Artifact(
   platform: ToolchainPlatform,
@@ -408,84 +406,6 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       fileName: "codex",
       size: 320_575_976,
       sha256: "cdcb45aaa01d0f14e298985e09465aebccd47f64ecd298aea44814af7b62bbda",
-    },
-  },
-  {
-    name: "opencode",
-    version: PINNED_TOOLCHAIN_VERSIONS.opencode,
-    platform: "darwin",
-    architecture: "arm64",
-    archive: {
-      format: "zip",
-      url: `${OPENCODE_RELEASE_BASE}/opencode-darwin-arm64.zip`,
-      entryPath: "opencode",
-      size: 64_278_924,
-      sha256: "c1c9e62521192192ef4c3ed1355ada2144055bddb61682217e997b03c55203c1",
-      allowedHosts: GITHUB_RELEASE_HOSTS,
-    },
-    executable: {
-      fileName: "opencode",
-      size: 180_672_544,
-      sha256: "feaafead8cd563af0c2dcb386b0757e4355e327ebb6bd1aaad5440fe2f83596c",
-      repairInvalidMacSignature: true,
-    },
-  },
-  {
-    name: "opencode",
-    version: PINNED_TOOLCHAIN_VERSIONS.opencode,
-    platform: "darwin",
-    architecture: "x64",
-    archive: {
-      format: "zip",
-      url: `${OPENCODE_RELEASE_BASE}/opencode-darwin-x64.zip`,
-      entryPath: "opencode",
-      size: 69_100_888,
-      sha256: "b0212efa6db347187225a17fa3a31c6b261bf4c9f1589a290b0ca902d720d250",
-      allowedHosts: GITHUB_RELEASE_HOSTS,
-    },
-    executable: {
-      fileName: "opencode",
-      size: 193_954_400,
-      sha256: "4b15c8aab1844936e9e1d1327213355d94c820de8c7084fad88d3812a067d3d0",
-      repairInvalidMacSignature: true,
-    },
-  },
-  {
-    name: "opencode",
-    version: PINNED_TOOLCHAIN_VERSIONS.opencode,
-    platform: "linux",
-    architecture: "arm64",
-    archive: {
-      format: "tar.gz",
-      url: `${OPENCODE_RELEASE_BASE}/opencode-linux-arm64.tar.gz`,
-      entryPath: "opencode",
-      size: 78_513_091,
-      sha256: "fae5be262d693b7c5e562856cc473e59e741772936db0c0600ac0d5ed5bd088b",
-      allowedHosts: GITHUB_RELEASE_HOSTS,
-    },
-    executable: {
-      fileName: "opencode",
-      size: 211_209_208,
-      sha256: "dab85b46f4ea4813da5367997f99a60aab64a2118d58ebf552980e792747436c",
-    },
-  },
-  {
-    name: "opencode",
-    version: PINNED_TOOLCHAIN_VERSIONS.opencode,
-    platform: "linux",
-    architecture: "x64",
-    archive: {
-      format: "tar.gz",
-      url: `${OPENCODE_RELEASE_BASE}/opencode-linux-x64.tar.gz`,
-      entryPath: "opencode",
-      size: 79_651_896,
-      sha256: "588310a336fa3b9df36b3f0225b26f679d453efaad0cf3d66c3651ef3ec1647a",
-      allowedHosts: GITHUB_RELEASE_HOSTS,
-    },
-    executable: {
-      fileName: "opencode",
-      size: 214_386_864,
-      sha256: "7df4e4136301f16589b0f30bf91a61380fca5f8ef22dd36570f5ebe1d4ec802c",
     },
   },
   openCode2Artifact(
@@ -891,7 +811,7 @@ export function pinnedToolchainArtifacts(
  * even an SDK-only one such as Cursor, gets the support tools.
  *
  * Each artifact reaches its platform through `agentPlatformForToolchain`, so
- * `opencode` selects both OpenCode binaries. Keeping the filter here means the
+ * `opencode` selects `opencode2`. Keeping the filter here means the
  * selection-to-download mapping is testable without starting Electron.
  */
 export function pinnedArtifactsForPlatforms(

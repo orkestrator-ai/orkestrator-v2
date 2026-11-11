@@ -56,7 +56,7 @@ reserved a single flake number (this case's), so that observation is kept
 here rather than as a case of its own. Give it its own number in the
 native-agents-and-transcripts group if it recurs. It recurred on 2026-11-11
 and is now case
-[9981](../native-agents-and-transcripts/9981-conversation-scroll-target-repeat-jump-highlight.md).
+[9983](../native-agents-and-transcripts/9983-conversation-scroll-target-repeat-jump-highlight.md).
 
 - **Test:** `useConversationScrollTarget > a repeat jump to the same message restarts the highlight; another moves it`
   in `apps/web/src/components/native-agent/useConversationScrollTarget.test.tsx`.

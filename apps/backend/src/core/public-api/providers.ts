@@ -63,9 +63,9 @@ export function providerCapabilities(agent: AgentPlatform): PublicProviderCapabi
   return {
     completion: completion.support,
     completionNote: completion.note,
-    // OpenCode advertises steer for its 2.x preview sessions only; 1.x sessions
-    // refuse it. The public CLI answers per platform, so it keeps refusing
-    // OpenCode steer up front until the preview is qualified (todo 0008).
+    // OpenCode advertises steer, but its steering is not yet qualified through
+    // the public CLI (todo 0008), so the CLI keeps refusing OpenCode steer up
+    // front.
     steer: native.actions?.steer === true && agent !== "opencode",
     stop: true,
     resume: native.resume,

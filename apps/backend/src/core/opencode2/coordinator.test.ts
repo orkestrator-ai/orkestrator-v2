@@ -2,10 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  COORDINATOR_PROTECTED_DATA_DIR_ENV,
-  coordinatorRuntimeId,
-} from "@orkestrator/protocol/coordinator";
+import { COORDINATOR_PROTECTED_DATA_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -18,7 +15,6 @@ import {
 } from "./coordinator-plugin.js";
 import {
   MAX_OPENCODE2_COORDINATOR_RESEARCH_TOOLS,
-  newOpenCodeCoordinatorSessionProtocol,
   openCode2CoordinatorConfigDir,
   openCode2CoordinatorLaunchEnv,
   openCode2CoordinatorPolicy,
@@ -32,51 +28,9 @@ import { OpenCode2Provider } from "./provider.js";
 import { OPENCODE2_CREDENTIAL_PLUGIN_ID } from "./server.js";
 import type { OpenCode2PermissionRule } from "./types.js";
 
-const RUNTIME = coordinatorRuntimeId("c1", "conv-1");
-const OWNER = { kind: "coordinator" as const, projectId: "p1", coordinatorId: "c1" };
-
 function effect(rules: readonly OpenCode2PermissionRule[], action: string) {
   return rules.findLast((rule) => rule.action === action || rule.action === "*")?.effect;
 }
-
-describe("which coordinator sessions take OpenCode 2", () => {
-  const trusted = {
-    agent: "opencode",
-    environmentId: RUNTIME,
-    origin: "coordinator" as const,
-    owner: OWNER,
-    executionPolicy: "coordinator-read-only",
-    policy: openCode2CoordinatorPolicy("off"),
-  };
-
-  test("a trusted coordinator session takes 2.x only under the preview switch with a 2.x host", () => {
-    expect(newOpenCodeCoordinatorSessionProtocol(trusted, "v2", true)).toBe("v2");
-    expect(newOpenCodeCoordinatorSessionProtocol(trusted, "legacy", true)).toBeUndefined();
-    expect(newOpenCodeCoordinatorSessionProtocol(trusted, undefined, true)).toBeUndefined();
-    expect(newOpenCodeCoordinatorSessionProtocol(trusted, "v2", false)).toBeUndefined();
-  });
-
-  test("anything but the exact trusted shape stays on 1.x", () => {
-    const cases = [
-      { ...trusted, agent: "claude" },
-      { ...trusted, environmentId: "env-1" },
-      { ...trusted, origin: "interactive-native" as const },
-      { ...trusted, owner: { kind: "environment" as const, projectId: "p1", environmentId: "e" } },
-      { ...trusted, owner: { ...OWNER, coordinatorId: "another" } },
-      { ...trusted, executionPolicy: undefined },
-      {
-        ...trusted,
-        policy: resolveNativeAgentExecutionPolicy(
-          { environmentType: "local", networkAccessMode: "full" },
-          "interactive-native",
-        ),
-      },
-    ];
-    for (const input of cases) {
-      expect(newOpenCodeCoordinatorSessionProtocol(input as never, "v2", true)).toBeUndefined();
-    }
-  });
-});
 
 describe("a coordinator's 2.x rules", () => {
   test("deny everything, then allow reading, the control tools and research by exact id", () => {

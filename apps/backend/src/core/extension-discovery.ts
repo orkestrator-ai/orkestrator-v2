@@ -198,8 +198,40 @@ function openCodeMcpEntries(config: Record<string, unknown>): Record<string, unk
   return isRecord(config.mcp.servers) ? config.mcp.servers : config.mcp;
 }
 
+/**
+ * OpenCode 2.x's `debug config` lists its configuration sources instead of
+ * the merged document 1.x printed: `{ type: "document", path, info }` per
+ * file read, in load order, beside the directories it searched. Each
+ * document's `info` is one configuration (servers under `mcp.servers`,
+ * plugins under `plugins`), merged here the way 2.x merges them: a later
+ * server of the same name replaces an earlier one, plugin lists add up. A
+ * document whose section cannot be read leaves that section unreadable.
+ */
+function openCodeConfigDocument(parsed: unknown): unknown {
+  if (!Array.isArray(parsed)) return parsed;
+  const servers: Record<string, unknown> = {};
+  const plugins: unknown[] = [];
+  let unreadableMcp = false;
+  let unreadablePlugins = false;
+  for (const source of parsed) {
+    if (!isRecord(source) || source.type !== "document" || !isRecord(source.info)) continue;
+    const { mcp, plugins: listed, plugin } = source.info;
+    if (mcp != null && !isRecord(mcp)) unreadableMcp = true;
+    else if (isRecord(mcp)) Object.assign(servers, openCodeMcpEntries(source.info));
+    for (const list of [listed, plugin]) {
+      if (list == null) continue;
+      if (Array.isArray(list)) plugins.push(...list);
+      else unreadablePlugins = true;
+    }
+  }
+  return {
+    mcp: unreadableMcp ? "unreadable" : { servers },
+    plugin: unreadablePlugins ? "unreadable" : plugins,
+  };
+}
+
 export function parseOpenCodeMcpServers(output: string): ExtensionItem[] {
-  const parsed = parseJsonOutput(output);
+  const parsed = openCodeConfigDocument(parseJsonOutput(output));
   if (!isRecord(parsed)) return [];
   // Present but not an object: this surface exists and cannot be read, which is
   // an error for *this* surface alone — the plugin list beside it in the same
@@ -232,7 +264,7 @@ export function parseOpenCodeMcpServers(output: string): ExtensionItem[] {
 }
 
 export function parseOpenCodePlugins(output: string): ExtensionItem[] {
-  const parsed = parseJsonOutput(output);
+  const parsed = openCodeConfigDocument(parseJsonOutput(output));
   if (!isRecord(parsed)) return [];
   // Same rule as the mcp section above, applied to this surface's own keys: a
   // plugin list that is present but not a list is unreadable, and says nothing
@@ -246,9 +278,11 @@ export function parseOpenCodePlugins(output: string): ExtensionItem[] {
   const plugins: ExtensionItem[] = [];
   const configuredPlugins = Array.isArray(parsed.plugin) ? parsed.plugin : [];
   for (const value of configuredPlugins) {
+    // A 2.x entry may be `[spec, options]`.
+    const entry = Array.isArray(value) ? value[0] : value;
     const name =
-      nonBlankString(value) ??
-      (isRecord(value) ? (nonBlankString(value.name) ?? nonBlankString(value.spec)) : undefined);
+      nonBlankString(entry) ??
+      (isRecord(entry) ? (nonBlankString(entry.name) ?? nonBlankString(entry.spec)) : undefined);
     if (name) plugins.push({ name, status: "configured" });
   }
 

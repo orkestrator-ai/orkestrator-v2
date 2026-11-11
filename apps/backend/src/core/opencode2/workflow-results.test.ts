@@ -72,7 +72,8 @@ describe("Orkestrator MCP connections", () => {
     expect(rules.at(-1)).toEqual({ action: `${name}_*`, resource: "*", effect: "allow" });
     expect(denies(rules, "orkestrator_tab_*")).toBe(true);
 
-    const puts = () => server.calls.filter((call) => call.method === "PUT").length;
+    const puts = () =>
+      server.calls.filter((call) => call.method === "PUT" && call.path.includes("/mcp/")).length;
     server.finishRun(id);
     await provider.send(id, "again", {
       requestId: "r2",

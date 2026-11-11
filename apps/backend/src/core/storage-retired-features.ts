@@ -94,6 +94,24 @@ export const retireLoopedReviewsMigration: StorageMigration = {
   },
 };
 
+/**
+ * The `opencode2-sessions` store recorded which workflow sessions the OpenCode
+ * 2 preview created, so a router could send them to 2.x rather than 1.x. With
+ * OpenCode 1.x retired every OpenCode session is a 2.x session and nothing
+ * reads it. Only session ids lived there.
+ */
+export const RETIRED_OPENCODE2_SESSIONS_STORE = "opencode2-sessions";
+
+export const RETIRE_OPENCODE2_SESSIONS_VERSION = 8;
+
+export const retireOpenCode2SessionsMigration: StorageMigration = {
+  version: RETIRE_OPENCODE2_SESSIONS_VERSION,
+  name: "retire-opencode2-sessions",
+  up({ database }) {
+    database.deleteStoreInTransaction(RETIRED_OPENCODE2_SESSIONS_STORE);
+  },
+};
+
 /** Only provider identities survive retirement; no prompts, diffs or reports. */
 export interface RetiredLoopedReviewSession {
   environmentId: string;

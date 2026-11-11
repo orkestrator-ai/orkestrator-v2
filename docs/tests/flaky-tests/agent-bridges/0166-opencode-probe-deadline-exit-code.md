@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-09-26
 - **Test:** `runOpenCodeLiveCompatibility > kills the server when the overall deadline expires`
-- **File:** `scripts/opencode-live-compatibility-probe.test.ts`
+- **File:** `scripts/opencode-live-compatibility-probe.test.ts` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:scripts/opencode-live-compatibility-probe.test.ts`)
 - **Original command:** `mise run test` on branch
   `implement-improvements-ecf7c41c13cd-r1`. Neither the probe script nor
   `apps/web/src/lib/opencode-client.ts` is changed by this branch.
@@ -158,3 +158,8 @@ stays open.
   five runs; with the private directory five of five passed.
 - **Stress:** as in 0242: five owner runs under three churners, 31 of 31
   each.
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

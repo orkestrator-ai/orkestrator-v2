@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VIEWS = [
   {
@@ -31,6 +31,29 @@ async function scrollHalfway(scroller: Locator): Promise<number> {
   }, offset);
   await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(offset);
   return offset;
+}
+
+/**
+ * Wheel up over the transcript until the reader is clear of the end, as a
+ * reader keeps scrolling.
+ *
+ * WebKit can swallow the first tick from the end: the list's height shrinks
+ * as the wheel animation starts, the browser clamps the offset, and the clamp
+ * cancels the animation, leaving the reader at the end (fanout: 4 of 4 WebKit
+ * runs in the Playwright image, failing most of CI's Mobile shell (webkit)
+ * runs on pull requests; the building scenario: 1 of 68). A Safari reader
+ * loses that tick too, so it is a product defect, not test timing. It is
+ * tracked in to-do 7766
+ * (docs/todo/transcripts-and-observation/7766-webkit-first-wheel-tick-swallowed-at-end.md),
+ * which also records why the retry covers every view: a single-tick
+ * assertion on the views that usually keep it would fail CI intermittently.
+ * When 7766 is fixed, replace the retry with one tick and assert it.
+ */
+async function wheelUpFromEnd(page: Page, bottomGap: () => Promise<number>): Promise<void> {
+  await expect(async () => {
+    await page.mouse.wheel(0, -600);
+    await expect.poll(bottomGap, { timeout: 1_000 }).toBeGreaterThan(100);
+  }).toPass({ timeout: 10_000 });
 }
 
 /**
@@ -126,8 +149,7 @@ for (const view of VIEWS) {
     // A reader who scrolled up: the documented exception to returning to their place.
     await transcript.scrollIntoViewIfNeeded();
     await transcript.hover();
-    await page.mouse.wheel(0, -600);
-    await expect.poll(bottomGap).toBeGreaterThan(100);
+    await wheelUpFromEnd(page, bottomGap);
     overviewOffset = await scrollHalfway(overview);
     // Record where the reader settled, not where the wheel's movement was.
     const readerOffset = await settledOffset(transcript);
@@ -178,8 +200,7 @@ for (const view of VIEWS.filter((candidate) => candidate.url.startsWith("/pipeli
 
     await transcript.scrollIntoViewIfNeeded();
     await transcript.hover();
-    await page.mouse.wheel(0, -600);
-    await expect.poll(bottomGap).toBeGreaterThan(100);
+    await wheelUpFromEnd(page, bottomGap);
     const readerOffset = await settledOffset(transcript);
 
     await ticket.click();
@@ -224,8 +245,7 @@ test("Build Pipeline opens another stage at its newest message after the Ticket"
 
   await transcript.scrollIntoViewIfNeeded();
   await transcript.hover();
-  await page.mouse.wheel(0, -600);
-  await expect.poll(bottomGap).toBeGreaterThan(100);
+  await wheelUpFromEnd(page, bottomGap);
   await settledOffset(transcript);
 
   await graph.getByRole("tab", { name: /^Ticket,/ }).click();
@@ -268,8 +288,7 @@ test("Build Pipeline opens a stage whose Tests view was showing at its newest me
   await expect.poll(bottomGap).toBeLessThanOrEqual(1);
   await transcript.scrollIntoViewIfNeeded();
   await transcript.hover();
-  await page.mouse.wheel(0, -600);
-  await expect.poll(bottomGap).toBeGreaterThan(100);
+  await wheelUpFromEnd(page, bottomGap);
   await settledOffset(transcript);
 
   await graph.getByRole("tab", { name: /^Prepare,/ }).click();

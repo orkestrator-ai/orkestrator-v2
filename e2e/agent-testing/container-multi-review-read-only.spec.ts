@@ -36,9 +36,10 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * in this process's environment as well), or use `--agent-tools-port` with a
  * firewall rule ([agent-testing.md](../../docs/development/agent-testing.md)).
  *
- * Read-only turns load no settings files, so the fake's base URL and token
- * are staged as Claude managed settings (`/etc/claude-code`) in the
- * container, and removed afterwards. The case also commits one file to the
+ * The fake's base URL and token are staged as Claude managed settings
+ * (`/etc/claude-code`) in the container, which every turn reads, and removed
+ * afterwards. (Read-only turns take only the user settings' connection `env`
+ * since to-do 7565, and the entrypoint rewrites that file at container start.) The case also commits one file to the
  * fixture branch so there is something to review. Prompts, tool output and
  * tokens never reach test output: the fake logs step names and error flags.
  */

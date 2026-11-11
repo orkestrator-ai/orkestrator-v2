@@ -121,6 +121,25 @@ write-only to the renderer: settings reads expose only configured/effective
 source metadata. `useHostClaudeCredentials` can disable host OAuth propagation
 into normal containers.
 
+A user can also point Claude Code at its model through the `env` of the user
+settings file (`$CLAUDE_CONFIG_DIR/settings.json`, else
+`~/.claude/settings.json`): a gateway's `ANTHROPIC_BASE_URL` and token, or the
+Bedrock, Vertex or Foundry variables. Ordinary turns load that file
+themselves. Read-only turns (Multi Review reviewers and consolidation,
+plan-mode fan-out reviewers, coordinators) load no settings file, so the
+Claude bridge reads it and passes only its connection entries
+(`READ_ONLY_CONNECTION_ENV_NAMES`,
+`bridges/claude-bridge/src/services/read-only-connection-env.ts`) to the turn's
+process environment, over the bridge's own values as the CLI orders them.
+Hooks, permission rules, plugins, other variables and project or local
+settings files are never taken, and `apiKeyHelper` is not run, because it is a
+command and a read-only turn runs none outside its hook. A login that relies
+on `apiKeyHelper` reaches read-only turns only through managed settings
+(`/etc/claude-code/managed-settings.json` on Linux) or the process
+environment. Containers do not receive the host settings file's `env`: the
+entrypoint rewrites the container's `~/.claude/settings.json` and stages only
+the host's `enabledPlugins`.
+
 #### Models
 
 The Claude bridge queries the installed SDK/CLI for the live catalogue. A

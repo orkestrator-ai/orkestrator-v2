@@ -200,6 +200,8 @@ export function claudeAsksForApproval(
  *
  * A coordinator loads nothing: user settings can declare their own hooks and
  * MCP servers, both of which run programs this boundary is supposed to exclude.
+ * The user settings' model connection still reaches such a turn, through its
+ * process environment (`read-only-connection-env.ts`, to-do 7565).
  */
 export function claudeSettingSources(
   policy: NativeAgentExecutionPolicy | undefined,

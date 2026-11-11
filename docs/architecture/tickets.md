@@ -358,15 +358,45 @@ since, or one no build ever moved, keeps its place.
 
 ## Views
 
-`TicketSectionsGrid` renders the sections as tiles in render order. It sizes to
-its container: one column, two from 36rem, three from 56rem; the summary spans
-the row and the criteria span two columns. It is used by the ticket dialog and
-the pipeline Ticket node inspector. Criteria show a status icon, evidence and a
-tally. The Ticket node inspector takes the ticks from the newest verify session
-that is not superseded and says which round they came from; the node face shows
+**The ticket view** (`KanbanTaskDialog`, parts in
+`apps/web/src/components/kanban/ticket-view/`) is a large modal (72rem, the
+top of the modal scale, 90% of the window's height) laid out like the
+full-tab Notes page. It has two tabs, **Ticket** and **Notes**, as a tablist.
+Each tab has an action bar that sits above its scrolling content, so it stays
+visible, and below it a narrow index down the left (from the `@3xl` container
+width) and one wide content column on the right; sections never sit side by
+side.
+
+- **Ticket**: the bar has Build… (the build launcher, disabled while a build
+  of the ticket runs), Edit (the markdown editor, in place) and View Build.
+  The index lists the ticket's sections (summary, criteria, the other
+  structured sections, Delivery), Images, Comments and activity (the
+  lifecycle's comments are the activity) and Pull request. Index entries are
+  links that scroll the column.
+- **Notes**: the linked build's Notes (`KeyInformationDocument`, single column,
+  led by what needs a look), with the Notes headings as its index. The bar
+  shows the pull request's state (open, draft, checks running or failed,
+  conflicts, ready to merge, merged, closed) from the same readiness rule as
+  the environment name and auto-merge, a Merge button enabled only when that
+  rule says ready (and confirmed before it merges), and the pipeline's
+  Integrate button, which arms auto-merge and launches Resolve for conflicts.
+  Nothing merges without a click. The tab is disabled, with the reason shown,
+  when the ticket has no build here with Notes; a ticket built on another
+  machine says which.
+
+A ticket opened from the Review column with Notes opens on the Notes tab;
+every other ticket opens on Ticket (`defaultTicketViewTab`).
+
+`TicketSectionsGrid` renders the sections as tiles in render order for the
+pipeline Ticket node inspector. It sizes to its container: one column, two
+from 36rem, three from 56rem; the summary spans the row and the criteria span
+two columns. The ticket view reads the same entries (`ticketSectionEntries`)
+as one column. Criteria show a status icon, evidence and a tally. The Ticket
+node inspector takes the ticks from the newest verify session that is not
+superseded and says which round they came from; the node face shows
 `n/m criteria`. Board cards show the first prose section and, once Verify has
-run, a criteria tally. The verdict in a Verify transcript lists each criterion's
-result under the rationale.
+run, a criteria tally. The verdict in a Verify transcript lists each
+criterion's result under the rationale.
 
 ## Sync across machines
 

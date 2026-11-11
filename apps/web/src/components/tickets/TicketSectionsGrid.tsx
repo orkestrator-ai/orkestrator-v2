@@ -160,10 +160,139 @@ export function AcceptanceCriteriaList({
   );
 }
 
+/** What `deliveryControl` makes of the Delivery section; see {@link TicketSectionsGrid}. */
+export interface TicketDeliveryControl {
+  onChange: (policy: DeliveryPolicy) => void;
+  disabled?: boolean;
+  /** The change came too late for a build that has already decided. */
+  tooLateNote?: string;
+}
+
+/** One non-empty section of a ticket, ready to render as a tile or a flow section. */
+export interface TicketSectionEntry {
+  key: string;
+  title: string;
+  /** `full` spans the whole grid row; `double` two columns where there are three. */
+  wide?: "full" | "double";
+  aside?: React.ReactNode;
+  body: React.ReactNode;
+}
+
+/**
+ * A ticket's non-empty sections in the schema's order. The grid lays them out
+ * as tiles; the ticket view (`TicketDocument`) as one indexed column.
+ */
+export function ticketSectionEntries({
+  sections,
+  deliveryControl,
+  environmentHead,
+}: {
+  sections: TicketSections;
+  deliveryControl?: TicketDeliveryControl;
+  environmentHead?: string;
+}): TicketSectionEntry[] {
+  const entries: TicketSectionEntry[] = [];
+  for (const definition of TICKET_SECTION_DEFINITIONS) {
+    const { key, heading } = definition;
+    if (key === "notes") {
+      (sections.custom ?? []).forEach((custom, index) => {
+        entries.push({
+          key: `custom-${index}`,
+          title: custom.title,
+          body: <MarkdownBody body={custom.body} />,
+        });
+      });
+    }
+    if (key === "acceptanceCriteria") {
+      const items = sections.acceptanceCriteria ?? [];
+      if (items.length) {
+        entries.push({
+          key,
+          title: heading,
+          wide: "double",
+          aside: <CriteriaTally items={items} />,
+          body: <AcceptanceCriteriaList items={items} environmentHead={environmentHead} />,
+        });
+      }
+      continue;
+    }
+    if (key === "checks") {
+      if (sections.checks?.length) {
+        entries.push({
+          key,
+          title: heading,
+          body: (
+            <ul className="flex flex-col gap-1">
+              {sections.checks.map((check, index) => (
+                <li key={index} className="min-w-0 font-mono text-xs break-words">
+                  {check}
+                </li>
+              ))}
+            </ul>
+          ),
+        });
+      }
+      continue;
+    }
+    if (key === "delivery") {
+      const delivery = sections.delivery;
+      if (deliveryControl || delivery?.policy || delivery?.note) {
+        entries.push({
+          key,
+          title: heading,
+          body: (
+            <>
+              {deliveryControl ? (
+                <DeliveryPolicySelect
+                  value={delivery?.policy}
+                  onChange={deliveryControl.onChange}
+                  disabled={deliveryControl.disabled}
+                />
+              ) : delivery?.policy ? (
+                <p data-testid="ticket-delivery-policy" className="text-sm font-medium">
+                  {DELIVERY_POLICY_LABELS[delivery.policy]}
+                </p>
+              ) : null}
+              {delivery?.note ? (
+                <MarkdownBody
+                  body={delivery.note}
+                  className={deliveryControl || delivery.policy ? "mt-1" : ""}
+                />
+              ) : null}
+              {deliveryControl?.tooLateNote ? (
+                <p
+                  role="status"
+                  data-testid="ticket-delivery-too-late"
+                  className="mt-2 text-xs text-amber-500"
+                >
+                  {deliveryControl.tooLateNote}
+                </p>
+              ) : null}
+            </>
+          ),
+        });
+      }
+      continue;
+    }
+    const text = sections[key];
+    if (text?.trim()) {
+      entries.push({
+        key,
+        title: heading,
+        wide: key === "summary" ? "full" : undefined,
+        body: <MarkdownBody body={text} />,
+      });
+    }
+  }
+  return entries;
+}
+
 /**
  * A ticket's sections as a responsive grid of tiles, in the schema's order.
  * It sizes to its container, not the window, so it stacks to one column in a
- * narrow inspector or on a phone. Empty sections are left out.
+ * narrow inspector or on a phone. Empty sections are left out. The pipeline's
+ * Ticket node reads it; the ticket view lays the same entries out as one
+ * column (`TicketDocument`).
  */
 export function TicketSectionsGrid({
   sections,
@@ -182,106 +311,15 @@ export function TicketSectionsGrid({
    * Makes the Delivery tile a dropdown that is always shown, for a ticket that
    * can still be edited. Absent, as for a pipeline's snapshot, it only reads.
    */
-  deliveryControl?: {
-    onChange: (policy: DeliveryPolicy) => void;
-    disabled?: boolean;
-    /** The change came too late for a build that has already decided. */
-    tooLateNote?: string;
-  };
+  deliveryControl?: TicketDeliveryControl;
 }) {
-  const tiles: React.ReactNode[] = [];
-  for (const definition of TICKET_SECTION_DEFINITIONS) {
-    const { key, heading } = definition;
-    if (key === "notes") {
-      (sections.custom ?? []).forEach((custom, index) => {
-        tiles.push(
-          <Tile key={`custom-${index}`} id={`custom-${index}`} title={custom.title}>
-            <MarkdownBody body={custom.body} />
-          </Tile>,
-        );
-      });
-    }
-    if (key === "acceptanceCriteria") {
-      const items = sections.acceptanceCriteria ?? [];
-      if (items.length) {
-        tiles.push(
-          <Tile
-            key={key}
-            id={key}
-            title={heading}
-            wide="double"
-            aside={<CriteriaTally items={items} />}
-          >
-            <AcceptanceCriteriaList items={items} environmentHead={environmentHead} />
-          </Tile>,
-        );
-      }
-      continue;
-    }
-    if (key === "checks") {
-      if (sections.checks?.length) {
-        tiles.push(
-          <Tile key={key} id={key} title={heading}>
-            <ul className="flex flex-col gap-1">
-              {sections.checks.map((check, index) => (
-                <li key={index} className="min-w-0 font-mono text-xs break-words">
-                  {check}
-                </li>
-              ))}
-            </ul>
-          </Tile>,
-        );
-      }
-      continue;
-    }
-    if (key === "delivery") {
-      const delivery = sections.delivery;
-      if (deliveryControl || delivery?.policy || delivery?.note) {
-        tiles.push(
-          <Tile key={key} id={key} title={heading}>
-            {deliveryControl ? (
-              <DeliveryPolicySelect
-                value={delivery?.policy}
-                onChange={deliveryControl.onChange}
-                disabled={deliveryControl.disabled}
-              />
-            ) : delivery?.policy ? (
-              <p data-testid="ticket-delivery-policy" className="text-sm font-medium">
-                {DELIVERY_POLICY_LABELS[delivery.policy]}
-              </p>
-            ) : null}
-            {delivery?.note ? (
-              <MarkdownBody
-                body={delivery.note}
-                className={deliveryControl || delivery.policy ? "mt-1" : ""}
-              />
-            ) : null}
-            {deliveryControl?.tooLateNote ? (
-              <p
-                role="status"
-                data-testid="ticket-delivery-too-late"
-                className="mt-2 text-xs text-amber-500"
-              >
-                {deliveryControl.tooLateNote}
-              </p>
-            ) : null}
-          </Tile>,
-        );
-      }
-      continue;
-    }
-    const text = sections[key];
-    if (text?.trim()) {
-      tiles.push(
-        <Tile key={key} id={key} title={heading} wide={key === "summary" ? "full" : undefined}>
-          <MarkdownBody body={text} />
-        </Tile>,
-      );
-    }
-  }
-  if (tiles.length === 0) return <>{empty ?? null}</>;
+  const entries = ticketSectionEntries({ sections, deliveryControl, environmentHead });
+  if (entries.length === 0) return <>{empty ?? null}</>;
   const onlyTheDeliveryControl =
-    deliveryControl && tiles.length === 1 && !sections.delivery?.policy && !sections.delivery?.note;
+    deliveryControl &&
+    entries.length === 1 &&
+    !sections.delivery?.policy &&
+    !sections.delivery?.note;
   return (
     <div className={cn("@container min-w-0", onlyTheDeliveryControl && "space-y-3", className)}>
       {onlyTheDeliveryControl ? empty : null}
@@ -289,7 +327,17 @@ export function TicketSectionsGrid({
         data-testid="ticket-sections-grid"
         className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-3"
       >
-        {tiles}
+        {entries.map((entry) => (
+          <Tile
+            key={entry.key}
+            id={entry.key}
+            title={entry.title}
+            wide={entry.wide}
+            aside={entry.aside}
+          >
+            {entry.body}
+          </Tile>
+        ))}
       </div>
     </div>
   );

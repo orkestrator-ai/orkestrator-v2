@@ -13,6 +13,8 @@ export const WEB_KANBAN_LOG_AREAS = defineLogAreas({
       "task.move-failed": "A task move failed and its status was rolled back.",
       "comment.add-failed": "A comment could not be added to a task.",
       "comment.delete-failed": "A comment could not be deleted from a task.",
+      "pr.merge-failed":
+        "Merging a ticket's pull request from its Notes tab failed; the error was shown to the user.",
       "image.add-failed": "An image could not be added to a task.",
       "image.delete-failed": "An image could not be deleted from a task.",
       "notes.load-failed": "Project notes could not be loaded; the editor stays disabled.",

@@ -454,7 +454,12 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
       </Tabs>
 
       {/* Task Detail Dialog */}
-      <KanbanTaskDialog task={currentSelectedTask} open={dialogOpen} onOpenChange={setDialogOpen} />
+      <KanbanTaskDialog
+        task={currentSelectedTask}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        openedFrom={selectedTask?.status}
+      />
 
       <GraphLaunchDialog
         open={runGraphTask !== null}

@@ -22,13 +22,17 @@ open.
 Rechecked 2026-11-11 against `main` at `14df96544` on beelink2 (Linux,
 credential-free, fake models only): task 4 is done (its outcome below). Task 1
 made progress but is not finished (its progress below): the floor is still
-v2.21.0, a current-stack control pairing passed, and the three v2.21.0
-pairings are still unproved, one for want of a rootful Docker daemon and two
-for want of the qualifier script. Task 2 (flake 0710) is unchanged.
+v2.21.0, a current-stack control pairing passed, and the container pairing
+(a v2.21.0 image with a current backend) is unproved for want of a rootful
+Docker daemon. Later the same day, `scripts/qualify-slash-mixed-versions.ts`
+was written and both other pairings passed credential-free: the v2.21.0
+backend with the current Pi bridge, and the current backend read through the
+v2.21.0 renderer's own calls and validators. Task 2 (flake 0710) is
+unchanged.
 
 ### Tasks
 
-1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones, credential-free. Status: open (unblocked; progress 2026-11-11: v2.21.0 builds from its tag, a control pairing passed, and a local v2.21.0 bridge cannot run beside a current backend, so the bridge pairing needs a container on a v2.21.0 image and a rootful daemon; the backend and renderer pairings need the qualifier script). The Claude and Codex pairings that spend live model turns moved to the manual-test checklist.
+1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones, credential-free. Status: open (unblocked on a host with a rootful Docker daemon; progress 2026-11-11: v2.21.0 builds from its tag, a control pairing passed, the v2.21.0 backend with the current Pi bridge and the current backend under the v2.21.0 renderer's calls both passed through `scripts/qualify-slash-mixed-versions.ts`, and a local v2.21.0 bridge cannot run beside a current backend, so the bridge pairing needs a container on a v2.21.0 image and a rootful daemon). The Claude and Codex pairings that spend live model turns moved to the manual-test checklist; the qualifier has no opt-in for them yet.
 2. **Container picker lag under host load** (flake 0710): a container tab's catalogue lags the backend's when the host is heavily loaded. Status: open (tracked as a flake, not as an item here).
 3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: done 2026-11-01 (staged as `entries`; shared and linked skills follow up in 2170, deleted 2026-11-06; its live check is task 4).
 4. **Shared and linked skills in a live container**: `~/.agents/skills` and linked Claude skills reach a container as real directories, and the login-free catalogue reads list them there. Moved from to-do 2170 (deleted 2026-11-06). Status: done (2026-11-11, credential-free, on a disposable rootless daemon; see its outcome). The logged-in Grok and Cursor picker check stays on the manual-test checklist (7568: 0015 task 4).
@@ -78,7 +82,7 @@ no templates without them, and the public CLI has no setting for it).
 
 - **Builds.** `git archive v2.21.0` into a private temporary directory,
   `bun install --frozen-lockfile --ignore-scripts` (Bun 1.4.4; the tag pins
-  1.4.3) and `bun run build` in `bridges/pi-bridge` built the v2.21.0 Pi
+  1.4.3) and `bun run --cwd bridges/pi-bridge build` built the v2.21.0 Pi
   bridge (Pi SDK 1.2.0). The tag's `apps/desktop/scripts/dev-build-image.ts`
   built `orkestrator-v2:dev-d3a6e91f03f0` in a disposable rootless daemon
   (capabilities `boot-status`, `bounded-logs`, `graceful-shutdown`,
@@ -116,12 +120,41 @@ no templates without them, and the public CLI has no setting for it).
   a fixture origin served over a protocol instead of a mount. beelink2's host
   daemon is not open to this user, and the nested rootful mode runs on the
   host daemon.
-- **Not run: the v2.21.0 backend with current bridges, and the v2.21.0
-  renderer against a current backend.** The v2.21.0 CLI has no catalogue
-  verbs (`session commands` and `session command` came with 0017 after the
-  tag), so a run needs a reader written against v2.21.0's registry commands
-  or its renderer in a browser. That is the recommended
-  `scripts/qualify-slash-mixed-versions.ts`, not started here.
+- **The v2.21.0 backend with the current Pi bridge, and the v2.21.0
+  renderer against a current backend (both passed).** The v2.21.0 CLI has no
+  catalogue verbs (`session commands` and `session command` came with 0017
+  after the tag), so `scripts/qualify-slash-mixed-versions.ts` drives both
+  backends with the v2.21.0 renderer's own registry calls
+  (`dispatch_native_agent_intent` with a command intent,
+  `refresh_native_agent_commands`, `get_native_agent_discovery_update`) and
+  checks every progressive read with the v2.21.0 renderer's validators,
+  imported from the tag (`packages/protocol/src/native-agent.ts`), which are
+  what raise "Invalid native agent ... update response" in that renderer. It
+  builds the tag (`git archive`, `bun install --frozen-lockfile
+  --ignore-scripts`), gives each backend its own temporary data directory,
+  worktree directory and HOME on loopback, and stands a loopback
+  chat-completions fake in for Pi's model with a placeholder key; a user
+  prompt template carries a random nonce. Run on beelink2 at `48245abdb`
+  (`bun scripts/qualify-slash-mixed-versions.ts --report <file>`, exit 0,
+  no failures):
+  - `floor-backend` (backend 2.21.0, this checkout's Pi bridge, launched
+    from the floor's resource root): the first turn reached the model; after
+    `refresh_native_agent_commands` (`reloaded`) the discovery section read
+    `loading` once, then `ready` (revision 1, 3 rows) with the template as
+    `pi:template:ork-mv-template` and a binding revision; the selected
+    template reached the model expanded (the nonce, not the slash text); a
+    stale binding and an unknown command were `rejected` and reached no
+    model; a literal `/ork-mv-template` reached it as the slash text; the
+    projection and transcript updates passed the v2.21.0 validators.
+  - `floor-renderer` (backend 2.37.6-beta with its own Pi bridge): the same
+    outcomes, with the catalogue `ready` on the first read (revision 2, 5
+    rows); every session-state, discovery, projection and transcript update
+    passed the v2.21.0 validators, and the backend logged no invalid
+    projection.
+
+  Not covered: the v2.21.0 renderer bundle drawn in a browser (the check is
+  its wire handling, not its rendering), and the older backend read by the
+  current renderer.
 
 ### 2. Container picker lag under host load
 
@@ -983,8 +1016,13 @@ file passed in containers at low load earlier the same day.
      image; a current-stack Pi control pairing passed through the packaged
      CLI; a local v2.21.0 Pi bridge cannot run beside a current backend (it
      predates the bridge credential verifier); a container on the v2.21.0
-     image could not clone the fixture origin on a rootless daemon. See task
-     1's progress.
+     image could not clone the fixture origin on a rootless daemon.
+     `scripts/qualify-slash-mixed-versions.ts` then passed the v2.21.0
+     backend with the current Pi bridge and the current backend under the
+     v2.21.0 renderer's calls and validators. What is left: the container
+     pairing on a host with a rootful daemon, and an opt-in for the
+     credentialed Claude and Codex pairings in the qualifier. See task 1's
+     progress.
 
 ## Constraints and rationale
 
@@ -1182,8 +1220,28 @@ Decisions 11 to 14 were made on 2026-11-01 for task 3, and 15 and 16 on
       local form of that pairing cannot exist and that the container form
       needs a rootful daemon here.
     - Pros: two facts any qualifier must account for, found without new
-      harness code. Cons: the v2.21.0 backend and renderer pairings are still
-      unproved, and the recommended script is still to write.
+      harness code. Cons: the v2.21.0 backend and renderer pairings were left
+      unproved until decision 17.
+17. **Mixed versions: the qualifier checks the floor renderer's wire, not its
+    drawing (task 1, 2026-11-11).**
+    - Options: serve the v2.21.0 renderer bundle against a current backend in
+      a browser and open the picker; or drive each backend with the v2.21.0
+      renderer's own registry calls and check every response with its own
+      validators, imported from the tag, headless.
+    - Chosen: the headless reader, in `scripts/qualify-slash-mixed-versions.ts`
+      (decision "Script it or run it by hand?" above), with Pi and a loopback
+      model fake as the only provider.
+    - Why: the failure the item watches for ("Invalid native agent projection
+      update response") is raised by exactly those validators, and the
+      catalogue, selection and refusal outcomes are backend answers the
+      renderer only displays. Pi runs its SDK in process, so a placeholder key
+      and a fake endpoint give real turns with no login. The floor backend
+      launches whichever bridge sits in its resource root, which is how it is
+      paired with this checkout's bridge.
+    - Pros: repeatable on any host without a display, credentials or Docker;
+      JSON evidence; one flag (`--tag`) to follow the floor. Cons: the old
+      bundle's rendering is not exercised, only Pi is paired, and the Claude
+      and Codex opt-in the decision above asked for is still to add.
 
 ## Open questions
 

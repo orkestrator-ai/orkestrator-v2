@@ -4135,7 +4135,8 @@ and question anchors from the message holding the tool call; mail and automatic
 prompts do not start user subjects. The next actual user message handles a
 marked plain-text question. No additional model call or renderer persistence
 store is used for cards; the only renderer persistence is the docked panel's
-open or folded preference above.
+open or folded preference above. The one stored override is the user's manual
+marks (below), which the backend keeps.
 
 The panel replays historical action evidence together with the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures
@@ -4158,6 +4159,55 @@ Only bare native tool names and explicit Orkestrator server prefixes create mark
 Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.
+
+### Marking actions done by hand
+
+When the user has dealt with an action outside the transcript, they can
+right-click its card (or press the context-menu key or Shift+F10 on a focused
+card) and choose **Mark done**. The menu is the app's shared context menu
+(`components/ui/context-menu.tsx`); it gives focus back to the card when it
+closes, and a narrow overlay stays open while it is used. Escape that closes
+the menu closes only the menu: the overlay's own Escape handlers skip a key
+press the menu used.
+
+- A mark is an override on top of the derived state: a card is done when the
+  transcript says so or when the user marked it
+  (`applyCoordinatorActionMarks` in `coordinator-action-cards.ts`). The
+  transcript replay itself is unchanged. A marked card shows muted, its label
+  starts "Done: ", its status reads "Marked done", and it leaves the waiting
+  count.
+- **Mark not done** appears only on a card the user marked and the transcript
+  still has open, and clears that mark. A card the transcript finished offers
+  only a disabled "Done in the conversation": no mark can reopen it.
+- Marks are keyed by the card's stable `id` within one coordinator
+  conversation, and stored by the backend that owns the conversation
+  (`coordinator-action-marks`, one row per conversation owned by its project,
+  in `storage-client-state.ts`; deleted with the project). The `coordinator`
+  domain's `get_coordinator_action_marks` and `set_coordinator_action_mark`
+  read and change them; the set is idempotent and refuses a mark beyond 500
+  per conversation rather than evicting one. Each change announces
+  `coordinator-action-marks` (id: the conversation id, with its `projectId`).
+- A mark stays stored when the transcript later finishes its card, where it
+  changes nothing. So a full conversation does not stay full: when a new mark
+  would exceed the limit, the renderer first clears up to 25 of the oldest
+  marks on cards the transcript has finished (the chat shell passes them as
+  `reclaimable`, from `redundantCoordinatorActionMarks`). Those cards stay
+  done, and no mark on an open card is ever cleared to make room.
+- The renderer mirrors them per node scope (`coordinatorActionMarksStore`).
+  It keeps the newest backend snapshot (by revision, from a read or a save's
+  answer) apart from this client's unanswered changes, and shows the changes
+  laid over the snapshot. A mark applies at once and is saved in the
+  background; a snapshot read while a save is out is kept, an older answer
+  arriving after a newer one changes nothing, and a save that fails (refused,
+  or the node unreachable) drops its change at once with an error toast,
+  whether or not the follow-up read succeeds. Refreshes follow the hint,
+  resyncs and the periodic safety check. Every window and client showing the
+  conversation reads the same marks, after a reload or restart too. Against a
+  backend without the commands the read fails and cards offer no menu.
+  `useCoordinatorActionMarking` is the hook the tab controller hands to the
+  chat shell.
+- The coordinator's own `mark_topic` and `mark_question` tools are unrelated
+  and unchanged: they create cards, never manual marks.
 
 ### Searching actions
 

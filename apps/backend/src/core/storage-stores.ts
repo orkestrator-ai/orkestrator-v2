@@ -133,6 +133,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "coordinator-upstream-declines": { kind: "record", owner: ownerField("projectId") },
   "coordinator-upstream-auto-merge": { kind: "record", owner: ownerField("projectId") },
   "notice-dismissals": { kind: "record" },
+  // Coordinator action cards marked done by hand: one row per conversation,
+  // owned by its project.
+  "coordinator-action-marks": { kind: "record", owner: ownerField("projectId") },
   // Setup commands the user approved, one row per project (`setup-approval.ts`).
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).

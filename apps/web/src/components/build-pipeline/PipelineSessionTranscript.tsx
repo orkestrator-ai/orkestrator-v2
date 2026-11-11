@@ -168,7 +168,11 @@ export function PipelineSessionTranscript({
   // no start time either; fixed so their rows do not drift on every update.
   const [transcriptFallbackCreatedAt] = useState(() => new Date().toISOString());
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
-    isActive: isActive && visible,
+    isActive,
+    // Another node in the same tab (Ticket, a Tests view) only hides this
+    // transcript; coming back from it keeps the reader's place
+    // (docs/architecture/transcript-scroll.md, "Activation and persistence").
+    visible,
     persistKey: `build-pipeline:${pipeline.id}`,
     environmentId,
     // A build runs unattended, so returning to the tab should show what the

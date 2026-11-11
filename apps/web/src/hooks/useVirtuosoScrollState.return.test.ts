@@ -167,3 +167,100 @@ describe("returning a detached reader to their semantic place", () => {
     scroller.remove();
   });
 });
+
+describe("a `latest` view hidden inside an active host", () => {
+  /** A detached reader at 1920 (k5 80px below the top) in a `latest` view. */
+  function detachedLatestView() {
+    const view = renderHook(
+      ({ isActive, visible }) =>
+        useVirtuosoScrollState({ isActive, visible, activation: "latest" }),
+      { initialProps: { isActive: true, visible: true } },
+    );
+    const virtualizer = handle();
+    view.result.current.virtuosoRef.current = virtualizer as never;
+    const scroller = scrollerWithRow(() => 2000);
+    scroller.scrollTop = 4400;
+    act(() => view.result.current.scrollProps.scrollerRef(scroller));
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      scroller.scrollTop = 1920;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    expect(view.result.current.scrollProps.followOutput(true)).toBe(false);
+    return { view, virtualizer, scroller };
+  }
+
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+
+  test("returning from another view in the same tab keeps the reader's place", async () => {
+    const { view, virtualizer, scroller } = detachedLatestView();
+    view.rerender({ isActive: true, visible: false });
+    view.rerender({ isActive: true, visible: true });
+    await settle();
+    expect(scroller.scrollTop).toBe(1920);
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+    expect(view.result.current.scrollProps.followOutput(true)).toBe(false);
+    scroller.remove();
+  });
+
+  test("a follower back from another view catches up to the end", async () => {
+    const view = renderHook(
+      ({ isActive, visible }) =>
+        useVirtuosoScrollState({ isActive, visible, activation: "latest" }),
+      { initialProps: { isActive: true, visible: true } },
+    );
+    view.result.current.virtuosoRef.current = handle() as never;
+    const scroller = scrollerWithRow(() => 2000);
+    scroller.scrollTop = 4400;
+    act(() => view.result.current.scrollProps.scrollerRef(scroller));
+    view.rerender({ isActive: true, visible: false });
+    // Output arrived while hidden and left the hidden offset short of the end.
+    scroller.scrollTop = 3000;
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("returning to the tab still shows the latest message", async () => {
+    const { view, scroller } = detachedLatestView();
+    view.rerender({ isActive: false, visible: true });
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("leaving the tab while the view was hidden counts as a tab return", async () => {
+    const { view, scroller } = detachedLatestView();
+    view.rerender({ isActive: true, visible: false });
+    view.rerender({ isActive: false, visible: false });
+    view.rerender({ isActive: true, visible: false });
+    await settle();
+    expect(scroller.scrollTop).toBe(1920);
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    scroller.remove();
+  });
+
+  test("a view return after a tab return is a view return again", async () => {
+    const { view, scroller } = detachedLatestView();
+    view.rerender({ isActive: false, visible: true });
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    // A browser fires `scroll` for the navigation's write; this fake does not.
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      scroller.scrollTop = 1920;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    view.rerender({ isActive: true, visible: false });
+    view.rerender({ isActive: true, visible: true });
+    await settle();
+    expect(scroller.scrollTop).toBe(1920);
+    scroller.remove();
+  });
+});

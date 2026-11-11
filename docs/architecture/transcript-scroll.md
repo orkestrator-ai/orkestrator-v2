@@ -208,6 +208,24 @@ element's top relative to the viewport.
 is happening now: the build pipeline transcript, the Graph Run transcript and
 the spec chat.
 
+A view hidden inside a host that stays active passes `visible` separately
+from `isActive`; the view is active only while both are true. When it comes
+back with the host active throughout (the pipeline inspector's Ticket node or
+a Tests view, then the stage again), the policy is not applied: a follower
+catches up to the latest message, and a detached reader stays at the offset
+the hidden element kept, under either policy. That offset is used rather than
+the semantic anchor because a reader looking at the review report in the
+footer has no row on screen, so their last captured anchor is an older place.
+The `latest` jump applies once the host itself has been left, even if the view
+was hidden at the time. The build pipeline transcript passes `visible`; the
+Graph Run transcript unmounts in its Details view instead. Before 2026-11-11
+the pipeline folded `visible` into `isActive`, so every return to a stage went
+to the newest message although its comments said the place was kept (to-do
+5620, retired 2026-11-11). `useVirtuosoScrollState.return.test.ts` covers
+both kinds of return, and `InspectorTranscriptHide.spec.ts` checks a reader's
+first visible frame and settled offset after Ticket and back, in Chromium and
+WebKit, with and without the review report.
+
 The two inspector transcripts were measured across a pane hide on 2026-11-05,
 in Playwright WebKit (build 2370) and Chromium, at phone and desktop widths
 (`e2e/InspectorTranscriptHide.spec.ts`). Every case settled on the newest
@@ -221,8 +239,7 @@ offset before the frame's animation callbacks. In a pipeline transcript the
 container is the review report in the footer: a reader near the end, or a
 follower, came back 466 px (desktop) higher than they left
 ([flake 6380](../tests/flaky-tests/web-ui/6380-inspector-transcript-hide-webkit-offset.md),
-[5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)
-task 2). When the scroller is, or wraps, the container, that range would be 0,
+to-do 5620 task 2, retired 2026-11-11). When the scroller is, or wraps, the container, that range would be 0,
 which fits the reset to the top that to-do 0860 (retired 2026-11-10) found
 in the Multi Review inspector tail (see
 [`build-pipeline-view.md`](build-pipeline-view.md#shared-flow-graph)). So the

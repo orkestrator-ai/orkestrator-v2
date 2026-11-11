@@ -153,3 +153,55 @@ for (const view of VIEWS) {
     await expectStableEnd(transcript, overview, overviewOffset);
   });
 }
+
+// Another node in the same inspector (the Ticket) only hides the stage's
+// transcript; `latest` is for returning to the pane, so coming back to the
+// stage keeps a reader's place (transcript-scroll.md, "Activation and persistence").
+for (const view of VIEWS.filter((candidate) => candidate.url.startsWith("/pipeline-flow"))) {
+  test(`${view.name} keeps a reader's place across another node`, async ({ page }) => {
+    await page.setViewportSize({ width: page.viewportSize()!.width, height: 700 });
+    await page.goto(view.url);
+    const transcript = page.locator("[data-transcript-scroller]");
+    const graph = page.getByRole("tablist", { name: "Build pipeline" });
+    const stage = graph.getByRole("tab", { selected: true });
+    const ticket = graph.getByRole("tab", { name: /^Ticket,/ });
+    const bottomGap = () =>
+      transcript.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      );
+    await expect(transcript).toContainText("Transcript entry 40.");
+    await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+    // The accessible name ends in a running time, so match its title only.
+    const stageTitle = (await stage.getAttribute("aria-label"))?.split(",")[0];
+    expect(stageTitle).toBeTruthy();
+    const stageTab = graph.getByRole("tab", { name: new RegExp(`^${stageTitle},`) });
+
+    await transcript.scrollIntoViewIfNeeded();
+    await transcript.hover();
+    await page.mouse.wheel(0, -600);
+    await expect.poll(bottomGap).toBeGreaterThan(100);
+    const readerOffset = await settledOffset(transcript);
+
+    await ticket.click();
+    await expect(page.getByTestId("pipeline-ticket")).toBeVisible();
+    await expect(transcript).toBeHidden();
+    const firstVisibleFrame = await transcript.evaluateHandle((element) => {
+      const result = { top: null as number | null };
+      const sample = () => {
+        if (element.getClientRects().length > 0) result.top = element.scrollTop;
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      return result;
+    });
+    await stageTab.click();
+    await expect.poll(() => firstVisibleFrame.evaluate((result) => result.top)).not.toBeNull();
+    expect(await firstVisibleFrame.evaluate((result) => result.top)).toBe(readerOffset);
+    await firstVisibleFrame.dispose();
+    // Long enough for an activation's frame to have moved it to the end.
+    expect(await settledOffset(transcript, 10)).toBe(readerOffset);
+    await expect(
+      page.getByRole("button", { name: "Scroll to bottom of transcript" }),
+    ).toBeVisible();
+  });
+}

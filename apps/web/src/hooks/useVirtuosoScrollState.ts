@@ -124,13 +124,24 @@ export function clearPersistedVirtuosoState(persistKey: string) {
  *   latest message; a detached reader is returned to their semantic place; an
  *   explicit message target pending for this view wins over both.
  * - `latest`: every activation jumps to the latest message and follows it.
- *   For views whose documented policy is "show what is happening now".
+ *   For views whose documented policy is "show what is happening now". A
+ *   return that only `visible` caused (another view inside the same active
+ *   host, such as an inspector's Ticket node) follows `respect-intent`.
  */
 export type ActivationPolicy = "respect-intent" | "latest";
 
 interface UseVirtuosoScrollStateOptions {
-  /** Whether the host view is currently active/visible */
+  /** Whether the host (the tab or pane) is currently active */
   isActive?: boolean;
+  /**
+   * Whether this view is shown inside its host (default true). The view is
+   * active only while both are true. Unlike a host return, a view that comes
+   * back while its host stayed active keeps the reader's place under either
+   * policy: they only looked at something else in the same tab. A follower
+   * still catches up; a detached reader keeps the offset the hidden element
+   * held rather than being restored to an anchor.
+   */
+  visible?: boolean;
   /** Optional persistence key for retaining scroll state across tab switches */
   persistKey?: string;
   activation?: ActivationPolicy;
@@ -233,13 +244,15 @@ export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {},
 ): UseVirtuosoScrollStateReturn {
   const {
-    isActive = true,
+    isActive: hostActive = true,
+    visible = true,
     persistKey,
     stickToBottomOnActivation = false,
     explicitTargetPending = false,
   } = options;
   const activation: ActivationPolicy =
     options.activation ?? (stickToBottomOnActivation ? "latest" : "respect-intent");
+  const isActive = hostActive && visible;
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   // Resolve persisted state once on mount. A snapshot that fails validation is
@@ -350,6 +363,12 @@ export function useVirtuosoScrollState(
     persisted && !persisted.wantsStick ? persisted.anchor : null,
   );
   const deactivatedSinceMountRef = useRef(false);
+  /** The host itself went inactive since this view was last active. */
+  const hostLeftSinceActiveRef = useRef(false);
+  // Declared before the activation effect so it has run when that one reads it.
+  useEffect(() => {
+    if (!hostActive) hostLeftSinceActiveRef.current = true;
+  }, [hostActive]);
   /** Activation positioning still to run: what, and the generation it was decided at. */
   const pendingActivationRef = useRef<{
     kind: "latest" | "restore";
@@ -437,13 +456,21 @@ export function useVirtuosoScrollState(
       return;
     }
     const isFirstActivation = !deactivatedSinceMountRef.current;
+    const viewReturnOnly = !isFirstActivation && !hostLeftSinceActiveRef.current;
+    hostLeftSinceActiveRef.current = false;
     let kind: "latest" | "restore" | null;
-    if (activation === "latest") {
+    if (activation === "latest" && !viewReturnOnly) {
       kind = "latest";
     } else if (controller.wantsFollow) {
       // First mount: the snapshot and growth pins already land a follower at
       // the end. On return, catch them up in one bounded journey.
       kind = isFirstActivation ? null : "latest";
+    } else if (viewReturnOnly) {
+      // A detached reader back from another view in the same host: the
+      // element kept its offset (WebKit's clamp on show is undone by the
+      // controller), which is more exact than an anchor captured while a
+      // footer such as a review report filled the viewport and no row did.
+      kind = null;
     } else {
       // A detached reader: on return, settle their semantic place if one was
       // captured (a hidden pane keeps its pixels; a remount may not).

@@ -51,6 +51,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
+import { pinLayoutRootScroll } from "@/lib/pinned-scroll";
 import { useDialogFocusReturn, useDialogFocusReturnGroup } from "@/lib/dialog-focus";
 import { Loader2 } from "lucide-react";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -212,6 +213,8 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
+  // A stray `scrollIntoView` or `focus()` must not shift the whole window.
+  useEffect(() => pinLayoutRootScroll(document), []);
   // The window scope and its command scope are the root of every per-node
   // store and service. Only the command scope exists yet, and nothing reads
   // it until the stores convert, so this mount changes no behaviour.

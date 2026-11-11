@@ -29,6 +29,7 @@ import { NodeErrorBoundary } from "./NodeErrorBoundary";
 import { NodeSnapshotPreview, useNodeSnapshot, useScopeSnapshotSync } from "./NodeSnapshotPreview";
 import { NodeWorkspaceHost } from "./NodeWorkspaceHost";
 import { nodeName, NodeWorkspaceStatus } from "./NodeWorkspaceStatus";
+import { pinnedScroll } from "@/lib/pinned-scroll";
 
 /**
  * The node's workspace inside its scope. `NodeWorkspaceHost` applies the
@@ -191,6 +192,7 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
         "absolute inset-0 flex flex-col overflow-hidden bg-background [transform:translateZ(0)]",
         !shown && "hidden",
       )}
+      {...pinnedScroll}
       data-testid="in-tree-workspace"
       data-node={nodeId}
     >

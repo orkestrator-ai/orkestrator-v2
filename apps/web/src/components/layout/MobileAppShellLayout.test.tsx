@@ -22,6 +22,7 @@ import {
 } from "./MobileAppShellLayout";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { appCommandStore } from "@/test/app-command-store";
+import { PINNED_SCROLL_ATTRIBUTE } from "@/lib/pinned-scroll";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -102,6 +103,21 @@ describe("MobileAppShellLayout", () => {
     expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR) === null).toBe(
       true,
     );
+  });
+
+  test("pins the overflow-hidden content frame and main around the workspace", () => {
+    renderLayout();
+    const main = screen.getByRole("main");
+    expect(main.contains(screen.getByText("Workspace"))).toBe(true);
+    const pinned: Element[] = [];
+    for (let node: Element | null = main; node; node = node.parentElement) {
+      if (node.hasAttribute(PINNED_SCROLL_ATTRIBUTE)) pinned.push(node);
+    }
+    // `main` and the frame that holds it and the files sheet; `AppShell` pins its own frame.
+    expect(pinned).toHaveLength(2);
+    expect(pinned[0]).toBe(main);
+    expect(pinned[1]!.className).toContain("overflow-hidden");
+    expect(pinned[1]!.contains(main)).toBe(true);
   });
 
   test("places the tools spanner third from the right without overlapping the other actions", () => {

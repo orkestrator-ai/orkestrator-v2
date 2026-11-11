@@ -12,6 +12,7 @@ import {
 } from "./CoordinatorActionsFixture";
 import { SchedulerStatusFixture } from "./SchedulerStatusFixture";
 import { FocusVisibilityFixture } from "./FocusVisibilityFixture";
+import { PinnedScrollFixture } from "./PinnedScrollFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { SuborkGroupFixture } from "./SuborkGroupFixture";
@@ -2121,6 +2122,10 @@ function fixtureForPath() {
   if (window.location.pathname === "/mobile-shell") {
     installMobileAppShellFixture();
     return <MobileAppShellFixture />;
+  }
+  if (window.location.pathname === "/pinned-scroll") {
+    installMobileAppShellFixture();
+    return <PinnedScrollFixture />;
   }
   if (window.location.pathname === "/sidebar-activity-probe") {
     return (

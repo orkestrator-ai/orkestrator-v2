@@ -43,6 +43,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { appCommandStore } from "@/test/app-command-store";
 import { SIDEBAR_SETTLE_MS } from "./useSidebarPanelMotion";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
+import { PINNED_SCROLL_ATTRIBUTE } from "@/lib/pinned-scroll";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -87,7 +88,18 @@ function selectState<TState, TResult>(
 }
 
 mock.module("@/components/ui/resizable", () => ({
-  ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  // Forwards the scroll pin, which the real group spreads onto its own element.
+  ResizablePanelGroup: ({
+    children,
+    [PINNED_SCROLL_ATTRIBUTE]: pinned,
+  }: {
+    children: React.ReactNode;
+    [PINNED_SCROLL_ATTRIBUTE]?: string;
+  }) => (
+    <div data-testid="resizable-panel-group" {...{ [PINNED_SCROLL_ATTRIBUTE]: pinned }}>
+      {children}
+    </div>
+  ),
   ResizablePanel: ({
     children,
     elementRef,
@@ -1025,6 +1037,38 @@ describe("AppShell", () => {
     );
     expect(screen.getByRole("main").contains(screen.getByText("Count 1"))).toBe(true);
     expect(mounts).toBe(1);
+  });
+
+  test("pins every overflow-hidden layout root between the window and the workspace", () => {
+    /** `element` and its ancestors that carry the scroll pin, innermost first. */
+    const pinnedChain = (element: Element) => {
+      const chain: Element[] = [];
+      for (let node: Element | null = element; node; node = node.parentElement) {
+        if (node.hasAttribute(PINNED_SCROLL_ATTRIBUTE)) chain.push(node);
+      }
+      return chain;
+    };
+
+    isMobile = false;
+    const desktop = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+    const desktopMain = screen.getByRole("main");
+    expect(desktopMain.contains(screen.getByText("Workspace"))).toBe(true);
+    expect(pinnedChain(desktopMain)).toEqual([
+      desktopMain,
+      screen.getByTestId("resizable-panel-group"),
+      desktop.container.firstElementChild!,
+    ]);
+    cleanup();
+
+    isMobile = true;
+    const mobile = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+    // The phone's first load opens the drawer, which hides the rest from the a11y tree.
+    const mobileMain = screen.getByRole("main", { hidden: true });
+    expect(mobileMain.contains(screen.getByText("Workspace"))).toBe(true);
+    const chain = pinnedChain(mobileMain);
+    expect(chain).toHaveLength(3);
+    expect(chain[0]).toBe(mobileMain);
+    expect(chain[2]).toBe(mobile.container.firstElementChild!);
   });
 
   test("opens the mobile drawer only on a phone-sized first load", () => {

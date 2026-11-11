@@ -14,6 +14,12 @@
  * The parser never awaits a consumer and bounds every frame: an oversized
  * frame is dropped and reported as a desync, so the caller re-reads rather
  * than trusting a partial picture.
+ *
+ * An idle healthy stream sends no events, only `: heartbeat` SSE comments
+ * (on connect and every 15 s at 2.2.6). The parser drops comments, so the
+ * optional `onLife` callback is how a caller's silence watchdog sees them:
+ * it is called for every chunk read, and with `heartbeat: true` for every
+ * heartbeat comment, which is what arms the watchdog.
  */
 
 /** A single SSE frame larger than this is dropped (and reported) rather than buffered. */
@@ -34,11 +40,15 @@ export type OpenCode2StreamSignal =
  * Read an SSE body until it ends or `signal` aborts, calling `onSignal`
  * synchronously for every frame. Never throws for a malformed frame; a
  * transport failure ends the read with the error so the caller reconnects.
+ * `onLife` is called synchronously for every chunk of bytes read
+ * (`heartbeat: false`) and for every `: heartbeat` comment frame
+ * (`heartbeat: true`); it never sees content.
  */
 export async function readOpenCode2Events(
   body: ReadableStream<Uint8Array>,
   onSignal: (signal: OpenCode2StreamSignal) => void,
   signal?: AbortSignal,
+  onLife?: (heartbeat: boolean) => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -51,6 +61,7 @@ export async function readOpenCode2Events(
       if (signal?.aborted) return;
       const { done, value } = await reader.read();
       if (done) return;
+      onLife?.(false);
       buffer += decoder.decode(value, { stream: true });
       for (;;) {
         const end = frameEnd(buffer);
@@ -60,6 +71,10 @@ export async function readOpenCode2Events(
         if (skipping) {
           // The tail of a frame that was already reported oversized.
           skipping = false;
+          continue;
+        }
+        if (onLife && isHeartbeatComment(frame)) {
+          onLife(true);
           continue;
         }
         const parsed = parseFrame(frame);
@@ -83,6 +98,17 @@ function frameEnd(buffer: string): { index: number; length: number } | undefined
   if (lf < 0 && crlf < 0) return undefined;
   if (crlf >= 0 && (lf < 0 || crlf < lf)) return { index: crlf, length: 4 };
   return { index: lf, length: 2 };
+}
+
+/** A frame of SSE comment lines only, one of which is `: heartbeat`. */
+function isHeartbeatComment(frame: string): boolean {
+  let heartbeat = false;
+  for (const line of frame.split(/\r?\n/)) {
+    if (!line) continue;
+    if (!line.startsWith(":")) return false;
+    if (line.slice(1).trim() === "heartbeat") heartbeat = true;
+  }
+  return heartbeat;
 }
 
 function parseFrame(frame: string): OpenCode2StreamSignal | undefined {

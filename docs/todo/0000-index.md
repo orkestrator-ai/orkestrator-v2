@@ -31,6 +31,6 @@ any row's status.
 | [Design canvas](design-canvas/0000-index.md) | 3 | 0 | 0 | 0 | 3 | The design canvas and its agent tools: qualification evidence, operation recovery edges, design-to-agent conversation links and accessibility findings. |
 | [MCP](mcp/0000-index.md) | 4 | 0 | 0 | 0 | 4 | MCP server management across providers, MCP delivery into environments, and the Control MCP voice surface. |
 | [Service previews and web annotations](previews-and-annotations/0000-index.md) | 2 | 3 | 0 | 0 | 5 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |
-| [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 15 | 4 | 0 | 0 | 19 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
+| [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 14 | 4 | 0 | 0 | 18 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
 | [Manual test](manual-test/0000-index.md) | 0 | 0 | 1 | 0 | 1 | One checklist of everything that needs you: manual tests and live checks first, then decisions, approvals and outward actions, each naming its source to-do and task. |
-| **Total** | 94 | 55 | 1 | 0 | 150 | |
+| **Total** | 93 | 55 | 1 | 0 | 149 | |

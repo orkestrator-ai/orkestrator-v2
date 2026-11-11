@@ -19,6 +19,7 @@ import {
 import { invoke } from "@/lib/native/backend";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import {
+  artifactSearchBodyWithheld,
   cachedArtifactSearchBody,
   clearArtifactRequestCache,
   clearArtifactRequestsForConversation,
@@ -53,6 +54,7 @@ import {
 } from "@/stores/staticHtmlFrameSlots";
 import { parkHost, placeHost } from "@/lib/stable-host";
 import { ArtifactPart } from "./ArtifactPart";
+import { cardsShowDocument } from "../static-document-search-index";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const BACKEND = "backend-1";
@@ -549,6 +551,63 @@ describe("StaticHtmlArtifactView", () => {
       const { iframe: fresh, generation: next } = await shownDocument(container);
       report(fresh, next);
       expect(findMatches("quokka")).toBe(1);
+    });
+
+    test("a failed frame keeps Find's index out until a Retry displays the document again", async () => {
+      const { container } = render(wrap(<ArtifactPart part={PART} />));
+      const { iframe, generation } = await shownDocument(container);
+      expect(artifactSearchBodyWithheld(REF)).toBe(false);
+      fromFrame(iframe, { type: "error", generation, code: "render-failed" });
+      await waitFor(() => expect(frameElement(container)).toBeNull());
+      expect(artifactSearchBodyWithheld(REF)).toBe(true);
+      expect(cardsShowDocument(scope(), REF)).toBe(false);
+      // Scrolling away does not forget the failure the card still shows.
+      cleanup();
+      expect(artifactSearchBodyWithheld(REF)).toBe(true);
+
+      const again = render(wrap(<ArtifactPart part={PART} />));
+      await shownDocument(again.container);
+      expect(artifactSearchBodyWithheld(REF)).toBe(false);
+      expect(cardsShowDocument(scope(), REF)).toBe(true);
+    });
+
+    test("a frame over the element limit and a read over the budget both withhold the document", async () => {
+      const first = render(wrap(<ArtifactPart part={PART} />));
+      const { iframe, generation } = await shownDocument(first.container);
+      fromFrame(iframe, { type: "error", generation, code: "too-many-elements" });
+      await waitFor(() => expect(screen.getByText(/more than 5000 elements/)).toBeTruthy());
+      expect(artifactSearchBodyWithheld(REF)).toBe(true);
+      cleanup();
+      clearArtifactRequestCache();
+      expect(artifactSearchBodyWithheld(REF)).toBe(false);
+
+      readEffective = () => ({
+        ...effective(),
+        totalBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes + 1,
+      });
+      const { container } = render(wrap(<ArtifactPart part={PART} />));
+      await waitFor(() =>
+        expect(
+          container.querySelector('[data-artifact-static-state="unavailable"]'),
+        ).not.toBeNull(),
+      );
+      expect(artifactSearchBodyWithheld(REF)).toBe(true);
+      expect(findMatches("quokka")).toBe(0);
+    });
+
+    test("a read failure is withheld too, and a successful Retry releases it", async () => {
+      readEffective = () => {
+        throw new Error("socket closed");
+      };
+      const { container } = render(wrap(<ArtifactPart part={PART} />));
+      await waitFor(() =>
+        expect(screen.getByText("The document could not be loaded.")).toBeTruthy(),
+      );
+      expect(artifactSearchBodyWithheld(REF)).toBe(true);
+      readEffective = () => effective();
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await shownDocument(container);
+      expect(artifactSearchBodyWithheld(REF)).toBe(false);
     });
 
     test("a re-read that fails withdraws text from an earlier visit", async () => {

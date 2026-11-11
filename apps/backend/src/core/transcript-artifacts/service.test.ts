@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ARTIFACT_TOOL_POLICY } from "@orkestrator/protocol/rich-content-policy";
+import {
+  ARTIFACT_TOOL_POLICY,
+  STATIC_PRESENTATION_POLICY,
+} from "@orkestrator/protocol/rich-content-policy";
 import { ARTIFACT_VERSIONS, type ArtifactKind } from "@orkestrator/protocol/transcript-artifacts";
+import { referencedAssets } from "./gc.js";
 import { conversationKeyForTab } from "./owner.js";
 import {
   CONVERSATION,
@@ -190,6 +194,126 @@ describe("artifact lifecycle per kind", () => {
     expect(source.data).toContain("<script>");
     expect(operation.evidence.captures).toHaveLength(1);
     expect(operation.visualInspection).toBe("not-assessed");
+  });
+
+  test("static HTML keeps the worker's document text for Find, tied to its receipt (5780)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const text = "Quarterly report\nRevenue grew 😀";
+    h.runner.staticSearchText = text;
+    const { published, created } = await createPreviewPublish("html-static");
+    const read = await h.service.readRepresentation({
+      ...scope,
+      publicationId: published.publicationId,
+      representation: "search-text",
+    });
+    expect(read).toMatchObject({
+      representation: "search-text",
+      encoding: "utf8",
+      mimeType: "text/plain; charset=utf-8",
+      data: text,
+      nextOffsetBytes: null,
+      executableOutsideOrkestrator: false,
+    });
+    const records = h.service.store.records(ENV);
+    const derived = records.get("derived", `${created.artifactId}/1`)!;
+    const view = await h.service.getPublication(scope, published.publicationId);
+    expect(derived.searchTexts).toEqual([
+      {
+        effectiveSourceHash: view.source.effectiveSha256,
+        sha256: read.sha256,
+        byteLength: new TextEncoder().encode(text).byteLength,
+      },
+    ]);
+    expect(referencedAssets(records).has(read.sha256)).toBe(true);
+  });
+
+  test("a static publication verified without document text answers invalid_input (5780)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    h.runner.staticSearchText = null;
+    const { published } = await createPreviewPublish("html-static");
+    await expect(
+      h.service.readRepresentation({
+        ...scope,
+        publicationId: published.publicationId,
+        representation: "search-text",
+      }),
+    ).rejects.toMatchObject({ error: { code: "invalid_input" } });
+    h.runner.staticSearchText = "text";
+    const chart = await createPreviewPublish("chart");
+    await expect(
+      h.service.readRepresentation({
+        ...scope,
+        publicationId: chart.published.publicationId,
+        representation: "search-text",
+      }),
+    ).rejects.toMatchObject({ error: { code: "invalid_input" } });
+  });
+
+  test("a failed write of the document text still verifies and publishes, without search-text (5780)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const text = "Only the stored text holds this";
+    h.runner.staticSearchText = text;
+    const textBytes = new TextEncoder().encode(text);
+    const store = h.service.store;
+    const writeAsset = store.writeAsset.bind(store);
+    let refused = 0;
+    store.writeAsset = async (environmentId, bytes) => {
+      if (
+        bytes.byteLength === textBytes.byteLength &&
+        bytes.every((byte, index) => byte === textBytes[index])
+      ) {
+        refused += 1;
+        throw new Error("disk full");
+      }
+      return writeAsset(environmentId, bytes);
+    };
+    try {
+      const { published, operation } = await createPreviewPublish("html-static");
+      expect(refused).toBe(1);
+      expect(operation.evidence.captures).toHaveLength(1);
+      const effective = await h.service.readRepresentation({
+        ...scope,
+        publicationId: published.publicationId,
+        representation: "effective-html",
+      });
+      expect(effective.representation).toBe("effective-html");
+      await expect(
+        h.service.readRepresentation({
+          ...scope,
+          publicationId: published.publicationId,
+          representation: "search-text",
+        }),
+      ).rejects.toMatchObject({ error: { code: "invalid_input" } });
+      expect(h.service.metrics.total("search_text_unstored")).toBe(1);
+    } finally {
+      store.writeAsset = writeAsset;
+    }
+  });
+
+  test("a static document its card cannot display stores no document text (5780 review)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const searchTextOf = (publicationId: string) =>
+      h.service.readRepresentation({ ...scope, publicationId, representation: "search-text" });
+    h.runner.staticSearchText = "Text a card shows only as its saved preview";
+    // Inlined offline assets can take the effective document past the inline budget.
+    h.runner.staticEffectiveHtml = `<p>${"x".repeat(STATIC_PRESENTATION_POLICY.maxDocumentBytes)}</p>`;
+    const overBudget = await createPreviewPublish("html-static");
+    await expect(searchTextOf(overBudget.published.publicationId)).rejects.toMatchObject({
+      error: { code: "invalid_input" },
+    });
+    h.runner.staticEffectiveHtml = null;
+    h.runner.staticElementCount = STATIC_PRESENTATION_POLICY.maxElements + 1;
+    const overElements = await createPreviewPublish("html-static");
+    await expect(searchTextOf(overElements.published.publicationId)).rejects.toMatchObject({
+      error: { code: "invalid_input" },
+    });
+    // At the limits the card displays the document, so its text is kept.
+    h.runner.staticElementCount = STATIC_PRESENTATION_POLICY.maxElements;
+    const atLimit = await createPreviewPublish("html-static");
+    expect((await searchTextOf(atLimit.published.publicationId)).data).toBe(
+      "Text a card shows only as its saved preview",
+    );
+    expect(h.service.metrics.total("search_text_unstored")).toBe(0);
   });
 
   test("interactive HTML records the prepared document, probes and a live session", async () => {

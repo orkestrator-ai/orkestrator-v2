@@ -77,14 +77,16 @@ export async function startTransportStack(
     profile,
     path.join(repositoryRoot, "test-fixtures", "agent-project"),
   );
-  // The relay run starts from no config at all: off is the default.
-  if (mode === "gateway") {
-    await mkdir(profile.dataDir, { recursive: true });
-    await writeFile(
-      path.join(profile.dataDir, "config.json"),
-      JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: true } }),
-    );
-  }
+  // Each run states its transport: since to-do 4501 task 2 the direct one is
+  // the default, so only an explicit `false` gives the relay.
+  await mkdir(profile.dataDir, { recursive: true });
+  await writeFile(
+    path.join(profile.dataDir, "config.json"),
+    JSON.stringify({
+      repositories: {},
+      global: { localWindowGatewayTransport: mode === "gateway" },
+    }),
+  );
   const rendererUrl = `http://127.0.0.1:${rendererPort}`;
   const vite = spawn("bun", ["run", "dev"], {
     cwd: webRoot,

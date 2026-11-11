@@ -156,7 +156,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     terminalHistoryRetentionDays:
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalScheduling: global.experimentalScheduling ?? false,
-    localWindowGatewayTransport: global.localWindowGatewayTransport ?? false,
+    localWindowGatewayTransport: global.localWindowGatewayTransport ?? true,
     experimentalGraphs: global.experimentalGraphs ?? false,
     experimentalSelfImprovement: global.experimentalSelfImprovement ?? false,
     debugLogging: global.debugLogging ?? false,
@@ -247,7 +247,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     global.experimentalScheduling ?? false,
-    global.localWindowGatewayTransport ?? false,
+    global.localWindowGatewayTransport ?? true,
     global.experimentalGraphs ?? false,
     global.experimentalSelfImprovement ?? false,
     global.debugLogging ?? false,
@@ -368,7 +368,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.experimentalScheduling ?? false,
   );
   const [localWindowGatewayTransport, setLocalWindowGatewayTransport] = useState(
-    global.localWindowGatewayTransport ?? false,
+    global.localWindowGatewayTransport ?? true,
   );
   const [experimentalGraphs, setExperimentalGraphs] = useState(global.experimentalGraphs ?? false);
   const [experimentalSelfImprovement, setExperimentalSelfImprovement] = useState(
@@ -491,7 +491,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     );
     setExperimentalScheduling(global.experimentalScheduling ?? false);
-    setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? false);
+    setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? true);
     setExperimentalGraphs(global.experimentalGraphs ?? false);
     setExperimentalSelfImprovement(global.experimentalSelfImprovement ?? false);
     setDebugLogging(global.debugLogging ?? false);

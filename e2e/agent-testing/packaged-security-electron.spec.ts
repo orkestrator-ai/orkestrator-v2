@@ -15,10 +15,14 @@ import {
   RENDERER_CONTENT_SECURITY_POLICY,
   STATIC_HTML_FRAME_DOCUMENT,
 } from "@orkestrator/protocol/renderer-content-security-policy";
-import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import {
+  AGENT_TEST_HIDDEN_WINDOWS_ENV,
+  resolveRuntimeProfile,
+} from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ownProcessGroup, stopProcessGroup, withCleanup } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { dismissStartupDialogsOnPage } from "./electron-startup-dialogs";
 import { packagedLaunchEnvironment, packagedLaunchSwitches } from "./packaged-electron-app";
 import { shippingPackage, verifyShippingPackage } from "../../scripts/packaged-security";
 
@@ -541,6 +545,242 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
     },
   ]);
 });
+
+type TransportProbe = {
+  protocol: string;
+  host: string[] | null;
+  hostOrigin: string | null;
+  gatewayClient: boolean;
+  streamState: string | null;
+  eventResource: string | null;
+  relayedToHost: number;
+  invokesOverHttp: string[];
+};
+
+/**
+ * Page code: run one command through `window.orkestrator` and wait for the
+ * `resource-changed` event its mutation announces. `relayedToHost` counts the
+ * same event on the preload's own listener, which only main's relay feeds.
+ */
+async function probeTransport(): Promise<TransportProbe> {
+  type Api = {
+    invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+    listen(event: string, callback: (payload: unknown) => void): (() => void) | Promise<() => void>;
+    eventStreamReady?: (event: string) => Promise<void>;
+    eventStreamConnection?: { state(): string };
+  };
+  const page = window as unknown as {
+    orkestrator: Api;
+    orkestratorGateway?: unknown;
+    orkestratorDesktopHost?: { api: Api; baseUrl: string };
+  };
+  const api = page.orkestrator;
+  const host = page.orkestratorDesktopHost;
+  const configChange = (value: unknown) => {
+    const payload = (value as { payload?: unknown })?.payload ?? value;
+    return (payload as { resource?: string })?.resource === "config";
+  };
+  let relayedToHost = 0;
+  const unlistenHost = host
+    ? await host.api.listen("resource-changed", (value) => {
+        if (configChange(value)) relayedToHost += 1;
+      })
+    : null;
+  let unlisten: (() => void) | null = null;
+  const received = new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("No resource-changed event arrived")), 30_000);
+    void Promise.resolve(
+      api.listen("resource-changed", (value) => {
+        if (!configChange(value)) return;
+        clearTimeout(timer);
+        resolve("config");
+      }),
+    ).then((stop) => {
+      unlisten = stop;
+    }, reject);
+  });
+  await api.eventStreamReady?.("resource-changed");
+  performance.clearResourceTimings();
+  const before = await api.invoke<{ global?: { experimentalScheduling?: boolean } }>(
+    "get_config",
+    {},
+  );
+  await api.invoke("patch_global_config", {
+    patch: { experimentalScheduling: before.global?.experimentalScheduling === true },
+  });
+  const eventResource = await received;
+  // Long enough for a relayed copy, had main sent one, to have arrived too.
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  (unlisten as (() => void) | null)?.();
+  unlistenHost?.();
+  return {
+    protocol: location.protocol,
+    host: host ? Object.keys(host).sort() : null,
+    hostOrigin: host ? new URL(host.baseUrl).origin : null,
+    gatewayClient: "orkestratorGateway" in page,
+    streamState: api.eventStreamConnection?.state() ?? null,
+    eventResource,
+    relayedToHost,
+    invokesOverHttp: performance
+      .getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .filter((name) => name.includes("/__orkestrator/invoke"))
+      .map((name) => new URL(name).origin),
+  };
+}
+
+/**
+ * To-do 4501 task 1: the direct gateway transport on the shipping renderer,
+ * which loads from `file://` under the packaged policy, rather than Vite's
+ * `http://` page the other transport specs drive. With no config the window
+ * takes the direct transport (the default since task 2); an explicit `false`,
+ * as a release before the flip stored it, keeps main's relay. Windows stay
+ * hidden on macOS (`ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS`), so the run never
+ * takes the desktop's focus.
+ */
+for (const transport of ["default", "relay"] as const) {
+  test(`packaged file:// window: ${transport === "default" ? "the direct gateway transport by default" : "an explicit false keeps main's relay"}`, async () => {
+    test.skip(
+      process.platform !== "darwin" && process.platform !== "linux",
+      "macOS/Linux package smoke",
+    );
+    const pkg = shippingPackage(
+      root,
+      process.platform,
+      process.arch,
+      process.env.ORKESTRATOR_SHIPPED_APP_EXECUTABLE?.trim() || undefined,
+    );
+    expect(
+      existsSync(pkg.executable),
+      "Build the shipping --dir package first (not packaged-test)",
+    ).toBe(true);
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "orkestrator-package-transport-"));
+    let browser: Browser | undefined;
+    let child: ReturnType<typeof spawn> | undefined;
+    let stopped = false;
+    await withCleanup(async () => {
+      const [rendererPort, gatewayPort] = await reserveLoopbackPorts(2);
+      const profile = resolveRuntimeProfile({
+        repositoryRoot: root,
+        requestedId: `packaged-transport-${transport}`,
+        flavor: "agent-test",
+        rendererPort: rendererPort!,
+        gatewayPort: gatewayPort!,
+        roots: {
+          developmentRoot: path.join(scratch, "dev"),
+          productionDataDir: path.join(scratch, "production"),
+          homeDir: scratch,
+        },
+      });
+      const profilePath = await initializeProfile(profile);
+      if (transport === "relay") {
+        await mkdir(profile.dataDir, { recursive: true });
+        await writeFile(
+          path.join(profile.dataDir, "config.json"),
+          JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: false } }),
+        );
+      }
+      const home = path.join(scratch, "home");
+      await mkdir(home);
+      let stderr = "";
+      let spawnError = false;
+      child = ownProcessGroup(
+        spawn(
+          pkg.executable,
+          [
+            ...ELECTRON_TEST_SWITCHES,
+            ...packagedLaunchSwitches(process.platform),
+            "--remote-debugging-port=0",
+          ],
+          {
+            detached: true,
+            cwd: scratch,
+            stdio: ["ignore", "ignore", "pipe"],
+            env: {
+              ...packagedLaunchEnvironment(process.env, { home, profilePath }),
+              [AGENT_TEST_HIDDEN_WINDOWS_ENV]: "1",
+            },
+          },
+        ),
+      );
+      child.on("error", () => {
+        spawnError = true;
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString()).slice(-256 * 1024);
+      });
+      const devtools = /DevTools listening on (ws:\/\/[^\s]+)/;
+      await expect
+        .poll(
+          () => {
+            expect(spawnError).toBe(false);
+            expect(child!.exitCode).toBeNull();
+            return devtools.exec(stderr)?.[1];
+          },
+          { timeout: 60_000 },
+        )
+        .toBeTruthy();
+      browser = await chromium.connectOverCDP(devtools.exec(stderr)![1]!);
+      const renderer = pathToFileURL(path.join(pkg.resources, "web/index.html")).href;
+      const pages = () => browser!.contexts().flatMap((c) => c.pages());
+      await expect.poll(() => pages().map((p) => p.url()), { timeout: 60_000 }).toContain(renderer);
+      const page = pages().find((p) => p.url() === renderer)!;
+      await expect
+        .poll(() => page.evaluate(() => "orkestrator" in window).catch(() => false), {
+          timeout: 60_000,
+        })
+        .toBe(true);
+      const probe = await page.evaluate(probeTransport);
+      expect(probe.protocol).toBe("file:");
+      expect(probe.gatewayClient, "a local window is never a remote gateway client").toBe(false);
+      expect(probe.eventResource).toBe("config");
+      if (transport === "default") {
+        // Commands and events went straight to the local backend over HTTP,
+        // from a file:// page: main's Origin rewrite and the packaged policy's
+        // connect-src both let them through, and main relayed nothing.
+        expect(probe.host).toEqual(["api", "baseUrl"]);
+        expect(probe.streamState).not.toBeNull();
+        expect(probe.invokesOverHttp.length).toBeGreaterThanOrEqual(2);
+        // The control listener main already uses, on loopback; not the gateway port.
+        expect(probe.hostOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+        expect(new Set(probe.invokesOverHttp)).toEqual(new Set([probe.hostOrigin]));
+        expect(probe.relayedToHost).toBe(0);
+        // Settings shows the same default as main applied.
+        dismissStartupDialogsOnPage(page);
+        await page.getByRole("button", { name: "Global settings", exact: true }).click();
+        await page
+          .getByRole("navigation", { name: "Settings sections" })
+          .getByRole("button", { name: "Experimental", exact: true })
+          .click();
+        const toggle = page.getByRole("switch", {
+          name: "Use the direct transport for new windows",
+        });
+        await expect(toggle).toHaveAttribute("aria-checked", "true");
+        const previewDir = path.join(root, "output/visual-previews");
+        await mkdir(previewDir, { recursive: true });
+        await toggle.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(previewDir, "local-transport-packaged-default-on.png"),
+        });
+      } else {
+        expect(probe.host).toBeNull();
+        expect(probe.invokesOverHttp).toEqual([]);
+      }
+      expect(stderr).not.toContain("preload-failed");
+    }, [
+      async () => {
+        await browser?.close();
+      },
+      async () => {
+        if (child) await stopProcessGroup(child);
+        stopped = true;
+      },
+      async () => {
+        if (stopped) await rm(scratch, { recursive: true, force: true });
+      },
+    ]);
+  });
+}
 
 for (const attack of ["asar-header", "app-folder"] as const) {
   test(`shipping binary rejects ${attack} tampering`, async () => {

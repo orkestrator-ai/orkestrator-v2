@@ -5,7 +5,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication, Page } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -29,7 +29,9 @@ import { watchElectronStartup } from "./electron-startup-recovery";
  * The desktop's relay of another node's events through the real main process,
  * preload and IPC (docs/architecture/command-nodes.md): each window says which
  * per-node events it listens to, and main opens one filtered stream for their
- * union. The leaf is a second backend on loopback.
+ * union. The leaf is a second backend on loopback. The window is pinned to the
+ * relay (`localWindowGatewayTransport: false`): a window on the direct gateway
+ * transport reads these events on its own stream.
  */
 
 type Project = { id: string; name: string };
@@ -97,6 +99,13 @@ test("main takes a node's relayed events only for the windows listening", async 
     },
   });
   const profilePath = await initializeProfile(profile);
+  // This spec is about main's relay, which a local window takes only with the
+  // direct transport turned off (on by default since to-do 4501 task 2).
+  await mkdir(profile.dataDir, { recursive: true });
+  await writeFile(
+    path.join(profile.dataDir, "config.json"),
+    JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: false } }),
+  );
   const projectPath = await prepareFixtureRepository(
     profile,
     path.join(repositoryRoot, "test-fixtures", "agent-project"),

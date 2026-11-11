@@ -4,6 +4,7 @@ import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/
 import type { ChangeProjection } from "@orkestrator/protocol/change-resources";
 import { createHarness, spoolSource, type Harness } from "./service-test-support.js";
 import { mergeLifecycle } from "./evidence-ingestion.js";
+import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 
 const harnesses: Harness[] = [];
 afterEach(() => {
@@ -287,6 +288,109 @@ describe("evidence ingestion to projections", () => {
     expect(effect.counters.additions.value).toBe(1);
     // A second pull ingests nothing new.
     expect(await h.service.pullEvidence(source)).toBe(0);
+  });
+
+  test("a steady-state pull reads once and does not repeat an accepted acknowledgment (todo 7567 task 3)", async () => {
+    const { h, spool, recorder } = setup();
+    const base = spoolSource(spool);
+    const calls = { read: 0, ack: 0 };
+    let refuseAcks = false;
+    const source = {
+      ...base,
+      read: (cursor: number, epoch: string | null) => {
+        calls.read += 1;
+        return base.read(cursor, epoch);
+      },
+      ack: async (request: Parameters<typeof base.ack>[0]) => {
+        calls.ack += 1;
+        if (refuseAcks) throw new Error("bridge unavailable");
+        return base.ack(request);
+      },
+    };
+    const write = (callId: string) =>
+      recorder.tool(
+        { conversationId: "s1", callId },
+        {
+          toolKind: "file-write",
+          phase: "succeeded",
+          executionOccurrence: "started",
+          evidence: [
+            {
+              kind: "replacement",
+              path: callId,
+              before: null,
+              after: "new\n",
+              extent: "whole-file",
+              origin: "result",
+              claim: "provider-reported",
+            },
+          ],
+        },
+      );
+    // A new epoch: nothing to ingest, the cursor is adopted unacknowledged.
+    await h.service.pullEvidence(source);
+    expect(calls).toEqual({ read: 1, ack: 0 });
+    // The next empty read acknowledges that cursor once; later ones only read.
+    await h.service.pullEvidence(source);
+    expect(calls).toEqual({ read: 2, ack: 1 });
+    for (let pass = 0; pass < 5; pass++) await h.service.pullEvidence(source);
+    expect(calls).toEqual({ read: 7, ack: 1 });
+
+    // Ingesting evidence acknowledges it, and that acknowledgment covers the
+    // empty reads after it.
+    write("w1");
+    expect(await h.service.pullEvidence(source)).toBeGreaterThan(0);
+    expect(spool.stats()).toMatchObject({ entries: 0, bodies: 0 });
+    const afterIngest = { ...calls };
+    for (let pass = 0; pass < 3; pass++) await h.service.pullEvidence(source);
+    expect(calls).toEqual({ read: afterIngest.read + 3, ack: afterIngest.ack });
+
+    // An acknowledgment the producer refused is not remembered: it is retried
+    // before the next read until one is accepted.
+    write("w2");
+    refuseAcks = true;
+    await h.service.pullEvidence(source);
+    expect(spool.stats().entries).toBeGreaterThan(0);
+    refuseAcks = false;
+    await h.service.pullEvidence(source);
+    expect(spool.stats()).toMatchObject({ entries: 0, bodies: 0 });
+    const settled = { ...calls };
+    await h.service.pullEvidence(source);
+    expect(calls).toEqual({ read: settled.read + 1, ack: settled.ack });
+  });
+
+  test("a pull the activity sweep starts is charged to change-evidence-pull (todo 7567 task 3)", async () => {
+    const { h, spool } = setup();
+    const base = spoolSource(spool);
+    // Each call stands for the bridge request `bridgeFetch` charges.
+    const source = {
+      ...base,
+      read: (cursor: number, epoch: string | null) => {
+        recurringWorkMetrics.work("provider-request");
+        return base.read(cursor, epoch);
+      },
+      ack: async (request: Parameters<typeof base.ack>[0]) => {
+        recurringWorkMetrics.work("provider-request");
+        return base.ack(request);
+      },
+    };
+    const requests = (kind: "native-activity-sweep" | "change-evidence-pull") =>
+      recurringWorkMetrics.snapshot().kinds[kind]?.workUnits["provider-request"] ?? 0;
+    const pulls = () => recurringWorkMetrics.snapshot().kinds["change-evidence-pull"]?.started ?? 0;
+    const before = {
+      sweep: requests("native-activity-sweep"),
+      pull: requests("change-evidence-pull"),
+      started: pulls(),
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      await recurringWorkMetrics.observe("native-activity-sweep", () =>
+        h.service.pullEvidence(source),
+      );
+    }
+    expect(requests("native-activity-sweep")).toBe(before.sweep);
+    // Three reads and the one acknowledgment of the adopted cursor.
+    expect(requests("change-evidence-pull") - before.pull).toBe(4);
+    expect(pulls() - before.started).toBe(3);
   });
 
   test("a recorded stream gap is visible, never accepted evidence", async () => {

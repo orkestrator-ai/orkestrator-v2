@@ -59,8 +59,8 @@ price of one capture; the orphan itself has not been seen running.
 
 **Context.** A claude-tmux tab needs the Claude CLI in tmux; the loopback
 Anthropic model of `e2e/agent-testing/fake-anthropic-model.ts` avoids a billed
-turn. Recurring diagnostics have no kind for B19's loop (see
-[7567](7567-tmux-tab-loop-recurring-kind.md) for the tab loop's missing kind),
+turn. Recurring diagnostics have no kind for B19's loop (to-do 7567, retired
+2026-11-11, gave only the tab loop its `tmux-tab-loop` kind, row B30),
 so the count would come from Docker's own exec count or a process sampler.
 
 **Investigation.** Not started.
@@ -73,9 +73,9 @@ so the count would come from Docker's own exec count or a process sampler.
     - Cons: needs a container environment, which beelink's Docker address pools have limited before (7100 task 2).
   - **Add a recurring kind for B19 and read it from diagnostics.**
     - Pros: a lasting gauge.
-    - Cons: a code change before the measurement; belongs with 7567's decision on kinds.
+    - Cons: a code change before the measurement; follows 7567's (retired) `tmux-tab-loop` kind.
 
 ## Related
 
 - [0048-recurring-work-qualification.md](0048-recurring-work-qualification.md) task 12 (decision C5) and [recurring-work.md](../../architecture/recurring-work.md) row B19.
-- [7567-tmux-tab-loop-recurring-kind.md](7567-tmux-tab-loop-recurring-kind.md): the claude-tmux tab loop's container cost.
+- 7567 (retired 2026-11-11): the claude-tmux tab loop's container cost, now counted as the `tmux-tab-loop` kind ([recurring-work.md](../../architecture/recurring-work.md) row B30).

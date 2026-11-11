@@ -26,7 +26,7 @@ import { join } from "node:path";
 type Json = Record<string, unknown>;
 type ChatRequest = {
   messages?: Array<{ role: string; content?: unknown }>;
-  tools?: Array<{ function?: { name?: string } }>;
+  tools?: Array<{ function?: { name?: string; description?: string } }>;
 };
 
 const STEP_SLEEP_SECONDS = 3;
@@ -70,6 +70,8 @@ export class ScriptedModel {
    */
   readonly calls: Array<{
     userTexts: string[];
+    /** The request's system messages, where session instructions arrive. */
+    systemTexts: string[];
     lastRole: string;
     tools: string[];
     /** The newest tool result the model was handed, when the request ends in one. */
@@ -77,6 +79,18 @@ export class ScriptedModel {
     lastUserContent?: unknown;
     reasoningEffort?: unknown;
   }> = [];
+  /**
+   * A live test's own script, consulted before the defaults below: given
+   * every message's text (any role), the last role and the offered tools, it
+   * answers with one tool call or a final text, or undefined for the defaults.
+   */
+  respond?: (call: {
+    texts: string[];
+    lastRole: string;
+    tools: string[];
+    /** Each offered tool's description, by name. */
+    descriptions: Record<string, string>;
+  }) => { tool: string; arguments: Json } | { text: string } | undefined;
   private server: ReturnType<typeof Bun.serve> | undefined;
 
   start(): string {
@@ -90,6 +104,9 @@ export class ScriptedModel {
         const body = (await request.json()) as ChatRequest;
         const messages = body.messages ?? [];
         const userTexts = messages.filter((m) => m.role === "user").map((m) => textOf(m.content));
+        const systemTexts = messages
+          .filter((m) => m.role === "system")
+          .map((m) => textOf(m.content));
         const lastRole = messages.at(-1)?.role ?? "";
         const tools = (body.tools ?? []).flatMap((tool) =>
           typeof tool.function?.name === "string" ? [tool.function.name] : [],
@@ -98,12 +115,29 @@ export class ScriptedModel {
         const reasoningEffort = (body as { reasoning_effort?: unknown }).reasoning_effort;
         this.calls.push({
           userTexts,
+          systemTexts,
           lastRole,
           tools,
           lastUserContent,
           reasoningEffort,
           ...(lastRole === "tool" ? { toolResult: textOf(messages.at(-1)?.content) } : {}),
         });
+        const custom = this.respond?.({
+          texts: messages.map((m) => textOf(m.content)),
+          lastRole,
+          tools,
+          descriptions: Object.fromEntries(
+            (body.tools ?? []).flatMap((tool) =>
+              typeof tool.function?.name === "string"
+                ? [[tool.function.name, tool.function.description ?? ""]]
+                : [],
+            ),
+          ),
+        });
+        if (custom && "tool" in custom) {
+          return sse(namedToolCallChunks(custom.tool, JSON.stringify(custom.arguments)));
+        }
+        if (custom) return sse(answerChunks(custom.text));
         const latestUser = userTexts.at(-1) ?? "";
         // A turn asking for a slow tool gets one bash call, then (after the tool result) an answer.
         // `RUN_BASH:<command>` runs that command instead (fixture-only; the model is scripted).
@@ -331,6 +365,11 @@ export async function startOpenCode2Fixture(
         OPENCODE_DB: join(dirs.data, "fixture.db"),
         OPENCODE_PASSWORD: password,
         OPENCODE_DISABLE_AUTOUPDATE: "1",
+        // As every Orkestrator launch runs it (`OPENCODE2_DISABLE_FILEWATCHER`
+        // in apps/backend/src/core/opencode2/server.ts), so the live set
+        // qualifies the server Orkestrator actually starts. `options.env`
+        // may turn the watchers back on.
+        OPENCODE_DISABLE_FILEWATCHER: "1",
         ...options.env,
       },
       stdout: "ignore",

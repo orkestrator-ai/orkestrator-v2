@@ -11,6 +11,10 @@ describe("containerServerLogFile", () => {
     expect(containerServerLogFile("cursor")).toBe("/tmp/cursor-bridge.log");
     expect(containerServerLogFile("grok")).toBe("/tmp/grok-acp-bridge.log");
   });
+
+  test("OpenCode's is its 2.x server's log, the only OpenCode server a container runs", () => {
+    expect(containerServerLogFile("opencode")).toBe("/tmp/opencode2-serve.log");
+  });
 });
 
 test("forced model discovery reaches the bridge with its bypass flag", async () => {

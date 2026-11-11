@@ -86,7 +86,7 @@ if [ "$1" = "port" ]; then
 fi
 if [ "$1" = "exec" ]; then
   case "$*" in
-    *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_TOKEN:-}" ;;
+    *opencode2-token*) printf '%s\n' "\${FAKE_OPENCODE_TOKEN:-}" ;;
   esac
   exit 0
 fi
@@ -170,8 +170,9 @@ async function startHealthServer(): Promise<{
       url: request.url ?? "",
       authorization: request.headers.authorization ?? null,
     });
-    response.writeHead(200);
-    response.end("ok");
+    // Answers as OpenCode 2's `/api/info` too; a bridge only needs a 200.
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ version: "2.2.6" }));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -424,7 +425,7 @@ describe("direct backend command registry coverage", () => {
         authToken: "t".repeat(43),
       });
       expect(health.requests).toContainEqual({
-        url: "/global/health",
+        url: "/api/info",
         authorization: `Basic ${Buffer.from(`opencode:${"t".repeat(43)}`).toString("base64")}`,
       });
     } finally {
@@ -442,7 +443,7 @@ describe("direct backend command registry coverage", () => {
       cachedAgents,
     );
     const log = await commandLogContents();
-    expect(log).toContain("pkill -f '[o]pencode serve'");
+    expect(log).toContain("pkill -f '[o]pencode2 serve'");
     expect(log).toContain("pkill -f '[c]laude-bridge/dist/index.js'");
     expect(log).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
   });

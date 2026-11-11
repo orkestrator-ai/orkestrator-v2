@@ -480,9 +480,9 @@ const nativeAgentSessionFields = {
   logicalSessionKey: Schema.String,
   providerSessionId: Schema.String,
   /**
-   * The OpenCode line serving `providerSessionId`: `v2` for an OpenCode 2.x
-   * session. Absent means legacy (1.x), as for every record written before
-   * the 2.x preview. Set once, at creation; never changes.
+   * Retired on 2026-11-11 with OpenCode 1.x, when OpenCode 2 became the only
+   * line: a record written by the 2.x preview may still carry `v2`. Nothing
+   * reads or writes it; kept so the schema is unchanged for older peers.
    */
   openCodeProtocol: Schema.optional(Schema.Literal("v2")),
   origin: Schema.Literals(AGENT_INTERACTION_ORIGINS),

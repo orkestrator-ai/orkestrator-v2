@@ -132,7 +132,7 @@ BUN_CHECK
 done
 
 # Versions: the manifest must name what is installed.
-for entry in claude codex opencode opencode2 grok pi playwright; do
+for entry in claude codex opencode2 grok pi playwright; do
     expected="$(field ".agents.\"$entry\"")"
     # Startup warnings belong on stderr; retain the CLI status and compare its
     # version output rather than the first line of a merged diagnostic stream.
@@ -142,6 +142,23 @@ for entry in claude codex opencode opencode2 grok pi playwright; do
         *) fail "$entry reports '$reported', the manifest says $expected" ;;
     esac
 done
+# OpenCode 2.x is the only OpenCode: a terminal's `opencode` is the image's
+# wrapper around it, defaulting to the 2.x server's own database, never 1.x's
+# `opencode.db`; no 1.x binary or launcher root is left.
+expected="$(field '.agents."opencode2"')"
+[ "$(field '.agents."opencode"')" = null ] || fail "the manifest still names an OpenCode 1.x"
+reported="$(in_container 'opencode --version')" || fail "opencode is not runnable"
+case "$reported" in
+    *"$expected"*) echo "ok   opencode runs OpenCode $expected" ;;
+    *) fail "opencode reports '$reported', not OpenCode $expected" ;;
+esac
+in_container 'test "$(readlink -f "$(command -v opencode)")" = /opt/opencode/bin/opencode &&
+    test "$(stat -c %u /opt/opencode/bin/opencode)" = 0 &&
+    grep -q "^exec /opt/opencode/bin/opencode2 " /opt/opencode/bin/opencode &&
+    test ! -e /run/orkestrator-opencode &&
+    ! grep -q "ORKESTRATOR_CAPABILITY opencode-launch=" /usr/local/bin/orkestrator-bridge-launch' \
+    || fail "opencode is not the root-owned 2.x wrapper, or OpenCode 1.x's launch is still installed"
+echo "ok   opencode is the 2.x wrapper; no 1.x launch"
 for entry in bun node; do
     expected="$(field ".runtimes.\"$entry\"")"
     reported="$(in_container "$entry --version")"

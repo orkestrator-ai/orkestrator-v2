@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { PINNED_TOOLCHAIN_VERSIONS } from "../../../packages/toolchain/src/manifest.js";
 
 export function policyQualificationCli(
-  agent: "claude" | "codex" | "grok" | "opencode",
+  agent: "claude" | "codex" | "grok" | "opencode2",
 ): string | undefined {
   const explicit = process.env[`ORKESTRATOR_POLICY_${agent.toUpperCase()}_PATH`];
   if (explicit) {

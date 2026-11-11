@@ -1025,7 +1025,8 @@ eval "$block"
     // -wal/-shm siblings) was copied into every container on every start.
     expect(entrypoint).not.toContain("find /opencode-data -maxdepth 1 -type f");
     // The login is the only portable OpenCode data. A live run of 1.19.4
-    // (scripts/qualify-opencode-seeded-data.sh) never opened a host-seeded
+    // (`git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`, retired
+    // with OpenCode 1.x) never opened a host-seeded
     // snapshot/ directory or account.json, and read only storage/'s
     // legacy-migration index, which an empty storage/ recreates.
     const copies = entrypoint
@@ -2632,7 +2633,18 @@ eval "$opencode_setup"
         : backend.slice(start, start + 1 + nextDeclaration);
     }
 
-    const commands = ["start_opencode_server", "start_claude_server", "start_codex_server"];
+    // OpenCode's container server (2.x) is started by `opencode2-container-server.ts`
+    // from one of two scripts: the launcher's preparation and the login-shell start.
+    for (const file of [
+      "apps/backend/src/core/opencode2-container-launch.ts",
+      "apps/backend/src/core/opencode2/container-server.ts",
+    ]) {
+      const script = read(file);
+      expect(script).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
+      expect(script).toContain("orkestrator_source_runtime_env");
+    }
+
+    const commands = ["start_claude_server", "start_codex_server"];
 
     for (const command of commands) {
       // Bridge-backed starts register through `registerBridgeStart`, which

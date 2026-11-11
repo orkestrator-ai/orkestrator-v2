@@ -51,8 +51,6 @@ on:
       - "apps/backend/src/core/egress-gateway.ts"
       - "apps/backend/src/core/github-ranges-cache.ts"
       - "apps/backend/scripts/github-ranges-seed.ts"
-      - "scripts/qualify-opencode-seeded-data.sh"
-      - "scripts/opencode-seeded-data/**"
 
 # Only pull request runs supersede each other. Scheduled and manual runs need
 # unique groups so a newer pending run cannot replace an older one.

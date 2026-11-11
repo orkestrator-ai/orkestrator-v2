@@ -23,8 +23,6 @@ const {
   fs,
   isolateCodexBinaryLookup,
   path,
-  pathToFileURL,
-  randomUUID,
   runGit,
   toClientEnvironment,
   waitForCondition,
@@ -369,50 +367,6 @@ exit 1
       toClientEnvironment(createEnvironment({ initialPromptAttachments: [] }))
         .hasInitialPromptAttachments,
     ).toBe(false);
-  });
-
-  test("injects the current managed GitHub credential into every OpenCode shell", async () => {
-    const directory = await createTempDir("ork-opencode-github-plugin-");
-    const credentialFile = path.join(directory, "github-token");
-    const pluginFile = path.join(directory, "orkestrator-github-env.mjs");
-    await fs.writeFile(
-      pluginFile,
-      commandTesting.buildOpenCodeGitHubEnvironmentPluginSource(credentialFile),
-    );
-    const pluginModule = (await import(
-      `${pathToFileURL(pluginFile).href}?test=${randomUUID()}`
-    )) as {
-      OrkestratorGitHubEnvironmentPlugin: () => Promise<{
-        "shell.env": (
-          input: Record<string, string>,
-          output: { env: Record<string, string> },
-        ) => Promise<void>;
-      }>;
-    };
-    const plugin = await pluginModule.OrkestratorGitHubEnvironmentPlugin();
-    const readEnvironment = async (): Promise<Record<string, string>> => {
-      const output = { env: {} as Record<string, string> };
-      await plugin["shell.env"](
-        { cwd: "/workspace", sessionID: "session", callID: "call" },
-        output,
-      );
-      return output.env;
-    };
-
-    await fs.writeFile(credentialFile, "first-token");
-    await expect(readEnvironment()).resolves.toMatchObject({
-      GITHUB_TOKEN: "first-token",
-      GH_TOKEN: "first-token",
-    });
-
-    await fs.writeFile(credentialFile, "rotated-token");
-    await expect(readEnvironment()).resolves.toMatchObject({
-      GITHUB_TOKEN: "rotated-token",
-      GH_TOKEN: "rotated-token",
-    });
-
-    await fs.writeFile(credentialFile, "");
-    await expect(readEnvironment()).resolves.toEqual({});
   });
 
   test("preserves unusual Git paths and binary stats in NUL-delimited output", async () => {

@@ -1568,7 +1568,7 @@ orkestrator-v2 (Electron)
       └─ agent CLI → shell → mise run test  your test run
 ```
 
-The production backend, bridges, agent CLIs, and `opencode serve` processes
+The production backend, bridges, agent CLIs, and OpenCode server processes
 have the same executable names and similar command lines to the ones tests
 start. Killing any of them stops every local agent session on the host, including
 the one running the tests. On 2026-10-26 the production backend received

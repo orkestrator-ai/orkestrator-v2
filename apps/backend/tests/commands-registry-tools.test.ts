@@ -1,8 +1,11 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, setDefaultTimeout, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 import * as agentSupport from "../src/core/commands-agent-support";
 import { homePath } from "../src/core/shell";
-import { createCommandFixtures } from "./command-fixtures";
+import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "../src/core/environment-agent-skills";
+import { createCommandFixtures, type CommandContext } from "./command-fixtures";
 
 const {
   commandTesting,
@@ -15,6 +18,9 @@ const {
   setAgentSkillsHomeForTesting,
   withFakeGh,
 } = await createCommandFixtures();
+
+// The skills scanner test runs the real scanner script in a subprocess.
+setDefaultTimeout(30_000);
 
 describe("agent skill commands", () => {
   test("registered plugin discovery runs the normal host runner", async () => {
@@ -217,6 +223,14 @@ describe("agent extension discovery commands", () => {
     return { run, calls };
   }
 
+  /** OpenCode is the managed 2.x binary only; give the context one. */
+  async function withManagedOpenCode(context: CommandContext): Promise<string> {
+    const toolchain = await createTempDir("ork-electron-opencode2-toolchain-");
+    await fs.writeFile(path.join(toolchain, "opencode2"), "managed opencode2");
+    context.toolchainBinDir = toolchain;
+    return path.join(toolchain, "opencode2");
+  }
+
   test("runs the host's agent CLI from the home directory, outside any project", async () => {
     const { context } = createContext(createEnvironment());
     const { run, calls } = recordingRun("[]");
@@ -237,11 +251,14 @@ describe("agent extension discovery commands", () => {
       containerId: null,
     });
     const { context } = createContext(environment);
+    const openCode = await withManagedOpenCode(context);
     const { run, calls } = recordingRun("docs: cmd - Connected");
 
     const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
     await expect(runner("claude", ["mcp", "list"])).resolves.toBe("docs: cmd - Connected");
     await runner("opencode", ["debug", "config"]);
+    // OpenCode's discovery runs the managed 2.x binary, never a PATH `opencode`.
+    expect(calls[1]!.command).toBe(openCode);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]!.args).toEqual(["mcp", "list"]);
@@ -361,7 +378,7 @@ describe("agent extension discovery commands", () => {
     expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
   });
 
-  test("uses OpenCode's resolved catalogue as bounded scanner input", async () => {
+  test("scans OpenCode's skill directories without asking the CLI for a catalogue", async () => {
     const environment = createEnvironment({
       id: "env-local",
       environmentType: "local",
@@ -369,157 +386,46 @@ describe("agent extension discovery commands", () => {
       containerId: null,
     });
     const { context } = createContext(environment);
-    const catalogue = [
-      {
-        name: "review",
-        description: "Environment review",
-        location: "/tmp/worktree/.opencode/skills/review/SKILL.md",
-        content: "content that must not be copied into scanner input",
-      },
-    ];
     const response = { provider: "opencode", roots: [], skills: [], errors: [] };
-    const { run, calls } = recordingRun([JSON.stringify(catalogue), JSON.stringify(response)]);
+    const { run, calls } = recordingRun(JSON.stringify(response));
 
     await expect(
       commandTesting.runEnvironmentAgentSkills(environment, context, "opencode", "list", "", run),
     ).resolves.toEqual(response);
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]!.args).toEqual(["debug", "skill"]);
-    expect(calls[1]!.args.slice(0, 2)).toEqual(["-e", expect.any(String)]);
-    expect(JSON.parse(String(calls[1]!.options?.stdin))).toEqual([
-      {
-        name: "review",
-        description: "Environment review",
-        location: "/tmp/worktree/.opencode/skills/review/SKILL.md",
-      },
-    ]);
-    expect(String(calls[1]!.options?.stdin)).not.toContain("must not be copied");
-  });
-
-  test("pipes OpenCode's catalogue into a container scanner", async () => {
-    const environment = createEnvironment({
-      id: "env-container",
-      environmentType: "containerized",
-      containerId: "container-1",
-      worktreePath: undefined,
-    });
-    const { context } = createContext(environment);
-    const response = { provider: "opencode", roots: [], skills: [], errors: [] };
-    const { run, calls } = recordingRun([
-      JSON.stringify([
-        {
-          name: "review",
-          location: "/workspace/.opencode/skills/review/SKILL.md",
-        },
-      ]),
-      JSON.stringify(response),
-    ]);
-
-    await commandTesting.runEnvironmentAgentSkills(
-      environment,
-      context,
-      "opencode",
-      "list",
-      "",
-      run,
-    );
-
-    expect(calls).toHaveLength(2);
-    expect(calls[0]!.args).toContain("opencode");
-    expect(calls[1]!.args.slice(0, 3)).toEqual(["exec", "-i", "-w"]);
-    expect(typeof calls[1]!.options?.stdin).toBe("string");
-  });
-
-  test("rejects malformed OpenCode catalogues before starting the scanner", async () => {
-    const environment = createEnvironment({
-      id: "env-local",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      containerId: null,
-    });
-    const { context } = createContext(environment);
-    const { run, calls } = recordingRun("not-json");
-
-    await expect(
-      commandTesting.runEnvironmentAgentSkills(environment, context, "opencode", "list", "", run),
-    ).rejects.toThrow("OpenCode returned an invalid skills catalogue");
     expect(calls).toHaveLength(1);
+    expect(calls[0]!.args.slice(0, 2)).toEqual(["-e", expect.any(String)]);
+    expect(calls[0]!.args.slice(-3)).toEqual(["opencode", "list", ""]);
+    expect(calls[0]!.options?.stdin).toBeUndefined();
   });
 
-  test("drops OpenCode's built-in skill, which has no file to read or reveal", () => {
-    expect(
-      commandTesting.parseOpenCodeEnvironmentSkills(
-        JSON.stringify([
-          { name: "configuration", location: "<built-in>" },
-          { name: "review", location: "/workspace/.opencode/skills/review/SKILL.md" },
-        ]),
-      ),
-    ).toEqual([
-      {
-        name: "review",
-        location: "/workspace/.opencode/skills/review/SKILL.md",
-      },
-    ]);
-  });
-
-  test("rejects a catalogue entry whose location is not an absolute SKILL.md", () => {
-    for (const location of [
-      ".opencode/skills/review/SKILL.md",
-      "/workspace/.opencode/skills/review/notes.md",
-      "/workspace/.opencode/skills/review",
-      `/workspace/${"x".repeat(4_097)}/SKILL.md`,
-    ]) {
-      expect(() =>
-        commandTesting.parseOpenCodeEnvironmentSkills(
-          JSON.stringify([{ name: "review", location }]),
-        ),
-      ).toThrow("OpenCode returned an invalid skill entry");
-    }
-    for (const entry of [
-      { name: "", location: "/workspace/SKILL.md" },
-      { name: 7, location: "/workspace/SKILL.md" },
-      { name: "review", location: "/workspace/SKILL.md", description: 7 },
-      ["review", "/workspace/SKILL.md"],
-      null,
-    ]) {
-      expect(() => commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([entry]))).toThrow(
-        "OpenCode returned an invalid skill entry",
+  test("the scanner finds an OpenCode project skill and reads it back", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-opencode-skills-"));
+    try {
+      const skillDir = path.join(root, ".opencode", "skills", "review");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: review\ndescription: Environment review\n---\nReview.\n",
       );
+      const scan = (args: string[]) =>
+        Bun.spawnSync([process.execPath, "-e", ENVIRONMENT_AGENT_SKILLS_SCRIPT, ...args], {
+          cwd: root,
+          env: { HOME: root, PATH: process.env.PATH ?? "" },
+        });
+      const listed = scan(["opencode", "list", ""]);
+      expect(listed.exitCode).toBe(0);
+      const result = JSON.parse(listed.stdout.toString()) as {
+        skills: Array<{ name: string; filePath: string; scope: string }>;
+      };
+      const skill = result.skills.find((entry) => entry.name === "review");
+      expect(skill).toMatchObject({ scope: "project" });
+      const read = scan(["opencode", "read", skill!.filePath]);
+      expect(read.exitCode).toBe(0);
+      expect(JSON.parse(read.stdout.toString()).content).toContain("Review.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
-  });
-
-  test("refuses a catalogue larger than the scanner is willing to accept", () => {
-    const entry = { name: "review", location: "/workspace/.opencode/skills/review/SKILL.md" };
-    expect(
-      commandTesting.parseOpenCodeEnvironmentSkills(
-        JSON.stringify(Array.from({ length: 2_000 }, () => entry)),
-      ),
-    ).toHaveLength(2_000);
-    expect(() =>
-      commandTesting.parseOpenCodeEnvironmentSkills(
-        JSON.stringify(Array.from({ length: 2_001 }, () => entry)),
-      ),
-    ).toThrow("OpenCode returned more than 2000 skills");
-    expect(() =>
-      commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify({ skills: [] })),
-    ).toThrow("OpenCode returned an invalid skills catalogue");
-  });
-
-  test("clamps catalogue metadata without splitting a surrogate pair", () => {
-    const [skill] = commandTesting.parseOpenCodeEnvironmentSkills(
-      JSON.stringify([
-        {
-          name: `  review${"n".repeat(600)}  `,
-          description: "🙂".repeat(600),
-          location: "/workspace/.opencode/skills/review/SKILL.md",
-        },
-      ]),
-    );
-
-    expect(Array.from(skill!.name)).toHaveLength(512);
-    expect(Array.from(skill!.description ?? "")).toHaveLength(512);
-    expect(skill!.description?.endsWith("🙂")).toBe(true);
   });
 
   test("reads a skill inside the selected container through the same scanner", async () => {
@@ -861,7 +767,10 @@ exit 0
     try {
       process.env.PATH = "";
       await fs.writeFile(path.join(root, "codex"), "managed codex");
-      await fs.writeFile(path.join(root, "opencode"), "managed opencode");
+      // OpenCode is the managed 2.x binary; a managed or PATH `opencode` is not it.
+      await fs.writeFile(path.join(root, "opencode"), "an OpenCode 1.x");
+      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(false);
+      await fs.writeFile(path.join(root, "opencode2"), "managed opencode2");
 
       await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
@@ -873,7 +782,7 @@ exit 0
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("claude");
 
       await Promise.all(
-        ["claude", "opencode", "codex"].map((name) =>
+        ["claude", "opencode2", "codex"].map((name) =>
           fs.rm(path.join(root, name), { force: true }),
         ),
       );

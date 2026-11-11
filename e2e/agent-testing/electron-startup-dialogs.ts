@@ -23,32 +23,38 @@ const STARTUP_DIALOG_BUTTONS = ["Continue Without Docker", "Continue Without Git
 const REACHABILITY_DIALOG = "Docker containers can't reach Orkestrator";
 
 /**
+ * Close those dialogs whenever one appears in `page`. Each is dismissed for
+ * this run only; "Don't remind me again" stays unticked, so nothing is written
+ * to the profile. For a page reached over CDP, where there is no
+ * `ElectronApplication` to watch for new windows.
+ */
+export function dismissStartupDialogsOnPage(page: Page): void {
+  for (const name of STARTUP_DIALOG_BUTTONS) {
+    page
+      .addLocatorHandler(page.getByRole("button", { name, exact: true }), async (button) => {
+        // The button can leave the role tree between the check that ran this
+        // handler and the click: a later modal hides it, or a status refresh
+        // re-renders the dialog. An unbounded click then waits for the whole
+        // action's timeout and fails it. After this handler resolves,
+        // Playwright waits for the button to become hidden; if it remains
+        // visible, the triggering action can still time out.
+        await button.click({ timeout: 5_000 }).catch(() => undefined);
+      })
+      .catch(() => undefined);
+  }
+  const reachability = page.getByRole("dialog", { name: REACHABILITY_DIALOG, exact: true });
+  page
+    .addLocatorHandler(reachability, (dialog) =>
+      dialog.getByRole("button", { name: "Close", exact: true }).last().click(),
+    )
+    .catch(() => undefined);
+}
+
+/**
  * Close those dialogs whenever one appears in any window of `app`, including
- * windows opened later. Each is dismissed for this run only; "Don't remind me
- * again" stays unticked, so nothing is written to the profile.
+ * windows opened later (`dismissStartupDialogsOnPage`).
  */
 export function dismissStartupDialogs(app: ElectronApplication): void {
-  const watch = (page: Page) => {
-    for (const name of STARTUP_DIALOG_BUTTONS) {
-      page
-        .addLocatorHandler(page.getByRole("button", { name, exact: true }), async (button) => {
-          // The button can leave the role tree between the check that ran this
-          // handler and the click: a later modal hides it, or a status refresh
-          // re-renders the dialog. An unbounded click then waits for the whole
-          // action's timeout and fails it. After this handler resolves,
-          // Playwright waits for the button to become hidden; if it remains
-          // visible, the triggering action can still time out.
-          await button.click({ timeout: 5_000 }).catch(() => undefined);
-        })
-        .catch(() => undefined);
-    }
-    const reachability = page.getByRole("dialog", { name: REACHABILITY_DIALOG, exact: true });
-    page
-      .addLocatorHandler(reachability, (dialog) =>
-        dialog.getByRole("button", { name: "Close", exact: true }).last().click(),
-      )
-      .catch(() => undefined);
-  };
-  for (const page of app.windows()) watch(page);
-  app.on("window", watch);
+  for (const page of app.windows()) dismissStartupDialogsOnPage(page);
+  app.on("window", dismissStartupDialogsOnPage);
 }

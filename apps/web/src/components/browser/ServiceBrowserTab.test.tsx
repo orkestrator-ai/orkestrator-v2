@@ -267,6 +267,16 @@ const serviceUri = (path = "/", serviceId = FIXTURE_SERVICE_ID) =>
     path,
   });
 
+/**
+ * Runs everything the tab has scheduled for the native view. In this suite an
+ * animation frame is a microtask (see `beforeAll`), the deferred hide
+ * (`useDeferredPreviewHide`) is a microtask and the preview mocks settle at
+ * once, so none of that work waits on a timer: one macrotask turn drains it
+ * all. A check that something did not happen is then final, not a race.
+ */
+const flushScheduledViewWork = () =>
+  act(() => new Promise<void>((resolve) => setImmediate(resolve)));
+
 describe("service browser tabs", () => {
   beforeAll(() => {
     window.requestAnimationFrame = (callback: FrameRequestCallback) => {
@@ -850,24 +860,49 @@ describe("service browser tabs", () => {
       expect(browserPreview.attach.mock.calls.at(-1)![0].service?.serviceId).toBe(API_SERVICE_ID),
     );
 
-    emitState({
-      tabId: "browser-1",
-      url: "http://127.0.0.1:41000/stale",
-      loading: false,
-      canGoBack: true,
-      canGoForward: false,
-      error: null,
-      service: {
-        serviceId: FIXTURE_SERVICE_ID,
-        path: "/stale",
-        displayUrl: "http://localhost:3000/stale",
-      },
-    });
-    await Bun.sleep(5);
-    expect(tabUrl()).toBe(serviceUri("/", API_SERVICE_ID));
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).not.toContain(
-      "/stale",
+    // Every URL the tab is persisted with from here on, transient ones included.
+    const persisted: string[] = [];
+    const stopRecording = appCommandStore(paneLayoutStore).subscribe(() =>
+      persisted.push(tabUrl()),
     );
+    try {
+      emitState({
+        tabId: "browser-1",
+        url: "http://127.0.0.1:41000/stale",
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+        service: {
+          serviceId: FIXTURE_SERVICE_ID,
+          path: "/stale",
+          displayUrl: "http://localhost:3000/stale",
+        },
+      });
+      expect(tabUrl()).toBe(serviceUri("/", API_SERVICE_ID));
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).not.toContain(
+        "/stale",
+      );
+      // States are handled in arrival order, so once the new service's next
+      // state is persisted, everything the stale one could have caused has run.
+      emitState({
+        tabId: "browser-1",
+        url: "http://127.0.0.1:41000/fresh",
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+        service: {
+          serviceId: API_SERVICE_ID,
+          path: "/fresh",
+          displayUrl: "http://localhost:8000/fresh",
+        },
+      });
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/fresh", API_SERVICE_ID)));
+    } finally {
+      stopRecording();
+    }
+    expect(persisted.filter((url) => url.includes("stale"))).toEqual([]);
   });
 
   test("hides the view at once while the next service's attach is still pending", async () => {
@@ -933,9 +968,7 @@ describe("service browser tabs", () => {
           .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
     }
-    // Each refresh settled inside act(), so its renders and effects have run;
-    // one more flush settles anything they chained, with no wall-clock wait.
-    await act(async () => {});
+    await flushScheduledViewWork();
     expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
     expect(browserPreview.attach).not.toHaveBeenCalledWith(
       expect.objectContaining({ visible: false }),

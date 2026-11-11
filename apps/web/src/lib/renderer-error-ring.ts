@@ -17,7 +17,7 @@ import { createLazyLoadFailureDiagnostic } from "./failure-diagnostic";
  * An entry is an error class, where it was caught, which surface this is, a
  * one-way fingerprint and a count. The error itself is used only to compute
  * the class and fingerprint and is never kept: no message, no stack. A desktop
- * window sends new counts to the backend's essential log
+ * window, and a browser tab, send new counts to the backend's essential log
  * (`renderer-error-upload.ts`); this module has no dependencies so the startup
  * handlers can record before the application loads.
  */
@@ -136,19 +136,36 @@ export class RendererErrorRing {
 /** This renderer's ring. */
 export const rendererErrorRing = new RendererErrorRing();
 
+/** What `rendererErrorRoute` reads from the page's globals. */
+export interface RendererRouteScope {
+  orkestratorGateway?: { enabled?: boolean; desktop?: boolean };
+  orkestrator?: unknown;
+  orkestratorDesktopHost?: unknown;
+  location?: { protocol?: string };
+  navigator?: { userAgent?: string };
+}
+
 /**
  * Which renderer this is. The app has no URL router, so the surface stands in
- * for a route pattern: a browser tab on the web client, or the desktop
- * window's renderer. (The protocol's third route names the separate
- * workspace documents of earlier releases; this client no longer has any.)
+ * for a route pattern: a browser tab on the web client (the iOS app's web view
+ * included), or the desktop window's renderer. (The protocol's third route
+ * names the separate workspace documents of earlier releases; this client no
+ * longer has any.)
+ *
+ * A browser tab installs its gateway only once the application modules load,
+ * so before that a page with no desktop API, served over HTTP to something
+ * that is not Electron, is a browser tab too (the same test as
+ * `isDesktopRenderer`, kept here so this module stays dependency-free).
  */
 export function rendererErrorRoute(
-  scope: {
-    orkestratorGateway?: { enabled?: boolean; desktop?: boolean };
-  } = globalThis as never,
+  scope: RendererRouteScope = globalThis as never,
 ): RendererErrorRoute {
-  if (scope.orkestratorGateway?.enabled && !scope.orkestratorGateway.desktop) return "browser";
-  return "window";
+  const gateway = scope.orkestratorGateway;
+  if (gateway?.enabled) return gateway.desktop ? "window" : "browser";
+  if (scope.orkestrator || scope.orkestratorDesktopHost) return "window";
+  const protocol = scope.location?.protocol;
+  const electron = /\bElectron\//.test(scope.navigator?.userAgent ?? "");
+  return protocol?.startsWith("http") && !electron ? "browser" : "window";
 }
 
 /** The boundary a React error was caught by: its declared name, or `boundary`. */

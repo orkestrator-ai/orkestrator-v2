@@ -1,5 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { reportRendererDebugLogging } from "./debug-log";
+import { reportRendererDebugLogging, reportWebInspectable } from "./debug-log";
 import { startDesktopRenderer } from "./desktop-startup";
 import { emitDesktopStartupMarker } from "./desktop-startup-marker";
 import { startRendererDiagnostics } from "./renderer-diagnostics";
@@ -43,6 +43,8 @@ export async function bootstrapRenderer({
   // Preload IPC is available before the backend connection check. DevTools must
   // remain reachable when that check fails; uploads still wait for readiness.
   reportRendererDebugLogging((window.orkestrator ?? window.orkestratorDesktopHost?.api)?.window);
+  // The iOS app's shell: Safari's Web Inspector, the same switch.
+  reportWebInspectable();
   let startupPending = true;
   const reportStartupError = () => {
     if (startupPending) emitMarker("renderer-error");

@@ -1,6 +1,7 @@
 /**
  * Real-Docker qualification of the egress gateway under the three conditions
- * the other live suites never create (0018 task 3): IPv6 on the environment
+ * the other live suites never create (docs/development/container-qualification.md,
+ * "Egress gateway conditions on Linux Engine"): IPv6 on the environment
  * network, DNS answers that rotate, and a restart of the Docker daemon.
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>.

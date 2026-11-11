@@ -15,7 +15,7 @@ import type { Environment } from "../src/core/models.js";
 import { runCommand } from "../src/core/shell.js";
 
 /**
- * Live evidence for to-do 0019 task 2: does the budget read-back stay
+ * Live evidence for to-do 0019 (retired) task 2: does the budget read-back stay
  * truthful on a rootless daemon whose user is delegated only some cgroup
  * controllers (for example `memory pids` without `cpu`)?
  *

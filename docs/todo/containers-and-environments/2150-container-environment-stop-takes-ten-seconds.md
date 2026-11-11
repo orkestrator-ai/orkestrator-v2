@@ -4,17 +4,19 @@
 
 Analysed 2026-11-01 against `main` at `93b99bfb`. Re-checked and acted on
 2026-11-02 against `main` at `38d55ee1`: the stop path, the drain and the
-image's PID 1 chain were unchanged since the first analysis.
+image's PID 1 chain were unchanged since the first analysis. Task 3 done
+2026-11-11 against `main` at `498b6876`, by to-do 0022's second probe run.
 
 ### Tasks
 
 1. **Attribute the 10 seconds**: find which step of `stop_environment` waits. Status: done (2026-11-02). It was the drain waiting its whole 10 s grace for an interactive shell that ignores SIGTERM. PID 1 and Docker's stop grace are not involved.
 2. **Fix it, or record why it must wait**: then make the benchmark measure what a user waits for. Status: done in code (2026-11-02). The drain hangs up interactive shells instead of waiting for them, and the benchmark times `stopEnvironmentOnce`. Users get it when their image is rebuilt from a release that carries it.
-3. **Confirm in the real stack**: re-run 0022's multi-environment UI probe on an image built from this change. Status: open (depends on 2).
+3. **Confirm in the real stack**: re-run 0022's multi-environment UI probe on an image built from this change. Status: done (2026-11-11). Stops from the page took 1.3–2.4 s, against 10.5–11.6 s before.
+4. **Full live suites on a full image**: the live lifecycle suite (C09, C11, C12, C20) and the benchmark's `stop_environment` case on a full image that carries the drain change. Status: open.
 
 ### 1. Attribute the 10 seconds
 
-**Problem.** [0022](0022-container-resource-budgets-and-performance.md)'s
+**Problem.** To-do 0022's (retired 2026-11-11)
 multi-environment UI probe stopped and started an idle fixture container
 environment 9 times on 2026-11-01. Each `stop_environment` took 10.5–11.6 s,
 with or without load in other containers. The benchmark's warm stop measured
@@ -130,9 +132,19 @@ the way 0022 measured 10.5–11.6 s.
 profile started with `--fixture-environments container`. That builds the
 workspace image from `docker/Dockerfile`.
 
-**Investigation.** Not done in this change: building the full workspace
+**Investigation.** Not done on 2026-11-02: building the full workspace
 image on a host shared by about ten builds was out of proportion once the
 benchmark had measured the backend path.
+
+Done 2026-11-11 on beelink, as part of to-do 0022 task 3: the probe ran with
+default options against a profile on `orkestrator-v2:dev-3f9489ce4342`,
+built from `main` at `498b6876`, which carries the drain change.
+`stop_environment` sent from the page took a median of 1.43 s idle, 1.93 s
+with three busy containers and 1.42 s idle again (1.29–2.38 s over all nine
+stops), with the sidebar showing the result 64–72 ms after each reply. On
+2026-11-01 every stop took 10.5–11.6 s. The host was saturated by other
+builds (load average 36–58), so these are a busy-host sample. The full table
+is in [container-qualification.md](../../development/container-qualification.md#ui-response-under-multi-environment-load-second-busy-host-run-2026-11-11).
 
 **Decisions.**
 
@@ -143,6 +155,34 @@ benchmark had measured the backend path.
   - **Accept the benchmark figures.**
     - Pros: no further run.
     - Cons: does not show what the page waits for.
+
+### 4. Full live suites on a full image
+
+**Problem.** Only C11 and the `stop_environment` case were run on 2026-11-02,
+on an image that differed from the released one only in the drain script.
+The rest of the live lifecycle suite was never run against the change.
+
+**Context.** The commands are in
+[container-qualification.md](../../development/container-qualification.md#suites)
+(live lifecycle, benchmarks). Run them on beelink with Docker through
+`apps/desktop/scripts/dev/docker-qualification-bin` and an image from
+`mise run docker:build:dev`.
+
+**Investigation.** Moved here unchanged from Outstanding work on 2026-11-11.
+That day to-do 0022 ran the benchmark's baseline case and the UI probe on a
+full image built from `main` at `498b6876`, so the stop path through the
+page is confirmed (task 3); C09, C11, C12, C20 and the `stop_environment`
+case were not run on it.
+
+**Decisions.**
+
+- **Which runs close it?**
+  - **The live lifecycle suite plus `-t stop_environment`, once, on one full image (recommended).**
+    - Pros: covers every case the drain change can affect, with the target the change set.
+    - Cons: needs an image build and about a quarter of an hour of Docker time on a shared host.
+  - **Rely on the weekly Linux Engine CI workflow.**
+    - Pros: no local run.
+    - Cons: CI uploads the benchmark report but nobody compares it with the `stop_environment` target unless asked.
 
 ## Assumptions and decisions
 
@@ -223,11 +263,8 @@ directory was removed.
 
 ## Outstanding work
 
-- Task 3: the real-stack UI probe on an image from this change.
-- The full live lifecycle suite (C09, C11, C12, C20) and the full benchmark
-  on a full image built from this branch. Only C11 and the
-  `stop_environment` case were run, on an image that differs from the
-  released one only in the drain script.
+- Task 4: the full live lifecycle suite (C09, C11, C12, C20) and the
+  `stop_environment` case on a full image.
 
 ## Constraints and rationale
 
@@ -238,6 +275,6 @@ directory was removed.
 
 ## Related
 
-- [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md): the UI probe that measured the 10 s stops
+- To-do 0022 (retired 2026-11-11): the UI probe that measured the 10 s stops and confirmed the fix; its runs are in [container-qualification.md](../../development/container-qualification.md#ui-response-under-multi-environment-load)
 - [0729-container-benchmark-target-misses.md](0729-container-benchmark-target-misses.md): the benchmark's earlier warm stop figures
 - [container-lifecycle.md](../../architecture/container-lifecycle.md#stop-and-drain): the stop and drain contract

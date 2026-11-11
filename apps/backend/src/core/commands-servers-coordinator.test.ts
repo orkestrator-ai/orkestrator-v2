@@ -10,7 +10,6 @@ import * as commandFiles from "./commands-files.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
 import { CoordinatorService } from "./coordinator-service.js";
-import * as hostPlugins from "./opencode-host-credential.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
@@ -1212,47 +1211,6 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-    }
-  });
-
-  test("OpenCode coordinator plugin refusal propagates without retry or spawn", async () => {
-    const project = await storage.addProject(createProject("remote", checkout));
-    const coordinator = new CoordinatorService(storage, () => ({
-      enabled: true,
-      running: true,
-      error: null,
-    }));
-    const snapshot = await coordinator.ensure(project.id);
-    const conversation = snapshot.workspace.conversations[0]!;
-    await coordinator.assignConversationAgent(project.id, conversation.id, "opencode");
-    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
-    const context = {
-      storage,
-      coordinators: coordinator,
-      appRoot: root,
-      resourceRoot: root,
-      emit: () => undefined,
-      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: trackedRuntime(),
-    } as CommandContext;
-    const previousDir = process.env.OPENCODE_CONFIG_DIR;
-    const previousContent = process.env.OPENCODE_CONFIG_CONTENT;
-    process.env.OPENCODE_CONFIG_DIR = path.join(root, "user-opencode");
-    process.env.OPENCODE_CONFIG_CONTENT = "{ invalid fixture json";
-    const install = spyOn(hostPlugins, "installHostOpenCodePlugins");
-    try {
-      await expect(startLocalServerUnlocked(runtimeId, context, "opencode")).rejects.toBeInstanceOf(
-        hostPlugins.OpenCodeCoordinatorReadBoundaryUnavailableError,
-      );
-      expect(install).toHaveBeenCalledTimes(1);
-      expect(install.mock.calls[0]![2]).toEqual({ coordinator: true });
-      expect(context.runtime.localServers.process(`opencode:${runtimeId}`)).toBeUndefined();
-    } finally {
-      install.mockRestore();
-      if (previousDir === undefined) delete process.env.OPENCODE_CONFIG_DIR;
-      else process.env.OPENCODE_CONFIG_DIR = previousDir;
-      if (previousContent === undefined) delete process.env.OPENCODE_CONFIG_CONTENT;
-      else process.env.OPENCODE_CONFIG_CONTENT = previousContent;
     }
   });
 

@@ -76,6 +76,14 @@ export function openCode2ReasoningId(ref: { variant?: unknown } | undefined): st
   return boundedId(ref?.variant) ?? OPENCODE2_DEFAULT_REASONING;
 }
 
+export interface OpenCode2ModelCatalogueOptions {
+  /**
+   * Providers whose models are listed first, so the cap never crowds them
+   * out of an unfiltered catalogue (the host's durable cache).
+   */
+  priorityProviders?: readonly string[];
+}
+
 /**
  * Normalize `/api/model` and `/api/model/default` into picker rows. Disabled,
  * non-chat and unaddressable rows are dropped rather than repaired.
@@ -84,8 +92,18 @@ export function normalizeOpenCode2ModelCatalogue(
   models: unknown,
   defaultModel: unknown,
   allowedProviders: readonly string[],
+  options: OpenCode2ModelCatalogueOptions = {},
 ): OpenCode2ModelCatalogue {
-  const rows = Array.isArray(models) ? models : [];
+  const listed = Array.isArray(models) ? models : [];
+  const priority = options.priorityProviders ?? [];
+  const prioritized = (row: unknown) => {
+    const providerId = boundedId(record(row)?.providerID);
+    return providerId !== undefined && isSelectableOpenCodeProvider(providerId, priority);
+  };
+  const rows =
+    priority.length > 0
+      ? [...listed.filter(prioritized), ...listed.filter((row) => !prioritized(row))]
+      : listed;
   const defaultId = openCode2ModelId(record(defaultModel));
   const seen = new Set<string>();
   const connected = new Set<string>();
@@ -233,6 +251,7 @@ export async function readOpenCode2ModelCatalogue(
   client: Pick<OpenCode2Client, "api">,
   allowedProviders: readonly string[],
   signal?: AbortSignal,
+  options: OpenCode2ModelCatalogueOptions = {},
 ): Promise<OpenCode2ModelCatalogue> {
   const [models, defaultModel] = await Promise.all([
     client.api<unknown>("GET", "/api/model", "OpenCode model list", {
@@ -244,7 +263,7 @@ export async function readOpenCode2ModelCatalogue(
       .catch(() => undefined),
   ]);
   if (!Array.isArray(models)) throw new Error("OpenCode model list is malformed");
-  return normalizeOpenCode2ModelCatalogue(models, defaultModel, allowedProviders);
+  return normalizeOpenCode2ModelCatalogue(models, defaultModel, allowedProviders, options);
 }
 
 /**

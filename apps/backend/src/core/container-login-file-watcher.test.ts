@@ -16,7 +16,11 @@ function environment(id: string, overrides: Partial<Environment> = {}): Environm
   return { id, containerId: `container-${id}`, status: "running", ...overrides } as Environment;
 }
 
-function harness(options: { environments: Environment[]; leaseHeld?: boolean }) {
+function harness(options: {
+  environments: Environment[];
+  leaseHeld?: boolean;
+  renewOpenCodeLogins?: () => Promise<unknown>;
+}) {
   const synced: string[] = [];
   const hooks: { afterSync?: () => void | string } = {};
   const context = {
@@ -33,6 +37,7 @@ function harness(options: { environments: Environment[]; leaseHeld?: boolean }) 
   } as unknown as CommandContext;
   const scheduled: Array<() => void> = [];
   const watcher = new ContainerLoginFileWatcher(context, {
+    ...(options.renewOpenCodeLogins ? { renewOpenCodeLogins: options.renewOpenCodeLogins } : {}),
     syncContainer: async (provider, containerId) => {
       synced.push(`${provider}:${containerId}`);
       return hooks.afterSync?.();
@@ -51,6 +56,7 @@ function harness(options: { environments: Environment[]; leaseHeld?: boolean }) 
 // An agent-test profile's Grok login is its own snapshot in its isolated HOME.
 const grokAuth = () => path.join(root, "profile-home", ".grok", "auth.json");
 const piAuth = () => path.join(root, "host-home", ".pi", "agent", "auth.json");
+const openCodeAuth = () => path.join(root, "host-data", "opencode", "auth.json");
 
 async function write(file: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -109,6 +115,37 @@ describe("ContainerLoginFileWatcher", () => {
       "pi:container-revoked",
       "pi:container-b",
     ]);
+  });
+
+  test("renews OpenCode's file from the 2.x store before fingerprinting it, in the same pass", async () => {
+    let renewals = 0;
+    const run = harness({
+      environments: [environment("a")],
+      renewOpenCodeLogins: async () => {
+        renewals += 1;
+        // A refresh 2.x made lands in the file containers are handed.
+        if (renewals === 2) await write(openCodeAuth(), '{"openai":{"renewed":true}}');
+      },
+    });
+    await write(openCodeAuth(), "{}");
+    await write(grokAuth(), "{}");
+    await run.watcher.tick();
+    run.synced.length = 0;
+    expect(await run.watcher.tick()).toEqual(["opencode"]);
+    expect(run.synced).toEqual(["opencode:container-a"]);
+    expect(renewals).toBe(2);
+  });
+
+  test("a failed OpenCode renewal still delivers every file", async () => {
+    const run = harness({
+      environments: [environment("a")],
+      renewOpenCodeLogins: async () => {
+        throw new Error("host server went away");
+      },
+    });
+    await write(openCodeAuth(), "{}");
+    expect(await run.watcher.tick()).toContain("opencode");
+    expect(run.synced).toContain("opencode:container-a");
   });
 
   test("a host file that disappears is pushed too, so a sign-out reaches containers", async () => {

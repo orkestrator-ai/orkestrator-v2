@@ -150,6 +150,9 @@ cursor, and that cost a whole transcript read on bridges that page directly.
   - OpenCode (`openCodeCursorBefore`, `opencode-snapshots.ts`) names the
     cursor before a message, so only the first row of a message's rows names
     one (an error row does not); the search moves on to the next message.
+    Since OpenCode 1.x was retired (2026-11-11) this is `cursorBefore` in
+    `apps/backend/src/core/opencode2/transcript-snapshot.ts`, where only the
+    first row of a group can name one.
   Rows between the view's start and that position return on the first page
   and the renderer drops them by id.
 - The trigger is ordinary, not exotic: a tool call's detail reference is

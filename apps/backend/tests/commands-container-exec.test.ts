@@ -433,12 +433,8 @@ describe("Electron backend command registry", () => {
 
   test.each([
     ["Claude", "start_claude_server", "container-claude-redaction", "CLAUDE_BRIDGE_TOKEN"],
-    [
-      "OpenCode",
-      "start_opencode_server",
-      "container-opencode-redaction",
-      "OPENCODE_SERVER_PASSWORD",
-    ],
+    // OpenCode 2 refuses a token-file image, so its case runs on a verifier image.
+    ["OpenCode", "start_opencode_server", "container-opencode-redaction", "OPENCODE_PASSWORD"],
   ] as const)(
     "redacts a generated %s container credential when detached startup fails",
     async (_label, commandName, containerId, credentialName) => {
@@ -450,6 +446,7 @@ describe("Electron backend command registry", () => {
         status: "running",
       });
       const { context } = createContext(environment);
+      if (commandName === "start_opencode_server") credentialModeSpy.mockResolvedValue("verifier");
       const commands = createCommandRegistry();
       const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
       process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
@@ -465,7 +462,7 @@ case "$1" in
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
-      *"cat /tmp/claude-bridge-token"*|*"cat /tmp/opencode-server-password"*)
+      *"cat /tmp/claude-bridge-token"*)
         exit 0 ;;
     esac
     exit 9 ;;

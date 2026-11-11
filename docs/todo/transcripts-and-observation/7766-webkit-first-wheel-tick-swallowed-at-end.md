@@ -94,5 +94,5 @@ The host this was measured on has no WebKit libraries (`libicu74`,
 ## Related
 
 - [transcript-scroll.md](../../architecture/transcript-scroll.md#known-limitations)
-- Flake case [9979](../../tests/flaky-tests/web-ui/9979-inspector-reader-place-webkit-restore.md),
+- Flake case [9981](../../tests/flaky-tests/web-ui/9981-inspector-reader-place-webkit-restore.md),
   a separate WebKit failure in the same spec seen during these runs.

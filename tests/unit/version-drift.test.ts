@@ -4,7 +4,6 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_RELEASE_BASE,
-  OPENCODE_RELEASE_BASE,
   GH_RELEASE_BASE,
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
@@ -232,8 +231,8 @@ function findCrossArtifactIntegrityCollisions(artifacts: ArtifactIntegrityValues
  * a hand-edited `GROK_SHA` would have shipped
  * unnoticed. The tests that follow iterate this table, and one of them asserts
  * the table covers every name in `PINNED_TOOLCHAIN_VERSIONS`, so another
- * managed CLI cannot be added with less coverage than the six here (OpenCode
- * counts twice: its 1.x and 2.x binaries are pinned separately).
+ * managed CLI cannot be added with less coverage than the five here (OpenCode's
+ * is the 2.x binary, pinned as `opencode2`).
  */
 interface AgentPins {
   /** `ARG <name>=` in docker/Dockerfile. */
@@ -286,18 +285,10 @@ const AGENT_PINS: Record<string, AgentPins> = {
     // No SDK by design; `Codex: the bridge does not depend on the Codex SDK`
     // is what keeps it that way.
   },
-  opencode: {
-    dockerArg: "OPENCODE_CLI_VERSION",
-    containerInstall: "pinned-archive",
-    // The backend is the only OpenCode client: it drives native chat and build
-    // pipelines alike, and the live compatibility probe resolves the SDK from
-    // it. `OpenCode: the renderer does not depend on the SDK` keeps it the only
-    // pin.
-    sdkPins: [{ file: "apps/backend/package.json", dep: "@opencode-ai/sdk", tracksCli: true }],
-  },
-  // OpenCode 2.x, installed beside 1.x for the same platform. No SDK pin: the
-  // 2.x client is the backend's own (`apps/backend/src/core/opencode2/`), not
-  // `@opencode/client`.
+  // OpenCode is 2.x only, pinned as `opencode2`. No SDK pin: the 2.x client is
+  // the backend's own (`apps/backend/src/core/opencode2/`), not
+  // `@opencode/client`; the 1.x SDK went with the 1.x provider, and `OpenCode:
+  // no package depends on the retired 1.x SDK` keeps it out.
   opencode2: {
     dockerArg: "OPENCODE2_CLI_VERSION",
     containerInstall: "pinned-archive",
@@ -794,80 +785,42 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   // shell downloaders were replaced by `scripts/download-agent.ts` those tests
   // were deleted whole, taking the manifest halves with them.
 
-  test("OpenCode: every managed artifact URL derives from the pinned release base", () => {
-    // OpenCode moved from the `sst` org to `anomalyco`. Without this, the
-    // release base could be edited back and every other test would stay green
-    // while the manifest shipped binaries from a different repository.
-    expect(OPENCODE_RELEASE_BASE).toBe(
-      `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}`,
-    );
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
-      (entry) => entry.name === "opencode",
-    )) {
-      expect(artifact.archive.url.startsWith(`${OPENCODE_RELEASE_BASE}/`)).toBe(true);
-    }
-  });
-
-  test("OpenCode: darwin ships zips and linux ships tarballs, named like the release assets", () => {
-    // The two platforms publish different container formats under different
-    // extensions. A record that names one and declares the other extracts with
-    // the wrong tool and fails at install time rather than in review.
-    const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode");
-    expect(artifacts.length).toBe(4);
-    for (const artifact of artifacts) {
-      const extension = artifact.platform === "linux" ? ".tar.gz" : ".zip";
+  test("OpenCode: no package depends on the retired 1.x SDK", () => {
+    // The backend's OpenCode 2.x client is its own (`apps/backend/src/core/opencode2/`).
+    // The 1.x SDK, its patch and its patch registration went with the 1.x provider.
+    const manifests = [
+      "package.json",
+      ...["apps", "bridges", "packages"].flatMap((group) =>
+        readdirSync(join(repoRoot, group))
+          .map((name) => `${group}/${name}/package.json`)
+          .filter((file) => existsSync(join(repoRoot, file))),
+      ),
+    ];
+    for (const file of manifests) {
+      const pkg = JSON.parse(read(file)) as Record<string, Record<string, string> | undefined>;
+      for (const field of [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+      ]) {
+        expect(pkg[field]?.["@opencode-ai/sdk"], `${file} ${field}`).toBeUndefined();
+      }
       expect(
-        artifact.archive.url.endsWith(
-          `opencode-${artifact.platform}-${artifact.architecture}${extension}`,
+        Object.keys(pkg.patchedDependencies ?? {}).filter((key) =>
+          key.startsWith("@opencode-ai/sdk@"),
         ),
-        `${artifact.platform}/${artifact.architecture} is not named like its release asset`,
-      ).toBe(true);
-      expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
-      expect(artifact.archive.entryPath).toBe("opencode");
+        file,
+      ).toEqual([]);
     }
-  });
-
-  test("OpenCode: the renderer does not depend on the SDK", () => {
-    // The renderer has no OpenCode client; only the backend talks to
-    // `opencode serve`. A second pin would be a second version to keep in step
-    // with the CLI and the patch for no consumer.
-    const pkg = JSON.parse(read("apps/web/package.json")) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    expect(pkg.dependencies?.["@opencode-ai/sdk"]).toBeUndefined();
-    expect(pkg.devDependencies?.["@opencode-ai/sdk"]).toBeUndefined();
-  });
-
-  test("OpenCode: the SDK pin, patch registration, patch file and lockfile stay aligned", () => {
-    const backendVersion = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
-
-    const expectedKey = `@opencode-ai/sdk@${backendVersion}`;
-    const expectedPatch = `patches/@opencode-ai%2Fsdk@${backendVersion}.patch`;
-    const rootPackage = JSON.parse(read("package.json")) as {
-      patchedDependencies?: Record<string, string>;
-    };
-    const rootPatchKeys = Object.keys(rootPackage.patchedDependencies ?? {}).filter((key) =>
-      key.startsWith("@opencode-ai/sdk@"),
-    );
-    expect(rootPatchKeys).toEqual([expectedKey]);
-    expect(rootPackage.patchedDependencies?.[expectedKey]).toBe(expectedPatch);
-    expect(existsSync(join(repoRoot, expectedPatch))).toBe(true);
-
-    const patchFiles = readdirSync(join(repoRoot, "patches")).filter((file) =>
-      file.startsWith("@opencode-ai%2Fsdk@"),
-    );
-    expect(patchFiles).toEqual([expectedPatch.slice("patches/".length)]);
-
-    const lock = JSON.parse(read("bun.lock").replace(/,(\s*[}\]])/g, "$1")) as {
-      patchedDependencies?: Record<string, string>;
-    };
-    const lockPatchKeys = Object.keys(lock.patchedDependencies ?? {}).filter((key) =>
-      key.startsWith("@opencode-ai/sdk@"),
-    );
-    expect(lockPatchKeys).toEqual([expectedKey]);
-    expect(lock.patchedDependencies?.[expectedKey]).toBe(expectedPatch);
-    expect(lockfileResolvedVersion("bun.lock", "@opencode-ai/sdk")).toBe(backendVersion);
+    expect(
+      readdirSync(join(repoRoot, "patches")).filter((file) =>
+        file.startsWith("@opencode-ai%2Fsdk@"),
+      ),
+    ).toEqual([]);
+    for (const lockfile of ["bun.lock", "bridges/claude-bridge/bun.lock"]) {
+      expect(read(lockfile), lockfile).not.toContain('"@opencode-ai/sdk');
+    }
   });
 
   test("Cursor: the diagnostic seam patch matches the SDK pin and lockfile", () => {
@@ -906,10 +859,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   });
 
   test("OpenCode 2.x: every managed artifact is the pinned npm tarball, installed as opencode2", () => {
-    // 2.x is fetched from `@opencode/cli-<target>`, not the 1.x release page.
-    // It shares the OpenCode platform with 1.x, so its activation name must
-    // differ: two `opencode` executables in one activation directory would
-    // collide, and the 1.x provider would start whichever won.
+    // 2.x is fetched from `@opencode/cli-<target>`. It keeps the activation
+    // name it had beside 1.x, `opencode2`, so installed toolchain directories
+    // stay where they are, and is never activated as `opencode`: that name on
+    // PATH is the user's own install.
     const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode2");
     expect(artifacts.length).toBe(4);
     for (const artifact of artifacts) {
@@ -924,12 +877,16 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       expect(artifact.activationAliases ?? []).not.toContain("opencode");
     }
     expect(PINNED_TOOLCHAIN_VERSIONS.opencode2).toMatch(/^2\./);
-    expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toMatch(/^1\./);
+    // OpenCode 1.x is retired: nothing pins or downloads it.
+    expect(Object.keys(PINNED_TOOLCHAIN_VERSIONS)).not.toContain("opencode");
+    expect(PINNED_TOOLCHAIN_ARTIFACTS.some(({ name }) => (name as string) === "opencode")).toBe(
+      false,
+    );
   });
 
   test("OpenCode 2.x belongs to the opencode platform and is not a platform itself", () => {
     expect(agentPlatformForToolchain("opencode2")).toBe("opencode");
-    expect(agentToolchainsForPlatform("opencode")).toEqual(["opencode", "opencode2"]);
+    expect(agentToolchainsForPlatform("opencode")).toEqual(["opencode2"]);
     expect(agentToolchainsForPlatform("opencode2")).toEqual([]);
     expect<readonly string[]>(AGENT_PLATFORMS).not.toContain("opencode2");
     // Every other agent toolchain is its own platform's only binary.
@@ -1055,10 +1012,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       }
     }
 
-    // OpenCode ships unsigned macOS binaries, and Pi 0.85.0 ships binaries with
-    // invalid linker signatures. Both architectures must opt into repair or
-    // installation fails before the executable can be probed.
-    for (const name of ["opencode", "pi"] as const) {
+    // Pi 0.85.0 ships binaries with invalid linker signatures. Both
+    // architectures must opt into repair or installation fails before the
+    // executable can be probed. (OpenCode 2.x's are validly signed.)
+    for (const name of ["pi"] as const) {
       const darwinArtifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter(
         (artifact) => artifact.name === name && artifact.platform === "darwin",
       );
@@ -1080,32 +1037,28 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"',
     );
     expect(dockerfile).toContain('npm install -g "@openai/codex@${CODEX_CLI_VERSION}"');
-    expect(dockerfile).toContain(
-      "releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz",
-    );
-    expect(dockerfile).toContain("OPENCODE_SHA=");
     expect(dockerfile).toMatch(/amd64\) GIT_DELTA_SHA=[a-f0-9]{64}/);
     expect(dockerfile).toMatch(/arm64\) GIT_DELTA_SHA=[a-f0-9]{64}/);
-    expect(dockerfile).toMatch(/amd64\) OPENCODE_ARCH=x64; OPENCODE_SHA=[a-f0-9]{64}/);
-    expect(dockerfile).toMatch(/arm64\) OPENCODE_ARCH=arm64; OPENCODE_SHA=[a-f0-9]{64}/);
-    // The three CLI paths the backend resolves at runtime.
+    // OpenCode 1.x is retired: no version, download or digest of it is left.
+    expect(dockerfile).not.toContain("OPENCODE_CLI_VERSION");
+    expect(dockerfile).not.toContain("OPENCODE_SHA=");
+    expect(dockerfile).not.toContain("anomalyco/opencode/releases");
+    expect(dockerfile).not.toContain("OPENCODE_CLI_PATH=");
+    // The CLI paths the backend resolves at runtime.
     expect(dockerfile).toContain("ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude");
     expect(dockerfile).toContain("ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex");
-    expect(dockerfile).toContain("ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode");
     expect(dockerfile).toContain("/home/node/.opencode/bin");
-    // The 1.x binary itself is root's, so the server the launcher starts from it
-    // runs code the agent's uid cannot replace; node's path is a symlink to it.
-    expect(dockerfile).toContain(
-      "tar -xzf /tmp/opencode.tar.gz --no-same-owner -C /opt/opencode/bin opencode",
-    );
+    // A terminal's `opencode` is the root-owned wrapper around the 2.x binary,
+    // proven to report the same version at build time.
+    expect(dockerfile).toContain("COPY docker/opencode-cli.sh /opt/opencode/bin/opencode");
     expect(dockerfile).toContain(
       "ln -s /opt/opencode/bin/opencode /home/node/.opencode/bin/opencode",
     );
+    expect(read("docker/opencode-cli.sh")).toContain('exec /opt/opencode/bin/opencode2 "$@"');
     expect(dockerfile).toContain('RUN "$CLAUDE_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$CODEX_CLI_PATH" --version');
-    expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');
-    // OpenCode 2.x beside 1.x: the npm platform tarball, digest-checked, installed
-    // under its own name, and proven runnable at build time.
+    // OpenCode 2.x: the npm platform tarball, digest-checked, installed under
+    // its own name, and proven runnable at build time.
     expect(dockerfile).toContain(
       "https://registry.npmjs.org/@opencode/cli-${OPENCODE2_TARGET}/-/cli-${OPENCODE2_TARGET}-${OPENCODE2_CLI_VERSION}.tgz",
     );
@@ -1114,7 +1067,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain("printf '%s  %s\\n' \"$OPENCODE2_SHA\" /tmp/opencode2.tgz");
     expect(dockerfile).toContain("ENV OPENCODE2_CLI_PATH=/home/node/.opencode/bin/opencode2");
     expect(dockerfile).toContain('&& "$OPENCODE2_CLI_PATH" --version');
-    // 2.x must not self-update past its pin either; the one setting covers both.
+    // 2.x must not self-update past its pin.
     expect(dockerfile).toContain("ENV OPENCODE_DISABLE_AUTOUPDATE=1");
   });
 

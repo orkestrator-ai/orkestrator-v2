@@ -67,7 +67,7 @@ export { isToolchainName };
  *
  * An explicit list names tools; a configuration names platforms, and a
  * platform brings every tool `agentPlatformForToolchain` assigns it, so an
- * enabled `opencode` installs both `opencode` and `opencode2`.
+ * enabled `opencode` installs `opencode2`.
  */
 export async function resolveToolchainSelection(options: {
   dataDir: string;

@@ -5,13 +5,14 @@
  * command registry (`teardown_tab`, the native agent commands, pane layouts,
  * compose drafts) over a real `StorageService` and `NativeAgentService`, the
  * real `HttpBridgeProvider` talking to the real Cursor, Pi and ACP (Grok)
- * bridges over HTTP, and the real `OpenCodeProvider`. Only the engines are
+ * bridges over HTTP, and the real OpenCode provider (`OpenCodeEnvironmentProvider`)
+ * over HTTP. Only the engines are
  * fake, each at its own boundary:
  *
  * - Cursor: `bridges/cursor-bridge/src/testing/fake-engine-server.ts`
  * - Pi: `bridges/pi-bridge/src/testing/fake-engine-server.ts` (pi-ai faux model)
  * - Grok: `bridges/acp-bridge/src/testing/fake-agent-close.ts`
- * - OpenCode: `close-retention-opencode.ts` (in-memory SDK client)
+ * - OpenCode: `close-retention-opencode.ts` (the OpenCode 2 fake server)
  *
  * The page reaches it through `/__close-retention/*`, which the spec proxies
  * here. Besides `/invoke`, the host answers `/environment` (a fresh
@@ -48,7 +49,6 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { BackendRuntime } from "../../apps/backend/src/core/backend-runtime";
 import { createCommandRegistry } from "../../apps/backend/src/core/commands";
 import type { CommandContext } from "../../apps/backend/src/core/commands-context";
@@ -378,10 +378,7 @@ const nativeAgents = new NativeAgentService(storage, invokeInternal, {
           authToken: "close-retention",
           directory: workspace,
         },
-        {
-          openCodeClient: openCode.client,
-          openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        },
+        { openCode: { connection: async () => openCode.connection } },
       );
     }
     if (input.agent !== "cursor" && input.agent !== "pi" && input.agent !== "grok") {
@@ -616,6 +613,7 @@ async function shutdown() {
   setCursorPromptGate(false);
   await nativeAgents.shutdown().catch(() => undefined);
   server.stop(true);
+  openCode.stop();
   staleClaudeBridge.stop(true);
   for (const bridge of Object.values(bridges)) bridge.child.kill("SIGTERM");
   rmSync(root, { recursive: true, force: true });

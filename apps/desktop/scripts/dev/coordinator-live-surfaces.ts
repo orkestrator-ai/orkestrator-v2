@@ -285,12 +285,17 @@ export function evaluateSurfacesScenario(input: SurfacesInput): CoordinatorLiveC
   const counts = SURFACES_TOOLS.map(
     (tool) => [tool, orkestratorToolCalls(input.calls, tool)] as const,
   );
-  const missing = counts.filter(([tool, calls]) => calls.length < expected[tool]);
+  // Exactly, not at least: the prompt asks for each call once (`edit_worker_tab`
+  // twice), and a repeated launch leaves a second tab open in the worker. A
+  // refused call did nothing and is `no-tool-error`'s to report.
+  const made = (calls: readonly ReadOnlyToolCall[]) =>
+    calls.filter((call) => call.state !== "refused").length;
+  const wrong = counts.filter(([tool, calls]) => made(calls) !== expected[tool]);
   checks.push(
     check(
       "each-tool-called",
-      missing.length === 0,
-      counts.map(([tool, calls]) => `${tool} ${calls.length}/${expected[tool]}`).join(", "),
+      wrong.length === 0,
+      counts.map(([tool, calls]) => `${tool} ${made(calls)}/${expected[tool]}`).join(", "),
     ),
   );
   const failed = counts.flatMap(([tool, calls]) => [
@@ -307,7 +312,15 @@ export function evaluateSurfacesScenario(input: SurfacesInput): CoordinatorLiveC
     ),
   );
 
-  const terminalTab = outputs("launch_terminal").map(launchedTabId).find(Boolean) ?? null;
+  const launchedTerminals = [
+    ...new Set(
+      outputs("launch_terminal")
+        .filter((output) => !toolOutputFailed(output))
+        .map(launchedTabId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
+  const terminalTab = launchedTerminals[0] ?? null;
   const listed = outputs("list_tabs").join("\n");
   const listedBrowser = coordinatorBrowserTabIds(listed);
   checks.push(
@@ -333,6 +346,14 @@ export function evaluateSurfacesScenario(input: SurfacesInput): CoordinatorLiveC
   );
 
   const after = layoutTabs(input.layoutAfter);
+  const terminalsLeft = after.filter((tab) => launchedTerminals.includes(tab.id));
+  checks.push(
+    check(
+      "one-terminal-launched",
+      launchedTerminals.length === 1 && terminalsLeft.length <= 1,
+      `${launchedTerminals.length} terminal tabs launched, ${terminalsLeft.length} in the layout`,
+    ),
+  );
   const terminal = terminalTab ? after.find((tab) => tab.id === terminalTab) : undefined;
   checks.push(
     check(

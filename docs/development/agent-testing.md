@@ -2776,8 +2776,9 @@ and `request_root_changes` naming the file, and ends. Once the request is
 pending, the spec approves it in the profile's own root-changes dialog
 (**Apply 1 file**, with the coordinator's file pre-selected), and the harness
 waits for the outcome and the coordinator's wake turn, then watches 30 more
-seconds. It passes when every call was made without an error result,
-`list_tabs` listed both new tabs, the terminal tab's output (read with
+seconds. It passes when every call was made exactly as many times as asked
+(a second launch, which would leave another tab open in the worker, fails) and
+without an error result, `list_tabs` listed both new tabs, the terminal tab's output (read with
 `get_terminal_output_snapshot` for up to 30 seconds) shows the line its `echo`
 printed, not only the typed command, the worker's layout afterwards keeps the
 terminal tab selected and holds no coordinator browser tab, the request ended

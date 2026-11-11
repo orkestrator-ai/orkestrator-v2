@@ -127,6 +127,47 @@ describe("evaluateSurfacesScenario", () => {
     });
   });
 
+  test("a second successful terminal launch, left open in the worker, fails", () => {
+    const input = passing();
+    const extraTab = "terminal-coordinator-def";
+    const leaf = (input.layoutAfter as { root: Record<string, unknown> }).root;
+    const checks = evaluateSurfacesScenario({
+      ...input,
+      calls: [call("launch_terminal"), ...input.calls],
+      outputs: {
+        ...input.outputs,
+        launch_terminal: [
+          ...input.outputs.launch_terminal!,
+          JSON.stringify({ environmentId: "worker", tabId: extraTab }),
+        ],
+      },
+      layoutAfter: {
+        root: {
+          ...leaf,
+          tabs: [...(leaf.tabs as unknown[]), { id: extraTab, type: "plain" }],
+        },
+      },
+    });
+    const failures = checks.filter((item) => !item.passed).map((item) => item.name);
+    expect(failures).toEqual(["each-tool-called", "one-terminal-launched"]);
+    expect(checks.find((item) => item.name === "each-tool-called")?.detail).toContain(
+      "launch_terminal 2/1",
+    );
+    expect(checks.find((item) => item.name === "one-terminal-launched")?.detail).toBe(
+      "2 terminal tabs launched, 2 in the layout",
+    );
+  });
+
+  test("any other tool called more often than asked fails", () => {
+    const input = passing();
+    expect(failed({ ...input, calls: [...input.calls, call("open_worker_browser")] })).toEqual([
+      "each-tool-called",
+    ]);
+    expect(failed({ ...input, calls: [...input.calls, call("edit_worker_tab")] })).toEqual([
+      "each-tool-called",
+    ]);
+  });
+
   test("a terminal whose echoed marker never printed fails, as does unreadable output", () => {
     const input = passing();
     expect(failed({ ...input, terminalOutput: "$ echo surfaces-t0k3n\r\n$ " })).toEqual([

@@ -52,3 +52,32 @@ toggles until the expanded state is a recorded choice, which the auto-collapse l
 alone, and `cli-ui.spec.ts`'s `openProject` uses it. The case passed in runs 3 to 7.
 The 2026-11-05 failure of `cli-ui.spec.ts:250` recorded in to-do 4222 ("the project row
 did not expand") fits the same race.
+
+### Confirmation on macOS for to-do 7431, 2026-11-11
+
+To-do 7431 (retired) recorded this case's two beelink failures of 2026-11-06 at
+`c1724ab7`, before the fix above landed (`ff6f1e50a`, #1914). It read them as
+"Expand is clicked and Collapse never appears"; the runs below show the helper
+never clicked. Profile `qa-7431-cascade` on arktech-mini (macOS arm64), started
+with `mise run dev:test --fixture --headless --no-agent-credentials
+--agent-platforms codex` under a throwaway `HOME`, `CODEX_HOME` and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, at `498b68766`; the command was
+`bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts
+cli-ui.spec.ts --grep "cascade removal" --workers=1` through `test:logged`.
+
+- **Current spec:** passed once (29.8 s), then 5 of 5 with `--repeat-each=5`
+  (136 s).
+- **Old `openProject` restored, uncommitted:** 2 of 5 failed with the to-do's
+  exact error, `Collapse project origin` not found from `openProject` after the
+  page's first load.
+- **Old helper with a state probe, uncommitted:** 3 of 5 failed. In every
+  failure the helper first saw `Collapse project origin`, so it did not click;
+  for the next 3 s neither button had an accessible name, because the
+  "Continue Without Docker" startup dialog was open over the page; once the
+  locator handler dismissed it, the empty fixture project had been collapsed by
+  `collapseEmptyProjects`. In the passing runs the helper first saw Expand and
+  clicked it, which records a choice the auto-collapse leaves alone.
+
+The sidebar behaves as its store documents, so the spec was the stale side and
+`ensureProjectExpanded` is the fix; no product change was needed. The profile
+was stopped and reset afterwards.

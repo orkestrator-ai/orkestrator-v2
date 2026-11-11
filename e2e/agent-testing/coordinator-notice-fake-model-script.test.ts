@@ -134,7 +134,7 @@ describe("the leaf's Pi coordinator", () => {
       tools,
     });
     expect(after.step.kind).toBe("text");
-    expect(after.launched).toEqual({ environmentId: false });
+    expect(after.launched).toEqual({ environmentId: false, shape: [] });
     const accepted = piTurn({
       messages: [
         { role: "user", content: launchPrompt(input) },
@@ -144,6 +144,17 @@ describe("the leaf's Pi coordinator", () => {
       tools,
     });
     expect(accepted.launched).toEqual({ status: "accepted", environmentId: true });
+    // An MCP content envelope carries the tool's JSON escaped inside a string.
+    const envelope = JSON.stringify({
+      content: [
+        { type: "text", text: JSON.stringify({ environmentId: "e1", status: "accepted" }) },
+      ],
+    });
+    expect(launchOutcome(envelope)).toEqual({ status: "accepted", environmentId: true });
+    expect(launchOutcome(JSON.stringify({ isError: true }))).toEqual({
+      environmentId: false,
+      shape: ["isError"],
+    });
     expect(launchOutcome("Coordinator launches require an explicit baseBranch")).toEqual({
       environmentId: false,
       error: "Coordinator launches require an explicit baseBranch",

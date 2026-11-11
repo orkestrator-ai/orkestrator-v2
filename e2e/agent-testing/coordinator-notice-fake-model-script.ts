@@ -225,23 +225,36 @@ export interface LaunchOutcome {
   status?: string;
   environmentId: boolean;
   error?: string;
+  /** The result's top-level keys, when it named no environment: how to read it next time. */
+  shape?: string[];
 }
 
+/**
+ * Reads the result whether Pi hands it over as the tool's JSON, as an MCP
+ * content envelope, or with its JSON escaped inside another string.
+ */
 export function launchOutcome(result: string): LaunchOutcome {
-  const start = result.indexOf("{");
-  const end = result.lastIndexOf("}");
-  let value: Record<string, unknown> = {};
-  try {
-    if (start >= 0 && end > start) value = JSON.parse(result.slice(start, end + 1)) as typeof value;
-  } catch {
-    value = {};
+  const field = (name: string) =>
+    new RegExp(`\\\\*"${name}\\\\*"\\s*:\\s*\\\\*"((?:[^"\\\\]|\\\\.){0,300}?)\\\\*"`).exec(
+      result,
+    )?.[1];
+  const status = field("status");
+  const environmentId = field("environmentId") !== undefined;
+  const error = field("error") ?? (result.includes("{") ? undefined : result.trim() || undefined);
+  let shape: string[] | undefined;
+  if (!environmentId) {
+    try {
+      const value = JSON.parse(result) as unknown;
+      if (value && typeof value === "object") shape = Object.keys(value).slice(0, 20);
+    } catch {
+      shape = undefined;
+    }
   }
-  const error =
-    typeof value.error === "string" ? value.error : start < 0 ? result.trim() : undefined;
   return {
-    ...(typeof value.status === "string" ? { status: value.status } : {}),
-    environmentId: typeof value.environmentId === "string",
+    ...(status ? { status } : {}),
+    environmentId,
     ...(error ? { error: error.slice(0, 300) } : {}),
+    ...(shape ? { shape } : {}),
   };
 }
 

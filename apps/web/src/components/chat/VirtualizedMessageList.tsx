@@ -72,6 +72,7 @@ import {
   useLiveArrivals,
   type LiveArrivalBatch,
 } from "@/lib/transcript-scroll/arrivals";
+import { useStaticDocumentSearchIndex } from "./static-document-search-index";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
@@ -550,6 +551,13 @@ export function VirtualizedMessageList<TMessage>({
     ownerRef: rootRef,
     onNavigate: handleFindNavigate,
   });
+  // Static documents the reader has not reached are searched through the text
+  // stored at verification, fetched only while this bar is searching.
+  useStaticDocumentSearchIndex(
+    messages,
+    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.artifacts,
+    Boolean(find?.isActive && chatFind.isOpen && chatFind.query.trim()),
+  );
   // What the static documents in this transcript are asked about. Held as plain
   // values, so a streaming update that moves no match leaves the cards alone.
   const activeDocument = useMemo(() => {
@@ -816,7 +824,36 @@ export function VirtualizedMessageList<TMessage>({
 
     let frame = 0;
     let attempts = 0;
+    let passRequested = false;
+    // A navigation can still hold this pass's match box after the effect ends.
+    let disposed = false;
     const revealedThisMatch = new Set<string>();
+    const currentItemIndex = chatFind.currentMatch?.itemIndex ?? -1;
+    /** Find's row, by identity, for a navigation whose match box was lost. */
+    const findRowTarget = (index: number) => {
+      const message = messages[index];
+      return {
+        kind: "row" as const,
+        index,
+        key: message === undefined ? undefined : computeItemKeyRef.current(index, message),
+        align: "center" as const,
+      };
+    };
+    /**
+     * One more highlight pass, asked for by a navigation whose match box
+     * belongs to a row that has since unmounted. The controller's bounded
+     * navigation is what asks, so these stop when it does.
+     */
+    const requestPass = () => {
+      if (passRequested || disposed) return;
+      passRequested = true;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        passRequested = false;
+        attempts = 0;
+        applyHighlights();
+      });
+    };
 
     /**
      * Pair one row's model matches with its DOM ranges. With a semantic
@@ -938,7 +975,12 @@ export function VirtualizedMessageList<TMessage>({
         const scroller = element?.closest<HTMLElement>("[data-virtuoso-scroller]");
         const range = activeRange;
         const matchRect = () => {
-          if (!node.isConnected) return null;
+          if (!node.isConnected) {
+            // The row left the rendered window. The controller brings it
+            // back by index; the next pass finds the match in the new row.
+            requestPass();
+            return null;
+          }
           if (!anchor) return range.getBoundingClientRect();
           // A static document's frame knows where the match is inside it.
           return (mirror && staticDocumentMatchRect(mirror)) ?? anchor.getBoundingClientRect();
@@ -952,7 +994,11 @@ export function VirtualizedMessageList<TMessage>({
           const navigating = controller.currentOwner === "find";
           const outside = box !== null && (box.top < viewport.top || box.bottom > viewport.bottom);
           if (findNavigation !== null && (navigating || outside)) {
-            controller.retarget("find", { kind: "rect", rect: matchRect }, findNavigation);
+            controller.retarget(
+              "find",
+              { kind: "rect", rect: matchRect, row: findRowTarget(currentItemIndex) },
+              findNavigation,
+            );
           }
         } else if (scroller) {
           // A list without a scroll controller (fixtures) scrolls directly.
@@ -984,6 +1030,7 @@ export function VirtualizedMessageList<TMessage>({
     };
     root?.addEventListener(STATIC_FIND_MATCH_EVENT, onFrameMatch);
     return () => {
+      disposed = true;
       root?.removeEventListener(STATIC_FIND_MATCH_EVENT, onFrameMatch);
       cancelAnimationFrame(frame);
       clearHighlights();

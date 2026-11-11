@@ -58,6 +58,7 @@ const Representation = Schema.Literals([
   "workflow-json",
   "pdf",
   "diagnostic-capture",
+  "search-text",
 ]);
 
 /** The conversation every read names; the handler answers `not_found` for anything it does not own. */

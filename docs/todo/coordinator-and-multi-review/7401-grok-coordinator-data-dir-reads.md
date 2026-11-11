@@ -37,21 +37,27 @@ Done 2026-11-11: `scripts/coordinator-probes/grok-web-tools-probe.mjs` has a
 `data-dir-reads` variant. It launches Grok exactly as the bridge launches a
 coordinator (`--disable-web-search`, `agent --no-leader`, the read-only profile
 with `monitor` removed, no `--always-approve`), plants a fixture data directory
-beside the workspace (a `control-mcp.json`, `config.json` and database file,
-each holding a random canary), advertises `fs/read_text_file` and serves it only
+beside the workspace (a `control-mcp.json` holding a random token, a
+`config.json`, a database file, and a randomly named session file one level
+down holding a search canary), advertises `fs/read_text_file` and serves it only
 for workspace files (the bridge's confinement), and answers every
 `session/request_permission` with `reject_once` (`policyDenialOutcome`). It asks
 for a workspace read first (the control), then a read, a listing and a search
-of the data directory. For each step it records every permission request (kind,
-the paths it names, the answer), every client read (path, served or refused),
-every tool call (kind, locations, final status) and whether a canary reached the
-reply, and ends with a `summary` and a `finding` naming which branch of task 2
-applies. Paths are printed as `<workspace>/…`, `<data-dir>/…`, `<fixture>/…` or
-`<other>`, and replies from the data directory are never printed.
+of the data directory, each step in its own ACP session. For each step it
+records every permission request (kind, the paths it names, the answer), every
+client read (path, served or refused), every tool call (kind, locations, final
+status) and whether a canary reached the reply, and gives each data-directory
+step an `outcome`: `asked`, `refusal-ignored`, `unasked-leak`, `unasked-tool`,
+`client-confined` or `no-attempt`. It ends with a `summary` (including every
+outcome) and a `finding` naming which branch of task 2 applies, built from all
+three outcomes. Paths are printed as `<workspace>/…`, `<data-dir>/…`,
+`<fixture>/…` or `<other>`, in titles as well as in structured fields, and
+replies from the data directory are never printed.
 `tests/unit/grok-coordinator-read-probe.test.ts` runs the variant against a
-fake ACP agent (a read that asks, a listing that does not, a search that
-refuses) and checks every recorded field, the finding, the exit status and
-that no real path or canary is printed.
+fake ACP agent in seven modes (mixed, fully mediated, unmediated, a refusal
+ignored, client reads only, nothing attempted, and a failed control) and checks
+every recorded field, each outcome and finding, the exit status, and that no
+real path, out-of-fixture title path or canary is printed.
 
 **Decisions.**
 
@@ -72,10 +78,14 @@ the data directory, the way it already refuses MCP calls with `reject_once`.
 Grok's turn, which `POLICY_DENIAL_CONTINUATION` (`acp-prompt.ts`) resumes.
 
 **Investigation.** Depends on task 1's signed-in run (on the manual-test
-checklist). The probe's `finding` says which branch applies: "asks before a
-data-directory read and names the path" (build the check), "read the data
-directory without a permission request naming it" (the recommended note), or
-"routed … through fs/read_text_file" (already confined; record it).
+checklist). The probe's `finding` says which branch applies, from every
+data-directory step's `outcome`: "reached the data directory without a
+refusable permission request (steps)" (the recommended note; when other steps
+did ask, the finding adds that a permission-answer check for those alone would
+not close the gap), "asks before every data-directory read it attempted and
+names the path" (build the check), or "routed … through fs/read_text_file"
+(already confined; record it). A mixed run therefore needs the note, and the
+check is worth building only as well as, not instead of, it.
 
 **Decisions.**
 
@@ -111,6 +121,35 @@ the same coordinator.
 Fixture paths are labelled and data-directory replies reduced to a
 leaked/not-leaked flag, so the output a person pastes back contains no path
 from their machine and nothing read from a data directory, even a fixture one.
+
+### Task 1: one step's answer cannot decide the finding (review round 1)
+
+The first version of the finding let any permission request naming the data
+directory win, so a run where the read asked but the listing read without
+asking recommended only the permission-answer check, which cannot stop the
+listing. Each step now gets its own outcome and any step that reached the data
+directory without a refusable request (no request naming it, or a refusal it
+ignored, or a data-directory tool that ran unasked) makes the finding the
+advisory note, naming the steps that asked alongside it. The alternative,
+printing per-step outcomes with no finding, was not taken: the checklist asks a
+person to paste one line back, and the outcomes are printed anyway.
+
+### Task 1: steps cannot see each other's replies (review round 1)
+
+Every step runs in its own ACP session, and the search target is a randomly
+named file one directory down, which the listing step cannot reveal. Before
+this, the search step shared a session with the listing and counted as leaked
+on `config.json`, a name the listing had just returned, so a model that skipped
+the search but repeated the name would have recorded a leak.
+
+### Task 1: titles are labelled word by word (review round 1)
+
+Tool and permission titles are written by the model and the provider. Every
+word with a slash or backslash is labelled as a path is: fixture paths keep
+their place, and anything else (another absolute path, `~/…`, a Windows path, a
+URL, or a piece of a path split at a space) becomes `<other>`; canaries become
+`<canary>`. This loses relative paths in titles, which the fixture workspace
+does not need, in exchange for never printing a path from the person's machine.
 
 ## Related
 

@@ -277,6 +277,8 @@ function scripted(options: {
   phase?: string;
   error?: string;
   onDispatch?: () => Promise<void>;
+  /** Interactions pending while the turn is working, as an escaped approval would be. */
+  interactions?: Array<Record<string, unknown>>;
 }) {
   const sent: Array<{ command: string; args: Record<string, unknown> }> = [];
   let reads = 0;
@@ -288,6 +290,7 @@ function scripted(options: {
       await options.onDispatch?.();
       return null as T;
     }
+    if (command === "resolve_native_agent_interaction") return null as T;
     if (command === "get_native_agent_projection") {
       reads += 1;
       const working = dispatched && reads <= 2;
@@ -299,7 +302,7 @@ function scripted(options: {
               ...(options.error ? { error: options.error } : {}),
             },
         messages: dispatched && !working ? options.messages : [],
-        interactions: [],
+        interactions: working ? (options.interactions ?? []) : [],
       } as T;
     }
     throw new Error(`unscripted command ${command}`);
@@ -389,5 +392,35 @@ describe("research scenario orchestration", () => {
       timeoutMs: 5_000,
     });
     expect(failed(result.checks)).toEqual(["research-call", "research-call-succeeded"]);
+  });
+
+  test("an approval that reaches the harness during the turn is denied, recorded and fails the case", async () => {
+    const checkout = await fixtureCheckout();
+    const transport = scripted({
+      messages: [assistant([{ ...RESOLVE_ROW.cursor, toolState: "completed" }], REPORT)],
+      interactions: [
+        { id: "i-1", kind: "command-approval", state: "pending", createdAt: 1, sessionId: "s" },
+      ],
+    });
+    const summary = summaryFor("cursor");
+    const result = await runResearchScenario({
+      invoke: transport.invoke,
+      identity: identity("cursor"),
+      checkout,
+      summary,
+      pollIntervalMs: 1,
+      timeoutMs: 5_000,
+    });
+    expect(failed(result.checks)).toEqual(["no-escaped-interactions"]);
+    expect(summary.escapedInteractions).toEqual(["command-approval"]);
+    // Denied once on the agent's behalf, never approved.
+    const resolutions = transport.sent.filter(
+      (entry) => entry.command === "resolve_native_agent_interaction",
+    );
+    expect(resolutions).toHaveLength(1);
+    expect(resolutions[0]!.args).toMatchObject({
+      interactionId: "i-1",
+      resolution: { action: "deny" },
+    });
   });
 });

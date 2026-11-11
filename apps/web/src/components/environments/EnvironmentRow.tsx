@@ -269,8 +269,9 @@ export interface EnvironmentRowActions {
   /** "Open workspace": another machine's row opens that machine's workspace. */
   open?: () => void;
   /**
-   * Present while the action bar shows its green Merge PR button for this
-   * environment; `disabled` mirrors that button's disabled state.
+   * Present while the action bar's Merge PR button shows this environment's
+   * PR as mergeable (green, no spinner); `disabled` mirrors whether the
+   * dialog's merge option can be used.
    */
   mergePr?: { run: () => void; disabled: boolean };
   /** A machine-qualified link to the environment. */

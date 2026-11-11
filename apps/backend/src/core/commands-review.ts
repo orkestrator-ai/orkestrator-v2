@@ -1524,7 +1524,7 @@ async function runStoredEnvironmentMergeOnce<T>(
         current.prUrl !== environment.prUrl ||
         current.autoMergeEnabledAt !== expectedAutoMergeEnabledAt
       ) {
-        throw new Error("Integration options changed before merge dispatch");
+        throw new Error("Auto-merge options changed before merge dispatch");
       }
     }
     let result: MergePrResult;

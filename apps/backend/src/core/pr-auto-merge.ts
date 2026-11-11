@@ -366,7 +366,7 @@ export class PrAutoMergeController {
           ? {
               autoMerge: false,
               autoMergeError:
-                "Resolve still reports conflicts after three attempts. Inspect the Resolve tab, then enable Integrate to retry.",
+                "Resolve still reports conflicts after three attempts. Inspect the Resolve tab, then turn auto-merge on again to retry.",
             }
           : {}),
         autoMergeResolveAttempts: attempts,

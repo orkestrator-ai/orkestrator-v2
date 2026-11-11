@@ -338,7 +338,7 @@ export function registerPullRequestCommands(
           environment.autoMergeEnabledAt !== autoMergeEnabledAt ||
           environment.autoMergeCleanup !== true)
       ) {
-        throw new Error("Integration options changed; retry with current options");
+        throw new Error("Auto-merge options changed; retry with current options");
       }
       // Automatic intent remains revocable until confirmation; manual requests
       // retain their independent durable recovery timestamp.
@@ -495,7 +495,7 @@ export function registerPullRequestCommands(
    * flag is durable; turning it on also asks the monitor for a fresh reading
    * before acting, so a cached pre-request reading cannot authorize a merge.
    *
-   * `cleanupAfterMerge` (the Integrate dialog's "Auto-merge & Cleanup") also
+   * `cleanupAfterMerge` (the Merge PR dialog's "Auto-merge & Cleanup") also
    * deletes the environment once auto-merge has merged the PR. Every call
    * restates it, so turning auto-merge on again without it withdraws it.
    */

@@ -6,11 +6,11 @@ import { useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
 /**
- * The auto-merge switch, shared by the action bar's toggle and the pipeline's
- * Integrate dialog. The flag lives on the environment record and the backend
- * does the merging (`pr-auto-merge.ts`), so this only writes the durable
- * setting and mirrors the answer into the store; every other client learns of
- * it through the environment channel.
+ * The auto-merge switch, shared by the auto-merge toggles and the Merge PR
+ * dialog's Auto-merge & Cleanup option. The flag lives on the environment
+ * record and the backend does the merging (`pr-auto-merge.ts`), so this only
+ * writes the durable setting and mirrors the answer into the store; every
+ * other client learns of it through the environment channel.
  *
  * `set(true, true)` also asks the backend to delete the environment once the
  * merge is confirmed. Every call restates that choice, so the plain toggle
@@ -51,7 +51,7 @@ export function useAutoMergeToggle(
           });
         }
         if (next && on && (updated?.autoMergeCleanup === true) !== (cleanupAfterMerge === true)) {
-          toast.error("Integration options were not saved");
+          toast.error("Auto-merge options were not saved");
           return null;
         }
         return on;

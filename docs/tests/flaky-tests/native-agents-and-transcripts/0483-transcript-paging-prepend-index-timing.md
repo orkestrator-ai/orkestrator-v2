@@ -166,3 +166,15 @@ component suite had not reached (686 passed, 30 skipped, two failed):
 passed with one worker (with `DataSavingGateway.spec.ts`, 129.4 s).
 `flaky:recurrence 0483` reported `open`. The branch does not change the
 transcript. Full run: [9953](../aggregate-validation-runs/9953-launch-override-marker-browser-owners.md).
+
+## Merge button review — 2026-11-11
+
+Preparation for the merge button branch (`merge-button-confusion-7ba4930d15d6-r1`, base `465c473d9`, validated at `ab8580dda`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 4 failed, 2 flaky, 152 skipped, 1694 passed (26.7 m). The branch changes the action bar's merge controls, the ticket view's PR bar and their tests; neither spec renders them. `mise run flaky:recurrence -- 0483 --base 465c473d9` answered "open. Record the failure as a recurrence". Evidence: `validation-05.stderr.txt` under `.orkestrator/review-artifacts/review-validation-085f2243-54bc-4625-8ead-8f255e326766/`. mobile-chromium failed `expect(received).toBeGreaterThan(1)` (received 1) on the first attempt and the retry.
+
+The complete unchanged ToolGroupFold and TranscriptPaging owners then passed together with one worker (exit 0, 289.0 s):
+
+```sh
+mise run test:logged -- --name transcript-browser-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.

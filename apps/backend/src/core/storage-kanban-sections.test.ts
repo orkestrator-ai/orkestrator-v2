@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { StorageService } from "./storage.js";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 
@@ -93,6 +94,22 @@ describe("Kanban ticket sections", () => {
       expect(await storage.kanban.getKanbanTasks("project-1")).toEqual([task!]);
       const stored = readStoredValue<Array<Record<string, unknown>>>(dataDir, "kanban.json");
       expect(stored?.[0]).toEqual(LEGACY_ROW);
+    });
+  });
+
+  test("reading a legacy row is counted; a current row is not", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const id = "kanban.legacy-row-derived";
+      const count = () => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
+      const current = await storage.kanban.addKanbanTask("project-1", "Current", "Body");
+      const before = count();
+      await storage.kanban.getKanbanTasks("project-1");
+      expect(count()).toBe(before);
+      const rows = readStoredValue<Array<Record<string, unknown>>>(dataDir, "kanban.json") ?? [];
+      seedStore(dataDir, "kanban.json", [...rows, LEGACY_ROW]);
+      const read = await storage.kanban.getKanbanTasks("project-1");
+      expect(read.map((task) => task.id).sort()).toEqual([current.id, LEGACY_ROW.id].sort());
+      expect(count()).toBe(before + 1);
     });
   });
 

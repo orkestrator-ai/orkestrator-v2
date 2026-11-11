@@ -96,6 +96,7 @@ import {
   bridgePromptAttachments,
 } from "./transport.js";
 import { closeBridgeSessionRetaining } from "../bridge-session-close.js";
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { compactBridgeSession } from "./compact.js";
 import { HttpBridgeTranscriptReader } from "./transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./activity-batch.js";
@@ -539,7 +540,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       {},
       this.fetchImpl,
     );
-    if (response.status === 404 || response.status === 405) return null;
+    if (response.status === 404 || response.status === 405) {
+      // The bridge predates the route (to-do 7570).
+      compatibilityPathUsage.record("bridge-human-prompts.missing-route");
+      return null;
+    }
     assertOk(response, "Human prompt observation");
     return asRecord(
       await boundedJson(response, "Human prompt observation", { remaining: 512 * 1024 }),

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { BridgeConnection } from "../agent-provider-contract.js";
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { frameSessionId, HttpBridgeObservationStream } from "./observation-stream.js";
 import { HttpBridgeProvider } from "./provider.js";
 
@@ -147,7 +148,9 @@ describe("HttpBridgeObservationStream", () => {
     }
   });
 
-  test("an older bridge that ignores observation mode is closed for good", async () => {
+  test("an older bridge that ignores observation mode is closed for good, and counted", async () => {
+    const id = "bridge-observation.full-stream";
+    const before = compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
     const { observer, streams, nextStream } = harness();
     observer.start();
     const first = await nextStream(1);
@@ -157,6 +160,23 @@ describe("HttpBridgeObservationStream", () => {
     expect(observer.isLive).toBe(false);
     expect(observer.stats().unsupported).toBe(true);
     expect(streams).toHaveLength(1);
+    expect(compatibilityPathUsage.snapshot().paths[id]?.count).toBe(before + 1);
+  });
+
+  test("a bridge that confirms observation mode is not counted", async () => {
+    const id = "bridge-observation.full-stream";
+    const before = compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
+    const { observer, nextStream } = harness();
+    try {
+      observer.start();
+      const first = await nextStream(1);
+      first.frame("connected", { status: "connected", observe: true }, "gen:1");
+      await settle();
+      expect(observer.isLive).toBe(true);
+      expect(compatibilityPathUsage.snapshot().paths[id]?.count ?? 0).toBe(before);
+    } finally {
+      observer.close();
+    }
   });
 
   test("a silent connection stops being live and is reconnected", async () => {

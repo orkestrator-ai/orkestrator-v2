@@ -23,6 +23,7 @@ import {
 } from "@orkestrator/protocol/notice-dismissals";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { checkUpstreamBeforeMessage } from "./coordinator-message-upstream.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
@@ -115,15 +116,19 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
 
   register(
     getCoordinatorUpstreamAutoMergeCommand,
-    async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => ({
-      enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
-        await existingProjectId(projectId, context),
-      ),
-    }),
+    async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => {
+      compatibilityPathUsage.record("retired-command.coordinator-upstream-auto-merge");
+      return {
+        enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
+          await existingProjectId(projectId, context),
+        ),
+      };
+    },
   );
   register(
     setCoordinatorUpstreamAutoMergeCommand,
     async ({ projectId, enabled }, context): Promise<CoordinatorUpstreamAutoMerge> => {
+      compatibilityPathUsage.record("retired-command.coordinator-upstream-auto-merge");
       if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
       return {
         enabled: context.storage.clientState.setCoordinatorUpstreamAutoMerge(

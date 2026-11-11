@@ -416,9 +416,16 @@ test("preserves XDG-based Git, gh and mise configuration for backend children", 
     path.dirname(path.dirname(process.execPath)),
     path.join(installs, process.versions.bun!),
   );
+  // mise also reads the machine's system config (`/etc/mise`), which the
+  // backend child rightly keeps but this check is not about: a host whose
+  // system config names `latest` tools would make this call wait on remote
+  // version lookups and warn on stderr. Point it at an empty directory, and
+  // stay offline so no lookup can be made.
+  const systemConfig = path.join(root, "empty-system-mise");
+  await mkdir(systemConfig);
   const mise = spawnSync(process.env.MISE_BIN_PATH || "mise", ["where", "bun"], {
     cwd: hostHome,
-    env,
+    env: { ...env, MISE_SYSTEM_CONFIG_DIR: systemConfig, MISE_OFFLINE: "1" },
     encoding: "utf8",
   });
   expect(mise.stderr).toBe("");

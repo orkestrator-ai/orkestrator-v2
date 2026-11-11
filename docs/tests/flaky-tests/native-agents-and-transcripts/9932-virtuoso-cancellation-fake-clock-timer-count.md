@@ -159,3 +159,29 @@ effect: one process on its own leaves a fake timer pending after every
 settle round. That still fits the Happy DOM real-immediate frame hypothesis,
 and it gives a way to reproduce it: run the file alone on a host loaded to
 about four times its core count. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (merge button review)
+
+Observed 2026-11-11 on `merge-button-confusion-7ba4930d15d6-r1` at
+`ab8580dda`, base commit `465c473d99ee046fe4889c9aa28468c994a5979d`
+(`mise run flaky:recurrence -- 9932 --base 465c473d9` answered "open. Record
+the failure as a recurrence"). The branch changes the web merge controls
+(`components/layout`, `kanban/ticket-view`, `build-pipeline`), their tests,
+docs and three backend error strings; it does not touch this file or the
+transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  (default suite, web package at its default worker count).
+- **Failure:** four cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`):
+  - `a function follow prop that answers false is still truthy to the viewport-shrink path` (32.3 ms)
+  - `literal false: a detached reader is not moved when the viewport shrinks` (19.2 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (14.2 ms, 7.9 ms)
+- **Suite counts:** web 14,478 passed and 4 failed; backend 18,451 passed and
+  1 failed (flake
+  [9963](../environments-and-containers/9963-rootful-create-logs-owned-port-listing.md));
+  CLI 517 and the root, bridge and lockfile groups passed.
+- **Isolated rerun:** the aggregate runner's automatic rerun reported
+  `PASSED ALONE (851ms)`, and a later
+  `bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
+  (`NODE_ENV=test`, host load average about 4 on 16 cores) passed.

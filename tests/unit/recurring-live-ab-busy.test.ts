@@ -10,6 +10,7 @@ import {
   busyFailed,
   busyRuntime,
   burstBadgeLines,
+  burstRescanLine,
   busyRowSummary,
   UNTRACKED_COUNTED_FILES,
   withoutReviewTabs,
@@ -54,6 +55,15 @@ type Scenario = {
   failPrepare?: boolean;
   /** Pane layout writes are ignored, so review tabs pile up. */
   keepReviewTabs?: boolean;
+  /**
+   * The backend never rescans the held turn's files' removal on its own: it
+   * is seen only together with the next burst, which writes as many one-line
+   * files, so the turn environment's numbers do not move and its scan does
+   * not count as changed (to-do 7765, retired).
+   */
+  turnFilesMaskBurst?: boolean;
+  /** The removal is rescanned, but only once time passes (a poll's sleep). */
+  lateTurnRemovalRescan?: boolean;
 };
 
 /**
@@ -79,6 +89,10 @@ function busyHarness(scenario: Scenario = {}) {
   let approval: { id: string; answered: boolean } | null = null;
   let changed = 0;
   let burst = 0;
+  /** The backend's file count per environment id. */
+  const files = new Map<string, number>();
+  /** The held turn's files are removed on disk but not yet rescanned. */
+  let unscannedTurnRemoval = false;
   let mails = 0;
   let reviewReads = 0;
   let commits = 0;
@@ -284,6 +298,22 @@ function busyHarness(scenario: Scenario = {}) {
       };
     },
     invoke: async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_environment_diff_stats")
+        return {
+          generation: "g1",
+          revision: reads,
+          entries: environments.map((entry) => ({
+            environmentId: entry.id,
+            comparisonRef: "main",
+            stats: {
+              additions: Math.min(files.get(entry.id) ?? 0, 2_000),
+              deletions: 0,
+              filesChanged: files.get(entry.id) ?? 0,
+              truncated: false,
+            },
+            computedAt: "2026-11-11T00:00:00.000Z",
+          })),
+        };
       if (command === "get_pane_layout") return structuredClone(reviewLayout);
       if (command === "apply_pane_layout_intent") {
         // The backend refuses any field but these four (a live run's HTTP 500).
@@ -396,18 +426,34 @@ function busyHarness(scenario: Scenario = {}) {
         expect(worktrees).toEqual(["/worktrees/busy-1"]);
         const tag = relative.slice("busy-turn/".length);
         turnFiles.push({ relative, count, heldAtModel: markers.has(`t-${tag}`) });
+        files.set("env-busy-1", (files.get("env-busy-1") ?? 0) + count);
         return;
       }
       expect(worktrees).toHaveLength(environments.length);
       expect(relative.startsWith("busy-burst/")).toBe(true);
       burst = count;
-      changed += environments.length;
+      for (const entry of environments) {
+        const previous = files.get(entry.id) ?? 0;
+        // One scan sees the removal and the burst together.
+        const next = entry.id === "env-busy-1" && unscannedTurnRemoval ? count : previous + count;
+        files.set(entry.id, next);
+        if (next !== previous) changed += 1;
+      }
+      unscannedTurnRemoval = false;
     },
     removeBurst: (worktrees, relative) => {
       if (relative.startsWith("busy-turn/")) {
         expect(worktrees).toEqual(["/worktrees/busy-1"]);
         turnFilesRemoved.push(relative);
+        if (scenario.turnFilesMaskBurst || scenario.lateTurnRemovalRescan)
+          unscannedTurnRemoval = true;
+        else files.delete("env-busy-1");
         return;
+      }
+      for (const entry of environments) {
+        const left = (files.get(entry.id) ?? 0) - burst;
+        if (left > 0) files.set(entry.id, left);
+        else files.delete(entry.id);
       }
       burst = 0;
     },
@@ -426,6 +472,10 @@ function busyHarness(scenario: Scenario = {}) {
     now: () => now,
     sleep: async (ms) => {
       now += ms;
+      if (scenario.lateTurnRemovalRescan && unscannedTurnRemoval) {
+        unscannedTurnRemoval = false;
+        files.delete("env-busy-1");
+      }
     },
   };
   return {
@@ -585,6 +635,65 @@ describe("busy phase", () => {
     ]);
     expect(busySummaryLines("turn files", result).join("\n")).toContain("2 held turns wrote files");
   });
+  test("records each burst as the backend saw it, per environment", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 2, busyTurnFiles: 5 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts).toEqual({});
+    expect(result.burstRescans).toHaveLength(2);
+    const [first] = result.burstRescans;
+    expect(first).toMatchObject({ clients: 0, round: 1, timedOut: false, changed: 4 });
+    expect(first!.environments.map((entry) => entry.name)).toHaveLength(4);
+    expect(first!.environments.find((entry) => entry.turn)).toMatchObject({
+      name: "busy-1",
+      before: { files: 0, additions: 0 },
+      after: { files: 5, additions: 5 },
+    });
+    expect(burstRescanLine(result)).toBe("Burst rescans: 0 of 2 rounds timed out.");
+  });
+
+  test("waits for the held turn's files to be rescanned away before the next burst", async () => {
+    // The pattern of to-do 7765 (retired): the round ends by removing 5 one-line files and the
+    // next burst writes 5 more into the same environment. Seen in one scan,
+    // the numbers would not move and the burst would go uncounted.
+    const h = busyHarness({ lateTurnRemovalRescan: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 3, busyTurnFiles: 5 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts).toEqual({});
+    expect(result.samples["turn-clear-backend"]).toHaveLength(3);
+    expect(result.burstRescans.map((entry) => entry.changed)).toEqual([4, 4, 4]);
+  });
+
+  test("a removal the backend never rescans fails its own row and names the masked burst", async () => {
+    const h = busyHarness({ turnFilesMaskBurst: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 3, busyTurnFiles: 5 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts["turn-clear-backend"]).toBe(3);
+    expect(busyFailed(result)).toBe(true);
+    expect(result.burstRescans.map((entry) => entry.timedOut)).toEqual([false, true, true]);
+    expect(result.timeouts["burst-backend"]).toBe(2);
+    const masked = result.burstRescans[1]!.environments.find((entry) => entry.turn)!;
+    expect(masked.before).toEqual(masked.after);
+    expect(burstRescanLine(result)).toBe(
+      "Burst rescans: 2 of 3 rounds timed out; the changed counter fell 1 to 1 short; environments whose stats did not move: the held turn's in 2 of them, others 0 times.",
+    );
+  });
+
   test("a CLI that cannot list environments is named, not reported as a missing fixture", async () => {
     const h = busyHarness();
     const broken: AsyncCli = async (args, signal) =>
@@ -914,6 +1023,7 @@ describe("busy phase", () => {
       timeouts: {},
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
       turnFileRounds: 0,
+      burstRescans: [],
       failures: [],
       windowSamples: [],
       admission: {},
@@ -936,6 +1046,7 @@ describe("busy phase", () => {
       timeouts: {},
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
       turnFileRounds: 0,
+      burstRescans: [],
       failures: [],
       windowSamples: [],
       admission: {},

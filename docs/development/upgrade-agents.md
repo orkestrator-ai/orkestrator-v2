@@ -711,7 +711,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
 
    It runs the SDK's own platform CLI unless `CLAUDE_CLI_PATH` names another;
    when the managed CLI differs from the SDK's (step 3), run it again with
-   `CLAUDE_CLI_PATH` pointing at the managed one. If its `bare` case fails, the
+   `CLAUDE_CLI_PATH` pointing at the managed one, installed into a throwaway
+   data directory (`mise run toolchain:install --data-dir <throwaway dir>
+   --tool claude`). The live Claude MCP probes refuse a `CLAUDE_CLI_PATH`
+   inside the real data directory (`live-cli-guard.ts`), which an agent shell
+   started by the app inherits; `ORKESTRATOR_LIVE_ALLOW_REAL_DATA_DIR_CLI=1`
+   is the operator's deliberate opt-in. If its `bare` case fails, the
    CLI now unloads launch servers by itself; the restatement is then harmless,
    but update the module's header to say so.
 

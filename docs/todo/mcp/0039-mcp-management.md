@@ -129,6 +129,21 @@ once an upstream release stops the old process, changing the canary to
   probes give the CLI temporary `HOME` and `CLAUDE_CONFIG_DIR` and send no
   prompt, so no login or model request was made. The run above replaces them
   as the recorded evidence.
+- Guard against a repeat (2026-11-11): the live Claude MCP checks now refuse
+  a `CLAUDE_CLI_PATH` inside the real data directory before they start
+  anything (`bridges/claude-bridge/src/services/live-cli-guard.ts`, called by
+  `session-manager-prompt-mcp-sync.live-probe.ts`, `plugin-mcp.live-probe.ts`
+  and both tests in `session-manager-prompt-mcp-sync.live.test.ts`; the repro
+  itself stays self-contained). A path lexically inside is refused without
+  touching it; one outside is resolved so a symlink into the data directory
+  also counts. `ORKESTRATOR_LIVE_ALLOW_REAL_DATA_DIR_CLI=1` is the operator's
+  deliberate opt-in. Evidence: `live-cli-guard.test.ts` passes (8 tests); with
+  this shell's inherited `CLAUDE_CLI_PATH` both `session-manager-prompt-mcp-sync.live.test.ts`
+  tests and both `claude-plugin-mcp-live.test.ts` tests fail at once with the
+  refusal and no CLI is spawned; with `CLAUDE_CLI_PATH` and the other
+  real-data-directory variables unset, `mise run verify:claude:mcp-live`
+  (44.5 s) and `verify:claude:plugin-mcp-live` (13.5 s) pass on the SDK's
+  bundled CLI.
 - Left: filing the report (7568) and, after an upstream fix, the canary flip.
 
 ### 2. Re-derive Grok rules at 1.0.70
@@ -1686,7 +1701,9 @@ verify:claude:mcp-live` runs did not: they inherited `CLAUDE_CLI_PATH` and
 executed the host's binary from the real data directory (read-only,
 temporary `HOME` and `CLAUDE_CONFIG_DIR`, no prompt; see task 1's
 disclosure). That cannot be undone; none of the recorded evidence comes from
-those runs. The recorded `verify:claude:mcp-live` and
+those runs. The probes now refuse such a path themselves (task 1, "Guard
+against a repeat"), so the same inheritance fails at once instead of running
+the binary. The recorded `verify:claude:mcp-live` and
 `verify:claude:plugin-mcp-live` results are reruns with `CLAUDE_CLI_PATH` at
 a second throwaway install (`output/p0039-r2`, removed afterwards) and every
 variable naming the real data directory unset. Anyone rerunning these tasks

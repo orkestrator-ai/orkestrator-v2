@@ -12,7 +12,9 @@
 //   bun claude-mcp-replace-linger.live-probe.ts
 //
 // `CLAUDE_CLI_PATH` selects a Claude Code executable; without it the SDK's
-// own. Credential-free: every CLI runs in a temporary HOME and
+// own. (In this repository the live test that runs it first refuses a
+// `CLAUDE_CLI_PATH` inside the real data directory, `live-cli-guard.ts`; the
+// check is not repeated here so the file stays self-contained.) Credential-free: every CLI runs in a temporary HOME and
 // CLAUDE_CONFIG_DIR with non-essential traffic off, and no prompt is ever
 // sent, so no model request is made. Exit status: 1 when a replaced process
 // outlived the replacement (the bug), 0 when none did, 2 on an error or when

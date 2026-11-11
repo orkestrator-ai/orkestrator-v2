@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { refuseRealDataDirClaudeCli } from "./live-cli-guard.js";
 import { RESULT_SENTINEL } from "./session-manager-prompt-mcp-sync.live-probe.js";
 import {
   REPLACE_LINGER_SENTINEL,
@@ -10,6 +11,7 @@ import {
 // proves what `session-manager-prompt-mcp-sync.ts` relies on. Run it with
 // `mise run verify:claude:mcp-live` for a focused rerun; also runs in the slow tier (`mise run test:slow`) and CI.
 test("a running Claude CLI unloads removed and renamed MCP servers", async () => {
+  refuseRealDataDirClaudeCli();
   const packageRoot = join(import.meta.dir, "..", "..");
   const probePath = join(import.meta.dir, "session-manager-prompt-mcp-sync.live-probe.ts");
   // The session-manager suites mock the SDK module-wide, so the probe runs
@@ -120,6 +122,8 @@ test("a running Claude CLI unloads removed and renamed MCP servers", async () =>
 // upstream stops a replaced server, this fails together with the `replace`
 // expectation above: flip both, and close the item.
 test("the standalone repro still shows a replaced launch server lingering", async () => {
+  // The repro stays self-contained, so the guard runs here instead.
+  refuseRealDataDirClaudeCli();
   const repro = Bun.spawn(
     [process.execPath, join(import.meta.dir, "claude-mcp-replace-linger.live-probe.ts")],
     { cwd: join(import.meta.dir, "..", ".."), env: process.env, stdout: "pipe", stderr: "pipe" },

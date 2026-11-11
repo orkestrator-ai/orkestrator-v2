@@ -961,8 +961,9 @@ live-work guard saw them.
   host's.
 - Opt-in Grok live renewal spec (`grok-container-login.spec.ts`): skipped
   explicitly at 2026-10-21T07:58Z, because the host Grok access token expired
-  at 2026-10-20T16:24:55Z (see the Grok qualification item in
-  [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md)).
+  at 2026-10-20T16:24:55Z (see the Grok qualification item in to-do 0018, retired 2026-11-11; the
+  access-only Grok login is described in
+  [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 - `test:agent:docker` on the same profile and the rebuilt image: 9 passed,
   2 skipped (the opt-in live Claude C11 spec and the Grok spec above).
 - Host `~/.codex/auth.json` and `~/.grok/auth.json`: SHA-256 prefix and
@@ -1384,7 +1385,8 @@ were removed.
 - [7548-rootless-gvisor-tap-vsock-host-loopback.md](7548-rootless-gvisor-tap-vsock-host-loopback.md)
   and [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
   (what the rootless runs left, after the retired to-do 0109),
-  [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md),
+  [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md)
+  (what is left of the retired to-do 0018's gateway qualification),
   to-do 0022 (retired 2026-11-11; the default budget is in
   [container-lifecycle.md](../../architecture/container-lifecycle.md#built-in-default) and its
   measurements in [container-qualification.md](../../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25)),

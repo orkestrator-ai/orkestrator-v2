@@ -395,6 +395,43 @@ What the two runs show:
   doubled in the busy phase this time, where the first run's idle phases
   differed more than idle and busy did.
 
+## Egress gateway on Linux Engine: qualification closed (2026-11-11)
+
+To-do 0018 (retired 2026-11-11) task 1 asked for the egress gateway to be
+qualified on rootful Linux Engine, amd64 and arm64. It is closed on the
+evidence already recorded in this guide, with no new run:
+
+- **amd64:** the self-managed rootful run on beelink
+  ([Egress name checks on rootful Linux Engine](#egress-name-checks-on-rootful-linux-engine-2026-11-06)),
+  the gateway conditions on a disposable rootful daemon
+  ([Egress gateway conditions on Linux Engine](#egress-gateway-conditions-on-linux-engine-2026-10-31)),
+  and the hosted `ubuntu-24.04` runner below.
+- **arm64:** the hosted `ubuntu-24.04-arm` runner (Engine 28.0.4). Runs
+  40338400817 (`e8306626`, 2026-10-26) and 40999226305 (`79c35c0b`,
+  2026-10-30) passed replacement, network 4/4, firewall 2/2 (tamper refusals
+  and gateway restart) and readiness 9/9 behind the gateway, and run
+  42128741746's arm64 job passed M12, network 4/4 and readiness 9/9 (its two
+  failures were the test defects fixed with it). Docker Desktop on Apple
+  Silicon, which runs a Linux arm64 kernel, passed the production gateway
+  path on 2026-10-25
+  ([Egress gateway on Docker Desktop](#egress-gateway-on-docker-desktop-2026-10-25)).
+- **Rootless:** the daemon restart and gateway suites on a disposable
+  rootless daemon
+  ([Rootless daemon restart on a disposable daemon](#rootless-daemon-restart-on-a-disposable-daemon-2026-11-06),
+  [Rollout-cap retirement review qualification](#rollout-cap-retirement-review-qualification-2026-11-04));
+  the remaining rootless settings and rootless arm64 are
+  [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md).
+
+Decision: the hosted arm64 runner counts as the arm64 Linux Engine
+qualification. It runs the same suites, against an image built from the
+branch, with exit statuses on record. A self-managed arm64 Linux host would
+add a second kernel and Engine build but no check the hosted runner does not
+already make, and no fleet machine offers one with a host daemon this work
+may use. The C14 migration failure in run 40409285999 and the weekly run's
+lifecycle failure are outside the gateway and are tracked in
+[0728](../todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md)
+and [0019](../todo/containers-and-environments/0019-container-platform-qualification.md).
+
 ## Egress name checks on rootless Docker (2026-11-10)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -1187,7 +1224,7 @@ remains unverified (7420 tasks 2 and 4).
 
 ## Rootless daemon restart on a disposable daemon (2026-11-06)
 
-To-do [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+To-do 0018 (retired 2026-11-11)
 task 2's last open check and
 4730 (retired 2026-11-10)
 tasks 1 to 3, run in worktree `orkestrator-v2-20261106-034211-c21c9a597669`
@@ -1329,7 +1366,7 @@ pid walker and the comparison bundle lived only in that container.
 ## Egress name checks on rootful Linux Engine (2026-11-06)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
-task 1 and [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+task 1 and 0018 (retired 2026-11-11)
 task 1: the gateway's name checks (`egress-filter=1`) and the gateway suites
 on rootful Linux Engine, x64.
 
@@ -1808,7 +1845,7 @@ which traced it to the drain waiting on the setup terminal's shell
 
 ## Egress gateway conditions on Linux Engine (2026-10-31)
 
-Todo [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+Todo 0018 (retired 2026-11-11)
 task 3: IPv6, a Docker daemon restart and DNS rotation behind the egress
 gateway.
 
@@ -1881,7 +1918,7 @@ Results:
 - **Default developer run.** On the host daemon without the opt-ins: IPv6
   logged "not covered" and created no IPv6 network (host IPv6 forwarding
   stayed 0), DNS rotation passed, and the restart case skipped.
-- **Not covered:** a rootless daemon restart (0018 task 2), external IPv6
+- **Not covered:** a rootless daemon restart (0018 (retired) task 2), external IPv6
   reachability (the disposable daemon had no IPv6 uplink; the control
   container proved the IPv6 path on the network itself), and a real CDN's
   rotation over six hours.
@@ -2250,7 +2287,7 @@ re-run until they pass.
 
 ## Egress gateway on Docker Desktop (2026-10-25)
 
-The backend's egress gateway (todo 0018 item 1), on Docker Desktop 4.96.3
+The backend's egress gateway (todo 0018 (retired) item 1), on Docker Desktop 4.96.3
 (Engine 29.9.2, linux/arm64), with a qualification image built from the
 branch (`orkestrator-v2:q0018-egress`, capabilities including
 `egress-gateway=1`). Every resource used a private owner label and was
@@ -3191,6 +3228,6 @@ daemon was stopped, and its data root removed. The shared daemon and its
 networks were left unchanged.
 
 Limits: this does not qualify every rootless kernel, a rootless daemon restart
-with owned runtimes, or the entire replacement matrix. Those remain under todo
-0018 task 2; the prior rootless evidence is retained above. The existing readiness fault suite was rerun rather than replacing its
+with owned runtimes, or the entire replacement matrix. Those remained under todo
+0018 (retired) task 2; the prior rootless evidence is retained above. The existing readiness fault suite was rerun rather than replacing its
 assertions with a manifest-only check.

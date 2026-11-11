@@ -1,5 +1,5 @@
 #!/bin/bash
-# External egress prototype (0018 item 1): a gateway container owns the
+# External egress prototype (to-do 0018 (retired) item 1): a gateway container owns the
 # environment's network namespace and runs the unchanged init-firewall.sh
 # with NET_ADMIN; the workload joins that namespace (`--network
 # container:<gateway>`) with no added capability. The backend now creates this

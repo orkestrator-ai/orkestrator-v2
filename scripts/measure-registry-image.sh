@@ -1,5 +1,5 @@
 #!/bin/bash
-# Registry measurements for a published environment image (0019): resolves a
+# Registry measurements for a published environment image (to-do 0019, retired): resolves a
 # tag or digest to its multi-architecture index and reports, per platform,
 # the manifest digest, layer count, largest layers and compressed bytes
 # (layers + config), read from the manifests alone.

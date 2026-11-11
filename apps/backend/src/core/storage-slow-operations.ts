@@ -6,6 +6,12 @@ import type {
 } from "@orkestrator/protocol/backend-diagnostics";
 import type { EventLoopStallContext } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { createLogger } from "@orkestrator/protocol/logger";
+import {
+  readSeriesForStore,
+  readSeriesForTable,
+  storageActivityMetrics,
+  type StorageActivityMetrics,
+} from "./storage-activity-metrics.js";
 import { leaseFamily } from "./storage-lease-metrics.js";
 
 /**
@@ -17,9 +23,13 @@ import { leaseFamily } from "./storage-lease-metrics.js";
  *
  * {@link instrumentSqliteConnection} times every statement call and every
  * outermost transaction on one connection. Below the threshold a call costs
- * two `performance.now()` reads and a comparison; the SQL text stays in the
- * closure and is parsed for its kind and table only when a call is slow.
- * Never kept or logged: SQL text, parameters, rows.
+ * two `performance.now()` reads, a comparison and its commit/read count
+ * (`storage-activity-metrics.ts`). Counting needs the statement's kind: a
+ * prepared statement (`query`, `prepare`) is classified once, on its first
+ * call, but `db.run` and `db.exec` carry their SQL per call, so each of those
+ * calls lowercases and matches the first 512 characters of its SQL
+ * ({@link classifyStatement}). The slow-operation record parses the SQL again
+ * only when a call is slow. Never kept or logged: SQL text, parameters, rows.
  */
 const log = createLogger("storage");
 
@@ -98,6 +108,50 @@ export function describeStatement(sql: string | null): {
   const op = KEYWORD_KINDS[keyword] ?? "other";
   const table = TABLE_AFTER[op]?.exec(head)?.[1] ?? null;
   return { op, table: table && table.length <= 64 && IDENTIFIER.test(table) ? table : null };
+}
+
+/**
+ * What a statement does to the file, for the commit and read counts
+ * (`storage-activity-metrics.ts`): `read` a SELECT; `change` an INSERT,
+ * UPDATE or DELETE, which writes only when it changes a row; `write` a schema
+ * change or an incremental vacuum; `checkpoint` a `wal_checkpoint`; `none`
+ * anything else (other pragmas, BEGIN and COMMIT, VACUUM INTO).
+ */
+export type StatementEffect = "read" | "change" | "write" | "checkpoint" | "none";
+
+export interface ClassifiedStatement {
+  effect: StatementEffect;
+  table: string | null;
+}
+
+export function classifyStatement(sql: string | null): ClassifiedStatement {
+  const { op, table } = describeStatement(sql);
+  switch (op) {
+    case "select":
+      return { effect: "read", table };
+    case "insert":
+    case "update":
+    case "delete":
+      return { effect: "change", table };
+    case "schema":
+      return { effect: "write", table };
+    case "pragma":
+      if (table === "incremental_vacuum") return { effect: "write", table };
+      if (table === "wal_checkpoint") return { effect: "checkpoint", table };
+      return { effect: "none", table };
+    default:
+      return { effect: "none", table };
+  }
+}
+
+/** Whether a call that completed wrote to the file. */
+function wrote(effect: StatementEffect, result: unknown): boolean {
+  if (effect === "write") return true;
+  if (effect !== "change") return false;
+  // `run` reports what it changed; a RETURNING read through `get` or `all`
+  // does not, and counts as a change.
+  const changes = (result as { changes?: unknown } | null)?.changes;
+  return typeof changes === "number" ? changes > 0 : true;
 }
 
 export function storageDatabaseName(file: string): StorageDatabaseName {
@@ -340,6 +394,8 @@ interface TransactionState extends SqliteConnectionTiming {
   sqlMs: number;
   slowestMs: number;
   slowestSql: string | null;
+  /** A statement in it changed the file, so its COMMIT writes the WAL. */
+  wrote: boolean;
 }
 
 /**
@@ -353,13 +409,24 @@ interface TransactionState extends SqliteConnectionTiming {
  * before and after its body, which is where the write lock and the WAL sync
  * are paid. Statement methods are own properties of each bun:sqlite
  * statement, so they are wrapped in place, once per statement.
+ *
+ * Every completed call and outermost transaction is also counted in
+ * `activity` (`storage-activity-metrics.ts`): a transaction or a statement
+ * outside one that changed the file is a commit, timed by its COMMIT (or the
+ * whole statement); one that only read is a read, timed by its statements. A
+ * prepared statement is classified once, when first called.
  */
 export function instrumentSqliteConnection(
   db: Database,
   database: StorageDatabaseName,
-  options: { recorder?: SlowStorageOperations; now?: () => number } = {},
+  options: {
+    recorder?: SlowStorageOperations;
+    activity?: StorageActivityMetrics;
+    now?: () => number;
+  } = {},
 ): SqliteConnectionTiming {
   const recorder = options.recorder ?? slowStorageOperations;
+  const activity = options.activity ?? storageActivityMetrics;
   const now = options.now ?? (() => performance.now());
   const state: TransactionState = {
     store: null,
@@ -367,7 +434,9 @@ export function instrumentSqliteConnection(
     sqlMs: 0,
     slowestMs: -1,
     slowestSql: null,
+    wrote: false,
   };
+  activity.connectionOpened(database);
   const timedStatements = new WeakSet<object>();
 
   const slow = (sample: Omit<SlowStorageSample, "database">): void => {
@@ -386,19 +455,46 @@ export function instrumentSqliteConnection(
     }
   };
 
-  /** Wraps a call whose SQL is `sqlOf(args)`. */
-  const timed = (method: AnyFunction, sqlOf: (args: unknown[]) => string | null): AnyFunction =>
+  /** Counts a completed call; never throws into it. */
+  const count = (classified: ClassifiedStatement, result: unknown, ms: number): void => {
+    try {
+      const changed = wrote(classified.effect, result);
+      if (state.depth > 0) {
+        if (changed) state.wrote = true;
+      } else if (changed) {
+        activity.commit(database, ms);
+      } else if (classified.effect === "read") {
+        activity.read(database, readSeriesForTable(classified.table), ms);
+      } else if (classified.effect === "checkpoint") {
+        activity.checkpoint(database, ms);
+      }
+    } catch {
+      // Evidence must never fail the call it describes.
+    }
+  };
+
+  /** Wraps a call whose SQL is `sqlOf(args)`, classified by `classify(args)`. */
+  const timed = (
+    method: AnyFunction,
+    sqlOf: (args: unknown[]) => string | null,
+    classify: (args: unknown[]) => ClassifiedStatement,
+  ): AnyFunction =>
     function (this: unknown, ...args: unknown[]) {
       const startedAt = now();
       let busy = false;
+      let completed = false;
+      let result: unknown;
       try {
-        return method.apply(this, args);
+        result = method.apply(this, args);
+        completed = true;
+        return result;
       } catch (error) {
         busy = isBusy(error);
         throw error;
       } finally {
         const endedAt = now();
         const ms = endedAt - startedAt;
+        if (completed) count(classify(args), result, ms);
         if (state.depth === 0) call(ms, endedAt);
         if (state.depth > 0) {
           state.sqlMs += ms;
@@ -428,11 +524,36 @@ export function instrumentSqliteConnection(
     const target = created as Record<string, AnyFunction>;
     if (timedStatements.has(target)) return created;
     timedStatements.add(target);
+    let classified: ClassifiedStatement | null = null;
+    const classify = () => (classified ??= classifyStatement(sql));
     for (const name of TIMED_STATEMENT_METHODS) {
       const method = target[name];
-      if (typeof method === "function") target[name] = timed(method, () => sql);
+      if (typeof method === "function") target[name] = timed(method, () => sql, classify);
     }
     return created;
+  };
+
+  /** Counts an outermost transaction that returned; never throws into it. */
+  const countTransaction = (
+    store: string | null,
+    endedAt: number,
+    marks: { bodyStartedAt: number; bodyEndedAt: number },
+  ): void => {
+    try {
+      if (state.wrote) {
+        const bodyEndedAt = Number.isNaN(marks.bodyEndedAt) ? endedAt : marks.bodyEndedAt;
+        activity.commit(database, endedAt - bodyEndedAt);
+      } else if (state.slowestMs >= 0) {
+        // Only a transaction that ran a statement read anything.
+        const series =
+          store === null
+            ? readSeriesForTable(describeStatement(state.slowestSql).table)
+            : readSeriesForStore(store);
+        activity.read(database, series, state.sqlMs);
+      }
+    } catch {
+      // Evidence must never fail the call it describes.
+    }
   };
 
   const timedTransaction = (
@@ -448,12 +569,16 @@ export function instrumentSqliteConnection(
       state.sqlMs = 0;
       state.slowestMs = -1;
       state.slowestSql = null;
+      state.wrote = false;
       marks.bodyStartedAt = Number.NaN;
       marks.bodyEndedAt = Number.NaN;
       const startedAt = now();
       let busy = false;
+      let committed = false;
       try {
-        return variant.apply(this, args);
+        const result = variant.apply(this, args);
+        committed = true;
+        return result;
       } catch (error) {
         busy = isBusy(error);
         throw error;
@@ -461,6 +586,7 @@ export function instrumentSqliteConnection(
         state.depth = 0;
         const endedAt = now();
         const ms = endedAt - startedAt;
+        if (committed) countTransaction(store, endedAt, marks);
         call(ms, endedAt);
         if (ms >= recorder.thresholdMs) {
           const ran = !Number.isNaN(marks.bodyStartedAt);
@@ -489,9 +615,12 @@ export function instrumentSqliteConnection(
   target.prepare = (sql: unknown, ...rest: unknown[]) =>
     statement(prepare.call(db, sql, ...rest), String(sql));
   const sqlArgument = (args: unknown[]) => (typeof args[0] === "string" ? args[0] : null);
+  const classifyArgument = (args: unknown[]) => classifyStatement(sqlArgument(args));
   for (const name of ["run", "exec"] as const) {
     const method = target[name];
-    if (typeof method === "function") target[name] = timed(method.bind(db), sqlArgument);
+    if (typeof method === "function") {
+      target[name] = timed(method.bind(db), sqlArgument, classifyArgument);
+    }
   }
   const transaction = target.transaction!;
   target.transaction = (fn: unknown) => {

@@ -1,6 +1,7 @@
 /**
  * Real-Docker qualification of the egress gateway under the three conditions
- * the other live suites never create (0018 task 3): IPv6 on the environment
+ * the other live suites never create (docs/development/container-qualification.md,
+ * "Egress gateway conditions on Linux Engine"): IPv6 on the environment
  * network, DNS answers that rotate, and a restart of the Docker daemon.
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>.
@@ -31,6 +32,8 @@ import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
+import { parseBackendHostPortsLabel } from "../src/core/container-host-ports";
+import { DOCKER_LABEL_BACKEND_HOST_PORTS } from "../src/core/constants";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -63,11 +66,28 @@ beforeAll(async () => {
   owner = dockerOwnerNamespace(dataDir);
 });
 
+/**
+ * Container processes recorded before a rootless live-restore daemon restart
+ * that the restart case has not reaped yet. The new daemon does not know them,
+ * so removing the labelled resources would leave them running; afterAll reaps
+ * them first when the case failed between the restart and its own reap.
+ */
+const unreapedOrphans: ContainerProcess[][] = [];
+
 afterAll(async () => {
   if (!ENABLED) return;
+  // A reap failure is reported after the resources are removed, so it neither
+  // skips that cleanup nor replaces the case's own failure.
+  let reapError: unknown = null;
+  for (const recorded of unreapedOrphans.splice(0)) {
+    await reapOrphanedContainers(recorded).catch((error: unknown) => {
+      reapError ??= error;
+    });
+  }
   const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
   expect(leftovers).toEqual([]);
+  if (reapError) throw reapError;
 }, 180_000);
 
 function conditionsContext(environments: Environment[]) {
@@ -571,6 +591,108 @@ async function restartDaemon(): Promise<void> {
   throw new Error("the daemon did not answer after its restart");
 }
 
+type ContainerProcess = { containerId: string; fullId: string; pid: number; startTime: string };
+
+/** Start time (field 22 of `/proc/<pid>/stat`) of a host process; null once it is gone. */
+async function processStartTime(pid: number): Promise<string | null> {
+  try {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Each running container's init process, as the host sees it (rootless dockerd shares its pid namespace). */
+async function containerProcesses(ids: string[]): Promise<ContainerProcess[]> {
+  const found: ContainerProcess[] = [];
+  for (const containerId of ids) {
+    const [fullId = "", pidText = ""] = (
+      await docker(["inspect", "-f", "{{.Id}} {{.State.Pid}}", containerId])
+    ).split(" ");
+    const pid = Number(pidText);
+    const startTime = pid > 0 ? await processStartTime(pid) : null;
+    if (fullId && startTime) found.push({ containerId, fullId, pid, startTime });
+  }
+  return found;
+}
+
+/**
+ * Prints one observation and, when ORKESTRATOR_QUALIFICATION_EVIDENCE names a
+ * file, appends it there as a JSON line (a logged run deletes passing output).
+ * Observations carry no workspace contents.
+ */
+async function evidence(scenario: string, fields: Record<string, unknown>): Promise<void> {
+  const line = JSON.stringify({ run: RUN, scenario, at: new Date().toISOString(), ...fields });
+  console.info(`[egress-conditions] ${line}`);
+  const file = process.env.ORKESTRATOR_QUALIFICATION_EVIDENCE;
+  if (file) await fs.appendFile(file, `${line}\n`);
+}
+
+/** How many host processes share `pid`'s pid namespace (a container's whole tree). */
+async function processesInNamespaceOf(pid: number): Promise<number> {
+  const target = await fs.readlink(`/proc/${pid}/ns/pid`).catch(() => null);
+  if (!target) return 0;
+  let count = 0;
+  for (const entry of await fs.readdir("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    if ((await fs.readlink(`/proc/${entry}/ns/pid`).catch(() => null)) === target) count++;
+  }
+  return count;
+}
+
+/**
+ * Whether an orphaned gateway's network namespace still reaches the allowed
+ * registry: curl in that namespace (entered through the user namespace this
+ * user owns) with the address resolved on the host. Null when the namespace
+ * cannot be entered, so it stays an observation rather than an assertion.
+ */
+async function orphanReachesRegistry(pid: number): Promise<number | null> {
+  const address = (
+    await runCommand("getent", ["ahostsv4", "registry.npmjs.org"]).catch(() => null)
+  )?.stdout.split(/\s+/)[0];
+  if (!address) return null;
+  try {
+    const result = await runCommand(
+      "sh",
+      [
+        "-c",
+        `nsenter --preserve-credentials -U -n -t ${pid} curl -sS -o /dev/null --max-time 8 --resolve registry.npmjs.org:443:${address} https://registry.npmjs.org/ 2>/dev/null; echo $?`,
+      ],
+      { timeoutMs: 20_000 },
+    );
+    return Number(result.stdout.trim().split("\n").at(-1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Kills the container processes that outlived a rootless daemon restart the
+ * daemon no longer knows about. Each is signalled only while its start time
+ * and its cgroup (which names the full container id) still match what was
+ * recorded before the restart. Killing a container's init ends its whole pid
+ * namespace. Returns the containers whose processes had survived.
+ */
+async function reapOrphanedContainers(recorded: ContainerProcess[]): Promise<string[]> {
+  const orphaned: string[] = [];
+  for (const entry of recorded) {
+    if ((await processStartTime(entry.pid)) !== entry.startTime) continue;
+    const cgroup = await fs.readFile(`/proc/${entry.pid}/cgroup`, "utf8").catch(() => "");
+    if (!cgroup.includes(entry.fullId)) continue;
+    orphaned.push(entry.containerId);
+    process.kill(entry.pid, "SIGKILL");
+  }
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const left = await Promise.all(
+      recorded.map(async (entry) => (await processStartTime(entry.pid)) === entry.startTime),
+    );
+    if (!left.some(Boolean)) return orphaned;
+    await Bun.sleep(200);
+  }
+  throw new Error("orphaned container processes did not exit after SIGKILL");
+}
+
 async function assertEnforced(containerId: string, gateway: string): Promise<void> {
   expect(
     await docker(["exec", containerId, "awk", "/^CapEff/ { print $2 }", "/proc/self/status"]),
@@ -609,13 +731,49 @@ async function assertEnforced(containerId: string, gateway: string): Promise<voi
   expect([6, 7]).toContain(await curl("https://example.com/"));
 }
 
+/**
+ * The gateway's published host ports and its backend-chosen port label. On a
+ * rootless daemon every automatic mapping is a port the backend chose
+ * (to-do 7549 task 4), so the two match and survive a daemon restart.
+ */
+async function publishedHostPorts(
+  gateway: string,
+): Promise<{ published: number[]; label: number[] }> {
+  const bindings = JSON.parse(
+    await docker(["inspect", "-f", "{{json .HostConfig.PortBindings}}", gateway]),
+  ) as Record<string, Array<{ HostPort?: string }> | null> | null;
+  const published = Object.values(bindings ?? {})
+    .flatMap((list) => list ?? [])
+    .map((binding) => Number(binding.HostPort ?? ""))
+    .sort((a, b) => a - b);
+  const label = parseBackendHostPortsLabel(
+    await docker([
+      "inspect",
+      "-f",
+      `{{ index .Config.Labels "${DOCKER_LABEL_BACKEND_HOST_PORTS}" }}`,
+      gateway,
+    ]),
+  ).sort((a, b) => a - b);
+  return { published, label };
+}
+
 describe("Docker daemon restart", () => {
   liveRestart(
     "stopped and running gateway runtimes restart in order with their policy, and never start on their own",
     async () => {
       const liveRestore =
         (await docker(["info", "--format", "{{.LiveRestoreEnabled}}"])) === "true";
+      const rootless = (await docker(["info", "--format", "{{json .SecurityOptions}}"])).includes(
+        "name=rootless",
+      );
       const { containerId, gateway } = await createRestricted("restart", ["registry.npmjs.org"]);
+      const hostPorts = await publishedHostPorts(gateway);
+      if (rootless) {
+        expect(hostPorts.label.length).toBeGreaterThan(0);
+        expect(hostPorts.published).toEqual(hostPorts.label);
+      } else {
+        expect(hostPorts.label).toEqual([]);
+      }
       await startRuntime(containerId);
       await assertEnforced(containerId, gateway);
 
@@ -632,8 +790,46 @@ describe("Docker daemon restart", () => {
 
       // 2. Running when the daemon restarts.
       const gatewayStarted = await docker(["inspect", "-f", "{{.State.StartedAt}}", gateway]);
+      const before = await containerProcesses([gateway, containerId]);
+      // Registered before the restart: a rootless restart can orphan these
+      // processes even when the restart command itself then fails.
+      if (liveRestore && rootless) unreapedOrphans.push(before);
       await restartDaemon();
-      if (liveRestore) {
+      if (liveRestore && rootless) {
+        // A rootless restart replaces RootlessKit, its user and network
+        // namespaces, containerd and the shims (to-do 7390 task 1,
+        // 2026-11-11). The new daemon finds no shim and reports both
+        // containers exited, while their processes can outlive it in the old
+        // namespace with nothing but loopback. Those are reaped before the
+        // backend starts the containers again, as a daemon with live-restore
+        // off would have left them.
+        expect(await running(gateway)).toBe(false);
+        expect(await running(containerId)).toBe(false);
+        const survivors = [];
+        for (const entry of before) {
+          const alive = (await processStartTime(entry.pid)) === entry.startTime;
+          survivors.push({
+            role: entry.containerId === gateway ? "gateway" : "runtime",
+            alive,
+            processes: alive ? await processesInNamespaceOf(entry.pid) : 0,
+            registryExit:
+              alive && entry.containerId === gateway
+                ? await orphanReachesRegistry(entry.pid)
+                : null,
+          });
+        }
+        const orphaned = await reapOrphanedContainers(before);
+        unreapedOrphans.splice(unreapedOrphans.indexOf(before), 1);
+        await evidence("rootless-live-restore-restart", {
+          containers: before.length,
+          orphaned: orphaned.length,
+          survivors,
+          daemonState: { gateway: "exited", runtime: "exited" },
+        });
+        expect(await dockerStatus(["start", containerId])).toBe(1);
+        await startRuntime(containerId);
+        await assertEnforced(containerId, gateway);
+      } else if (liveRestore) {
         // Both kept running in the same namespace; the rules, the resolver
         // and the refresher survived the daemon.
         expect(await running(gateway)).toBe(true);
@@ -653,6 +849,15 @@ describe("Docker daemon restart", () => {
         await startRuntime(containerId);
         await assertEnforced(containerId, gateway);
       }
+      // The backend-chosen ports are the gateway's own across both restarts.
+      expect(await publishedHostPorts(gateway)).toEqual(hostPorts);
+      await evidence("daemon-restart", {
+        liveRestore,
+        rootless,
+        backendHostPorts: hostPorts.label.length,
+        branch: liveRestore ? (rootless ? "rootless-live-restore" : "live-restore") : "stopped",
+        passed: true,
+      });
     },
     LIVE_TIMEOUT_MS,
   );

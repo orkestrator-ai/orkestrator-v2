@@ -15,6 +15,11 @@
  *   (container-live-rebuild-fixtures.ts). Severing it destroys every open
  *   connection and removes the socket file, as when a daemon goes away; the
  *   real daemon is never restarted.
+ * - Daemon restart: only with ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND, a shell
+ *   command that restarts the daemon this suite talks to and returns once it
+ *   answers again (`mise run docker:disposable` prints one). A restart stops
+ *   every container on that daemon, so point it only at a disposable daemon,
+ *   never a shared one.
  * - Kill: the rebuild runs in a child Bun process
  *   (container-live-rebuild-kill-driver.ts) that parks inside its own storage
  *   wrapper at the commit write and is SIGKILLed by PID; a fresh storage
@@ -35,6 +40,7 @@ import { waitForContainerBoot } from "../src/core/container-readiness";
 import { reconcileContainerOperations } from "../src/core/container-lifecycle-service";
 import type { Environment } from "../src/core/models";
 import { openRegistryWriter, type RegistryWriter } from "../src/core/registry-writer-lease";
+import { runCommand } from "../src/core/shell";
 import { StorageService } from "../src/core/storage";
 import { readStoredValue } from "../src/core/storage-test-support";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
@@ -61,6 +67,14 @@ import {
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
 const live = ENABLED ? test : test.skip;
+const RESTART_COMMAND = process.env.ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND?.trim() ?? "";
+const liveRestart = ENABLED && RESTART_COMMAND.length > 0 ? test : test.skip;
+/**
+ * The restart scenario's workspace file. Big enough that the copy outlasts
+ * the daemon's shutdown; ORKESTRATOR_LIVE_RESTART_COPY_MIB lowers it on a
+ * runner short of disk (the scenario holds about three copies at once).
+ */
+const RESTART_COPY_MIB = Number(process.env.ORKESTRATOR_LIVE_RESTART_COPY_MIB) || 3072;
 const RUN = `f${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 /** Generous: the qualification host may be heavily loaded. */
 const LIVE_TIMEOUT_MS = 1_500_000;
@@ -503,6 +517,167 @@ describe("C15 daemon disconnect during the copy keeps the original authoritative
       await startRuntime(env.containerId);
       await waitForContainerBoot(env.containerId);
       expect(await workspaceFingerprint(env.containerId, false)).toBe(before);
+      await env.close();
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+/** Runs the restart command, then waits until the daemon answers again. */
+async function restartDaemon(): Promise<void> {
+  await runCommand("sh", ["-c", RESTART_COMMAND], { timeoutMs: 300_000 });
+  for (let attempt = 0; attempt < 240; attempt++) {
+    if (
+      await docker(["info", "--format", "{{.ID}}"], 10_000).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      return;
+    }
+    await sleep(500);
+  }
+  throw new Error("the daemon did not answer after its restart");
+}
+
+describe("C15 Docker daemon restart during the rebuild copy", () => {
+  liveRestart(
+    "a daemon restart while the volume copy helper writes keeps the original set, and a retry succeeds",
+    async () => {
+      const liveRestore =
+        (await docker(["info", "--format", "{{.LiveRestoreEnabled}}"])) === "true";
+      const env = await createLegacyEnvironment("c15rs", RESTART_COPY_MIB);
+      const migrated = await rebuild(env, env.containerId);
+      expect(migrated.error).toBeUndefined();
+      const sourceId = migrated.outcome!.containerId;
+      await startRuntime(sourceId);
+      await waitForContainerBoot(sourceId);
+      const before = await workspaceFingerprint(sourceId, true);
+      const stateBefore = await exec(sourceId, STATE_SNAPSHOT);
+      const databasesBefore = await sqliteSnapshot(sourceId, true);
+      await env.storage.updateEnvironment(env.environmentId, { status: "running" });
+      const sourceSet = lifecycleOf(await env.storage.getEnvironment(env.environmentId)).storage;
+
+      // The moment a copy helper is running daemon-side, restart the whole
+      // daemon: the backend's client and the helper both lose it.
+      const seen: string[] = [];
+      let copyingAt = 0;
+      let restart: Promise<{ helper: string; restartMs: number; intoCopyMs: number }> | undefined;
+      env.phases.add((phase) => {
+        seen.push(phase);
+        if (phase !== "copying" || restart) return;
+        copyingAt = Date.now();
+        restart = (async () => {
+          const deadline = Date.now() + 300_000;
+          let helpers: string[] = [];
+          while ((helpers = await storageHelpers(env.owner, "running")).length === 0) {
+            if (Date.now() > deadline) throw new Error("no copy helper started");
+            await sleep(100);
+          }
+          const helper = await docker([
+            "inspect",
+            "-f",
+            '{{.State.Status}} {{index .Config.Labels "orkestrator-resource-role"}} {{join .Args " "}}',
+            helpers[0]!,
+          ]).catch((error: unknown) => `gone: ${error instanceof Error ? error.message : error}`);
+          const started = Date.now();
+          await restartDaemon();
+          return { helper, restartMs: Date.now() - started, intoCopyMs: started - copyingAt };
+        })();
+        // Awaited after the rebuild returns; a failure before then is not
+        // left unhandled meanwhile.
+        restart.catch(() => undefined);
+      });
+      const result = await rebuild(env, sourceId);
+      const atRestart = await restart;
+      const helpersAfter = await storageHelpers(env.owner);
+      await evidence("c15-daemon-restart-copy", {
+        liveRestore,
+        copyMiB: RESTART_COPY_MIB,
+        helperAtRestart: atRestart?.helper,
+        restartMs: atRestart?.restartMs,
+        restartIntoCopyMs: atRestart?.intoCopyMs,
+        phases: seen,
+        committed: result.outcome !== undefined,
+        error: result.error?.message,
+        helpersLeftAfterFailure: helpersAfter.length,
+      });
+      // The restart landed inside the copy, on a helper copying the source
+      // workspace volume, and nothing was committed.
+      expect(atRestart?.helper).toStartWith("running storage-helper copy-volume /source");
+      expect(result.outcome).toBeUndefined();
+      expect(seen).not.toContain("verified");
+      // Named as the outage, never as files that failed verification.
+      expect(result.error?.message).toStartWith("ContainerLifecycleError:daemon-unavailable:");
+
+      // The original stays authoritative and nothing is left half-done.
+      let environment = await env.storage.getEnvironment(env.environmentId);
+      let record = lifecycleOf(environment);
+      expect(record.operation).toBeUndefined();
+      expect(environment?.containerId).toBe(sourceId);
+      expect(record.storage.storageSetId).toBe(sourceSet.storageSetId);
+      expect(record.outcomes.at(-1)).toMatchObject({
+        status: "failed",
+        failureCode: "daemon-unavailable",
+      });
+      // A `--rm` helper the restart stopped mid-write does not outlive it.
+      await waitForStorageHelpersGone(env.owner);
+      expect(await reconcileContainerOperations(env.context)).toEqual([]);
+      record = await expectOneAuthoritativeSet(await env.storage.getEnvironment(env.environmentId));
+      // Any candidate set kept because Docker was gone is listed, never
+      // restorable, and discards cleanly.
+      const { listRecoveryCopies, discardRecoveryCopy } =
+        await import("../src/core/recovery-copies");
+      const list = await listRecoveryCopies(env.environmentId, env.context);
+      const failed = list.copies.filter((entry) => entry.reason === "failed-candidate");
+      await evidence("c15-daemon-restart-copy-recovery", { failedCandidates: failed.length });
+      for (const copy of failed) expect(copy).toMatchObject({ restorable: false });
+      let revision = list.revision;
+      for (const copy of failed) {
+        const discarded = await discardRecoveryCopy(
+          { environmentId: env.environmentId, copyId: copy.copyId, expectedRevision: revision },
+          env.context,
+        );
+        expect(discarded?.discarded).toBe(true);
+        revision = (await listRecoveryCopies(env.environmentId, env.context)).revision;
+      }
+      environment = await env.storage.getEnvironment(env.environmentId);
+      record = await expectOneAuthoritativeSet(environment);
+      expect((record.retainedStorage ?? []).some((set) => set.reason === "failed-candidate")).toBe(
+        false,
+      );
+
+      // The original's files are intact after the restart.
+      await startRuntime(sourceId);
+      await waitForContainerBoot(sourceId);
+      expect(await workspaceFingerprint(sourceId, true)).toBe(before);
+      expect(await exec(sourceId, STATE_SNAPSHOT)).toBe(stateBefore);
+      expect(await sqliteSnapshot(sourceId, true)).toBe(databasesBefore);
+
+      // Rebuilding again once Docker is back succeeds with the same files.
+      await env.storage.updateEnvironment(env.environmentId, { status: "running" });
+      // How long the same copy takes undisturbed: the restart above landed
+      // well inside that window.
+      const retryPhases: Array<{ phase: string; at: number }> = [];
+      env.phases.clear();
+      env.phases.add((phase) => retryPhases.push({ phase, at: Date.now() }));
+      const retried = await rebuild(env, sourceId);
+      const copyStarted = retryPhases.find((entry) => entry.phase === "copying")?.at;
+      const copyVerified = retryPhases.find((entry) => entry.phase === "verified")?.at;
+      await evidence("c15-daemon-restart-copy-retry", {
+        error: retried.error?.message,
+        copyMs: copyStarted && copyVerified ? copyVerified - copyStarted : null,
+      });
+      expect(retried.error).toBeUndefined();
+      expect(copyVerified! - copyStarted!).toBeGreaterThan(atRestart!.intoCopyMs);
+      const retriedId = retried.outcome!.containerId;
+      await startRuntime(retriedId);
+      await waitForContainerBoot(retriedId);
+      expect(await workspaceFingerprint(retriedId, true)).toBe(before);
+      expect(await exec(retriedId, STATE_SNAPSHOT)).toBe(stateBefore);
+      expect(await sqliteSnapshot(retriedId, true)).toBe(databasesBefore);
+      await expectOneAuthoritativeSet(await env.storage.getEnvironment(env.environmentId));
+      await docker(["stop", "-t", "5", retriedId]);
       await env.close();
     },
     LIVE_TIMEOUT_MS,

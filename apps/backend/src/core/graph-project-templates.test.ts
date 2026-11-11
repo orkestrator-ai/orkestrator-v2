@@ -279,6 +279,39 @@ describe("watching", () => {
     }
   });
 
+  test("the default watch reloads when its handle reports lost events", async () => {
+    reader.close();
+    let lose: (() => void) | undefined;
+    const start = spyOn(watchHost, "watchDirectory").mockImplementation(() => {
+      const handle = {
+        on: () => handle,
+        close: () => undefined,
+        onEventsLost: (listener: () => void) => {
+          lose = listener;
+        },
+      };
+      return handle;
+    });
+    reader = new GraphProjectTemplates({
+      checkoutOf: async () => checkout,
+      onChange: (id) => changes.push(id),
+      settleMs: 0,
+    });
+    try {
+      await write("a.graph.json", sampleGraphTemplate("a"));
+      await reader.scan("p1");
+      await waitForGraphCondition(() => lose !== undefined);
+      // The edit's own event was lost in a stream rebuild; only the flag arrives.
+      await write("a.graph.json", { ...sampleGraphTemplate("a"), name: "Lost edit" });
+      lose!();
+      await waitForGraphCondition(() => changes.length === 1);
+      expect(changes).toEqual(["p1"]);
+      expect((await reader.scan("p1")).files[0]?.template.name).toBe("Lost edit");
+    } finally {
+      start.mockRestore();
+    }
+  });
+
   test("stops watching on close and evicts the least recently scanned project", async () => {
     const small = new GraphProjectTemplates({
       checkoutOf: async (projectId) => (projectId === "bare" ? null : checkout),

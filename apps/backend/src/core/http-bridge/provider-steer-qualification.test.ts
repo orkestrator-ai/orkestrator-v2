@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { claudeConnection, codexConnection, httpProvider } from "../agent-provider-test-support.js";
+import {
+  HttpBridgeSteerQualification,
+  STEER_QUALIFICATION_CACHE_MAX_SESSIONS,
+  STEER_QUALIFICATION_POSITIVE_TTL_MS,
+} from "./steer-qualification.js";
 
 const SESSION_ID = "private-session-id";
 const QUALIFIED = () => Response.json({ dispatch: "unknown" });
@@ -180,11 +185,13 @@ describe("steer qualification logging", () => {
     await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
     expect(steerRecords()).toEqual([]);
 
+    // A positive answer is cached per session, so the fault is staged on
+    // another session of the same bridge connection.
     healthy = false;
-    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(false);
+    await expect(provider.steerSupported!("second-session")).resolves.toBe(false);
     healthy = true;
-    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
-    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
+    await expect(provider.steerSupported!("second-session")).resolves.toBe(true);
+    await expect(provider.steerSupported!("second-session")).resolves.toBe(true);
 
     expect(steerRecords()).toMatchObject([
       { event: "steer.qualification-failed" },
@@ -212,4 +219,119 @@ describe("steer qualification logging", () => {
       expect(steerRecords()).toEqual([]);
     },
   );
+});
+
+describe("steer qualification cache", () => {
+  const probes = (requests: { url: string }[]) =>
+    requests.filter((request) => request.url.includes("/steer/dispatch")).length;
+
+  test("asks once per session while the answer is positive", async () => {
+    const { provider, requests } = httpProvider(QUALIFIED, claudeConnection);
+
+    for (let poll = 0; poll < 5; poll += 1) {
+      await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
+    }
+    await expect(provider.steerSupported!("another-session")).resolves.toBe(true);
+
+    expect(probes(requests)).toBe(2);
+  });
+
+  test("never caches a refusal", async () => {
+    let qualified = false;
+    const { provider, requests } = httpProvider(
+      () => (qualified ? QUALIFIED() : new Response(null, { status: 404 })),
+      codexConnection,
+    );
+
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(false);
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(false);
+    qualified = true;
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
+
+    expect(probes(requests)).toBe(3);
+  });
+
+  test("asks again when the bridge generation behind the connection changes", async () => {
+    let qualified = true;
+    const connection = { ...claudeConnection };
+    const { provider, requests } = httpProvider(
+      () => (qualified ? QUALIFIED() : new Response(null, { status: 404 })),
+      connection,
+    );
+
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
+    // A workflow provider adopts a replaced bridge's coordinates in place.
+    connection.authToken = `${connection.authToken}-replaced`;
+    qualified = false;
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(false);
+
+    expect(probes(requests)).toBe(2);
+  });
+
+  test("asks again once a positive answer has expired", async () => {
+    let now = 1_000;
+    let calls = 0;
+    const qualification = new HttpBridgeSteerQualification(
+      "claude",
+      claudeConnection,
+      (async () => {
+        calls += 1;
+        return QUALIFIED();
+      }) as unknown as typeof fetch,
+      () => now,
+    );
+
+    await expect(qualification.supported(SESSION_ID)).resolves.toBe(true);
+    now += STEER_QUALIFICATION_POSITIVE_TTL_MS - 1;
+    await expect(qualification.supported(SESSION_ID)).resolves.toBe(true);
+    expect(calls).toBe(1);
+    now += 1;
+    await expect(qualification.supported(SESSION_ID)).resolves.toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("keeps at most its bound of sessions, dropping the oldest", async () => {
+    let calls = 0;
+    const qualification = new HttpBridgeSteerQualification(
+      "claude",
+      claudeConnection,
+      (async () => {
+        calls += 1;
+        return QUALIFIED();
+      }) as unknown as typeof fetch,
+    );
+
+    for (let index = 0; index <= STEER_QUALIFICATION_CACHE_MAX_SESSIONS; index += 1) {
+      await qualification.supported(`session-${index}`);
+    }
+    expect(calls).toBe(STEER_QUALIFICATION_CACHE_MAX_SESSIONS + 1);
+    await qualification.supported(`session-${STEER_QUALIFICATION_CACHE_MAX_SESSIONS}`);
+    expect(calls).toBe(STEER_QUALIFICATION_CACHE_MAX_SESSIONS + 1);
+    await qualification.supported("session-0");
+    expect(calls).toBe(STEER_QUALIFICATION_CACHE_MAX_SESSIONS + 2);
+  });
+
+  test("a steer the bridge answers 404 drops the cached answer", async () => {
+    let sessionKnown = true;
+    const { provider, requests } = httpProvider((url) => {
+      if (url.includes("/steer/dispatch")) {
+        return sessionKnown ? QUALIFIED() : new Response(null, { status: 404 });
+      }
+      return new Response(null, { status: 404 });
+    }, claudeConnection);
+
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(true);
+    sessionKnown = false;
+    await expect(
+      provider.performSessionAction!(SESSION_ID, {
+        kind: "steer",
+        text: "steer",
+        requestId: "steer-1",
+        expectedRunId: "run-1",
+      }),
+    ).rejects.toThrow("session was not found");
+    await expect(provider.steerSupported!(SESSION_ID)).resolves.toBe(false);
+
+    expect(probes(requests)).toBe(2);
+  });
 });

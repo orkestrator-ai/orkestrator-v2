@@ -69,8 +69,10 @@ import {
   parseScalePlatforms,
   pickScaleModel,
   profileRssMiB,
+  runTeardown,
   SCALE_FAKE_PI_MODEL_REF,
   SCALE_FAKE_PLATFORMS,
+  scaleFakeOutcomeProblems,
   scaleModelVariable,
   scalePanelPlatforms,
   writeScaleFakePiModels,
@@ -1149,6 +1151,19 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       await fs.writeFile(testInfo.outputPath("scale.json"), `${JSON.stringify(result, null, 2)}\n`);
       test.info().annotations.push({ type: "scale", description: JSON.stringify(result) });
       expect(SETTLED_PHASES.has(workflow.phase), describeWorkflow(workflow)).toBe(true);
+      if (SCALE_FAKE_MODEL) {
+        // The fake answers every step, so a failed or partial panel is a failure here.
+        expect(
+          scaleFakeOutcomeProblems({
+            reviewers: SCALE_REVIEWERS,
+            phase: workflow.phase,
+            consolidated: workflow.consolidatedReport !== undefined,
+            statuses: workflow.reviewers.map((reviewer) => reviewer.status),
+            submissions: fakeCalls?.submissions,
+          }),
+          describeWorkflow(workflow),
+        ).toEqual([]);
+      }
       expect(stats.runId, "the fan-out stats belong to another run").toBe(runId);
       expect(stats.passes, "the backend recorded no fan-out pass").toBeGreaterThan(0);
       // The scheduler's own peaks, recorded inside every pass: exact, not sampled.
@@ -1166,10 +1181,14 @@ test.describe("live Multi Review inactive-environment cycle", () => {
         else expect(reviewer.status, describeWorkflow(workflow)).toBe("completed");
       }
     } finally {
-      await fs.rm(statsMarker, { force: true });
-      await cycle.cleanup();
-      restorePiModels?.();
-      if (fakeModel) await stopChild(fakeModel.child);
+      // Each step runs even when an earlier one throws, so a failed cleanup
+      // cannot leave the fake model running or the profile's models.json changed.
+      await runTeardown([
+        () => fs.rm(statsMarker, { force: true }),
+        () => cycle.cleanup(),
+        () => restorePiModels?.(),
+        () => (fakeModel ? stopChild(fakeModel.child) : undefined),
+      ]);
     }
   });
 });

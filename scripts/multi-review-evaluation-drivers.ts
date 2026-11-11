@@ -15,6 +15,10 @@
  *   reports no cost. Its environment context is switched off, so the working
  *   directory is not part of the prompt.
  *
+ * Each CLI runs through the shared command capture (`runChild`): its own
+ * process group, SIGTERM then SIGKILL on the whole group at the deadline, and
+ * bounded output, so a CLI that ignores SIGTERM cannot hang the script.
+ *
  * Every call runs in a fresh temporary directory unless the caller names one
  * shared directory. The Codex schema and answer files live in their own
  * temporary directory, so a shared working directory stays empty.
@@ -22,11 +26,12 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "../packages/protocol/src/structured-review";
+import { CommandFailedError, runCommand } from "@orkestrator/protocol/node/command-capture";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import {
   CODEX_TITLE_CONFIG_OVERRIDES,
   DISABLED_CODEX_TITLE_FEATURES,
-} from "../apps/backend/src/core/session-title-runners";
+} from "../apps/backend/src/core/session-title-runners.js";
 
 export const EVALUATION_PROVIDERS = ["claude", "codex"] as const;
 export type EvaluationProvider = (typeof EVALUATION_PROVIDERS)[number];
@@ -44,6 +49,7 @@ export const EVALUATION_EXECUTABLE_ENV: Record<EvaluationProvider, string> = {
 };
 
 export const CONSOLIDATION_TURN_TIMEOUT_MS = 15 * 60_000;
+const VERSION_TIMEOUT_MS = 30_000;
 /** Largest Codex answer file read back; a report is bounded far below this. */
 const MAX_CODEX_ANSWER_BYTES = 8 * 1024 * 1024;
 
@@ -202,35 +208,43 @@ export interface ConsolidationRunInput {
   env?: NodeJS.ProcessEnv;
 }
 
-async function runChild(
+interface ChildOutcome {
+  stdout: string;
+  exitCode: number;
+  /** The deadline passed; the child's process group was sent SIGTERM, then SIGKILL. */
+  timedOut: boolean;
+}
+
+/**
+ * Runs one CLI through the shared command capture, which leads the child's own
+ * process group, escalates SIGTERM to SIGKILL on the whole group at the
+ * deadline and settles even when a descendant holds the output open. A
+ * non-zero exit is an outcome here, not an error: the parsers classify it.
+ */
+export async function runChild(
   argv: string[],
-  cwd: string,
-  prompt: string,
-  timeoutMs: number,
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<{ stdout: string; exitCode: number }> {
-  const child = Bun.spawn(argv, {
-    cwd,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "ignore",
-    ...(env ? { env } : {}),
-  });
-  const timer = setTimeout(() => child.kill(), timeoutMs);
+  options: { cwd?: string; stdin?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+): Promise<ChildOutcome> {
+  const [command, ...args] = argv;
+  if (!command) throw new Error("runChild needs an executable");
   try {
-    // A CLI that exits without reading its input must not fail the write.
-    try {
-      child.stdin.write(prompt);
-      await child.stdin.end();
-    } catch {
-      // The exit code and output below say what happened.
-    }
-    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-    return { stdout, exitCode };
-  } finally {
-    clearTimeout(timer);
+    const { stdout } = await runCommand(command, args, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.env ? { env: options.env } : {}),
+      // An empty prompt closes stdin at once, as a CLI awaiting EOF needs.
+      ...(options.stdin ? { stdin: options.stdin } : {}),
+      timeoutMs: options.timeoutMs,
+    });
+    return { stdout, exitCode: 0, timedOut: false };
+  } catch (error) {
+    if (!(error instanceof CommandFailedError)) throw error;
+    if (error.timedOut) return { stdout: "", exitCode: -1, timedOut: true };
+    if (error.executableMissing) return { stdout: "", exitCode: 127, timedOut: false };
+    return { stdout: error.stdout, exitCode: error.exitCode ?? -1, timedOut: false };
   }
 }
+
+const TIMED_OUT: ConsolidationTurn = { ok: false, failure: "timed out" };
 
 /** Runs one consolidation turn on the chosen provider's CLI. */
 export async function runConsolidation(input: ConsolidationRunInput): Promise<ConsolidationTurn> {
@@ -238,30 +252,25 @@ export async function runConsolidation(input: ConsolidationRunInput): Promise<Co
   const cwd = input.fixedCwd ?? (await mkdtemp(path.join(tmpdir(), "mre-live-")));
   try {
     if (input.provider === "claude") {
-      const { stdout, exitCode } = await runChild(
+      const { stdout, exitCode, timedOut } = await runChild(
         [input.executable, ...claudeConsolidationArgs(input.model)],
-        cwd,
-        input.prompt,
-        timeoutMs,
-        input.env,
+        { cwd, stdin: input.prompt, timeoutMs, env: input.env },
       );
-      return parseClaudeResult(stdout, exitCode);
+      return timedOut ? TIMED_OUT : parseClaudeResult(stdout, exitCode);
     }
     const files = await mkdtemp(path.join(tmpdir(), "mre-live-codex-"));
     try {
       const schemaPath = path.join(files, "report-schema.json");
       const outputPath = path.join(files, "answer.json");
       await writeFile(schemaPath, JSON.stringify(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA));
-      const { stdout, exitCode } = await runChild(
+      const { stdout, exitCode, timedOut } = await runChild(
         [
           input.executable,
           ...codexConsolidationArgs({ cwd, model: input.model, schemaPath, outputPath }),
         ],
-        cwd,
-        input.prompt,
-        timeoutMs,
-        input.env,
+        { cwd, stdin: input.prompt, timeoutMs, env: input.env },
       );
+      if (timedOut) return TIMED_OUT;
       const written = await readFile(outputPath).catch(() => undefined);
       if (written && written.length > MAX_CODEX_ANSWER_BYTES) {
         return { ok: false, failure: "answer over the size limit" };
@@ -279,24 +288,11 @@ export async function runConsolidation(input: ConsolidationRunInput): Promise<Co
 export async function executableVersion(
   executable: string,
   env?: NodeJS.ProcessEnv,
+  timeoutMs = VERSION_TIMEOUT_MS,
 ): Promise<string | undefined> {
   try {
-    const child = Bun.spawn([executable, "--version"], {
-      stdout: "pipe",
-      stderr: "ignore",
-      stdin: "ignore",
-      ...(env ? { env } : {}),
-    });
-    const timer = setTimeout(() => child.kill(), 30_000);
-    try {
-      const [stdout, exitCode] = await Promise.all([
-        new Response(child.stdout).text(),
-        child.exited,
-      ]);
-      return exitCode === 0 ? stdout.trim().split("\n")[0]?.slice(0, 200) : undefined;
-    } finally {
-      clearTimeout(timer);
-    }
+    const { stdout, exitCode } = await runChild([executable, "--version"], { timeoutMs, env });
+    return exitCode === 0 ? stdout.trim().split("\n")[0]?.slice(0, 200) : undefined;
   } catch {
     return undefined;
   }

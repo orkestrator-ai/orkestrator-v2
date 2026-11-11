@@ -1042,7 +1042,12 @@ no login and nothing billed. The panel defaults to Pi, and every slot
 and Pi SDK against the scripted loopback model `auto-pipeline-fake-model.ts`,
 which answers each Multi Review result tool with a fixed, finding-free result.
 The case names it in the profile's isolated Pi `models.json` (never `~/.pi`)
-and restores that file afterwards. It measures the control plane (caps,
+and restores that file afterwards, even when the environment cleanup fails.
+Because the fake answers every step, this mode passes only when the review is
+`ready` with a consolidated report, every reviewer completed, and the fake
+counted the preparation, every reviewer's report and the consolidation
+submission (`scaleFakeOutcomeProblems` in `multi-review-scale-support.ts`); a
+settled but failed panel fails the case. It measures the control plane (caps,
 latency, memory), not review quality:
 
 ```bash

@@ -1,18 +1,33 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { evaluationCorpus } from "../../apps/backend/src/core/multi-review-evaluation-corpus";
-import { referenceConsolidation } from "../../apps/backend/src/core/multi-review-evaluation";
+/**
+ * The evaluation script's CLI drivers (`scripts/multi-review-evaluation-drivers.ts`).
+ * They live with the backend because the script reads the backend's corpus,
+ * scoring and session-title runner profile, and the subprocess paths must run
+ * on the platform they ship on rather than under the root tree's Happy DOM.
+ */
+import { evaluationCorpus } from "./multi-review-evaluation-corpus.js";
+import { referenceConsolidation } from "./multi-review-evaluation.js";
 import {
   claudeConsolidationArgs,
   codexConsolidationArgs,
+  executableVersion,
   parseClaudeResult,
   parseCodexResult,
   runConsolidation,
-} from "../../scripts/multi-review-evaluation-drivers";
+} from "../../../../scripts/multi-review-evaluation-drivers.js";
 
-const repoRoot = path.join(import.meta.dir, "../..");
+const repoRoot = path.join(import.meta.dir, "../../../..");
 const temporaryDirectories: string[] = [];
 
 function temporaryDirectory(): string {
@@ -175,6 +190,112 @@ describe("Codex consolidation driver", () => {
     );
     // The schema and the answer file live outside the shared directory.
     expect(readdirSync(shared)).toEqual([]);
+  });
+});
+
+/** A fake CLI running `body` after recording its working directory and pid. */
+function fakeCli(directory: string, name: string, body: string): string {
+  const file = path.join(directory, name);
+  writeFileSync(
+    file,
+    `#!/bin/sh
+pwd > "$FAKE_RECORD/cwd"
+echo $$ > "$FAKE_RECORD/pid"
+${body}
+`,
+  );
+  chmodSync(file, 0o755);
+  return file;
+}
+
+/** A CLI that ignores SIGTERM, so only the group SIGKILL can stop it. */
+const IGNORES_SIGTERM = `trap '' TERM
+for argument in "$@"; do echo "$argument"; done > "$FAKE_RECORD/argv"
+while :; do sleep 1; done`;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntilGone(pid: number): Promise<boolean> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) return true;
+    await Bun.sleep(25);
+  }
+  return !processAlive(pid);
+}
+
+describe("subprocess bounds", () => {
+  for (const provider of ["claude", "codex"] as const) {
+    test(`a ${provider} CLI that ignores SIGTERM times out, is killed and leaves no directory`, async () => {
+      const record = temporaryDirectory();
+      const executable = fakeCli(temporaryDirectory(), provider, IGNORES_SIGTERM);
+      const started = Date.now();
+      const turn = await runConsolidation({
+        provider,
+        executable,
+        prompt: "consolidate this",
+        model: undefined,
+        timeoutMs: 300,
+        env: { ...process.env, FAKE_RECORD: record },
+      });
+      expect(turn).toEqual({ ok: false, failure: "timed out" });
+      expect(Date.now() - started).toBeLessThan(10_000);
+      const pid = Number(readFileSync(path.join(record, "pid"), "utf8").trim());
+      expect(await waitUntilGone(pid)).toBe(true);
+      // The per-call working directory is removed.
+      expect(existsSync(readFileSync(path.join(record, "cwd"), "utf8").trim())).toBe(false);
+      if (provider === "codex") {
+        // So is the separate directory holding the schema and answer files.
+        const argv = readFileSync(path.join(record, "argv"), "utf8").split("\n");
+        const schema = argv[argv.indexOf("--output-schema") + 1]!;
+        expect(existsSync(path.dirname(schema))).toBe(false);
+      }
+    }, 20_000);
+
+    test(`a ${provider} CLI that exits without reading its prompt fails on its exit code`, async () => {
+      const record = temporaryDirectory();
+      const executable = fakeCli(temporaryDirectory(), provider, "exit 3");
+      const turn = await runConsolidation({
+        provider,
+        executable,
+        // Larger than a pipe buffer, so the write cannot complete unread.
+        prompt: "x".repeat(1024 * 1024),
+        model: undefined,
+        env: { ...process.env, FAKE_RECORD: record },
+      });
+      expect(turn).toEqual(expect.objectContaining({ ok: false, failure: "exit 3" }));
+      expect(existsSync(readFileSync(path.join(record, "cwd"), "utf8").trim())).toBe(false);
+    }, 20_000);
+  }
+
+  test("the version probe is bounded the same way", async () => {
+    const record = temporaryDirectory();
+    const executable = fakeCli(temporaryDirectory(), "codex", IGNORES_SIGTERM);
+    const version = await executableVersion(
+      executable,
+      { ...process.env, FAKE_RECORD: record },
+      300,
+    );
+    expect(version).toBeUndefined();
+    const pid = Number(readFileSync(path.join(record, "pid"), "utf8").trim());
+    expect(await waitUntilGone(pid)).toBe(true);
+  }, 20_000);
+
+  test("a missing executable is a failed turn, not a thrown error", async () => {
+    const turn = await runConsolidation({
+      provider: "claude",
+      executable: path.join(temporaryDirectory(), "no-such-cli"),
+      prompt: "p",
+      model: undefined,
+    });
+    expect(turn.ok).toBe(false);
   });
 });
 

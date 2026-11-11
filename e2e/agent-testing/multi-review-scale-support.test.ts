@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { workflowResultToolName } from "@orkestrator/protocol/workflow-results";
+import { MULTI_REVIEW_STEP_TURNS } from "../../apps/backend/src/core/multi-review-steps";
 import {
   FANOUT_STATS_FILE,
   FANOUT_STATS_FIXTURE_DIR,
@@ -21,6 +23,10 @@ import {
   writeScaleFakePiModels,
   processTreeRssKiB,
   profileRssMiB,
+  runTeardown,
+  SCALE_FAKE_SUBMISSION_TOOLS,
+  scaleFakeOutcomeProblems,
+  type ScaleFakeOutcome,
   scaleModelVariable,
   scalePanelPlatforms,
 } from "./multi-review-scale-support";
@@ -177,5 +183,100 @@ describe("fake-model mode", () => {
     writeFileSync(modelsFile(root), foreign);
     expect(() => writeScaleFakePiModels(root, "http://127.0.0.1:5/v1")).toThrow(/other providers/);
     expect(readFileSync(modelsFile(root), "utf8")).toBe(foreign);
+  });
+});
+
+describe("fake-model outcome", () => {
+  const qualified: ScaleFakeOutcome = {
+    reviewers: 3,
+    phase: "ready",
+    consolidated: true,
+    statuses: ["completed", "completed", "completed"],
+    submissions: {
+      submit_validation_plan: 1,
+      submit_review_report: 3,
+      submit_consolidated_review: 1,
+    },
+  };
+
+  test("names the tools the Multi Review steps submit with", () => {
+    const tools: Record<string, string> = { ...SCALE_FAKE_SUBMISSION_TOOLS };
+    expect(tools).toEqual({
+      preparation: workflowResultToolName(MULTI_REVIEW_STEP_TURNS.prepare.result),
+      reviewer: workflowResultToolName("review-report"),
+      consolidation: workflowResultToolName(MULTI_REVIEW_STEP_TURNS.consolidate.result),
+    });
+  });
+
+  test("a ready, consolidated panel where every reviewer submitted qualifies", () => {
+    expect(scaleFakeOutcomeProblems(qualified)).toEqual([]);
+  });
+
+  test("a panel whose every reviewer failed after admission does not", () => {
+    const problems = scaleFakeOutcomeProblems({
+      ...qualified,
+      phase: "failed",
+      consolidated: false,
+      statuses: ["failed", "failed", "failed"],
+      submissions: { submit_validation_plan: 1 },
+    });
+    expect(problems).toEqual([
+      "phase is failed, not ready",
+      "no consolidated report",
+      "0 of 3 reviewers completed",
+      "submit_review_report submitted 0 times, expected 3",
+      "submit_consolidated_review submitted 0 times, expected 1",
+    ]);
+  });
+
+  test("one failed reviewer, a short panel or missing counts also fail", () => {
+    expect(
+      scaleFakeOutcomeProblems({
+        ...qualified,
+        statuses: ["completed", "failed", "completed"],
+        submissions: { ...qualified.submissions, submit_review_report: 2 },
+      }),
+    ).toEqual(["2 of 3 reviewers completed", "submit_review_report submitted 2 times, expected 3"]);
+    expect(scaleFakeOutcomeProblems({ ...qualified, statuses: ["completed"] })).toEqual([
+      "1 reviewers, expected 3",
+      "1 of 3 reviewers completed",
+    ]);
+    expect(scaleFakeOutcomeProblems({ ...qualified, submissions: undefined })).toEqual([
+      "the fake model reported no submission counts",
+    ]);
+  });
+});
+
+describe("scale teardown", () => {
+  test("runs every step after one throws, then rethrows that failure", async () => {
+    const ran: string[] = [];
+    const failure = new Error("cleanup failed");
+    await expect(
+      runTeardown([
+        () => ran.push("marker"),
+        () => {
+          ran.push("cleanup");
+          throw failure;
+        },
+        () => ran.push("restore models.json"),
+        async () => {
+          await Promise.resolve();
+          ran.push("stop fake model");
+        },
+      ]),
+    ).rejects.toBe(failure);
+    expect(ran).toEqual(["marker", "cleanup", "restore models.json", "stop fake model"]);
+  });
+
+  test("reports several failures together and resolves when none fail", async () => {
+    const error = await runTeardown([
+      () => Promise.reject(new Error("a")),
+      () => {
+        throw new Error("b");
+      },
+    ]).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors.map((item: Error) => item.message)).toEqual(["a", "b"]);
+    await expect(runTeardown([() => undefined])).resolves.toBeUndefined();
   });
 });

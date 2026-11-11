@@ -218,3 +218,74 @@ export function writeScaleFakePiModels(dataDir: string, baseUrl: string): () => 
     else write(previous);
   };
 }
+
+/** The submission tool of each Multi Review step the fake model answers. */
+export const SCALE_FAKE_SUBMISSION_TOOLS = {
+  preparation: "submit_validation_plan",
+  reviewer: "submit_review_report",
+  consolidation: "submit_consolidated_review",
+} as const;
+
+/** What the fake-mode outcome check reads from a settled scale run. */
+export interface ScaleFakeOutcome {
+  reviewers: number;
+  phase: string;
+  consolidated: boolean;
+  statuses: readonly string[];
+  /** The fake model's `GET /__calls` submission counts, by tool. */
+  submissions: Readonly<Record<string, number>> | undefined;
+}
+
+/**
+ * Why a fake-model run did not qualify, empty when it did. The fake answers
+ * every step with a valid result, so anything short of a ready, consolidated
+ * review in which every reviewer completed and submitted is a failure: a
+ * settled-but-failed panel must not report green.
+ */
+export function scaleFakeOutcomeProblems(outcome: ScaleFakeOutcome): string[] {
+  const problems: string[] = [];
+  if (outcome.phase !== "ready") problems.push(`phase is ${outcome.phase}, not ready`);
+  if (!outcome.consolidated) problems.push("no consolidated report");
+  if (outcome.statuses.length !== outcome.reviewers) {
+    problems.push(`${outcome.statuses.length} reviewers, expected ${outcome.reviewers}`);
+  }
+  const completed = outcome.statuses.filter((status) => status === "completed").length;
+  if (completed !== outcome.reviewers) {
+    problems.push(`${completed} of ${outcome.reviewers} reviewers completed`);
+  }
+  if (!outcome.submissions) {
+    problems.push("the fake model reported no submission counts");
+    return problems;
+  }
+  const minimum = {
+    preparation: 1,
+    reviewer: outcome.reviewers,
+    consolidation: 1,
+  } as const;
+  for (const [step, tool] of Object.entries(SCALE_FAKE_SUBMISSION_TOOLS)) {
+    const count = outcome.submissions[tool] ?? 0;
+    const wanted = minimum[step as keyof typeof minimum];
+    if (count < wanted) problems.push(`${tool} submitted ${count} times, expected ${wanted}`);
+  }
+  return problems;
+}
+
+/**
+ * Runs every teardown step even when an earlier one throws, then rethrows the
+ * first failure, so a failed cleanup cannot leave a fake model running or a
+ * profile file modified.
+ */
+export async function runTeardown(
+  steps: ReadonlyArray<() => unknown | Promise<unknown>>,
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "teardown failed");
+}

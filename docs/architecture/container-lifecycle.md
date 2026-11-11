@@ -417,15 +417,15 @@ be resolved without them, and an ambiguous dispatch survives reconstruction
 as unknown rather than unsent.
 
 Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
-2.1.319, Codex 0.167.0, OpenCode 1.19.5, Pi 1.5.0, `@cursor/sdk` 1.3.1, Grok
+2.1.319, Codex 0.167.0, OpenCode 2.2.6, Pi 1.5.0, `@cursor/sdk` 1.3.1, Grok
 1.0.77), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
-A platform's second binary is traced on its own, in
-`PROVIDER_STATE_TRACED_TOOLCHAINS`: OpenCode 2.x (`opencode2` 2.2.6), whose
-sessions are in `OPENCODE_DB` (`opencode2.db` and its WAL and SHM files) in
-the same `opencode/db` sub-directory, so it needed no mount of its own and a
-storage set initialized before it existed mounts unchanged.
+OpenCode's CLI is the toolchain's `opencode2` (OpenCode 2.x), whose sessions
+are in `OPENCODE_DB` (`opencode2.db` and its WAL and SHM files) in the
+`opencode/db` sub-directory, so it needed no mount of its own and a storage
+set initialized before it existed mounts unchanged. The `opencode.db` that
+OpenCode 1.x left there is no longer read or copied by a rebuild.
 
 | Provider | Preserved (`state` sub-directory → mount) | Not preserved |
 | --- | --- | --- |
@@ -502,7 +502,7 @@ listing that did not finish fails the step. Images
 built before 2026-10-26 read the root from the selected listing and refused
 such a step as `root-symlink`, which blocked migrating any legacy environment
 without Codex or OpenCode databases. Codex
-databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
+databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode2.db*` are relocated
 into their state sub-directories; the rest of those homes (configuration,
 credentials, caches, OpenCode snapshots) is not copied. Hashes and paths never
 leave the helper — its result line carries counts only.
@@ -723,7 +723,7 @@ Staged per provider (`portableInputSpec`):
 | Provider | Mount | Staged |
 | --- | --- | --- |
 | Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `settings.json` filtered to its boolean `enabledPlugins` (no hooks, permissions or environment; withheld when it names no plugin), which the entrypoint merges into the container's own `settings.json` so the bridge and the CLI honour the host's plugin enablement, `.credentials.json` (access-only), `commands`, `skills`, `agents`, `ide`, `plugins`; `~/.claude.json` filtered to `oauthAccount`, the onboarding flags and container-safe user `mcpServers` (`claudeContainerConfig`: no `orkestrator` entry, no loopback URL, nothing naming a path in the host home; no projects, history, caches or API key), with the same top-level allowlist applied again by the entrypoint |
-| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The automated live data-contract suite runs authenticated active console accounts with and without these host files (`scripts/qualify-opencode-seeded-data.sh`) |
+| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The live check that showed it ran against OpenCode 1.x and was retired with it (`git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`) |
 | Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
 | Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`, `commands`; `~/.config/grok` |
 | Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
@@ -876,8 +876,11 @@ on revocation described above.
   host's file changes: `ContainerLoginFileWatcher` polls each file's inode,
   size and mtime every minute and pushes a changed one to every running
   container that may receive it, through the same bridge-operation queue and
-  revocation fences (the writer-lease holder only). Pi and OpenCode re-read the
-  file per request, so a running session picks a renewal up; whether Grok's
+  revocation fences (the writer-lease holder only). Pi re-reads the file per
+  request, and OpenCode's pushed logins are also written into the container
+  server's database through its `/api/credential` route
+  (`opencode2/container-credentials.ts`), which it reads per use, so a running
+  session picks a renewal up; whether Grok's
   agent re-reads it mid-session is not known. OpenCode and Pi merge
   the host's providers into the container's file, keeping a login made inside
   the container, and a host file of expired logins still blanks any refresh
@@ -1869,11 +1872,11 @@ not keep answering for a container that just ended. A memory update below curren
 | Followers | one per container, 16 per backend, 5 s idle grace, 60 s lease | `ContainerLogService` |
 
 Together these bound a runtime's diagnostic logs by construction, so nothing
-measures them live. Seven launch logs (the Claude, Codex, Cursor, Pi and Grok
-bridges and both OpenCode servers, the table in [The previous run](#the-previous-run))
+measures them live. Six launch logs (the Claude, Codex, Cursor, Pi and Grok
+bridges and the OpenCode server, the table in [The previous run](#the-previous-run))
 each hold at most the active file, its `.1` and `.2` rotations and one
-`.prev.log`: 4 × 5 MiB = 20 MiB, or 140 MiB for all seven. Docker's own log
-adds 10 MiB × 3, so a runtime holds at most about 170 MiB of diagnostic
+`.prev.log`: 4 × 5 MiB = 20 MiB, or 120 MiB for all six. Docker's own log
+adds 10 MiB × 3, so a runtime holds at most about 150 MiB of diagnostic
 output (plus the writer's dropped-line markers), and a rebuild discards the
 `/tmp` copies. A live per-environment total would need a `docker exec` per
 environment, the polling cost
@@ -1930,8 +1933,7 @@ first, which moves the log to its `.prev.log` name:
 
 | Server | Active log | Previous run |
 | --- | --- | --- |
-| OpenCode | `/tmp/opencode-serve.log` | `/tmp/opencode-serve.prev.log` |
-| OpenCode 2.x | `/tmp/opencode2-serve.log` | `/tmp/opencode2-serve.prev.log` |
+| OpenCode | `/tmp/opencode2-serve.log` | `/tmp/opencode2-serve.prev.log` |
 | Claude | `/tmp/claude-bridge.log` | `/tmp/claude-bridge.prev.log` |
 | Codex | `/tmp/codex-bridge.log` | `/tmp/codex-bridge.prev.log` |
 | Cursor | `/tmp/cursor-bridge.log` | `/tmp/cursor-bridge.prev.log` |
@@ -2354,8 +2356,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 | --- | --- | --- |
 | `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
 | `/run/orkestrator-bridge/<kind>-authority`, beside it (`bridge-launch=1`) | The private half of the bridge's authority key | The backend, in the same root exec |
-| `/run/orkestrator-bridge/opencode-listener` (`opencode-launch=1`) | The inode of the socket the OpenCode server the backend launched listens on | The backend, in the root exec that reads OpenCode's password |
-| `/run/orkestrator-opencode` (`opencode-launch=1`) | OpenCode's configuration and empty home: the user's host configuration and Orkestrator's plugins, rebuilt as root before every start | The OpenCode server, read-only |
+| `/run/orkestrator-bridge/opencode2-listener` (`opencode2-launch=1`) | The inode of the socket the OpenCode server the backend launched listens on | The backend, in the root exec that reads OpenCode's password |
+| `/run/orkestrator-opencode2` (`opencode2-launch=1`) | OpenCode's configuration directory, empty XDG and home directories and package cache: the user's host configuration and Orkestrator's plugins, rebuilt as root before every start | The OpenCode server, read-only |
 | The bridge's environment | `<TOKEN_ENV>_SHA256` and, with `bridge-launch=1`, `<TOKEN_ENV>_AUTHORITY_KEY`, both removed from `process.env` at start | Anything, harmlessly |
 | The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
 
@@ -2410,26 +2412,24 @@ What the agent's uid can still do is in
 kill the bridge, or replace it between two of the backend's checks of the
 socket on its port ([a replaced bridge is refused](agent-approvals.md#a-replaced-bridge-is-refused)),
 and on an older image catch the token on the bridge's port or plant code for the
-next start. OpenCode has no bridge and takes the plain password, in
-`opencode-token` in the same directory; on an `opencode-launch=1` image the
-launcher starts it from root's binary and configuration and the backend sends
-the password only to the listening socket it recorded in `opencode-listener`
+next start. OpenCode has no bridge and takes the plain password. Its server
+(`opencode2-container-server.ts`, container port 4102) keeps it in
+`opencode2-token` in the same directory and in its own environment alone; on
+an `opencode2-launch=1` image the launcher starts it from root's binary and
+configuration and the backend sends the password only to the listening socket
+it recorded in `opencode2-listener`
 ([agent-approvals.md](agent-approvals.md#opencode-under-the-launcher-opencode-launch1),
-and for 2.x, the package caches and project configuration
-[on `opencode2-launch=1` images](agent-approvals.md#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1));
-a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
-`agent-credential-files.ts`). In a container, a server the plugin could not harden
-refuses tools; on a host it only logs, because a host's OpenCode can be any build.
-A host server gets the plugin through `OPENCODE_CONFIG_DIR`
-(`opencode-host-credential.ts`), and a server whose user set that variable runs
-without it (`credential-plugin.skipped`).
-The OpenCode 2.x server (`opencode2-container-server.ts`, container port
-4102) takes its password the same way, in `opencode2-token` and in its own
-environment alone; its 2.x plugin (`buildOpenCode2CredentialPluginSource` with
-`hardened: "refuse-tools"`) removes it from the process and every shell,
-marks the server non-dumpable and refuses tools when it cannot. An image that
-keeps no root credential file is refused rather than given a `node`-readable
-one; every image that carries `opencode2` has one.
+and the package cache and project configuration
+[on `opencode2-launch=1` images](agent-approvals.md#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1)).
+A plugin inside the server (`buildOpenCode2CredentialPluginSource` in
+`opencode2/server.ts`, with `hardened: "refuse-tools"` in a container) removes
+it from the process and every shell, marks the server non-dumpable and
+refuses tools when it cannot. A host server gets the plugin from the
+configuration directory Orkestrator gives it (`opencode2/host-launch.ts`). An
+image that keeps no root credential file is refused rather than given a
+`node`-readable one; every image that carries `opencode2` has one. The 1.x
+server's `opencode-token`, `opencode-listener` and `/run/orkestrator-opencode`
+were retired with 1.x on 2026-11-11.
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

@@ -1020,13 +1020,11 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
 (the profile setup is in the spec's header).
-`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
-OpenCode 2: it turns the profile's preview setting on for the run and back off
-afterwards, and adds a `steer` case (a prompt queued from the composer while a
+OpenCode also runs a `steer` case (a prompt queued from the composer while a
 turn runs is steered into it from its queue strip, then checked again after a
 reload) that every other platform records as skipped. `mise run
-verify:opencode2:real-stack` runs exactly that against the running profile
-named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+verify:opencode2:real-stack` runs the OpenCode cases against the running
+profile named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, with
 scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
 overrides the list). Start the profile with `--fixture --no-agent-credentials
@@ -1037,9 +1035,8 @@ firewall drops container traffic to the profile (beelink's ufw, to-do
 [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
 run that profile and the spec on `mise run docker:disposable -- start
 --host-loopback` with its `DOCKER_HOST` exported for both, and build the
-image inside that daemon. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
-puts the run's OpenCode sessions on the 2.x preview, the only OpenCode line
-whose shell can background a command. The `detach` case waits each
+image inside that daemon. OpenCode's `shell` can background a command, so
+`background` exercises OpenCode too. The `detach` case waits each
 provider's own idle window: 630 s for the 10 min bridges, and up to 35.5 min
 for Codex (30 min without a touch, found by a 5 min sweep), which it waits
 with the renderer closed, because Codex's tab reads refresh the thread's
@@ -1066,16 +1063,18 @@ each is one sample, not a p95:
   shell (Claude through the task's output file) and Claude's and Pi's full
   630 s detach wait. A missed final event is recovered inside the 17.5 s
   lost-announcement bound, though often above the 3 s budget.
-- OpenCode's background shell (2026-11-11): on the 2.x preview
-  (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`) the `shell` call
+- OpenCode's background shell (2026-11-11): on the 2.x line (then opted
+  into with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`, retired with
+  OpenCode 1.x the same day) the `shell` call
   returns at once, and when the command ends 2.x resumes the idle session with
   its output, which the idle page shows without a turn from the test. The
   first runs overstated this: the check matched the marker in the prompt and
   in the command line, and the tab showed only the command. Since the
   transcript shows a finished background shell's output and the check counts
   only a non-user row that arrived after the turn settled, the rerun
-  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` cannot background a command, so
-  on the default line the case is `not-exercised` (rerun `oc2-bgfix-legacy1`).
+  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` could not background a command,
+  so on that line, then the default, the case was `not-exercised` (rerun
+  `oc2-bgfix-legacy1`).
 - Claude in a container (2026-11-11, beelink2, on a disposable rootless daemon
   with host loopback, because the host's firewall drops the profile's port):
   `missed-final`, `background` and `no-renderer` passed on a current image.

@@ -288,7 +288,17 @@ for (const tools of (process.platform === "darwin" ? ["GNU", "BSD"] : ["GNU"]) a
       // The skip needs GNU find's -printf; elsewhere every mount is relayed in
       // full, which the cases above already cover.
       describe("an unchanged mount is not relayed again", () => {
-        const inode = async (file: string) => (await fs.stat(file)).ino;
+        // A relay removes the old copy before it writes the new one, and ext4
+        // (the CI runners' /tmp) hands the freed inode number straight to the
+        // next file, so a replaced copy could read as kept. Each inode read
+        // also takes a hard link outside the relay directory, which keeps that
+        // inode allocated until the test's roots are removed.
+        let held = 0;
+        const inode = async (file: string) => {
+          const holdDir = await tempRoot();
+          await fs.link(file, path.join(holdDir, `held-${held++}`));
+          return (await fs.stat(file)).ino;
+        };
         const ok = { exitCode: 0, stderr: "" };
 
         test("a second boot keeps the copy, and a changed mount alone is relayed", async () => {

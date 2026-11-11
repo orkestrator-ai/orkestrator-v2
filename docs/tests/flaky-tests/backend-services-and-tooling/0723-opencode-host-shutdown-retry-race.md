@@ -3,7 +3,7 @@
 - **ID:** 0723
 - **Status:** resolved
 - **Date observed:** 2026-10-24
-- **Owner:** `apps/backend/src/core/opencode-host-start.test.ts`
+- **Owner:** `apps/backend/src/core/opencode-host-start.test.ts` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:apps/backend/src/core/opencode-host-start.test.ts`)
 - **Test:** `local OpenCode server starts on one host > shutdown between database-lock attempts prevents a retry spawn`
 - **Original command:** `ORKESTRATOR_TEST_AREA_BASE=f12cc5a5382417bf1bfbda2a7fd93e0d6013aa95 mise run test:logged -- --name merge-repository -- mise run test`, during the transcript-scroll main merge. Workspace/root/bridges/protocol reserved 4/1/2/1 slots, backend used two workers; component and isolated-stack browser suites shared the host.
 - **Failure:** expected rejection containing `shutting down`; received `opencode server exited before becoming healthy (code 1, signal null)` (361.88 ms). The child reported `database is locked` immediately beforehand.
@@ -94,3 +94,8 @@ the to-do.
 ## Additional macOS stress evidence — 2026-11-10
 
 Main also recorded `mise run test:logged -- --name stress-opencode-host -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-host-start.test.ts --rerun-each=10` passing on macOS, with unpinned burners and host load approximately 35 to 55. This supplements the focused reproduction and loaded aggregate confirmation above.
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

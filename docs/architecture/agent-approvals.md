@@ -76,7 +76,11 @@ requests until it is rebuilt (`containerCredentialMode`).
 
 OpenCode has no bridge of ours, so it has no verifier and no signatures: it
 compares a plain password (HTTP Basic), and its plugins run inside the server
-beside it. On an `opencode-launch=1` image (`opencode-container-launch.ts`):
+beside it. `opencode-launch=1` started OpenCode 1.x this way on port 4096
+(`git show 5f4e27b1c:apps/backend/src/core/opencode-container-launch.ts`). It
+was retired with 1.x on 2026-11-11 and the backend no longer asks for it; the
+2.x start on an `opencode2-launch=1` image ([below](#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1))
+follows the same design, recorded here as the 1.x launcher had it:
 
 - **Root's binary, root's configuration.** `orkestrator-bridge-launch opencode`
   runs the root-owned `/opt/opencode/bin/opencode` (node's
@@ -119,9 +123,11 @@ non-dumpable imposter is out of reach, and the start then fails with an error
 asking for a restart rather than sending anything. Qualified on beelink (Linux
 Engine 29.9.2) on 2026-11-09 by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
-An image without `opencode-launch=1` keeps the login-shell start from node's
-binary and configuration, with the password in root's file and the server's
-environment alone on a `bridge-credential=1` image.
+An image without `opencode2-launch=1` starts the 2.x server from node's login
+shell, with the password in root's file and the server's environment alone on
+a `bridge-credential=1` image; an image that would leave the password where
+`node` reads it is refused (`containerOpenCode2Mode`,
+`opencode2-container-server.ts`).
 
 ### OpenCode 2.x, the package cache and project configuration (`opencode2-launch=1`)
 
@@ -141,7 +147,7 @@ servers load. On an `opencode2-launch=1` image:
   answers its fresh password and has loaded its plugins (the warm request is
   `/api/agent`: 2.2.6 does not load them for `/api/session/active`), its
   socket is recorded in `/run/orkestrator-bridge/opencode2-listener`, and
-  every read of the 2.x password checks it, as for 1.x. Checked against the
+  every read of the 2.x password checks it, as the 1.x launcher did. Checked against the
   pinned 2.2.6 binary outside a container on 2026-11-10
   (`opencode2-launch.live.test.ts`): plugins planted in the checkout's
   `.opencode/plugins`, `~/.config/opencode/plugins` and `~/.opencode/plugins`
@@ -155,13 +161,10 @@ servers load. On an `opencode2-launch=1` image:
   does not bundle (and, on 1.x, an npm plugin) into `$XDG_CACHE_HOME/opencode`
   and imports it into the server. Code planted in such a package in node's
   `~/.cache` ran inside the next 1.19.5 and 2.2.6 server (2026-11-10). The
-  launcher now points both servers' `XDG_CACHE_HOME` at
-  `/run/orkestrator-<server>/cache`, root-owned and read-only to them. For
-  1.x, root installs what the user's own configuration names before each start
-  (the image's Bun, `--ignore-scripts`, into the directory 1.19.5 imports from)
-  and keeps it across starts (`opencode-package-cache.ts`); 1.19.5 imported a
-  package installed that way and ran with the cache read-only. For 2.x, root
-  installs the providers the user's configuration names the same way, into the
+  launcher points the server's `XDG_CACHE_HOME` at
+  `/run/orkestrator-opencode2/cache`, root-owned and read-only to it. Root
+  installs the providers the user's configuration names before each start
+  (the image's Bun, `--ignore-scripts`; `opencode-package-cache.ts`) into the
   directory 2.2.6 imports from, `npm/<name>@<tag>/1`: the tag is the configured
   version or `latest`, except that 2.2.6 always asks for a bare
   `@ai-sdk/<name>` as its `ai-v6` dist-tag (read from 2.2.6's npm service,
@@ -185,7 +188,7 @@ servers load. On an `opencode2-launch=1` image:
   environment holds the password) and every `{file:}` reference outside the
   checkout, inlines those inside it, and root writes the result where the
   launcher passes it as `OPENCODE_CONFIG` (`opencode-project-config.ts`), which
-  both pinned versions honour with project configuration off. MCP servers,
+  2.2.6 honours with project configuration off (as 1.19.5 did). MCP servers,
   agents, commands and permission rules from the checkout apply again; they
   are the agent's to change, as before 7252. The checkout's `.opencode/`
   directories are still not read.
@@ -195,11 +198,11 @@ servers load. On an `opencode2-launch=1` image:
   its prompt (2026-11-10). The launcher no longer names `/workspace/AGENTS.md`:
   the backend reads it and each project instruction inside the checkout as
   `node` before the start, and the filtered document names root's copies. An
-  edit reaches the server at its next start. An `opencode-launch=1` image
-  without `opencode2-launch=1` still names the checkout's `AGENTS.md`; rebuild
-  it.
+  edit reaches the server at its next start. An image without
+  `opencode2-launch=1` starts the server from node's login shell, which reads
+  the checkout itself; rebuild it.
 - **A failed answer re-checks the socket** (`opencode-listener-recheck.ts`).
-  After a refused connection, a 401 or a 403 from either server, the backend
+  After a refused connection, a 401 or a 403 from the server, the backend
   asks root which socket listens; once it is not the recorded one, the
   connection sends nothing more until a fresh start records its own server.
 
@@ -226,10 +229,11 @@ Why it is built this way (decisions recorded when 7252 and 7550 were done):
   that accepts any password is caught at the next start, status or peek read
   instead, and a fresh start's own server is reached again after at most five
   seconds.
-- **An `opencode-launch=1` image without `opencode2-launch=1`** keeps the
-  checkout's `AGENTS.md` by path, node's package cache and the 2.x login-shell
-  start until it is rebuilt; the backend writes the root caches and project
-  file there too, and that launcher ignores them.
+- **An image without `opencode2-launch=1`** keeps node's package cache and
+  the 2.x login-shell start until it is rebuilt.
+
+Since 1.x was retired (2026-11-11) the decisions above that name 1.x are
+history: only the 2.x start runs.
 
 ### Code a bridge loads itself
 
@@ -318,7 +322,7 @@ socket, not to a port (`container-bridge-listener.ts`):
 The check is on reuse, not on every request. A process that replaces the bridge
 between a check and the next request still gets that request, until the next
 refresh or start. The agent's uid can still kill the bridge, which it could
-already do. OpenCode has its own socket check on `opencode-launch=1` images
+already do. OpenCode has its own socket check on `opencode2-launch=1` images
 ([above](#opencode-under-the-launcher-opencode-launch1)); its remaining windows
 are described [above](#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1).
 
@@ -336,9 +340,10 @@ asked about. Every CLI provider keeps its standing rules in files the agent's
 uid owns, and a tool that can write them (on an `ask` environment, one the user
 approved) can widen them without answering anything:
 
-- OpenCode: the `permission` column of `session` and the `permission` table in
-  `~/.local/share/opencode/opencode.db`, and, on an image without
-  `opencode-launch=1`, the `permission` key of `opencode.json` (user or
+- OpenCode: the session permission rules and saved rules in its database
+  (`OPENCODE_DB`, `opencode2.db` under
+  `~/.local/share/opencode/orkestrator-db`), and, on an image without
+  `opencode2-launch=1`, the `permission` key of `opencode.json` (user or
   `/workspace`).
 - Claude: `settings.json` under `~/.claude` and `.claude/settings*.json` in the
   checkout.
@@ -357,13 +362,12 @@ need its own uid, and then its tools would too.
   ([above](#a-replaced-bridge-is-refused)), but a request made before then
   reaches it, and killing the bridge ends the agent's own session.
 - **Reach OpenCode's password, narrowly.** On an `opencode2-launch=1` image
-  neither server loads a plugin, package or instruction file the agent writes,
+  the server loads no plugin, package or instruction file the agent writes,
   and the password is withheld from any other listener. Two windows remain by
   design: requests sent between a replacement and the first failed answer (or
   to a replacement that answers like OpenCode), and the server's first seconds
   before the warm request loads the plugin that makes it non-dumpable. An
-  `opencode-launch=1` image without it keeps node's package cache, the
-  checkout's `AGENTS.md` by path and the 2.x login-shell start
+  image without it keeps node's package cache and the 2.x login-shell start
   ([above](#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1)).
 - **Stop being asked.** Through the provider rule files above.
 

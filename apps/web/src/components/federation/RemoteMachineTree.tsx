@@ -40,6 +40,7 @@ import {
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
+import { shellOpenExternal } from "@/lib/native/shell";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
 import {
@@ -94,7 +95,7 @@ const NO_ENVIRONMENTS: readonly FederatedEnvironment[] = [];
  * leaf) would run.
  */
 export function openWebPage(url: string): void {
-  const openExternal = window.orkestrator?.shell?.openExternal;
+  const openExternal = shellOpenExternal();
   if (openExternal) {
     void openExternal(url).catch(() => toast.error("Could not open repository in browser."));
     return;

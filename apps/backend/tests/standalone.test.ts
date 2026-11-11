@@ -423,12 +423,21 @@ describe("standalone backend service", () => {
 
   test("drains an active local server process tree before exiting", async () => {
     const worktreePath = await createTemporaryDirectory("orkestrator-standalone-worktree-");
+    // The OpenCode start reads the user's OpenCode configuration and the
+    // auth.json containers are handed; neither may be the developer's own.
+    const isolatedHome = await createTemporaryDirectory("orkestrator-standalone-worktree-");
     let processMarkerPath = "";
-    const started = await startBackend([], {}, async ({ dataDir }) => {
+    const homeEnv = {
+      HOME: isolatedHome,
+      XDG_CONFIG_HOME: path.join(isolatedHome, ".config"),
+      XDG_DATA_HOME: path.join(isolatedHome, ".local", "share"),
+    };
+    const started = await startBackend([], homeEnv, async ({ dataDir }) => {
       processMarkerPath = path.join(dataDir, "fake-opencode-processes.json");
       const toolchainBinDir = path.join(dataDir, "toolchains", "bin");
       await mkdir(toolchainBinDir, { recursive: true });
-      const executable = path.join(toolchainBinDir, "opencode");
+      // The managed OpenCode 2 binary (`resolveOpenCode2Binary`); there is no PATH fallback.
+      const executable = path.join(toolchainBinDir, "opencode2");
       const fakeServerPath = path.join(dataDir, "fake-opencode-server.cjs");
       const fakeServerSource = `
         const fs = require("node:fs");
@@ -450,23 +459,14 @@ describe("standalone backend service", () => {
         );
         http.createServer((request, response) => {
           const pathname = new URL(request.url, "http://127.0.0.1").pathname;
-          if (request.method === "GET" && pathname === "/global/health") {
-            response.writeHead(200);
-            response.end();
+          // OpenCode 2's readiness route (\`localServerHealthPath\`), in its \`{ data }\` envelope.
+          if (request.method === "GET" && pathname === "/api/info") {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ data: { version: "2.2.6" } }));
             return;
           }
-          if (request.method === "POST" && pathname === "/mcp") {
-            request.resume();
-            request.once("end", () => {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(JSON.stringify({
-                orkestrator: { status: "connected" },
-              }));
-            });
-            return;
-          }
-          response.writeHead(404);
-          response.end();
+          response.writeHead(404, { "content-type": "application/json" });
+          response.end(JSON.stringify({ _tag: "NotFoundError", message: "Not found" }));
         }).listen(Number(process.argv[2]), "127.0.0.1");
       `;
       await writeFile(fakeServerPath, fakeServerSource);
@@ -524,8 +524,10 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
     expect(result.pid).toBe(processIds.serverPid);
     expect(isProcessRunning(processIds.serverPid)).toBe(true);
     expect(isProcessRunning(processIds.descendantPid)).toBe(true);
-    expect(processIds.agentToolsUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-    expect(processIds.agentToolsToken).toMatch(/^[A-Za-z0-9_-]{32,128}$/);
+    // The Orkestrator MCP credential is attached per session (`opencode2/mcp.ts`),
+    // never handed to the server or the shells it runs.
+    expect(processIds.agentToolsUrl).toBeUndefined();
+    expect(processIds.agentToolsToken).toBeUndefined();
 
     started.child.kill("SIGTERM");
     await expect(started.child.exited).resolves.toBe(0);

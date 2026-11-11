@@ -200,14 +200,12 @@ ENV VISUAL=nano
 # so these are a second copy; `every shipped agent, uniformly` in
 # tests/unit/version-drift.test.ts is what stops the two drifting.
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
-#   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/backend/package.json
-#   OPENCODE2_CLI_VERSION ↔ PINNED_TOOLCHAIN_VERSIONS.opencode2 (OpenCode 2.x, beside 1.x)
+#   OPENCODE2_CLI_VERSION ↔ PINNED_TOOLCHAIN_VERSIONS.opencode2 (OpenCode 2.x, the only OpenCode)
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.319
 ARG CODEX_CLI_VERSION=0.167.0
-ARG OPENCODE_CLI_VERSION=1.19.5
 ARG OPENCODE2_CLI_VERSION=2.2.6
 ARG GROK_BUILD_VERSION=1.0.77
 ARG PI_CLI_VERSION=1.5.0
@@ -224,41 +222,15 @@ ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 # container runs a version the manifest does not declare. Plugins still update.
 ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
 
-# Install OpenCode from the same pinned, digest-verified release artifacts as
-# the packaged desktop toolchain.
-# Retry transient release-host failures with bounded attempts and timeouts.
-# The binary is root-owned in /opt/opencode, because `orkestrator-bridge-launch
-# opencode` starts the container's server from it: a copy in node's home could
-# be replaced by the agent before the next start. node's PATH and
-# OPENCODE_CLI_PATH keep their old path through a symlink.
-USER root
-RUN ARCH="$(dpkg --print-architecture)" && \
-  case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=588310a336fa3b9df36b3f0225b26f679d453efaad0cf3d66c3651ef3ec1647a ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=fae5be262d693b7c5e562856cc473e59e741772936db0c0600ac0d5ed5bd088b ;; \
-    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-  esac && \
-  install -d -o root -g root -m 0755 /opt/opencode /opt/opencode/bin && \
-  curl -fsSL --retry 5 --retry-max-time 300 --connect-timeout 30 --max-time 300 \
-    "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz" -o /tmp/opencode.tar.gz && \
-  printf '%s  %s\n' "$OPENCODE_SHA" /tmp/opencode.tar.gz | sha256sum -c - && \
-  tar -xzf /tmp/opencode.tar.gz --no-same-owner -C /opt/opencode/bin opencode && \
-  chown root:root /opt/opencode/bin/opencode && \
-  chmod 755 /opt/opencode/bin/opencode && \
-  rm /tmp/opencode.tar.gz && \
-  install -d -o node -g node /home/node/.opencode /home/node/.opencode/bin && \
-  ln -s /opt/opencode/bin/opencode /home/node/.opencode/bin/opencode && \
-  chown -h node:node /home/node/.opencode/bin/opencode
-USER node
-ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
-# Never offer /update: it would replace the pinned binary with OpenCode 2.
-ENV OPENCODE_DISABLE_AUTOUPDATE=1
-
-# OpenCode 2.x, installed beside the 1.x binary as `opencode2`: the same npm
-# platform tarball and digests as the desktop toolchain's `opencode2` entry
-# (glibc build; the image is Debian). Root-owned in /opt/opencode for the same
-# reason as 1.x: `orkestrator-bridge-launch opencode2` starts the container's
-# 2.x server from it. node's `opencode2` is a symlink to it.
+# OpenCode 2.x, the image's only OpenCode, from the same npm platform tarball
+# and digests as the desktop toolchain's `opencode2` entry (glibc build; the
+# image is Debian). Retry transient registry failures with bounded attempts
+# and timeouts. The binary is root-owned in /opt/opencode, because
+# `orkestrator-bridge-launch opencode2` starts the container's server from it:
+# a copy in node's home could be replaced by the agent before the next start.
+# node's ~/.opencode/bin holds symlinks to it: `opencode2`, and `opencode`,
+# which names the root-owned wrapper copied below (docker/opencode-cli.sh) so
+# a terminal's `opencode` runs 2.x with the server's database.
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
@@ -266,6 +238,7 @@ RUN ARCH="$(dpkg --print-architecture)" && \
     arm64) OPENCODE2_TARGET=linux-arm64; OPENCODE2_SHA=22352e200630ec61a48a65b9f5c2b627328ae5002658d81c067f67c5fb689898 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
+  install -d -o root -g root -m 0755 /opt/opencode /opt/opencode/bin && \
   mkdir -p /tmp/opencode2 && \
   curl -fsSL --retry 5 --retry-max-time 300 --connect-timeout 30 --max-time 300 \
     "https://registry.npmjs.org/@opencode/cli-${OPENCODE2_TARGET}/-/cli-${OPENCODE2_TARGET}-${OPENCODE2_CLI_VERSION}.tgz" -o /tmp/opencode2.tgz && \
@@ -275,9 +248,13 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   chown root:root /opt/opencode/bin/opencode2 && \
   chmod 755 /opt/opencode/bin/opencode2 && \
   rm -rf /tmp/opencode2 /tmp/opencode2.tgz && \
+  install -d -o node -g node /home/node/.opencode /home/node/.opencode/bin && \
   ln -s /opt/opencode/bin/opencode2 /home/node/.opencode/bin/opencode2 && \
-  chown -h node:node /home/node/.opencode/bin/opencode2
+  ln -s /opt/opencode/bin/opencode /home/node/.opencode/bin/opencode && \
+  chown -h node:node /home/node/.opencode/bin/opencode2 /home/node/.opencode/bin/opencode
 USER node
+# Never offer /update: the binary is the image's pin.
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
 ENV OPENCODE2_CLI_PATH=/home/node/.opencode/bin/opencode2
 
 # Install Codex CLI
@@ -324,7 +301,6 @@ ENV PI_CLI_PATH=/usr/local/bin/pi
 # runnable CLI at the path the backend will use.
 RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
- && "$OPENCODE_CLI_PATH" --version \
  && "$OPENCODE2_CLI_PATH" --version \
  && grok --version \
  && "$PI_CLI_PATH" --version
@@ -545,18 +521,21 @@ COPY docker/orkestrator-state-signal.sh /usr/local/bin/orkestrator-state-signal
 COPY docker/orkestrator-worktree-signal.sh /usr/local/bin/orkestrator-worktree-signal
 COPY docker/orkestrator-git-credential.sh /usr/local/bin/orkestrator-git-credential
 COPY docker/orkestrator-bridge-launch.sh /usr/local/bin/orkestrator-bridge-launch
-# /run/orkestrator-opencode and /run/orkestrator-opencode2 hold the
-# configuration and package cache the backend writes, as root, for the OpenCode
-# 1.x and 2.x servers `orkestrator-bridge-launch opencode`/`opencode2` start.
+# The `opencode` command node's ~/.opencode/bin/opencode links to.
+COPY docker/opencode-cli.sh /opt/opencode/bin/opencode
+# /run/orkestrator-opencode2 holds the configuration and package cache the
+# backend writes, as root, for the OpenCode server
+# `orkestrator-bridge-launch opencode2` starts.
 # Per-boot status and process registration. Owned by node because the
 # entrypoint runs as node after the network policy is fixed; the records are
 # orchestration evidence, not a security boundary against the same user.
 RUN install -d -o root -g root -m 0700 /run/orkestrator-bridge \
- && install -d -o root -g root -m 0755 /run/orkestrator-opencode \
  && install -d -o root -g root -m 0755 /run/orkestrator-opencode2 \
  && install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
  && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal /usr/local/bin/orkestrator-worktree-signal /usr/local/bin/orkestrator-git-credential /usr/local/bin/orkestrator-bridge-launch \
- && chown root:root /usr/local/bin/orkestrator-bridge-launch
+ && chown root:root /usr/local/bin/orkestrator-bridge-launch /opt/opencode/bin/opencode \
+ && chmod 0755 /opt/opencode/bin/opencode \
+ && test "$(su node -s /bin/sh -c '/home/node/.opencode/bin/opencode --version')" = "$(su node -s /bin/sh -c '/opt/opencode/bin/opencode2 --version')"
 # Exercise the installed writer as its runtime user, including actual Perl
 # startup, rotation errors, signals, /dev/full and the no-Perl drain fallback.
 COPY docker/tests/log-writer-test.sh /tmp/orkestrator-log-writer-test.sh

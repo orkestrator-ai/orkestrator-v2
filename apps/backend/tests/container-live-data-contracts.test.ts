@@ -97,17 +97,3 @@ live(
   },
   180_000,
 );
-
-live(
-  "OpenCode host-data omissions work with an authenticated active console account",
-  async () => {
-    const { stdout } = await runCommand(
-      "bash",
-      [path.join(ROOT, "scripts/qualify-opencode-seeded-data.sh"), IMAGE],
-      { timeoutMs: 300_000 },
-    );
-    expect(stdout).toContain("PASS: OpenCode used none of the seeded host data");
-    expect(stdout.match(/ok   console_authenticated=yes/g)).toHaveLength(4);
-  },
-  330_000,
-);

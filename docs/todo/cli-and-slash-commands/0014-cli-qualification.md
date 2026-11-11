@@ -12,6 +12,11 @@ Rechecked 2026-11-01 against `main` at `93b99bfb`: tasks 2 and 3 are done
 Rechecked 2026-11-06 against `main` at `c1724ab74`: task 5 is done (see its
 outcome); tasks 1, 4 and 7 are unchanged.
 
+Rechecked 2026-11-11 against `main` at `14df96544` on beelink2 (Linux): task 4
+is done (see its outcome). Task 1 is unchanged and still waits on the
+credentialed runs in 7568; task 7 had already moved to the checklist on
+2026-11-10 (7568: 0014 task 7). Nothing an agent can do alone is left here.
+
 Code items 1 to 4 and qualification items 2 to 4 are done and on `main`
 (`c23f6be9` #1274, with the harness toolchain install from `a51045a4` #1287).
 The open work is the live run for three providers, two measurements or
@@ -22,7 +27,7 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
 1. **Completion flip for Pi, Cursor and Grok** (qualification item 1; the live `live-session` runs moved to the manual-test checklist). Status: blocked (waits on 7568: 0014 task 1).
 2. **Re-run the slow-admission `--wait` recovery under load** (code item 4, flake 0440). Status: done (2026-11-01, credential-free; flake 0440 resolved).
 3. **Lost-response recovery for `environment exec --wait` and `environment start --wait`**. Status: done (2026-11-01; `stop`, `recreate` and `delete --wait` share it).
-4. **Token cost of a live run: record usage in the manifest** (qualification item 5; the paid measurement run moved to the manual-test checklist). Status: open (optional).
+4. **Token cost of a live run: record usage in the manifest** (qualification item 5; the paid measurement run moved to the manual-test checklist). Status: done (2026-11-11; a live scenario's result carries `usage`, proved credential-free with fake-model Pi turns).
 5. **Fresh Linux evidence**: the latest Linux CLI run was 2026-09-26. Status: done (2026-11-06, credential-free; Cursor's task 1 run left to task 1).
 6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: done (settled by #1491 on 2026-10-31).
 
@@ -127,6 +132,30 @@ response; see "Assumptions and decisions".
     - Pros: closes the item.
     - Cons: no basis for budgeting live runs (0031 batches many).
 
+**Outcome (2026-11-11).** Done with a variant of the recommended option: the
+harness reads the scenario backend's usage report rather than its SQLite
+file. Before a live scenario's cleanup (pass or fail) and while its backend
+still runs, `readRunUsage` (`packages/cli/scenarios/usage.ts`) calls the
+backend's own `get_usage_history` command over the gateway with the
+backend's token, and the runner writes the content-free summary to that
+scenario's `results[].usage` in the manifest and prints one line: turns,
+input, output, cache-read, cache-write and total tokens, priced `costUsd`,
+`unpricedTokens`, and per platform and model the same counts. Every row in
+the scenario's private data directory is that scenario's, so no filter is
+needed. A failed read is recorded as `readError` and never fails the run.
+Credential-free scenarios make no turns and get no `usage` field. Covered by
+`packages/cli/tests/scenario-usage.test.ts`. Evidence (see "Evidence log",
+2026-11-11): a packaged backend answered the read (0 turns, and 401 for a wrong
+token), and two fake-model Pi turns through the packaged CLI recorded 2 turns,
+246 input and 90 output tokens, exactly what the fake model reported. One
+limit found on the way: the backend records usage only when it refreshes a
+session's projection, which a later prompt dispatch does but `session start`'s
+own completion and every public read do not, so a run whose last turn is a
+`session start` records nothing for it; `live-session` ends with prompts, so
+its count is whole. That backend gap is to-do
+[7815](7815-cli-session-start-usage-unrecorded.md). The paid run that reads a
+real provider's cost stays on the checklist (7568: 0014 task 4).
+
 ### 5. Fresh Linux evidence
 
 **Problem.** The CLI matrix on Linux was last run on 2026-09-26, before SQLite storage, the bridge splits, #1270's no-`PATH` rule and the 0166 harness change.
@@ -194,10 +223,11 @@ tests, real-backend tests, packaged scenarios on Linux and macOS (local and
 container), live Claude, Codex and OpenCode runs, and a real browser. On
 2026-10-25 the macOS packaging and profile checks, the foreign-owner Docker
 decoy, the per-run model record, other-provider browser cards (OpenCode) and
-the scenario measurements were done (see "Evidence log"). What is still
+the scenario measurements were done (see "Evidence log"); on 2026-11-11 the
+manifest started recording each live run's token usage. What is still
 missing is the live qualification run for Pi, Cursor and Grok (the scenario
-can drive them; the run is on the manual-test checklist) and the token cost
-of live runs. Until Pi, Cursor
+can drive them; the run is on the manual-test checklist) and a paid live run
+that reads the token cost (also on the checklist). Until Pi, Cursor
 and Grok are qualified, scripts on those providers cannot use `run wait` as
 a success signal.
 
@@ -247,6 +277,10 @@ a success signal.
   the session reports in force through `session config get`
   (`recordResolvedModel` in `cases.ts`, `RunManifest.annotate` in
   `harness.ts`).
+- Since 2026-11-11 a live scenario's manifest result also carries `usage`:
+  the token counts and priced spend the scenario backend recorded, read
+  through its `get_usage_history` command before cleanup
+  (`readRunUsage` in `packages/cli/scenarios/usage.ts`), or `readError`.
 - `e2e/agent-testing/cli-ui.spec.ts` checks CLI-made changes in an open and a
   reloaded renderer. Its live question and approval tests are gated on
   `ORKESTRATOR_AGENT_TEST_LIVE_CLI=1` and run on
@@ -360,10 +394,9 @@ a success signal.
    cleanup removed the decoy.
 5. **Optional measurement.** Done for start-up time, time to failure
    evidence, flake rate and cleanup failures (2026-10-25, "Evidence log").
-   Still open: token cost of a live run. The manifest records no usage.
-   Recording it from the backend's `usage-history` store in the scenario data
-   directory before cleanup is task 4; the paid run that reads the cost is on
-   the manual-test checklist (7568: 0014 task 4). None of this shortens
+   Since 2026-11-11 (task 4) a live run's manifest records the usage its
+   backend recorded; the paid run that reads a real provider's cost is on the
+   manual-test checklist (7568: 0014 task 4). None of this shortens
    `mise run test`.
 
 Run prerequisites specific to the CLI scenarios (shared profile and
@@ -419,6 +452,31 @@ command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages, exit
 codes, backend start-up time and, for live turns, the pinned and reported
 model).
+
+- **2026-11-11, Linux (Arch, kernel 7.2.15, x86_64, host beelink2), task 4.**
+  Branch `20261111-141353-024da345b17c` on `14df96544` plus this change; Bun
+  1.4.4, CLI 2.37.6-beta, packaged with `mise run build:cli:test`, Pi bridge
+  from `mise run build:pi-bridge`. No real login and no billed turn:
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, provider homes disposable, and
+  the only credential was a placeholder Pi `api_key` for a loopback
+  chat-completions fake (`piProviderConfig` from
+  `scripts/pi-fake-model-shared.ts`) answering every request with 123 prompt
+  and 45 completion tokens. Ad hoc probes over `startIsolatedBackend` and
+  `CliDriver`, not committed.
+  - Credential-free backend, no session: `readRunUsage` answered 0 turns and
+    an empty model list; the same read with a wrong token was a `readError`
+    (`usage read answered HTTP 401`). Backend exit 0.
+  - Pi with the fake model (`--credential-source pi`, `PI_CODING_AGENT_DIR`
+    pointed at a private directory holding only the placeholder key, never
+    `~/.pi`): `session start --wait` and a follow-up `session prompt --wait`
+    each reached the fake once and ended `unknown` (exit 7, `run-unknown`:
+    Pi is still unqualified, task 1). After the first turn, a transcript read,
+    `session config get`, `session get` and `session commands` the report still
+    counted 0 turns; after the follow-up it counted 2 turns, 246 input, 90
+    output, 336 total, all unpriced (`costUsd` 0), one session, model
+    `pi/orkfake/fake-1`. Filed as 7815.
+  - Not run: a paid live run (7568: 0014 task 4) and Pi, Cursor or Grok
+    qualification (task 1).
 
 - **2026-11-06, Linux (Arch, kernel 7.1.8, x86_64, host beelink), task 5.**
   Branch `linux-cli-evidence-517ed3f70513-r1` on `c1724ab74` (no code
@@ -739,7 +797,9 @@ model).
   - Full suite, `mise run check` and `mise run smoke:cli`: pass.
   - Found and fixed during the run: OpenCode reported success for a failed or
     not yet answered turn (now `turnTerminalError`, reading
-    `readOpenCodeTurnTerminalError` in `opencode-turn-outcome.ts`); `run wait`
+    `readOpenCodeTurnTerminalError` in `opencode-turn-outcome.ts`, removed
+    with OpenCode 1.x on 2026-11-11; OpenCode 2's is
+    `openCode2TurnTerminalError` in `opencode2/environment-provider.ts`); `run wait`
     exited 6 for up to ten seconds after a question was answered.
   - Not run: Pi, Cursor, Grok (bridges not packaged); macOS; Docker Desktop.
   - Durations: live local runs 31 to 45 s; live container runs 35 to 90 s
@@ -844,6 +904,24 @@ model).
 - **Item 5 narrowed, not finished.** Start-up, failure time, flake rate and
   cleanup failures were measurable from the manifests; token cost was not,
   and stays open.
+- **Task 4: read usage through the backend's report, not its SQLite file.**
+  Options: (a) open the scenario data directory's `orkestrator.sqlite` and
+  parse the `usage-history` rows, as recommended; (b) call the backend's
+  `get_usage_history` command over the gateway with the backend's own token;
+  (c) add usage to a public read. Chose (b). Pros: the contract-defined report
+  the usage panes read, already aggregated per platform and model, so a
+  storage or row-format change cannot silently break it, and no public
+  contract changes. Cons: it needs the backend running, so the read happens
+  before `backend.stop()`, and it couples the harness to one registry
+  command outside `public_action` (the token never leaves the harness). (a)
+  would also work after the backend stopped, but ties the harness to the row
+  layout `usage-history-record.ts` owns; (c) is a public change for an
+  optional measurement.
+- **Task 4: live scenarios only, read once more when the first read is
+  empty.** Credential-free scenarios make no turns, so their results keep
+  their shape. The recorder writes off the projection path, so a read that
+  counts no turns waits one second and reads again; a missing count is
+  otherwise recorded as zero, not guessed.
 
 ## Constraints and rationale
 
@@ -867,11 +945,18 @@ model).
 
 ## Related
 
+- [7815-cli-session-start-usage-unrecorded.md](7815-cli-session-start-usage-unrecorded.md):
+  the usage a `session start` turn never records (found by task 4).
+- [7816-cli-scenario-host-shared-skills.md](7816-cli-scenario-host-shared-skills.md):
+  scenario backends read the operator's `~/.agents/skills` (found by 0015's
+  2026-11-11 run).
 - [agent-engines.md](../../architecture/agent-engines.md#opencode): how OpenCode
   attachments are labelled since the `--attach` failure found by this file's
   2026-10-25 run (todo 0166, retired on 2026-10-29).
-- [0017-cli-command-surface.md](0017-cli-command-surface.md): each new capability adds a
-  scenario and, where the UI rehydrates, a `cli-ui.spec.ts` check.
+- [`public-cli.md`](../../architecture/public-cli.md#not-built): what the CLI
+  surface deliberately leaves out (from to-do 0017, retired on 2026-11-11);
+  each new capability adds a scenario and, where the UI rehydrates, a
+  `cli-ui.spec.ts` check.
 - 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker Desktop runs batched with other container work.
 - [`public-cli.md`](../../architecture/public-cli.md#targeted-scenarios),

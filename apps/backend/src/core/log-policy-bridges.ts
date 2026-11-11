@@ -6,12 +6,22 @@ import {
   localRuntimeEnvironment,
   localServerPort,
 } from "./commands-servers.js";
-import { readContainerBridgeToken } from "./container-bridge-credential.js";
+import {
+  isContainerBridgeKind,
+  readContainerBridgeToken,
+  type ContainerBridgeKind,
+} from "./container-bridge-credential.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { BridgeLogPolicyTarget } from "./log-policy-service.js";
 
 /** OpenCode has no bridge of ours to carry the route. */
-const LOG_POLICY_BRIDGES: readonly LocalServerKind[] = ["claude", "codex", "cursor", "grok", "pi"];
+const LOG_POLICY_BRIDGES: readonly ContainerBridgeKind[] = [
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+  "pi",
+];
 const log = createLogger("logging");
 const CONTAINER_LOOKUP_CONCURRENCY = 4;
 const CONTAINER_LOOKUP_TIMEOUT_MS = 3_000;
@@ -31,7 +41,7 @@ async function localTargets(context: CommandContext): Promise<BridgeLogPolicyTar
     const separator = key.indexOf(":");
     if (separator <= 0) continue;
     const agent = key.slice(0, separator) as LocalServerKind;
-    if (!LOG_POLICY_BRIDGES.includes(agent)) continue;
+    if (!isContainerBridgeKind(agent) || !LOG_POLICY_BRIDGES.includes(agent)) continue;
     const environmentId = key.slice(separator + 1);
     const authToken = localServers.bridgeToken(agent, environmentId);
     // One environment that cannot be resolved must not cost the others their update.
@@ -46,7 +56,7 @@ async function localTargets(context: CommandContext): Promise<BridgeLogPolicyTar
 
 async function containerTarget(
   containerId: string,
-  agent: LocalServerKind,
+  agent: ContainerBridgeKind,
   dependencies: DiscoveryDependencies,
 ): Promise<BridgeLogPolicyTarget | null> {
   const signal = AbortSignal.timeout(CONTAINER_LOOKUP_TIMEOUT_MS);

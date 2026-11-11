@@ -14,6 +14,7 @@ import {
   defaultResponder,
   envelope,
   startFakeGateway,
+  useVirtualClock,
   type ClientSandbox,
   type FakeGateway,
 } from "./support/client-harness.js";
@@ -947,4 +948,105 @@ describe("transcript following", () => {
       ).toBe(true);
     },
   );
+  /*
+   * The trigger measurement for an event-stream follow (public-cli.md,
+   * "Following without an event stream"). A scripted busy session: one 1 KiB
+   * message every 400 ms for 30 s, then 30 s idle, followed for 60 s on the
+   * virtual clock against a backend that answers `unchanged` to a held token.
+   * The budget it pins: at most 35 reads a minute (an open native tab polls
+   * about twice a second while streaming), every message out within 2 s of
+   * being written, and an idle stretch that downloads no page at all.
+   */
+  test("a busy-session follow stays within the polling budget", async () => {
+    const box = await createSandbox();
+    cleanups.push(() => box.cleanup());
+    const io = captureIo(box.env, box.root);
+    useVirtualClock(io);
+    const start = io.now();
+    const BUSY_MESSAGES = 75;
+    const SPACING_MS = 400;
+    const writtenAt = (index: number) => start + SPACING_MS * (index + 1);
+    const text = "x".repeat(1024);
+    const firstServed = new Map<string, number>();
+    const reads: Array<{ at: number; bytes: number; unchanged: boolean }> = [];
+    const gateway = await startFakeGateway((request) => {
+      const { action, input } = request.body.args;
+      if (action === "capabilities") {
+        return envelope(
+          publicSuccessEnvelope(
+            "capabilities",
+            capabilities({ features: { ...capabilities().features, transcriptKnownToken: true } }),
+          ),
+        );
+      }
+      if (action !== "session.transcript") return defaultResponder()(request);
+      const now = io.now();
+      let written = 0;
+      while (written < BUSY_MESSAGES && writtenAt(written) <= now) written += 1;
+      const token = `t${written}`;
+      const ids = Array.from({ length: written }, (_, index) => `m${index}`).slice(-100);
+      const known = (input as { knownToken?: string }).knownToken === token;
+      const result = known
+        ? { sessionId: "ses_eA", status: "unchanged", token }
+        : {
+            ...page(ids, token),
+            messages: page(ids, token).messages.map((message) => ({ ...message, text })),
+          };
+      if (!known) for (const id of ids) if (!firstServed.has(id)) firstServed.set(id, now);
+      const response = publicSuccessEnvelope("session.transcript", result);
+      reads.push({ at: now - start, bytes: JSON.stringify(response).length, unchanged: known });
+      return envelope(response);
+    });
+    cleanups.push(() => gateway.stop());
+    const dataDir = await box.publishDescriptor(gateway);
+    const added = await box.run([
+      "connection",
+      "add",
+      "local",
+      "--data-dir",
+      dataDir,
+      "--default",
+      "--no-check",
+    ]);
+    expect(added.code).toBe(0);
+
+    const result = await box.run([...FOLLOW, "60s"], io);
+    expect(result.code).toBe(0);
+    expect(followed(result.out)).toEqual(
+      Array.from({ length: BUSY_MESSAGES }, (_, index) => `m${index}`),
+    );
+
+    const latencies = Array.from(
+      { length: BUSY_MESSAGES },
+      (_, index) => firstServed.get(`m${index}`)! - writtenAt(index),
+    );
+    const busy = reads.filter((read) => read.at <= SPACING_MS * BUSY_MESSAGES);
+    const idle = reads.filter((read) => read.at > SPACING_MS * BUSY_MESSAGES + 2_000);
+    const measured = {
+      reads: reads.length,
+      maxLatencyMs: Math.max(...latencies),
+      meanLatencyMs: Math.round(latencies.reduce((sum, value) => sum + value, 0) / BUSY_MESSAGES),
+      busyReads: busy.length,
+      busyBytes: busy.reduce((sum, read) => sum + read.bytes, 0),
+      idleReads: idle.length,
+      idleBytes: idle.reduce((sum, read) => sum + read.bytes, 0),
+    };
+    // The figures recorded in public-cli.md; a change to the poll schedule or
+    // the conditional read shows up here first. Poll times are fixed by the
+    // backoff (250 ms doubling to 2 s), so the counts and latencies are exact.
+    expect(measured).toMatchObject({
+      reads: 34,
+      maxLatencyMs: 1_750,
+      meanLatencyMs: 937,
+      busyReads: 18,
+      idleReads: 15,
+    });
+    expect(measured.reads).toBeLessThanOrEqual(35);
+    expect(measured.maxLatencyMs).toBeLessThanOrEqual(2_000);
+    // A changed read carries the whole window (here at most 75 messages of
+    // about 1.1 KiB each); an unchanged one carries only the token.
+    expect(measured.busyBytes).toBeLessThan(measured.busyReads * 75 * 1_200);
+    expect(idle.every((read) => read.unchanged)).toBe(true);
+    expect(measured.idleBytes).toBeLessThan(idle.length * 200);
+  });
 });

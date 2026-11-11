@@ -2,4 +2,5 @@
 export * from "./domain.js";
 export * from "./schemas.js";
 export * from "./commands.js";
+export * from "./linear-commands.js";
 export * from "./client.js";

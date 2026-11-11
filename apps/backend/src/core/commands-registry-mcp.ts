@@ -36,7 +36,6 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { wrapRegistrar } from "./commands-registry-contracts.js";
-import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import {
   McpManagementService,
@@ -150,15 +149,10 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
     async reloadOpenCode(environmentId) {
       const service = context.nativeAgents;
       if (!service) return { outcome: "not-running" };
-      // Idle-gated inside the provider too: the directory's instance is
-      // disposed only while no session there is busy and no dispatch is open.
-      const outcome = await service.reloadMcpConfigurationIfRunning(environmentId, "opencode");
-      if (outcome !== "reloaded") return { outcome };
-      // Disposal dropped the runtime-only `orkestrator` entry with the old
-      // instance. Post it again now rather than when its memo expires.
-      context.runtime.localServers.openCodeAgentTools.forget(`local:${environmentId}`);
-      void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
-      return { outcome };
+      // Idle-gated inside the provider: a reload cancels pending permissions
+      // and forms. Each session's own MCP entries are posted again by its
+      // next dispatch (`opencode2/mcp.ts`).
+      return { outcome: await service.reloadMcpConfigurationIfRunning(environmentId, "opencode") };
     },
     async openCodeMcpServerNames(environmentId) {
       return context.nativeAgents?.openCodeMcpServerNamesIfRunning(environmentId);

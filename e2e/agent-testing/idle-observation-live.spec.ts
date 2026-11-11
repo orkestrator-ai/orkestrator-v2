@@ -35,7 +35,7 @@
  *   the view must settle within the completion budget.
  * - `no-renderer`: the only page is closed while a turn runs. A second client
  *   signs in afterwards and must see the completed, idle conversation.
- * - `steer`: OpenCode 2 only (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`).
+ * - `steer`: OpenCode only.
  *   While a turn runs a shell command, a prompt queued from the composer is
  *   steered into it from its queue strip. The turn must end on the steer's
  *   reply, never the first prompt's, with the steer shown once, before and
@@ -71,13 +71,9 @@
  * provider merged into the profile's own global `opencode.json`
  * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
  * so no turn or title request can reach a hosted model; it needs no
- * credential source either. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
- * puts the run's OpenCode sessions on the 2.x preview for the run (the
- * profile's `openCodeProtocol`, restored afterwards); only 2.x's `shell` can
- * background a command, so only then does `background` exercise OpenCode
- * (todo 0049 task 8).
- * The 2.x server mirrors the same profile-local configuration, so the fake
- * provider reaches it too (todo 0008 task 7).
+ * credential source either. OpenCode's `shell` can background a command, so
+ * `background` exercises OpenCode too (todo 0049 task 8). OpenCode's server
+ * mirrors the same profile configuration (todo 0008 task 7).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -115,7 +111,7 @@ import {
   type FakeModelHandle,
 } from "./idle-observation-fake-models";
 import { PI_FAKE_PROVIDER } from "./idle-observation-fake-pi";
-import { allowOpenCodeFakeProvider, useOpenCodeProtocol } from "./opencode-fake-provider";
+import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
 import {
   requireRecoveredBackoff,
   backgroundOutputEvidence,
@@ -218,15 +214,6 @@ const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIME
 const DETACH_WAIT_OVERRIDE = process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS;
 const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
 const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "container";
-/**
- * `v2` puts the run's OpenCode sessions on the 2.x preview (`openCodeProtocol`),
- * whose `shell` can background a command; 1.19.5's cannot (todo 0049 task 8).
- * It is switched on before the environment's tab is created and put back
- * afterwards; the 2.x server mirrors the same profile-local configuration,
- * so the fake provider reaches it too (todo 0008 task 7).
- */
-const OPENCODE_PROTOCOL: "legacy" | "v2" =
-  process.env.ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL === "v2" ? "v2" : "legacy";
 
 // Budgets (p95) from docs/architecture/recurring-work.md#latency-budgets.
 const COMPLETION_BUDGET_MS = 3_000;
@@ -577,7 +564,6 @@ test.describe("live idle observation", () => {
       /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
       let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       /** Puts the profile's OpenCode protocol setting back; set only when the run changed it. */
-      let restoreOpenCodeProtocol: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -611,15 +597,6 @@ test.describe("live idle observation", () => {
               PI_FAKE_PROVIDER,
             );
           }
-        }
-        if (platform === "opencode" && OPENCODE_PROTOCOL === "v2") {
-          // Before the environment's first session: the line is fixed at creation.
-          restoreOpenCodeProtocol = await useOpenCodeProtocol(
-            (command, args) => client.invoke(command, args),
-            OPENCODE_PROTOCOL,
-          );
-          summary.openCodeProtocol = OPENCODE_PROTOCOL;
-          progress("OpenCode 2 preview on");
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -1691,9 +1668,9 @@ test.describe("live idle observation", () => {
               "the exercised background task's output reached a tool result or its task output file",
             ).not.toBe("none");
           } else {
-            // No task surface (Codex, OpenCode 2.x): read what the transcript
+            // No task surface (Codex, OpenCode): read what the transcript
             // shows once the 20 s command has surely ended, with no turn from us.
-            // OpenCode 2.x promises to resume the session with the output, so
+            // OpenCode promises to resume the session with the output, so
             // allow it 25 s for that.
             const endedBy = sentAt + 45_000 - Date.now();
             if (endedBy > 0) await sleep(endedBy);
@@ -1719,20 +1696,20 @@ test.describe("live idle observation", () => {
                   .join(",") || "none"
               }; late output rows: ${lateOutputIds.length}; phase ${ended?.turn.phase ?? "none"}`,
             );
-            // OpenCode 2.x promises to resume the session with the output, so on
-            // the opted-in 2.x line a backgrounded command whose output never
-            // arrives is a failure, not an unexercised case.
-            if (platform === "opencode" && OPENCODE_PROTOCOL === "v2" && evidence === "none") {
+            // OpenCode promises to resume the session with the output, so a
+            // backgrounded command whose output never arrives is a failure,
+            // not an unexercised case.
+            if (platform === "opencode" && evidence === "none") {
               expect(
                 lateOutputIds.length,
-                "OpenCode 2.x resumed the idle session with the background command's output",
+                "OpenCode resumed the idle session with the background command's output",
               ).toBeGreaterThan(0);
             }
-            // A foreground run (OpenCode 1.19.5, Pi) returns the output in the
+            // A foreground run (Pi) returns the output in the
             // call's own result, which proves nothing about a late arrival.
             if (lateOutputIds.length > 0 && evidence === "none") {
-              // The provider resumed the idle session with the output (OpenCode
-              // 2.x): an idle, backed-off page must catch up with no turn of
+              // The provider resumed the idle session with the output
+              // (OpenCode): an idle, backed-off page must catch up with no turn of
               // ours, on that row itself rather than on our prompt's bubble.
               const lateRowOnPage = page()
                 .locator(
@@ -1930,11 +1907,11 @@ test.describe("live idle observation", () => {
         });
 
         await runCase("steer", async (record) => {
-          // OpenCode 2 is the line whose composer steer had not been driven
+          // OpenCode is the platform whose composer steer had not been driven
           // through the UI (todo 0008 task 7); the other fakes do not script it.
-          if (platform !== "opencode" || OPENCODE_PROTOCOL !== "v2") {
+          if (platform !== "opencode") {
             record.status = "skipped";
-            record.notes.push("composer steer is checked on OpenCode 2 only");
+            record.notes.push("composer steer is checked on OpenCode only");
             return;
           }
           const baseWord = `IDLEQA-STEER-BASE-${nonce()}`;
@@ -2182,12 +2159,6 @@ test.describe("live idle observation", () => {
           if (restoreOpenCodeAllowlist) {
             await restoreOpenCodeAllowlist().catch((error: unknown) => {
               summary.allowlistRestoreError = String(error).slice(0, 300);
-              writeSummary();
-            });
-          }
-          if (restoreOpenCodeProtocol) {
-            await restoreOpenCodeProtocol().catch((error: unknown) => {
-              summary.protocolRestoreError = String(error).slice(0, 300);
               writeSummary();
             });
           }

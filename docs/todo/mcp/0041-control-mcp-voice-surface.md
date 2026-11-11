@@ -247,8 +247,9 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
 10. **Parity and budget tests.** Done; see Tests and qualification.
 11. **Docs.** Done: `control-mcp.md`, `public-cli.md`, `agent-messaging.md`,
     new `control-mcp-voice.md`, the catalog in `docs/README.md`, and a pointer
-    from the gateway constraint in
-    [`0017-cli-command-surface.md`](../cli-and-slash-commands/0017-cli-command-surface.md).
+    from the gateway constraint, now in
+    [`public-cli.md`](../../architecture/public-cli.md#rules-for-new-client-features)
+    (to-do 0017 was retired on 2026-11-11).
     The file is not fully ticked (see Remaining work), so it stays; its
     durable behaviour is already in `architecture/`.
 12. **Optional.** Deferred, not built (D13, D14): `delegate`, and a stateful

@@ -3,7 +3,7 @@
 - **ID:** 0320
 - **Status:** resolved
 - **Date observed:** 2026-10-17
-- **File:** `apps/backend/src/core/commands-agent-tools.test.ts`.
+- **File:** `apps/backend/src/core/commands-agent-tools.test.ts` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:apps/backend/src/core/commands-agent-tools.test.ts`).
 - **Test:** `OpenCode agent-tool configuration > reconciles in the background and memoizes a healthy generation`.
 - **Original command:** `mise run test` on a shared 18-slot host (other environments held every slot at start; workspace/root/bridges/protocol reserved 4/1/2/1), with an isolated `dev:test` profile running a live Grok check.
 - **Failure:** after a real `setTimeout(150)` (line 173), `__testing.openCodeAgentToolsConfigurationCount()` was still 1, not 0 (line 174), at 174.00 ms. The background reconcile had not settled within the fixed wait.
@@ -126,3 +126,8 @@ The unchanged owner passed alone three times in a row (2.2 to 2.5 s) with `mise 
 - **Reproduced:** yes. With the fixture response delayed to 400 ms, the unchanged test failed with configuration count 1, not 0, as in the aggregate.
 - **Fix:** `commands-agent-tools.test.ts` now awaits the outcome, then asserts zero configurations, one outcome and one request. The memoized second `schedule()` also awaits its returned promise instead of a 25 ms sleep, and it now also asserts that no reconcile was started. No assertion was removed and no product code changed.
 - **Verification:** with the 400 ms delay (temporary), the fixed test passed. `mise run test:logged -- --name n0320-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --rerun-each=20` passed 420 tests with 0 failures.
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

@@ -40,8 +40,9 @@ vocabulary:
   that reused values already decoded. Content fetched from the database also
   charges `bytes`, so a cache miss is visible beside a cache-served read (see
   [storage.md](storage.md)). `provider-request` is one HTTP request to a
-  bridge (`bridgeFetch`) or to an OpenCode server through its SDK
-  (`openCodeSdkFetch`, event-stream connects included).
+  bridge (`bridgeFetch`). Requests to an OpenCode server (`OpenCode2Client`)
+  are not counted; until 2026-11-11 the OpenCode 1.x SDK's `openCodeSdkFetch`
+  counted them, event-stream connects included.
 
 The backend recorder, `recurringWorkMetrics`
 (`apps/backend/src/core/recurring-work-metrics.ts`), keeps one fixed record
@@ -179,8 +180,9 @@ Observation uses the no-touch `/activity` route; it never starts a bridge,
 attaches, hydrates or refreshes liveness. Dispatch and generation fences make
 a pre-dispatch idle inert. A provider group whose sessions are all stably
 idle backs off to a 4 s safety read (`STABLE_IDLE_BACKOFF_MS`) only when the
-provider has a qualified wakeup for work started elsewhere: OpenCode's SDK
-event stream, and the Claude and Codex bridges' content-free observation
+provider has a qualified wakeup for work started elsewhere: OpenCode's
+`/api/event` stream while it is connected (`observationStreamLive`,
+`opencode2/environment-provider.ts`), and the Claude and Codex bridges' content-free observation
 stream (`/event/subscribe?observe=1`, `http-bridge/observation-stream.ts`).
 Cursor, Pi and Grok groups are read on every sweep. Mail presence reports a
 retained idle the injection gate would not trust (older than 4 s, or read
@@ -269,7 +271,7 @@ the running attempt.
 | B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. A capture is one `tmux capture-pane`, or one `docker exec` in a container (about 60 to 70 ms of CPU on Linux, 2026-11-11). The loop stops only on an explicit detach, the environment's tmux cleanup or shutdown, so a terminal whose client reloaded or vanished keeps capturing ([to-do 7745](../todo/transcripts-and-observation/7745-tmux-interactive-capture-orphans.md)). |
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
 | B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
-| B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. Once a connection has sent `server.heartbeat` (every 10 s from `opencode serve` 1.19.5), 35 s with no frame (`OPENCODE_EVENT_STREAM_SILENCE_MS`, `OpenCodeStreamSilenceWatchdog` in `opencode-stream-silence.ts`) aborts it onto the same loss path and logs `monitor.silent`; an OpenCode that never sends the heartbeat gets no deadline, since it is legitimately silent while idle. Heartbeats count as liveness, not drift. The 2.x provider's `/api/event` monitor (`opencode2/provider.ts` `watchEvents`) uses the same watchdog with its own deadline: 2.x sends no heartbeat event, only a `: heartbeat` SSE comment on connect and every 15 s (measured on 2.2.6), so the comment arms it, any bytes read count as life, and 50 s of silence (`OPENCODE2_EVENT_STREAM_SILENCE_MS`) aborts the connection onto the provider's loss path (everything re-read, reconnect after 1 s). Added by to-do 7559 (retired 2026-11-11). |
+| B22 | `opencode-reconnect` | `opencode2/provider.ts` (`watchEvents`), `opencode2/stream-silence.ts` | The provider's `/api/event` stream; a lost connection is a gap: everything is re-read and the stream reconnects after 1 s. OpenCode 2 sends no heartbeat event, only a `: heartbeat` SSE comment on connect and every 15 s (measured on 2.2.6), so the comment arms the silence watchdog (`OpenCodeStreamSilenceWatchdog`), any bytes read count as life, and 50 s of silence (`OPENCODE2_EVENT_STREAM_SILENCE_MS`) aborts the connection onto the same loss path and logs it. Added by to-do 7559 (retired 2026-11-11). Until 2026-11-11 the OpenCode 1.x SDK stream (`git show 5f4e27b1c:apps/backend/src/core/opencode-observation-stream.ts`) backed off from 1 s to 30 s and used a 35 s deadline armed by `server.heartbeat`. |
 | B23 | `bridge-observation-stream` | `http-bridge/observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
 | B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
@@ -281,8 +283,9 @@ the running attempt.
 
 Other backend recurrence is event-scheduled lifecycle work rather than a
 standing timer: native projection hydration and display-tail debounce (B23),
-OpenCode agent-tool re-verification on a 5 min connected TTL (B24) and merge
-cleanup (B25).
+merge cleanup (B25). OpenCode agent-tool re-verification on a 5 min connected
+TTL (B24) went with OpenCode 1.x on 2026-11-11: each OpenCode 2 session
+registers its own Orkestrator MCP servers.
 
 **Per-pass skips.** Several passes skip work an earlier read already answers;
 each skip gives the same answer the skipped read would have:

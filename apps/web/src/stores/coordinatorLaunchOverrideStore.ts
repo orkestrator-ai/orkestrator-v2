@@ -72,9 +72,18 @@ export const coordinatorLaunchOverrideStore =
       let subscriptions: Array<() => void> | null = null;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let inFlight: Promise<void> | null = null;
-      /** When the in-flight read started; see `retain`. */
-      let inFlightStartedAt = 0;
       let rerun = false;
+      /**
+       * After the last release the listeners stay for one coalescing window,
+       * so a remount (React StrictMode's effect replay, or a strip that
+       * unmounts and mounts again at once) loses no hint. `grace` stops them
+       * when it runs out.
+       */
+      let grace: ReturnType<typeof setTimeout> | null = null;
+      /** A hint arrived, or a waiting one was dropped, while nobody was retained. */
+      let missed = false;
+      /** A remount relied on the in-flight read instead of starting its own. */
+      let shared = false;
       let unsupported = false;
 
       const read = async (): Promise<void> => {
@@ -82,7 +91,7 @@ export const coordinatorLaunchOverrideStore =
           rerun = true;
           return inFlight;
         }
-        inFlightStartedAt = Date.now();
+        shared = false;
         inFlight = (async () => {
           try {
             const snapshot = await backendApiForScope(scope, createCoordinatorApi, {
@@ -103,6 +112,9 @@ export const coordinatorLaunchOverrideStore =
             if (isUnknownViewCommandError(error, COORDINATOR_LAUNCH_OVERRIDES_COMMAND)) {
               unsupported = true;
               if (get().overrides.size > 0) set({ overrides: new Map() });
+            } else if (shared) {
+              // A remount took this read as its own; it would have read again.
+              rerun = true;
             }
             // Anything else keeps the last answer; the next hint or check reads again.
           }
@@ -119,7 +131,12 @@ export const coordinatorLaunchOverrideStore =
       };
 
       function schedule(): void {
-        if (unsupported || retainers === 0 || timer) return;
+        if (unsupported || subscriptions === null || timer) return;
+        if (retainers === 0) {
+          // Inside the grace window: a remount reads for it, otherwise nothing does.
+          missed = true;
+          return;
+        }
         timer = setTimeout(() => {
           timer = null;
           void read();
@@ -135,11 +152,21 @@ export const coordinatorLaunchOverrideStore =
         onViewSafetyCheck(() => schedule(), scope),
       ];
 
+      const cancelTimer = (): boolean => {
+        if (!timer) return false;
+        clearTimeout(timer);
+        timer = null;
+        return true;
+      };
+
       const stop = () => {
         for (const unsubscribe of subscriptions ?? []) unsubscribe();
         subscriptions = null;
-        if (timer) clearTimeout(timer);
-        timer = null;
+        cancelTimer();
+        if (grace) clearTimeout(grace);
+        grace = null;
+        missed = false;
+        shared = false;
       };
       // A retainer left mounted when the scope goes leaves no timer or listener.
       scope.onDispose("coordinator-launch-override", stop);
@@ -149,23 +176,34 @@ export const coordinatorLaunchOverrideStore =
         retain: () => {
           retainers += 1;
           if (retainers === 1) {
-            subscriptions = subscribe();
-            // A remount (React StrictMode's effect replay, or a strip that
-            // unmounts and mounts again at once) re-retains while the read its
-            // first mount started is still running. That read is no older than
-            // the coalescing window, as fresh as any hint gets, so it answers
-            // the remount too rather than queueing a second read behind it.
-            const recentRead =
-              inFlight !== null &&
-              Date.now() - inFlightStartedAt < COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS;
-            if (!unsupported && !recentRead) void read();
+            if (grace) {
+              // A remount inside the grace window. The listeners never stopped,
+              // so the last read plus any hint they heard is the whole story:
+              // read only for a hint that arrived (or was dropped) meanwhile.
+              // A read still running answers the remount too, rather than
+              // queueing a second read behind it; if it fails, it reruns.
+              clearTimeout(grace);
+              grace = null;
+              if (missed) {
+                missed = false;
+                if (!unsupported) void read();
+              } else if (inFlight) {
+                shared = true;
+              }
+            } else {
+              subscriptions = subscribe();
+              if (!unsupported) void read();
+            }
           }
           let released = false;
           return () => {
             if (released) return;
             released = true;
             retainers -= 1;
-            if (retainers === 0) stop();
+            if (retainers > 0) return;
+            // A hint still waiting to read is dropped; a remount reads for it.
+            if (cancelTimer()) missed = true;
+            grace = setTimeout(stop, COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS);
           };
         },
         refresh: () => read(),

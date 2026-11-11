@@ -196,7 +196,7 @@ describe("coordinator launch override store", () => {
     release();
   });
 
-  test("a re-retain behind a read older than the coalescing window reads again", async () => {
+  test("a re-retain after the listeners have stopped reads again", async () => {
     const first = Promise.withResolvers<{ overrides: [] }>();
     invokeMock.mockImplementation(async (command: string) => {
       if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
@@ -206,9 +206,71 @@ describe("coordinator launch override store", () => {
     });
     const store = appCommandStore(coordinatorLaunchOverrideStore);
     store.getState().retain()();
-    jest.setSystemTime(Date.now() + COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS + 1);
+    // The grace window runs out: nothing listened from here until the re-retain.
+    jest.advanceTimersByTime(COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS + 1);
     const release = store.getState().retain();
     first.resolve({ overrides: [] });
+    await settled();
+    expect(reads).toBe(2);
+    expect(store.getState().overrides.get(key("worker", "tab"))?.model).toBe("opus");
+    release();
+  });
+
+  test("a coordinator write during a quick remount reads again after the shared read", async () => {
+    const first = Promise.withResolvers<{ overrides: Array<Record<string, string>> }>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
+      reads += 1;
+      if (reads === 1) return first.promise;
+      return { overrides: [{ environmentId: "new-worker", tabId: "new-tab", model: "opus" }] };
+    });
+    const store = appCommandStore(coordinatorLaunchOverrideStore);
+    store.getState().retain()();
+    dispatchResourceChange({ resource: "coordinator", id: "project", revision: 1 });
+    // Let the resource-change coalescing deliver the hint, still inside this store's grace window.
+    for (let step = 0; step < 10; step += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      jest.advanceTimersByTime(10);
+    }
+    const release = store.getState().retain();
+    // The first read's snapshot predates the write.
+    first.resolve({ overrides: [{ environmentId: "old-worker", tabId: "old-tab" }] });
+    await settled();
+    expect(reads).toBe(2);
+    expect(Array.from(store.getState().overrides.keys())).toEqual([key("new-worker", "new-tab")]);
+    release();
+  });
+
+  test("a hint dropped by the release is read for when the tab remounts at once", async () => {
+    const store = appCommandStore(coordinatorLaunchOverrideStore);
+    const firstRelease = store.getState().retain();
+    await settled();
+    answer = [{ environmentId: "worker", tabId: "tab" }];
+    dispatchResourceChange({ resource: "coordinator", id: "project", revision: 1 });
+    for (let step = 0; step < 10; step += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      jest.advanceTimersByTime(10);
+    }
+    firstRelease();
+    const release = store.getState().retain();
+    await settled();
+    expect(reads).toBe(2);
+    expect(store.getState().overrides.has(key("worker", "tab"))).toBe(true);
+    release();
+  });
+
+  test("a shared read that fails is retried for the remount", async () => {
+    const first = Promise.withResolvers<{ overrides: Array<Record<string, string>> }>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
+      reads += 1;
+      if (reads === 1) return first.promise;
+      return { overrides: [{ environmentId: "worker", tabId: "tab", model: "opus" }] };
+    });
+    const store = appCommandStore(coordinatorLaunchOverrideStore);
+    store.getState().retain()();
+    const release = store.getState().retain();
+    first.reject(new Error("transport closed"));
     await settled();
     expect(reads).toBe(2);
     expect(store.getState().overrides.get(key("worker", "tab"))?.model).toBe("opus");

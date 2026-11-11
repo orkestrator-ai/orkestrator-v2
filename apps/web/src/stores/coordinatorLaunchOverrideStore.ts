@@ -72,6 +72,8 @@ export const coordinatorLaunchOverrideStore =
       let subscriptions: Array<() => void> | null = null;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let inFlight: Promise<void> | null = null;
+      /** When the in-flight read started; see `retain`. */
+      let inFlightStartedAt = 0;
       let rerun = false;
       let unsupported = false;
 
@@ -80,6 +82,7 @@ export const coordinatorLaunchOverrideStore =
           rerun = true;
           return inFlight;
         }
+        inFlightStartedAt = Date.now();
         inFlight = (async () => {
           try {
             const snapshot = await backendApiForScope(scope, createCoordinatorApi, {
@@ -147,7 +150,15 @@ export const coordinatorLaunchOverrideStore =
           retainers += 1;
           if (retainers === 1) {
             subscriptions = subscribe();
-            if (!unsupported) void read();
+            // A remount (React StrictMode's effect replay, or a strip that
+            // unmounts and mounts again at once) re-retains while the read its
+            // first mount started is still running. That read is no older than
+            // the coalescing window, as fresh as any hint gets, so it answers
+            // the remount too rather than queueing a second read behind it.
+            const recentRead =
+              inFlight !== null &&
+              Date.now() - inFlightStartedAt < COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS;
+            if (!unsupported && !recentRead) void read();
           }
           let released = false;
           return () => {

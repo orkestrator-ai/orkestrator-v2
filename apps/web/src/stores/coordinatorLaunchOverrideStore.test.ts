@@ -179,6 +179,42 @@ describe("coordinator launch override store", () => {
     expect(reads).toBe(1);
   });
 
+  test("a remount while its first read is running shares that read (StrictMode's replay)", async () => {
+    const first = Promise.withResolvers<{ overrides: Array<Record<string, string>> }>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
+      reads += 1;
+      return first.promise;
+    });
+    const store = appCommandStore(coordinatorLaunchOverrideStore);
+    store.getState().retain()();
+    const release = store.getState().retain();
+    first.resolve({ overrides: [{ environmentId: "worker", tabId: "tab", model: "opus" }] });
+    await settled();
+    expect(reads).toBe(1);
+    expect(store.getState().overrides.get(key("worker", "tab"))?.model).toBe("opus");
+    release();
+  });
+
+  test("a re-retain behind a read older than the coalescing window reads again", async () => {
+    const first = Promise.withResolvers<{ overrides: [] }>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
+      reads += 1;
+      if (reads === 1) return first.promise;
+      return { overrides: [{ environmentId: "worker", tabId: "tab", model: "opus" }] };
+    });
+    const store = appCommandStore(coordinatorLaunchOverrideStore);
+    store.getState().retain()();
+    jest.setSystemTime(Date.now() + COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS + 1);
+    const release = store.getState().retain();
+    first.resolve({ overrides: [] });
+    await settled();
+    expect(reads).toBe(2);
+    expect(store.getState().overrides.get(key("worker", "tab"))?.model).toBe("opus");
+    release();
+  });
+
   test("releasing the last consumer cancels a hint still waiting to read", async () => {
     const release = appCommandStore(coordinatorLaunchOverrideStore).getState().retain();
     await settled();

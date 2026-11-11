@@ -11,3 +11,14 @@
 - **Reruns:** `--project=desktop-chromium --workers=2 e2e/StaticHtmlTranscript.spec.ts -g Find` at the default timeout: 2 passed, and `Find matches a report's body…` failed at about 31 s. Its trace shows every step finished: 15 s were the first navigation, and 5.5 s and 6.3 s were the two passes that index the 3,000-message fixture. `--workers=3 --timeout=150000` over both files and both projects: all passed, load average about 27.
 - **Not established:** no run at the default timeout passed on an idle host, and the base commit was not measured under the same load, so this does not show how much of the budget each cost.
 - **Hypothesis:** the 30 s budget is close to what these specs need on a loaded host, because the fixture's first load and Find's full index take most of it. Unconfirmed. The two Find specs added with 5780 use `test.slow()` for that reason; the existing ones were left as they are.
+
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `bdc583ce4` (base `498b68766`), a
+targeted ten-spec browser run beside another checkout's browser suite (load
+average about 30 to 36, default workers) failed four mobile `StaticHtmlArtifact.spec.ts` cases on `page.goto`/`page.reload` 30 s timeouts. The complete unchanged
+owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
+--base 498b68766` reported the case open. Details and commands:
+[9937](../aggregate-validation-runs/9937-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.

@@ -111,3 +111,14 @@ changed path is not reached. Rerun alone,
 passed all 25 starts in 70.6 s. `mise run flaky:recurrence -- 0483 --base HEAD`
 reported the case open. No assertion, skip or timeout changed; root cause
 remains unconfirmed.
+
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `bdc583ce4` (base `498b68766`), a
+targeted ten-spec browser run beside another checkout's browser suite (load
+average about 30 to 36, default workers) failed mobile `paging before prose in a byte-bounded view` and mobile `a same-minute page growing row zero` (prepend index at `:138`). The complete unchanged
+owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
+--base 498b68766` reported the case open. Details and commands:
+[9937](../aggregate-validation-runs/9937-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.

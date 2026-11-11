@@ -93,3 +93,14 @@ mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `bdc583ce4` (base `498b68766`), a
+targeted ten-spec browser run beside another checkout's browser suite (load
+average about 30 to 36, default workers) failed `native: history pages in without a click, opening with a page and paging near the top` on both projects (`:478`). The complete unchanged
+owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
+--base 498b68766` reported the case open. Details and commands:
+[9937](../aggregate-validation-runs/9937-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.

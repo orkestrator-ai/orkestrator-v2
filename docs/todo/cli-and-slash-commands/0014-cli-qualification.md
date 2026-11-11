@@ -872,7 +872,7 @@ model).
   2026-10-25 run (todo 0166, retired on 2026-10-29).
 - [0017-cli-command-surface.md](0017-cli-command-surface.md): each new capability adds a
   scenario and, where the UI rehydrates, a `cli-ui.spec.ts` check.
-- [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker Desktop runs batched with other container work.
 - [`public-cli.md`](../../architecture/public-cli.md#targeted-scenarios),
   [`cli-testing.md`](../../development/cli-testing.md),

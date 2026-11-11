@@ -1411,7 +1411,7 @@ Made on 2026-10-25 without the user, to be validated.
   [0124-web-annotation-commit-cost.md](0124-web-annotation-commit-cost.md).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.
-- [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker fixtures.
 - [web-page-annotations.md](../../architecture/web-page-annotations.md),
   including §"Request states" and §"Anchors and pins".

@@ -2,40 +2,33 @@
  * The package cache of a launched OpenCode server
  * (#2091; docs/architecture/agent-approvals.md).
  *
- * OpenCode installs two kinds of npm package at run time and imports them into
- * the server: the AI SDK package of a provider it does not bundle (the
- * `provider.<id>.npm` key) and, on 1.x, an npm plugin (an entry of `plugin`).
- * Both land in `$XDG_CACHE_HOME/opencode`, which was node's `~/.cache`, so the
+ * OpenCode installs the AI SDK package of a provider it does not bundle (the
+ * `provider.<id>.npm` key) at run time and imports it into the server. It
+ * lands in `$XDG_CACHE_HOME/opencode`, which was node's `~/.cache`, so the
  * agent's uid could change a package's code before the next start imported it.
- * Shown on 2026-11-10 against the pinned binaries: code planted in a cached
- * provider package ran inside the next 1.19.5 and 2.2.6 server.
+ * Shown on 2026-11-10 against the pinned binary: code planted in a cached
+ * provider package ran inside the next 2.2.6 server.
  *
- * On an `opencode2-launch=1` image the launcher points both servers'
+ * On an `opencode2-launch=1` image the launcher points the server's
  * `XDG_CACHE_HOME` at a root-owned directory, which the server's uid can read
- * but not write. Both binaries start with a read-only cache once
- * `opencode/bin` exists, import a package already in it without installing it
- * again, and skip the models catalogue write. So:
- *
- * - **1.x**: before each start, root installs every package the user's own
- *   configuration (root's copy of the host input) names and the cache lacks,
- *   with the image's Bun (`--ignore-scripts`, so no package code runs as
- *   root), into the directory 1.19.5 looks in: `packages/<npm>` for a
- *   provider, `packages/<spec>@latest` for a plugin given without a version.
- *   1.19.5 imported a package Bun installed there. Packages stay across starts.
- *   An install that fails (no network, a firewall without the registry) leaves
- *   that provider or plugin unavailable; nothing falls back to node's cache.
- * - **2.x**: before each start, root installs every provider package the
- *   user's configuration names and the cache lacks, the same way, into the
- *   directory 2.2.6 imports it from: `npm/<name>@<tag>/<generation>`, where
- *   the tag is the configured version or `latest`, except that a bare
- *   `@ai-sdk/<name>` is installed as `@ai-sdk/<name>@ai-v6` (2.2.6's npm
- *   service, `tW` and `we` in its bundle, read on 2026-11-10). 2.2.6 imports
- *   the newest numeric generation whose `node_modules/<name>` exists without
- *   installing again; root's is always `1`. That rule is the binary's, not the
- *   configuration's, so it is pinned to {@link OPENCODE2_PACKAGE_LAYOUT_VERSION}
- *   and re-checked on every bump (`opencode2-package-cache.live.test.ts`).
- *   2.x withholds npm plugins (`opencode2/user-config.ts`), so only providers
- *   are installed.
+ * but not write. 2.2.6 starts with a read-only cache once `opencode/bin`
+ * exists, imports a package already in it without installing it again, and
+ * skips the models catalogue write. So before each start, root installs every
+ * provider package the user's configuration (root's copy of the host input)
+ * names and the cache lacks, with the image's Bun (`--ignore-scripts`, so no
+ * package code runs as root), into the directory 2.2.6 imports it from:
+ * `npm/<name>@<tag>/<generation>`, where the tag is the configured version or
+ * `latest`, except that a bare `@ai-sdk/<name>` is installed as
+ * `@ai-sdk/<name>@ai-v6` (2.2.6's npm service, `tW` and `we` in its bundle,
+ * read on 2026-11-10). 2.2.6 imports the newest numeric generation whose
+ * `node_modules/<name>` exists without installing again; root's is always
+ * `1`. That rule is the binary's, not the configuration's, so it is pinned to
+ * {@link OPENCODE2_PACKAGE_LAYOUT_VERSION} and re-checked on every bump
+ * (`opencode2-package-cache.live.test.ts`). 2.x withholds npm plugins
+ * (`opencode2/user-config.ts`), so only providers are installed. Packages stay
+ * across starts. An install that fails (no network, a firewall without the
+ * registry) leaves that provider unavailable; nothing falls back to node's
+ * cache.
  *
  * A project configuration can name a provider package too; it is never
  * installed: that would let the agent choose code the server imports.
@@ -43,12 +36,9 @@
 import {
   OPENCODE2_LAUNCH_CACHE_HOME,
   OPENCODE2_LAUNCH_CONFIG_DIR,
-  OPENCODE_LAUNCH_CACHE_HOME,
-  OPENCODE_LAUNCH_CONFIG_DIR,
 } from "./agent-credential-files.js";
 import { CONTAINER_BRIDGE_LAUNCHER } from "./container-bridge-credential.js";
 import { quoteShell } from "./commands-agent-support.js";
-import type { OpenCodeServerKind } from "./opencode-listener-identity.js";
 
 /** At most this many packages are installed per start. */
 export const OPENCODE_PACKAGE_INSTALL_LIMIT = 16;
@@ -70,31 +60,24 @@ const ROOT_BUN = "/usr/local/bin/bun --config=/dev/null --no-env-file";
 export interface OpenCodePackageInstall {
   /** What to install (`name` or `name@version`). */
   spec: string;
-  /**
-   * Where the server imports it from: below `<cache>/opencode/packages` for
-   * 1.19.5, below `<cache>/opencode/npm` (generation included) for 2.2.6.
-   */
+  /** Where the server imports it from, below `<cache>/opencode/npm` (generation included). */
   directory: string;
 }
 
 /**
- * The packages a configuration document makes a `kind` server install, where
- * it looks for them. Self-contained (it uses only `Bun.JSONC`), because the
- * root script runs its source with the image's Bun. Only plain registry specs
- * are kept: a path, URL, git or `file:` spec is something OpenCode resolves
+ * The packages a configuration document makes the server install, where it
+ * looks for them. Self-contained (it uses only `Bun.JSONC`), because the root
+ * script runs its source with the image's Bun. Only plain registry specs are
+ * kept: a path, URL, git or `file:` spec is something OpenCode resolves
  * without installing, and anything else could not be passed to a shell.
  */
-export function openCodePackageInstalls(
-  texts: readonly string[],
-  kind: "opencode" | "opencode2" = "opencode",
-): OpenCodePackageInstall[] {
+export function openCodePackageInstalls(texts: readonly string[]): OpenCodePackageInstall[] {
   const SPEC =
     /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[A-Za-z0-9][A-Za-z0-9._~^*+-]*)?$/;
   const jsonc = (globalThis as unknown as { Bun: { JSONC: { parse(text: string): unknown } } }).Bun
     .JSONC;
   const isObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
-  const hasVersion = (spec: string) => spec.lastIndexOf("@") > 0;
   const installs = new Map<string, string>();
   // 2.2.6: `@ai-sdk/<name>` without a version is installed as its `ai-v6`
   // tag; the directory is `<name>@<tag or latest>`, then the generation.
@@ -116,37 +99,25 @@ export function openCodePackageInstalls(
       for (const provider of Object.values(document.provider)) {
         const npm = isObject(provider) ? provider.npm : undefined;
         if (typeof npm !== "string" || !SPEC.test(npm)) continue;
-        if (kind === "opencode2") install2(npm);
-        else installs.set(npm, npm);
+        install2(npm);
       }
     }
     // 2.x is never given a plugin key; one here would not be its to install.
-    if (kind === "opencode" && Array.isArray(document.plugin)) {
-      for (const plugin of document.plugin) {
-        if (typeof plugin !== "string" || !SPEC.test(plugin)) continue;
-        installs.set(hasVersion(plugin) ? plugin : `${plugin}@latest`, plugin);
-      }
-    }
   }
   return [...installs].map(([directory, spec]) => ({ spec, directory }));
 }
 
-/** Where a launched server of `kind` keeps its package cache. */
-export function openCodeLaunchCacheHome(kind: OpenCodeServerKind): string {
-  return kind === "opencode2" ? OPENCODE2_LAUNCH_CACHE_HOME : OPENCODE_LAUNCH_CACHE_HOME;
-}
-
 /**
- * Root shell that makes `kind`'s cache root-owned and installs the packages
- * root's copy of the user's configuration names. Runs only on an image whose
- * launcher points the server at it (`opencode2-launch=1`); on an older one it
- * does nothing. Never fails the start: an install that fails is reported on
- * stderr and its package stays unavailable.
+ * Root shell that makes the server's cache root-owned and installs the
+ * packages root's copy of the user's configuration names. Runs only on an
+ * image whose launcher points the server at it (`opencode2-launch=1`); on an
+ * older one it does nothing. Never fails the start: an install that fails is
+ * reported on stderr and its package stays unavailable.
  */
-export function openCodePackageCacheScript(kind: OpenCodeServerKind): string {
-  const cache = openCodeLaunchCacheHome(kind);
-  const base = kind === "opencode2" ? "npm" : "packages";
-  const configDir = kind === "opencode2" ? OPENCODE2_LAUNCH_CONFIG_DIR : OPENCODE_LAUNCH_CONFIG_DIR;
+export function openCodePackageCacheScript(): string {
+  const cache = OPENCODE2_LAUNCH_CACHE_HOME;
+  const base = "npm";
+  const configDir = OPENCODE2_LAUNCH_CONFIG_DIR;
   const program = `const fs = require("node:fs");
 const path = require("node:path");
 const installs = (${openCodePackageInstalls.toString()});
@@ -155,7 +126,7 @@ const texts = [];
 for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
   try { texts.push(fs.readFileSync(path.join(dir, name), "utf8")); } catch {}
 }
-for (const install of installs(texts, ${JSON.stringify(kind)})) {
+for (const install of installs(texts)) {
   process.stdout.write(install.directory + "\\t" + install.spec + "\\n");
 }
 `;
@@ -166,7 +137,7 @@ for (const install of installs(texts, ${JSON.stringify(kind)})) {
     `cache=${cache}`,
     // A cache that is not root's (or not a directory) is rebuilt from nothing.
     `if [ -L "$cache" ] || { [ -e "$cache" ] && { [ ! -d "$cache" ] || [ "$(stat -c %u "$cache")" != 0 ]; }; }; then rm -rf "$cache"; fi`,
-    // Both binaries create opencode/bin at start and fail when they cannot.
+    // The binary creates opencode/bin at start and fails when it cannot.
     `mkdir -p "$cache/opencode/bin" "$cache/opencode/${base}"`,
     `chown -R 0:0 "$cache"`,
     `chmod -R u=rwX,go=rX "$cache"`,

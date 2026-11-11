@@ -8,7 +8,6 @@ import path from "node:path";
 import {
   OPENCODE2_LAUNCH_PROJECT_CONFIG,
   OPENCODE2_LAUNCH_ROOT,
-  OPENCODE_LAUNCH_PROJECT_CONFIG,
 } from "./agent-credential-files.js";
 import {
   OPENCODE_PROJECT_CONFIG_MAX_BYTES,
@@ -16,7 +15,6 @@ import {
   OPENCODE_PROJECT_FILE_REFERENCE_LIMIT,
   checkoutRelativePath,
   filterProjectOpenCodeConfig,
-  openCodeProjectConfigPath,
   openCodeProjectInstructionPath,
   readFilteredProjectOpenCodeConfig,
   writeProjectInstructionScript,
@@ -284,7 +282,7 @@ describe("filterProjectOpenCodeConfig", () => {
 describe("readFilteredProjectOpenCodeConfig", () => {
   test("copies 100 KiB instructions and reports oversized AGENTS.md", async () => {
     for (const size of [100 * 1024, OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES + 1]) {
-      const result = await readFilteredProjectOpenCodeConfig("container-1", "opencode2", (async (
+      const result = await readFilteredProjectOpenCodeConfig("container-1", (async (
         _container: string,
         command: string,
       ) => {
@@ -297,7 +295,7 @@ describe("readFilteredProjectOpenCodeConfig", () => {
       if (size <= OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES) {
         expect(result.instructions).toEqual(["r".repeat(size)]);
         expect(parse(result.text)).toEqual({
-          instructions: [openCodeProjectInstructionPath("opencode2", 0)],
+          instructions: [openCodeProjectInstructionPath(0)],
         });
       } else {
         expect(result.instructions).toEqual([]);
@@ -321,11 +319,7 @@ describe("readFilteredProjectOpenCodeConfig", () => {
       // AGENTS.md is absent: the read prints nothing.
       return "";
     };
-    const result = await readFilteredProjectOpenCodeConfig(
-      "container-1",
-      "opencode2",
-      exec as never,
-    );
+    const result = await readFilteredProjectOpenCodeConfig("container-1", exec as never);
     expect(parse(result.text)).toEqual({ agent: { a: { prompt: "prompt text" } } });
     expect(commands.some((command) => command.includes("'/workspace/AGENTS.md'"))).toBe(true);
     expect(commands[0]).toContain(`head -c ${OPENCODE_PROJECT_CONFIG_MAX_BYTES + 1} --`);
@@ -341,13 +335,11 @@ describe("writing the filtered configuration as root", () => {
       await rm(directory, { recursive: true, force: true });
   });
 
-  test("each server has its own file under its root directory", () => {
-    expect(openCodeProjectInstructionPath("opencode2", 3)).toBe(
+  test("the server's file is under its root directory", () => {
+    expect(openCodeProjectInstructionPath(3)).toBe(
       `${OPENCODE2_LAUNCH_ROOT}/project/instructions/3.md`,
     );
-    expect(openCodeProjectConfigPath("opencode")).toBe(OPENCODE_LAUNCH_PROJECT_CONFIG);
-    expect(openCodeProjectConfigPath("opencode2")).toBe(OPENCODE2_LAUNCH_PROJECT_CONFIG);
-    expect(OPENCODE2_LAUNCH_PROJECT_CONFIG.startsWith(`${OPENCODE2_LAUNCH_ROOT}/`)).toBe(true);
+    expect(OPENCODE2_LAUNCH_PROJECT_CONFIG).toBe(`${OPENCODE2_LAUNCH_ROOT}/project/opencode.json`);
   });
 
   test.skipIf(process.platform !== "linux")(
@@ -355,10 +347,7 @@ describe("writing the filtered configuration as root", () => {
     async () => {
       const root = await mkdtemp(path.join(tmpdir(), "ork-opencode-project-"));
       directories.push(root);
-      const script = writeProjectOpenCodeConfigScript("opencode2").replaceAll(
-        OPENCODE2_LAUNCH_ROOT,
-        root,
-      );
+      const script = writeProjectOpenCodeConfigScript().replaceAll(OPENCODE2_LAUNCH_ROOT, root);
       // A planted link where the file goes is replaced with the directory.
       await writeFile(path.join(root, "target"), "planted");
       await Bun.spawn(["mkdir", path.join(root, "project")]).exited;
@@ -370,10 +359,7 @@ describe("writing the filtered configuration as root", () => {
       expect(await readFile(file, "utf8")).toBe('{"model":"a/b"}\n');
       expect((await stat(file)).mode & 0o777).toBe(0o644);
       expect(await readFile(path.join(root, "target"), "utf8")).toBe("planted");
-      const instruction = writeProjectInstructionScript("opencode2", 0).replaceAll(
-        OPENCODE2_LAUNCH_ROOT,
-        root,
-      );
+      const instruction = writeProjectInstructionScript(0).replaceAll(OPENCODE2_LAUNCH_ROOT, root);
       expect(
         Bun.spawnSync(["sh", "-c", instruction], { stdin: Buffer.from("rules") }).exitCode,
       ).toBe(0);

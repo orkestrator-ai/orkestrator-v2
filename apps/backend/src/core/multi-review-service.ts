@@ -614,7 +614,7 @@ export interface MultiReviewServiceOptions extends Omit<
   ) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<
     ProviderDependencies,
-    "openCodeClient" | "monitorRetryMs" | "planUsage" | "usageLimitStops" | "openCode2Workflow"
+    "planUsage" | "usageLimitStops" | "openCodeWorkflow"
   >;
   workflowResults?: WorkflowResultService;
   /** Each reviewer's own mailbox identity on turns without a result tool. */

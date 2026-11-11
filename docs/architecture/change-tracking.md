@@ -117,7 +117,7 @@ pick its tip so only this branch's own work shows. Commands:
 | Commands | `apps/backend/src/core/commands-registry-changes.ts` |
 | Bridge transport | `apps/backend/src/core/http-bridge/change-evidence.ts` (pull/ack client) |
 | Bridge adapters | `bridges/<bridge>/src/**/change-evidence.ts` (Claude, Codex, Cursor, Pi, ACP/Grok) |
-| OpenCode adapter | `apps/backend/src/core/opencode-change-evidence.ts` |
+| OpenCode adapter | None since 2026-11-11: the backend's OpenCode 1.x adapter was retired with 1.x (`git show 5f4e27b1c:apps/backend/src/core/opencode-change-evidence.ts`), and the OpenCode 2 provider has no `changeEvidenceSource`, so OpenCode sessions record no change evidence. The 1.x command-change journals still left on disk are imported once (`change-tracking/legacy-import.ts`) |
 | Public CLI | `changes.view` / `changes.history` actions (`public-api/actions-changes.ts`), `orkestrator changes view|history` |
 | Web clients | `apps/web/src/lib/changes/` (subscriptions, labels), `apps/web/src/hooks/useChangeProjection.ts`, `apps/web/src/stores/changeProjectionStore.ts`, `apps/web/src/components/changes/` |
 
@@ -260,7 +260,7 @@ files on a large page show `changes.body.batch-limit`.
 
 ## Evidence pipeline
 
-1. **Adapter** (bridge or backend OpenCode) decodes native events and calls
+1. **Adapter** (a bridge's) decodes native events and calls
    `ChangeEvidenceRecorder` (`evidence-builders.ts`). It never counts lines.
 2. **Spool** (`ChangeEvidenceSpool`): bounded, optionally persisted; appends
    are synchronous and never await the backend. Capacity loss becomes an

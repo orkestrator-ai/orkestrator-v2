@@ -216,7 +216,8 @@ export async function readAgentSignInStatus(
       );
     }
     case "opencode": {
-      // The bundled OpenCode 1.x store every local environment shares.
+      // OpenCode's `auth.json`, kept in step with the host OpenCode 2 database
+      // on every sign-in change (`opencode2/credentials.ts`).
       const dataHome = envPath(env.XDG_DATA_HOME, home) ?? path.join(home, ".local", "share");
       return providerStoreStatus(
         "opencode",

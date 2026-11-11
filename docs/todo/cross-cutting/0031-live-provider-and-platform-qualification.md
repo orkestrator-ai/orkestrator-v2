@@ -190,7 +190,8 @@ evidence. This file only points at it.
   - `mise run test:agent:docker` (only tests whose title matches `Docker fixture`);
   - `mise run test:agent:electron` (`e2e/agent-testing/playwright.electron.config.ts`);
   - `mise run test:cli:scenarios` (credential-free unless `--provider`);
-  - `mise run verify:opencode:live`;
+  - `mise run verify:opencode2:live` (OpenCode 2's live set; the 1.x
+    `verify:opencode:live` was removed with OpenCode 1.x on 2026-11-11);
   - opt-in env gates such as `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1`
     (`e2e/agent-testing/opencode-live.spec.ts`) and
     `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`

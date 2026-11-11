@@ -7,7 +7,7 @@ import {
   stripDisplayTailPayload,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
-import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
+import { normalizeOpenCodeEnvelope } from "./opencode-display-transcript.js";
 
 describe("native agent display tails", () => {
   test("strips tool payloads, data URLs and approval state", () => {
@@ -29,7 +29,7 @@ describe("native agent display tails", () => {
   });
 
   test("keeps an OpenCode edit path and counts when its diff body is stripped", () => {
-    const normalized = normalizeOpenCodeInteractiveMessage(
+    const normalized = normalizeOpenCodeEnvelope(
       {
         info: { id: "m1", role: "assistant", time: { created: 0 } },
         parts: [

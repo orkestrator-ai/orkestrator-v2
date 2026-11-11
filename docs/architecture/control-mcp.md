@@ -267,6 +267,10 @@ original tools remain:
   remove one on a ticket (`list_ticket_labels`, `create_ticket_label`,
   `set_ticket_label`; [tickets.md](tickets.md#labels)). These are ticket
   labels, separate from a pull request's labels (`pr_label`, `pr_options`).
+- Coordinators only: work a project's linked Linear board
+  (`list_linear_issues`, `get_linear_issue`, `create_linear_issue`,
+  `update_linear_issue`, `add_linear_comment`, `list_linear_board_options`;
+  [tickets.md](tickets.md#linear)). Kanban stays the default board.
 - Create a validated environment with an initial agent prompt.
 - Launch a new job in an existing running environment.
 - Send a new prompt to an existing native-agent tab.

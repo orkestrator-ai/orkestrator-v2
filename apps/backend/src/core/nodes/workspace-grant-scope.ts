@@ -65,6 +65,7 @@ const INHERITED_KEYS: ReadonlySet<string> = new Set(INHERITED_GLOBAL_SETTING_KEY
  */
 const RETIRED_GLOBAL_SETTING_KEYS: ReadonlySet<string> = new Set([
   "experimentalCodexRawEventLogging",
+  "openCodeProtocol",
 ]);
 
 export function isGlobalConfigWriteCommand(command: string): boolean {

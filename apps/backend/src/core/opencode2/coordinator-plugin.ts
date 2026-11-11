@@ -20,8 +20,8 @@
  *   a link inside the checkout pointing out of it was read (observed on 2.2.6:
  *   `read`, `grep` and `glob` through a linked directory). The plugin resolves
  *   paths the way the filesystem will and refuses a call that would reach
- *   Orkestrator's data directory, as the 1.x plugin does
- *   (`opencode-read-boundary-plugin.ts`). The checkout and the conversation's
+ *   Orkestrator's data directory, as the retired 1.x plugin did
+ *   (`git show 5f4e27b1c:apps/backend/src/core/opencode-read-boundary-plugin.ts`). The checkout and the conversation's
  *   attachment directory stay readable.
  *
  * Without the policy variable the plugin does nothing, so it is safe in any

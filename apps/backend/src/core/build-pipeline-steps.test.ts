@@ -9,7 +9,6 @@ import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
-import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { AppConfig, RepositoryConfig } from "./models.js";
@@ -471,6 +470,42 @@ async function withBridgeService(
       body: rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : undefined,
     });
     const pathname = new URL(url).pathname;
+    // OpenCode 2's server (`opencode2/client.ts`): just enough for a session
+    // to be created on the configured model and a prompt to be posted.
+    if (pathname.startsWith("/api/")) {
+      const data = (value: unknown) => Response.json({ data: value, cursor: {} });
+      if (pathname === "/api/event") {
+        return new Response(new ReadableStream({ start() {} }), {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      const fixtureModel = {
+        id: "claude-sonnet",
+        providerID: "anthropic",
+        name: "Claude Sonnet",
+        type: "chat",
+        variants: [],
+      };
+      if (pathname === "/api/model") return data([fixtureModel]);
+      if (pathname === "/api/model/default") return data(fixtureModel);
+      if (pathname === "/api/agent") {
+        return data([
+          { id: "build", name: "Build", mode: "primary", hidden: false },
+          { id: "plan", name: "Plan", mode: "primary", hidden: false },
+        ]);
+      }
+      if (pathname === "/api/session" && method === "POST") {
+        const body = JSON.parse(rawBody) as Record<string, unknown>;
+        const session = { id: `ses_${++sessionCounter}`, model: body.model };
+        openCodeSessions.set(`/api/session/${session.id}`, session);
+        return data(session);
+      }
+      const known = openCodeSessions.get(pathname);
+      if (known) return data(known);
+      if (pathname.endsWith("/prompt")) return data({ id: "input" });
+      if (pathname.endsWith("/message")) return data([]);
+      return data([]);
+    }
     if (pathname === "/permission" || pathname === "/question") {
       return Response.json([]);
     }
@@ -1131,20 +1166,14 @@ describe("per-step bridge connections", () => {
       await service.advanceNow(started.id);
 
       expect(invocations).toContain("start_local_opencode_server_cmd");
-      const history = requests.find((request) =>
-        new URL(request.url).pathname.endsWith("/message"),
+      // OpenCode 2 holds the model on the session, set when it is created.
+      const created = requests.find(
+        (request) => new URL(request.url).pathname === "/api/session" && request.body,
       );
-      expect(new URL(history!.url).searchParams.get("limit")).toBe(
-        String(OPEN_CODE_MESSAGE_HISTORY_LIMIT),
-      );
-      const prompt = requests.find((request) =>
-        new URL(request.url).pathname.endsWith("/prompt_async"),
-      );
-      expect(prompt?.body?.model).toEqual({
-        providerID: "anthropic",
-        modelID: "claude-sonnet",
-      });
-      expect(JSON.stringify(prompt?.body)).not.toContain("repo-claude");
+      expect(created?.body?.model).toEqual({ providerID: "anthropic", id: "claude-sonnet" });
+      const prompt = requests.find((request) => new URL(request.url).pathname.endsWith("/prompt"));
+      expect(prompt).toBeDefined();
+      expect(JSON.stringify(requests.map((request) => request.body))).not.toContain("repo-claude");
     });
   });
 

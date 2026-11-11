@@ -451,6 +451,50 @@ describe("a cold app-server child", () => {
     commands.dispose();
   });
 
+  test("plugins that load after the list settled appear at the next TTL read", async () => {
+    // The accepted gap of the settle rule: a slow container whose plugin load
+    // pauses for longer than the settle delay, then resumes. Two agreeing
+    // pre-plugin answers settle the list; with no `skills/changed`, the first
+    // read past the TTL is what brings the plugin skills in, never a guess.
+    const { state, engine } = fakeEngine();
+    const settle = manualSettleTimer();
+    let clock = 1_000;
+    const commands = new CodexCommandCatalogue({
+      engine,
+      cwd,
+      now: () => clock,
+      skillColdSettleMs: 20,
+      skillSettleTimer: settle.schedule,
+    });
+    try {
+      expect((await commands.list()).status).toBe("stale");
+      settle.fire();
+      await drain();
+      settle.fire();
+      await drain();
+      const settled = await commands.list();
+      expect(settled.status).toBe("ready");
+      expect(settled.commands.map((row) => row.name)).not.toContain("$plugin-review");
+      const callsWhenSettled = state.calls.length;
+
+      state.response = withPlugins;
+      clock += SKILL_INVENTORY_LIMITS.ttlMs - 1;
+      const withinTtl = await commands.list();
+      expect(withinTtl.commands.map((row) => row.name)).not.toContain("$plugin-review");
+      expect(state.calls).toHaveLength(callsWhenSettled);
+
+      clock += 1;
+      const healed = await commands.list();
+      expect(state.calls).toHaveLength(callsWhenSettled + 1);
+      expect(healed.status).toBe("ready");
+      expect(healed.commands.map((row) => row.name)).toContain("$plugin-review");
+      expect(healed.revision).toBeGreaterThan(settled.revision);
+      expect(settle.armed).toBe(0);
+    } finally {
+      commands.dispose();
+    }
+  });
+
   test("a restarted child settles again on its own first answer", async () => {
     const { state, engine } = fakeEngine();
     const settle = manualSettleTimer();

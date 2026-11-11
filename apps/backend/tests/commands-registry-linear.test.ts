@@ -17,19 +17,31 @@ describe("Electron backend command registry", () => {
     // Assigned inside storage mocks, so widen past the initial null narrowing.
     let auth = null as {
       apiKey: string;
+      connectedAt: string;
       viewer?: { id: string; name: string; email?: string };
     } | null;
+    const revocations: unknown[] = [];
 
     Object.assign(context.storage.kanban, {
       getLinearAuth: mock(async () => auth),
       saveLinearAuth: mock(
-        async (apiKey: string, viewer?: { id: string; name: string; email?: string }) => {
-          auth = { apiKey, viewer };
+        async (
+          apiKey: string,
+          viewer?: { id: string; name: string; email?: string },
+          connectedAt?: string,
+        ) => {
+          auth = { apiKey, viewer, connectedAt: connectedAt ?? "2026-11-11T10:00:00.000Z" };
           return auth;
         },
       ),
       clearLinearAuth: mock(async () => {
         auth = null;
+      }),
+    });
+    Object.assign(context.storage.linear, {
+      mergeLinearRevocations: mock((list: unknown[]) => {
+        revocations.push(...list);
+        return list.length;
       }),
     });
 
@@ -45,32 +57,44 @@ describe("Electron backend command registry", () => {
       );
     }) as unknown as typeof fetch;
 
+    const connected = {
+      connected: true,
+      hasToken: true,
+      viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" },
+      keyFingerprint: expect.stringMatching(/^[a-f0-9]{16}$/),
+      connectedAt: "2026-11-11T10:00:00.000Z",
+    };
+
     try {
       await expect(commands.get("get_linear_connection")?.({}, context)).resolves.toEqual({
         connected: false,
         hasToken: false,
       });
 
-      await expect(
-        commands.get("connect_linear")?.({ apiKey: " lin_api_secret " }, context),
-      ).resolves.toEqual({
-        connected: true,
-        hasToken: true,
-        viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" },
-      });
+      const status = (await commands.get("connect_linear")?.(
+        { apiKey: " lin_api_secret " },
+        context,
+      )) as { keyFingerprint?: string };
+      expect(status).toEqual(connected);
+      expect(JSON.stringify(status)).not.toContain("lin_api_secret");
       expect(auth?.apiKey).toBe("lin_api_secret");
 
-      await expect(commands.get("get_linear_connection")?.({}, context)).resolves.toEqual({
-        connected: true,
-        hasToken: true,
-        viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" },
-      });
+      // A status read refreshes the viewer but keeps when the key was connected,
+      // so a disconnect made on another machine since still applies.
+      await expect(commands.get("get_linear_connection")?.({}, context)).resolves.toEqual(
+        connected,
+      );
+      expect(auth?.connectedAt).toBe("2026-11-11T10:00:00.000Z");
 
       await expect(commands.get("disconnect_linear")?.({}, context)).resolves.toEqual({
         connected: false,
         hasToken: false,
       });
       expect(auth).toBeNull();
+      // The disconnect is recorded by the key's fingerprint, never the key.
+      expect(revocations).toEqual([
+        { keyFingerprint: status.keyFingerprint, revokedAt: expect.any(String) },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

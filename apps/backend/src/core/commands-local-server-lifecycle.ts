@@ -10,7 +10,6 @@ import {
   CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND,
 } from "./container-scripts.js";
 import { LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
-import { openCode2ServerKey } from "./opencode2/host-server-state.js";
 import { noteGitMirrorCloneOutcome } from "./project-git-mirror.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
@@ -160,21 +159,12 @@ export async function stopLocalServerUnlocked(
 ): Promise<void> {
   const key = `${kind}:${environmentId}`;
   const localServers = context.runtime.localServers;
-  if (kind === "opencode") {
-    localServers.openCodeAgentTools.cancel(`local:${environmentId}`);
-  }
   const child = localServers.process(key);
-  const openCode2Key = openCode2ServerKey(environmentId);
-  const openCode2Child = kind === "opencode" ? localServers.process(openCode2Key) : undefined;
-  if (child || openCode2Child) {
+  if (child) {
     await context.nativeAgents?.runtimeStopRequested(environmentId, kind);
+    await localServers.terminate(key, child, "stop requested");
   }
-  if (child) await localServers.terminate(key, child, "stop requested");
-  // The environment's OpenCode 2.x preview server stops with its 1.x server.
-  if (openCode2Child) {
-    await localServers.terminate(openCode2Key, openCode2Child, "stop requested");
-    localServers.openCode2.forget(environmentId, openCode2Child);
-  }
+  if (kind === "opencode") localServers.openCode2.forget(environmentId, child);
   const { port, pid } = localServerFields(kind);
   const fields = { [port]: null, [pid]: null };
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);

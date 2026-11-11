@@ -499,6 +499,9 @@ describe("per-node URLs", () => {
     expect(client.resolveLoopbackUrl("http://127.0.0.1:8080/api/")).toBe(
       `${relay}/__orkestrator/proxy/loopback/8080/api`,
     );
+    await expect(client.resolveExternalLoopbackUrl("http://127.0.0.1:8080/api/")).resolves.toBe(
+      `${relay}/__orkestrator/proxy/loopback/8080/api`,
+    );
   });
 
   test("the node-taking variants in gateway-url", () => {

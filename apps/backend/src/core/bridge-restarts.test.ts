@@ -18,10 +18,10 @@ describe("bridge restart counter", () => {
     counter.localStarted("claude:env-2");
     counter.localExited("claude:env-1", false);
     counter.localExited("claude:env-2", true);
-    counter.localStarted("opencode2:env-3");
+    counter.localStarted(openCode2ServerKey("env-3"));
     expect(counter.snapshot()).toEqual({
       claude: { localStarts: 2, localUnrequestedExits: 1, containerLaunches: 0 },
-      opencode2: { localStarts: 1, localUnrequestedExits: 0, containerLaunches: 0 },
+      opencode: { localStarts: 1, localUnrequestedExits: 0, containerLaunches: 0 },
     });
   });
 
@@ -43,7 +43,9 @@ describe("bridge restart counter", () => {
     expect(counter.snapshot()).toEqual({});
     expect(bridgeProviderOfKey("grok:env-1")).toBe("grok");
     expect(bridgeProviderOfKey("grok")).toBeNull();
-    expect(bridgeProviderOfKey(openCode2ServerKey("env-1"))).toBe("opencode2");
+    // The OpenCode server is the environment's `opencode` local server.
+    expect(bridgeProviderOfKey(openCode2ServerKey("env-1"))).toBe("opencode");
+    expect(bridgeProviderOfKey("opencode2:env-1")).toBeNull();
   });
 
   test("a snapshot is a copy", () => {

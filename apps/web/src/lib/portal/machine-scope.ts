@@ -23,6 +23,7 @@ import { CONFIG_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
 import { DOCKER_COMMANDS } from "@orkestrator/protocol/contract/domains/docker";
 import { ENVIRONMENTS_COMMANDS } from "@orkestrator/protocol/contract/domains/environments";
 import { GRAPHS_COMMANDS } from "@orkestrator/protocol/contract/domains/graphs";
+import { KANBAN_COMMANDS } from "@orkestrator/protocol/contract/domains/kanban";
 import { MCP_COMMANDS } from "@orkestrator/protocol/contract/domains/mcp";
 import { NODES_COMMANDS } from "@orkestrator/protocol/contract/domains/nodes";
 import { PREVIEWS_COMMANDS } from "@orkestrator/protocol/contract/domains/previews";
@@ -40,7 +41,9 @@ import { portalStore } from "./portal-store";
 /**
  * The domains the machine-aware `lib/backend` functions (`machineInvoker`,
  * `machineBackendClient`) and Settings' machine calls (`machine-access.ts`:
- * profile and host maintenance) reach.
+ * profile and host maintenance) reach. `kanban` is here for the Linear
+ * connect dialog, which sends the key to each machine on its own scope when
+ * the window holds one, so it does not pass through the command node.
  */
 const MACHINE_DOMAIN_COMMANDS: ReadonlyArray<
   ReadonlyArray<{ readonly name: string; readonly access: string }>
@@ -51,6 +54,7 @@ const MACHINE_DOMAIN_COMMANDS: ReadonlyArray<
   DOCKER_COMMANDS,
   ENVIRONMENTS_COMMANDS,
   GRAPHS_COMMANDS,
+  KANBAN_COMMANDS,
   MCP_COMMANDS,
   NODES_COMMANDS,
   PREVIEWS_COMMANDS,

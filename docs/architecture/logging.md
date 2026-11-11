@@ -335,9 +335,11 @@ into `folded` and `foldedMaxMs`; a call of 5 s or more is always written. The
 same records, without the spacing, are in `get_database_stats` and
 `database.json` as `slowOperations`: counts, total and longest per series (64
 series at most, then `overflowed`) and the last 32 operations. Below the
-threshold a call costs two `performance.now()` reads:
-`apps/backend/scripts/storage-timing-overhead.ts` measured about 55–80 ns per
-statement and 250–290 ns per transaction on an in-memory database.
+threshold a call costs two `performance.now()` reads and its addition to the
+call buckets below: `apps/backend/scripts/storage-timing-overhead.ts` measured
+about 55–80 ns per statement and 250–290 ns per transaction on an in-memory
+database, and 58–94 ns per statement and 170 ns per transaction with the call
+buckets on 2026-11-11 (a busy Linux host).
 
 **`command.slow`.** The command registry wraps every registered command
 (`createCommandRegistry`'s `register`), so it covers every caller: the
@@ -354,7 +356,13 @@ counts and summed durations of gateway invokes were already in
 that is reported, with the window from the last on-time tick to the late one.
 The storage source adds the slow SQLite operations overlapping the window:
 `storageMs` in total and the longest one's `storageDatabase`, `storageOp`,
-`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. The command
+`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. It also
+adds every call that ended in the window, slow or not: `storageCalls`, their
+time `storageCallMs`, and the parts of it on the main database
+(`storageMainCallMs`) and the change-tracking ledger (`storageLedgerCallMs`).
+Those come from 250 ms buckets by end time, kept for 32 s, so they are exact
+to one bucket at either edge. A call is an outermost statement or a whole
+transaction. The command
 source adds `commandsInFlight`, the names of up to three of the most recently
 started (`commands`), and `blockingCommand` with `blockingCommandMs` when a
 command's synchronous part of 250 ms or more overlapped the window. The
@@ -367,7 +375,10 @@ it is in flight and, once settled, only for windows it overlapped, but its kind
 is not named. An
 attempt's span includes its awaits, so a named job ran around the stall rather
 than necessarily causing it; a kind that keeps coming back is the lead. A stall
-with no storage fields was not SQLite holding the loop for 250 ms at a time.
+with no `storageMs` was not SQLite holding the loop for 250 ms at a time; its
+`storageCallMs` says whether many shorter calls did (to-do 7562 found stalls
+that were mostly the thread waiting on disk with no single call reaching
+250 ms).
 
 The backend and the desktop also pass the monitor a CPU reader
 (`process.cpuUsage()`, one `getrusage` per tick), so both stall lines carry
@@ -650,8 +661,9 @@ ring below do.
 
 A renderer failure used to leave nothing behind: its console stays in the browser
 (see [What stays out of the persistent log](#what-stays-out-of-the-persistent-log)).
-Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`), and a
-desktop window sends its new counts to the backend it drives, which writes them here as
+Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`). A
+desktop window sends its new counts to the backend it drives, and a browser tab (the iOS
+app's web view included) to the backend it is signed in to, which writes them here as
 `renderer-errors` `error.recorded`.
 
 An entry is five fields and nothing else, defined in
@@ -661,7 +673,7 @@ An entry is five fields and nothing else, defined in
 | --- | --- |
 | `errorClass` | A built-in error class, `ChunkLoadError`, or `NonErrorThrow`. A custom class name is application text, so it becomes `Error`. |
 | `boundary` | Where it was caught: `lazy-view`, `message-row` or `rich-block` (the boundaries that name themselves), `boundary` (any other), `root` (no boundary caught it), `recoverable` (React recovered), `window` or `rejection` (the window's own error and unhandled-rejection events). |
-| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
+| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client, in a browser tab or the iOS app). A page with no desktop API, served over HTTP to something other than Electron, counts as `browser` even before its gateway is installed. The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
 | `fingerprint` | Eight hex digits of FNV-1a over the class, stack and component stack, the same one the boundaries already log. It tells failures apart without keeping what it was computed from. |
 | `count` | Occurrences since the last report, capped at 1,000,000. |
 
@@ -672,8 +684,8 @@ stack** is kept, in the ring or anywhere after it.
 flowchart LR
   B["React root onCaughtError / onUncaughtError / onRecoverableError"] --> R[(ring, 100 entries)]
   W["window error / unhandledrejection"] --> R
-  R -->|"new counts, ≤ 20 per write, every 10 s"| C["record_renderer_errors"]
-  C -->|"parsed again, 30 entries a minute"| E[(logs/essential)]
+  R -->|"new counts, ≤ 20 per write, every 10 s, with client id"| C["record_renderer_errors"]
+  C -->|"parsed again, 30 entries a minute, 10 to 20 per client"| E[(logs/essential)]
 ```
 
 Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
@@ -686,21 +698,44 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   static `diagnosticBoundary`. Nothing is added to each boundary's `componentDidCatch`.
 - **Bounded in the renderer.** At most 100 distinct entries, the least recently seen
   dropped first. A repeat only raises a count.
-- **Sent by a desktop window only.** Its own renderer starts the upload
-  (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
-  entries a write. A failed send puts the counts back and waits twice as long, up to five
-  minutes. A backend that predates the command answers "Unknown backend command", which
-  stops the upload for that load. Errors in another node's workspace shown in the
-  window are the window renderer's, so they go to the window's own backend. A browser
-  tab keeps its ring in memory: whose log its entries belong in is open
-  ([6300](../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md)).
+- **Sent by every renderer, to its own backend.** A desktop window's renderer and a
+  browser tab both start the upload (`renderer-error-upload.ts`, started by
+  `renderer-diagnostics.ts`): promptly for the first failure, then every 10 seconds, up
+  to 20 entries a write. A failed send puts the counts back and waits twice as long, up
+  to five minutes. A backend that predates the command answers "Unknown backend
+  command", which stops the upload for that load. Errors in another node's workspace
+  shown in the window are the window renderer's, so they go to the window's own
+  backend. A browser tab sends to the backend it is signed in to (its command node).
+  Its gateway is installed only once the application modules load, so a failure before
+  then is retried on the next send, and one the tab never recovers from (its own
+  application chunk failing to load) is kept in session storage for the tab's next
+  load. A tab that is closed first loses it.
+- **Each renderer names itself.** Every write carries `client`, a random id the
+  renderer keeps in its session storage (`renderer-error-client.ts`), so a reload keeps
+  the same share. The stored id is reused only when the document is a reload
+  (Navigation Timing's `type`): a tab opened from another (`window.open`, "Duplicate
+  tab") starts with a copy of its opener's session storage, and takes a fresh id
+  instead of sharing the opener's allowance. It identifies no user, device or session
+  and is never logged. A
+  backend from v2.36.5-beta or v2.36.6-beta, whose handler refused any argument but
+  `entries`, gets the batch again without it.
 - **Validated and rate-bound in the backend.** `record_renderer_errors`
   (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
   other key (a `message`, a `stack`) or any value outside its list refuses the whole
-  write. Across every client it writes at most 30 entries a minute and counts the rest
-  in one `report.rate-limited` line per minute. The essential log's own per-event budget
-  applies after that. A workspace client may not call it
-  (`workspace-grant-scope.ts`): this machine's log is its own.
+  write, as does a `client` that is not 8 to 64 letters, digits, `-` or `_`. Across
+  every client it writes at most 30 entries a minute. Each `client` is sure of 10 of
+  them, and may take up to 20 (one full batch) while 10 more stay free for another
+  renderer, so a lone window's full batch is logged and one noisy tab cannot use the
+  minute a desktop window needs. A lone renderer therefore writes at most 20 a minute
+  where an older one (no `client`) could write 30; what is dropped is counted, not
+  resent. The first 64 client ids in a minute are tracked; later ones share one more
+  slot, which bounds the backend's memory, not fairness. The id is self-declared, so a
+  sender that mints ids, or omits `client`, can still use the whole total: the share
+  protects other renderers from a noisy one, not from a hostile client, which already
+  holds admin access. A write without `client` (an older renderer) is bounded by the
+  total alone. The rest are counted in one `report.rate-limited` line per minute. The
+  essential log's own per-event budget applies after that. A workspace client may not
+  call it (`workspace-grant-scope.ts`): this machine's log is its own.
 - **Not the startup markers.** The ring never writes to the console and never uses the
   `desktop.startup` area, so the [exact-marker rule](#what-stays-out-of-the-persistent-log)
   is unchanged. It is also separate from `recentRendererErrors`, the bug report's
@@ -1460,7 +1495,15 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
   shows what the renderer holds in memory, tokens included, which is why it is opt-in
   and the switch says so. The artifact host and browser previews keep their own rules
   (`artifact-host-session.ts`, `browser-preview-manager.ts`); the menu never targets
-  them.
+  them. `native-application-menu.yml` qualifies the item on real Electron on Linux,
+  macOS and Windows and in the packaged app on Linux and macOS.
+- **Safari's Web Inspector in the iOS app.** The app's web view is inspectable from a
+  connected Mac only while this switch is on in the page: the renderer reports its state
+  at start (`reportWebInspectable`, `debug-log.ts`) through the shell's bridge
+  (`orkestratorNativeShell.setWebInspectable`, the `set-inspectable` action in
+  `RemoteWebView.swift`), and the shell sets `isInspectable` back to false on every new
+  document. The shell has no native log of its own; its renderer's failures reach the
+  backend through the error ring above.
 - **What a line now looks like.** One text line, not a console object: `error.name`,
   `error.message` and up to 8 relative frames, with no expandable object or
   source-mapped links in DevTools. Where a site logged an entity or a name, it now

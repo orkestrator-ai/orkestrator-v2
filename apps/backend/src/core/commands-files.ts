@@ -2468,19 +2468,36 @@ export function runtimeHostClaudeConfigDir(env: NodeJS.ProcessEnv = process.env)
   return { configDir, explicit: Boolean(configDir) };
 }
 
-/** The host login this runtime's Claude launches use, without the container opt-out. */
-export async function readRuntimeHostClaudeCredentials(): Promise<string | undefined> {
+/**
+ * Where this runtime's host Claude login is looked up: the arguments
+ * `getHostClaudeCredentials` and `hostClaudeSignedOut` take after the platform.
+ */
+export function runtimeHostClaudeLookup(): {
+  homeDir: string;
+  configDir: string | undefined;
+  options: Parameters<typeof getHostClaudeCredentials>[3];
+} {
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
   const { configDir, explicit } = runtimeHostClaudeConfigDir();
-  return getHostClaudeCredentials(process.platform, agentTestHostHome || os.homedir(), configDir, {
-    // Only an agent-test profile needs the lookup pinned to one keychain file.
-    // An ordinary install runs as the logged-in user and may keep the record
-    // outside `login.keychain-db`, so it keeps the default search list.
-    allowDefaultKeychainSearchList: !agentTestHostHome,
-    // The entry Claude itself reads for that directory, so a profile started
-    // from an added account's shell spends that account, not the default one.
-    ...claudeLoginLookupOptions(configDir, explicit),
-  });
+  return {
+    homeDir: agentTestHostHome || os.homedir(),
+    configDir,
+    options: {
+      // Only an agent-test profile needs the lookup pinned to one keychain file.
+      // An ordinary install runs as the logged-in user and may keep the record
+      // outside `login.keychain-db`, so it keeps the default search list.
+      allowDefaultKeychainSearchList: !agentTestHostHome,
+      // The entry Claude itself reads for that directory, so a profile started
+      // from an added account's shell spends that account, not the default one.
+      ...claudeLoginLookupOptions(configDir, explicit),
+    },
+  };
+}
+
+/** The host login this runtime's Claude launches use, without the container opt-out. */
+export async function readRuntimeHostClaudeCredentials(): Promise<string | undefined> {
+  const { homeDir, configDir, options } = runtimeHostClaudeLookup();
+  return getHostClaudeCredentials(process.platform, homeDir, configDir, options);
 }
 
 // `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and

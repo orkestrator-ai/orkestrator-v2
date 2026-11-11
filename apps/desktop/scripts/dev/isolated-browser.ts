@@ -86,7 +86,14 @@ const PROFILE_FLAGS = new Set([
   "--no-agent-credentials",
   "--use-dev-worktree-folder",
 ]);
-const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms", "--agent-tools-port"]);
+const PROFILE_OPTIONS = new Set([
+  "--credential-source",
+  "--agent-platforms",
+  "--agent-tools-port",
+  // A suite that needs the fixture's environments without the Docker
+  // qualification run (`docker`), for example a container worker.
+  "--fixture-environments",
+]);
 
 /**
  * The disposable profile's `dev:test` arguments: a credential-free Codex
@@ -170,16 +177,42 @@ export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
   ],
 ];
 
+/** The value of the last `--agent-tools-port` in `profileArgs`, if any. */
+function agentToolsPortArgument(profileArgs: readonly string[]): string | undefined {
+  const index = profileArgs.lastIndexOf("--agent-tools-port");
+  return index === -1 ? undefined : profileArgs[index + 1];
+}
+
 /**
- * The shards this run uses. A fixed `--agent-tools-port` is one port, which
- * only one backend can bind, so that run keeps every spec in one profile.
+ * The shards this run uses. A fixed `--agent-tools-port <n>` is one port,
+ * which only one backend can bind, so that run keeps every spec in one
+ * profile. `--agent-tools-port auto` gives each shard profile its own port.
  */
 export function dockerFixtureShards(
   profileArgs: readonly string[],
 ): readonly (readonly string[])[] {
-  return profileArgs.includes("--agent-tools-port")
+  const port = agentToolsPortArgument(profileArgs);
+  return port !== undefined && port !== "auto"
     ? [DOCKER_FIXTURE_SHARDS.flat()]
     : DOCKER_FIXTURE_SHARDS;
+}
+
+/**
+ * A Docker run's profile arguments. Its containers must reach the profile's
+ * agent tools port, so unless the caller chose one, each profile takes a free
+ * port from the documented range (`--agent-tools-port auto`, to-do 7500): one
+ * host firewall rule then admits every concurrent run on the host, with no
+ * coordination between the agents that started them.
+ */
+export function dockerProfileArguments(profileArgs: readonly string[]): string[] {
+  return [
+    ...profileArgs,
+    // A caller's own fixture selection wins over the Docker default.
+    ...(profileArgs.includes("--fixture-environments")
+      ? []
+      : ["--fixture-environments", "local,container"]),
+    ...(agentToolsPortArgument(profileArgs) === undefined ? ["--agent-tools-port", "auto"] : []),
+  ];
 }
 
 /**
@@ -280,6 +313,13 @@ export interface IsolatedBrowserOptions {
    * `ORKESTRATOR_AGENT_TEST_PROFILE`; the suite's own env names the others).
    */
   companionProfiles?: readonly string[];
+  /**
+   * The suite stops and starts its profiles itself (with `dev:stop` and a new
+   * `dev:test` launcher), so a launcher exiting during the suite is not a
+   * failure. Cleanup still stops and resets every profile by name, which
+   * covers a launcher the suite started.
+   */
+  suiteRestartsProfiles?: boolean;
   signal?: AbortSignal;
   root?: string;
   env?: NodeJS.ProcessEnv;
@@ -290,8 +330,8 @@ export interface IsolatedBrowserOptions {
 
 /** A foreground launcher is started concurrently, never awaited as a setup command. */
 export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): Promise<number> {
-  const profileArgs = isolatedProfileArguments(options.profileArgs);
-  if (options.docker) profileArgs.push("--fixture-environments", "local,container");
+  const isolatedArgs = isolatedProfileArguments(options.profileArgs);
+  const profileArgs = options.docker ? dockerProfileArguments(isolatedArgs) : isolatedArgs;
   const profile = options.profile ?? `qa-browser-${randomUUID().slice(0, 12)}`;
   const root = options.root ?? repositoryRoot;
   const companions = [...(options.companionProfiles ?? [])];
@@ -535,7 +575,11 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         Promise.race([
           handle.done,
           ...launchers
-            .filter((started) => started.name === name || companions.includes(started.name))
+            .filter(
+              (started) =>
+                !options.suiteRestartsProfiles &&
+                (started.name === name || companions.includes(started.name)),
+            )
             .map((started) =>
               started.handle.done.then(() => {
                 throw new Error("Isolated profile exited during browser tests");

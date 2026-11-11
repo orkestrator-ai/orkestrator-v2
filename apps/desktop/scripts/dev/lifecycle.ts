@@ -19,6 +19,11 @@ import {
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
 import { bundleElectron, formatBuildLogs } from "../electron-bundle.js";
+import {
+  chooseAgentToolsPort,
+  claimAgentToolsPort,
+  developmentRootOfProfile,
+} from "./agent-tools-port-claims.js";
 import type { DevArguments } from "./arguments.js";
 import {
   assertAgentToolsPortFree,
@@ -585,6 +590,26 @@ export function electronLaunch(
 }
 
 /**
+ * `1` starts an agent-test profile's Electron with Chromium's remote debugging
+ * on an OS-chosen loopback port, so a spec can drive the profile's real window
+ * (its preload and IPC path) over CDP. Chromium prints the endpoint as
+ * `DevTools listening on ws://127.0.0.1:<port>/...` on stderr, which reaches
+ * the profile's `electron.log`. Off by default, and ignored for a development
+ * profile: whoever can reach the port controls the window, which in an
+ * agent-test profile holds only fixture state.
+ */
+export const AGENT_TEST_ELECTRON_DEBUG_ENV = "ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG";
+
+/** The remote-debugging switches {@link AGENT_TEST_ELECTRON_DEBUG_ENV} asks for, if any. */
+export function electronDebugSwitches(
+  flavor: "development" | "agent-test",
+  env: NodeJS.ProcessEnv,
+): string[] {
+  if (flavor !== "agent-test" || env[AGENT_TEST_ELECTRON_DEBUG_ENV] !== "1") return [];
+  return ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"];
+}
+
+/**
  * `1` lets an agent-test profile's Electron, and everything it starts, write
  * core dumps on Linux. Off by default: see `electronCommand`.
  */
@@ -857,13 +882,30 @@ export async function startDevelopment(
   }
   await pruneOrphanedProfiles(existingProfile.id, dependencies.roots, dependencies.prune);
 
+  const launcherStart = processStartTime(process.pid) ?? Date.now();
   // Recorded in the profile, so a restart without the flag keeps the port the
   // host firewall admits; `dev:reset` forgets it.
-  const agentToolsPort =
+  const requestedAgentToolsPort =
     flavor === "agent-test" ? (args.agentToolsPort ?? existingProfile.agentToolsPort) : undefined;
-  if (agentToolsPort !== undefined) {
-    // Before the profile is written, so a busy port is never recorded.
-    await (dependencies.checkAgentToolsPort ?? assertAgentToolsPortFree)(agentToolsPort);
+  let agentToolsPort: number | undefined;
+  if (requestedAgentToolsPort !== undefined) {
+    // Before the profile is written, so a busy port is never recorded. The
+    // claim names this launcher, so another profile starting before this
+    // one's backend binds does not take the same port.
+    const claim = {
+      developmentRoot: developmentRootOfProfile(existingProfile.profileRoot),
+      owner: { profile: existingProfile.id, pid: process.pid, startTime: launcherStart },
+      checkFree: dependencies.checkAgentToolsPort ?? assertAgentToolsPortFree,
+    };
+    if (requestedAgentToolsPort === "auto") {
+      agentToolsPort = await chooseAgentToolsPort({
+        ...claim,
+        preferred: existingProfile.agentToolsPort,
+      });
+      console.log(`Agent tools port: ${agentToolsPort} (--agent-tools-port auto)`);
+    } else {
+      agentToolsPort = await claimAgentToolsPort({ ...claim, port: requestedAgentToolsPort });
+    }
   }
 
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
@@ -888,7 +930,6 @@ export async function startDevelopment(
   const statusPath = statusManifestPath(profile);
   let rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();
-  const launcherStart = processStartTime(process.pid) ?? Date.now();
   let status: RuntimeStatusManifest = {
     version: 1,
     status: "starting",
@@ -1047,7 +1088,11 @@ export async function startDevelopment(
     const electronEnv = launch.env;
     const electronSpawn = electronCommand(
       electronExecutable,
-      [...launch.switches, "apps/desktop/dist/electron/main.js"],
+      [
+        ...launch.switches,
+        ...electronDebugSwitches(flavor, process.env),
+        "apps/desktop/dist/electron/main.js",
+      ],
       { flavor, platform, env: process.env },
     );
     electron = (dependencies.spawn ?? spawn)(electronSpawn.command, electronSpawn.args, {

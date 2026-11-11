@@ -82,3 +82,101 @@ The three extra settle windows did not absorb the late timer under this load,
 so the hypothesis (a Happy DOM frame arming one more fake timer after the last
 advance) still fits, but the bounded settle is not a sufficient fix. Status
 reopened; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (egress name-check review repairs)
+
+Observed 2026-11-11 on `egress-name-checks-99a7933a4d12-r1`, base commit
+`498b68766f5c9f357a3a86782406d1e9e0977559` (`mise run flaky:recurrence --
+9932 --base 498b68766f` reported the case open). The branch changes
+`apps/web/src/components/environments/EnvironmentNetworkPolicyStatus*`,
+one line of `ServiceBrowserTab.test.tsx`, a daemon unit test and docs; it
+does not touch this file or the transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  (default suite, web package at its default `bun test src --parallel`
+  worker count). Host load average about 73 on 16 cores from other
+  worktrees' runs.
+- **Failure:** five cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`):
+  - `a function follow prop that answers false is still truthy to the viewport-shrink path` (40.5 ms)
+  - `literal false: a detached reader is not moved when the viewport shrinks` (31.5 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (60.6 ms, 59.0 ms)
+  - `controller deactivation reveals a snapshot whose initial navigation is still pending` (45.3 ms)
+- **Suite counts:** web 14,472 passed and 5 failed; backend 18,369, protocol
+  5,817, desktop 2,033, web-public 52, toolchain 135 and CLI 517 passed.
+- **Isolated rerun:** the aggregate runner's automatic rerun, queued behind
+  another worktree's exclusive resource, reported `FAILED ALONE (2.3s)` with
+  six cases (adding `cancelling before the refresh retires the queued
+  follow: no LAST write` and `a literal false follow prop never scrolls on
+  growth`). A later manual rerun,
+  `mise run test:logged -- --name virtuoso -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`,
+  passed (1.0 s).
+
+A second complete `mise run test` on the same branch (head `5cff101fa`,
+load average 61 to 72) failed nine cases of this file in the web group
+(14,469 passed), and the runner's rerun again reported `FAILED ALONE (1.4s)`
+(two `restored snapshot` cases). Three manual single-file reruns with
+`--parallel=1` at that load gave 8 pass / 6 fail, 14 pass / 0 fail and
+7 pass / 7 fail, so at this load the file fails alone about two runs in three.
+
+This is the first observation where the runner's single-file rerun also
+failed: under heavy host load one rerun is not enough to clear the late
+timer, which still fits the Happy DOM frame hypothesis. Status stays open.
+
+## Recurrence — 2026-11-11 (container probe rerun review repairs), fails alone under load
+
+Observed 2026-11-11 on `container-probe-rerun-6defadbc4752-r1`, base commit
+`498b68766f5c9f357a3a86782406d1e9e0977559`, which contains the fix above
+(`mise run flaky:recurrence -- 9932 --base 498b68766` answered "open. Record
+the failure as a recurrence"). The branch changes container test harnesses,
+the UI perf probe, docs and one assertion in
+`apps/web/src/components/browser/ServiceBrowserTab.test.tsx`; it does not
+touch this file or the transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  (default suite, web package at its default worker count). The host load
+  average was 61–65 on 16 cores from other worktrees' work, and the aggregate
+  runner's scheduler reported 14–16 of 16 slots reserved.
+- **Failure:** three cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`, after the
+  bounded extra settle rounds):
+  - `literal false: a detached reader is not moved when the viewport shrinks` (24.9 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (16.1 ms, 22.4 ms)
+- **Suite counts:** web 14,466 passed and 3 failed; backend 18,370,
+  protocol 5,817, desktop 2,033, web-public 52 and toolchain 135 passed, as
+  did the root, bridge and lockfile groups.
+- **Isolated rerun:** as in the egress name-check observation above, the
+  file **failed alone** too. The aggregate runner's automatic rerun reported
+  `FAILED ALONE (589.5s)` (2 of 14 failed, after waiting 588 s for a slot),
+  and four further one-worker runs at the same load failed 8, 9, 7 and 7 of
+  14 cases with the same assertion
+  (`bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`,
+  three with `NODE_ENV=test`, one without). The extra cases include
+  `indexJumpThenRefresh` (line 140) and `followThenRefresh` (line 177) callers.
+
+At a load average around 60, the late timer is no longer an aggregate-only
+effect: one process on its own leaves a fake timer pending after every
+settle round. That still fits the Happy DOM real-immediate frame hypothesis,
+and it gives a way to reproduce it: run the file alone on a host loaded to
+about four times its core count. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (coordinator tab-group review repairs)
+
+- **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; `mise run flaky:recurrence -- 9932 --base 498b68766…` answered `open`.
+- **Observed head:** `coordinator-tab-groups-93e8abebd558-r1` at `1dffbbfac`
+  (coordinator layout store and plan-usage URL changes); nothing under
+  `apps/web/src/lib/transcript-scroll/` is touched.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-skip-guards -- mise run test`
+  on macOS, on a host shared with other worktrees' suites (1400.9 s).
+- **Failure:** five cases failed with `expect(jest.getTimerCount()).toBe(0)`
+  at line 110 (`elapsePastEveryDeadline`), called from lines 210, 248, 255
+  and 343 (twice): `a literal false follow prop never scrolls on growth`,
+  `a function follow prop that answers false is still truthy to the viewport-shrink path`,
+  `literal false: a detached reader is not moved when the viewport shrinks`
+  and `restored snapshot transitions from hidden to visible (cancel=%s)` (both).
+- **Suite counts:** web 14,474 passed and 5 failed; backend 18,326 passed and
+  4 failed (all case 9936's `maintenance.lock` copy race); root, bridge and
+  lockfile groups passed.
+- **Isolated rerun:** `mise run test:logged -- --name rerun-virtuoso -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
+  passed (0.9 s). The aggregate runner's own rerun was not reached: its 600 s
+  budget went to a file queued for host capacity.

@@ -26,6 +26,12 @@ export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
  * creation, as `name=reason` pairs from a fixed vocabulary.
  */
 export const DOCKER_LABEL_PROJECT_SEED_REFUSED = "orkestrator-project-seed-refused";
+/**
+ * Host ports the backend chose for a rootless daemon's automatic mappings, as
+ * comma-separated numbers (`container-host-ports.ts`). Published as fixed
+ * ports, but not ports the user fixed, so the start path may retry them.
+ */
+export const DOCKER_LABEL_BACKEND_HOST_PORTS = "orkestrator-backend-host-ports";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 /**

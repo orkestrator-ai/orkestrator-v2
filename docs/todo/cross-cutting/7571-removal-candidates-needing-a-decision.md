@@ -251,8 +251,8 @@ the investigation could not run:
 **Problem.** The same branch repointed the ten most-cited retired to-do
 numbers (7250, 3800, 7530, 0160, 7550, 7522, 4520, 7540, 7310, 7200) to the
 pull requests that did the work. About 39 others remain on about 80
-comment lines. `plans/*` links also remain inside to-do files 0052, 0007,
-0031 and 0025.
+comment lines. `plans/*` links also remain inside to-do files 0007, 0031 and
+0025.
 
 **Context.** They are cosmetic. "recurring-processes step NN" comments are
 deliberately kept (0048 task 15).

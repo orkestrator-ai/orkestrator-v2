@@ -2277,7 +2277,7 @@ export function jsonResponse(
 export function serializedJsonResponse(
   response: ServerResponse,
   statusCode: number,
-  payload: string,
+  payload: string | Buffer,
   headers: OutgoingHttpHeaders = {},
 ): void {
   bodyResponse(response, statusCode, payload, {

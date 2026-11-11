@@ -7,7 +7,7 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
     events: {
       stalled: {
         description:
-          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `commandsInFlight` and `commands` the commands running, `blockingCommand` one whose synchronous part overlapped it, and `jobsInWindow` and `jobs` the recurring jobs that ran around it. `cpuMs` is the CPU time the process used in the window: near `lagMs` its own thread was busy, far below it the thread waited.",
+          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `storageCalls` and `storageCallMs` every SQLite call that ended in it, slow or not (`storageMainCallMs` and `storageLedgerCallMs` per database), `commandsInFlight` and `commands` the commands running, `blockingCommand` one whose synchronous part overlapped it, and `jobsInWindow` and `jobs` the recurring jobs that ran around it. `cpuMs` is the CPU time the process used in the window: near `lagMs` its own thread was busy, far below it the thread waited.",
         essential: true,
         minLevel: "error",
         fields: {
@@ -20,6 +20,10 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
           storageTable: "label",
           storageLongestMs: "number",
           storageBusy: "boolean",
+          storageCalls: "number",
+          storageCallMs: "number",
+          storageMainCallMs: "number",
+          storageLedgerCallMs: "number",
           commandsInFlight: "number",
           blockingCommandMs: "number",
           jobsInWindow: "number",

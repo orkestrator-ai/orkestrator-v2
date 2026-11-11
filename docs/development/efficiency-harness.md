@@ -223,4 +223,4 @@ harness, the recurring-work A/B in
   review sessions. Those gaps
   are tracked in
   [0050-transcript-history-efficiency.md](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
-  and [0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md).
+  and [remote-bandwidth.md](remote-bandwidth.md).

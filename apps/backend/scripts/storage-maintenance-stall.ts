@@ -17,7 +17,7 @@ import { storeLayout } from "../src/core/storage-stores.js";
  * (to-do 1202 task 7, report finding ST-13):
  *
  *   mise exec -- bun apps/backend/scripts/storage-maintenance-stall.ts \
- *     [--main-mb 256] [--ledger-mb 256] [--runs 3] [--json]
+ *     [--main-mb 256] [--ledger-mb 256] [--runs 3] [--scrub-only] [--json]
  *
  * Builds a throwaway data directory under the system temporary directory (a
  * main database and a change-tracking ledger of the given sizes, filled with
@@ -35,7 +35,14 @@ import { storeLayout } from "../src/core/storage-stores.js";
  * - `upkeep`: `runDatabaseUpkeep` after 1 / (2 × runs) of the main rows were
  *   deleted, so it has free pages to return; `optimize` alone is timed too.
  * - `scrub`: `scrubDeletedContent` after another such share was deleted. Not part
- *   of the snapshot check: a deletion runs it.
+ *   of the snapshot check: a deletion runs it. Since 2026-11-11 it is only the
+ *   truncating checkpoint (storage.md, "Durability and deletion").
+ * - `release 16 MiB`: `releaseFreePages()` straight after the scrub, which is
+ *   what the scrub also did before 2026-11-11 and the upkeep's child now does
+ *   instead.
+ *
+ * `--scrub-only` skips every step but the last two (and the ledger), for a
+ * quick check of the deletion path.
  *
  * The directory is removed afterwards. Nothing outside it is read or written.
  */
@@ -120,6 +127,7 @@ async function main(): Promise<void> {
   const mainMb = argument("--main-mb", 256);
   const ledgerMb = argument("--ledger-mb", 256);
   const runs = argument("--runs", 3);
+  const scrubOnly = process.argv.includes("--scrub-only");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "orkestrator-maintenance-stall-"));
   const rows: Row[] = [];
   try {
@@ -128,7 +136,7 @@ async function main(): Promise<void> {
     });
     try {
       fillMain(db, mainMb * MIB);
-      fillLedger(directory, ledgerMb * MIB);
+      if (!scrubOnly) fillLedger(directory, ledgerMb * MIB);
       let clock = Date.now();
       const tick = () => clock;
       const bump = (run: number) => db.writeStore("bench-marker", { run, at: clock });
@@ -138,6 +146,16 @@ async function main(): Promise<void> {
           .query("DELETE FROM store_rows WHERE store = 'bench-records' AND position % ? = ?")
           .run(2 * runs, share);
       for (let run = 1; run <= runs; run += 1) {
+        if (scrubOnly) {
+          deleteShare(2 * (run - 1) + 1);
+          rows.push({ step: "scrub", run, ...(await measure(() => db.scrubDeletedContent())) });
+          rows.push({
+            step: "release 16 MiB",
+            run,
+            ...(await measure(() => db.releaseFreePages())),
+          });
+          continue;
+        }
         clock += 2 * 24 * 60 * 60 * 1000;
         bump(run);
         rows.push({
@@ -166,9 +184,11 @@ async function main(): Promise<void> {
         deleteShare(2 * (run - 1));
         rows.push({ step: "optimize", run, ...(await measure(() => db.optimize())) });
         rows.push({ step: "upkeep", run, ...(await measure(() => runDatabaseUpkeep(db))) });
-        // A deletion's scrub returns up to 16 MiB in one synchronous step.
+        // A deletion's scrub is its truncating checkpoint; the release it used
+        // to run in-process (up to 16 MiB) is timed on its own after it.
         deleteShare(2 * (run - 1) + 1);
         rows.push({ step: "scrub", run, ...(await measure(() => db.scrubDeletedContent())) });
+        rows.push({ step: "release 16 MiB", run, ...(await measure(() => db.releaseFreePages())) });
       }
     } finally {
       db.close();

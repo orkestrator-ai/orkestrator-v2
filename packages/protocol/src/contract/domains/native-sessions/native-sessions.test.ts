@@ -43,6 +43,7 @@ const ADMIN = new Set([
 
 /** Results the gateway splices pre-encoded (`markSpliceableResult`). */
 const ENCODED = new Set([
+  "get_native_agent_projection",
   "get_native_agent_transcript_update",
   "get_native_agent_live_update",
   "get_native_agent_projection_update",

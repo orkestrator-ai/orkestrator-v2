@@ -23,7 +23,7 @@ import { CONTAINER_BRIDGE_LAUNCHER } from "../container-bridge-credential.js";
 import { OPENCODE_HOST_CONFIG_INPUT } from "../opencode-container-launch.js";
 import { openCodePackageCacheScript } from "../opencode-package-cache.js";
 import { openCode2LaunchConfigScript } from "../opencode2-container-launch.js";
-import { OpenCode2Client } from "./client.js";
+import { startOpenCode2OnFreePort } from "./live-server.test-support.js";
 import { OPENCODE2_FLAGS } from "./server.js";
 import { mintOpenCode2InputId } from "./steer.js";
 
@@ -167,42 +167,37 @@ mkdir -p "node_modules/$(dirname "$name")" && cp -R "${fixtures}/$name" "node_mo
     await Bun.spawn(["chmod", "-R", "a-w", path.join(run, "opencode"), cache]).exited;
 
     const password = `okb_${"c".repeat(43)}`;
-    const port = 40_000 + Math.floor(Math.random() * 1_000);
-    server = Bun.spawn([binary!, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
-      cwd: workspace,
-      env: {
-        OPENCODE_PASSWORD: password,
-        OPENCODE_FLAGS: OPENCODE2_FLAGS,
-        OPENCODE_DB: at("data", "opencode2.db"),
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        HOME: at("home"),
-        LANG: "C.UTF-8",
-        XDG_CONFIG_HOME: path.join(run, "config"),
-        OPENCODE_CONFIG_DIR: path.join(run, "opencode"),
-        OPENCODE_TEST_HOME: path.join(run, "home"),
-        XDG_CACHE_HOME: cache,
-        XDG_DATA_HOME: at("data"),
-        XDG_STATE_HOME: at("state"),
-        OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-        OPENCODE_DISABLE_AUTOUPDATE: "1",
-      },
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    const client = new OpenCode2Client({
-      baseUrl: `http://127.0.0.1:${port}`,
+    const started = await startOpenCode2OnFreePort({
+      stderrPath: at("serve.stderr"),
       password,
       directory: workspace,
+      onSpawn: (spawned) => {
+        server = spawned;
+      },
+      spawn: (port) =>
+        Bun.spawn([binary!, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+          cwd: workspace,
+          env: {
+            OPENCODE_PASSWORD: password,
+            OPENCODE_FLAGS: OPENCODE2_FLAGS,
+            OPENCODE_DB: at("data", "opencode2.db"),
+            PATH: "/usr/local/bin:/usr/bin:/bin",
+            HOME: at("home"),
+            LANG: "C.UTF-8",
+            XDG_CONFIG_HOME: path.join(run, "config"),
+            OPENCODE_CONFIG_DIR: path.join(run, "opencode"),
+            OPENCODE_TEST_HOME: path.join(run, "home"),
+            XDG_CACHE_HOME: cache,
+            XDG_DATA_HOME: at("data"),
+            XDG_STATE_HOME: at("state"),
+            OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+            OPENCODE_DISABLE_AUTOUPDATE: "1",
+          },
+          stdout: "ignore",
+          stderr: Bun.file(at("serve.stderr")),
+        }),
     });
-    let ready = false;
-    for (let attempt = 0; attempt < 150 && !ready; attempt++) {
-      ready = await client.info().then(
-        (info) => info.version.startsWith("2."),
-        () => false,
-      );
-      if (!ready) await Bun.sleep(200);
-    }
-    expect(ready).toBe(true);
+    const client = started.client;
     await client.api("GET", "/api/agent", "OpenCode agents", {});
 
     for (const id of Object.keys(providers)) {

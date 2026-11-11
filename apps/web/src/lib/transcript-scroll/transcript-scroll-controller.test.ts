@@ -61,6 +61,9 @@ function harness() {
       width = 600;
       rowTop += 150;
     },
+    setWidth(value: number) {
+      width = value;
+    },
   };
 }
 
@@ -248,6 +251,60 @@ describe("transcript reading ownership", () => {
     expect(view.controller.diagnostics().operationsStarted).toBe(operations + 1);
     expect(view.row.getBoundingClientRect().top).toBe(80);
     expect(view.scroller.scrollTop).toBe(2070);
+  });
+
+  test("a width reflow leaves a pending history recovery in charge of the reader's place", () => {
+    const original = globalThis.ResizeObserver;
+    let resize: ResizeObserverCallback | undefined;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        resize = callback;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    disposals.push(() => {
+      globalThis.ResizeObserver = original;
+    });
+    const idle = installControlledTimeout(150, { label: "reading anchor" });
+    disposals.unshift(() => {
+      idle.assertDrained();
+      idle.restore();
+    });
+    const view = harness();
+    view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    view.scrollTo(1920);
+    expect(idle.advance()).toBe(1);
+    expect(view.controller.readingAnchor).not.toBeNull();
+    const resized = () =>
+      resize?.(
+        [
+          {
+            target: view.scroller,
+            contentRect: view.scroller.getBoundingClientRect(),
+            borderBoxSize: [],
+            contentBoxSize: [],
+            devicePixelContentBoxSize: [],
+          },
+        ],
+        {} as ResizeObserver,
+      );
+    // The reader's history was dropped and is being paged back in; the
+    // shorter list lost its scrollbar, so the scroller is wider now.
+    view.controller.setWaitingForHistory(true);
+    const generation = view.controller.generation;
+    const operations = view.controller.diagnostics().operationsStarted;
+    view.reflow();
+    resized();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.generation).toBe(generation);
+    expect(view.controller.diagnostics().operationsStarted).toBe(operations);
+    // Once the recovery is over, a later width change holds the place again.
+    view.controller.setWaitingForHistory(false);
+    view.setWidth(700);
+    resized();
+    expect(view.controller.currentOwner).toBe("reflow");
   });
 
   test("a settled reader keeps their place throughout a tool-group fold above them", async () => {

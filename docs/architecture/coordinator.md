@@ -15,10 +15,14 @@ OpenCode and Grok steer in
 worker-surface follow-ups (root changes on other nodes, adopting feature
 plans) in
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md);
-live qualification of the gap tools (`resolve_conflicts`, PR wakes,
-`stop_worker_turn`, `get_worker_changes`, `fork_worker`, schedule edits,
-worker slash commands, `answer_worker_question`) in
-[1021-coordinator-gap-tools-follow-ups.md](../todo/coordinator-and-multi-review/1021-coordinator-gap-tools-follow-ups.md).
+the gap tools (`resolve_conflicts`, PR wakes, `stop_worker_turn`,
+`get_worker_changes`, `fork_worker`, schedule edits, worker slash commands,
+`answer_worker_question`) pass the live suite's `gap-tools` case on a fake
+model, on this node and through a leaf
+([agent-testing.md](../development/agent-testing.md#coordinator-gap-tools-on-this-node-and-a-leaf-fake-model)),
+and their real-provider, GitHub and answer-relay runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(1021 (retired)).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -488,11 +492,14 @@ move, and the provider's error in its transcript is what the user sees. A side a
 stop reaches its main. So a wake that fails on a limit ends there rather than raising
 another wake: a notice cannot trigger another notice about the same stop.
 
-To check this live, with real accounts and two machines: attach a leaf to a command node
-that has the same repository, run a tab on the leaf until the provider refuses it, and
-look for one wake on the command node's coordinator and none on the leaf's. Repeat with
-the link down across a leaf restart, and with the command node's coordinator on the same
-email as the stopped tab, with and without another included account.
+`mise run test:agent:coordinator:notice-live` checks this on two real backends, on
+fixture Claude accounts and a loopback provider
+([agent-testing.md](../development/agent-testing.md#coordinator-usage-limit-notices-between-two-profiles-fixture-accounts)):
+a leaf's tab, delegated worker and pipeline session stopping on one account reach the
+command node's coordinator as one wake and the leaf's as none; a coordinator on its own
+entry of the limited login is moved, unpinned, before its wake; and a stop raised while
+the command node is down arrives once after a leaf restart. With real accounts and two
+machines, the same check is on the manual-test checklist.
 
 ## Coordinators on two nodes
 
@@ -790,7 +797,13 @@ with the stored record and the renderer adopts it, which is why a layout change
 lost in that race is not retried. Other clients hear `coordinator-pane-layout`
 and re-read. A browser's earlier local copy is imported once at revision 0, so it
 never replaces a layout already stored, and then deleted; against a backend
-without the capability the layout stays in that copy. It never opens or closes a
+without the capability the layout stays in that copy. Until a read of the
+stored layout (or of the backend's capabilities) succeeds, the panel shows no
+groups and saves nothing: a default grouping reconciled from "nothing known"
+would otherwise be saved over the user's groups. It shows **Could not load the
+tab groups** with **Retry now** instead, reads again after 1, 3 and 10 seconds,
+and then on the next resync, safety check, mount or Retry
+(`coordinatorPaneLayoutStore.ts`). It never opens or closes a
 conversation; on every snapshot it is reconciled against the backend's open set,
 dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
@@ -3135,7 +3148,12 @@ rollup (passing, failing, running, neutral/skipped, none), merge conflicts and r
 sends nothing; an unknown mergeability keeps the last known conflict state.
 The first known conflict state is silent. Every later change sends one notice naming what changed. A merge or close
 is reported once and ends the watch; a pull request already
-settled at its first reading ends silently. *Finished work only* (`off`)
+settled at its first reading ends silently. A closed pull request that is
+later reopened is therefore not reported: ending the watch keeps the sweep's
+reads bounded, and a coordinator that needs to know starts a new watch
+(`get_environment` shows the pull request open again). This was decided on
+2026-11-01 (to-do 1021 (retired) task 6); revisit it only if a coordinator
+workflow is seen to lose a reopened pull request. *Finished work only* (`off`)
 records changes without notices, and with no main conversation open the change
 is recorded without a notice, as for other status notices. Disabled messaging also records changes quietly.
 **Deleted pull requests.** A 404 alone cannot tell a deleted pull request
@@ -3573,7 +3591,11 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 `docker exec` in a running container): the patch applies whole or not at
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
-The coordinator never sees the patch.
+The coordinator never sees the patch. `mise run test:agent:coordinator:surfaces-fake`
+runs a reject and two approvals (a local and a container worker) end to end
+in the browser client on a loopback fake model, together with
+`open_worker_browser` on the container worker
+([agent-testing.md](../development/agent-testing.md#coordinator-worker-surfaces-fake-model)).
 
 **Answering a worker's question.** A delegated worker waiting on a question
 needs a person, and the coordinator cannot answer for them, but it can save

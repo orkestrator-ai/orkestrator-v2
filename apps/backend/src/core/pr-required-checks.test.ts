@@ -14,7 +14,7 @@ import {
 } from "./pr-required-checks.js";
 
 /**
- * Which failing checks GitHub requires (to-do 1021 task 7): the GraphQL
+ * Which failing checks GitHub requires (to-do 1021 (retired) task 7): the GraphQL
  * answer's parsing and guards, the per-head cache, and the monitor's `gh`
  * boundary through a fake `gh` on PATH.
  */

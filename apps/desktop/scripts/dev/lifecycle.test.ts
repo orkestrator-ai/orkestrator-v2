@@ -20,8 +20,10 @@ import {
   assertElectronReadiness,
   compileElectronForDevelopment,
   AGENT_TEST_CORE_DUMPS_ENV,
+  AGENT_TEST_ELECTRON_DEBUG_ENV,
   electronCommand,
   electronHeadlessNotice,
+  electronDebugSwitches,
   electronLaunch,
   ELECTRON_STOP_GRACE_MS,
   signalsProcessGroup,
@@ -118,25 +120,30 @@ describe("Electron readiness", () => {
   });
 
   test.each([
-    ["development", "linux", undefined, false, "window", null],
-    ["development", "linux", undefined, true, "window", null],
-    ["agent-test", "linux", undefined, false, "ozone", null],
-    ["agent-test", "linux", undefined, true, "window", null],
-    ["agent-test", "linux", true, true, "ozone", null],
-    ["agent-test", "linux", false, false, "window", null],
-    ["agent-test", "darwin", true, true, "hidden", null],
-    ["agent-test", "darwin", undefined, false, "hidden", null],
-    ["agent-test", "win32", true, true, "window", "--headless"],
-    ["agent-test", "win32", undefined, false, "window", "running without a terminal"],
-    ["agent-test", "darwin", undefined, true, "window", null],
-    ["agent-test", "win32", undefined, true, "window", null],
-    ["agent-test", "darwin", false, false, "window", null],
-    ["agent-test", "win32", false, false, "window", null],
-    ["development", "darwin", true, false, "window", null],
-    ["development", "win32", true, false, "window", null],
+    ["development", "linux", undefined, false, "window", null, false],
+    ["development", "linux", undefined, true, "window", null, false],
+    ["agent-test", "linux", undefined, false, "ozone", null, false],
+    ["agent-test", "linux", undefined, true, "window", null, false],
+    ["agent-test", "linux", true, true, "ozone", null, false],
+    ["agent-test", "linux", false, false, "window", null, false],
+    ["agent-test", "darwin", true, true, "hidden", null, false],
+    ["agent-test", "darwin", undefined, false, "hidden", null, false],
+    ["agent-test", "win32", true, true, "window", "--headless", false],
+    ["agent-test", "win32", undefined, false, "window", "running without a terminal", false],
+    ["agent-test", "darwin", undefined, true, "window", null, false],
+    ["agent-test", "win32", undefined, true, "window", null, false],
+    ["agent-test", "darwin", false, false, "window", null, false],
+    ["agent-test", "win32", false, false, "window", null, false],
+    ["development", "darwin", true, false, "window", null, false],
+    ["development", "win32", true, false, "window", null, false],
+    // ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1 opens a loopback debugging port
+    // on an agent-test profile only, ahead of main.js (0050 task 4).
+    ["agent-test", "linux", true, true, "ozone", null, true],
+    ["agent-test", "darwin", true, true, "hidden", null, true],
+    ["development", "linux", undefined, false, "window", null, true],
   ] as const)(
-    "wires Electron spawn settings and keeps readiness during status persistence (%s on %s, requested=%s, interactive=%s)",
-    async (flavor, platform, requested, interactive, mode, windowNoticeCause) => {
+    "wires Electron spawn settings and keeps readiness during status persistence (%s on %s, requested=%p, interactive=%p, mode=%s, notice=%p, debug=%p)",
+    async (flavor, platform, requested, interactive, mode, windowNoticeCause, debug) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
       const roots = {
         developmentRoot: path.join(root, "dev"),
@@ -179,10 +186,13 @@ describe("Electron readiness", () => {
         ELECTRON_RUN_AS_NODE: "1",
         // Inherited from a shell, it must not hide a profile that keeps its window.
         ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
+        ...(debug ? { [AGENT_TEST_ELECTRON_DEBUG_ENV]: "1" } : {}),
       };
       const ambientHeadlessVariables = [
         "ORKESTRATOR_AGENT_TEST_HEADLESS",
         "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON",
+        // Inherited from a shell, it must not add switches a case did not ask for.
+        AGENT_TEST_ELECTRON_DEBUG_ENV,
       ];
       const previousEnv = Object.fromEntries(
         [...Object.keys(launchEnv), ...ambientHeadlessVariables].map((key) => [
@@ -273,6 +283,11 @@ describe("Electron readiness", () => {
         );
         const electronMainArgs = [
           ...(mode === "ozone" ? HEADLESS_ELECTRON_SWITCHES : []),
+          // The debugging switches come before main.js, or Electron hands them
+          // to the app as arguments instead of reading them.
+          ...(debug && flavor === "agent-test"
+            ? ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"]
+            : []),
           "apps/desktop/dist/electron/main.js",
         ];
         // An agent-test profile on Linux starts Electron with no core dumps (7554).
@@ -509,6 +524,19 @@ describe("Electron launch", () => {
       ...electronLaunch(false, "darwin", env).env,
       ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
     });
+  });
+
+  test("remote debugging is opt-in, loopback-only and never for a development profile", () => {
+    expect(electronDebugSwitches("agent-test", {})).toEqual([]);
+    expect(
+      electronDebugSwitches("agent-test", { ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG: "true" }),
+    ).toEqual([]);
+    expect(
+      electronDebugSwitches("agent-test", { ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG: "1" }),
+    ).toEqual(["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"]);
+    expect(
+      electronDebugSwitches("development", { ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG: "1" }),
+    ).toEqual([]);
   });
 
   test("only the launcher's own decision hides windows", () => {

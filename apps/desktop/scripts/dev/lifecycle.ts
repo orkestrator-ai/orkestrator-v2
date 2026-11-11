@@ -585,6 +585,26 @@ export function electronLaunch(
 }
 
 /**
+ * `1` starts an agent-test profile's Electron with Chromium's remote debugging
+ * on an OS-chosen loopback port, so a spec can drive the profile's real window
+ * (its preload and IPC path) over CDP. Chromium prints the endpoint as
+ * `DevTools listening on ws://127.0.0.1:<port>/...` on stderr, which reaches
+ * the profile's `electron.log`. Off by default, and ignored for a development
+ * profile: whoever can reach the port controls the window, which in an
+ * agent-test profile holds only fixture state.
+ */
+export const AGENT_TEST_ELECTRON_DEBUG_ENV = "ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG";
+
+/** The remote-debugging switches {@link AGENT_TEST_ELECTRON_DEBUG_ENV} asks for, if any. */
+export function electronDebugSwitches(
+  flavor: "development" | "agent-test",
+  env: NodeJS.ProcessEnv,
+): string[] {
+  if (flavor !== "agent-test" || env[AGENT_TEST_ELECTRON_DEBUG_ENV] !== "1") return [];
+  return ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"];
+}
+
+/**
  * `1` lets an agent-test profile's Electron, and everything it starts, write
  * core dumps on Linux. Off by default: see `electronCommand`.
  */
@@ -1047,7 +1067,11 @@ export async function startDevelopment(
     const electronEnv = launch.env;
     const electronSpawn = electronCommand(
       electronExecutable,
-      [...launch.switches, "apps/desktop/dist/electron/main.js"],
+      [
+        ...launch.switches,
+        ...electronDebugSwitches(flavor, process.env),
+        "apps/desktop/dist/electron/main.js",
+      ],
       { flavor, platform, env: process.env },
     );
     electron = (dependencies.spawn ?? spawn)(electronSpawn.command, electronSpawn.args, {

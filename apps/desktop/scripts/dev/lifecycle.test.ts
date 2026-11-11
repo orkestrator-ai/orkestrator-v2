@@ -22,6 +22,7 @@ import {
   AGENT_TEST_CORE_DUMPS_ENV,
   electronCommand,
   electronHeadlessNotice,
+  electronDebugSwitches,
   electronLaunch,
   ELECTRON_STOP_GRACE_MS,
   signalsProcessGroup,
@@ -509,6 +510,19 @@ describe("Electron launch", () => {
       ...electronLaunch(false, "darwin", env).env,
       ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
     });
+  });
+
+  test("remote debugging is opt-in, loopback-only and never for a development profile", () => {
+    expect(electronDebugSwitches("agent-test", {})).toEqual([]);
+    expect(
+      electronDebugSwitches("agent-test", { ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG: "true" }),
+    ).toEqual([]);
+    expect(
+      electronDebugSwitches("agent-test", { ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG: "1" }),
+    ).toEqual(["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"]);
+    expect(
+      electronDebugSwitches("development", { ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG: "1" }),
+    ).toEqual([]);
   });
 
   test("only the launcher's own decision hides windows", () => {

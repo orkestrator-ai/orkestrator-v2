@@ -26,6 +26,7 @@ import {
 import type { DiffScanEvent, DiffStatsTarget } from "../diff-stats-service.js";
 import type { GitFileChange } from "../commands-files.js";
 import { encodePath } from "./capture.js";
+import type { WorktreeActivity } from "./inert-hints.js";
 import type { MeasurementFileRecord } from "./change-ledger.js";
 import type { ChangeMeasurementService } from "./measurement-service.js";
 import type { ChangeProjectionService } from "./projection-service.js";
@@ -89,7 +90,7 @@ export class EnvironmentChangeProjector {
     { timer: ReturnType<typeof setTimeout>; paths: Set<string> | null }
   >();
   private readonly onWorktreeActivity:
-    ((environmentId: string, paths: readonly string[] | null) => void) | undefined;
+    ((environmentId: string, activity: WorktreeActivity) => void) | undefined;
 
   constructor(
     private readonly deps: {
@@ -98,7 +99,7 @@ export class EnvironmentChangeProjector {
       registry: WorktreeRegistry;
       announcer: ProjectionAnnouncer;
       liveBodyCoalesceMs: number;
-      onWorktreeActivity?: (environmentId: string, paths: readonly string[] | null) => void;
+      onWorktreeActivity?: (environmentId: string, activity: WorktreeActivity) => void;
     },
   ) {
     this.onWorktreeActivity = deps.onWorktreeActivity;
@@ -110,7 +111,10 @@ export class EnvironmentChangeProjector {
       event.kind === "removed" ? event.environmentId : event.target.environmentId;
     if (event.kind === "hint") {
       this.coalesceHint(environmentId, event.paths);
-      this.onWorktreeActivity?.(environmentId, event.paths);
+      this.onWorktreeActivity?.(environmentId, {
+        paths: event.paths,
+        gitMetadata: event.gitMetadata === true,
+      });
       return;
     }
     const previous = this.chains.get(environmentId) ?? Promise.resolve();

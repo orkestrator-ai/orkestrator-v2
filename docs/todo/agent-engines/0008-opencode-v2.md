@@ -2634,6 +2634,18 @@ a 3 s p95 budget. 1.x gave the same reading on the same profile (13.3 and
 13.5 s): it is the view's own idle read gap (about 15 s) under quiet backoff,
 not a 2.x difference.
 
+Observed, not recorded as a flake: in the default suite run with guards
+skipped (`ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test`, 2026-11-11, head
+`05c350cae`), one backend test timed out at 5,000.59 ms:
+`pull request status wakes > a follow that already ended still records the
+merge when its worker is deleted`
+(`apps/backend/src/core/coordinator-status-wakes-pr.test.ts`). Its owning file
+passed alone (16 pass, 6.99 s), and it imports no OpenCode module. The work
+that found it had no flake number of its own left to give it (its one number,
+9974, went to the launch flake above), so it has no case file; whoever sees it
+again should open a flake case under the coordinator group with this run as
+the first observation.
+
 Decisions:
 
 - **Where the real-stack half runs.**

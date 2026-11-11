@@ -146,6 +146,7 @@ describe("buildOpenCode2TerminalCommand", () => {
       `OPENCODE_CONFIG_DIR=${configDir}`,
       `OPENCODE_DB=${openCode2HostPaths(dataDir).database}`,
       "OPENCODE_DISABLE_AUTOUPDATE=1",
+      "OPENCODE_DISABLE_FILEWATCHER=1",
       `OPENCODE_FLAGS=${OPENCODE2_FLAGS}`,
     ]);
     expect(await Bun.file(path.join(root, "pwned")).exists()).toBe(false);

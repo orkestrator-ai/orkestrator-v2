@@ -26,7 +26,7 @@
  */
 import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import { quoteShell } from "../commands-agent-support.js";
-import { OPENCODE2_FLAGS, openCode2HostPaths } from "./server.js";
+import { OPENCODE2_DISABLE_FILEWATCHER, OPENCODE2_FLAGS, openCode2HostPaths } from "./server.js";
 
 /** Shell variables that must not reach a 2.x terminal TUI or its private server. */
 const UNSET_IN_TERMINAL = [
@@ -55,6 +55,7 @@ export function buildOpenCode2TerminalCommand(input: OpenCode2TerminalLaunchInpu
     ["OPENCODE_FLAGS", OPENCODE2_FLAGS],
     ["OPENCODE_DB", paths.database],
     ["OPENCODE_CONFIG_DIR", input.configDir],
+    ...Object.entries(OPENCODE2_DISABLE_FILEWATCHER),
   ];
   if (input.mirroredUserConfig) assignments.push(["OPENCODE_CONFIG", paths.customConfig]);
   const model = input.model && input.model !== "default" ? input.model : undefined;

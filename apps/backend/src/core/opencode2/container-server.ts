@@ -159,6 +159,7 @@ ${plugins
     export OPENCODE_CONFIG_DIR=${OPENCODE2_CONTAINER_CONFIG_DIR}
     export OPENCODE_DISABLE_AUTOUPDATE=1
     export OPENCODE_FLAGS=${quoteShell(OPENCODE2_FLAGS)}
+    export OPENCODE_DISABLE_FILEWATCHER=1
     ${persistentStateExports("opencode2")}
     ${boundedLaunchWithPrivateEnv(serve, OPENCODE2_CONTAINER_LOG, "OPENCODE_PASSWORD")}
   `;

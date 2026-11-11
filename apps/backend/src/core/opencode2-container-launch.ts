@@ -77,6 +77,7 @@ import {
 } from "./opencode2/container-server.js";
 import {
   OPENCODE2_CREDENTIAL_PLUGIN_ID,
+  OPENCODE2_DISABLE_FILEWATCHER,
   OPENCODE2_FLAGS,
   buildOpenCode2CredentialPluginSource,
 } from "./opencode2/server.js";
@@ -203,6 +204,8 @@ export function openCode2Launch(
         env: {
           OPENCODE_PASSWORD: password,
           OPENCODE_FLAGS: OPENCODE2_FLAGS,
+          // Its location watchers stall start and shutdown (`server.ts`).
+          ...OPENCODE2_DISABLE_FILEWATCHER,
           // 2.x always gets a database of its own: its default is 1.x's `opencode.db`.
           OPENCODE_DB: persistentDatabase ? OPENCODE2_DB_PATH : OPENCODE2_LEGACY_DB_PATH,
         },

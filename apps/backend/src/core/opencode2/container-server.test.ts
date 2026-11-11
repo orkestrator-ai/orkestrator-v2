@@ -50,6 +50,7 @@ describe("buildOpenCode2ContainerStartScript", () => {
     expect(script).toContain(`export OPENCODE_CONFIG_DIR=${OPENCODE2_CONTAINER_CONFIG_DIR}`);
     expect(script).toContain("export OPENCODE_DISABLE_AUTOUPDATE=1");
     expect(script).toContain(`export OPENCODE_FLAGS='${OPENCODE2_FLAGS}'`);
+    expect(script).toContain("export OPENCODE_DISABLE_FILEWATCHER=1");
     // The exports follow the runtime-env snapshot, which must not override them.
     expect(script.indexOf("orkestrator_source_runtime_env")).toBeLessThan(
       script.indexOf("export OPENCODE_DB="),

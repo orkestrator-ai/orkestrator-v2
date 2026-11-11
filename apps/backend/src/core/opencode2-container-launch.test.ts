@@ -110,6 +110,7 @@ describe("the image, the launcher and the backend agree on the 2.x server", () =
       env: {
         OPENCODE_PASSWORD: password,
         OPENCODE_FLAGS: OPENCODE2_FLAGS,
+        OPENCODE_DISABLE_FILEWATCHER: "1",
         OPENCODE_DB: "/home/node/.local/share/opencode/orkestrator-db/opencode2.db",
       },
     });

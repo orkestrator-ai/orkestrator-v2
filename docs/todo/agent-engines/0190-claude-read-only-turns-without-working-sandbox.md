@@ -487,16 +487,51 @@ Made 2026-10-28 while implementing.
   settings or process-environment routes); the names are an explicit list
   (endpoint, credential, alias models, Bedrock, Vertex, Foundry, proxy, TLS
   trust and client certificate), not an `ANTHROPIC_` prefix, because that
-  prefix also holds configuration directories and logging; coordinator turns
-  get the same, since they load no settings file either and these variables
-  widen nothing; settings values win over the bridge's own, matching the
-  CLI's order for an ordinary turn. Evidence: unit and query-plan tests, and
+  prefix also holds configuration directories and logging; settings values
+  win over the bridge's own, matching the CLI's order for an ordinary turn.
+  Coordinators read the same way but find nothing (A21). Evidence: unit and query-plan tests, and
   `conformance-read-only-settings-connection-live.test.ts` on the pinned CLI
   2.1.319 (before: "Not logged in", 0 model calls; after: 1 model call).
   Cons: the list must be rechecked on each Claude bump. Containers do not
   receive the host's settings `env` at all (the entrypoint rewrites
   `~/.claude/settings.json` and stages only `enabledPlugins`), so this
   changes host environments and settings edited inside a container.
+- **A21. Review findings on A20 (2026-11-11, 7565).**
+  - *AWS profiles can run a command.* `AWS_PROFILE` selects a profile in
+    `~/.aws/config`, and a profile (directly or through `source_profile`) can
+    name a `credential_process`, which the pinned CLI's AWS credential chain
+    runs outside the hook and the command sandbox; so can the default
+    profile, with no `AWS_PROFILE` at all. Options: (a) drop `AWS_PROFILE`
+    only; (b) drop it, and also withhold a settings Bedrock connection that
+    would reach the credential chain (Bedrock on, and no skip flag, bearer
+    token or static key pair); (c) neutralise the AWS files for read-only
+    turns (`AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` at an empty
+    file). **Chosen: (b).** (a) leaves the default profile's helper reachable;
+    (c) also breaks SSO and static profiles and changes a bridge environment
+    the user launched. With (b) the settings keep their endpoint, region and
+    model entries but lose the Bedrock switch and credentials, and the bridge
+    logs `read-only-connection.bedrock-withheld` (no values). Such a user puts
+    `AWS_BEARER_TOKEN_BEDROCK` or a static key pair in the settings `env`, or
+    sets the connection in managed settings or the bridge's environment. A
+    bridge whose own environment already reaches the chain is left as it is:
+    that is the launch's choice, not something the settings file added.
+    Evidence: `conformance-read-only-settings-connection-live.test.ts` on the
+    pinned CLI 2.1.319 with a sentinel helper in a private HOME: the settings
+    `env` passed whole runs the helper through `source_profile`; the bridge's
+    environment runs none and sends no Bedrock request; a static key pair
+    still reaches the Bedrock endpoint, signed, with no helper run.
+  - *Coordinators do not get the connection.* A coordinator bridge runs with
+    `CLAUDE_CONFIG_DIR` at its private, empty Claude home
+    (`applyCoordinatorClaudeAccount`, `apps/backend/src/core/agent-accounts-active.ts`),
+    so the settings file it would read is absent and nothing is added; A20
+    and the docs had said otherwise. Options: (a) correct the docs and keep
+    coordinators excluded; (b) have the backend pass the host settings path
+    to coordinator bridges in a dedicated variable. **Chosen: (a).** A
+    coordinator connects with the account token the backend hands it, and
+    its home deliberately holds nothing the user authored; (b) widens a
+    coordinator's inputs for a case no report has raised. Pinned by
+    `read-only-connection-env.test.ts` ("which settings file a coordinator
+    bridge reads").
 
 ## Open questions
 

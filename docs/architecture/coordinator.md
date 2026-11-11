@@ -1372,7 +1372,12 @@ token, Bedrock or Vertex), so every reviewer answered "Not logged in". The
 bridge now passes that file's connection entries, and nothing else from it,
 to the turn's process environment (`read-only-connection-env.ts`; see
 [credentials-and-models.md](../development/credentials-and-models.md)).
-`apiKeyHelper` is not run: it is a command outside the hook.
+`apiKeyHelper` is not run: it is a command outside the hook. For the same
+reason `AWS_PROFILE` is not taken, and a Bedrock connection that would make
+the CLI resolve AWS profiles (whose `credential_process` is a command) is
+withheld. A coordinator itself gets nothing from the file: its bridge's
+`CLAUDE_CONFIG_DIR` is the coordinator's private, empty Claude home, and it
+connects with the account token the backend hands it.
 
 Without the sandbox the hook refuses every Git command, because a
 repository's Git configuration can run helpers (an external diff, a

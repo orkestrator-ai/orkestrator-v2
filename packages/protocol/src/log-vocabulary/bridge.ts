@@ -112,6 +112,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "An answer arrived for a question no longer pending; the route answered stale.",
       "question.wait-failed":
         "A parked question ended without an answer: cancelled, timed out or closed.",
+      "read-only-connection.bedrock-withheld":
+        "A read-only turn did not take the user settings' Bedrock connection: it names no bearer token or static key pair, so the CLI would resolve AWS profiles, whose credential_process runs outside the read-only boundary.",
       "runtime.ended-under-resumed-turn":
         "The Claude runtime ended while a resumed root turn was still open.",
       "server.listening": "The HTTP server is listening.",

@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { claudeLaunchResourceProfile } from "./session-manager-runtime.js";
+import {
+  assertClaudeRuntimeAccepts,
+  claudeLaunchResourceProfile,
+} from "./session-manager-runtime.js";
 import {
   nextQueryCall,
+  releaseWithBackgroundWork,
   sendPrompt,
   createSession,
   track,
@@ -64,5 +68,31 @@ describe("a read-only turn reaches the model the user settings name (to-do 7565)
     expect(claudeLaunchResourceProfile([], { PATH: "/a" }).credentials).toBe(
       claudeLaunchResourceProfile([], { PATH: "/b" }).credentials,
     );
+  });
+
+  test("a changed settings connection is refused while the warm read-only CLI owes background work", async () => {
+    await withTemporaryClaudeHome("claude-read-only-connection-change-", async (home) => {
+      await mkdir(join(home, ".claude"), { recursive: true });
+      const settingsPath = join(home, ".claude", "settings.json");
+      const writeConnection = (url: string) =>
+        writeFile(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: url } }));
+      await writeConnection("http://127.0.0.1:1");
+      const { session, call, firstPrompt } = await releaseWithBackgroundWork(
+        "read-only connection change",
+        "agent-bg",
+        { readOnly: true },
+      );
+      expect(call.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:1");
+      // The same connection joins the running CLI.
+      await assertClaudeRuntimeAccepts(session, { readOnly: true });
+      // A longer value, so the stat-validated cache sees a new file.
+      await writeConnection("http://127.0.0.1:47123");
+      await expect(assertClaudeRuntimeAccepts(session, { readOnly: true })).rejects.toMatchObject({
+        code: "conflict",
+      });
+      expect(JSON.stringify(session.claudeRuntime!.launch)).not.toContain("127.0.0.1:47123");
+      call.finish();
+      await firstPrompt;
+    });
   });
 });

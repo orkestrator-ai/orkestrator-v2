@@ -389,6 +389,12 @@ interface Client {
   context: BrowserContext;
   page: Page;
   invoke: Invoke;
+  /**
+   * Slide the browser session's idle window, as an open renderer does. An
+   * agent-test session lapses after 30 idle minutes, which a no-renderer
+   * wait (Codex's detach, 7380) outlasts. It reads no agent session.
+   */
+  keepSignedIn: () => Promise<void>;
   readTimes: number[];
   /** Reads per backend command, for the evidence record. */
   readCommands: Record<string, number>;
@@ -445,7 +451,13 @@ async function openClient(browser: Browser, status: Status, logicalSessionKey: s
     if (!reply.ok()) throw new Error(`${command}: ${await reply.text()}`);
     return ((await reply.json()) as { result: T }).result;
   };
-  return { context, page, invoke, readTimes, readCommands } satisfies Client;
+  const keepSignedIn = async () => {
+    const reply = await context.request.post(
+      new URL("/__orkestrator/session", status.browserUrl!).href,
+    );
+    if (!reply.ok()) throw new Error(`session refresh: HTTP ${reply.status()}`);
+  };
+  return { context, page, invoke, keepSignedIn, readTimes, readCommands } satisfies Client;
 }
 
 async function openEnvironment(page: Page, projectName: string, environmentName: string) {
@@ -1906,6 +1918,8 @@ test.describe("live idle observation", () => {
           while (Date.now() - idleStart < DETACH_WAIT_MS) {
             await sleep(15_000);
             if (closesRenderer) {
+              // No renderer slides the browser session meanwhile.
+              await client.keepSignedIn();
               // The no-touch read: stop as soon as the thread is released.
               const state = await runtimeState();
               if (state === "detached") {

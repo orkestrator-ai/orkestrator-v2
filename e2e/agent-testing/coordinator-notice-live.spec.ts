@@ -884,9 +884,9 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       const leafWhileDown = limitNotices(await leafMailbox()).length;
       await stopProfile(leafProfile);
       await startProfile(leafProfile);
-      leaf = await signIn(await newPage(), leafProfile);
+      leaf = await signIn(await newPage(), leafProfile, { fixture: false });
       await startProfile(deskProfile);
-      desk = await signIn(await newPage(), deskProfile);
+      desk = await signIn(await newPage(), deskProfile, { fixture: false });
       await waitForLeafLink(desk, leaf, nodeId, 180_000);
       fake = await until(
         "the command node's coordinator to be woken with the queued stop",

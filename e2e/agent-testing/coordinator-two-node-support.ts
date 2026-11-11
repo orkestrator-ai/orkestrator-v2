@@ -42,11 +42,22 @@ export async function until<T>(
   );
 }
 
-export async function signIn(page: Page, name: string): Promise<Profile> {
+/**
+ * Signs a page in to a running profile. A profile restarted without
+ * `--fixture` reports no fixture project, so a re-sign-in passes
+ * `{ fixture: false }`.
+ */
+export async function signIn(
+  page: Page,
+  name: string,
+  options: { fixture?: boolean } = {},
+): Promise<Profile> {
   const status = profileStatus(name) as Profile["status"];
   expect(status.status, `profile "${name}" is not running`).toBe("ready");
   expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
-  expect(status.testProject, "the profile has no fixture").toBeTruthy();
+  if (options.fixture !== false) {
+    expect(status.testProject, "the profile has no fixture").toBeTruthy();
+  }
   return { name, status, invoke: await authenticatedInvoke(page, status, name) };
 }
 

@@ -1385,9 +1385,9 @@ env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
 
 The gateway case of `local-gateway-transport-electron.spec.ts` relaunches
 Electron from the production bundles, so build them first
-(`bun run --cwd apps/backend build`, and `bunx vite build` then
-`bun run scripts/precompress.ts` in `apps/web`); without them the relaunched
-window closes at start because `backend/main.js` is missing.
+(`bun run --cwd apps/backend build` and `bun run --cwd apps/web build`);
+without them the relaunched window closes at start because `backend/main.js`
+is missing.
 
 On a host where other work creates and removes Docker networks, the
 Vite-served renderer of these specs loses its modules to

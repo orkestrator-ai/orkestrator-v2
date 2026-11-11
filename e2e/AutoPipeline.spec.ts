@@ -15,11 +15,11 @@ test("drafting runs in a tab that can be left and returned to without losing it"
   page,
 }, testInfo) => {
   await page.goto("/auto-pipeline?draftMs=2500");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
-  // The Multi Review dialog closes; the draft is a tab, not a modal over the app.
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
+  // The draft is a tab of its own, not a modal over the app.
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const region = draftRegion(page);
-  await expect(region.getByText(/Drafting ticket and Build notes/)).toBeVisible();
+  await expect(region.getByText(/Waiting for the agent in the source tab/)).toBeVisible();
   await expect(region.getByTestId("auto-pipeline-spinner")).toBeVisible();
   await expect(steps(page).getByRole("button", { name: /Draft/ })).toHaveAttribute(
     "aria-current",
@@ -41,7 +41,7 @@ test("details, acceptance criteria and confirm are steps of the same tab", async
   page,
 }, testInfo) => {
   await page.goto("/auto-pipeline");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
   await page.getByLabel("Title", { exact: true }).fill("Edited title");
   await page.getByRole("button", { name: /^Description, rendered/ }).press("Enter");
   const editor = page.getByRole("textbox", { name: "Description", exact: true });
@@ -94,7 +94,7 @@ test("details, acceptance criteria and confirm are steps of the same tab", async
 
 test("a blank criterion blocks confirmation and says why", async ({ page }, testInfo) => {
   await page.goto("/auto-pipeline");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
   await steps(page)
     .getByRole("button", { name: /Acceptance criteria/ })
     .click();
@@ -118,7 +118,7 @@ for (const state of ["ready", "running", "failure", "pipeline"]) {
       await shot(page, "before", testInfo.project.name);
     }
     await page.goto(`/auto-pipeline?${state === "ready" ? "" : state}`);
-    const button = page.getByRole("button", { name: "Auto-pipeline", exact: true });
+    const button = page.getByRole("button", { name: "To pipeline", exact: true });
     if (state === "pipeline") {
       await expect(button).toHaveCount(0);
       return;
@@ -127,11 +127,11 @@ for (const state of ["ready", "running", "failure", "pipeline"]) {
     if (state === "ready") await shot(page, "launch", testInfo.project.name);
     if (state === "running") {
       await expect(button).toBeDisabled();
-      await expect(page.getByRole("status")).toContainText("finish");
+      await expect(button).toHaveAccessibleDescription(/finish/);
     } else {
       await button.click();
       if (state === "failure") {
-        await expect(page.getByRole("alert")).toContainText("drafting session failed");
+        await expect(page.getByRole("alert")).toContainText("finished without submitting a draft");
         await expect(page.getByRole("button", { name: "Retry drafting" })).toBeVisible();
       } else {
         await expect(page.getByLabel("Title", { exact: true })).toHaveValue(
@@ -175,7 +175,7 @@ test("a refused confirmation keeps the draft and shows its reason beside Confirm
   page,
 }, testInfo) => {
   await page.goto("/auto-pipeline?long&refused");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
   await steps(page)
     .getByRole("button", { name: /Acceptance criteria/ })
     .click();
@@ -198,7 +198,7 @@ test("a refused confirmation keeps the draft and shows its reason beside Confirm
 
 test("an unsaved edit warns and stays in the tab while saves fail", async ({ page }, testInfo) => {
   await page.goto("/auto-pipeline?saveOffline");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
   await page.getByLabel("Title", { exact: true }).fill("Edited while offline");
   const warning = page.getByRole("alert");
   await expect(warning).toContainText("not saved yet");
@@ -211,7 +211,7 @@ test("a ticket whose confirmation began is read-only and can be confirmed again"
   page,
 }, testInfo) => {
   await page.goto("/auto-pipeline?refused&locked");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
   await page.getByLabel("Title", { exact: true }).fill("Submitted title");
   await steps(page)
     .getByRole("button", { name: /Confirm/ })
@@ -230,7 +230,7 @@ test("a ticket whose confirmation began is read-only and can be confirmed again"
 
 test("a drafting request the backend never recorded says why", async ({ page }, testInfo) => {
   await page.goto("/auto-pipeline?draftRefused");
-  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
   await page.getByRole("button", { name: "Draft ticket" }).click();
   await expect(page.getByRole("alert")).toContainText("Drafting did not start");
   await expect(page.getByRole("button", { name: "Draft ticket" })).toBeVisible();

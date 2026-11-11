@@ -161,6 +161,20 @@ describe("MultiReviewLaunchDialog", () => {
     expect(row.textContent).toContain("Provider Cloud");
   });
 
+  test("does not offer Auto-pipeline: turning a tab into a pipeline is the toolbar's To pipeline button", () => {
+    renderInAppCommandScope(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Auto-pipeline" }) === null).toBe(true);
+    expect(screen.queryByRole("combobox", { name: "Build transcript" }) === null).toBe(true);
+  });
+
   test("adds and removes reviewer model rows while retaining at least one", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
     renderInAppCommandScope(

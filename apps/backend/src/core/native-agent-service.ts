@@ -2553,6 +2553,25 @@ export class NativeAgentService {
     return projection;
   }
 
+  /**
+   * Stops the session's turn only while `requestId` is still the turn it is
+   * running; a turn that ended or was replaced by a newer one is left alone.
+   * For a caller that sent one turn into a tab it shares with the user. Unlike
+   * a user's Stop it leaves goals and suborks alone.
+   */
+  stopRequest(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ stopped: boolean }> {
+    return this.sessionOperations.stopProjectionRequest(
+      {
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+      },
+      input.requestId,
+    );
+  }
+
   /** A tab's close, or the person's Stop on the group: stops what the session asked for. */
   async stopSuborksForSession(sessionKey: string, batchId?: string): Promise<void> {
     await this.options.suborks?.stopForSession(sessionKey, batchId);

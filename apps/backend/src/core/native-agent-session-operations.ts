@@ -46,6 +46,18 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
 
+/**
+ * The request whose turn the session is running, or last ran: a prompt the
+ * provider has not accepted yet (Pi's startup) is the active turn, and joins
+ * `dispatchedRequestIds` only once accepted.
+ */
+function activeRequestId(session: PersistedNativeAgentSession): string | undefined {
+  const inFlight = session.pendingDispatch;
+  return inFlight && !inFlight.mailRefused
+    ? inFlight.requestId
+    : session.dispatchedRequestIds?.at(-1);
+}
+
 /** What the session operations need from the service that wires them. */
 export interface NativeAgentSessionOperationsHost {
   storage: StorageService;
@@ -104,6 +116,34 @@ export class NativeAgentSessionOperations {
     );
   }
 
+  /**
+   * Stops the session's turn only while `requestId` is the turn it is running:
+   * a caller that started one turn in a tab it shares with the user (the
+   * auto-pipeline drafting request) must never interrupt a turn the user
+   * started after it. The identity check and the stop run under the session's
+   * work fence, which every prompt and steer dispatch takes, so no newer turn
+   * can begin between them. A turn that already ended, was interrupted or was
+   * replaced is left alone and reported `stopped: false`.
+   */
+  async stopProjectionRequest(
+    input: NativeAgentProjectionInput,
+    requestId: string,
+  ): Promise<{ stopped: boolean }> {
+    return this.host.promptQueues.withSessionWorkFence(input, async () => {
+      const session = await this.host.storage.getNativeAgentSession(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      );
+      if (!session || activeRequestId(session) !== requestId) return { stopped: false };
+      if (
+        session.turnOutcomes?.some((entry) => entry.requestId === requestId) ||
+        session.interruptedRequestIds?.includes(requestId)
+      )
+        return { stopped: false };
+      await this.stopProjectionSession(input);
+      return { stopped: true };
+    });
+  }
+
   private async stopProjectionSessionWithIntent(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
@@ -114,11 +154,7 @@ export class NativeAgentSessionOperations {
     // and an observer must never mistake it for one that finished on its own.
     // A prompt the provider has not accepted yet (Pi's startup) is the turn
     // being stopped; it joins `dispatchedRequestIds` only once accepted.
-    const inFlight = resolved.session.pendingDispatch;
-    const requestId =
-      inFlight && !inFlight.mailRefused
-        ? inFlight.requestId
-        : resolved.session.dispatchedRequestIds?.at(-1);
+    const requestId = activeRequestId(resolved.session);
     let recordingInterrupt: Promise<void> | undefined;
     if (requestId) {
       const before = await resolved.provider

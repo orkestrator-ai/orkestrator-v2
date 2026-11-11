@@ -195,6 +195,7 @@ import {
   reviewSession,
   stableJitterMs,
   supervisionDemand,
+  validationRunJustStarted,
   type MultiReviewObligation,
 } from "./multi-review-scheduling.js";
 import {
@@ -292,24 +293,6 @@ const MAX_AUTO_PR_ATTEMPTS = 3;
 /** Observation passes an unsettled interactive Address Findings outcome may wait before it counts as unknown. */
 const MAX_ADDRESS_FINDINGS_OUTCOME_POLLS = 20;
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
-
-/**
- * Whether the workflow's validation run is running and started less than
- * `windowMs` ago. A short run usually ends inside that window, and its end
- * raises no wake (todo 7564 task 3).
- */
-function validationRunJustStarted(
-  workflow: MultiReviewWorkflow,
-  now: number,
-  windowMs: number,
-): boolean {
-  const run = workflow.validationRun;
-  if (workflow.phase !== "preparing" || run?.status !== "running") return false;
-  if (isGraphEngineProjection(workflow)) return false;
-  if (workflow.validationStopRequested === true) return false;
-  const startedAt = Date.parse(run.startedAt);
-  return Number.isFinite(startedAt) && now - startedAt < windowMs;
-}
 
 function nowIso(): string {
   return new Date().toISOString();

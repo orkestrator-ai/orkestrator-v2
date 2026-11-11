@@ -991,6 +991,10 @@ are absent and reports Docker failures in `cleanupErrors`. `live-session`
 records the model each session reports in force (`session config get`) on
 its `session start`
 manifest entry, beside the pinned model or `null` for the provider default.
+Before cleanup, the runner reads a live scenario's recorded token usage from
+its backend's `get_usage_history` report (`scenarios/usage.ts`) into that
+scenario's `results[].usage` (counts, priced spend and per-model totals only;
+`readError` when the read fails, never a failed run).
 `live-session` also lists the session's
 commands, checks that an unknown and a changed command are refused, runs a
 selected command (Claude's built-in `/context`), and sends `--literal`,

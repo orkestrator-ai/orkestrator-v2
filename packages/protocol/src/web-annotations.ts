@@ -1158,7 +1158,7 @@ export interface WebAnnotationCapabilities {
 
 /**
  * The optional result tools the agent tools MCP server offers an annotation
- * destination (`apps/backend/src/core/web-annotation-tools.ts`). Like the mail
+ * destination (`apps/backend/src/core/web-annotations/tools.ts`). Like the mail
  * tools, a bridge answers their permission requests without a person: they
  * read the request assigned to the calling tab and report a result, and none
  * of them can resolve, retarget or dispatch anything.

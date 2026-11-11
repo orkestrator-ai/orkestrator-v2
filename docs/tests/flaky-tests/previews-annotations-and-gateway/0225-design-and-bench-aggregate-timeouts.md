@@ -10,7 +10,7 @@
     (`apps/backend/src/core/design-history.test.ts`): failed at 5,058.19 ms, past
     Bun's five-second default.
   - `large collections > SQLite writes per create stay bounded as the collection grows (no whole-history rewrite)` (named "creation cost stays flat …" until 2026-10-25)
-    (`apps/backend/src/core/web-annotation-payloads.bench.test.ts:448`):
+    (`apps/backend/src/core/web-annotations/payloads.bench.test.ts:448`):
     `expect(batchMs[2]!).toBeLessThan(Math.max(batchMs[0]! * 4, 2_000))`
     received 2,171.66 against a 2,000 bound.
 - **Original command:** `mise run test:logged -- --name full-suite-2 -- mise run test`

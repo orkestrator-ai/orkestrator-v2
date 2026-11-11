@@ -150,14 +150,14 @@ const ACTIVITY_JOB_MS = 2_000;
 const MAINTENANCE_JOB_MS = 60_000;
 /** Safety cadence for rename intent when none is pending. */
 const RENAME_SAFETY_MS = 30_000;
-import { WebAnnotationService } from "./web-annotation-service.js";
-import { WebAnnotationRollout } from "./web-annotation-rollout.js";
-import { WebAnnotationDispatchAdapter } from "./web-annotation-dispatch.js";
 import {
   compileWebAnnotationBrief,
   composeWebAnnotationDispatchText,
-} from "./web-annotation-brief.js";
-import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+  WebAnnotationDispatchAdapter,
+  WebAnnotationRollout,
+  WebAnnotationService,
+  type WebAnnotationToolHost,
+} from "./web-annotations/index.js";
 import {
   combineProvisionalFindingSinks,
   type ProvisionalFindingSink,
@@ -305,6 +305,7 @@ import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
+import { autoPipelineToolHost, createAutoPipelineService } from "./auto-pipeline-wiring.js";
 import { GraphDescribeService } from "./graph-describe-service.js";
 import { GraphMockRuns } from "./graph-mock-launch.js";
 import { installGraphMockExecutors } from "./graph-mock-provider.js";
@@ -424,6 +425,7 @@ export class OrkestratorBackend {
         AgentToolsServer,
         | "setGoalToolHost"
         | "setSuborkToolHost"
+        | "setAutoPipelineToolHost"
         | "revokeTab"
         | "workflowResultConnection"
         | "servicePort"
@@ -499,6 +501,7 @@ export class OrkestratorBackend {
           AgentToolsServer,
           | "setGoalToolHost"
           | "setSuborkToolHost"
+          | "setAutoPipelineToolHost"
           | "revokeTab"
           | "workflowResultConnection"
           | "servicePort"
@@ -1836,6 +1839,10 @@ export class OrkestratorBackend {
     });
     context.suborks = this.suborks;
     this.agentTools.setSuborkToolHost?.(this.suborks);
+    // `convert_to_pipeline`: an interactive tab's agent submits its own draft.
+    this.agentTools.setAutoPipelineToolHost?.(
+      autoPipelineToolHost(createAutoPipelineService(context, invokeCommand)),
+    );
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (

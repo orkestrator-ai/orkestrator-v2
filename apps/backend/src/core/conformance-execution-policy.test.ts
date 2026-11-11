@@ -131,7 +131,14 @@ function observeOpenCodeProjectResources(): Promise<boolean> {
       PINNED_TOOLCHAIN_VERSIONS.opencode2,
     );
     // 2.x lists each configuration source it loaded, a document with its contents.
-    const sources = JSON.parse(await policyCliOutput(opencode!, ["debug", "config"], fixture)) as {
+    // `--standalone` answers from a private server. Without it the CLI joins or
+    // starts the per-user background service on its fixed port: on a host
+    // already running OpenCode's service that port is taken and the probe hangs
+    // past the spawn timeout (exit 143), and elsewhere it leaves a daemon
+    // running after the test.
+    const sources = JSON.parse(
+      await policyCliOutput(opencode!, ["debug", "config", "--standalone"], fixture),
+    ) as {
       info?: { instructions?: unknown };
     }[];
     return sources.some(
@@ -139,6 +146,11 @@ function observeOpenCodeProjectResources(): Promise<boolean> {
         Array.isArray(source.info?.instructions) &&
         source.info.instructions.includes("POLICY_PROBE.md"),
     );
+  });
+  // A failed probe is not remembered, so one failure is reported once rather
+  // than by every later shape in under a millisecond.
+  openCodeProjectResources.catch(() => {
+    openCodeProjectResources = undefined;
   });
   return openCodeProjectResources;
 }

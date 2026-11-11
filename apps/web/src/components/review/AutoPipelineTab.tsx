@@ -387,9 +387,9 @@ export function AutoPipelineTab({
           {state?.phase === "idle" && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                No draft yet. Drafting reads the source tab&apos;s transcript and the branch&apos;s
-                changes, then proposes a ticket and Build notes for you to review. Nothing is
-                created until you confirm.
+                No draft yet. Drafting asks the agent in the source tab to write a ticket and Build
+                notes from its own work, then shows them here for you to review. Nothing is created
+                until you confirm.
               </p>
               <Button type="button" onClick={startDrafting}>
                 Draft ticket
@@ -404,7 +404,8 @@ export function AutoPipelineTab({
                   data-testid="auto-pipeline-spinner"
                   className="size-4 shrink-0 animate-spin text-primary"
                 />
-                Drafting ticket and Build notes… this can take a couple of minutes.
+                Waiting for the agent in the source tab to write the draft… this can take a few
+                minutes.
               </p>
               <Button type="button" variant="outline" size="sm" onClick={cancelDrafting}>
                 Cancel drafting
@@ -422,7 +423,7 @@ export function AutoPipelineTab({
               </p>
               <p className="text-sm text-muted-foreground">
                 No draft was produced. Retry drafting, or start a plain Multi Review from the
-                toolbar.
+                toolbar to review the work without a ticket.
               </p>
               <Button type="button" onClick={startDrafting}>
                 Retry drafting

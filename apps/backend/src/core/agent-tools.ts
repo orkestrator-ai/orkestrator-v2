@@ -48,10 +48,13 @@ import {
   registerWorkflowResultSlotTools,
   registerWorkflowResultTools,
 } from "./workflow-result-tools.js";
-import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
 import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
 import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
+import {
+  registerAutoPipelineTool,
+  type AutoPipelineToolHost,
+} from "./agent-tools-auto-pipeline.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import {
   registerSuborkRefusalTool,
@@ -62,7 +65,8 @@ import {
   authenticatePipelineWorkerMailCapability,
   pipelineWorkerTabForResultKey,
 } from "./pipeline-worker-identity.js";
-import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
+import type { WebAnnotationToolHost } from "./web-annotations/index.js";
+import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotations/tools.js";
 import {
   ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
   ARTIFACT_TOOL_INSTRUCTIONS,
@@ -691,12 +695,14 @@ async function createAgentToolServer(
     goalTools = null,
     suborkTools = null,
     keyInformation = null,
+    autoPipelineTools = null,
   }: {
     instructions?: boolean;
     graphTools?: GraphActivationToolHost | null;
     goalTools?: GoalToolHost | null;
     suborkTools?: SuborkToolHost | null;
     keyInformation?: BuildPipelineKeyInformationHost | null;
+    autoPipelineTools?: AutoPipelineToolHost | null;
   } = {},
 ): Promise<McpServer> {
   const pipelineScope = { environmentId: scope.environmentId, projectId: scope.projectId };
@@ -967,6 +973,13 @@ async function createAgentToolServer(
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
 
+  // Tab-scoped credentials only: the draft belongs to the tab that calls it.
+  if (autoPipelineTools && scope.tabId) {
+    const tab = { environmentId: scope.environmentId, tabId: scope.tabId };
+    if (await autoPipelineTools.offered(tab))
+      registerAutoPipelineTool(server, autoPipelineTools, tab);
+  }
+
   if (suborkTools) registerSuborkTools(server, storage, callerScope, suborkTools, consumeRateLimit);
 
   if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
@@ -1041,6 +1054,7 @@ export class AgentToolsServer {
   private scheduledJobs: ScheduledJobService | null = null;
   private graphActivationToolHost: GraphActivationToolHost | null = null;
   private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
+  private autoPipelineToolHost: AutoPipelineToolHost | null = null;
   private readonly peerFilter: AgentToolsPeerGate;
   private unfollowNetworkChanges: (() => void) | null = null;
 
@@ -1303,6 +1317,11 @@ export class AgentToolsServer {
   /** Where `report_goal` calls go. The tool is listed only while this is set. */
   setGoalToolHost(host: GoalToolHost | null): void {
     this.goalToolHost = host;
+  }
+
+  /** Where `convert_to_pipeline` calls go. The tool is listed only while this is set. */
+  setAutoPipelineToolHost(host: AutoPipelineToolHost | null): void {
+    this.autoPipelineToolHost = host;
   }
 
   /** Where `ask_agents` calls go. The tool is listed only while this is set. */
@@ -1669,6 +1688,7 @@ export class AgentToolsServer {
                   goalTools: this.goalToolHost,
                   suborkTools: this.suborkToolHost,
                   keyInformation: this.keyInformationHost,
+                  autoPipelineTools: this.autoPipelineToolHost,
                 },
               ),
         { legacy: "stateless" },

@@ -12,7 +12,7 @@
  */
 import { cpus, loadavg } from "node:os";
 import { fixtureCaptureInput } from "../packages/protocol/src/testing/web-annotations-fixtures";
-import { ENV_A, createHarness } from "../apps/backend/src/core/web-annotation-test-support";
+import { ENV_A, createHarness } from "../apps/backend/src/core/web-annotations/test-support";
 
 const args = new Map(
   process.argv.slice(2).map((arg) => {

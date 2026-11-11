@@ -28,14 +28,18 @@ export interface ProviderStateEntry {
 /**
  * The provider versions whose on-disk state this layout was last traced
  * against: the CLI for every provider but Cursor, whose state is written by
- * `@cursor/sdk` in the bridge. A test fails when a pin moves away from these,
- * so an upgrade cannot land until the paths below are re-traced
- * (docs/development/upgrade-agents.md, "Re-trace preserved provider state").
+ * `@cursor/sdk` in the bridge. OpenCode's CLI is the toolchain's `opencode2`
+ * (OpenCode 2.x), which keeps its sessions in {@link OPENCODE2_DB_PATH}
+ * (`OPENCODE_DB`; its WAL and SHM files beside it); its snapshots, tool
+ * output and worktrees live in the data directory, which is not preserved. A
+ * test fails when a pin moves away from these, so an upgrade cannot land
+ * until the paths below are re-traced (docs/development/upgrade-agents.md,
+ * "Re-trace preserved provider state").
  */
 export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
   claude: "2.1.319",
   codex: "0.167.0",
-  opencode: "1.19.5",
+  opencode: "2.2.6",
   pi: "1.5.0",
   cursor: "1.3.1",
   grok: "1.0.77",
@@ -45,28 +49,20 @@ export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
 export const CODEX_SQLITE_HOME = "/home/node/.codex/orkestrator-sqlite";
 /** OpenCode's session database directory on persistent storage. */
 export const OPENCODE_DB_DIRECTORY = "/home/node/.local/share/opencode/orkestrator-db";
+/**
+ * The database OpenCode 1.x left on the persistent mount of a container it
+ * ran in. Nothing opens or preserves it any more; it is named so that 2.x is
+ * never pointed at it: 2.x migrates a 1.x database in place.
+ */
 export const OPENCODE_DB_PATH = `${OPENCODE_DB_DIRECTORY}/opencode.db`;
 /**
- * OpenCode 2.x's own database, beside 1.x's on the same persistent mount. 2.x
- * migrates a 1.x database in place, so it never opens `opencode.db`; a file of
- * its own in the existing `opencode/db` sub-directory needs no new mount, so
- * a storage set initialized before 2.x existed mounts it unchanged.
+ * OpenCode (2.x)'s database, on the persistent mount. A file of its own in
+ * the existing `opencode/db` sub-directory needs no new mount, so a storage
+ * set initialized before 2.x existed mounts it unchanged.
  */
 export const OPENCODE2_DB_PATH = `${OPENCODE_DB_DIRECTORY}/opencode2.db`;
 /** Where 2.x keeps its database in a runtime without the persistent mount. */
 export const OPENCODE2_LEGACY_DB_PATH = "/home/node/.local/share/opencode/opencode2.db";
-
-/**
- * Pinned toolchains that are not a platform's own binary but write preserved
- * state, and the version their state was traced against. The layout test
- * compares each with its pin, as it does `PROVIDER_STATE_TRACED_VERSIONS`.
- * OpenCode 2.x keeps its sessions in {@link OPENCODE2_DB_PATH} (`OPENCODE_DB`;
- * its WAL and SHM files beside it). Its snapshots, tool output and
- * worktrees live in the data directory, which is not preserved, as for 1.x.
- */
-export const PROVIDER_STATE_TRACED_TOOLCHAINS: Record<string, string> = {
-  opencode2: "2.2.6",
-};
 
 export const PROVIDER_STATE_LAYOUT: readonly ProviderStateEntry[] = [
   {
@@ -122,8 +118,7 @@ export const PROVIDER_STATE_LAYOUT: readonly ProviderStateEntry[] = [
     provider: "opencode",
     subdir: "opencode/db",
     containerPath: OPENCODE_DB_DIRECTORY,
-    holds:
-      "OpenCode session databases: 1.x opencode.db and 2.x opencode2.db (relocated with OPENCODE_DB)",
+    holds: "OpenCode's session database, opencode2.db (relocated with OPENCODE_DB)",
     sqlite: true,
   },
   {
@@ -168,12 +163,9 @@ export const PROVIDER_STATE_LAYOUT: readonly ProviderStateEntry[] = [
  * persistent mount is present. A legacy runtime keeps its databases where they
  * already are; moving them there would hide the user's existing sessions.
  */
-export function persistentStateExports(provider: "codex" | "opencode" | "opencode2"): string {
+export function persistentStateExports(provider: "codex" | "opencode2"): string {
   if (provider === "codex") {
     return `if mountpoint -q ${CODEX_SQLITE_HOME} 2>/dev/null; then export CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME}; fi`;
-  }
-  if (provider === "opencode") {
-    return `if mountpoint -q ${OPENCODE_DB_DIRECTORY} 2>/dev/null; then export OPENCODE_DB=${OPENCODE_DB_PATH}; fi`;
   }
   // 2.x always gets a database of its own: its default is 1.x's `opencode.db`.
   return `if mountpoint -q ${OPENCODE_DB_DIRECTORY} 2>/dev/null; then export OPENCODE_DB=${OPENCODE2_DB_PATH}; else export OPENCODE_DB=${OPENCODE2_LEGACY_DB_PATH}; fi`;

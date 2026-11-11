@@ -9,13 +9,9 @@ import {
   ProviderUnavailableError,
   type ProviderSessionRegistration,
 } from "./native-agent-provider.js";
-import {
-  codexConnection,
-  httpProvider,
-  answerResolution,
-  openCodeFake,
-  openCodeActivityProvider,
-} from "./agent-provider-test-support.js";
+import { codexConnection, httpProvider, answerResolution } from "./agent-provider-test-support.js";
+import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "./opencode2/provider.js";
 
 /** What a Claude bridge serves for a snapshot family a test leaves empty. */
 function emptyClaudeFamily(url: string) {
@@ -160,13 +156,24 @@ describe("provider-neutral interaction adapters", () => {
       codex.provider.interactions!.listPendingInteractions("session-1"),
     ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
-    const fake = openCodeFake();
-    fake.setPending([], [{ id: "bad", sessionID: "session-1", questions: [] }]);
-    const opencode = openCodeActivityProvider(fake);
-    await expect(
-      opencode.interactions!.listPendingInteractions("session-1"),
-    ).rejects.toBeInstanceOf(ProviderUnavailableError);
-    await opencode.dispose?.();
+    // OpenCode 2: a form with no fields cannot be presented as a card.
+    const server = new FakeOpenCode2Server();
+    const opencode = new OpenCode2Provider(server.client(), { monitorEvents: false });
+    try {
+      const sessionId = await opencode.createSession("build", "Malformed");
+      server.sessions.get(sessionId)!.forms.push({
+        id: "frm_bad",
+        sessionID: sessionId,
+        title: "Bad",
+        fields: [],
+      });
+      await expect(opencode.interactions.listPendingInteractions(sessionId)).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+    } finally {
+      await opencode.dispose();
+      server.stop();
+    }
 
     const malformedClaudeQuestion = httpProvider((url) =>
       Response.json(
@@ -209,23 +216,6 @@ describe("provider-neutral interaction adapters", () => {
     await expect(
       malformedCodexQuestion.provider.interactions!.listPendingInteractions("session-1"),
     ).rejects.toBeInstanceOf(ProviderUnavailableError);
-
-    const malformedOpenCodeQuestion = openCodeFake();
-    malformedOpenCodeQuestion.setPending(
-      [],
-      [
-        {
-          id: "bad-option",
-          sessionID: "session-1",
-          questions: [{ question: "Choose", options: [{}] }],
-        },
-      ],
-    );
-    const malformedOpenCodeProvider = openCodeActivityProvider(malformedOpenCodeQuestion);
-    await expect(
-      malformedOpenCodeProvider.interactions!.listPendingInteractions("session-1"),
-    ).rejects.toBeInstanceOf(ProviderUnavailableError);
-    await malformedOpenCodeProvider.dispose?.();
 
     for (const body of ["{", null] as const) {
       const malformed = httpProvider(() => new Response(body, { status: 200 }));

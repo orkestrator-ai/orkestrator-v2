@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { limitNativeAgentCapabilities } from "./native-agent-capability-limits.js";
-import { OPENCODE2_CAPABILITY_LIMITS } from "./opencode2/routing-provider.js";
+import { OPENCODE2_CAPABILITY_LIMITS } from "./opencode2/environment-provider.js";
 
 test("no limits leaves the platform's capabilities untouched", () => {
   const capabilities = nativeAgentCapabilities("opencode");
@@ -28,7 +28,7 @@ test("limits remove actions, attachments, slash commands and fork, and never add
   expect("rewindMessages" in limited.actions!).toBe(false);
 });
 
-test("an OpenCode 2.x session keeps compact, undo, redo, attachments, commands and fork", () => {
+test("an OpenCode session keeps compact, undo, redo, attachments, commands and fork", () => {
   const limited = limitNativeAgentCapabilities(
     nativeAgentCapabilities("opencode"),
     OPENCODE2_CAPABILITY_LIMITS,

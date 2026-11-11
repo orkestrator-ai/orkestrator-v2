@@ -53,9 +53,9 @@ export interface DeliverNowProbe {
  * correction is `unsupported, queued` by design, so the case is skipped.
  */
 export function deliverNowApplies(platform: AgentPlatform): boolean {
-  // OpenCode steers only in OpenCode 2 sessions, which need the opt-in preview
-  // setting; this scenario runs on defaults, so its OpenCode worker is on 1.x
-  // and the platform-wide flag would overstate it.
+  // OpenCode advertises steer, but its mid-turn delivery is not yet qualified
+  // with a live worker (the public CLI refuses it for the same reason, todo
+  // 0008), so the platform-wide flag would overstate it here.
   if (platform === "opencode") return false;
   return nativeAgentCapabilities(platform).actions?.steer === true;
 }

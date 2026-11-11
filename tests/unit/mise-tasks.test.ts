@@ -89,7 +89,6 @@ const ROOT_COMMAND_SURFACE = [
   "lint",
   "lint:fix",
   "check",
-  "verify:opencode:live",
   "verify:toolchains:live",
   "verify:packaged-backend",
   "verify:codex:protocol",

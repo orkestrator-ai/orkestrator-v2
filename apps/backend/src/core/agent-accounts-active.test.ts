@@ -480,19 +480,17 @@ describe("localBridgeIsOnActiveAccount", () => {
     expect(await localBridgeIsOnActiveAccount("pi:env-1", "pi", "env-1", context)).toBe(true);
   });
 
-  test("replaces an idle OpenCode server once a provider login changed", async () => {
+  test("keeps an OpenCode server across a provider login change", async () => {
+    // OpenCode 2 reads credentials from its database per use, so a sign-in
+    // reaches a running server without replacing it.
     const key = "opencode:env-1";
     const { localServers } = context.runtime;
     localServers.adoptProcess(key, {} as never);
     localServers.adoptProcess("codex:env-1", {} as never);
-    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
     markLocalBridgesForLoginRefresh(context, "opencode");
-    expect(localServers.hasStaleLogin(key)).toBe(true);
     expect(localServers.hasStaleLogin("codex:env-1")).toBe(false);
-    liveWork = true;
-    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
     liveWork = false;
-    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(false);
+    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
   });
 
   test("keeps a near-expiry token until a fresher one is available or it expires", async () => {

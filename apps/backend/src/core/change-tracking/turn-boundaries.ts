@@ -88,6 +88,8 @@ export function turnIdFor(
 export class TurnBoundaryService {
   private readonly lastProvisional = new Map<string, number>();
   private readonly provisionalRunning = new Set<string>();
+  /** Provisional passes skipped because their hint could not move the tree (todo 7840). */
+  provisionalInertSkips = 0;
   /** The running end-capture retry per worktree, cancelled by a new turn there. */
   private readonly recoveries = new Map<string, AbortController>();
 
@@ -782,11 +784,19 @@ export class TurnBoundaryService {
    * snapshot id, so a publish would store the whole file list again. The
    * unused snapshot row goes with retention's next sweep, and a turn's end
    * always publishes.
+   *
+   * `inert` answers whether the hint that prompted this pass cannot move the
+   * tree (todo 7840, `WorktreeChangeOwner.hintCannotMoveTree`). It runs only
+   * once a pass would otherwise capture, so an idle worktree pays nothing for
+   * it, and a skipped pass leaves the spacing untouched. It does not hold the
+   * pass slot: a hint arriving meanwhile is judged on its own paths rather
+   * than dropped behind one that turns out to need no capture.
    */
   async provisional(
     environmentId: string,
     owner: WorktreeChangeOwner,
     nowMs = Date.now(),
+    inert?: () => Promise<boolean>,
   ): Promise<string[]> {
     const turns = this.deps.ledger
       .activeTurns()
@@ -801,8 +811,14 @@ export class TurnBoundaryService {
         ? this.deps.policies.policy.provisionalSpacingRemoteMs
         : this.deps.policies.policy.provisionalSpacingLocalMs;
     const key = owner.identity.worktreeId;
-    if (this.provisionalRunning.has(key) || nowMs - (this.lastProvisional.get(key) ?? 0) < spacing)
+    const blocked = () =>
+      this.provisionalRunning.has(key) || nowMs - (this.lastProvisional.get(key) ?? 0) < spacing;
+    if (blocked()) return [];
+    if (inert && (await inert().catch(() => false))) {
+      this.provisionalInertSkips++;
       return [];
+    }
+    if (inert && blocked()) return [];
     this.provisionalRunning.add(key);
     this.lastProvisional.set(key, nowMs);
     try {

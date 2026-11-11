@@ -47,8 +47,10 @@
  * apart, cycling through reading, editing a tracked file, `git status`, a test
  * run that writes only Git-ignored output, and `git diff`. It reports the
  * hints, the provisional passes they started, the captures those took, how
- * many captures moved the turn's tree (a published measurement) and how many
- * found it unchanged. It is opt-in: it runs for about steps x step-ms.
+ * many captures moved the turn's tree (a published measurement), how many
+ * found it unchanged, and how many passes were skipped because their hint
+ * named only Git-ignored output (todo 7840). It is opt-in: it runs for about
+ * steps x step-ms.
  *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).
@@ -755,6 +757,7 @@ async function benchCaptureChurn() {
         kind: "hint",
         target,
         paths: hint?.paths && !hint.overflow ? hint.paths : null,
+        ...(hint?.gitMetadata ? { gitMetadata: true } : {}),
         at: new Date().toISOString(),
       });
     },
@@ -793,6 +796,7 @@ async function benchCaptureChurn() {
       captures: Object.values(captures).reduce((sum, n) => sum + n, 0),
       published: captures.published ?? 0,
       moved: counts.moved,
+      skippedIgnored: service.turns.provisionalInertSkips,
     };
   };
   type Tally = ReturnType<typeof tally>;
@@ -827,6 +831,7 @@ async function benchCaptureChurn() {
         captures: 0,
         published: 0,
         moved: 0,
+        skippedIgnored: 0,
       });
       entry.calls += 1;
       for (const key of Object.keys(change) as Array<keyof Tally>) entry[key] += change[key];
@@ -845,7 +850,8 @@ async function benchCaptureChurn() {
       capturesPublished: total.published,
       capturesMoved: total.moved,
       capturesUnchanged: total.published - total.moved,
-      passesWithoutCapture: total.passes - total.captures,
+      passesSkippedIgnored: total.skippedIgnored,
+      passesInsideSpacing: total.passes - total.captures - total.skippedIgnored,
       byToolCall: JSON.stringify(
         Object.fromEntries(
           Object.entries(byStep).map(([name, entry]) => [
@@ -856,6 +862,7 @@ async function benchCaptureChurn() {
               captures: entry.captures,
               moved: entry.moved,
               unchanged: entry.published - entry.moved,
+              skippedIgnored: entry.skippedIgnored,
             },
           ]),
         ),

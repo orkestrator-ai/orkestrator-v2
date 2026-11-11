@@ -5,8 +5,10 @@ Status: living. Owner modules:
 (wire contract, bounds, intent parsing) and
 [`agent-slash-commands.ts`](../../packages/protocol/src/agent-slash-commands.ts)
 (lexical parsing, resolution, session-action collisions). Outstanding work:
-[0016-slash-command-catalogue.md](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md) and
 [0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
+The catalogue decisions below come from to-do 0016, retired on 2026-11-11
+(its last version, with every option weighed, is
+`git show 14df96544:docs/todo/cli-and-slash-commands/0016-slash-command-catalogue.md`).
 
 Every enabled row in the native composer's `/` menu must run exactly what it
 describes, through a tested executor, and a chosen command must never silently
@@ -225,8 +227,7 @@ The backend merges runtime actions into the provider list
 Deduplication is by identity, never by lower-cased display name.
 
 No other shortcuts are planned beyond `/goal`, which has its own design
-([goals.md](goals.md); decided 2026-10-24 in
-[0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)),
+([goals.md](goals.md); decided 2026-10-24 in to-do 0016, retired),
 and `/subork`, which has its own contract ([suborks.md](suborks.md)).
 Clearing or starting a session, model and permission changes already have
 composer controls, and a `/review` alias would run a workflow whose scope
@@ -255,6 +256,12 @@ probe was re-run then (same result as 0.164.0). The other rows above are still
 the live record at their own pins and are unproven at the new ones until a
 signed-in run repeats them; the transport and fake-model suites pass at the
 new pins.
+
+The picker itself (source groups, keyboard order, a command file added on
+disk reaching the menu after a refresh, the row surviving a reload) passed
+live on Claude CLI 2.1.309, Pi 1.4.0 and Grok 1.0.67 on 2026-10-24, with no
+model turn (`slash-command-picker.spec.ts`,
+[agent-testing.md](../development/agent-testing.md#live-slash-command-picker)).
 
 The record, including what each run did not cover (a backend restart,
 and OpenCode, Grok and Pi in the browser scenario), is in
@@ -320,7 +327,15 @@ catalogue read cannot let `/clear` reach the CLI.
   `~/.claude/orkestrator/`) and applies it to probe rows until the session's
   own init arrives. A CLI version the bridge has never run a turn on gets no
   list: its terminal-only rows stay available, and the CLI answers them as
-  local output, until that first turn.
+  local output, until that first turn. Holding every `builtin` row
+  unavailable until then would also block `/context` and `/compact`, a fixed
+  name list would rot with each CLI release, and a model turn at tab open
+  would cost tokens and leave a session file nobody asked for. If the Agent
+  SDK adds a terminal marker to `SlashCommand`, read it from the probe's rows
+  and delete the remembered list; every SDK bump checks for it
+  ([upgrade-agents.md](../development/upgrade-agents.md#how-to-upgrade-claude)).
+  Still absent at 0.3.319 (the pin) and 0.3.322 (the newest published, checked
+  2026-11-11).
 - **Codex**: skills run as structured `skill` input (`$name`, alias
   `/skill:name`); templates are an Orkestrator compatibility feature with
   bounded discovery and `$ARGUMENTS` only. Inline `` !`…` `` shell spans are
@@ -338,7 +353,14 @@ catalogue read cannot let `/clear` reach the CLI.
   (five), after which the newest answer is trusted. A read already in flight
   when the timer fires never counts. Loads after this bounded observation
   window rely on notifications or the 30 s TTL. Settling bumps
-  `commandRevision`; disposal cancels queued settling continuations.
+  `commandRevision`; disposal cancels queued settling continuations. The
+  delay was measured only on a host worktree on Apple Silicon; it is accepted
+  for slower containers without a container figure, because a load that keeps
+  changing extends the rounds and the only miss (a load that pauses for more
+  than 1 s after two agreeing answers, then resumes) shows a short list that
+  the first read past the TTL heals, never a guessed row
+  (`codex-command-catalogue.test.ts`, "plugins that load after the list
+  settled appear at the next TTL read").
 - **OpenCode**: `GET /api/command` lists `{ name, description }` only for
   the session's directory (`opencode2/commands.ts`, with the registry and
   resolver in `opencode2/command-catalogue.ts`). A selection runs as `POST

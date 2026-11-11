@@ -109,7 +109,8 @@ counts under `history.joined-v1-page` and its two cause ids (the transcript
 partition goes with the legacy preview route.
 
 The legacy slash catalogue routes and their 404 fallback were retired on
-2026-10-24 by [0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md).
+2026-10-24 by to-do 0016 (retired on 2026-11-11; the retirement is described in
+[native-agent-commands.md](native-agent-commands.md#lifecycle)).
 A session-route 404 now returns `outdated-bridge` without reading a global
 list. Each rejected read records `slash-catalogue.outdated-bridge` in the
 persistent usage counters, alongside the per-agent in-memory count.

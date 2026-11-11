@@ -169,8 +169,9 @@ inactive-environment browser scenario then ran on 2026-10-17, and Pi, Codex
 disabled skills, the container paths, the mixed-version matrix and the
 performance harness on 2026-10-23 (records below). This file collects the
 evidence still needed before the feature can be called complete. Failures
-found here become code items in
-[0016-slash-command-catalogue.md](0016-slash-command-catalogue.md).
+found here become new to-dos (0016, which held the code items, was retired
+on 2026-11-11; its decisions are in
+[native-agent-commands.md](../../architecture/native-agent-commands.md)).
 
 ## Current state
 
@@ -1071,8 +1072,9 @@ the 2026-10-17 and 2026-10-23 records above are the qualification.
 
 ## Related
 
-- [0016-slash-command-catalogue.md](0016-slash-command-catalogue.md) for code items and
-  the legacy-route retirement this matrix gates.
+- [native-agent-commands.md](../../architecture/native-agent-commands.md#lifecycle) for
+  the legacy-route retirement this matrix gates (from to-do 0016, retired on
+  2026-11-11).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for credentials, profiles and batching with other provider runs.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)

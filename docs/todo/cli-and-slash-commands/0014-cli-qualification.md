@@ -872,8 +872,10 @@ model).
 - [agent-engines.md](../../architecture/agent-engines.md#opencode): how OpenCode
   attachments are labelled since the `--attach` failure found by this file's
   2026-10-25 run (todo 0166, retired on 2026-10-29).
-- [0017-cli-command-surface.md](0017-cli-command-surface.md): each new capability adds a
-  scenario and, where the UI rehydrates, a `cli-ui.spec.ts` check.
+- [`public-cli.md`](../../architecture/public-cli.md#not-built): what the CLI
+  surface deliberately leaves out (from to-do 0017, retired on 2026-11-11);
+  each new capability adds a scenario and, where the UI rehydrates, a
+  `cli-ui.spec.ts` check.
 - 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker Desktop runs batched with other container work.
 - [`public-cli.md`](../../architecture/public-cli.md#targeted-scenarios),

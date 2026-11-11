@@ -1027,9 +1027,13 @@ each is one sample, not a p95:
 - OpenCode's background shell (2026-11-11): on the 2.x preview
   (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`) the `shell` call
   returns at once, and when the command ends 2.x resumes the idle session with
-  its output, which the idle page shows without a turn from the test. 1.19.5's
-  `bash` cannot background a command, so on the default line the case is
-  `not-exercised`.
+  its output, which the idle page shows without a turn from the test. The
+  first runs overstated this: the check matched the marker in the prompt and
+  in the command line, and the tab showed only the command. Since the
+  transcript shows a finished background shell's output and the check counts
+  only a non-user row that arrived after the turn settled, the rerun
+  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` cannot background a command, so
+  on the default line the case is `not-exercised` (rerun `oc2-bgfix-legacy1`).
 - Claude in a container (2026-11-11, beelink2, on a disposable rootless daemon
   with host loopback, because the host's firewall drops the profile's port):
   `missed-final`, `background` and `no-renderer` passed on a current image.

@@ -1698,7 +1698,14 @@ test.describe("live idle observation", () => {
             );
             const lateOutputIds = lateOutputRowIds(ended?.messages ?? [], presentAtSettle, marker);
             record.notes.push(
-              `rows after the turn settled: ${lateRows.map((message) => message.role).join(",") || "none"}; late output rows: ${lateOutputIds.length}; phase ${ended?.turn.phase ?? "none"}`,
+              `rows after the turn settled: ${
+                lateRows
+                  .map(
+                    (message) =>
+                      `${message.role}(marker ${textOf(message).includes(marker)}, emitted ${lateOutputIds.includes(message.id)}, parts ${Array.isArray(message.parts) ? message.parts.map((part) => (part as { type?: string }).type ?? "?").join("+") : "none"})`,
+                  )
+                  .join(",") || "none"
+              }; late output rows: ${lateOutputIds.length}; phase ${ended?.turn.phase ?? "none"}`,
             );
             // OpenCode 2.x promises to resume the session with the output, so on
             // the opted-in 2.x line a backgrounded command whose output never

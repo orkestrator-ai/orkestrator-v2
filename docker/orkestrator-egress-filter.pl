@@ -17,6 +17,13 @@
 #     HTTP/1.x request the Host header (and an absolute-form target) must be;
 #     anything else    refused on TCP 443, relayed on any other allowed port
 #                      (SSH to GitHub on 22, a database on its named port).
+#   A first write of printable text with no newline yet is held, because a
+#   request line sent a byte at a time (`G`, `GE`, `GET` ...) must not reach
+#   the server before its Host is checked. A client-first text protocol on a
+#   named port must therefore end its first command with a newline: a bare
+#   word (`probe`, `{"op":1}`) is never relayed, and the connection is
+#   refused with no reply after CLASSIFY_TIMEOUT. Binary first bytes,
+#   server-first protocols and newline-terminated commands are not held.
 #   Nothing is decrypted, and no certificate is involved. A refused TLS
 #   client gets an access_denied alert, a refused HTTP client a 403.
 # - DNS: every query the workload sends to any port 53 off loopback, and to

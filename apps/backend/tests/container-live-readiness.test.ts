@@ -14,7 +14,11 @@
  * pre-created DNS-broken environment network, file writes and a silent
  * resolver inside this run's own containers, a container restart, and the
  * death of the setup terminal's host process. No production setting is
- * involved. The whole Docker daemon is never restarted: it is shared.
+ * involved. The whole Docker daemon is restarted only by the one scenario
+ * gated on ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND, a shell command that
+ * restarts the daemon this suite talks to and returns once it answers again
+ * (`mise run docker:disposable` prints one). Point it only at a disposable
+ * daemon, never a shared one.
  *
  * Every scenario has a private data directory, so everything the backend
  * creates carries that directory's owner label; fixtures also carry this
@@ -49,6 +53,8 @@ import { restartRuntime } from "./container-live-start";
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
 const live = ENABLED ? test : test.skip;
+const RESTART_COMMAND = process.env.ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND?.trim() ?? "";
+const liveRestart = ENABLED && RESTART_COMMAND.length > 0 ? test : test.skip;
 const RUN = `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 const RUN_LABEL = `orkestrator-qualification=${RUN}`;
 const LIVE_TIMEOUT_MS = 900_000;
@@ -216,6 +222,23 @@ async function heldBoot(
     await Bun.sleep(100);
   }
   throw new Error("the boot was never held");
+}
+
+/** Runs the restart command, then waits until the daemon answers again. */
+async function restartDaemon(): Promise<void> {
+  await runCommand("sh", ["-c", RESTART_COMMAND], { timeoutMs: 300_000 });
+  for (let attempt = 0; attempt < 240; attempt++) {
+    if (
+      await docker(["info", "--format", "{{.ID}}"], 10_000).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      return;
+    }
+    await Bun.sleep(500);
+  }
+  throw new Error("the daemon did not answer after its restart");
 }
 
 async function releaseBoot(containerId: string): Promise<void> {
@@ -775,6 +798,97 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
       expect(recheck).toBeTruthy();
       expect(recheck).not.toBe(bootId);
       console.warn(`[C09/readiness] restart during launch: branch=${branch}`);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  liveRestart(
+    "C09/readiness: a Docker daemon restart during launch never releases the previous boot",
+    async () => {
+      const liveRestore =
+        (await docker(["info", "--format", "{{.LiveRestoreEnabled}}"])) === "true";
+      const scene = await scenario({});
+      const environment = launchingEnvironment(`env-${RUN}-daemon`);
+      const fixture = readinessContext(scene, environment, { image: await heldBootImage() });
+      const outcome = startEnvironment(environment.id, fixture.context).then(
+        (result) => ({ result, error: null as unknown }),
+        (error: unknown) => ({ result: null, error }),
+      );
+      const containerId = await containerOf(scene, environment.id);
+      // The first boot is held before `ready`, then the whole daemon restarts
+      // while the backend waits for it.
+      const held = await heldBoot(containerId);
+      const restartStarted = Date.now();
+      await restartDaemon();
+      const restartMs = Date.now() - restartStarted;
+      const runningAfterRestart =
+        (await docker(["inspect", "-f", "{{.State.Running}}", containerId])) === "true";
+      // With live-restore the container and its held boot outlive the daemon;
+      // without it the daemon stopped the container, and nothing restarts it.
+      expect(runningAfterRestart).toBe(liveRestore);
+      if (liveRestore) await releaseBoot(containerId);
+      let { error } = await outcome;
+      const firstOutcome =
+        error === null
+          ? "ready"
+          : error instanceof ContainerInitializationError
+            ? `${error.reason}:${error.failureCode}`
+            : `other:${error instanceof Error ? error.message.slice(0, 160) : String(error)}`;
+      let branch = "waited-for-boot";
+      if (error) {
+        // The daemon stopped the container: a typed, retryable refusal
+        // with nothing dispatched. The retry is explicit.
+        branch = "refused-then-retried";
+        expectRefusedLaunch(fixture, environment.id, error, {
+          reason: "failed",
+          failureCodes: ["container-exited", "entrypoint-failed"],
+        });
+        ({ error } = await startEnvironment(environment.id, fixture.context).then(
+          () => ({ error: null as unknown }),
+          (retryError: unknown) => ({ error: retryError }),
+        ));
+        expect(error).toBeNull();
+      }
+      await fixture.context.runtime.environments.setupTask(environment.id);
+      const ready = fixture.environments.get(environment.id)!;
+      expect(ready.status).toBe("running");
+      expect(ready.setupPhase).toBe("ready");
+      const record = lifecycleRecord(ready);
+      const bootId = record.runtime?.bootId;
+      expect(bootId).toBeTruthy();
+      // A boot the daemon stopped is never accepted; one that survived it is
+      // still the container's current boot.
+      if (liveRestore) expect(bootId).toBe(held.bootId);
+      else expect(bootId).not.toBe(held.bootId);
+      if (branch === "waited-for-boot") {
+        expect(fixture.launches).toHaveLength(1);
+        expect(fixture.launches[0]!.boot).toMatchObject({
+          kind: "current",
+          phase: "ready",
+          bootId,
+        });
+      } else {
+        expect(fixture.launches).toEqual([]);
+      }
+      expect(record.setup?.runtimeGeneration).toBe(record.runtime?.runtimeGeneration);
+      // A logged run deletes passing output, so the branch taken is also
+      // appended to ORKESTRATOR_QUALIFICATION_EVIDENCE when it names a file.
+      const observation = JSON.stringify({
+        run: RUN,
+        scenario: "c09-daemon-restart-launch",
+        at: new Date().toISOString(),
+        liveRestore,
+        restartMs,
+        firstOutcome,
+        branch,
+      });
+      console.warn(`[C09/readiness] ${observation}`);
+      const evidenceFile = process.env.ORKESTRATOR_QUALIFICATION_EVIDENCE;
+      if (evidenceFile) await fs.appendFile(evidenceFile, `${observation}\n`);
+      // A daemon that is briefly away is waited out: with live-restore the
+      // launch proceeds into the boot that survived; without it the stopped
+      // container is refused as exited once the daemon answers again.
+      expect(branch).toBe(liveRestore ? "waited-for-boot" : "refused-then-retried");
     },
     LIVE_TIMEOUT_MS,
   );

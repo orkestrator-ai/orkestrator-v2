@@ -4,6 +4,7 @@ import { MAX_RENDERER_ERROR_BATCH } from "@orkestrator/protocol/renderer-errors"
 import {
   RENDERER_ERROR_CLIENTS_PER_WINDOW,
   RENDERER_ERROR_ENTRIES_PER_CLIENT,
+  RENDERER_ERROR_ENTRIES_PER_CLIENT_BURST,
   RENDERER_ERROR_ENTRIES_PER_WINDOW,
   RENDERER_ERROR_WINDOW_MS,
   RendererErrorRecorder,
@@ -96,17 +97,56 @@ describe("each renderer's share of the minute", () => {
     const { essential } = capture();
     let now = 0;
     const recorder = new RendererErrorRecorder(() => now);
-    expect(recorder.record(batch(20), "noisy-tab-0001")).toEqual({
-      accepted: RENDERER_ERROR_ENTRIES_PER_CLIENT,
-      dropped: 20 - RENDERER_ERROR_ENTRIES_PER_CLIENT,
-    });
+    // A full batch fits a quiet minute: the burst leaves one share for others.
+    expect(recorder.record(batch(20), "noisy-tab-0001")).toEqual({ accepted: 20, dropped: 0 });
     expect(recorder.record(batch(5), "noisy-tab-0001")).toEqual({ accepted: 0, dropped: 5 });
-    expect(recorder.record(batch(3), "desktop-window-1")).toEqual({ accepted: 3, dropped: 0 });
+    expect(recorder.record(batch(12), "desktop-window-1")).toEqual({
+      accepted: RENDERER_ERROR_ENTRIES_PER_CLIENT,
+      dropped: 12 - RENDERER_ERROR_ENTRIES_PER_CLIENT,
+    });
     expect(
       essential.filter((record) => record.event === "error.recorded").map((r) => r.fields),
     ).not.toContainEqual(expect.objectContaining({ client: expect.anything() }));
     now += RENDERER_ERROR_WINDOW_MS;
     expect(recorder.record(batch(4), "noisy-tab-0001")).toEqual({ accepted: 4, dropped: 0 });
+  });
+
+  test("a lone named renderer has a full batch logged, as before the share", () => {
+    capture();
+    const recorder = new RendererErrorRecorder(() => 0);
+    expect(RENDERER_ERROR_ENTRIES_PER_CLIENT_BURST).toBe(MAX_RENDERER_ERROR_BATCH);
+    expect(recorder.record(batch(MAX_RENDERER_ERROR_BATCH), "desktop-window-1")).toEqual({
+      accepted: MAX_RENDERER_ERROR_BATCH,
+      dropped: 0,
+    });
+    // The last share of the minute stays for another renderer.
+    expect(recorder.record(batch(1), "desktop-window-1")).toEqual({ accepted: 0, dropped: 1 });
+    expect(recorder.record(batch(MAX_RENDERER_ERROR_BATCH), "second-tab-01")).toEqual({
+      accepted: RENDERER_ERROR_ENTRIES_PER_CLIENT,
+      dropped: MAX_RENDERER_ERROR_BATCH - RENDERER_ERROR_ENTRIES_PER_CLIENT,
+    });
+  });
+
+  test("past its share a renderer takes only what leaves one more share free", () => {
+    capture();
+    const recorder = new RendererErrorRecorder(() => 0);
+    expect(recorder.record(batch(10), "first-tab-001").accepted).toBe(10);
+    expect(recorder.record(batch(5), "second-tab-01").accepted).toBe(5);
+    // 15 left: the first tab is past its share, so it may take 5 and leave 10.
+    expect(recorder.record(batch(20), "first-tab-001").accepted).toBe(5);
+    // The second tab still has the rest of its own share.
+    expect(recorder.record(batch(20), "second-tab-01").accepted).toBe(5);
+    expect(recorder.record(batch(20), "third-tab-001").accepted).toBe(5);
+  });
+
+  test("the id bounds memory, not fairness: fresh ids can each take a share", () => {
+    capture();
+    const recorder = new RendererErrorRecorder(() => 0);
+    let accepted = 0;
+    for (let index = 0; index < 3; index += 1) {
+      accepted += recorder.record(batch(10), `minted-000${index}`).accepted;
+    }
+    expect(accepted).toBe(RENDERER_ERROR_ENTRIES_PER_WINDOW);
   });
 
   test("the shared total still bounds every share together", () => {
@@ -139,7 +179,7 @@ describe("each renderer's share of the minute", () => {
     for (let index = 0; index < 20; index += 1) {
       accepted += recorder.record(batch(3), `minted-${String(index).padStart(4, "0")}`).accepted;
     }
-    expect(accepted).toBe(RENDERER_ERROR_ENTRIES_PER_CLIENT);
+    expect(accepted).toBe(RENDERER_ERROR_ENTRIES_PER_CLIENT_BURST);
   });
 
   test("a malformed client id refuses the write", () => {

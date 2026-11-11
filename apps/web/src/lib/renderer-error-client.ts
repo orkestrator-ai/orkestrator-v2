@@ -20,20 +20,45 @@ function randomClientId(): string {
 }
 
 /**
+ * How this document was loaded (Navigation Timing's `type`): `reload`,
+ * `navigate`, `back_forward` or `prerender`; undefined when the browser does
+ * not say.
+ */
+export function documentNavigationType(
+  performance: Pick<Performance, "getEntriesByType"> | undefined = globalThis.performance,
+): string | undefined {
+  try {
+    const entry = performance?.getEntriesByType?.("navigation")[0] as
+      { type?: unknown } | undefined;
+    return typeof entry?.type === "string" ? entry.type : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * This renderer's upload id (`client` on `record_renderer_errors`), so the
  * backend can give it its own share of the per-minute bound. Random, kept in
  * this tab's or window's session storage so a reload keeps the same share
  * rather than taking a fresh one, and never shown or logged. Storage that is
  * blocked gives an id for this load only.
+ *
+ * The stored id is reused only when this document is a reload. A tab opened
+ * from another one (`window.open`, "Duplicate tab") starts with a copy of its
+ * opener's session storage, and so of its id; it loads as a `navigate` or a
+ * `back_forward`, not a `reload`, and takes a fresh id, so two live tabs never
+ * share one allowance. A same-tab navigation takes a fresh id too, which costs
+ * nothing: the page it replaced no longer writes.
  */
 export function rendererErrorClientId(
   storage: ClientStorage | null | undefined = undefined,
   random: () => string = randomClientId,
+  navigationType: () => string | undefined = documentNavigationType,
 ): string {
   try {
     if (storage === undefined) storage = globalThis.sessionStorage;
     const stored = storage?.getItem(RENDERER_ERROR_CLIENT_KEY);
-    if (isRendererErrorClientId(stored)) return stored;
+    if (isRendererErrorClientId(stored) && navigationType() === "reload") return stored;
   } catch {
     /* Storage may be blocked; an id for this load still works. */
   }

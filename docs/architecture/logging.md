@@ -674,7 +674,7 @@ flowchart LR
   B["React root onCaughtError / onUncaughtError / onRecoverableError"] --> R[(ring, 100 entries)]
   W["window error / unhandledrejection"] --> R
   R -->|"new counts, ≤ 20 per write, every 10 s, with client id"| C["record_renderer_errors"]
-  C -->|"parsed again, 30 entries a minute, 10 per client"| E[(logs/essential)]
+  C -->|"parsed again, 30 entries a minute, 10 to 20 per client"| E[(logs/essential)]
 ```
 
 Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
@@ -701,18 +701,28 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   load. A tab that is closed first loses it.
 - **Each renderer names itself.** Every write carries `client`, a random id the
   renderer keeps in its session storage (`renderer-error-client.ts`), so a reload keeps
-  the same share. It identifies no user, device or session and is never logged. A
+  the same share. The stored id is reused only when the document is a reload
+  (Navigation Timing's `type`): a tab opened from another (`window.open`, "Duplicate
+  tab") starts with a copy of its opener's session storage, and takes a fresh id
+  instead of sharing the opener's allowance. It identifies no user, device or session
+  and is never logged. A
   backend from v2.36.5-beta or v2.36.6-beta, whose handler refused any argument but
   `entries`, gets the batch again without it.
 - **Validated and rate-bound in the backend.** `record_renderer_errors`
   (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
   other key (a `message`, a `stack`) or any value outside its list refuses the whole
   write, as does a `client` that is not 8 to 64 letters, digits, `-` or `_`. Across
-  every client it writes at most 30 entries a minute, and at most 10 of them from one
-  `client`, so one noisy tab cannot use the minute a desktop window needs. The first 64
-  client ids in a minute get a share each; later ones share one more, so minting ids
-  buys nothing. A write without `client` (an older renderer) is bounded by the total
-  alone. The rest are counted in one `report.rate-limited` line per minute. The
+  every client it writes at most 30 entries a minute. Each `client` is sure of 10 of
+  them, and may take up to 20 (one full batch) while 10 more stay free for another
+  renderer, so a lone window's full batch is logged and one noisy tab cannot use the
+  minute a desktop window needs. A lone renderer therefore writes at most 20 a minute
+  where an older one (no `client`) could write 30; what is dropped is counted, not
+  resent. The first 64 client ids in a minute are tracked; later ones share one more
+  slot, which bounds the backend's memory, not fairness. The id is self-declared, so a
+  sender that mints ids, or omits `client`, can still use the whole total: the share
+  protects other renderers from a noisy one, not from a hostile client, which already
+  holds admin access. A write without `client` (an older renderer) is bounded by the
+  total alone. The rest are counted in one `report.rate-limited` line per minute. The
   essential log's own per-event budget applies after that. A workspace client may not
   call it (`workspace-grant-scope.ts`): this machine's log is its own.
 - **Not the startup markers.** The ring never writes to the console and never uses the

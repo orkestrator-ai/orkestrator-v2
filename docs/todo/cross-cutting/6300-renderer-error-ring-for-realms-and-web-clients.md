@@ -55,7 +55,7 @@ Done (2026-11-11).
 - **How does the backend tell renderers apart?**
   - **A random id the renderer sends as an optional `client` argument (recommended, implemented).**
     - Pros: no transport change; works the same over the gateway and Electron IPC; an older backend ignores it.
-    - Cons: self-declared, so a sender can mint ids; bounded by tracking 64 ids a minute, with later ids sharing one more share, and by the unchanged total.
+    - Cons: self-declared, so a sender that mints ids (or omits `client`) can still use the whole total; tracking only 64 ids a minute bounds the backend's memory, not fairness. The share protects other renderers from a noisy one, not from a hostile client, which already holds admin access.
   - **Derive the caller from the transport (the gateway session or IPC sender).**
     - Pros: cannot be forged.
     - Cons: command handlers receive no caller identity today; threading one through every transport is a much larger change, and every signed-in client is already an admin client.
@@ -108,13 +108,13 @@ Corrected the upload startup reference to `renderer-diagnostics.ts`, invoked by 
 
 Realms were deleted by plan items 6002 and 6003 (node scopes replaced them), so there is no separate realm renderer whose ring could go unsent. Marked done rather than deleted: tasks 2 and 3 keep the file open. The file name keeps "realms" so the links to it keep working.
 
-### Task 2: a share of 10 entries a minute per client
+### Task 2: each client is sure of 10 entries a minute, and may take a full batch of 20
 
-Each `client` may write at most 10 of the minute's 30 entries (`RENDERER_ERROR_ENTRIES_PER_CLIENT`, `renderer-error-recorder.ts`), so three noisy renderers are needed to use the whole minute. A write without `client` (a renderer from before this change) keeps the old behaviour, the total alone, so an older desktop window loses nothing. A malformed `client` refuses the write, like a malformed entry. The id is never logged.
+Each `client` is sure of 10 of the minute's 30 entries (`RENDERER_ERROR_ENTRIES_PER_CLIENT`, `renderer-error-recorder.ts`). Past that it may take up to 20, one full upload batch (`RENDERER_ERROR_ENTRIES_PER_CLIENT_BURST`), while at least 10 more stay free for another renderer. A first version capped every named client at 10 even when it was alone, so a lone desktop window's full batch of 20 lost 10 entries that the old total-only bound would have logged (review round 1). Raising the share to 20 for every client would have let two renderers take the whole minute and leave nothing for a third; keeping one share free does not. A lone renderer still writes at most 20 a minute where an older renderer (no `client`) could write 30; the uploader does not resend what was dropped, because the backend already counts it in `report.rate-limited` and a resend would keep a noisy tab writing. A write without `client` keeps the old behaviour, the total alone, so an older desktop window loses nothing. A malformed `client` refuses the write, like a malformed entry. The id is never logged.
 
-### Task 2: the id lives in session storage
+### Task 2: the id lives in session storage, and is reused only on a reload
 
-The renderer keeps its id in the tab's session storage (`renderer-error-client.ts`), so a crash-reloading tab keeps one share instead of taking a new one each load; a new tab gets a new id.
+The renderer keeps its id in the tab's session storage (`renderer-error-client.ts`), so a crash-reloading tab keeps one share instead of taking a new one each load. A tab opened from another one (`window.open`, "Duplicate tab") starts with a copy of its opener's session storage, id included, so the stored id is reused only when Navigation Timing says the document is a `reload`; any other load, or a browser that does not say, takes a fresh id (review round 1). A same-tab navigation therefore also takes a fresh id, which costs nothing because the page it replaced no longer writes. The alternative, asking other live tabs over a `BroadcastChannel` whether they own the id, keeps the id across same-tab navigations but makes the id asynchronous and needs a listener for the tab's whole life. The pending-entry journal (`orkestrator:pending-renderer-errors`) is copied the same way, so a tab opened while its opener had unacknowledged counts may send those counts once more; the counts are content-free and bounded, and this was left as it is.
 
 ### Task 2: a tab sends before its gateway exists
 

@@ -4,6 +4,7 @@ import {
   type RendererErrorEntry,
 } from "@orkestrator/protocol/renderer-errors";
 import {
+  documentNavigationType,
   RENDERER_ERROR_CLIENT_KEY,
   rendererErrorClientId,
   rendererErrorSender,
@@ -27,18 +28,42 @@ const entry: RendererErrorEntry = {
 };
 
 describe("the renderer's upload id", () => {
+  const reload = () => "reload";
+
   test("is random, valid, and kept across a reload of the same tab", () => {
     const storage = memoryStorage();
-    const first = rendererErrorClientId(storage);
+    const first = rendererErrorClientId(storage, undefined, () => "navigate");
     expect(isRendererErrorClientId(first)).toBe(true);
     expect(storage.values.get(RENDERER_ERROR_CLIENT_KEY)).toBe(first);
-    expect(rendererErrorClientId(storage)).toBe(first);
-    expect(rendererErrorClientId(memoryStorage())).not.toBe(first);
+    expect(rendererErrorClientId(storage, undefined, reload)).toBe(first);
+    expect(rendererErrorClientId(memoryStorage(), undefined, reload)).not.toBe(first);
+  });
+
+  test("a tab opened from another, with a copy of its storage, takes its own id", () => {
+    // window.open and "Duplicate tab" copy the opener's session storage.
+    const opener = memoryStorage();
+    const openerId = rendererErrorClientId(
+      opener,
+      () => "opener-client-id",
+      () => "navigate",
+    );
+    for (const type of ["navigate", "back_forward", "prerender", undefined]) {
+      const copy = memoryStorage(Object.fromEntries(opener.values));
+      const childId = rendererErrorClientId(
+        copy,
+        () => "child-client-id",
+        () => type,
+      );
+      expect(childId).toBe("child-client-id");
+      expect(copy.values.get(RENDERER_ERROR_CLIENT_KEY)).toBe("child-client-id");
+    }
+    // The opener keeps its own across its reloads.
+    expect(rendererErrorClientId(opener, () => "never-used-id", reload)).toBe(openerId);
   });
 
   test("a stored value that is not an id is replaced", () => {
     const storage = memoryStorage({ [RENDERER_ERROR_CLIENT_KEY]: "not an id!" });
-    expect(rendererErrorClientId(storage, () => "fresh-client-id")).toBe("fresh-client-id");
+    expect(rendererErrorClientId(storage, () => "fresh-client-id", reload)).toBe("fresh-client-id");
     expect(storage.values.get(RENDERER_ERROR_CLIENT_KEY)).toBe("fresh-client-id");
   });
 
@@ -53,6 +78,23 @@ describe("the renderer's upload id", () => {
     };
     expect(isRendererErrorClientId(rendererErrorClientId(blocked))).toBe(true);
     expect(isRendererErrorClientId(rendererErrorClientId(null))).toBe(true);
+  });
+});
+
+describe("how the document was loaded", () => {
+  test("reads Navigation Timing's type, and nothing when the browser does not say", () => {
+    const timing = (entries: unknown[]) => ({ getEntriesByType: () => entries }) as never;
+    expect(documentNavigationType(timing([{ type: "reload" }]))).toBe("reload");
+    expect(documentNavigationType(timing([{ type: "navigate" }]))).toBe("navigate");
+    expect(documentNavigationType(timing([]))).toBeUndefined();
+    expect(documentNavigationType(undefined)).toBeUndefined();
+    expect(
+      documentNavigationType({
+        getEntriesByType: () => {
+          throw new Error("unsupported");
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 

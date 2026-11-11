@@ -151,6 +151,7 @@ function harness(
   let failNext: Error | null = null;
   let nextStatus: string | null = null;
   let requireChecks: boolean | undefined;
+  const warnings: string[] = [];
   const storage = {
     getEnvironment: async (id: string) => (id === stored.id ? stored : null),
     loadEnvironments: async () => [stored],
@@ -201,7 +202,7 @@ function harness(
     cancel: (timer) => {
       (timer as { cancelled: boolean }).cancelled = true;
     },
-    ...(defaultLogging ? {} : { onWarning: () => undefined }),
+    ...(defaultLogging ? {} : { onWarning: (warning) => void warnings.push(warning.event) }),
   });
   return {
     controller,
@@ -215,6 +216,7 @@ function harness(
     invocations,
     timers,
     listeners,
+    warnings,
     set(next: Environment) {
       stored = next;
       monitorState = monitor(next);
@@ -780,5 +782,112 @@ test("a conflict-free reading after Resolve merges without sending the prompt ag
   await h.controller.evaluate("env-1");
   await flush();
   expect(h.invocations.map((invocation) => invocation.command)).toEqual(["merge_environment_pr"]);
+  h.controller.dispose();
+});
+
+test("a consumption that loses to a concurrent attempt count does not undercount the cap", async () => {
+  let calls = 0;
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+    }),
+    false,
+    () => {
+      // Another writer counts two attempts after this pass read its snapshot.
+      if ((calls += 1) === 1) h.set({ ...h.stored, autoMergeResolveAttempts: 2 });
+      return true;
+    },
+  );
+  await h.controller.evaluate("env-1");
+  await flush();
+  // The stale write (0 + 1) was refused; the follow-up pass counted from 2.
+  expect(h.stored.autoMergeResolveAttempts).toBe(3);
+  expect(h.stored.autoMerge).toBe(false);
+  expect(h.stored.autoMergeError).toContain("three attempts");
+  expect(h.invocations).toHaveLength(0);
+  h.controller.dispose();
+});
+
+test("a consumption that loses to a re-armed token launches nothing", async () => {
+  let calls = 0;
+  const rearmedAt = isoAgo(1_000);
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+    }),
+    false,
+    () => {
+      // A Resolve pressed by hand re-arms the token and is still working.
+      if ((calls += 1) > 1) return false;
+      h.set({
+        ...h.stored,
+        prRecheckAfterAgentCompletionArmedAt: rearmedAt,
+        autoMergeResolveCompletedAt: undefined,
+      });
+      return true;
+    },
+  );
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(calls).toBe(2);
+  expect(h.stored.prRecheckAfterAgentCompletionArmedAt).toBe(rearmedAt);
+  expect(h.stored.autoMergeResolveCompletedAt).toBeUndefined();
+  expect(h.stored.autoMergeResolveAttempts ?? 0).toBe(0);
+  expect(h.stored.autoMerge).toBe(true);
+  expect(h.invocations).toHaveLength(0);
+  h.controller.dispose();
+});
+
+test("a failing settled check leaves the Resolve armed and the next reading retries", async () => {
+  let fail = true;
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+    }),
+    false,
+    () => {
+      if (fail) throw new Error("storage unavailable");
+      return true;
+    },
+  );
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.warnings).toEqual(["auto-merge.evaluation-failed"]);
+  expect(h.stored.prRecheckAfterAgentCompletionArmedAt).toBeDefined();
+  expect(h.stored.autoMergeResolveAttempts ?? 0).toBe(0);
+  expect(h.invocations).toHaveLength(0);
+
+  fail = false;
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.stored.autoMergeResolveAttempts).toBe(1);
+  expect(h.invocations).toHaveLength(1);
+  h.controller.dispose();
+});
+
+test("a failing consumption write counts nothing and sends nothing", async () => {
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+    }),
+    false,
+    () => true,
+  );
+  const update = h.storage.updateEnvironment;
+  h.storage.updateEnvironment = async () => {
+    throw new Error("database is locked");
+  };
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.warnings).toEqual(["auto-merge.evaluation-failed"]);
+  expect(h.stored.prRecheckAfterAgentCompletionArmedAt).toBeDefined();
+  expect(h.stored.autoMergeResolveAttempts ?? 0).toBe(0);
+  expect(h.invocations).toHaveLength(0);
+
+  h.storage.updateEnvironment = update;
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.stored.autoMergeResolveAttempts).toBe(1);
+  expect(h.invocations).toHaveLength(1);
   h.controller.dispose();
 });

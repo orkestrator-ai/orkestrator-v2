@@ -325,12 +325,17 @@ export class PrAutoMergeController {
     if (this.closed) return;
     const environmentId = environment.id;
     const completedAt = Date.parse(environment.autoMergeResolveCompletedAt ?? "");
+    // Every write below is computed from the snapshot `run()` read, the
+    // attempt count included, so each one applies only while that snapshot
+    // still holds; a write that loses leaves the stored state for the
+    // follow-up pass to decide from.
     const unchanged = (current: Environment): boolean =>
       current.autoMerge === true &&
       current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
       current.prRecheckAfterAgentCompletionArmedAt ===
         environment.prRecheckAfterAgentCompletionArmedAt &&
-      current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt;
+      current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt &&
+      (current.autoMergeResolveAttempts ?? 0) === (environment.autoMergeResolveAttempts ?? 0);
     if (!Number.isFinite(completedAt)) {
       if (settled === true) {
         await this.options.storage.updateEnvironment(

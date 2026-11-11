@@ -88,21 +88,32 @@ exit 125
   }, 90_000);
   test("the deadline fails the step even when neither child can be seen to close", async () => {
     // A killed child's descendant still holds the pipes, so `close` does not fire:
-    // the same wait a lost completion event leaves.
-    await withDockerScript("#!/bin/sh\nsleep 8 &\nexec sleep 8\n", async () => {
-      const started = Date.now();
-      const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
-        timeoutMs: 100,
-        settleGraceMs: 100,
-      });
-      expect(result).toEqual({
-        absent: false,
-        output: "",
-        producerFailed: true,
-        daemonUnavailable: false,
-      });
-      expect(Date.now() - started).toBeLessThan(4_000);
-    });
+    // the same wait a lost completion event leaves. Each fake `docker` logs its
+    // pid once its pipe-holding `sleep` exists.
+    await withDockerScript(
+      '#!/bin/sh\nsleep 8 &\necho "$$" >> "$FAKE_DOCKER_LOG"\nexec sleep 8\n',
+      async (log) => {
+        const started = Date.now();
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+          // The deadline must fire after both shells have forked their holder;
+          // nothing can be awaited for that, because the timer starts at spawn.
+          // At 100 ms a loaded macOS host killed both shells first in 2 of 25
+          // runs (flake 9979): with no holder both closed, and the step failed
+          // through `close` instead. 1.5 s leaves a wide margin for the fork.
+          timeoutMs: 1_500,
+          settleGraceMs: 100,
+        });
+        // The scenario held: both children had a descendant holding the pipes.
+        expect((await log.read()).split("\n").filter(Boolean)).toHaveLength(2);
+        expect(result).toEqual({
+          absent: false,
+          output: "",
+          producerFailed: true,
+          daemonUnavailable: false,
+        });
+        expect(Date.now() - started).toBeLessThan(6_000);
+      },
+    );
   }, 15_000);
   test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
     // Reaching no daemon (its socket gone) also says "no such file"; that
@@ -155,10 +166,8 @@ exit 125
       select: [".codex/*.sqlite", ".codex/*.sqlite-wal", ".codex/*.sqlite-shm"],
     });
     const opencode = plan.find((step) => step.target.subdir === "opencode/db");
+    // OpenCode 1.x's opencode.db is left behind.
     expect(opencode?.select).toEqual([
-      "opencode/opencode.db",
-      "opencode/opencode.db-wal",
-      "opencode/opencode.db-shm",
       "opencode/opencode2.db",
       "opencode/opencode2.db-wal",
       "opencode/opencode2.db-shm",

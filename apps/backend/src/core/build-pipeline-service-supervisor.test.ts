@@ -23,9 +23,6 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
-import { openCodeFake } from "./agent-provider-test-support.js";
-import { createNativeAgentProvider } from "./native-agent-provider.js";
-import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -42,12 +39,11 @@ import {
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
 import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review-prompts.js";
-import { DEFAULT_OPENCODE_MODEL_PROVIDERS } from "@orkestrator/protocol/native-agent";
 import {
-  normalizeOpenCodeComposerCatalog,
-  resolveOpenCodeDefaultModel,
-} from "./opencode-model-catalog.js";
-import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
+  normalizeOpenCode2ModelCatalogue,
+  resolveOpenCode2DefaultModel,
+} from "./opencode2/models.js";
+import { fakeOpenCode2Model } from "./opencode2/fake-server.test-support.js";
 import { resolveCodexDefaultModel } from "./session-held-model.js";
 
 import type {
@@ -427,64 +423,6 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
-  test("schema-less OpenCode build holds its stage for capacity continuation", async () => {
-    const fake = openCodeFake();
-    const native = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        openCodeCapacityRetryPolicy: { baseDelayMs: 0 },
-        monitorRetryMs: 1,
-      },
-    );
-    try {
-      await withService(
-        async (service, storage) => {
-          const { started, session } = await startBuilding(service, storage, {
-            agentType: "opencode",
-            reviewPreparation: { agent: "opencode" },
-          });
-          expect(session.structuredRequestId).toBeUndefined();
-          expect(fake.promptCalls).toHaveLength(1);
-          const original = fake.promptCalls[0]!;
-          fake.setMessagesResponse({
-            data: [
-              { info: { id: original.messageID, role: "user" }, parts: [] },
-              {
-                info: {
-                  id: "answer-1",
-                  role: "assistant",
-                  parentID: original.messageID,
-                  time: { completed: 1 },
-                  error: {
-                    name: "APIError",
-                    data: { statusCode: 503, message: "Service Unavailable" },
-                  },
-                },
-                parts: [],
-              },
-            ],
-          });
-          for (let i = 0; i < 3; i++) {
-            await service.advanceNow(started.id);
-            expect((await pipeline(storage, started.id)).phase).toBe("building");
-          }
-          expect(fake.promptCalls).toHaveLength(2);
-          expect(fake.promptCalls[1]!.messageID).not.toBe(original.messageID);
-        },
-        { runtimeProvider: native },
-      );
-    } finally {
-      await native.dispose?.();
-    }
-  });
-
   test("a manual turn in a resumed stage session cannot satisfy the pipeline result request", async () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);
@@ -557,13 +495,16 @@ describe("BuildPipelineService", () => {
   });
 
   describe("on an OpenCode login with only opencode-go connected", () => {
-    const goOnlyCatalog = normalizeOpenCodeComposerCatalog(
-      OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
-      DEFAULT_OPENCODE_MODEL_PROVIDERS,
-      { requireConnected: true },
+    // The OpenCode server lists only what it can serve: opencode-go's models,
+    // with its own default.
+    const luna = fakeOpenCode2Model("opencode-go", "gpt-5.6-luna", [], { name: "GPT-5.6 Luna" });
+    const goOnlyCatalog = normalizeOpenCode2ModelCatalogue(
+      [fakeOpenCode2Model("opencode-go", "deepseek-v4.1-flash"), luna],
+      luna,
+      [],
     );
     const answerFromGoOnlyLogin = async (modelId: string | undefined) =>
-      resolveOpenCodeDefaultModel(modelId, goOnlyCatalog);
+      resolveOpenCode2DefaultModel(modelId, goOnlyCatalog);
     const configureOpenCodeModel = async (storage: StorageService, model?: string) => {
       const config = await storage.loadConfig();
       config.global.agentSettings = {
@@ -590,7 +531,8 @@ describe("BuildPipelineService", () => {
         expect(session.modelSubstitution).toEqual({
           requestedModelId: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
           modelId: "opencode-go/gpt-5.6-luna",
-          message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+          message:
+            "claude-sonnet-5 isn't available in OpenCode 2 with your sign-ins; using GPT-5.6 Luna.",
         });
         // Substituted for this build only; the configured choice survives.
         expect((await storage.loadConfig()).global.agentSettings).toEqual(

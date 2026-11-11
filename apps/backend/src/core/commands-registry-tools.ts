@@ -2,7 +2,10 @@ import path from "node:path";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
-import { createHostExtensionCommandRunner } from "./commands-agent-support.js";
+import {
+  createHostExtensionCommandRunner,
+  resolveManagedBinary,
+} from "./commands-agent-support.js";
 import { discoverAgentPlugins } from "./extension-discovery.js";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.js";
 import {
@@ -69,6 +72,14 @@ function claudeLoginHome(
 async function anyPathExists(candidates: string[]): Promise<boolean> {
   for (const candidate of candidates) if (await pathExists(candidate)) return true;
   return false;
+}
+
+/**
+ * OpenCode is the managed `opencode2` only: it has no PATH fallback, because
+ * an `opencode` on PATH is usually a 1.x install (`resolveOpenCode2Binary`).
+ */
+async function hasManagedOpenCode(context: CommandContext): Promise<boolean> {
+  return Boolean(resolveManagedBinary(context, "opencode2"));
 }
 
 export function registerToolingCommands(register: CommandRegistrar): void {
@@ -140,7 +151,7 @@ export function registerToolingCommands(register: CommandRegistrar): void {
   });
   register(checkOpencodeCliCommand, (_args, context) => {
     compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return checkHostTool(context, "opencode");
+    return hasManagedOpenCode(context);
   });
   register(checkCodexCliCommand, (_args, context) => {
     compatibilityPathUsage.record("retired-command.provider-cli-check");
@@ -181,7 +192,7 @@ export function registerToolingCommands(register: CommandRegistrar): void {
     checkAnyAiCliCommand,
     async (_args, context) =>
       (await checkHostTool(context, "claude")) ||
-      (await checkHostTool(context, "opencode")) ||
+      (await hasManagedOpenCode(context)) ||
       (await checkHostTool(context, "codex")) ||
       (await hasCursorSdkBridge(context)) ||
       (await hasManagedAcpBinary(context, "grok")) ||
@@ -190,7 +201,7 @@ export function registerToolingCommands(register: CommandRegistrar): void {
   register(getAvailableAiCliCommand, async (_args, context) =>
     (await checkHostTool(context, "claude"))
       ? "claude"
-      : (await checkHostTool(context, "opencode"))
+      : (await hasManagedOpenCode(context))
         ? "opencode"
         : (await checkHostTool(context, "codex"))
           ? "codex"

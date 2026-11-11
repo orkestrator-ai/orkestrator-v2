@@ -260,19 +260,26 @@ exit 0
           expect(execLog.indexOf("workspace-setup.sh --prepare-only")).toBeLessThan(
             execLog.indexOf("git -C /workspace rev-parse --verify 'HEAD^{commit}'"),
           );
+          // The setup shell is marked with a per-PTY session token and runs
+          // under bash, which records its PID and execs a login zsh in place
+          // (`commands-environment.ts`, `containerSetupShellCommand`).
           expect(ptySpawn).toHaveBeenCalledWith(
             "docker",
             expect.arrayContaining([
               "exec",
               "-it",
+              "--env",
+              expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=/),
               "container-1",
-              "zsh",
-              "-lc",
+              "bash",
+              "-c",
               expect.stringContaining("/usr/local/bin/workspace-setup.sh"),
             ]),
             expect.any(Object),
           );
-          expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
+          const setupShell = ptySpawn.mock.calls[0]?.[1].at(-1);
+          expect(setupShell).toContain("exec zsh -lc");
+          expect(setupShell).toContain("flock");
           const setupOutput = emitted
             .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
             .map((entry) => (entry.payload as { text: string }).text)

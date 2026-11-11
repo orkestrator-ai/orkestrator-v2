@@ -15,7 +15,7 @@ upstream-blocked item and two small verification or hygiene points.
 1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311, and rechecked 2026-11-10 at the 0.3.319 pin: `SlashCommand` is still `{ name, description, argumentHint, aliases?, builtin? }`). Filing the upstream feature request moved to the manual-test checklist.
 2. **Codex cold-settle wait in a slow container** (Needs verification): confirm two 1 s re-reads are enough where plugin loading is slower. Status: open.
 3. **Real v2.21.0 pairings** (Needs verification): mixed-version run against real old builds. Status: open, owned by 0015 item 1.
-4. **Stale OpenCode pin comment**: `opencode-commands.ts` named 1.19.0 as the pin while the pin had moved on. Status: done (2026-10-31).
+4. **Stale OpenCode pin comment**: `opencode-commands.ts` named 1.19.0 as the pin while the pin had moved on. Status: done (2026-10-31). The file was removed with OpenCode 1.x on 2026-11-11 (`git show 5f4e27b1c:apps/backend/src/core/opencode-commands.ts`); OpenCode 2's catalogue (`opencode2/commands.ts`) states its facts from 2.2.6.
 
 ### 1. Claude terminal marker
 
@@ -176,8 +176,10 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   `e2e/agent-testing/slash-command-picker.spec.ts`.
 - Owner comments as of 2026-10-24: Claude `session-manager-commands.ts` names
   Agent SDK 0.3.309 (the pin); Cursor's `http.ts` names 1.0.37, type surface
-  re-checked on 1.0.40 (the pin). `opencode-commands.ts` (2026-10-31) names
-  1.19.0, SDK facts re-checked on 1.19.5 (the pin), server facts not.
+  re-checked on 1.0.40 (the pin). `opencode-commands.ts` (2026-10-31) named
+  1.19.0, SDK facts re-checked on 1.19.5, server facts not; it was removed
+  with OpenCode 1.x on 2026-11-11, and OpenCode 2's `opencode2/commands.ts`
+  names 2.2.6 (the pin).
 
 ## Outstanding work
 
@@ -299,7 +301,10 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
     model turn, as recorded in the qualification. If the Agent SDK adds a
     terminal marker to `SlashCommand`, use it and delete the remembered list.
 - **OpenCode command files added while the server runs (code item 10).**
-  Root cause: OpenCode 1.19.0 reads command files once per directory
+  This was the OpenCode 1.x behaviour, removed with 1.x on 2026-11-11: OpenCode
+  2's explicit refresh re-reads `GET /api/command`
+  (`apps/backend/src/core/opencode2/command-catalogue.ts`) and disposes
+  nothing. Root cause: OpenCode 1.19.0 reads command files once per directory
   instance, and `command.list` serves that copy until the instance is
   disposed. Reproduced on an isolated `opencode serve`: a file added after
   start was missing from `GET /command` until `POST /instance/dispose`, and
@@ -316,7 +321,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
     (`session.command` answers only after its whole turn, so that turn's idle
     edge arrives while the dispatch is still open). A reload bumps the provider's catalogue revision,
     which session snapshots carry, so the backend cache re-reads at once
-    (`apps/backend/src/core/opencode-command-reload.ts`).
+    (`apps/backend/src/core/opencode-command-reload.ts`, retired:
+    `git show 5f4e27b1c:apps/backend/src/core/opencode-command-reload.ts`).
   - Only an explicit refresh reloads. TTL reads never dispose: disposal also
     restarts the instance's MCP servers and LSP clients and reconnects the
     event stream.

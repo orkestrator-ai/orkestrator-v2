@@ -35,7 +35,6 @@ const rel = (path: string) => relative(repoRoot, path);
 
 const PROVIDER_SDKS = [
   "@anthropic-ai/",
-  "@opencode-ai/sdk",
   "@cursor/sdk",
   "@agentclientprotocol/sdk",
   "@openai/codex",

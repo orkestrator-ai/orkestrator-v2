@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Observed:** 2026-10-27, todo 0223 branch validation
 - **Test:** `openCodeSdkFetch > charges one provider request per call to the job that made it`
-- **File:** `apps/backend/src/core/opencode-sdk-fetch.test.ts:19`
+- **File:** `apps/backend/src/core/opencode-sdk-fetch.test.ts:19` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:apps/backend/src/core/opencode-sdk-fetch.test.ts`)
 
 Failed once in the second `mise run test` of the 0223 branch (9.58 ms): the
 response text from the test's own `Bun.serve` fixture was expected to be `ok`
@@ -125,3 +125,8 @@ Not checked: a keep-alive connection to a server in a different process that sto
   bun scripts/test-under-contention.ts -- bun test --cwd apps/backend
   --preload ../../tests/setup-node.ts ./src/core/opencode-sdk-fetch.test.ts
   --rerun-each=50` passed (macOS, host load ~35 to 55).
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

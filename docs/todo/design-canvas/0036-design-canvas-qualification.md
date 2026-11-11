@@ -1187,8 +1187,8 @@ record version was exercised on the new backend instead.
 `mise run typecheck` passed. The web package's native-agent, design and
 action-bar tests passed (1,030). `mise run test` passed every group except
 root/support, which failed two cases of
-`scripts/opencode-live-compatibility-probe.test.ts` on the shared temporary
-directory; the file passed alone three times, recorded as a recurrence of
+`scripts/opencode-live-compatibility-probe.test.ts` (removed with OpenCode
+1.x on 2026-11-11) on the shared temporary directory; the file passed alone three times, recorded as a recurrence of
 flake [0242](../../tests/flaky-tests/agent-bridges/0242-opencode-probe-shared-temp-root.md).
 The flake-index, doc and mise-task unit tests passed. Electron, iOS and the
 full `test:agent:browser` suite were not run: the change is renderer

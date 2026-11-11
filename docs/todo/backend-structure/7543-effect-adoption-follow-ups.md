@@ -271,7 +271,14 @@ For the invoker family that is left:
   refusal in a running Electron window").
 - The invoker cancel was checked against the test node network (a routed read
   aborted on the leaf, no outcome record) and a real gateway socket (a real
-  `fetch` abort aborts the call's signal), not across two running backends.
+  `fetch` abort aborts the call's signal). The whole chain is also checked end
+  to end in `apps/backend/tests/gateway-node-cancel-chain.test.ts`: a client
+  leaves a real command-node gateway in front of a real `OrkestratorBackend`
+  registry, and `invoke_on_node` goes through the real `NodePortal`,
+  `routeToNode` and `NodeLink` to a second real gateway, whose call's signal
+  aborts. The test node network stands in only for the leaf's hello and
+  authentication, and the leaf's backend is a stub. It has not been run
+  across two fully running backends on separate machines.
 - One failure from this work's default-suite runs has no flake case yet.
   `review regressions > concurrent start and restart cannot reap an in-flight
   launch` (`tests/unit/disposable-docker-daemon.test.ts:458`) failed once on

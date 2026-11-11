@@ -100,3 +100,30 @@ formatting, lint and typechecking. The run does not establish that every
 aggregate failure is pre-existing. Browser, Electron, Docker and iOS scenario
 suites were outside this backend-only follow-up's scope; production-scale
 maintenance timing and packaged/cross-platform copy behavior remain unmeasured.
+
+
+## Main CI recurrence — 2026-11-11 (V09 count, not deadline)
+
+Observed 2026-11-11 in `main` CI run 43093113394 (job "Tests (backend)",
+head `963ffa6ab`, PR #2176, agent-testing specs only). Recorded from branch
+`fix-ci-main-1727044b99e3-r1`, base `51456e887`
+(`mise run flaky:recurrence -- 1185 --base 51456e887` answered "open").
+
+`V09: aliases of one checkout share physical work > V09: environments aliasing
+one checkout share one watcher and scan; a linked worktree does not` failed
+in 89.27 ms, not at a deadline: `expect(shared.executed).toBeLessThanOrEqual(2)`
+received 3. `SharedScanQueue.run` joins a request only while a pass is
+running or queued, so three passes run when the first finishes before a
+later alias's request reaches it. That ordering depends on how fast the three
+`track()` calls reach the queue, which a loaded runner does not bound — the
+same contention family as the deadline failures above.
+
+- **Command:** `mise run test:full` with `ORKESTRATOR_TEST_GROUPS=backend`
+  (two backend workers) on the GitHub-hosted Linux x64 runner.
+- **Isolated rerun:** the runner's automatic rerun never ran the file (the
+  `::group::` path bug fixed in the same change, see case 9963's recurrence).
+  Locally, `bun test --preload ../../tests/setup-node.ts src/core/change-tracking/acceptance-sharing.test.ts`
+  in `apps/backend` passed 15/15 three times.
+
+Status stays open. Making V09 deterministic would hold the first scan until
+every alias has requested one; no assertion, timeout or skip changed here.

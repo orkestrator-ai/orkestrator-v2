@@ -2,7 +2,8 @@
 
 ## Task analysis
 
-Analysed 2026-11-10 against `main` at `04639b12b`. First analysed 2026-11-08
+Analysed 2026-11-11 against `main` at `14df96544`. Previously analysed
+2026-11-10 against `main` at `04639b12b`. First analysed 2026-11-08
 against `main` at `df1815e98`, with the Effect adoption change on branch
 `effect-ts-review-f8e88fe1638c-r1` applied. That change is described in
 [effect-usage.md](../../development/effect-usage.md). It moved backend
@@ -17,7 +18,7 @@ found. These tasks are what the review left for later.
 3. **Shared abort-aware timeout, sleep and retry in the backend**: Status: done (2026-11-10); the timeouts whose callee takes no signal are task 6.
 4. **One bounded-wait helper for the bridges**: Status: done (2026-11-10).
 5. **Parked cancels and prompt timeouts as `acquireUseRelease` in the Cursor bridge**: Status: open (depends on recurrence; see Decisions).
-6. **Give the remaining backend timeouts a signal to cancel**: Status: open.
+6. **Give the remaining backend timeouts a signal to cancel**: Status: open; the content and media loads, the MCP apply reads and the MCP inventory reads were done 2026-11-11, and only the command invoker family is left (see its Decisions).
 
 ### 1. Register the remaining message-marker error conventions
 
@@ -138,11 +139,13 @@ bridge.
 ### 6. Give the remaining backend timeouts a signal to cancel
 
 **Problem.** About 28 inline `Promise.race` timeouts in `apps/backend/src`
-still stop the caller waiting without stopping the work, because the work they
-race takes no `AbortSignal`: `ControlMcpInvoker` and `CommandInvoker`,
+stopped the caller waiting without stopping the work, because the work they
+raced took no `AbortSignal`: `ControlMcpInvoker` and `CommandInvoker`,
 `ProjectGitService.fetch`, the provider `mcpServers`, `commandCatalogue` and
 `send` calls, the content and media `load` and `resolve` callbacks, and the
-MCP management reload calls.
+MCP management reload calls. A media `resolve` that opened its file after the
+route gave up also leaked the file handle, because nothing was left to close
+it.
 
 **Context.** Task 3 added `runWithTimeout` (`abortable-timing.ts`), which
 aborts the work's signal when its deadline fires. It only cancels work that
@@ -157,10 +160,40 @@ already have been sent. `change-tracking/worktree-owner.ts` resolves an
 outcome rather than throwing. `web-annotation-tools.ts` was fixed in plain
 code by the adoption change.
 
+On 2026-11-11 each named family was checked against its callee. No bridge
+route observes a client disconnect (only the SSE routes read
+`c.req.raw.signal`), so aborting a bridge request ends the backend's request
+and its body read, not the bridge's own work. What each family got:
+
+- **Content `load` and media `resolve`** take a signal. The content load's
+  asset read (`TranscriptArtifactStore.readAsset`) stops on it, and the media
+  route (`resolveMediaWithin`) closes a handle that opens after its deadline.
+- **MCP apply reads** (`mcpConfigEvidence`, `openCodeMcpServerNames`) and the
+  **MCP inventory read after an action** (`mcpServers`) take a signal through
+  `ProviderReadOptions`, which the HTTP bridges and both OpenCode providers
+  pass to their request.
+- **Kept as races, with the reason beside each:** the command catalogue read
+  (its concurrency slot bounds bridge-side probes, which a client abort does
+  not stop); provider `send` (prompt dispatch is at most once, and an aborted
+  dispatch is ambiguous rather than cancelled); the MCP reloads (mutations an
+  abort cannot undo); `ProjectGitService.fetch` (one coalesced fetch shared by
+  every caller, bounded by its own 60 s git timeout, so one caller's short
+  budget must not kill it); and the content and media `authorize` checks
+  (in-process reads whose bound decides the answer).
+- **Left open:** the `ControlMcpInvoker` and `CommandInvoker` family
+  (`control-mcp-machine-load.ts`, `agent-accounts-machines.ts`,
+  `ticket-criteria-head.ts`). A command handler receives no signal, and a
+  command routed to another node has no cancel message on the node link.
+
 **Decisions.**
 
 - Thread a signal through each callee, then move its race to `runWithTimeout`, one callee family per change (recommended). Pros: the timeout then actually stops the work; each change is small and testable. Cons: touches provider and invoker interfaces.
 - Convert the races to `runWithTimeout` now without callee signals. Pros: one idiom sooner. Cons: no behaviour gained, and it reads as if the work were cancelled when it is not.
+
+For the invoker family that is left:
+
+- Give `CommandContext` an optional `signal` that local handlers may honour, and add a cancel message for commands routed over a node link, declared in the domain contract with an older-peer fallback (recommended). Pros: a timed-out command stops on this node and on the node that runs it. Cons: a protocol addition with its own compatibility tests, and a signal most of several hundred handlers would ignore at first.
+- Leave the three invoker timeouts as bounded waits. Pros: no protocol change. Cons: a slow remote command keeps running after the caller has answered "unavailable".
 
 ## Current state
 
@@ -189,11 +222,21 @@ code by the adoption change.
 - **Bridge waits (task 4).** `@orkestrator/protocol/node/bounded-wait`
   (`boundedWait`, `boundedWaitOrThrow`) replaces 21 copies across the Pi,
   Cursor, ACP, Claude and Codex bridges.
+- **Backend timeouts with a signal (task 6).** `ProviderReadOptions`
+  (`agent-provider-contract.ts`) carries a signal into `mcpServers` and
+  `mcpConfigEvidence`; the HTTP bridge catalog and evidence readers, the
+  OpenCode 1.x capabilities reader and the OpenCode 2.x client's MCP list
+  pass it to their request. `runWithTimeout` now bounds the MCP apply
+  scheduler's evidence read and OpenCode server-name listing, the agent
+  panel's MCP re-read after an action, the artifact content server's load
+  (whose asset read honours the signal) and the media route's file open
+  (`resolveMediaWithin`, which also closes a handle opened too late).
 
 ## Outstanding work
 
 - Task 5, only if parked-cancel or prompt-timeout bugs recur.
-- Task 6.
+- Task 6, the command invoker family only: a cancellation path through the
+  command registry and node links (see its Decisions).
 - Three bridge waits keep their own code on purpose (see Assumptions and
   decisions, task 4).
 - Non-invoke desktop IPC channels (`orkestrator:nodes:open`, `…:gateway` and
@@ -206,7 +249,8 @@ code by the adoption change.
 
 - None of this changes a live provider turn or Docker behaviour; it was
   verified with focused unit and integration tests only (no `dev:test`
-  profile, no Docker run). A desktop window showing a container lifecycle or
+  profile, no Docker run). Task 6's aborts were checked against fake bridges,
+  a local OpenCode 2.x HTTP stub and real files, not a running bridge. A desktop window showing a container lifecycle or
   MCP refusal after this change should show the text without a `[code …]`
   prefix; that was checked at the renderer client level, not in a running
   Electron window.
@@ -308,6 +352,54 @@ shutdown path, where unref'ing it could let the process exit before the steps
 that follow. Codex `process-supervisor.ts` races a shared unref'd sleep and is
 not a copy of the helper. Claude `rewindViaTransientQuery`'s timer aborts the
 query rather than ending a race.
+
+### Task 6: only reads take a signal
+
+`ProviderReadOptions` is accepted by `mcpServers` and `mcpConfigEvidence`
+only. A mutation (`send`, the MCP reloads, a tab close) may already have
+reached the bridge when its deadline fires; aborting the request would not
+undo it and would hide whether it ran, so those keep a plain bounded wait
+with a comment saying so.
+
+### Task 6: the command catalogue read keeps its race
+
+`NativeAgentCommandCatalogue` holds one of four service-wide slots until the
+provider read settles, because a Claude cold probe spawns a CLI. The bridge
+does not stop that probe when the backend disconnects, so aborting the read
+at its deadline would free the slot while the probe still runs and let more
+than four run at once. The read keeps its race and its slot.
+
+### Task 6: `ProjectGitService.fetch` is a soft budget
+
+Coordinator message checks wait a short time for `ProjectGitService.fetch`,
+but the fetch is coalesced per project, shared by every caller and bounded by
+its own 60 s `git fetch` timeout. Aborting it for one caller's budget would
+fail the fetch for the others, and a fetch that finishes later still serves
+the next check through its cooldown. The race stays, as a soft budget.
+
+### Task 6: the media route closes a late handle
+
+`runWithTimeout` drops a value that arrives after its deadline. For media
+`resolve` that value is an open file, so `resolveMediaWithin` records the
+handle and closes it when the route has already given up, whichever side of
+the deadline it lands on. The host-file resolver also checks the signal before
+opening, so a resolver that is still reading its roots opens nothing.
+
+### Task 6: `authorize` checks stay bounded races
+
+The content and media `authorize` callbacks read in-process state (live
+sessions, the environment record) and hold nothing to release. Their deadline
+decides the answer (deny) rather than cancelling work, so passing them a signal
+would gain nothing; a comment at each says so.
+
+### Task 6: the invoker family is left open
+
+`ControlMcpInvoker` and `CommandInvoker` run registry commands that receive no
+signal, and a command routed to another node has no cancel message on the node
+link. Cancelling them means a `CommandContext` signal and a contract-declared
+cancel message with an older-peer fallback
+([version-compatibility.md](../../architecture/version-compatibility.md#domain-contracts)),
+which is a protocol change of its own rather than a follow-up to this one.
 
 ## Related
 

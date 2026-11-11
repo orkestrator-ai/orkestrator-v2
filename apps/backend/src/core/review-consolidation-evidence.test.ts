@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   MULTI_REVIEW_REPORTS_FRAME_CLOSE,
   MULTI_REVIEW_REPORTS_FRAME_OPEN,
@@ -120,6 +121,36 @@ describe("compact consolidation evidence", () => {
     expect(caught).toBeInstanceOf(ConsolidationBudgetError);
     expect((caught as Error).message).toContain("fewer reviewers");
     expect((caught as Error).message).not.toContain("SECRET");
+  });
+
+  test("an overflow is logged as counts only, so how often it happens can be read back", () => {
+    const panel = reviewers(2);
+    panel[0]!.report!.issues[0]!.evidence = "SECRET-EVIDENCE ".repeat(1_000);
+    const logs = captureLogs();
+    try {
+      expect(() => buildConsolidationEvidence(consolidationReports(panel), 4_096)).toThrow(
+        ConsolidationBudgetError,
+      );
+      // A panel that fits logs nothing.
+      buildConsolidationEvidence(consolidationReports(reviewers(2)));
+      const overflow = logs
+        .records()
+        .filter(
+          (record) => record.area === "review" && record.event === "consolidation.budget-exceeded",
+        );
+      expect(overflow).toHaveLength(1);
+      expect(overflow[0]!.level).toBe("warn");
+      expect(overflow[0]!.fields).toEqual({
+        reviewers: 2,
+        sourceFindings: 4,
+        compactBytes: expect.any(Number),
+        maxBytes: 4_096,
+      });
+      expect(overflow[0]!.fields!.compactBytes as number).toBeGreaterThan(4_096);
+      expect(logs.lines.join("\n")).not.toContain("SECRET");
+    } finally {
+      logs.restore();
+    }
   });
 
   test("each reviewer's lens label travels as its focus, within the budget", () => {

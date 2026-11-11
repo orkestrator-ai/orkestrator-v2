@@ -518,6 +518,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
 | `renderer-errors` | `error.recorded` | `errorClass`, `boundary`, `route`, `fingerprint`, `count` | A desktop window reported new occurrences of a renderer failure; see [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). |
+| `review` | `consolidation.budget-exceeded` | `reviewers`, `sourceFindings`, `compactBytes`, `maxBytes` | A review panel's reports did not fit one consolidation turn (`CONSOLIDATION_MAX_EVIDENCE_BYTES`) after optional prose was removed, so consolidation failed before dispatch. It counts how often real panels need [hierarchical consolidation](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md). |
 
 A lease is **regained** by the next backend, not by the one that lost it: a lost lease
 is final until that process restarts, so `writer-lease.regained` is written by whichever

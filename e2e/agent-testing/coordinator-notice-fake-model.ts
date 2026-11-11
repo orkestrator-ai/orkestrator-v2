@@ -52,6 +52,8 @@ interface ClaudeCall {
   parked: boolean;
   /** When it arrived, in ms since the epoch. */
   at: number;
+  /** The CLI's own startup probe (`quota`, one output token), not a turn. */
+  probe: boolean;
 }
 interface Wake {
   /** Which platform's coordinator was woken: the command node's Claude or the leaf's Pi. */
@@ -187,6 +189,7 @@ async function claudeMessages(request: Request): Promise<Response> {
     refused: refuse,
     parked: refuse && state.hold,
     at: Date.now(),
+    probe: prompt.trim() === "quota" || body.max_tokens === 1,
   };
   track(state.claude, call);
   if (!refuse) return claudeReply(stream);

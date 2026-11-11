@@ -107,6 +107,7 @@ type ClaudeCall = {
   refused: boolean;
   parked: boolean;
   at: number;
+  probe: boolean;
 };
 type Wake = { by: "claude" | "pi"; account?: FixtureAccount | "unknown"; notices: NoticeFacts[] };
 type Calls = {
@@ -768,6 +769,16 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
         platform: "claude",
         accountId: deskAccounts.ids["desk-b"],
       });
+      // The command node's ticks travel to the leaf by email, so the leaf's
+      // other limited logins are left out there: the leaf's tab stays stopped
+      // rather than moving to them.
+      for (const name of ["leaf-a", "leaf-c"] as const) {
+        await leaf.invoke("set_agent_account_auto_switch", {
+          platform: "claude",
+          email: FIXTURE_ACCOUNTS[name].email,
+          included: false,
+        });
+      }
       await desk.invoke("set_agent_account_auto_switch", { platform: "claude", enabled: true });
       for (const name of ["desk-b", "desk-h"] as const) {
         await desk.invoke("set_agent_account_auto_switch", {
@@ -803,9 +814,13 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
               .filter((call) => call.refused)
               .map((call) => call.at),
           );
-          return fake.claude.filter((call) => call.account === "desk-b" && call.at >= refusedAt)
-            .length;
+          return fake.claude.filter(
+            (call) => call.account === "desk-b" && call.at >= refusedAt && !call.probe,
+          ).length;
         })(),
+        probesOnSharedLoginAtDesk: fake.claude
+          .slice(beforeTask3.claude.length)
+          .filter((call) => call.account === "desk-b" && call.probe).length,
         callsOnSharedLoginBeforeStop: fake.claude
           .slice(beforeTask3.claude.length)
           .filter(

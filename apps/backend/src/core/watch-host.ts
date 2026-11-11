@@ -22,6 +22,15 @@ import { watch } from "node:fs";
  * A watch is a hint source, so a lost helper is not fatal: every open handle
  * reports an error, and its owner falls back to polling and retries as it does
  * for any failed watch. The next start spawns a new helper.
+ *
+ * Bun rebuilds that one stream from "now" on every `fs.watch` and `close()`
+ * (`kFSEventStreamEventIdSinceNow` in its `fs_events.rs`), so whatever happens
+ * under any other watch while the stream is rebuilt, about 30 ms, is lost rather
+ * than delayed. The helper therefore flags every other live watch after each
+ * start or close it performs, and the backend hands the flag to the watch's
+ * `onEventsLost` listeners: its owner rescans instead of waiting for the next
+ * event or its safety scan (docs/architecture/git-scan-caches.md, "Lost events
+ * on macOS").
  */
 
 /** A watch with what `WorktreeWatcher` and its peers use of an `FSWatcher`. */
@@ -37,6 +46,13 @@ export interface WatchHandle {
    * Closing before readiness rejects with ECANCELED without emitting an error.
    */
   established?: Promise<void>;
+  /**
+   * Present when events can be lost without an `error`: on macOS another watch
+   * starting or closing rebuilds the shared FSEvents stream, and changes made
+   * during the rebuild reach no watch. Called at most once per helper flush
+   * ({@link WATCH_HOST_FLUSH_MS}); which paths were affected is unknown.
+   */
+  onEventsLost?(listener: () => void): void;
 }
 
 export type WatchListener = (eventType: string, filename: string | null) => void;
@@ -52,8 +68,10 @@ export const WATCH_HOST_MAX_LINE_CHARS = 16 * 1024 * 1024;
  * Runs with `bun -e`, so it needs no file of its own in a build. It writes one
  * batch at a time and keeps collecting while the backend is slow to read: repeats
  * are dropped and anything past the cap becomes the watch's `overflow` flag, so
- * neither side can queue without bound. It exits when the backend closes stdin,
- * which also covers the backend dying.
+ * neither side can queue without bound. A start or close that rebuilt the stream
+ * sets the `lost` flag of every other live watch; like `overflow` it is one
+ * boolean per watch per batch, so a burst of starts costs each watch one flag.
+ * It exits when the backend closes stdin, which also covers the backend dying.
  */
 export const WATCH_HOST_PROGRAM = String.raw`
 const { watch } = require("node:fs");
@@ -69,7 +87,7 @@ const flush = () => {
   timer = null;
   if (writing || pending.size === 0) return;
   const batches = [];
-  for (const [id, batch] of pending) batches.push([id, [...batch.events.values()], batch.overflow]);
+  for (const [id, batch] of pending) batches.push([id, [...batch.events.values()], batch.overflow, batch.lost]);
   pending.clear();
   pendingEvents = 0;
   writing = true;
@@ -79,10 +97,24 @@ const flush = () => {
   });
 };
 const schedule = () => { timer ??= setTimeout(flush, FLUSH_MS); };
+const batchOf = (id) => {
+  let batch = pending.get(id);
+  if (!batch) pending.set(id, (batch = { events: new Map(), overflow: false, lost: false }));
+  return batch;
+};
+// The stream was rebuilt: what happened under every other watch meanwhile is gone.
+const rebuilt = (except) => {
+  let flagged = false;
+  for (const id of watches.keys()) {
+    if (id === except) continue;
+    batchOf(id).lost = true;
+    flagged = true;
+  }
+  if (flagged) schedule();
+};
 const record = (id, eventType, filename) => {
   if (!watches.has(id)) return;
-  let batch = pending.get(id);
-  if (!batch) pending.set(id, (batch = { events: new Map(), overflow: false }));
+  const batch = batchOf(id);
   const name = typeof filename === "string" ? filename : null;
   const key = eventType + ":" + name;
   if (!batch.events.has(key)) {
@@ -105,6 +137,7 @@ const handle = (message) => {
     watches.delete(message.id);
     pending.delete(message.id);
     try { open?.close(); } catch {}
+    if (open) rebuilt(message.id);
     return;
   }
   try {
@@ -114,6 +147,7 @@ const handle = (message) => {
     opened.on("error", (error) => fail(id, error));
     watches.set(id, opened);
     write({ type: "ready", id });
+    rebuilt(id);
   } catch (error) {
     fail(message.id, error);
   }
@@ -134,7 +168,11 @@ process.stdout.on("error", () => process.exit(0));
 type HostMessage =
   | { type: "ready"; id: number }
   | { type: "error"; id: number; code: string }
-  | { type: "events"; batches: Array<[number, Array<[string, string | null]>, boolean]> };
+  | {
+      type: "events";
+      /** Watch id, its events, `overflow`, and `lost` (absent from an older helper). */
+      batches: Array<[number, Array<[string, string | null]>, boolean, boolean?]>;
+    };
 
 type SpawnHost = () => ChildProcess;
 
@@ -159,6 +197,7 @@ function hostFailure(code: string): NodeJS.ErrnoException {
 class HostedWatch implements WatchHandle {
   readonly established: Promise<void>;
   private readonly errorListeners: Array<(error: Error) => void> = [];
+  private readonly lostListeners: Array<() => void> = [];
   private settle!: { resolve: () => void; reject: (error: Error) => void };
   private pendingError: Error | null = null;
 
@@ -180,9 +219,17 @@ class HostedWatch implements WatchHandle {
     return this;
   }
 
+  onEventsLost(listener: () => void): void {
+    this.lostListeners.push(listener);
+  }
+
   close(): void {
     this.settle.reject(hostFailure("ECANCELED"));
     this.onClose(this);
+  }
+
+  eventsLost(): void {
+    for (const listener of this.lostListeners) listener();
   }
 
   ready(): void {
@@ -291,12 +338,14 @@ export class WatchHost {
       hosted.fail(hostFailure(message.code));
       return;
     }
-    for (const [id, events, overflow] of message.batches) {
+    for (const [id, events, overflow, lost] of message.batches) {
       const hosted = this.watches.get(id);
       if (!hosted) continue;
       for (const [eventType, filename] of events) hosted.listener(eventType, filename);
       // Too many to list: the same "unknown path" an unnamed event means.
       if (overflow) hosted.listener("change", null);
+      // A listener may close the watch; a closed one hears nothing more.
+      if (lost === true && this.watches.get(id) === hosted) hosted.eventsLost();
     }
   }
 

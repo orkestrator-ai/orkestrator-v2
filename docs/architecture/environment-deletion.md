@@ -267,6 +267,12 @@ watch, whose owner falls back to polling and retries; the next start spawns a ne
 helper. Linux keeps `fs.watch` in the backend: inotify has no shared stream to
 rebuild.
 
+Each rebuild also starts the stream from "now", so whatever happens under every
+other watch while it is rebuilt, about 30 ms, is lost rather than delayed. The
+helper therefore flags every other live watch after each start or close, and their
+owners rescan
+([git-scan-caches.md](git-scan-caches.md#lost-events-on-macos)).
+
 The helper takes the blocking out of the backend; it does not make `fseventsd`
 any faster. With it at 100% of a core, independent Bun and Node processes writing
 one new file a second each saw their first event 72 s in, and about 44 events for

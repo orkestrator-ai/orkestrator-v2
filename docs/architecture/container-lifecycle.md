@@ -596,8 +596,8 @@ the user rebuilds it.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host; see [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 for what is still unproved on rootless. The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
-| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host. Its Linux Engine and rootless qualification is summarised in [container qualification](../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11); what is still unproved on rootless is [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md). The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
+| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([environment networks](#environment-networks-network-policy2)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
 
@@ -917,9 +917,12 @@ on revocation described above.
   start that finds the host token expired asks for that refresh at once
   rather than waiting for the next pass. An agent-test profile never
   refreshes the host. A switch also rewrites `oauthAccount` in
-  the running container's `~/.claude.json`. Remaining qualification and renewal
-  work is tracked in
-  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+  the running container's `~/.claude.json`. The refresh trigger is re-checked
+  with a fake login on every Claude Code bump
+  (`scripts/claude-host-refresh-trigger-probe.ts`, see
+  [upgrading agents](../development/upgrade-agents.md#re-check-oauth-refresh-token-rotation));
+  the live renewal checks with a real login are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 - Neither the Cursor key nor the Anthropic API key (when used instead of
   OAuth) is in a staged-inputs container's creation environment. The bridge
   reads the synced owner-only Cursor file. The Anthropic key is written to
@@ -1053,7 +1056,8 @@ bridge. The network asks for nothing about IPv6, so a daemon whose
 owner (the egress gateway, or the container itself) is created with
 `net.ipv6.conf.all.disable_ipv6=1`, which leaves every interface, including
 one attached later, without an IPv6 address; that was checked live on Engine
-29.9.2 with IPv6 on by default (0018 task 3). The container also gets
+29.9.2 with IPv6 on by default
+([container qualification](../development/container-qualification.md#egress-gateway-conditions-on-linux-engine-2026-10-31)). The container also gets
 three policy inputs the root bootstrap captures once, root-owned:
 
 | File | Meaning |
@@ -1371,6 +1375,44 @@ privileges drop, and an in-container runtime gets `NET_ADMIN` only for that
 firewall. `no-new-privileges` stays off: the image's entrypoint is `sudo
 network-policy-entrypoint.sh` as `node`, which it would break, and starting
 runtimes as root instead would make every `docker exec` default to root.
+
+### Isolation constraints
+
+These were decided while building network and credential isolation (to-do
+0018, retired 2026-11-11) and should keep holding:
+
+- Default ports: TCP 443 for allowed domains, TCP 443 and 22 for GitHub's
+  ranges. Everything on the default lists is HTTPS on 443, so anything else
+  needs a `host:port` (or `host:port/udp`) entry; plain HTTP (80) and SSH to
+  other Git hosts are not defaults. Lists that relied on another port are not
+  rewritten; the network status and settings help say what applies.
+- Never claim that IP allowlisting prevents exfiltration. Shared CDN
+  addresses, allowed services and DNS remain channels.
+- Never fall back to the shared default bridge when the environment network
+  cannot be created; that is an explicit error.
+- No allow-all or empty window during a refresh: build the next set beside
+  the live one, swap it in, then revoke tracked connections of removed
+  entries.
+- IPv6 stays dropped unless equivalent IPv6 enforcement is implemented and
+  tested.
+- Keep the restricted-mode sudo policy exact. Never add blanket sudo and never
+  mount the Docker socket. Do not describe a root workload as unable to change
+  its firewall unless its firewall runs in a gateway.
+- Published ports stay on loopback and authenticated.
+- A container never holds a refresh token it shares with the host or another
+  container when that provider's refresh tokens are single-use or rotating. It
+  gets the access token, re-read from the host on start, and signs out on its
+  own when that expires. A refresh token that is reused rather than rotated
+  (GitHub Copilot, Pi's Meta) may be copied, like an API key. Only the host
+  refreshes, through the provider's own CLI; Orkestrator never calls a token
+  endpoint or writes a host credential store itself, and an agent-test profile
+  never refreshes the host. Which providers rotate is re-checked on every
+  agent bump
+  ([upgrading agents](../development/upgrade-agents.md#re-check-oauth-refresh-token-rotation)).
+- Credentials go only to enabled, authorized, non-revoked providers.
+  Revocation is recorded before anything else, so an interrupted revoke still
+  gates staging and syncs. Never promise that removal retracts a credential a
+  workload already read, and never revoke an account-wide key.
 
 ## Agent tools reachability (`container-host-reachability.ts`)
 

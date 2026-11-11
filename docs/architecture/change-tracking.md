@@ -270,7 +270,10 @@ files on a large page show `changes.body.batch-limit`.
    (`GET /change-evidence/body`), commits them to the ledger, then
    acknowledges (`POST /change-evidence/ack`). An in-memory read is never an
    acknowledgment; bodies are released only when retained or durably
-   recorded unavailable.
+   recorded unavailable. A read with nothing new acknowledges its cursor
+   only until the producer has accepted that epoch and cursor once in this
+   process: a repeat releases nothing, and sending it made every sweep read
+   cost three bridge requests instead of two (todo 7567 task 3).
 4. **Reduce**: one operation per native call identity (+ native attempt id);
    terminal phases never regress; a replace revision becomes selected only
    when the adapter declared it supersedes the selected one or a verified

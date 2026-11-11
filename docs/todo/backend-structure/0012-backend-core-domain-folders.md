@@ -4,16 +4,16 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`.
 
 ### Tasks
 
-1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), and the `http-bridge` move is done (2026-11-06, the procedure proof; see "Assumptions and decisions"); the `opencode`, `web-annotations` and `control-mcp` moves and placing `keyed-record-format.ts` are open.
+1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof) and the `web-annotations` move is done (2026-11-11; see "Assumptions and decisions"); the `opencode` and `control-mcp` moves and placing `keyed-record-format.ts` are open, one domain per change.
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: open.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
-6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one.
+6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11 and are tracked in [7800](7800-domain-folders-without-index.md).
 7. **Open questions**: where `keyed-record-format.ts` and `pi-model-catalog-seeding.ts` go, and whether `storage` and `native-agent` move before or after their splits. Status: partly done (the 0009/0010 splits have landed).
 
 ### 1. Wave 1 (leaves)
@@ -22,7 +22,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The plan moves low-dependency domains first to prove the codemod procedure. Only `design/` is done (#979, `0466ebd0`), with an `index.ts` and patterns in both `.oxlintrc.json` overrides (`apps/backend/src/**` at line 177, pattern at 188; `tests/unit/**` at 216, pattern at 223).
 
-**Investigation.** Nothing has moved since #979, and the root has grown fast: 521 source files and 446 tests (the file says 378 and 299). Wave 1 prefix counts today: `opencode-*` 41 source / 33 tests (was 29/22), `web-annotation-*` 29/25 (28/22), `http-bridge-*` 18/14 (13/11), `control-mcp-*` 20/9 (2/1). `mcp-management/` (29 source, 27 tests) and `public-api/` (42, 20) still have no `index.ts`. The codemod `scripts/move-backend-modules.ts` and its test `tests/unit/move-backend-modules.test.ts` still exist (last touched for Bun 1.4.4 in #1229). `mise run build:backend` and `mise run verify:packaged-backend` exist in `mise.toml`.
+**Investigation.** Nothing has moved since #979, and the root has grown fast: 521 source files and 446 tests (the file says 378 and 299). Wave 1 prefix counts today: `opencode-*` 41 source / 33 tests (was 29/22), `web-annotation-*` 29/25 (28/22), `http-bridge-*` 18/14 (13/11), `control-mcp-*` 20/9 (2/1). `mcp-management/` (29 source, 27 tests) and `public-api/` (42, 20) still have no `index.ts`. The codemod `scripts/move-backend-modules.ts` and its test `tests/unit/move-backend-modules.test.ts` still exist (last touched for Bun 1.4.4 in #1229). `mise run build:backend` and `mise run verify:packaged-backend` exist in `mise.toml`. Re-measured 2026-11-11 on `14df96544`: `opencode-*` 55 source / 53 tests, `control-mcp-*` 39/27, and `web-annotation-*` 29/27 before its move. `core/opencode2/` (36/43, #2009) now sits beside the `opencode-*` files, with four `opencode2-*.ts` files still at the root, so the `opencode` slice also has to decide where those four files go.
 
 **Decisions.**
 
@@ -196,8 +196,10 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   because `public-api/index.ts` reaches most of the backend through
   `registry.js`: `attention-cursor.js`, `dispatch.js`, `errors.js`,
   `exec-control.js`, `operation-ledger.js` and `revisions.js`.
-  `mcp-management/` needs none. No domain folder is now without an
-  `index.ts`.
+  `mcp-management/` needs none. That left no domain folder without an
+  `index.ts` at the time except `permission-rules/` (2026-10-27), which was
+  missed; it and the later `opencode2/` and `self-improvement/` are tracked in
+  [7800](7800-domain-folders-without-index.md).
 - Done (task 1's `http-bridge` slice, 2026-11-06, against `main` at
   `c1724ab7`): the 20 `http-bridge-*` source files and their 20 tests are in
   `core/http-bridge/` without the prefix (`http-bridge/provider.ts`,
@@ -208,6 +210,17 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `HttpBridgeProviderDependencies`), and all seven import it. No named
   exceptions were needed: routing them through `index.ts` closes no runtime
   cycle.
+- Done (task 1's `web-annotations` slice, 2026-11-11, against `main` at
+  `14df96544`): the 29 `web-annotation-*` source files (test helpers and
+  support included) and their 27 tests are in `core/web-annotations/`
+  without the prefix (`web-annotations/service.ts`,
+  `web-annotations/storage.ts`, …), with an `index.ts` and both lint
+  patterns. `index.ts` re-exports the 23 symbols the six production importers
+  outside the folder use. Two leaf modules are named exceptions in the
+  `apps/backend/src/**` pattern, because routing their importer through
+  `index.ts` would close a runtime import cycle: `store-layout.js`
+  (imported by `storage-stores.ts`) and `tools.js` (imported by
+  `agent-tools.ts`). See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -228,13 +241,14 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   not comparable.
 - The `core/` root holds 378 non-test `.ts` files and 299 tests (the
   2026-10-15 count; after the `http-bridge` slice on 2026-11-06 it holds 827
-  and 842).
+  and 842, and after the `web-annotations` slice on 2026-11-11 it holds 883
+  and 925).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
   | --- | --- | ---: | ---: |
   | opencode | `opencode-*` | 29 | 22 |
-  | web-annotations | `web-annotation-*` | 28 | 22 |
+  | web-annotations | `web-annotation-*` | done (29 / 27 moved, 2026-11-11) | |
   | http-bridge | `http-bridge-*` | done (20 / 20 moved, 2026-11-06) | |
   | control-mcp | `control-mcp-*` | 2 | 1 |
   | keyed-records | `keyed-record-*` | 1 | 0 |
@@ -269,7 +283,13 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   prefix, rewrites relative specifiers (including `import()`, `require()` and
   `mock.module()`) and path strings in tracked text files, stages every move in
   one `git add`, and runs `bun fmt` on what it touched. It does not rewrite bare
-  file names in prose.
+  file names in prose, and since 2026-11-11 (todo 7490, retired) it leaves a
+  path that follows a Git revision and a colon (`git show 0d254a3a^:apps/…`,
+  `` `ff4026b4e^:apps/…:72-110` ``) under its old name, because at that
+  revision the file had it. A revision here is a hex SHA of 7 to 40
+  characters, `HEAD`, `ORIG_HEAD`, `FETCH_HEAD`, `main`, `master`, an
+  `origin/` or `upstream/` name, a `refs/` name or a `vX.Y.Z` tag, each with
+  any `^`/`~` steps; a path after any other `word:` is rewritten.
 - Lint: each domain has a pattern in two `.oxlintrc.json` overrides. The
   `apps/backend/src/**` override comes before the tests-off override (so
   co-located tests and test-support files may reach internals) and repeats the
@@ -285,9 +305,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 Order: move the domains few others depend on first, so the procedure is proven
 before the busy ones move.
 
-1. **Wave 1 (leaves):** `opencode`, `web-annotations`, `control-mcp`.
+1. **Wave 1 (leaves):** `opencode`, `control-mcp`.
    (Done: an `index.ts` and both lint patterns for `mcp-management/` and
-   `public-api/`; the `http-bridge` move.) Place `keyed-record-format.ts` rather
+   `public-api/`; the `http-bridge` and `web-annotations` moves.) Place `keyed-record-format.ts` rather
    than giving it a folder (see "Open questions").
 2. **Wave 2 (mid-tier):** `plan-usage`, `features`, `coordinator`,
    `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`,
@@ -320,10 +340,11 @@ change, no edits beyond paths, the new `index.ts` and the lint patterns):
    fails midway, reset with `git reset -q && git checkout -- . && rm -rf <new
    folder>` and run it again. Then fix by hand what it gets wrong or leaves
    alone:
-   - it also rewrites paths that name a historical commit
+   - it leaves paths that name a historical commit
      (`` `<sha>^:apps/backend/src/core/<old>.ts` `` in test comments and
-     `git show <sha>:…` commands in flake records), which must keep the old
-     name; revert those (todo [7490](7490-move-codemod-rewrites-revision-paths.md));
+     `git show <sha>:…` commands in flake records) alone, but only for the
+     revision forms listed under "Current state"; grep the diff for `:apps/`
+     and revert any other revision spelling it rewrote;
    - it does not rewrite bare file names (`` `http-bridge-provider.ts` ``) in
      source comments, living docs, `AGENTS.md` globs, or file-name lists that
      tests read by path (`agent-provider-boundaries.test.ts`). Grep for the old
@@ -355,8 +376,89 @@ Done when:
 ## Assumptions and decisions
 
 Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
-`index.ts` step (2026-11-03) and task 1's `http-bridge` slice (2026-11-06). The moves in waves 1 to 4 (tasks 1 to 4) were
+`index.ts` step (2026-11-03), task 1's `http-bridge` slice (2026-11-06) and
+task 1's `web-annotations` slice with the codemod fix from todo 7490
+(2026-11-11). The moves in waves 1 to 4 (tasks 1 to 4) were
 left open on purpose: they move many files that other work in flight touches.
+
+### Task 1: `web-annotations` as the next slice
+
+- Chosen: one domain, `web-annotations`, moved with the codemod
+  (`--prefix web-annotation- --into web-annotations`) against `main` at
+  `14df96544`. Of the three wave 1 moves left it is the smallest (29 source,
+  27 tests, against 55/53 for `opencode-*` and 39/27 for `control-mcp-*`), no
+  open pull request touched it (three were open, none in these files), and
+  `opencode` has the unsettled `opencode2/` layout (see task 1).
+  `commands-registry-web-annotations.ts` stays at the root: it is a
+  `commands-*` file and moves with the `commands` slice.
+- Measured before the move: importers outside the folder were 6 production
+  files in `apps/backend/src/core/` (`agent-tools.ts`, `commands-context.ts`,
+  `commands-registry-terminal.ts`, `commands-registry-web-annotations.ts`,
+  `index.ts`, `storage-stores.ts`) using 23 symbols from 12 modules; 2
+  co-located tests at the root (`commands-registry-web-annotations.test.ts`,
+  `mcp-tool-schema-portability.test.ts`); `scripts/web-annotation-commit-profile.ts`
+  (test support); `tests/source-guards/baseline.json` (two keys); and path
+  strings in a protocol comment, `docs/architecture/web-page-annotations.md`,
+  four to-do files and three flake records. The codemod moved 56 files and
+  rewrote 68. No `<revision>:<path>` string named a moved file, so the 7490
+  fix had nothing to skip in this slice; it is covered by its fixture test.
+- `index.ts` holds exactly the 23 production symbols. All six production
+  importers use it except the two exception sites below; co-located tests and
+  the profile script keep deep imports (procedure step 3).
+- Named exceptions: `store-layout.js` and `tools.js`. Routing all six
+  importers through `index.ts` added `import/no-cycle` errors: `index.ts`
+  reaches `storage-stores.ts` through `service.ts`, `context.ts` and
+  `storage.ts`, and reaches `agent-tools.ts` through `dispatch.ts`,
+  `native-agent-service-shared.ts`, `native-agent-provider.ts`,
+  `opencode-provider.ts` and `opencode-provider-helpers.ts` (found with a
+  throwaway value-import reachability script). Neither leaf module reaches
+  its importer. Options were the same as task 6's (exceptions in the pattern,
+  disable comments at each site, or breaking the cycle by moving code);
+  chosen the exceptions, as task 6 and the `public-api/` step did, because a
+  code move is outside this file's "pure moves" rule. `agent-tools.ts` still
+  takes the type `WebAnnotationToolHost` from `index.ts` with `import type`,
+  which adds no runtime edge. Both modules are still re-exported from
+  `index.ts` (the `public-api/` choice: `index.ts` stays the complete list),
+  and its header names them and why.
+- Hand fixes after the codemod: bare file names in the moved files' own
+  comments (`web-annotation-service-store.ts` → `service-store.ts`, and the
+  `-threads.ts` shorthand in `context.ts` written out), a comment in
+  `apps/web/src/stores/conversationScrollTargetStore.ts`, five short names in
+  `docs/architecture/web-page-annotations.md`, five to-do files (0057,
+  7543, 0078, 5800, 6140) and `plans/unified/7014-remaining-zod-to-effect-schema.md`,
+  and the folder list in `docs/development/linting.md` ("Module
+  boundaries"), which also lacked `http-bridge/`. Flake records keep the path
+  rewrites the codemod made and their bare names, as in the earlier slices.
+- Lint patterns: `**/web-annotations/*` with `!**/web-annotations/index.js`
+  and the two exceptions under `apps/backend/src/**`, and the
+  `**/backend/src/core/web-annotations/*` form under `tests/unit/**`. No
+  backend or `tests/unit` import path has another `web-annotations/` segment
+  (the protocol's `@orkestrator/protocol/web-annotations*` modules are single
+  segments; `apps/web/src/lib/web-annotations/` is outside both overrides).
+  Checked with probe files (deleted): a deep import is reported under both
+  overrides; `index.js` is not; the two exceptions are not reported under
+  `apps/backend/src/**` and are under `tests/unit/**`; the protocol imports
+  are not.
+- Validation run here: `bunx oxlint apps/backend tests/unit scripts` (no
+  errors), backend typecheck, `mise run guards`, the moved tests plus the
+  importers' tests (`bun test --preload ../../tests/setup-node.ts
+  ./src/core/web-annotations …`, 415 pass across 30 files) and
+  `mise run build:backend`. The full suite and `verify:packaged-backend` run
+  in the pipeline's validation stage.
+
+### Task 1: the codemod skips `<revision>:<path>` strings (todo 7490)
+
+- Chosen: 7490's recommended option, a negative look-behind for a revision
+  token and a colon (plus any leading directories of the path) before each
+  path-string match in `scripts/move-backend-modules.ts`, with a fixture
+  case in `tests/unit/move-backend-modules.test.ts`. The test was confirmed to
+  fail on the unfixed script (10 lines rewritten) before the fix.
+- The revision token is a closed list (SHA, `HEAD` and kin, `main`,
+  `master`, `origin/`/`upstream/` and `refs/` names, `vX.Y.Z` tags), not any
+  word, so `see:apps/…` or `domain:apps/…` still moves. Cons: another ref
+  name (`release-2:apps/…`) is rewritten, which is why procedure step 2 still
+  asks for a grep; and a bare word of seven or more hex letters followed by
+  `:` before a path (`deadbeef:apps/…`) would be skipped.
 
 ### Task 1: `http-bridge` as the procedure proof
 
@@ -628,6 +730,8 @@ Rules that keep slices safe:
   the storage repositories and native agent collaborators (todos 0009 and
   0010).
 - [`linting.md`](../../development/linting.md) ("Module boundaries").
+- [7800](7800-domain-folders-without-index.md): `index.ts` and lint patterns
+  for `permission-rules/`, `opencode2/` and `self-improvement/`.
 
 ## Replaces
 

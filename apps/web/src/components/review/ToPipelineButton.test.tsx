@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "bun:test";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
-import { readCoordinatorFor } from "@/lib/read-coordinator";
+import { readCoordinatorFor, readKeyId, type ReadCoordinator } from "@/lib/read-coordinator";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { ToPipelineButton } from "./ToPipelineButton";
@@ -19,6 +19,16 @@ function client(sources: Source[] = [original], available = true) {
       draft_auto_pipeline: () => new Promise(() => undefined),
     },
   });
+}
+
+/**
+ * The toolbar's read of `tabId`'s eligibility in `coordinator`, as diagnostics
+ * report it. Undefined when nothing is subscribed (or it polls on a timer of
+ * its own, which the coordinator cannot see).
+ */
+function sourcesEntry(coordinator: ReadCoordinator, tabId = "original") {
+  const id = readKeyId({ resource: "auto-pipeline-sources", target: "env", view: tabId });
+  return coordinator.getDiagnostics().entries.find((entry) => entry.id === id);
 }
 
 /** Renders the button with `activeTabId` active in the environment's only pane. */
@@ -121,11 +131,15 @@ test("stops reading while the node's connection is down, and reads again when it
   const view = render(node, () => true);
   await screen.findByRole("button", { name: "To pipeline" });
   const coordinator = readCoordinatorFor(view.scope);
+  // Connected, the poll holds its next read as a coordinator timer.
+  await waitFor(() => expect(sourcesEntry(coordinator)?.timerDueAt).not.toBeNull());
   act(() => coordinator.setDisconnected(true));
   const whileDown = node.calls("auto_pipeline_sources").length;
-  // Longer than one poll interval: a timer of its own kept reading through an
+  // Paused, the coordinator holds no timer for it, so nothing can read until
+  // the connection returns. A timer of its own kept reading through an
   // outage, which the live client-outage spec counts as a read while paused.
-  await act(() => new Promise((resolve) => setTimeout(resolve, 2_500)));
+  expect(coordinator.getDiagnostics().paused).toBe(true);
+  expect(sourcesEntry(coordinator)).toMatchObject({ subscribers: 1, timerDueAt: null });
   expect(node.calls("auto_pipeline_sources")).toHaveLength(whileDown);
   act(() => coordinator.setDisconnected(false));
   // An auxiliary read resumes within the coalescing window plus its spread (1.55 s).
@@ -166,10 +180,11 @@ test("stops polling when it unmounts", async () => {
   const node = client();
   const view = render(node, () => true);
   await screen.findByRole("button", { name: "To pipeline" });
+  const coordinator = readCoordinatorFor(view.scope);
+  expect(sourcesEntry(coordinator)?.subscribers).toBe(1);
   view.unmount();
-  const calls = node.calls("auto_pipeline_sources").length;
-  await new Promise((resolve) => setTimeout(resolve, 2300));
-  expect(node.calls("auto_pipeline_sources")).toHaveLength(calls);
+  // The read is evicted with its last subscriber, timer and all.
+  expect(sourcesEntry(coordinator)).toBeUndefined();
 });
 
 test("reads nothing while the window is hidden and reads again once it is shown", async () => {
@@ -181,12 +196,20 @@ test("reads nothing while the window is hidden and reads again once it is shown"
   try {
     setVisibility("hidden");
     const node = client();
-    render(node, () => true);
-    await new Promise((resolve) => setTimeout(resolve, 2300));
+    const view = render(node, () => true);
+    const coordinator = readCoordinatorFor(view.scope);
+    // Subscribed while hidden: the read is owed, but the coordinator holds no
+    // timer for it, so nothing can read until the window is shown.
+    await waitFor(() => expect(sourcesEntry(coordinator)?.subscribers).toBe(1));
+    expect(coordinator.getDiagnostics().paused).toBe(true);
+    expect(sourcesEntry(coordinator)?.timerDueAt).toBeNull();
     expect(node.calls("auto_pipeline_sources")).toHaveLength(0);
     act(() => setVisibility("visible"));
+    // An auxiliary read resumes within the coalescing window plus its spread (1.55 s).
+    await waitFor(() => expect(node.calls("auto_pipeline_sources")).toHaveLength(1), {
+      timeout: 4_000,
+    });
     expect(await screen.findByRole("button", { name: "To pipeline" })).toBeTruthy();
-    expect(node.calls("auto_pipeline_sources")).toHaveLength(1);
   } finally {
     if (visibility) Object.defineProperty(document, "visibilityState", visibility);
     else delete (document as { visibilityState?: unknown }).visibilityState;

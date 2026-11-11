@@ -139,10 +139,56 @@ describe("outage link", () => {
     });
     expect(await module.text()).toBe("renderer");
     expect(await (await fetch(`${outage.url}/`)).text()).toBe("renderer");
+    // API traffic is all a remote connection sends (connection-outage-electron.spec.ts
+    // loads its renderer from Vite directly), and it always meets the gateway.
+    const invoke = await fetch(`${outage.url}/__orkestrator/invoke`, {
+      method: "POST",
+      headers: { "sec-fetch-dest": "empty" },
+      body: invokeBody,
+    });
+    expect(await invoke.text()).toBe("gateway");
+    expect(outage.requests.map((request) => request.kind)).toEqual(["invoke"]);
     // Documents are not API traffic: nothing recorded, and outage modes pass them.
     outage.setMode("reset");
     const during = await fetch(`${outage.url}/`, { headers: { "sec-fetch-dest": "document" } });
     expect(await during.text()).toBe("gateway");
+    expect(outage.requests.map((request) => request.kind)).toEqual(["invoke"]);
+  });
+
+  test("a sign-in through the link gets the gateway's session, and later pages carry it", async () => {
+    // multi-client-restarts-live.spec.ts signs a linked tab in by loading the
+    // one-shot login URL through the link: the gateway has to answer it, with
+    // its redirect and cookie intact, and see that cookie on the next page.
+    const seen: Array<{ path: string; cookie?: string }> = [];
+    const gateway = await serve((request, response) => {
+      seen.push({ path: request.url ?? "", cookie: request.headers.cookie });
+      if (request.url?.startsWith("/login")) {
+        response.writeHead(302, { location: "/", "set-cookie": "session=s1; Path=/; HttpOnly" });
+        response.end();
+        return;
+      }
+      response.end("gateway");
+    });
+    const renderer = await serve((_request, response) => response.end("renderer"));
+    const outage = await startOutageLink({
+      owner: "test",
+      gatewayUrl: gateway.url,
+      rendererUrl: renderer.url,
+    });
+    closers.push(() => outage.close());
+    const login = await fetch(`${outage.url}/login?code=one-shot`, {
+      headers: { "sec-fetch-dest": "document" },
+      redirect: "manual",
+    });
+    expect(login.status).toBe(302);
+    expect(login.headers.get("location")).toBe("/");
+    expect(login.headers.get("set-cookie")).toContain("session=s1");
+    const page = await fetch(`${outage.url}/`, {
+      headers: { "sec-fetch-dest": "document", cookie: "session=s1" },
+    });
+    expect(await page.text()).toBe("gateway");
+    expect(seen).toEqual([{ path: "/login?code=one-shot" }, { path: "/", cookie: "session=s1" }]);
+    // Sign-in is a page load, not API traffic: nothing recorded.
     expect(outage.requests).toHaveLength(0);
   });
 

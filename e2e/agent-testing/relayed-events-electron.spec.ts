@@ -5,7 +5,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication, Page } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,6 +23,7 @@ import {
 } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { seedLocalWindowTransport } from "./local-window-transport-config";
 import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
@@ -101,11 +102,7 @@ test("main takes a node's relayed events only for the windows listening", async 
   const profilePath = await initializeProfile(profile);
   // This spec is about main's relay, which a local window takes only with the
   // direct transport turned off (on by default since to-do 4501 task 2).
-  await mkdir(profile.dataDir, { recursive: true });
-  await writeFile(
-    path.join(profile.dataDir, "config.json"),
-    JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: false } }),
-  );
+  await seedLocalWindowTransport(profile.dataDir, false);
   const projectPath = await prepareFixtureRepository(
     profile,
     path.join(repositoryRoot, "test-fixtures", "agent-project"),

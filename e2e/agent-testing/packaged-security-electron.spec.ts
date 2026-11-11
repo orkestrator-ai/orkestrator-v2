@@ -23,6 +23,7 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ownProcessGroup, stopProcessGroup, withCleanup } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogsOnPage } from "./electron-startup-dialogs";
+import { seedLocalWindowTransport } from "./local-window-transport-config";
 import { packagedLaunchEnvironment, packagedLaunchSwitches } from "./packaged-electron-app";
 import { shippingPackage, verifyShippingPackage } from "../../scripts/packaged-security";
 
@@ -717,13 +718,7 @@ for (const transport of ["default", "relay"] as const) {
         },
       });
       const profilePath = await initializeProfile(profile);
-      if (transport === "relay") {
-        await mkdir(profile.dataDir, { recursive: true });
-        await writeFile(
-          path.join(profile.dataDir, "config.json"),
-          JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: false } }),
-        );
-      }
+      if (transport === "relay") await seedLocalWindowTransport(profile.dataDir, false);
       const home = path.join(scratch, "home");
       await mkdir(home);
       let stderr = "";

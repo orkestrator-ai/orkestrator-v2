@@ -5,7 +5,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -17,6 +17,7 @@ import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { seedLocalWindowTransport } from "./local-window-transport-config";
 import { terminalVisibleText } from "./terminal-visible-text";
 import { watchElectronStartup } from "./electron-startup-recovery";
 
@@ -121,11 +122,7 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
   const profilePath = await initializeProfile(profile);
   // The fault injector wraps main's fetch, which a local window's commands
   // reach only with the direct transport turned off.
-  await mkdir(profile.dataDir, { recursive: true });
-  await writeFile(
-    path.join(profile.dataDir, "config.json"),
-    JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: false } }),
-  );
+  await seedLocalWindowTransport(profile.dataDir, false);
   const projectPath = await prepareFixtureRepository(
     profile,
     path.join(repositoryRoot, "test-fixtures", "agent-project"),

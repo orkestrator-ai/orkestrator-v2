@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
@@ -10,6 +9,7 @@ import { withStartingProcess } from "./local-gateway-transport-lifecycle";
 import { recordProcessOutput } from "./electron-diagnostics";
 import { expect } from "./electron-fixtures";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { seedLocalWindowTransport } from "./local-window-transport-config";
 
 /**
  * The disposable profile, fixture repository and Vite renderer both local
@@ -79,14 +79,7 @@ export async function startTransportStack(
   );
   // Each run states its transport: since to-do 4501 task 2 the direct one is
   // the default, so only an explicit `false` gives the relay.
-  await mkdir(profile.dataDir, { recursive: true });
-  await writeFile(
-    path.join(profile.dataDir, "config.json"),
-    JSON.stringify({
-      repositories: {},
-      global: { localWindowGatewayTransport: mode === "gateway" },
-    }),
-  );
+  await seedLocalWindowTransport(profile.dataDir, mode === "gateway");
   const rendererUrl = `http://127.0.0.1:${rendererPort}`;
   const vite = spawn("bun", ["run", "dev"], {
     cwd: webRoot,

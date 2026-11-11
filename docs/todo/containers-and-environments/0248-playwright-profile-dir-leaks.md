@@ -4,16 +4,17 @@ Checked against `main` at `7809191f` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-11 against `main` at `498b68766` (earlier: 2026-10-27 at `863b5782`).
 
 ### Tasks
 
 1. **Find the 2026-10-25 burst**: identify what made 259 profiles between 12:40 and 12:42. Status: closed without a source (2026-10-28): not chased further, as recommended; the macOS evidence below points at Playwright Test runs, and every test-owned launch is now attributable.
 2. **Sweep stale profiles automatically**: remove profiles past an age floor that no live process uses, both in tests and in the backend. Status: done (2026-10-28); the backend half deviates from the recommendation, see [decision 3](#3-task-2-backend-a-profile-ledger-under-the-data-directory-not-a-private-tmpdir).
 3. **Report profiles in `disk:report`**: show their count, size and age. Status: done (2026-10-28).
-4. **Qualification run**: `mise run test` plus design and preview use, a backend SIGKILL and a restart, then `/tmp` holds nothing stale. Status: partly done (2026-10-28): `mise run test` ran on macOS, and the SIGKILL-and-restart path of the design renderer is an automated real-Chromium test; the `dev:test` session on omarchy-hp is still open.
+4. **Qualification run**: `mise run test` plus design and preview use, a backend SIGKILL and a restart, then `/tmp` holds nothing stale. Status: done (2026-11-11): `mise run test` ran on macOS on 2026-10-28, and the `dev:test` session (design renders, process-isolated previews, two backend SIGKILLs, three restarts) ran on beelink (Linux); see [Evidence from beelink](#evidence-from-beelink-2026-11-11).
 5. **Where the sweep lives (open question)**: a shared helper, or a private `TMPDIR` for the backend's launches. Status: settled (2026-10-28): one owner-scoped path per owner, no helper shared across `tests/` and `apps/`.
-7. **Private `TMPDIR` in the real-stack Playwright suites**: the credential-free design and preview suites leave no Playwright profile or artifact directory behind, on Linux and macOS. Moved from to-do 0830 (deleted 2026-11-06). Status: open. The restart, coordinator and Electron runs that need live provider credentials moved to the manual-test checklist.
+7. **Private `TMPDIR` in the real-stack Playwright suites**: the credential-free design and preview suites leave no Playwright profile or artifact directory behind, on Linux and macOS. Moved from to-do 0830 (deleted 2026-11-06). Status: open (step 2 only: the macOS design and preview runs need a macOS node, which beelink is not). Step 1, the Linux design run, and the Linux preview run were done on 2026-11-11. The restart, coordinator and Electron runs that need live provider credentials moved to the manual-test checklist.
+8. **Orphaned fake preview workers**: a test process that dies leaves its detached fake preview worker running, which pins the test's private `TMPDIR` as in use. Found and fixed on 2026-11-11 ([decision 13](#13-task-8-the-fake-preview-worker-leaves-when-its-launcher-is-gone)). Status: done.
 
 ### 1. Find the 2026-10-25 burst
 
@@ -84,7 +85,7 @@ Bare profiles cost little: 2.8 MB for 273. Preview scratch directories cost far 
 
 **Context.** The run must not kill the production backend on the host.
 
-**Investigation.** None: this waits on task 2.
+**Investigation.** Done on 2026-11-11 on beelink with the recommended option; the results are under [Evidence from beelink](#evidence-from-beelink-2026-11-11). Every leftover the sweeps can prove is theirs went once it was past the hour floor; nothing they cannot prove was touched.
 
 **Decisions.**
 
@@ -142,6 +143,17 @@ in [`testing-guide.md`](../../development/testing-guide.md).
 
 The restart specs and the remaining coordinator and Electron runs need live
 provider credentials; they are in the manual-test checklist (see Related).
+
+Step 1 was done on 2026-11-11 on beelink rather than omarchy-hp (same
+platform, Linux x86_64), together with task 4 as recommended, and the preview
+suite's Chromium project was run there too; see
+[Evidence from beelink](#evidence-from-beelink-2026-11-11). Step 2 needs a
+macOS node. Run it the same way: an empty `TMPDIR` made for the run,
+`mise run test:agent:design:isolated --no-agent-credentials` and
+`mise run test:preview:browser` each through `test:logged`, then list that
+directory and `/private/tmp` (where private directories go on macOS) for
+`playwright_chromiumdev_profile-*`, `playwright-artifacts-*` and
+`ork-test-tmp-*` the run made.
 
 **Decisions.**
 
@@ -218,9 +230,11 @@ automatically today; this file is the work to make that happen.
 
 ### Qualification
 
-1. After the fixes, run `mise run test` and a session that uses the design
+1. ~~After the fixes, run `mise run test` and a session that uses the design
    canvas and artifact previews. Kill the backend once with SIGKILL, restart it,
-   and record that no profile older than the age floor is left in `/tmp`.
+   and record that no profile older than the age floor is left in `/tmp`.~~
+   Done: `mise run test` on macOS (2026-10-28), the session on beelink
+   (2026-11-11).
 
 ## Constraints and rationale
 
@@ -337,6 +351,80 @@ but nothing on this host proves it, and the Arch host's evidence is gone.
   was made in `/private/tmp/ork-test-tmp-<pid>-*/` and the directory was gone
   after the runner exited.
 
+## Evidence from beelink (2026-11-11)
+
+beelink is Arch Linux x86_64 (kernel 7.1.8), Bun 1.4.4, `playwright-core`
+1.64.0, the system Chromium (`/usr/lib/chromium/chromium`) for the design
+renderer, at `main` `498b68766` plus this change. Every run used a new empty
+`TMPDIR` under `/tmp` made for it, so its contents are exactly what the run
+left; each was removed afterwards by its exact path. The host's own `/tmp`
+was only counted, never changed. No provider credentials, logins or model
+turns were used.
+
+**Task 4: `dev:test` session, SIGKILL and restart.** Profile `qa-0248-kill`,
+started with `mise run dev:test --profile qa-0248-kill --fixture
+--no-agent-credentials --agent-platforms codex --headless`, with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the Docker qualification shim on
+`PATH`, and `TMPDIR` set to the private directory (the backend inherits it,
+so its design profiles and preview scratch land there, as they land in `/tmp`
+in production). No preview worker image is present, so `auto` chose process
+isolation and no container ran. A throwaway driver in the ignored
+`output/agent-testing/` signed in with `dev:login` and called
+`create_environment`, `design_action` (`create_canvas`, `create_frame`),
+`design_capture` and `transcript_artifact_render_mermaid` through the gateway.
+
+| Step | Observed |
+| --- | --- |
+| Capture and Mermaid render | Both succeeded. The renderer's browser made `playwright_chromiumdev_profile-26kgUJ`, and the ledger held `<backend pid>-<browser pid>-*.json` plus `artifacts-<backend pid>-*`. The preview job's `ork-artifact-preview-<backend pid>-*` scratch was gone shortly after the job ended. |
+| SIGKILL 1 (after the jobs ended), PID checked by start time, command line and the profile name in its environment | Chromium exited by itself (its pipe closed) and left its profile; the record stayed. Electron did not restart the backend. |
+| Restart 1 (`dev:stop`, then `dev:test` without `--fixture`) | The recorded profile, about 30 s old, stayed (hour floor), with its record. A seeded unrecorded `playwright_chromiumdev_profile-ctrl01`, backdated three hours, stayed. |
+| SIGKILL 2, 0.5 s after starting a Mermaid render and a capture | Left the job's scratch (`.cache`, `.config`, `.ork-preview-owner`, a Chromium singleton directory) and a second profile, `5D9383`. That profile has **no** record: the kill landed while its browser was launching, before `record()` runs, so only its `artifacts-*` directory is provably the backend's. |
+| Restart 2, after backdating `26kgUJ` and the scratch by two hours | The backend logged `[design] profiles.swept removed=1`. Gone: `26kgUJ`, its record and its artifacts directory, and the scratch. Kept: `5D9383` (unrecorded), its young `artifacts-*` directory (held for the hour floor), `ctrl01` (unrecorded) and Chromium's own `org.chromium.Chromium.*` directories. |
+| Graceful stop after a further capture and render | Playwright removed that browser's profile, and the ledger dropped its record and artifacts directory; the scratch was gone. |
+
+`dev:stop` and `dev:reset` then removed the profile.
+
+**Task 7 step 1: `mise run test:agent:design:isolated --no-agent-credentials
+--agent-platforms codex`** (through `test:logged`, same shim and switch):
+passed in 211.8 s, 3 passed, 0 skipped, 0 failed (`results.json`). The run's
+`TMPDIR` then held no `playwright_chromiumdev_profile-*`,
+`playwright-artifacts-*` or `ork-test-tmp-*`; what remained was
+`node-compile-cache`, `playwright-transform-cache-1000`, Electron's
+`scoped_dir*` and two Chromium `org.chromium.Chromium.*` directories. An
+earlier attempt was killed by the agent session ending at about 3 minutes;
+it left one `ork-test-tmp-<pid>-*` holding a Playwright worker's profile and
+nothing loose in `TMPDIR`, which is the containment decision 2 intends (the
+next run sweeps it once its owner is dead and it is an hour old).
+
+**Task 7, the preview suite on Linux: `mise run test:preview:browser`**
+(Chromium, Firefox and WebKit): the Chromium project passed; Firefox and
+WebKit failed all 20 of their tests at `browserType.launch` because this
+host's Playwright cache has no Firefox or WebKit build for the pinned version
+(`firefox-1572` absent). Downloading browsers into the shared host cache was
+left alone, and those two engines do not make Chromium profiles anyway. The
+Chromium project was then run alone, `mise run test:preview:browser
+--project=chromium` through `test:logged`: passed in 21.0 s (a passing logged
+run keeps no per-test counts). Both runs' `TMPDIR` held only
+`playwright-transform-cache-1000` afterwards.
+
+**Not swept, by design.**
+
+- Chromium's own `org.chromium.Chromium.<random>` (a `SingletonSocket` and
+  `SingletonCookie`) and `org.chromium.Chromium.chromium_chrome_url_fetcher_.<random>`
+  (empty) directories, one pair per system-Chromium launch, are left even by
+  a graceful stop. Their names hold no owner, so nothing can prove they are
+  Orkestrator's (decision 12). The host's `/tmp` held 88 of them. They hold
+  no data; on a tmpfs they cost an inode each.
+- A profile whose browser was still launching when the backend died
+  (decision 11).
+
+**Found along the way.** A `fake-preview-worker.ts` from another worktree's
+test run, started 2026-11-10 12:40, was still running 13 hours later,
+reparented to `systemd --user`, holding `ork-artifact-preview-*` scratch
+inside `/tmp/ork-test-tmp-3324099-*`. Because its command line names that
+directory, the in-use check keeps it, correctly. It was not started by this
+work and was left alone. Task 8 fixes the cause (decision 13).
+
 ## Assumptions and decisions
 
 ### 1. Task 1: stop chasing the burst
@@ -448,6 +536,8 @@ on macOS, and the real-Chromium SIGKILL test, which kills a process running
 the design renderer and checks that the next sweep removes exactly its
 profile. The `dev:test` session with the design canvas and previews, a SIGKILL
 of that profile's backend and a restart, still has to run on omarchy-hp.
+(Done on 2026-11-11 on beelink, a Linux x86_64 host like omarchy-hp; see
+decision 10.)
 
 ### 9. A new todo for what is left
 
@@ -457,6 +547,73 @@ the profile, and it is not on Chromium's command line, so the ledger cannot
 record it) are recorded in
 0830 (deleted 2026-11-06; its live check is now task 7) rather than here, to keep this
 file's tasks closable.
+
+### 10. Task 4: how the Linux session was run
+
+Chose the recommended isolated `dev:test` profile, with three details. The
+profile got a new private parent `TMPDIR`, so everything it left could be
+listed and removed without a glob over the shared `/tmp`; the backend reads
+`os.tmpdir()` like production, so the layout is the same. Previews ran under
+process isolation, which `auto` picks when no worker image exists, because
+this host may run Docker only through the qualification shim; container-mode
+scratch is a container, not a directory, and 0247's container reaper owns it.
+The sweep's age floor was crossed by backdating modification times (`touch
+-d`), as 0023's sweep pass did, rather than waiting an hour. Pros: one session
+showed both the floor (restart 1) and removal (restart 2). Cons: a backdated
+time is not an hour of real ageing; the age comparison itself is covered by
+`browser-profiles.test.ts` and `preview-supervisor.test.ts`.
+
+### 11. Task 4: a profile whose browser was still launching stays
+
+Options: (a) accept it; (b) record a pending launch before `launchServer` and
+claim whichever profile appears; (c) launch the browser from a helper process
+with its own `TMPDIR`. Chose (a). The profile name is chosen inside
+Playwright's `mkdtemp` and is known only once `launchServer` returns, so (b)
+would have to guess among same-prefix directories other tools also make,
+which is exactly the proof the ledger exists to avoid. (c) is what decision 3
+rejected (0037's direct ownership of the browser process). The window is the
+browser's start-up, about half a second per backend run, and the leftover is
+one profile (about 1 MB); the constraint "when unsure, keep it" wins.
+
+### 12. Chromium's own temporary directories are not swept
+
+`org.chromium.Chromium.*` names hold no owner, and every Chromium on the host
+makes them in the same place, so no sweep can prove one is Orkestrator's.
+Options: (a) leave them and record them here; (b) add a `disk:report` row.
+Chose (a): they are empty or hold a socket and a symlink, so a report row
+would show a count with no size worth acting on. Revisit if a host shows them
+costing real space.
+
+### 13. Task 8: the fake preview worker leaves when its launcher is gone
+
+The preview supervisor starts workers detached, in their own process group,
+and reaps them itself; a test process that is killed or times out never does.
+Options: (a) the fake worker exits, killing its `spawn-child` grandchild, once
+its parent is no longer the launcher (checked at startup and every 250 ms,
+unreferenced so it never keeps a worker alive); (b) start test workers non-detached so they die with the
+test's group; (c) a sweep that kills orphaned fake workers by name. Chose
+(a). (b) would change what the tests exercise, since detached spawning is
+what production does; (c) is killing by name, which this repository forbids.
+The real worker needs no watchdog: it is bounded by its job deadlines and was
+gone within seconds of the SIGKILL above. The test "a fake worker whose
+launcher has died exits with its grandchild (0248)" in
+`preview-supervisor.test.ts` launches a worker through a shell that exits as
+a killed test would. On 2026-11-11 the whole file passed with the change
+(`bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-supervisor.test.ts`
+through `test:logged`), and the new test failed with the worker restored to
+its previous version, its `finally` reaping the processes it started.
+
+Review round 1 (2026-11-11) found that reading `process.ppid` inside the
+worker is too late when the launcher dies between spawn and the worker's
+module running: the worker is already reparented, records init as its parent
+and never sees it change. Every launcher of the fixture now passes its own PID
+as `--fake-launcher-pid=<pid>` (the supervisor, admission and isolation tests
+pass `process.pid`; the shell launchers pass `$$`), and the worker exits at
+startup when its parent is already someone else, before it reads a job or
+starts a grandchild. Without the flag it falls back to the parent it first
+observes. The test "a fake worker whose launcher died before it started exits
+at once (0248)" makes the shell exit before it `exec`s the worker; it passed
+with the change and timed out with the startup check reverted.
 
 ## Related
 

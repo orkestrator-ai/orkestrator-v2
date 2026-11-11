@@ -25,8 +25,7 @@ Checked against `main` at `2459b05c` (2026-10-15).
 5. **Open shadow roots and same-origin iframes**: code item 4. Status: open
    (open shadow roots done on 2026-11-02 on branch
    `shadow-root-annotations-583af4c65646-r1`; same-origin iframes not
-   started; follow-ups in
-   [2580](2580-shadow-root-annotation-follow-ups.md)).
+   started; the follow-ups in 2580 (retired 2026-11-11) are done).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
    blocked (waits on 7568: 0042 task 3, per the embedding deferral recorded
    by [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
@@ -423,10 +422,11 @@ A document observer never sees inside a shadow root, so the pin layer also
 observes each open root a pass resolved into (at most 64; the kit reports
 them through `shadowRootsSeen`). A host that attaches its root only after
 pins were shown was a known gap, recorded in
-[2580](2580-shadow-root-annotation-follow-ups.md) task 3, with sensitive-field
-masks inside roots (task 1, which predates this work), text selections inside
-roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
-2026-11-03, and task 2 on 2026-11-05.
+2580 (retired) task 3, with sensitive-field masks inside roots (task 1, which
+predates this work), text selections inside roots (task 2) and a live desktop
+run (task 4). Tasks 1 and 3 were done on 2026-11-03, task 2 on 2026-11-05 and
+task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
+[0044](0044-web-annotation-qualification.md)), and 2580 was retired.
 
 ## Current state
 
@@ -486,9 +486,8 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
    view list and the live captures are done in
    0950.
 4. Open shadow roots and same-origin iframes. Open shadow roots are done
-   (task 5); the follow-ups are in
-   [2580](2580-shadow-root-annotation-follow-ups.md). Same-origin iframes
-   remain.
+   (task 5), and so are its follow-ups (2580, retired 2026-11-11).
+   Same-origin iframes remain.
    - Requires explicit root paths, a navigation generation per frame, and
      coordinate transforms through each frame.
    - Bound depth, frame count, traversal time and transformed geometry.

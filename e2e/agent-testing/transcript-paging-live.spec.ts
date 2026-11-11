@@ -63,12 +63,41 @@
  *   CODEX_HOME=<throwaway dir whose auth.json holds a made-up OPENAI_API_KEY> \
  *     mise run dev:test --profile <name> --fixture --headless \
  *     --credential-source codex --agent-platforms codex
+ *
+ * Two switches move the native case off its default local environment and
+ * browser client (to-do 0050, task 4); the Multi Review case stays local and
+ * in the browser:
+ *
+ * - `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container` runs it in the
+ *   profile's seeded fixture container environment (start the profile with
+ *   `--fixture-environments local,container`; `ORKESTRATOR_AGENT_TEST_CONTAINER_ENV`
+ *   names another), so every transcript read crosses the container bridge.
+ *   The trail is copied into its `/workspace`, and the bridge restart is the
+ *   container's (`stop_codex_server`, `start_codex_server`). With the
+ *   loopback model, the model runs inside that container, where the firewall
+ *   admits the container's own loopback, and the container's Codex home
+ *   (`$HOME/.codex/config.toml`) is pointed at it for the run and restored.
+ * - `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` renders the tab in the
+ *   profile's own Electron window, so the transcript reads go through the
+ *   preload and IPC path rather than the gateway. Start the profile with
+ *   `ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`: the spec attaches over CDP to
+ *   the debugging endpoint the window prints into the profile's
+ *   `electron.log`, and only disconnects afterwards. A headless profile is
+ *   enough. The backend checks still go through the gateway.
  */
-import { expect, test, type Locator, type Page } from "./browser-test";
+import {
+  chromium,
+  expect,
+  fetchModulesOutsideChromium,
+  test,
+  type Locator,
+  type Page,
+} from "./browser-test";
 import { expectPlaceHeld, holdPosition } from "../transcript-hold";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, promises as fs, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
@@ -80,11 +109,19 @@ type Status = {
   status: string;
   profile?: string;
   browserUrl?: string;
+  rendererUrl?: string;
+  logDir?: string;
   testProject?: string;
   dataDir?: string;
 };
 type Project = { id: string; name: string; localPath: string | null };
-type Environment = { id: string; name: string; worktreePath?: string | null };
+type Environment = {
+  id: string;
+  name: string;
+  status?: string;
+  worktreePath?: string | null;
+  containerId?: string | null;
+};
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Row = { id?: unknown; role?: unknown; content?: unknown; parts?: unknown };
 type ProjectionUpdate = {
@@ -125,6 +162,27 @@ const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING ==
  * no login and no billed turn. Implies a Codex native case without notes.
  */
 const CODEX_LOOPBACK = process.env.ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK === "1";
+/** The value of a switch that takes one of `values`; the first is the default. */
+function choice<T extends string>(name: string, values: readonly [T, ...T[]]): T {
+  const value = process.env[name];
+  if (value === undefined || value === "") return values[0];
+  if (!(values as readonly string[]).includes(value)) {
+    throw new Error(`${name} must be one of ${values.join(", ")}, not "${value}"`);
+  }
+  return value as T;
+}
+/** Where the native case's environment runs (see the file comment). */
+const PAGING_ENVIRONMENT = choice("ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT", [
+  "local",
+  "container",
+] as const);
+const CONTAINER_ENVIRONMENT_NAME =
+  process.env.ORKESTRATOR_AGENT_TEST_CONTAINER_ENV ?? "fixture-container";
+/** Which client renders the native tab (see the file comment). */
+const PAGING_CLIENT = choice("ORKESTRATOR_AGENT_TEST_PAGING_CLIENT", [
+  "browser",
+  "electron",
+] as const);
 /** The native case's platform: Claude by default, or Codex. */
 const NATIVE_PLATFORM: "claude" | "codex" =
   CODEX_LOOPBACK || process.env.ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM === "codex"
@@ -503,7 +561,20 @@ async function layoutAtTop(list: Locator, trail: Trail) {
  * Scrolls up the way a reader does, with the wheel. A programmatic scroll is
  * not user intent to the list: it stays pinned to the bottom and snaps back.
  */
+/**
+ * Waits for the list through an auto-waiting assertion, which is what runs
+ * the page's locator handlers: raw mouse and wheel input, `isVisible()` and
+ * `boundingBox()` do not. On a host whose user cannot reach the Docker daemon
+ * the "Docker Permission Required" dialog opens after the probe answers, often
+ * after a reload has already rendered the list, and its overlay then takes the
+ * wheel gestures meant for the list.
+ */
+async function clearOverlays(list: Locator): Promise<void> {
+  await expect(list).toBeVisible();
+}
+
 async function wheelUp(page: Page, list: Locator): Promise<void> {
+  await clearOverlays(list);
   const box = await list.boundingBox();
   if (!box) throw new Error("the transcript list is not laid out");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -733,24 +804,159 @@ async function scanRendered(page: Page, list: Locator, trail: Trail) {
   };
 }
 
-/** Starts `transcript-paging-codex-model.ts` and returns its base URL. */
-async function startLoopbackModel(): Promise<{ baseUrl: string; child: ChildProcess }> {
-  const child = spawn("bun", [path.join(import.meta.dirname, "transcript-paging-codex-model.ts")], {
-    stdio: ["ignore", "pipe", "inherit"],
-  });
+type LoopbackModel = { baseUrl: string; stop: () => Promise<void> };
+const LOOPBACK_MODEL_FILE = "transcript-paging-codex-model.ts";
+
+/** The base URL a freshly started model prints on its first line. */
+async function firstLine(child: ChildProcess): Promise<string> {
   const lines = createInterface({ input: child.stdout! });
-  const baseUrl = await new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     lines.once("line", resolve);
     child.once("exit", () => reject(new Error("the loopback model exited")));
   });
-  return { baseUrl, child };
+}
+
+/** Resolves once `child` has exited, or after `timeoutMs`. */
+function exited(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Starts `transcript-paging-codex-model.ts` where the environment's Codex
+ * runs: on the host for a local environment, or inside the container, whose
+ * firewall admits its own loopback, for a container one.
+ */
+async function startLoopbackModel(containerId?: string | null): Promise<LoopbackModel> {
+  if (!containerId) {
+    const child = spawn("bun", [path.join(import.meta.dirname, LOOPBACK_MODEL_FILE)], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    const baseUrl = await firstLine(child);
+    return {
+      baseUrl,
+      stop: async () => {
+        child.kill();
+        await exited(child, 10_000);
+      },
+    };
+  }
+  const dir = `/tmp/ork-paging-model-${randomBytes(4).toString("hex")}`;
+  copyIntoContainer(containerId, import.meta.dirname, [LOOPBACK_MODEL_FILE], dir);
+  // `docker exec` keeps stdin open while this process holds it, so closing it
+  // stops the model even though signalling the client would not reach it.
+  // The working directory is the model's own, never the fixture checkout.
+  const child = spawn(
+    "docker",
+    [
+      "exec",
+      "-i",
+      "-u",
+      "node",
+      "-w",
+      dir,
+      containerId,
+      "sh",
+      "-c",
+      'bun "./$1" & model=$!; cat >/dev/null; kill "$model" 2>/dev/null; wait "$model"',
+      "sh",
+      LOOPBACK_MODEL_FILE,
+    ],
+    { stdio: ["pipe", "pipe", "inherit"] },
+  );
+  const stop = async () => {
+    child.stdin!.end();
+    await exited(child, 10_000);
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    spawnSync("docker", ["exec", "-u", "node", containerId, "rm", "-rf", dir]);
+  };
+  try {
+    return { baseUrl: await firstLine(child), stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
+/**
+ * Copies `names` from `sourceDir` into `targetDir` in the container, as the
+ * container user, through `tar` over `docker exec` stdin rather than
+ * `docker cp` (which a rootless daemon can refuse; see container-qualification.md).
+ */
+function copyIntoContainer(
+  containerId: string,
+  sourceDir: string,
+  names: string[],
+  targetDir: string,
+): void {
+  const archive = spawnSync("tar", ["-c", "-C", sourceDir, ...names], {
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  expect(archive.status, `tar: ${archive.stderr?.toString()}`).toBe(0);
+  const unpack = spawnSync(
+    "docker",
+    [
+      "exec",
+      "-i",
+      "-u",
+      "node",
+      containerId,
+      "sh",
+      "-c",
+      'mkdir -p "$1" && tar -x --no-same-owner -C "$1"',
+      "sh",
+      targetDir,
+    ],
+    { input: archive.stdout, maxBuffer: 1024 * 1024 },
+  );
+  expect(unpack.status, `copy into the container: ${unpack.stderr?.toString()}`).toBe(0);
+}
+
+/** Lays the trail where the environment's agent reads it. */
+async function writeTrail(trail: Trail, environment: Environment): Promise<void> {
+  if (!environment.containerId) return trail.write(environment.worktreePath!);
+  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "ork-paging-trail-"));
+  try {
+    await trail.write(staging);
+    copyIntoContainer(environment.containerId, staging, [trail.dir], "/workspace");
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** Removes a trail laid in a fixture container, which outlives the case. */
+function removeContainerTrail(trail: Trail, environment: Environment): void {
+  if (!environment.containerId) return;
+  spawnSync("docker", [
+    "exec",
+    "-u",
+    "node",
+    "-w",
+    "/workspace",
+    environment.containerId,
+    "rm",
+    "-rf",
+    `./${trail.dir}`,
+  ]);
 }
 
 /**
  * Points the profile's own Codex home (never the host's) at the loopback
- * model, and returns the restore. A top-level key goes before any table.
+ * model, or a container environment's Codex home, and returns the restore. A
+ * top-level key goes before any table.
  */
-function pointCodexAt(status: Status, baseUrl: string): () => void {
+function pointCodexAt(
+  status: Status,
+  containerId: string | null | undefined,
+  baseUrl: string,
+): () => void {
+  if (containerId) return pointContainerCodexAt(containerId, baseUrl);
   expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
   const configFile = path.join(status.dataDir!, "agent-credentials", "codex", "config.toml");
   const restore = snapshotFixtureFiles([configFile]);
@@ -763,8 +969,87 @@ function pointCodexAt(status: Status, baseUrl: string): () => void {
   return restore;
 }
 
+/**
+ * The container's Codex home is staged from the profile's at boot, so the
+ * fixture container (already running) is pointed directly, as the container
+ * user, and restored afterwards.
+ */
+function pointContainerCodexAt(containerId: string, baseUrl: string): () => void {
+  const read = spawnSync(
+    "docker",
+    [
+      "exec",
+      "-u",
+      "node",
+      containerId,
+      "sh",
+      "-c",
+      'f="$HOME/.codex/config.toml"; if [ -f "$f" ]; then printf present; cat "$f"; fi',
+    ],
+    { encoding: "utf8" },
+  );
+  expect(read.status, `read the container's Codex config: ${read.stderr}`).toBe(0);
+  const existed = read.stdout.startsWith("present");
+  const original = existed ? read.stdout.slice("present".length) : "";
+  const write = (body: string) => {
+    const written = spawnSync(
+      "docker",
+      [
+        "exec",
+        "-i",
+        "-u",
+        "node",
+        containerId,
+        "sh",
+        "-c",
+        'umask 077 && mkdir -p "$HOME/.codex" && cat > "$HOME/.codex/config.toml"',
+      ],
+      { input: body, encoding: "utf8" },
+    );
+    expect(written.status, `write the container's Codex config: ${written.stderr}`).toBe(0);
+  };
+  write(
+    `openai_base_url = ${JSON.stringify(baseUrl)}\n${original.replace(/^openai_base_url = .*\n/m, "")}`,
+  );
+  return () => {
+    if (existed) write(original);
+    else
+      spawnSync("docker", [
+        "exec",
+        "-u",
+        "node",
+        containerId,
+        "sh",
+        "-c",
+        'rm -f "$HOME/.codex/config.toml"',
+      ]);
+  };
+}
+
+/** The pid of the container's Codex bridge, read with `pgrep` (which only reads). */
+function containerCodexBridgePid(containerId: string): string | undefined {
+  const found = spawnSync(
+    "docker",
+    ["exec", containerId, "sh", "-c", "pgrep -f '[c]odex-bridge/dist/index.js' | head -n 1"],
+    { encoding: "utf8" },
+  );
+  return found.status === 0 ? found.stdout.trim() || undefined : undefined;
+}
+
 /** Stops and starts the environment's Codex bridge, and proves it is a new process. */
-async function restartCodexBridge(invoke: Invoke, environmentId: string) {
+async function restartCodexBridge(invoke: Invoke, environment: Environment) {
+  if (environment.containerId) {
+    const containerId = environment.containerId;
+    const before = containerCodexBridgePid(containerId);
+    expect(before, "no Codex bridge was running in the container").toBeTruthy();
+    await invoke("stop_codex_server", { containerId });
+    await invoke("start_codex_server", { containerId });
+    const after = containerCodexBridgePid(containerId);
+    expect(after, "the container's Codex bridge did not start again").toBeTruthy();
+    expect(after, "the bridge was not replaced").not.toBe(before);
+    return;
+  }
+  const environmentId = environment.id;
   const before = await invoke<{ pid: number | null }>("get_local_codex_server_status", {
     environmentId,
   });
@@ -798,7 +1083,9 @@ async function dismissOptionalToolDialogs(page: Page): Promise<void> {
 
 async function openApp(page: Page, status: Status, fixture: Project, environmentName: string) {
   await dismissOptionalToolDialogs(page);
-  await page.goto(status.browserUrl!);
+  // The Electron window is the profile's own; reload it rather than navigate.
+  if (PAGING_CLIENT === "electron") await page.reload();
+  else await page.goto(status.browserUrl!);
   const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
   const entry = page.getByText(environmentName, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
@@ -808,11 +1095,62 @@ async function openApp(page: Page, status: Status, fixture: Project, environment
   await entry.click({ timeout: 15_000 });
 }
 
+/**
+ * The profile's own Electron window, attached over CDP through the endpoint
+ * its `electron.log` records (`ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`).
+ * `detach` only disconnects: the window and the profile keep running.
+ */
+async function attachElectronWindow(
+  status: Status,
+): Promise<{ window: Page; detach: () => Promise<void> }> {
+  expect(status.logDir, "dev:status reported no log directory").toBeTruthy();
+  expect(status.rendererUrl, "dev:status reported no renderer URL").toBeTruthy();
+  const log = readFileSync(path.join(status.logDir!, "electron.log"), "utf8");
+  const endpoint = [...log.matchAll(/DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/\S+)/g)].at(
+    -1,
+  )?.[1];
+  expect(
+    endpoint,
+    "the profile's Electron has no debugging endpoint; start it with ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1",
+  ).toBeTruthy();
+  const browser = await chromium.connectOverCDP(endpoint!);
+  try {
+    // The window's modules come from Vite, which a host network change can
+    // abort mid-load (flake 2340), exactly as in the browser suite.
+    for (const context of browser.contexts()) await fetchModulesOutsideChromium(context);
+    const renderer = new URL(status.rendererUrl!).origin;
+    let window: Page | undefined;
+    await expect
+      .poll(
+        () => {
+          window = browser
+            .contexts()
+            .flatMap((context) => context.pages())
+            .find((page) => page.url().startsWith(renderer));
+          return window !== undefined;
+        },
+        { timeout: 30_000, message: "the profile's Electron has no renderer window" },
+      )
+      .toBe(true);
+    return { window: window!, detach: () => browser.close() };
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+/**
+ * Signs `page` in for backend commands, and returns the page the tab is
+ * rendered in: `page` itself, or the profile's Electron window.
+ */
 async function connect(page: Page) {
+  const status = profileStatus();
+  const electron = PAGING_CLIENT === "electron" ? await attachElectronWindow(status) : undefined;
+  const ui = electron?.window ?? page;
   // Qualify explicit button paging deterministically: importing the switch
   // after navigation races the opening page. Run it in Vite's entry module
   // before React mounts, on every reload, without changing application code.
-  await page.route(/\/src\/main\.tsx(?:\?.*)?$/, async (route) => {
+  await ui.route(/\/src\/main\.tsx(?:\?.*)?$/, async (route) => {
     const response = await route.fetch();
     await route.fulfill({
       response,
@@ -821,13 +1159,18 @@ async function connect(page: Page) {
         (await response.text()),
     });
   });
-  const status = profileStatus();
   const invoke = await signIn(page, status);
   const fixture = (await invoke<Project[]>("get_projects")).find(
     (project) => project.localPath === status.testProject,
   );
   expect(fixture, "the profile has no seeded fixture project").toBeTruthy();
-  return { status, invoke, fixture: fixture! };
+  return {
+    status,
+    invoke,
+    fixture: fixture!,
+    ui,
+    detach: electron?.detach ?? (async () => undefined),
+  };
 }
 
 async function createEnvironment(
@@ -847,6 +1190,35 @@ async function createEnvironment(
   return started;
 }
 
+/**
+ * The native case's environment: a new local one, or the profile's seeded
+ * fixture container, which the case uses but never deletes.
+ */
+async function nativeEnvironment(
+  invoke: Invoke,
+  fixture: Project,
+): Promise<{ environment: Environment; created: boolean }> {
+  if (PAGING_ENVIRONMENT === "local") {
+    return {
+      environment: await createEnvironment(invoke, fixture, "paging-native"),
+      created: true,
+    };
+  }
+  const seeded = (await invoke<Environment[]>("get_environments", { projectId: fixture.id })).find(
+    (environment) => environment.name === CONTAINER_ENVIRONMENT_NAME,
+  );
+  expect(
+    seeded,
+    `no ${CONTAINER_ENVIRONMENT_NAME} environment; start the profile with --fixture-environments local,container`,
+  ).toBeTruthy();
+  if (seeded!.status !== "running") {
+    await invoke("start_environment", { environmentId: seeded!.id });
+  }
+  const started = await invoke<Environment>("get_environment", { environmentId: seeded!.id });
+  expect(started.containerId, `${CONTAINER_ENVIRONMENT_NAME} has no container`).toBeTruthy();
+  return { environment: started, created: false };
+}
+
 async function removeEnvironments(invoke: Invoke, environments: Environment[]): Promise<void> {
   for (const environment of environments) {
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
@@ -860,22 +1232,42 @@ test.describe("live transcript paging", () => {
     "opt-in live turns against the isolated fixture; set ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1",
   );
 
-  test("a native conversation pages back past the live window", async ({ page }) => {
+  test("a native conversation pages back past the live window", async ({ page: gatewayPage }) => {
     test.setTimeout(TURN_TIMEOUT_MS + 10 * 60_000);
+    gatewayPage.setDefaultTimeout(15_000);
+    const { status, invoke, fixture, ui: page, detach } = await connect(gatewayPage);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const { status, invoke, fixture } = await connect(page);
+    note("native-environment", PAGING_ENVIRONMENT);
+    note("native-client", PAGING_CLIENT);
     const environments: Environment[] = [];
-    // The loopback is in place before the environment's Codex bridge starts.
-    const loopback = CODEX_LOOPBACK ? await startLoopbackModel() : undefined;
+    let loopback: LoopbackModel | undefined;
     let restoreCodexConfig: (() => void) | undefined;
-    note("native-provider", loopback ? "pinned Codex, loopback model" : "real provider");
+    let laidTrail: { trail: Trail; environment: Environment } | undefined;
+    note("native-provider", CODEX_LOOPBACK ? "pinned Codex, loopback model" : "real provider");
     try {
-      restoreCodexConfig = loopback ? pointCodexAt(status, loopback.baseUrl) : undefined;
-      const environment = await createEnvironment(invoke, fixture, "paging-native");
-      environments.push(environment);
+      let environment: Environment;
+      if (PAGING_ENVIRONMENT === "local") {
+        // The loopback is in place before the environment's Codex bridge starts.
+        loopback = CODEX_LOOPBACK ? await startLoopbackModel() : undefined;
+        restoreCodexConfig = loopback ? pointCodexAt(status, null, loopback.baseUrl) : undefined;
+        ({ environment } = await nativeEnvironment(invoke, fixture));
+        environments.push(environment);
+      } else {
+        // The fixture container is already running: point its Codex home at
+        // the model inside it, then restart its bridge so the next thread
+        // reads that configuration.
+        ({ environment } = await nativeEnvironment(invoke, fixture));
+        if (CODEX_LOOPBACK) {
+          loopback = await startLoopbackModel(environment.containerId);
+          restoreCodexConfig = pointCodexAt(status, environment.containerId, loopback.baseUrl);
+          await invoke("stop_codex_server", { containerId: environment.containerId });
+          await invoke("start_codex_server", { containerId: environment.containerId });
+        }
+      }
       const trail = new Trail(NATIVE_STOPS);
-      await trail.write(environment.worktreePath!);
+      laidTrail = { trail, environment };
+      await writeTrail(trail, environment);
 
       let model = NATIVE_MODEL;
       if (!model) {
@@ -890,7 +1282,8 @@ test.describe("live transcript paging", () => {
         )?.id;
       }
       note("native-model", `${NATIVE_PLATFORM} ${model ?? "provider default"}`);
-      const tabId = "paging-native-tab";
+      // A fresh conversation per run: the fixture container outlives a run.
+      const tabId = `paging-native-tab-${randomBytes(3).toString("hex")}`;
       const identity = {
         environmentId: environment.id,
         agent: NATIVE_PLATFORM,
@@ -904,7 +1297,8 @@ test.describe("live transcript paging", () => {
         expectedRevision: layout?.revision ?? 0,
         layout: {
           version: PANE_LAYOUT_VERSION,
-          containerId: null,
+          // A container environment's layout is fenced to its container.
+          containerId: environment.containerId ?? null,
           activePaneId: "paging-pane",
           root: {
             kind: "leaf",
@@ -918,7 +1312,7 @@ test.describe("live transcript paging", () => {
                 nativeAgentData: {
                   environmentId: environment.id,
                   platform: NATIVE_PLATFORM,
-                  isLocal: true,
+                  ...(environment.containerId ? {} : { isLocal: true }),
                 },
                 ...(model ? { initialAgentModel: model } : {}),
               },
@@ -1117,6 +1511,7 @@ test.describe("live transcript paging", () => {
         // `expandStop` opened the folded calls, so the list scrolls.
         const renderedBefore = await scanRendered(page, list, trail);
         await oldestRenderedText(page, list);
+        await clearOverlays(list);
         const box = await list.boundingBox();
         await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
         for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 500);
@@ -1138,7 +1533,7 @@ test.describe("live transcript paging", () => {
           .locator("[data-transcript-group-frame]")
           .first()
           .screenshot({ path: path.join(previews, "restart-review-before-tools.png") });
-        await restartCodexBridge(invoke, environment.id);
+        await restartCodexBridge(invoke, environment);
         // The backend sees the replay once the new bridge answers.
         let replayed: Awaited<ReturnType<typeof wholeTranscript>> | undefined;
         const backendRekeyed = await expect
@@ -1255,7 +1650,7 @@ test.describe("live transcript paging", () => {
         environments.push(other);
         await page.getByText(other.name, { exact: true }).first().click();
         await expect(list).not.toBeVisible();
-        await restartCodexBridge(invoke, environment.id);
+        await restartCodexBridge(invoke, environment);
         await page.getByText(environment.name, { exact: true }).first().click();
         await expect(list).toBeVisible();
         await expect
@@ -1277,15 +1672,24 @@ test.describe("live transcript paging", () => {
     } finally {
       await removeEnvironments(invoke, environments);
       try {
+        if (laidTrail) removeContainerTrail(laidTrail.trail, laidTrail.environment);
         restoreCodexConfig?.();
       } finally {
-        loopback?.child.kill();
+        try {
+          await loopback?.stop();
+        } finally {
+          await detach();
+        }
       }
     }
   });
 
   test("Multi Review reviewers page back past the live window", async ({ page }) => {
     test.skip(CODEX_LOOPBACK, "the loopback model drives only the native Codex case");
+    test.skip(
+      PAGING_ENVIRONMENT !== "local" || PAGING_CLIENT !== "browser",
+      "the container and Electron switches apply to the native case only",
+    );
     test.setTimeout(TURN_TIMEOUT_MS + 15 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });

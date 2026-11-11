@@ -807,6 +807,12 @@ export class TranscriptScrollController {
     if (previous === 0 || Math.abs(width - previous) < 1) return;
     if (!this.state.active || this.state.wantsFollow) return;
     if (this.op && this.op.owner !== "reflow") return;
+    // A history recovery owns the reader's place until their part is back,
+    // and the anchor names a part the list no longer holds. Dropping that
+    // history usually shortens the list enough to remove a classic vertical
+    // scrollbar, which widens the scroller; a reflow navigation then would
+    // bump the generation and cancel the recovery (to-do 0050, task 4).
+    if (this.historyRecoveryPending) return;
     const anchor = this.lastReadingAnchor;
     if (!anchor) return;
     this.navigateTo(

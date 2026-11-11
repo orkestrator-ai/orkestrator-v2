@@ -10,13 +10,17 @@
  * observes them. These tests run the keyed driver with an observation interval
  * far longer than their wait, so only the settle cadence can finish the step.
  */
-import { expect, jest, spyOn, test } from "bun:test";
+import { describe, expect, jest, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  newReviewValidationRun,
+  type ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
 import type {
   BuildPipelineProvider,
   ProviderSendOptions,
@@ -139,7 +143,18 @@ async function waitUntil(
   }
 }
 
-async function setup(reviewerCount = 1) {
+/** A validation run the test finishes by hand (todo 7564 task 3). */
+interface ValidationScript {
+  run: ReviewValidationRun | null;
+  done: boolean;
+  statusReads: number;
+}
+
+async function setup(
+  reviewerCount = 1,
+  options: { mutate?: (workflow: MultiReviewWorkflow) => void } = {},
+) {
+  const validation: ValidationScript = { run: null, done: false, statusReads: 0 };
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-result-settle-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -165,6 +180,21 @@ async function setup(reviewerCount = 1) {
     if (command === "generate_review_package") return testGeneratedReviewPackage(args!) as T;
     if (command === "get_environment_uncommitted_paths") {
       return { head: HEAD, paths: [], fingerprint: "a".repeat(64) } as T;
+    }
+    if (command === "status_review_validation" && validation.run) {
+      validation.statusReads += 1;
+      if (!validation.done) return structuredClone(validation.run) as T;
+      return {
+        ...validation.run,
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        results: validation.run.results.map((result) => ({
+          ...result,
+          status: "passed",
+          exitCode: 0,
+          durationMs: 1_100,
+        })),
+      } as T;
     }
     throw new Error(`unexpected command ${command}`);
   };
@@ -214,6 +244,8 @@ async function setup(reviewerCount = 1) {
     updatedAt: timestamp,
     backendRevision: 0,
   };
+  options.mutate?.(workflow);
+  validation.run = workflow.validationRun ?? null;
   await storage.createMultiReviewWorkflowIfNoActive(workflow.id, ENVIRONMENT_ID, 1, workflow);
   const snapshot = async () =>
     (await storage.getMultiReviewWorkflow(workflow.id))!.snapshot as MultiReviewWorkflow;
@@ -222,6 +254,7 @@ async function setup(reviewerCount = 1) {
     workflowResults,
     createService,
     workflowId: workflow.id,
+    validation,
     snapshot,
     cleanup: async () => {
       workflowResults.closeStorage();
@@ -459,3 +492,105 @@ for (const interruption of ["blocked", "unreachable", "usage-pending"] as const)
     }
   });
 }
+
+/**
+ * Todo 7564 task 3: a validation run is a detached worker in the environment
+ * and nothing announces its end, so a run that took about a second reached
+ * `reviewing` only at the next observation pass (3 s plus a spread).
+ */
+describe("validation run fast window (todo 7564 task 3)", () => {
+  async function preparing(time: ManualTime) {
+    return setup(1, {
+      mutate: (workflow) => {
+        workflow.phase = "preparing";
+        delete workflow.reviewPackage;
+        const run = newReviewValidationRun("review-validation-settle", {
+          headRef: HEAD,
+          commands: [
+            {
+              id: "check",
+              command: "bun test",
+              cwd: ".",
+              dependsOn: [],
+              resources: [],
+              weight: 1,
+              timeoutMs: 60_000,
+            },
+          ],
+          limitations: [],
+        });
+        run.status = "running";
+        run.startedAt = new Date(time.now()).toISOString();
+        run.results[0]!.status = "running";
+        workflow.validationRun = run;
+      },
+    });
+  }
+
+  function validationService(env: Awaited<ReturnType<typeof setup>>, time: ManualTime) {
+    return env.createService({
+      autoAdvance: true,
+      pollIntervalMs: 1_000,
+      observationIntervalMs: 3_000,
+      discoveryIntervalMs: OBSERVATION_MS,
+      schedulerClock: { now: time.now, timers: time.timerFactory },
+    });
+  }
+
+  test("a short validation run reaches reviewing within the fast cadence", async () => {
+    const time = new ManualTime(Date.now());
+    const wallClock = spyOn(Date, "now").mockImplementation(time.now);
+    const env = await preparing(time);
+    const service = validationService(env, time);
+    try {
+      await service.init();
+      await settleKeyedWork(time, [service]);
+      // The first pass reads the run still running.
+      expect(env.validation.statusReads).toBe(1);
+      expect((await env.snapshot()).phase).toBe("preparing");
+      await time.advance(1_100);
+      // The worker finished; nothing wakes the workflow.
+      env.validation.done = true;
+      await settleKeyedWork(time, [service]);
+      expect((await env.snapshot()).phase).toBe("preparing");
+      await time.advance(1_000);
+      await settleKeyedWork(time, [service]);
+      expect((await env.snapshot()).phase).toBe("reviewing");
+      expect(env.validation.statusReads).toBeLessThanOrEqual(3);
+    } finally {
+      await service.shutdown();
+      wallClock.mockRestore();
+      await env.cleanup();
+    }
+  });
+
+  test("a long validation run returns to the observation cadence after the window", async () => {
+    const time = new ManualTime(Date.now());
+    const wallClock = spyOn(Date, "now").mockImplementation(time.now);
+    const env = await preparing(time);
+    const service = validationService(env, time);
+    try {
+      await service.init();
+      await settleKeyedWork(time, [service]);
+      for (let elapsed = 0; elapsed < 3_000; elapsed += 250) {
+        await time.advance(250);
+        await settleKeyedWork(time, [service]);
+      }
+      // About one read a second inside the 3 s window.
+      const inWindow = env.validation.statusReads;
+      expect(inWindow).toBeGreaterThanOrEqual(3);
+      expect(inWindow).toBeLessThanOrEqual(5);
+      for (let elapsed = 0; elapsed < 8_000; elapsed += 250) {
+        await time.advance(250);
+        await settleKeyedWork(time, [service]);
+      }
+      // 3 s plus at most 1 s of stable spread: two or three reads in 8 s.
+      expect(env.validation.statusReads - inWindow).toBeLessThanOrEqual(3);
+      expect((await env.snapshot()).phase).toBe("preparing");
+    } finally {
+      await service.shutdown();
+      wallClock.mockRestore();
+      await env.cleanup();
+    }
+  });
+});

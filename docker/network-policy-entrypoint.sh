@@ -154,10 +154,19 @@ printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 # (GitHub's runners, a second user on a shared host) the mounts belong to that
 # uid. Each mount node cannot read in full is copied, root reading and node
 # writing, into a node-owned 0700 directory the entrypoint reads instead.
-# Nothing is widened on the host or for any other user. The relay is rebuilt
-# from the mounts on every boot, so emptying the revision (revocation) empties
-# it at the next start.
+# Nothing is widened on the host or for any other user.
+#
+# A mount is relayed again whenever it may differ from the copy, so emptying
+# the revision (revocation) empties the copy at the next start. Root keeps a
+# digest of each mount it relayed (paths, types, modes, sizes, link targets
+# and content, read from the read-only mount, never from node's copy) in its
+# own STAGED_INPUT_RELAY_STATE_DIR. A mount whose digest is unchanged and
+# whose copy is still there is left as it is: rebuilding it cost as much as
+# the rest of a restart (to-do 4580 task 3). node owns its copy, so editing it
+# only changes node's own input, as editing its home does. Every other copy is
+# removed, and when no copy is kept the whole directory is rebuilt as before.
 STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs
+STAGED_INPUT_RELAY_STATE_DIR=/run/orkestrator-relay-state
 # The mount points below `/`, as the backend binds them
 # (apps/backend/src/core/portable-inputs.ts and the project seed files).
 STAGED_INPUT_MOUNTS="claude-config claude-config.json codex-home opencode-config opencode-data opencode-state/model.json grok-home grok-config pi-config cursor-config agents-skills tmp/gitconfig project-env opencode-project-json"
@@ -169,24 +178,113 @@ as_input_user() {
     setpriv --reuid=node --regid=node --init-groups "$@"
 }
 
+# One mount's digest, or a failure. Every field of the listing is NUL-ended
+# and a name cannot hold a NUL, so two different trees cannot list alike;
+# sha256sum escapes a name holding a newline. Only regular files are opened
+# (-type f never matches a link, a FIFO or a device), and the mount is the
+# backend's read-only bind, so nothing node writes is read here.
+staged_input_digest() {
+    local source="$1" digest
+    digest=$(
+        set -o pipefail
+        export LC_ALL=C
+        {
+            printf 'staged-input-relay 1\0'
+            find -P "$source" -printf '%y\0%#m\0%s\0%P\0%l\0' &&
+                find -P "$source" -type f -exec sha256sum -- {} +
+        } 2>/dev/null | sha256sum
+    ) || return 1
+    digest="${digest%% *}"
+    case "$digest" in
+        *[!0-9a-f]* | '') return 1 ;;
+    esac
+    printf '%s\n' "$digest"
+}
+
+# Removes copies below the relay as node, who owns every path there. A
+# directory node left without write or search permission (a workload's chmod
+# 0500) is opened up and the removal tried again. Succeeds only when every
+# path is gone, checked by root, who can see past any mode node set.
+remove_relay_copies() {
+    local copy
+    [ "$#" -gt 0 ] || return 0
+    as_input_user rm -rf -- "$@" 2>/dev/null || {
+        as_input_user chmod -R u+rwx -- "$@" 2>/dev/null
+        as_input_user rm -rf -- "$@" 2>/dev/null
+    } || true
+    for copy in "$@"; do
+        if [ -e "$copy" ] || [ -L "$copy" ]; then return 1; fi
+    done
+}
+
 relay_staged_inputs() {
-    local source_root="$1" relay_dir="$2" owner="$3"
-    local name source parent unreadable entries bytes
-    # Root's own directory under root-owned /run: node cannot plant it, and
-    # rm never follows a link node left inside it.
-    rm -rf --one-file-system -- "$relay_dir"
+    local source_root="$1" relay_dir="$2" owner="$3" state_dir="${4:-${STAGED_INPUT_RELAY_STATE_DIR:-}}"
+    local name source parent unreadable entries bytes digest previous index
+    local relay_names=() relay_digests=() kept=() kept_digests=() remove=()
+    # Root's own directory under root-owned /run, like the relay directory:
+    # node cannot create entries there, so neither can be planted. Without
+    # one, every mount is relayed in full.
+    case "$state_dir" in
+        /?*) if [ -L "$state_dir" ] || { [ -e "$state_dir" ] && [ ! -d "$state_dir" ]; }; then
+                 rm -f -- "$state_dir"
+             fi ;;
+        *) state_dir="" ;;
+    esac
     for name in $STAGED_INPUT_MOUNTS; do
         source="$source_root/$name"
         # A mount point is a real file or directory; a link is never followed.
-        { [ -e "$source" ] && [ ! -L "$source" ]; } || continue
+        { [ -e "$source" ] && [ ! -L "$source" ]; } || { remove+=("$name"); continue; }
         unreadable=$(as_input_user find -P "$source" ! -readable -print -quit 2>/dev/null) || unreadable=yes
-        [ -n "$unreadable" ] || continue
+        [ -n "$unreadable" ] || { remove+=("$name"); continue; }
         entries=$(find -P "$source" 2>/dev/null | head -n "$((STAGED_INPUT_RELAY_MAX_ENTRIES + 1))" | wc -l) || true
         bytes=$(du -s -B1 --apparent-size "$source" 2>/dev/null | cut -f1) || true
         if [ "${entries:-0}" -gt "$STAGED_INPUT_RELAY_MAX_ENTRIES" ] || [ "${bytes:-0}" -gt "$STAGED_INPUT_RELAY_MAX_BYTES" ]; then
             echo "Staged input /$name is over the relay bounds and stays unreadable" >&2
+            remove+=("$name")
             continue
         fi
+        digest=""
+        [ -z "$state_dir" ] || digest=$(staged_input_digest "$source") || digest=""
+        previous=""
+        if [ -n "$digest" ] && [ -d "$relay_dir" ] && [ -f "$state_dir/${name//\//%2F}" ]; then
+            IFS= read -r previous < "$state_dir/${name//\//%2F}" || previous=""
+        fi
+        if [ -n "$digest" ] && [ "$previous" = "$digest" ] && as_input_user test -e "$relay_dir/$name"; then
+            kept+=("$name")
+            kept_digests+=("$digest")
+        else
+            relay_names+=("$name")
+            relay_digests+=("$digest")
+            remove+=("$name")
+        fi
+    done
+    if [ "${#kept[@]}" -gt 0 ]; then
+        # Each copy not kept goes, as node, who owns every path below the
+        # relay directory; its digest goes first, so a copy is never kept on
+        # the strength of a digest whose relay did not finish. A copy that
+        # will not go must not stay readable at its live path, so the whole
+        # relay is then rebuilt by root, as when nothing is kept.
+        local paths=()
+        for name in "${remove[@]}"; do
+            rm -f -- "$state_dir/${name//\//%2F}"
+            paths+=("$relay_dir/$name")
+        done
+        if ! remove_relay_copies "${paths[@]}"; then
+            echo "Stale staged input copies could not be removed; relaying every staged input again" >&2
+            relay_names+=("${kept[@]}")
+            relay_digests+=("${kept_digests[@]}")
+            kept=()
+        fi
+    fi
+    if [ "${#kept[@]}" -eq 0 ]; then
+        # rm never follows a link node left inside either directory.
+        rm -rf --one-file-system -- "$relay_dir"
+        [ -z "$state_dir" ] || rm -rf --one-file-system -- "$state_dir"
+    fi
+    for index in "${!relay_names[@]}"; do
+        name="${relay_names[$index]}"
+        digest="${relay_digests[$index]}"
+        source="$source_root/$name"
         [ -d "$relay_dir" ] || install -d -o "$owner" -g "$owner" -m 0700 "$relay_dir"
         parent="$relay_dir/$(dirname "$name")"
         as_input_user mkdir -p -m 0700 "$parent" || continue
@@ -195,8 +293,19 @@ relay_staged_inputs() {
         if ! tar -C "$(dirname "$source")" -cf - "$(basename "$source")" 2>/dev/null |
             as_input_user sh -c 'umask 077; exec tar -C "$1" -xf - --no-same-owner --no-same-permissions' sh "$parent"; then
             echo "Staged input /$name could not be relayed" >&2
-            as_input_user rm -rf -- "$relay_dir/$name" || true
+            if ! remove_relay_copies "$relay_dir/$name"; then
+                # A partial copy must not be read as the input: give up on
+                # the whole relay, so every input falls back to its mount.
+                rm -rf --one-file-system -- "$relay_dir"
+                [ -z "$state_dir" ] || rm -rf --one-file-system -- "$state_dir"
+                return 1
+            fi
+            continue
         fi
+        [ -n "$digest" ] || continue
+        { [ -d "$state_dir" ] || install -d -m 0700 "$state_dir"; } &&
+            printf '%s\n' "$digest" > "$state_dir/${name//\//%2F}" ||
+            echo "Staged input /$name will be relayed again at the next start" >&2
     done
 }
 

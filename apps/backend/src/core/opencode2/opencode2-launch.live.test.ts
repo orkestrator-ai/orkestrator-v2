@@ -23,7 +23,7 @@ import {
   openCode2LaunchConfigScript,
   openCode2LaunchPlugins,
 } from "../opencode2-container-launch.js";
-import { OpenCode2Client } from "./client.js";
+import { startOpenCode2OnFreePort } from "./live-server.test-support.js";
 import {
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,
   buildOpenCode2GitHubEnvironmentPluginSource,
@@ -176,48 +176,43 @@ liveTest(
       mode: 0o600,
     });
     const password = `okb_${"q".repeat(43)}`;
-    const port = 39_000 + Math.floor(Math.random() * 1_000);
-    server = Bun.spawn([binary!, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
-      cwd: workspace,
-      // What the launcher exports, in its order, under `env -i`.
-      env: {
-        OPENCODE_PASSWORD: password,
-        OPENCODE_FLAGS: OPENCODE2_FLAGS,
-        OPENCODE_DB: at("data", "opencode2.db"),
-        ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT: snapshot,
-        ORKESTRATOR_BRIDGE_LAUNCH_KEYS: "OPENCODE_PASSWORD,OPENCODE_FLAGS,OPENCODE_DB",
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        HOME: home,
-        LANG: "C.UTF-8",
-        XDG_CONFIG_HOME: path.join(run, "config"),
-        OPENCODE_CONFIG_DIR: path.join(run, "opencode"),
-        OPENCODE_TEST_HOME: path.join(run, "home"),
-        XDG_CACHE_HOME: path.join(run, "cache"),
-        XDG_DATA_HOME: at("data"),
-        XDG_STATE_HOME: at("state"),
-        OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-        OPENCODE_DISABLE_AUTOUPDATE: "1",
-        OPENCODE_CONFIG: path.join(run, "project", "opencode.json"),
-      },
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    const client = new OpenCode2Client({
-      baseUrl: `http://127.0.0.1:${port}`,
+    const started = await startOpenCode2OnFreePort({
+      stderrPath: at("serve.stderr"),
       password,
       directory: workspace,
+      onSpawn: (spawned) => {
+        server = spawned;
+      },
+      spawn: (port) =>
+        Bun.spawn([binary!, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+          cwd: workspace,
+          // What the launcher exports, in its order, under `env -i`.
+          env: {
+            OPENCODE_PASSWORD: password,
+            OPENCODE_FLAGS: OPENCODE2_FLAGS,
+            OPENCODE_DB: at("data", "opencode2.db"),
+            ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT: snapshot,
+            ORKESTRATOR_BRIDGE_LAUNCH_KEYS: "OPENCODE_PASSWORD,OPENCODE_FLAGS,OPENCODE_DB",
+            PATH: "/usr/local/bin:/usr/bin:/bin",
+            HOME: home,
+            LANG: "C.UTF-8",
+            XDG_CONFIG_HOME: path.join(run, "config"),
+            OPENCODE_CONFIG_DIR: path.join(run, "opencode"),
+            OPENCODE_TEST_HOME: path.join(run, "home"),
+            XDG_CACHE_HOME: path.join(run, "cache"),
+            XDG_DATA_HOME: at("data"),
+            XDG_STATE_HOME: at("state"),
+            OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+            OPENCODE_DISABLE_AUTOUPDATE: "1",
+            OPENCODE_CONFIG: path.join(run, "project", "opencode.json"),
+          },
+          stdout: "ignore",
+          stderr: Bun.file(at("serve.stderr")),
+        }),
     });
-    let ready = false;
-    for (let attempt = 0; attempt < 150 && !ready; attempt++) {
-      ready = await client.info().then(
-        (info) => info.version.startsWith("2."),
-        () => false,
-      );
-      if (!ready) await Bun.sleep(200);
-    }
-    expect(ready).toBe(true);
+    const client = started.client;
     // Before the warm request the server is still dumpable: its environment is readable.
-    const environ = `/proc/${server.pid}/environ`;
+    const environ = `/proc/${started.server.pid}/environ`;
     expect((await readFile(environ)).length).toBeGreaterThan(0);
     // The backend's warm request loads the plugins, which make it non-dumpable.
     await client.api("GET", "/api/agent", "OpenCode agents", {});

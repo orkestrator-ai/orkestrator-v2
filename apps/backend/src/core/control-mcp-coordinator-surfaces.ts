@@ -21,7 +21,7 @@ import {
 } from "./control-mcp-worker-questions.js";
 
 /**
- * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
+ * Coordinator tools for a worker's own surfaces (coordinator.md, "Worker surfaces"): a terminal or
  * tmux tab, a browser preview, tab editing, the PR and Resolve tabs,
  * feature-plan launch, the request to copy the checkout's uncommitted changes into a
  * worker, and the proposal to save decisions to AGENTS.md. None of them

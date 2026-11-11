@@ -9,6 +9,7 @@ import {
 } from "./worktree-git-paths.js";
 import {
   planWatchTargets,
+  WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
   worktreeWatchPlanIo,
   type WatchTarget,
   type WorktreeWatchPlanIo,
@@ -68,6 +69,15 @@ export interface WorktreeChangeHint {
 /** Paths carried by one settled hint before it degrades to "unknown paths". */
 export const WATCH_HINT_MAX_PATHS = 256;
 
+/**
+ * How long a large-tree measurement that came out under the bound is reused for
+ * a directory whose identity has not changed. A tree can grow in place, and a
+ * watched one that has grown past the bound should be left out at the next plan
+ * rather than at the next restart. A tree about to be watched is always counted
+ * afresh, so this bounds only the inotify watches a grown tree keeps meanwhile.
+ */
+export const WATCH_IGNORED_REMEASURE_MS = 60_000;
+
 export type StartWatch = (
   target: string,
   listener: (eventType: string, filename: string | null) => void,
@@ -103,9 +113,12 @@ export interface WorktreeWatcherOptions {
   /**
    * Called when {@link WorktreeWatcher.qualified} becomes true, and again if a
    * directory this process may not read turns up after that, which makes it
-   * false for good.
+   * false for good. A large ignored tree left out (Linux) withdraws it the same
+   * way, and putting the tree back reports it true again.
    */
   onCoverageChange?: () => void;
+  /** Injected for tests; the clock {@link WATCH_IGNORED_REMEASURE_MS} is read from. */
+  now?: () => number;
 }
 
 export interface WorktreeWatcher {
@@ -114,9 +127,9 @@ export interface WorktreeWatcher {
   /**
    * True once the root *and* every Git metadata location that can change the
    * diff (a linked worktree's index/HEAD and the shared refs) are watched.
-   * Until then, and forever when metadata could not be resolved or a directory
-   * in the worktree could not be read, a quiet watcher is not evidence that
-   * nothing changed. Watchers that omit it (test doubles) are treated as
+   * Until then, forever when metadata could not be resolved or a directory in
+   * the worktree could not be read, and while a large ignored tree is left out,
+   * a quiet watcher is not evidence that nothing changed. Watchers that omit it (test doubles) are treated as
    * qualified whenever they are watching.
    */
   readonly qualified?: boolean;
@@ -171,6 +184,9 @@ export function classifyWorktreeChange(
   const tree = !normalized.split("/").some((segment) => segment === "node_modules");
   return { fileList: true, tree };
 }
+
+/** What lost events under a Git metadata watch may have changed. */
+const METADATA_LOST = { fileList: true, tree: false } as const;
 
 const defaultStartWatch: StartWatch = (target, listener, options) =>
   watchDirectory(target, listener, options);
@@ -232,6 +248,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   const plan =
     options.plan === undefined ? (options.startWatch ? null : worktreeWatchPlanIo) : options.plan;
   const splitting = plan !== null && (options.perDirectoryWatches ?? process.platform === "linux");
+  // Large ignored trees are measured before they are watched (Linux).
+  const measuring = splitting && !!plan?.listIgnoredTrees && !!plan.exceedsDirectories;
+  const now = options.now ?? Date.now;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
@@ -256,6 +275,25 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   // retry, and gave it nothing a polling owner does not already have.
   let unreadable = false;
   let excluded: readonly string[] = [];
+  // Ignored trees too large for Bun to walk on the event loop (Linux only,
+  // `WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES`). Left out like `node_modules`,
+  // but the tree view shows them, so coverage is withdrawn while any is.
+  let oversized: readonly string[] = [];
+  // What each listed tree measured, by directory identity, so a replan does not
+  // count the same tree again. Holds only trees Git listed in the last plan. A
+  // result under the bound expires (`WATCH_IGNORED_REMEASURE_MS`).
+  const measured = new Map<string, { identity: string; over: boolean; at: number }>();
+  // Recursive targets, by identity, that the last replan saw (Linux, `measuring`).
+  // A directory that appeared or was replaced since then may be a large ignored
+  // tree Git has not been asked about, and recursively watching it would walk
+  // it on the event loop, so it waits for a replan before it is watched.
+  const vetted = new Map<string, string | null>();
+  // Each lost-events flag may have hidden the change that invalidates the
+  // `node_modules` proof (a `.gitignore` edit, a renamed ancestor, a staged
+  // file). Until a Git read that began after the flag has finished, events are
+  // not dropped by that proof.
+  let lostEpoch = 0;
+  let verifiedEpoch = 0;
   let replanAtSettle = false;
   let replanQueued = false;
   let applyQueued = false;
@@ -284,6 +322,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       closed ||
       coverageAnnounced ||
       unreadable ||
+      oversized.length > 0 ||
       !metadataCovered ||
       !treeCovered ||
       unestablished > 0
@@ -293,6 +332,45 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     coverageAnnounced = true;
     options.onCoverageChange?.();
   };
+
+  /** Unlike an unreadable directory, a tree left out can be put back. */
+  const setOversized = (next: readonly string[]) => {
+    const was = oversized.length > 0;
+    oversized = next;
+    if (closed || was === next.length > 0) return;
+    if (!coverageAnnounced) announceCoverage();
+    else if (!unreadable) options.onCoverageChange?.();
+  };
+
+  /** Everything the plan leaves out; a dependency tree inside a large one goes with it. */
+  const leftOut = (): readonly string[] =>
+    oversized.length === 0
+      ? excluded
+      : [
+          ...excluded.filter((entry) => !oversized.some((tree) => isInsideTree(tree, entry))),
+          ...oversized,
+        ];
+
+  /**
+   * Another watch rebuilt the shared macOS stream and dropped whatever happened
+   * here meanwhile (`watch-host.ts`): rescan with unknown paths. A proof in
+   * force is distrusted and read again once the burst settles, so every flag
+   * folded into one settle window costs one Git read per worktree, and a
+   * worktree with nothing left out asks Git nothing.
+   */
+  const noteEventsLost = (lost: { fileList: boolean; tree: boolean }) => {
+    if (closed) return;
+    // A read in flight may have started before the hidden change.
+    if (plan && (excluded.length > 0 || reconciling)) {
+      lostEpoch += 1;
+      replanAtSettle = true;
+    }
+    schedule(lost, lost.tree ? null : undefined);
+  };
+
+  /** What events are dropped by; an unverified proof drops nothing. */
+  const filteredOut = (): readonly string[] =>
+    verifiedEpoch === lostEpoch ? leftOut() : oversized;
 
   const schedule = (
     hint: { fileList: boolean; tree: boolean; overflow?: boolean },
@@ -338,6 +416,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     target: string,
     recursive: boolean,
     listener: (eventType: string, filename: string | null) => void,
+    lost: { fileList: boolean; tree: boolean },
   ): WatchHandle => {
     // Node types the name as `string | null`, but Bun on Linux passes
     // `undefined` when the watched directory itself is removed. Both mean
@@ -354,6 +433,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       if (recursive && isUnreadableDescendant(error, target)) noteUnreadable();
       else fail(error);
     });
+    // The settle window folds the flags of a worktree's watches, and a start of
+    // several, into one hint (`noteEventsLost`).
+    handle.onEventsLost?.(() => noteEventsLost(lost));
     if (handle.established) {
       unestablished += 1;
       void handle.established.then(
@@ -381,7 +463,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       relative === null ? null : target.relative ? `${target.relative}/${relative}` : relative;
     // The entry itself can have become a file or symlink; only descendants
     // still have a valid directory exclusion.
-    if (name !== null && excluded.some((entry) => entry !== name && isInsideTree(entry, name)))
+    if (name !== null && filteredOut().some((entry) => entry !== name && isInsideTree(entry, name)))
       return;
     // A renamed ancestor can remove the .gitignore that proved a descendant
     // safe to omit. Drop that proof immediately on both platform strategies.
@@ -391,6 +473,12 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
         excluded = excluded.filter((entry) => !affected.includes(entry));
         replanQueued = true;
         schedule({ fileList: true, tree: true }, null);
+        reconcile();
+      }
+      // A large tree renamed or removed is measured again before the plan
+      // moves; dropping it here would put it back for a moment and walk it.
+      if (oversized.some((entry) => name === null || isInsideTree(name, entry))) {
+        replanQueued = true;
         reconcile();
       }
     }
@@ -460,6 +548,14 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       closeQuietly(watched.handle);
       retired = true;
     }
+    // Linux reuses a removed directory's inode at once, so what is there now is
+    // vetted and counted again rather than trusted by identity.
+    for (const relative of Array.from(vetted.keys())) {
+      if (isInsideTree(name, relative)) vetted.delete(relative);
+    }
+    for (const relative of Array.from(measured.keys())) {
+      if (isInsideTree(name, relative)) measured.delete(relative);
+    }
     return retired;
   };
 
@@ -468,16 +564,22 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       target.relative ? path.join(options.worktreePath, target.relative) : options.worktreePath,
       target.recursive,
       (eventType, filename) => onTreeEvent(target, eventType, filename),
+      { fileList: true, tree: true },
     );
     treeWatches.set(targetKey(target), { target, handle, identity });
   };
 
-  /** Moves the watches to the current plan; returns whether any were added. */
-  const applyPlan = async (io: WorktreeWatchPlanIo): Promise<boolean> => {
+  /**
+   * Moves the watches to the current plan; returns whether any were added.
+   * `vetting` says Git was asked and the ignored trees measured in this pass.
+   */
+  const applyPlan = async (io: WorktreeWatchPlanIo, vetting: boolean): Promise<boolean> => {
     const root = options.worktreePath;
     let desired: readonly WatchTarget[];
     try {
-      desired = await planWatchTargets(excluded, (relative) => io.childDirectories(root, relative));
+      desired = await planWatchTargets(leftOut(), (relative) =>
+        io.childDirectories(root, relative),
+      );
     } catch (error) {
       // The worktree itself went away. Its owner decides what that means.
       if (isVanishedPath(error)) return false;
@@ -494,6 +596,12 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
         wanted.set(targetKey(target), { target, identity });
       }
     });
+    if (measuring && vetting) {
+      vetted.clear();
+      for (const { target, identity } of wanted.values()) {
+        if (target.recursive && target.relative) vetted.set(target.relative, identity);
+      }
+    }
     for (const [key, watched] of Array.from(treeWatches)) {
       const next = wanted.get(key);
       // No identity is not a different one: the first root watch starts before
@@ -509,6 +617,16 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       const watched = treeWatches.get(key);
       if (watched) {
         watched.identity = identity;
+        continue;
+      }
+      if (
+        measuring &&
+        target.recursive &&
+        target.relative &&
+        (!vetted.has(target.relative) || vetted.get(target.relative) !== identity)
+      ) {
+        // New or replaced since Git was last asked: plan again before watching.
+        replanQueued = true;
         continue;
       }
       try {
@@ -534,27 +652,82 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       replanQueued = false;
       applyQueued = false;
       if (replan) {
-        // No answer proves nothing, so nothing stays left out.
-        const listed = await io.listExcluded(options.worktreePath).catch(() => undefined);
+        // Flags after this point are not answered by this read.
+        const epoch = lostEpoch;
+        let listed: readonly string[] | undefined;
+        let others: readonly string[] | undefined;
+        if (splitting && io.listIgnoredTrees && io.exceedsDirectories) {
+          const trees = await io.listIgnoredTrees(options.worktreePath).catch(() => undefined);
+          listed = trees?.dependencies;
+          others = trees?.others;
+        } else {
+          listed = await io.listExcluded(options.worktreePath).catch(() => undefined);
+        }
+        if (closed) return;
+        // Leaving a large tree out costs coverage, never a count, so without an
+        // answer the last measurement stands rather than walking it.
+        const nextOversized = others ? await measureIgnored(io, others) : oversized;
         if (closed) return;
         const previous = excluded;
+        // No answer proves nothing, so no dependency tree stays left out.
         excluded = listed ?? [];
         // Writes to a subtree put back were dropped until now, so report them.
         if (previous.some((entry) => !excluded.includes(entry))) {
           schedule({ fileList: true, tree: true }, null);
         }
+        setOversized(nextOversized);
+        if (epoch > verifiedEpoch) verifiedEpoch = epoch;
       }
       if (!splitting) continue;
-      const added = await applyPlan(io);
+      const added = await applyPlan(io, replan);
       if (closed) return;
       // A write before a new watch began reached nothing, so report the gap: the
       // scan this causes starts after the watch did.
       if (added) schedule({ fileList: true, tree: true }, null);
-      if (!treeCovered) {
+      // A directory waiting to be vetted is not watched yet.
+      if (!treeCovered && !replanQueued) {
         treeCovered = true;
         announceCoverage();
       }
     }
+  };
+
+  /** The listed trees over the bound; each is counted once per directory identity. */
+  const measureIgnored = async (
+    io: WorktreeWatchPlanIo,
+    others: readonly string[],
+  ): Promise<readonly string[]> => {
+    const root = options.worktreePath;
+    const over: string[] = [];
+    const listed = new Set<string>();
+    for (const relative of others) {
+      const identity = await io.directoryIdentity(root, relative).catch(() => null);
+      if (closed) return oversized;
+      if (identity === null) continue;
+      listed.add(relative);
+      let known = measured.get(relative);
+      // An over result stands until the directory is replaced: the tree is not
+      // watched, so it cannot have cost anything meanwhile. An under one can
+      // have grown in place.
+      if (
+        known?.identity !== identity ||
+        (!known.over && now() - known.at >= WATCH_IGNORED_REMEASURE_MS)
+      ) {
+        const exceeds = await io.exceedsDirectories!(
+          root,
+          relative,
+          WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
+        ).catch(() => false);
+        if (closed) return oversized;
+        known = { identity, over: exceeds, at: now() };
+        measured.set(relative, known);
+      }
+      if (known.over) over.push(relative);
+    }
+    for (const relative of Array.from(measured.keys())) {
+      if (!listed.has(relative)) measured.delete(relative);
+    }
+    return over;
   };
 
   /** One pass at a time; a request during a pass is picked up by that pass. */
@@ -592,30 +765,45 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
         try {
           if (paths.linked || !isInside(options.worktreePath, paths.gitDir)) {
             metadataWatchers.push(
-              watchPath(paths.gitDir, false, (_eventType, filename) => {
-                if (!isRelevantGitDirChange(filename)) return;
-                // Staging can put a tracked file inside a subtree left out.
-                if (plan && filename !== "HEAD") replanAtSettle = true;
-                schedule({ fileList: true, tree: false });
-              }),
+              watchPath(
+                paths.gitDir,
+                false,
+                (_eventType, filename) => {
+                  if (!isRelevantGitDirChange(filename)) return;
+                  // Staging can put a tracked file inside a subtree left out.
+                  if (plan && filename !== "HEAD") replanAtSettle = true;
+                  schedule({ fileList: true, tree: false });
+                },
+                METADATA_LOST,
+              ),
             );
           }
           if (!isInside(options.worktreePath, paths.commonDir)) {
             metadataWatchers.push(
-              watchPath(paths.commonDir, false, (_eventType, filename) => {
-                if (filename === null || filename === "packed-refs") {
-                  schedule({ fileList: true, tree: false });
-                }
-              }),
+              watchPath(
+                paths.commonDir,
+                false,
+                (_eventType, filename) => {
+                  if (filename === null || filename === "packed-refs") {
+                    schedule({ fileList: true, tree: false });
+                  }
+                },
+                METADATA_LOST,
+              ),
             );
             if (refs.length > 0) {
               metadataWatchers.push(
-                watchPath(path.join(paths.commonDir, "refs"), true, (_eventType, filename) => {
-                  const relative = filename === null ? null : `refs/${filename}`;
-                  if (isRelevantCommonDirChange(relative, refs)) {
-                    schedule({ fileList: true, tree: false });
-                  }
-                }),
+                watchPath(
+                  path.join(paths.commonDir, "refs"),
+                  true,
+                  (_eventType, filename) => {
+                    const relative = filename === null ? null : `refs/${filename}`;
+                    if (isRelevantCommonDirChange(relative, refs)) {
+                      schedule({ fileList: true, tree: false });
+                    }
+                  },
+                  METADATA_LOST,
+                ),
               );
             }
           }
@@ -652,6 +840,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
         watchEstablished &&
         !closed &&
         !unreadable &&
+        oversized.length === 0 &&
         metadataCovered &&
         treeCovered &&
         unestablished === 0

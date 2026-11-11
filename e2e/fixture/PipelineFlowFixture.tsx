@@ -46,7 +46,8 @@ import { appCommandStore } from "../../apps/web/src/test/app-command-store";
  *   here" and "Prepare package again".
  *
  * `&longTranscript` gives the current session a transcript that overflows its
- * inspector; `&longTranscript=report` also files a review report in its footer.
+ * inspector; `&longTranscript=report` also files a review report in its footer;
+ * `&longTranscript=stages` gives every session one.
  * `&restore=1` reloads the last saved snapshot into the review pass, or into the
  * build tab with `&view=build`. `&autoSteer=1` turns the Auto-steer setting on. `&steer=refused` makes the
  * backend refuse every steer, leaving the message queued.
@@ -839,9 +840,12 @@ function seed(): BuildPipeline {
   }
   if (params.has("longTranscript")) {
     const session = pipeline.sessions[pipeline.currentSessionIndex]!;
-    session.messages = Array.from({ length: 40 }, (_, index) =>
-      transcriptEntry(session.sessionKey, index + 1),
-    );
+    const long = params.get("longTranscript") === "stages" ? pipeline.sessions : [session];
+    for (const each of long) {
+      each.messages = Array.from({ length: 40 }, (_, index) =>
+        transcriptEntry(each.sessionKey, index + 1),
+      );
+    }
     if (params.get("longTranscript") === "report") {
       session.reviewReport = TEST_STRUCTURED_REVIEW_REPORT;
     }

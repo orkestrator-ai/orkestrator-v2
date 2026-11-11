@@ -16,6 +16,7 @@ import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
 import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
 import { PRIVATE_TMPDIR_PREFIX, privateTmpdirRoot } from "../tests/private-tmpdir";
+import { CHECKOUT_FILE, disposableDockerStateBase } from "./disposable-docker-daemon";
 import {
   listProbeNetworks,
   probeNetworkCreators,
@@ -304,6 +305,33 @@ export function probeNetworkRow(dockerRun: Run = run, now = Date.now()): ReportR
   };
 }
 
+/**
+ * The disposable Docker daemons' instance roots, one per checkout
+ * (`disposable-docker-daemon.ts`). A root whose checkout is gone is orphaned:
+ * its daemon's files belong to mapped users, so only the launcher's `stop`
+ * removes them.
+ */
+export function disposableDockerRow(base: string): ReportRow | null {
+  if (!isDirectory(base)) return null;
+  const roots = childDirectories(base);
+  const orphans = roots.filter((root) => {
+    let checkout = "";
+    try {
+      checkout = readFileSync(path.join(root, CHECKOUT_FILE), "utf8").trim();
+    } catch {
+      return true;
+    }
+    return !checkout || !isDirectory(checkout);
+  });
+  return {
+    location: `${base} (one per checkout)`,
+    bytes: diskUsage([base]),
+    orphaned: `${orphans.length} of ${roots.length} without their checkout`,
+    owner: "scripts/disposable-docker-daemon.ts (stop removes an instance)",
+    cleanup: "bun scripts/disposable-docker-daemon.ts status|stop --name <n> --root <dir>",
+  };
+}
+
 /** Per-project Git mirrors (`project-git-mirror.ts`), with those of removed projects. */
 export function gitMirrorRow(dataDir: string): ReportRow {
   const root = path.join(dataDir, "git-mirrors");
@@ -512,6 +540,11 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
       cleanup: "mise prune",
     });
   }
+
+  const disposableDocker = disposableDockerRow(
+    disposableDockerStateBase(process.env, context.homeDir),
+  );
+  if (disposableDocker) rows.push(disposableDocker);
 
   rows.push(environmentCleanupLedgerRow(context.dataDir, new Set(environmentIds)));
   rows.push(gitMirrorRow(context.dataDir));

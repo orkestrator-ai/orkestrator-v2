@@ -154,7 +154,7 @@ test.skipIf(process.platform === "win32")(
   "qualification Docker shim execs the real CLI, so stopping a follower stops Docker",
   async () => {
     // A follower the backend stops with SIGTERM (`docker logs -f`) used to run
-    // as the shim's child and outlive it (0019 task 6). The PATH shim must be
+    // as the shim's child and outlive it (to-do 0019 (retired) task 6). The PATH shim must be
     // the Docker process itself.
     const root = await mkdtemp(path.join(tmpdir(), "qualification-exec-"));
     let child: Bun.Subprocess<"ignore", "pipe", "inherit"> | undefined;

@@ -263,12 +263,16 @@ them, or found expired), through the `onGrantRevoked` node hook, so a terminal
 socket or event stream it authorized closes at once rather than at the grant's
 original deadline.
 
-A local desktop window normally takes everything through Electron main: every
-backend event, terminal output included, is parsed in main and relayed to each
-window, and each command is cloned, stringified, fetched, parsed and cloned back.
-With `global.localWindowGatewayTransport` on (Settings → Experimental, off by
-default, read once as each window is created), a new local window uses this
-gateway itself instead:
+A local desktop window on main's relay takes everything through Electron main:
+every backend event, terminal output included, is parsed in main and relayed to
+each window, and each command is cloned, stringified, fetched, parsed and cloned
+back. By default a new local window uses this gateway itself instead. The
+choice is `global.localWindowGatewayTransport` (Settings → Experimental, read
+once as each window is created): unset or `true` is the direct transport, and
+only an explicit `false` keeps the relay, so a user who turned it off before the
+default moved stays off (to-do 4501). The packaged `file://` renderer is
+qualified on it by `packaged-security-electron.spec.ts`. On the direct
+transport:
 
 - `readLocalWindowGatewayTransport` decides at creation, and `gateway-sync` hands
   the preload the backend's origin. The preload then exposes

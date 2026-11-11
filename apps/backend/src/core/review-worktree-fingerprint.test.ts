@@ -31,6 +31,10 @@ function repositoryTemplate(): Promise<string> {
     await runCommand("git", ["init", "-q"], { cwd: root });
     await runCommand("git", ["config", "user.name", "Review Test"], { cwd: root });
     await runCommand("git", ["config", "user.email", "review@example.invalid"], { cwd: root });
+    // No detached auto-maintenance after the commit: its maintenance.lock
+    // can vanish while fs.cp copies the template (flake 9936).
+    await runCommand("git", ["config", "maintenance.auto", "false"], { cwd: root });
+    await runCommand("git", ["config", "gc.auto", "0"], { cwd: root });
     await fs.writeFile(path.join(root, "tracked.txt"), "base\n");
     await runCommand("git", ["add", "tracked.txt"], { cwd: root });
     await runCommand("git", ["commit", "-qm", "base"], { cwd: root });

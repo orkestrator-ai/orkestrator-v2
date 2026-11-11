@@ -10,7 +10,11 @@
  * chose to save this.
  */
 
-/** The backend command a desktop window sends its ring's new counts to. */
+/**
+ * The backend command a renderer sends its ring's new counts to: a desktop
+ * window's own renderer, and a browser tab (or the iOS app's web view) to the
+ * backend it is signed in to.
+ */
 export const RECORD_RENDERER_ERRORS_COMMAND = "record_renderer_errors";
 
 /** Distinct failures one renderer keeps; the least recently seen goes first. */
@@ -144,6 +148,18 @@ export function parseRendererErrorBatch(value: unknown): RendererErrorEntry[] | 
     entries.push(entry);
   }
   return entries;
+}
+
+/**
+ * The optional `client` argument: one renderer's upload id, so the backend can
+ * give each renderer its own share of the per-minute bound. Random, chosen by
+ * the renderer for one tab or window (kept across its reloads), and never
+ * written to the log: it identifies no user, device or session.
+ */
+export const RENDERER_ERROR_CLIENT_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+export function isRendererErrorClientId(value: unknown): value is string {
+  return typeof value === "string" && RENDERER_ERROR_CLIENT_ID.test(value);
 }
 
 /** What the backend answers: how many it logged and how many the rate bound dropped. */

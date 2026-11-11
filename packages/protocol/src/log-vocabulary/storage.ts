@@ -60,8 +60,6 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "A waiter gave up on a lease; `lease` and `family` name it, `holderAgeMs` is the time since its holder's last heartbeat (null when the holder had just gone), `waitedMs` how long the waiter waited.",
       "lease.heartbeat-failed":
         "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
-      "scrub.vacuum-failed":
-        "Deleted-content page reclamation failed; the checkpoint is attempted independently.",
       "scrub.checkpoint-failed":
         "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
       "upkeep.vacuum-failed": "Periodic page reclamation failed; the next upkeep pass retries.",

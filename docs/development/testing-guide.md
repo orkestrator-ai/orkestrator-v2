@@ -735,8 +735,9 @@ same suite, `e2e/agent-testing/service-preview-seeded-electron.spec.ts`. It
 gives the fixture project an `entryPort` and a `run` command, creates two local
 environments, and checks the wait state, two servers on one port with the
 port-move offer, a restart, agent links and framework hints in the real window
-([0045](../todo/previews-and-annotations/0045-preview-service-discovery.md),
-task 1). Both specs launch Electron through
+([browser-previews.md](../architecture/browser-previews.md#local-environments)).
+It also runs headless on Linux through `playwright.electron-headless.config.ts`
+with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`. Both specs launch Electron through
 `e2e/agent-testing/service-preview-electron-launch.ts`.
 
 Record results in the evidence log of

@@ -235,3 +235,30 @@ transcript-scroll code.
   `PASSED ALONE (851ms)`, and a later
   `bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
   (`NODE_ENV=test`, host load average about 4 on 16 cores) passed.
+
+## Recurrence — 2026-11-11 (design conversation links fix round)
+
+Observed 2026-11-11 on `conversation-links-de945f872863-r1` at `19a9c9550`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes the design canvas's agent
+links, the design perf harness and their tests and docs; it does not touch
+this file or the transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  (default suite, web package at its default worker count).
+- **Failure:** nine cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them
+  `control: without cancellation the library retries the index target after a refresh`
+  (206.8 ms) and both `restored snapshot transitions from hidden to visible (cancel=%s)`
+  cases.
+- **Suite counts:** web 14,576 passed and 9 failed; backend 18,582 passed and
+  0 failed; CLI 517; the root, bridge and lockfile groups passed.
+- **Isolated rerun:** the aggregate runner's own rerun of the file waited for
+  host capacity and was still running when the 30-minute group deadline ended
+  the run. Two manual one-worker runs,
+  `NODE_ENV=test bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`,
+  at a host load average of about 57 on 16 cores, failed 5 and 10 of 14 cases
+  with the same `Received: 1`, matching the earlier high-load recurrences.
+
+Status stays open; no assertion, timeout or skip changed.

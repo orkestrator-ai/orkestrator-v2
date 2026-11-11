@@ -790,7 +790,13 @@ with the stored record and the renderer adopts it, which is why a layout change
 lost in that race is not retried. Other clients hear `coordinator-pane-layout`
 and re-read. A browser's earlier local copy is imported once at revision 0, so it
 never replaces a layout already stored, and then deleted; against a backend
-without the capability the layout stays in that copy. It never opens or closes a
+without the capability the layout stays in that copy. Until a read of the
+stored layout (or of the backend's capabilities) succeeds, the panel shows no
+groups and saves nothing: a default grouping reconciled from "nothing known"
+would otherwise be saved over the user's groups. It shows **Could not load the
+tab groups** with **Retry now** instead, reads again after 1, 3 and 10 seconds,
+and then on the next resync, safety check, mount or Retry
+(`coordinatorPaneLayoutStore.ts`). It never opens or closes a
 conversation; on every snapshot it is reconciled against the backend's open set,
 dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere

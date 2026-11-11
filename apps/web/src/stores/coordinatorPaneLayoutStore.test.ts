@@ -5,10 +5,12 @@ import type {
   CoordinatorPaneLayoutRecord,
 } from "@orkestrator/protocol/coordinator-pane-layout";
 import {
+  COORDINATOR_LAYOUT_RETRY_DELAYS_MS,
   LEGACY_COORDINATOR_LAYOUT_KEY,
   MAX_REMEMBERED_COORDINATOR_LAYOUTS,
   selectCoordinatorPaneLayout,
   selectCoordinatorPaneLayoutReady,
+  selectCoordinatorPaneLayoutStatus,
   coordinatorPaneLayoutStore,
 } from "./coordinatorPaneLayoutStore";
 import { appCommandStore } from "@/test/app-command-store";
@@ -103,6 +105,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Stops any retry a failed read scheduled (invariant 15).
+  appCommandStore(coordinatorPaneLayoutStore).getState().reset();
   localStorage.removeItem(key);
   resetClientStateCapabilitiesForTests();
   invokeMock.mockImplementation(() => Promise.resolve());
@@ -304,17 +308,54 @@ describe("against a backend that owns coordinator layouts", () => {
     ).toEqual(edited);
   });
 
-  test("a failed read still lets the page render", async () => {
+  test("a failed read is not ready, so nothing is reconciled against it", async () => {
     invokeMock.mockImplementation(async () => {
       throw new Error("transport closed");
     });
     await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
-    expect(
-      selectCoordinatorPaneLayoutReady("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
-    ).toBe(true);
-    expect(
-      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
-    ).toBeUndefined();
+    const state = appCommandStore(coordinatorPaneLayoutStore).getState();
+    expect(selectCoordinatorPaneLayoutReady("p")(state)).toBe(false);
+    expect(selectCoordinatorPaneLayoutStatus("p")(state)).toBe("failed");
+    expect(selectCoordinatorPaneLayout("p")(state)).toBeUndefined();
+  });
+
+  test("a failed layout read is read again after a delay, a bounded number of times", async () => {
+    const server = fakeBackend();
+    server.remoteSave("p", single());
+    const timers: Array<{ delay: number; run: () => void }> = [];
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((run: () => void, delay: number) => {
+      timers.push({ delay, run });
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    try {
+      const healthy = invokeMock.getMockImplementation()!;
+      invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_coordinator_pane_layout") throw new Error("transport closed");
+        return healthy(command, args);
+      });
+      await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+      for (let index = 0; index < 5 && timers.length > index; index += 1) {
+        timers[index]!.run();
+        await flushPromises();
+      }
+      expect(timers.map((timer) => timer.delay)).toEqual([...COORDINATOR_LAYOUT_RETRY_DELAYS_MS]);
+      expect(
+        selectCoordinatorPaneLayoutStatus("p")(
+          appCommandStore(coordinatorPaneLayoutStore).getState(),
+        ),
+      ).toBe("failed");
+
+      // The panel's Retry reads again now, and a success ends the failure.
+      invokeMock.mockImplementation(healthy);
+      await appCommandStore(coordinatorPaneLayoutStore).getState().retry("p");
+      const state = appCommandStore(coordinatorPaneLayoutStore).getState();
+      expect(selectCoordinatorPaneLayoutStatus("p")(state)).toBe("ready");
+      expect(selectCoordinatorPaneLayout("p")(state)).toEqual(server.records.get("p")!.layout);
+      expect(server.saves).toEqual([]);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
   });
 });
 

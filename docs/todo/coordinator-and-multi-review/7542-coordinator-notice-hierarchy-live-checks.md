@@ -2,7 +2,8 @@
 
 ## Task analysis
 
-Analysed 2026-11-07 against `main` at `413bd6219`.
+Analysed 2026-11-07 against `main` at `413bd6219`; re-analysed 2026-11-11
+against `main` at `498b68766`.
 
 The notice hierarchy (one routing rule for status, pull request, auto-switch
 and usage-limit stop notices; session creation for a notice with no main
@@ -16,11 +17,76 @@ deleted with the rest of `docs/reports/` on 2026-11-07; read it with
 
 ### Tasks
 
-1. **A leaf's usage-limit stops reach the command node's coordinator, once and grouped**: criteria AC2, AC8 and AC9 on two real backends. Status: open.
-2. **A command node's coordinator on the limited login moves first**: criterion AC13 across two machines' account entries. Status: open (depends on 1).
-3. **A stop raised while the link is down arrives once after a leaf restart**: criteria AC11 and AC12 on two real backends. Status: open (depends on 1).
+1. **A two-backend harness with scripted provider accounts**: two linked `dev:test` profiles whose Claude or Codex accounts are fixtures and whose model and usage endpoints are loopback servers. Status: open.
+2. **A leaf's usage-limit stops reach the command node's coordinator, once and grouped**: criteria AC2, AC8 and AC9 on two real backends. Status: open (depends on 1).
+3. **A command node's coordinator on the limited login moves first**: criterion AC13 across two machines' account entries. Status: open (depends on 2).
+4. **A stop raised while the link is down arrives once after a leaf restart**: criteria AC11 and AC12 on two real backends. Status: open (depends on 2).
 
-### 1. A leaf's usage-limit stops reach the command node's coordinator, once and grouped
+### 1. A two-backend harness with scripted provider accounts
+
+**Problem.** Tasks 2 to 4 need a usage-limit stop raised on one real backend
+and delivered to another, with no billed turn and no real login. No harness in
+the repository can do that today, so none of them can be run as written.
+
+**Context.** Two harnesses each cover half of it:
+
+- `e2e/agent-testing/coordinator-node-mail-fake.spec.ts` (to-do 2900, retired)
+  links two real `dev:test` profiles, the desk attaching the leaf over the
+  leaf's gateway, but drives Pi on a loopback model. Pi has no account
+  entries: `AGENT_ACCOUNT_PLATFORMS` in `packages/protocol/src/agent-accounts.ts`
+  is `claude` and `codex` only, so no stop is grouped by account and no
+  automatic switch is attempted.
+- `apps/backend/tests/account-switch-stack.ts` (with
+  `account-switch-stack-host.ts`, run by `mise run verify:accounts:resend-live`)
+  has fixture Claude and Codex accounts, the pinned CLIs pointed at a loopback
+  model (`ANTHROPIC_BASE_URL`, Codex `openai_base_url` and `chatgpt_base_url`)
+  and scripted usage readings. It runs one in-process `OrkestratorBackend`
+  under a throwaway HOME and answers the usage reads by replacing the global
+  `fetch`, because `plan-usage.ts` hard-codes `CLAUDE_USAGE_URL` and
+  `CODEX_USAGE_URL`.
+
+**Investigation.** Checked 2026-11-11. Every file the tasks below name still
+exists on `main`, and the in-process evidence still holds:
+`coordinator-notice-hierarchy.test.ts`, `coordinator-notice-sources.test.ts`
+and `coordinator-usage-limit-account-routing.test.ts` pass (84 tests). A
+`dev:test` backend is a separate process, so the stack's `fetch` replacement
+cannot reach it; started with fixture accounts as it is, its usage reads would
+go to the real Anthropic and OpenAI hosts with fixture tokens, which these runs
+must not do. What the harness needs:
+
+1. A way for an agent-test profile's backend to read usage from a loopback
+   origin. Refused outside agent-test profiles, so a production backend can
+   never be pointed elsewhere.
+2. Each profile's Claude (or Codex) configuration, in its isolated credential
+   home and never `~/.claude` or `~/.codex`, naming the loopback model, with
+   two fixture accounts on the leaf (one limited) and, for task 3, the same
+   login under a second entry plus one with headroom on the desk.
+3. A scripted model that refuses with the provider's usage-limit error for the
+   limited account, answers the others, and drives the leaf's coordinator to
+   call `launch_environment` so a delegated worker exists.
+4. A build pipeline started on the leaf with the limited account (through the
+   `orkestrator` CLI against the leaf profile), so a pipeline worker stops too.
+5. The link setup and content-free summary of
+   `coordinator-node-mail-fake.spec.ts`, reused rather than copied.
+
+**Decisions.**
+
+- **Where should the usage endpoints come from on a profile?**
+  - **An agent-test-only override read at backend start (recommended).** The `dev:test` launcher passes a loopback origin, and the backend honours it only when the profile is an agent-test profile.
+    - Pros: tests the real separate-process backends the tasks ask for; the same seam serves any later two-node account check.
+    - Cons: a production code path, however gated, that needs its own test proving it is refused outside agent-test profiles.
+  - **Two in-process backends in one test process, linked over loopback HTTP, with the stack's `fetch` replacement.**
+    - Pros: no production change; reuses the stack almost whole.
+    - Cons: one process shares HOME, globals and the replaced `fetch`, so it is closer to the in-process worlds already tested than to two machines; a leaf restart (task 4) is not a process restart.
+- **Which platform?**
+  - **Claude (recommended).** Its refusal shape and usage reading are already scripted in the stack, and its CLI reads `ANTHROPIC_BASE_URL`.
+    - Pros: least new scripting.
+    - Cons: the coordinator turn that calls `launch_environment` needs Anthropic tool-use responses scripted, which the stack does not have yet.
+  - **Codex.**
+    - Pros: also scripted in the stack.
+    - Cons: two base URLs to point and a JWT fixture per account; no simpler.
+
+### 2. A leaf's usage-limit stops reach the command node's coordinator, once and grouped
 
 **Problem.** A session that stops on a usage limit on a leaf should produce
 one notice, at the command node's main coordinator for that repository (not
@@ -42,8 +108,8 @@ stops are grouped by account and window in
 "Usage-limit stop notices") and [command-nodes.md](../../architecture/command-nodes.md)
 (Leaf mode).
 
-**Investigation.** Not run. Steps the acceptance record gave, on throwaway
-`dev:test` profiles only:
+**Investigation.** Not run: it needs the harness from task 1. Steps the
+acceptance record gave, on throwaway `dev:test` profiles only:
 
 1. Link a leaf profile to a command-node profile that has the same repository.
 2. On the leaf, run a native tab, a delegated worker and a pipeline worker on
@@ -63,7 +129,7 @@ stops are grouped by account and window in
     - Pros: end to end, including the provider's own refusal.
     - Cons: needs an exhausted subscription at the moment of the run, as 1250 does.
 
-### 2. A command node's coordinator on the limited login moves first
+### 3. A command node's coordinator on the limited login moves first
 
 **Problem.** When the receiving coordinator runs on the limited account,
 including the same login under another machine's entry (same provider and
@@ -77,7 +143,7 @@ machines.
 (production callbacks in `coordinator-usage-limit-account-routing.ts`). A move
 it cannot make keeps the notice with a reason (AC14).
 
-**Investigation.** Not run. Repeat task 1 with the command node's coordinator
+**Investigation.** Not run (depends on task 2). Repeat task 2 with the command node's coordinator
 on the same login as the leaf's limited account, under a different account
 entry, and a second login with headroom on the command node. Confirm the
 command node moves to the second login before the coordinator's turn, and
@@ -86,14 +152,14 @@ that nothing is pinned afterwards.
 **Decisions.**
 
 - **Where to run it?**
-  - **The same two profiles as task 1, straight after it (recommended).**
+  - **The same two profiles as task 2, straight after it (recommended).**
     - Pros: the setup is already in place; one run covers both.
     - Cons: needs a second login with headroom on the command node.
   - **Join to-do 0722's two-machine batch (0722 retired 2026-11-10; its runs are in the manual-test checklist, 7568).**
     - Pros: shares the cost with the other cross-machine account checks.
     - Cons: waits on that batch.
 
-### 3. A stop raised while the link is down arrives once after a leaf restart
+### 4. A stop raised while the link is down arrives once after a leaf restart
 
 **Problem.** A notice raised while the leaf's link to the command node is down
 should arrive once after reconnect, and survive a leaf backend restart in
@@ -105,7 +171,7 @@ in-process links have shown this.
 `nodes/node-mail-collector.ts`, under durable request ids per notice and per
 stop group; a retried notice keeps its first rendering.
 
-**Investigation.** Not run. Repeat task 1 with the link down when the stops
+**Investigation.** Not run (depends on task 2). Repeat task 2 with the link down when the stops
 happen, stop and start the leaf profile's backend, then restore the link.
 Confirm the command node's coordinator gets the notice exactly once.
 
@@ -119,12 +185,29 @@ Confirm the command node's coordinator gets the notice exactly once.
     - Pros: keeps the command node running.
     - Cons: a host firewall change, which these runs should not make.
 
+## Assumptions and decisions
+
+### Task 1: added as a prerequisite rather than run as written (2026-11-11)
+
+Ticket "To-dos 5000 + 7542" asked for every task an agent can finish on this
+machine. Tasks 2 to 4 cannot be run without new harness code: the only
+two-backend harness drives Pi, which has no accounts, and the only scripted
+account stack is in-process. Building that harness is a feature of its own, so
+it is recorded here as task 1 with what it needs, and the file stays
+`backlog`: an agent can start task 1 now, and nothing in it needs the user. No
+item was added to the manual-test checklist, because the scripted run proves
+the routing and grouping, and the real provider's refusal is already there
+from retired to-do 1250.
+
 ## Constraints and rationale
 
 - Use only isolated `dev:test` profiles and a fixture repository; never a
   production instance or its data directory.
 - Record no prompts, notice bodies or account emails in evidence; counts,
   routes and request-id equality are enough.
+- No billed turn, no real login and no real provider endpoint: fixture
+  accounts and loopback servers only, and never `~/.claude`, `~/.codex` or the
+  real data directory.
 
 ## Related
 

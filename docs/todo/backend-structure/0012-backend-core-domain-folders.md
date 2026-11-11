@@ -13,7 +13,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
-6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11 and are tracked in [7800](7800-domain-folders-without-index.md).
+6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11; to-do 7800 (retired 2026-11-11) gave each an `index.ts` and both lint patterns (see "Current state").
 7. **Open questions**: where `keyed-record-format.ts` and `pi-model-catalog-seeding.ts` go, and whether `storage` and `native-agent` move before or after their splits. Status: partly done (the 0009/0010 splits have landed).
 
 ### 1. Wave 1 (leaves)
@@ -198,8 +198,19 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `exec-control.js`, `operation-ledger.js` and `revisions.js`.
   `mcp-management/` needs none. That left no domain folder without an
   `index.ts` at the time except `permission-rules/` (2026-10-27), which was
-  missed; it and the later `opencode2/` and `self-improvement/` are tracked in
-  [7800](7800-domain-folders-without-index.md).
+  missed.
+- Done (to-do 7800, retired 2026-11-11, against `main` at `963ffa6ab`):
+  `core/permission-rules/`, `core/self-improvement/` and `core/opencode2/`
+  each have an `index.ts` and both lint patterns, and production importers
+  outside each folder go through it (11, 4 and 20 files). The four root
+  `opencode2-*.ts` files import `opencode2/index.js` like any other caller.
+  One leaf module is a named exception in the `apps/backend/src/**` pattern:
+  `opencode2/container-credentials.js`, imported directly by
+  `agent-accounts-containers.ts` and `portable-input-status.ts`, because
+  `opencode2/index.ts` reaches `agent-accounts-containers.ts` through
+  `host-launch.ts`. The `self-improvement/` patterns use `**` rather than `*`
+  so they also cover its `insights/` subfolder. See "Assumptions and
+  decisions".
 - Done (task 1's `http-bridge` slice, 2026-11-06, against `main` at
   `c1724ab7`): the 20 `http-bridge-*` source files and their 20 tests are in
   `core/http-bridge/` without the prefix (`http-bridge/provider.ts`,
@@ -380,6 +391,48 @@ Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
 task 1's `web-annotations` slice with the codemod fix from todo 7490
 (2026-11-11). The moves in waves 1 to 4 (tasks 1 to 4) were
 left open on purpose: they move many files that other work in flight touches.
+
+### To-do 7800: `index.ts` for `permission-rules/`, `self-improvement/` and `opencode2/`
+
+- Chosen: all three folders in one change (against `main` at `963ffa6ab`),
+  by the procedure's steps 3 to 5 with no file moves. 7800 recommended doing
+  `opencode2/` on its own or with the `opencode` slice because OpenCode 2
+  work was in flight; the ticket asked for all three, no open pull request
+  touched `opencode2/`, and each rewrite is a one-statement path change that
+  rebases easily. The four root `opencode2-*.ts` files stay where they are
+  (7800's recommendation) and go through `opencode2/index.js`.
+- Measured: production importers outside each folder were 11 files for
+  `permission-rules/` (9 symbols from 5 modules), 4 for `self-improvement/`
+  (3 symbols; one is an `import("…")` type expression in
+  `commands-context.ts`) and 20 for `opencode2/` (49 symbols from 15
+  modules). Each `index.ts` holds exactly those symbols, as named re-exports.
+- Named exception: `opencode2/container-credentials.js`. Routing
+  `agent-accounts-containers.ts` and `portable-input-status.ts` through
+  `opencode2/index.ts` added four `import/no-cycle` errors, because
+  `index.ts` reaches `agent-accounts-containers.ts` through `host-launch.ts`
+  (`pushedLoginHostFile`), and `agent-accounts-containers.ts` imports
+  `portable-input-status.ts`. Chosen as for the earlier slices: an exception
+  in the `apps/backend/src/**` pattern and a note in the `index.ts` header,
+  since breaking the cycle is a code move. `permission-rules/` and
+  `self-improvement/` need none, the storage layer included: neither
+  `index.ts` reaches storage.
+- `self-improvement/` has an `insights/` subfolder, and a `*` pattern does
+  not match below the first level (a probe import of
+  `self-improvement/insights/prepare.js` was not reported), so both of its
+  patterns use `**`. The other two folders have no subfolders.
+- Not routed through `index.ts`: co-located tests, `apps/backend/tests/**`,
+  `e2e/` and `bridges/` tests and fixtures, and
+  `apps/backend/scripts/self-improvement-scan-stall.ts` (a white-box
+  measurement script outside both lint overrides).
+- Lint checked with probe files (deleted): deep imports into all three
+  folders are reported under both overrides, `index.js` is not, the
+  `container-credentials.js` exception is not reported under
+  `apps/backend/src/**` and is under `tests/unit/**`, and
+  `@orkestrator/protocol/permission-rules` and
+  `@orkestrator/protocol/self-improvement` (single segments) are not.
+- 7800 had one task, so it is retired; its row is gone from the folder
+  index, the counts are updated, and `linting.md` ("Module boundaries") lists
+  the three folders.
 
 ### Task 1: `web-annotations` as the next slice
 
@@ -731,8 +784,10 @@ Rules that keep slices safe:
   the storage repositories and native agent collaborators (todos 0009 and
   0010).
 - [`linting.md`](../../development/linting.md) ("Module boundaries").
-- [7800](7800-domain-folders-without-index.md): `index.ts` and lint patterns
-  for `permission-rules/`, `opencode2/` and `self-improvement/`.
+- To-do 7800 (retired 2026-11-11; read it with
+  `git show 963ffa6ab:docs/todo/backend-structure/7800-domain-folders-without-index.md`):
+  `index.ts` and lint patterns for `permission-rules/`, `opencode2/` and
+  `self-improvement/`.
 
 ## Replaces
 

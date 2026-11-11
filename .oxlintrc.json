@@ -384,6 +384,22 @@
                   "!**/web-annotations/tools.js"
                 ],
                 "message": "Import the web-annotations domain through web-annotations/index.js."
+              },
+              {
+                "group": ["**/permission-rules/*", "!**/permission-rules/index.js"],
+                "message": "Import the permission-rules domain through permission-rules/index.js."
+              },
+              {
+                "group": ["**/self-improvement/**", "!**/self-improvement/index.js"],
+                "message": "Import the self-improvement domain through self-improvement/index.js."
+              },
+              {
+                "group": [
+                  "**/opencode2/*",
+                  "!**/opencode2/index.js",
+                  "!**/opencode2/container-credentials.js"
+                ],
+                "message": "Import the opencode2 domain through opencode2/index.js."
               }
             ]
           }
@@ -472,6 +488,27 @@
                   "!**/backend/src/core/web-annotations/index.js"
                 ],
                 "message": "Import the web-annotations domain through web-annotations/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/permission-rules/*",
+                  "!**/backend/src/core/permission-rules/index.js"
+                ],
+                "message": "Import the permission-rules domain through permission-rules/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/self-improvement/**",
+                  "!**/backend/src/core/self-improvement/index.js"
+                ],
+                "message": "Import the self-improvement domain through self-improvement/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/opencode2/*",
+                  "!**/backend/src/core/opencode2/index.js"
+                ],
+                "message": "Import the opencode2 domain through opencode2/index.js."
               }
             ]
           }

@@ -29,7 +29,7 @@ import {
 } from "./bug-report-runtime.js";
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { createSelfImprovementService } from "./commands-registry-self-improvement.js";
-import type { SelfImprovementService } from "./self-improvement/service.js";
+import type { SelfImprovementService } from "./self-improvement/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -226,7 +226,7 @@ import {
 } from "./native-agent-service.js";
 import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
 import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
-import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
+import { openCode2WorkerMailbox } from "./opencode2/index.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 import {
   createSessionTitleService,

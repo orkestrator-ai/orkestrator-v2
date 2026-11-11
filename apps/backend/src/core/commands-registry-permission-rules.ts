@@ -17,8 +17,7 @@ import {
   asRequiredBoolean,
   asString,
 } from "./commands-validation.js";
-import { listExternalPermissionRules } from "./permission-rules/external-rules.js";
-import type { PermissionRuleStore } from "./permission-rules/store.js";
+import { listExternalPermissionRules, type PermissionRuleStore } from "./permission-rules/index.js";
 
 /**
  * Orkestrator's own permission rules (todo 0723): list and remove them, and

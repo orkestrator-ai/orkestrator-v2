@@ -48,7 +48,7 @@ import {
   truncatedJoinedText,
   truncatedText,
 } from "../agent-provider-runtime.js";
-import { openCodeRuleDetail } from "../permission-rules/request-detail.js";
+import { openCodeRuleDetail } from "../permission-rules/index.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import { openCode2FormAnswer, openCode2FormCard, type OpenCode2FormCard } from "./forms.js";
 

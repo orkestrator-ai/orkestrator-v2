@@ -120,7 +120,7 @@ import { legacyCompatibilityCounts } from "./change-tracking/index.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionSnapshot } from "@orkestrator/protocol/agent-interactions";
-import type { PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
+import type { PermissionRuleEnforcer } from "./permission-rules/index.js";
 import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
   inferredComposerSelectionToPersist,

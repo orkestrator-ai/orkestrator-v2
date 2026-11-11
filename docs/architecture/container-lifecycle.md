@@ -1621,7 +1621,19 @@ least 2 GiB). The default contains a runaway environment — a leak or a fork
 bomb is killed inside its own cgroup instead of exhausting the VM or host,
 the backend and sibling environments; it is not a packing target, and the
 sum over environments may exceed the daemon. The measurements behind it are
-in [container-qualification.md](../development/container-qualification.md#workload-budgets).
+in [container-qualification.md](../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25).
+
+It is a preset capped at a fraction of the daemon's memory, not either alone.
+The experiment's fixed preset (2 CPUs, 4 GiB, 1,024 PIDs) broke the heavy
+browser workload on Docker Desktop with OOM kills, page crashes and failed
+rounds, and a pure fraction would give a 32 GiB Linux host a 24 GiB
+"budget" that contains nothing. The cap keeps one environment from
+exhausting a small Desktop VM. The margin on Desktop's heavy-browser case is
+thin (5,885 MiB peak against 5,888 MiB, with reclaim): a heavier browser
+load would fail inside its own cgroup instead of taking the VM down. Long
+agent sessions, providers other than Claude Code, and repositories larger
+than this one were not measured. Rolling the default back is "No limits" in
+Settings, or all-`null` limits on an environment.
 
 An axis the daemon cannot enforce (support `false`, or unknown on a rootless
 daemon) is left off the default and reported in the policy's `unsupported`
@@ -1695,6 +1707,20 @@ not keep answering for a container that just ended. A memory update below curren
 | Follow record | 16 KiB, UTF-8 decoded incrementally | `ContainerLogService` |
 | Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
 | Followers | one per container, 16 per backend, 5 s idle grace, 60 s lease | `ContainerLogService` |
+
+Together these bound a runtime's diagnostic logs by construction, so nothing
+measures them live. Seven launch logs (the Claude, Codex, Cursor, Pi and Grok
+bridges and both OpenCode servers, the table in [The previous run](#the-previous-run))
+each hold at most the active file, its `.1` and `.2` rotations and one
+`.prev.log`: 4 × 5 MiB = 20 MiB, or 140 MiB for all seven. Docker's own log
+adds 10 MiB × 3, so a runtime holds at most about 170 MiB of diagnostic
+output (plus the writer's dropped-line markers), and a rebuild discards the
+`/tmp` copies. A live per-environment total would need a `docker exec` per
+environment, the polling cost
+[0020](../todo/containers-and-environments/0020-container-state-observation.md)
+works to remove, so it is not built while the bound holds (to-do 0022
+task 6, retired 2026-11-11). Revisit if a surface needs actual sizes, or when
+another launch log is added, which also raises this bound.
 
 Bridges and the OpenCode server start through `boundedBackgroundLaunch`: when
 the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer

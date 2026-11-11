@@ -291,6 +291,110 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Benchmarks on a saturated host (2026-11-11)
+
+To-do 0022 (retired 2026-11-11) task 5 asked whether the 5,000-file copy
+still meets its target, the condition for building an
+[in-process tar hasher](#optimisations-measured-and-not-taken). The baseline
+case (`container-benchmarks.test.ts -t "fresh environment, warm stop"`) ran
+once on beelink (16 CPUs, Docker Engine 29.9.2 rootful) with image
+`orkestrator-v2:dev-3f9489ce4342` (`main` at `498b6876`), under the built-in
+default (applied: no CPU cap, 8 GiB, 4,096 PIDs), Docker through
+`apps/desktop/scripts/dev/docker-qualification-bin`. Other builds saturated
+the host throughout: load average 56 at the start and 44–49 at the end, on
+a daemon shared with other worktrees' containers. beelink is not the
+reference host, so these numbers do not gate anything; they are recorded
+because they are the nearest the copy has come to its condition.
+
+| Measure | Target | Median (min–max) |
+| --- | --- | --- |
+| Fresh restricted environment to ready | ≤ 3 s | **8.94 s** (7.80–13.25 s): storage 1.44 s, create 1.02 s, gateway 2.39 s, runtime start 0.27 s, ready 2.49 s |
+| Incomplete fresh boots | none | none |
+| Docker calls per fresh environment | ≤ 27 | 19 (18–25) |
+| Three concurrent, slowdown | ≤ 1.5× | 1.02× |
+| Warm stop | ≤ 1 s | 0.47 s |
+| Warm start | ≤ 2 s | **2.04 s** (1.91–2.21 s) |
+| Rebuild copy and verify, 5,000 files | ≤ 20 s | **30.7 s** (30.4–31.3 s, n = 3); whole rebuild 40.9 s |
+| Rebuild copy and verify, 200 files | — | 2.9 s (n = 5) |
+| Docker calls per minute, view open | ≤ 36 | 24 |
+| Log followers after the idle grace | 0 | 0 |
+
+Every timed step slowed, not only the copy: fresh boots took about three
+times their target with the same 19 calls, and the copy ran at about 6.1 ms
+per file against 2.6–2.9 ms on the 4-CPU CI runners (2026-10-26). The copy's
+source side runs one `sha256sum` per tar member, 5,000 short-lived processes,
+which is the work a saturated host slows most, so this run is consistent with
+host contention rather than a regression. The condition for the hasher is
+unchanged (a miss on the reference host or the CI runners), and the weekly
+Linux Engine CI run is the next comparison.
+
+## UI response under multi-environment load, second busy-host run (2026-11-11)
+
+To-do 0022 (retired 2026-11-11) task 3, with the
+[probe](#ui-response-under-multi-environment-load) at `498b6876` and default
+options, after the [first run](#ui-response-under-multi-environment-load-first-run-on-a-busy-host-2026-11-01).
+Like that run it is a sample of a busy shared host, not a reference figure;
+a run on a quiet reference host is item "0022 (retired) task 3" in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs, 62 GiB),
+  Docker Engine 29.9.2 rootful. Other builds rose through the run: the load
+  average was 36.5, 44.6 and 57.7 at the three phase starts, and the host CPU
+  was 96.3–99.6% busy. Unlike the first run, the daemon was shared: 15–22
+  containers were running, of which 10 were this profile's.
+- **Image and profile:** `orkestrator-v2:dev-3f9489ce4342`, built from this
+  commit (so with the [stop fix](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)).
+  `dev:test --fixture-environments container --no-agent-credentials
+  --agent-platforms claude --headless` with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, Docker through
+  `apps/desktop/scripts/dev/docker-qualification-bin`. Three busy
+  environments, one target and the fixture container, all restricted and
+  under the built-in default (applied: no CPU cap, 8 GiB, 4,096 PIDs). No
+  provider turns.
+- **Load:** each busy container used 158–176% CPU in the busy phase and
+  0–11% in the idle phases.
+
+Medians with p95 in brackets, in milliseconds unless stated:
+
+| Measure | Idle 1 | Busy | Idle 2 |
+| --- | --- | --- | --- |
+| Row selected and painted | 7.0 (12.4) | 9.0 (12.9) | 9.3 (15.8) |
+| `<main>` settled after a switch | 261 (367) | 504 (959) | 270 (413) |
+| Frame interval; stalls over 50 ms | 16.7 (16.8), max 33.3; 0 | 16.7 (16.8), max 83.3; 3 | 16.7 (16.8), max 66.7; 2 |
+| Long tasks | 0 | 1 (58 ms) | 2 (153 ms in all) |
+| Timer lag (250 ms timer) | 0.2 (2.6) | 0.7 (15.1) | 0.9 (12.7) |
+| `get_environments` round trip | 7.1 (23.0) | 14.9 (73.6) | 11.5 (51.1) |
+| `stop_environment` round trip | 1.43 s (1.57 s) | 1.93 s (2.38 s) | 1.42 s (1.58 s) |
+| `start_environment` round trip | 5.3 s (5.5 s) | 6.1 s (6.3 s) | 5.5 s (8.1 s) |
+| Sidebar after the stop reply | 64 (71) | 72 (97) | 69 (80) |
+| Sidebar after the start reply | 2 (55) | 50 (116) | −22 (84) |
+
+The first visit to each environment: selected in 11.5 ms and settled in
+148 ms (medians of 4). There were no failures, missed signals or renderer
+reloads. The one dialog dismissed was "Claude Code Is Not Logged In". It
+opened after the environments were created, past the probe's startup check,
+and its overlay swallowed the first switch's clicks. The probe now dismisses
+any open dialog again before its first click and at each phase start, and
+reports it as before.
+
+What the two runs show:
+
+- **Stops are fixed in the real stack.** `stop_environment` from the page
+  took 1.3–2.4 s in every phase, against 10.5–11.6 s on 2026-11-01. That
+  confirms [2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md)'s
+  drain change through the gateway and the page.
+- **The renderer holds up.** Selection painted within a frame in every phase
+  of both runs. This run had a few stalls and long tasks, as many in the
+  second idle phase as in the busy one, while the host load kept rising, so
+  they follow the host rather than the containers.
+- **The backend's busy-phase slowdown recurs but is not attributed.**
+  `get_environments` rose 1.3–2.1× against the idle phases (1.4–1.5× on
+  2026-11-01) and `start_environment` 1.10–1.13× (1.24–1.27×). Both runs had
+  a saturated host, and this one shared its daemon, so neither separates the
+  containers' cost from the other builds'. `<main>` settle times also roughly
+  doubled in the busy phase this time, where the first run's idle phases
+  differed more than idle and busy did.
+
 ## Egress name checks on rootless Docker (2026-11-10)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -1647,8 +1751,8 @@ deadline without requiring an image.
 
 ## UI response under multi-environment load, first run on a busy host (2026-11-01)
 
-Todo [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md)
-task 3, with the [probe](#ui-response-under-multi-environment-load) at
+To-do 0022 (retired 2026-11-11) task 3, with the
+[probe](#ui-response-under-multi-environment-load) at
 `5616f272`. This is a first sample on a busy shared host, not a reference
 figure.
 
@@ -2037,6 +2141,112 @@ built by `mise run docker:build:dev --profile todo0058` before and after the
   to-do 0241, retired 2026-11-10),
   including the new case and C16's symlinked-root refusal. The live data
   contracts suite passed 2/2.
+
+## Workload budgets and the built-in default (2026-10-25)
+
+To-do 0022 (retired 2026-11-11) chose the
+[built-in default](../architecture/container-lifecycle.md#built-in-default)
+from these runs of the [workload harness](#workload-budgets) and the
+[benchmarks](#benchmarks). Both machines were busy with other work during
+every run, so the timings are noisy. The Mac's load average was about 50 on
+18 cores (other worktrees' test suites). The Linux host was at about 8 on 12
+threads (the user's own Bun processes). Memory and PID peaks, OOM kills and
+failures are robust; wall times are not. Peaks are the kernel's
+`memory.peak` (which includes reclaimable page cache) and the sampler's
+anonymous and `shmem` maxima. "Budget" is the experiment budget of 2 CPUs,
+4 GiB and 1,024 PIDs.
+
+Provider turns ran the real Claude Code CLI with real Bash and Read tool
+calls (four per turn) against a loopback mock of the Messages API answering
+in 1 s, because no credentials were available. That measures the CLI's
+process, tools and streaming, not model output, a bridge or another
+provider. Authenticated turns through each bridge under the default are
+item "0022 (retired) task 4" in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+**Docker Desktop 29.9.2, arm64.** The VM has 18 CPUs and 7.75 GiB, so the
+default there is 5,888 MiB and 4,096 PIDs. Image `orkestrator-v2:q0022-arm64`.
+Reports: `output/benchmarks/workload-desktop-arm64*.json` on that machine.
+
+| Workload | Condition | Wall | Peak MiB (anon / shmem) | PIDs | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Browser, 3 × 2 heavy pages | unrestricted | 14.5 s | 6,046 (4,141 / 1,762) | 379 | clean |
+| | budget | 47.7 s | 4,096 (limit) | 373 | **2 OOM kills, 2 page crashes, 8 of 24 rounds failed** |
+| | default | 11.9 s | 5,885 (4,033 / 1,741) | 377 | clean |
+| Browser, 1 × 2 pages | unrestricted / budget / default | 9.8 / 14.9 / 10.3 s | 2,346 (1,706 / 616) | 136 | clean |
+| Provider, 3 CLIs × 3 turns, 36 tool calls | all three | 17.0–17.2 s | 738 (366 / 0) | 57–110 | clean |
+| Build: install, typecheck, Vite | unrestricted | 31 s | 4,777 (2,481 / 0) | 206 | clean |
+| | budget | 24 s | 3,724 (1,778 / 0) | 67 | clean |
+| | default | 54 s | 4,230 (2,238 / 0) | 214 | clean |
+| Combined: build, 1 browser, 2 CLIs | unrestricted | 35.1 s | 4,846 (2,925 / 595) | 392 | clean |
+| | budget | 41.4 s | 4,096 (limit, reclaiming) | 203 | clean |
+| | default | 66.6 s | 5,144 (2,993 / 586) | 387 | clean |
+
+CPU only (2 CPUs, no memory or PID limit), three interleaved repeats: the
+one-browser round median rose from 2.55–2.64 s to 3.69–4.57 s, every time.
+The build showed no consistent difference (typecheck 10.3–20.3 s against
+10.0–11.4 s, Vite 4.4–7.6 s against 3.9–5.6 s): its tools finish in seconds
+and contention dominates.
+
+**Linux Engine 29.9.1 rootful, amd64.** omarchy-hp, kernel 7.2.8, 12
+threads, 31 GiB, cgroup v2, systemd driver, driven from the Mac with
+`DOCKER_HOST=ssh://`. The default there is 8,192 MiB and 4,096 PIDs. The
+image was the host's own `orkestrator-v2:dev-f7622900ba3f` (2026-09-28): its
+disk had 12 GB free, too little to load a 6 GB current image. That image
+ships Bun 1.4.2, so the build workload installed the checkout's Bun 1.4.4
+first, untimed (report field `bunReplaced`), and its Chromium and CLI
+versions are older than the branch's.
+
+| Workload | Condition | Wall | Peak MiB (anon / shmem) | PIDs | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Browser, 3 × 2 heavy pages | unrestricted | 113 s | 5,463 (3,683 / 0) | 292 | clean |
+| | budget | 326 s | 4,096 (limit, 18,115 reclaim events) | 294 | clean, 2.9× slower |
+| | 8 GiB / 4,096 | 183 s | 5,708 (3,872 / 0) | 282 | clean |
+| Browser, 1 × 2 pages | all three | 67–97 s | 1,834–2,014 (≤ 1,394 / 0) | 104 | clean |
+| Provider, 3 CLIs × 3 turns | all three | 19.6–20.6 s | 692 (303 / 0) | 57–94 | clean |
+| Build: install, typecheck, Vite | unrestricted | 24 s | 4,476 (2,282 / 0) | 168 | clean |
+| | budget | 35 s (typecheck 15.1 s against 6.5 s) | 4,096 (limit) | 69 | clean |
+| | 8 GiB / 4,096 | 25 s | 4,496 (2,304 / 0) | 154 | clean |
+| Combined: build, 1 browser, 2 CLIs | unrestricted | 45.0 s | 6,284 (3,476 / 0) | 271 | clean |
+| | budget | 85.9 s | 4,096 (limit) | 173 | clean, 1.9× slower |
+| | 8 GiB / 4,096 | 47.8 s | 5,997 (3,203 / 0) | 263 | clean |
+
+On amd64 the same Chromium pages used no `shmem` at all; a direct write to
+`/dev/shm` there is accounted (200 MB showed as 200 MB), so this is a real
+platform difference, not a sampler gap. On arm64 Desktop the browser held up
+to 1.8 GB of `shmem`. That is more than the 1 GiB `/dev/shm` mount, so it
+includes memfd shared memory, which counts against the memory limit as well.
+
+**Enforcement.** All three daemons report CPU, memory and PID support:
+Desktop's VM, rootful Engine, and omarchy-hp's rootless Engine (systemd
+driver, `cpu memory pids` delegated). On the rootless daemon, a container
+started with the default's arguments read `memory.max` 8 GiB,
+`memory.swap.max` 0, `pids.max` 4096 and `cpu.max` unlimited. Its throwaway
+`busybox` image was removed afterwards, leaving the daemon empty, as it was
+found. Rootless without delegation is covered by unit tests: the default
+creates with no limits and reports the axes.
+
+**Benchmarks, Docker Desktop 29.9.2 arm64**, 18 CPUs, image
+`orkestrator-v2:q0022-arm64`, against the targets of the day (the calls
+target was 21 before [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+re-baselined it for the egress gateway):
+
+| Measure | Target | Built-in default | Unrestricted |
+| --- | --- | --- | --- |
+| Fresh restricted environment to ready | ≤ 3 s | 2.75 s | 2.56 s |
+| Incomplete fresh boots | none | none | none |
+| Docker calls per fresh environment | ≤ 21 | 15 | 15 |
+| Three concurrent, slowdown | ≤ 1.5× | 1.22× | **1.60×** |
+| Warm stop | ≤ 1 s | 0.59 s | 0.61 s |
+| Warm start | ≤ 2 s | 1.60 s | 1.62 s |
+| 5,000-file copy and verify | ≤ 20 s | 17.5 s | 19.0 s |
+| Docker calls per minute, view open | ≤ 36 | 24 | 24 |
+| Followers after grace | 0 | 0 | 0 |
+
+The unrestricted run missed the concurrency target once, on the Mac at load
+average about 50. Unrestricted is the behaviour before the default, and the
+run under the default on the same host met it. Both runs are recorded, not
+re-run until they pass.
 
 ## Egress gateway on Docker Desktop (2026-10-25)
 
@@ -2650,6 +2860,69 @@ headroom.
 Never clear a user's global Docker or cache state to manufacture a cold run;
 "cold" means a new network, volumes and staged inputs per environment.
 
+The reference host for these targets is Linux Engine amd64. Docker Desktop
+and arm64 figures are recorded for comparison and are not separate gates:
+Desktop met every target under the built-in default, so per-platform
+targets would add a table without changing a decision. Revisit that if CI
+arm64 or Desktop misses repeatedly on a quiet host.
+
+### Optimisations measured and not taken
+
+Each of these was measured against a stated condition (to-do 0022, retired
+2026-11-11) and not built. Revisit one only when its condition is met; a
+benchmark miss under the merge-gate rule above is fixed or explained before
+merging, and the matching entry here is the first candidate.
+
+- **An in-process tar hasher on the copy's source side.** `copy_stream`
+  (`docker/orkestrator-migrate.sh`) hashes each tar member with its own
+  `sha256sum`; the destination already batches 256 files per call. Revisit
+  when `rebuild.medium.copying` misses 20 s on the reference host or the CI
+  runners. Measured: 17.5 s under the default and 19.0 s unrestricted on
+  Docker Desktop arm64 at load average about 50 (3.5–3.8 ms per file, both
+  sides); 13.0–15.0 s on the 4-CPU CI runners (2026-10-26); 30.7 s on
+  beelink saturated by other builds, where every other timed step also
+  missed (2026-11-11,
+  [Benchmarks on a saturated host](#benchmarks-on-a-saturated-host-2026-11-11)).
+  The last is not the reference host and does not meet the condition, but
+  the per-member processes are what a busy host slows most. A replacement
+  needs its own safety review: the corruption, symlink-root and Git checks
+  must still pass.
+- **Bun download-cache BuildKit mounts in `docker/Dockerfile`.** The bridge
+  `bun install` layer re-ran cold in a local rebuild in 5.5 s (2026-10-25,
+  Desktop arm64). It re-runs only when the lockfile, `patches/` or a
+  workspace `package.json` changes, because the source is copied after it,
+  and CI release builds start without the mount cache anyway. About 5 s per
+  dependency change does not pay for the build-cache disk growth and the
+  extra Dockerfile syntax.
+- **Environment-private dependency cache volumes.** A cold `bun install` of
+  this repository (941 packages) in a fresh container took 8.0–19.6 s on
+  Desktop and 10.3–11.0 s on Linux; a warm reinstall from the container's
+  cache took 1.2–2.2 s and 2.6–3.1 s. Downloads cost about 7–17 s once per
+  new environment (`node_modules` lives in the workspace volume, which
+  preserving rebuilds copy), so they do not dominate an environment's life.
+  Sharing a cache across environments would also need cache-poisoning and
+  concurrency analysis.
+- **Faster usage samples.** A sample took 2.0 s (median; Desktop arm64, 8
+  running containers), nearly all of it `docker stats --no-stream`'s own CPU
+  interval. Samples are shared, the visible refresh is 5 s, and the Docker
+  view costs 24 calls a minute against a target of 36.
+- **Reusing verified input revisions.** Staging sits inside the create step
+  and is not a dominant phase. If revisited, revocation must bypass the
+  cache, and size or time alone is not proof that secret or configuration
+  contents are unchanged.
+- **A Docker events watcher for status sampling.** The sampler costs three
+  calls per sample whatever the environment count, and the 3 s status cache
+  already batches `docker ps`. Events would only ever be hints: a full owned
+  snapshot after every gap, with periodic reconciliation kept as the repair
+  path.
+- **A snapshot or reflink copy fast path.** It is not portable across Engine
+  and Desktop storage drivers, and the verified streaming copy is the
+  contract.
+
+Never weaken the separate-candidate-copy guarantee for speed: running setup
+against the only source volume is not an acceptable shortcut. Rolling back
+an optimisation must leave the storage and lifecycle contract intact.
+
 ### Workload budgets
 
 `container-workload-budget.ts` measures realistic workloads in fresh
@@ -2690,7 +2963,7 @@ has sizes, counts and durations only. Containers are labelled
 The built-in default ([container-lifecycle.md](../architecture/container-lifecycle.md#built-in-default))
 was chosen from the 2026-10-25 runs on Docker Desktop arm64 and Linux
 Engine amd64. Their results are in
-[0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md#evidence-2026-10-25).
+[Workload budgets and the built-in default](#workload-budgets-and-the-built-in-default-2026-10-25).
 Rerun them when a workload grows (a new browser default, a heavier build),
 before you change the default.
 
@@ -2717,8 +2990,10 @@ mise run dev:stop --profile ui-load && mise run dev:reset --profile ui-load
 
 It adds `--environments` container environments (`ui-load-busy-N`) and a
 `ui-load-target` to the fixture project, and signs a headless Chromium in
-through `dev:login`. Startup dialogs such as "Claude Code Is Not Logged In"
-are dismissed for that page only. In each `busy` phase, every
+through `dev:login`. Dialogs such as "Claude Code Is Not Logged In" are
+dismissed for that page only, while the shell loads, again before the first
+click (some open only once the environments exist) and at each phase start;
+the report lists their titles. In each `busy` phase, every
 `ui-load-busy-N` container runs a load through `docker exec`, and only after
 its `environment-id` label has been checked. The load is `--workers` shell
 spin loops (one CPU each), a workspace file rewritten every second, and an

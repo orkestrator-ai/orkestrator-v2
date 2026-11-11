@@ -35,6 +35,29 @@ the aggregate runner reran it alone (0.6 to 2.2 s). A second complete
 `mise run test` on the same tree passed (exit 0, 265.4 s) with no
 `maintenance.lock` error.
 
+## Recurrence 2026-11-11
+
+- **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; `mise run flaky:recurrence -- 9936 --base 498b68766…` answered `open`.
+- **Observed head:** `coordinator-tab-groups-93e8abebd558-r1` at `1dffbbfac`, a
+  renderer layout-store fix plus a plan-usage URL seam. It does not touch the
+  fixture or the failing tests.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-skip-guards -- mise run test`
+  on macOS, on a host shared with other worktrees' suites (1400.9 s; the
+  runner's own reruns queued for host capacity and ran out of their 600 s
+  budget).
+- **Tests:** `real scoped credentials prompt and launch jobs in leaf-only environments with durable delegations` (`control-mcp-node-auth.test.ts`),
+  `a command node's coordinator sending to a leaf > an agent tab there can open the image from the path its own node wrote` (`coordinator-mail-attachments-nodes.test.ts`),
+  `tickets on a leaf > a ticket created for a leaf is on the board and on the leaf under one id, and its build runs there` (`coordinator-node-tickets.test.ts`)
+  and `one failing delegation > does not stop the wakes behind it` (`coordinator-delegation-wakes.test.ts`),
+  each with the same `ENOENT … .git/objects/maintenance.lock` at about 190 to 410 ms
+  (backend 18,326 passed and 4 failed).
+- **Isolated reruns:** `bun --cwd=apps/backend test` on the three files plus
+  `coordinator-delegation-wakes.test.ts` with `--parallel=2` failed the first
+  two again with the same error (75 pass, 2 fail); `coordinator-delegation-wakes` passed in that run;
+  each of the other three alone with `--parallel=1` passed (1.5 s, 4.8 s,
+  2.1 s). So two loaded files are
+  enough to hit it, which fits the hypothesis below.
+
 ## Hypothesis
 
 `committedCheckoutTemplate` runs `git commit` in the template. Git then

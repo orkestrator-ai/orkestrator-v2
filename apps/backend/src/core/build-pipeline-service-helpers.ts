@@ -502,7 +502,11 @@ export function resumePromptFor(
       }
       return "Resume creating the pull request from where you left off. Incorporate any messages sent while the pipeline was paused, push or prepare the branch as needed, and create the PR against the target branch if it is not already created. Do not ask questions; make sensible assumptions.";
     case "resolving-conflicts":
-      return `Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused and finish the conflict resolution. ${MERGE_RESOLUTION_VALIDATION_INSTRUCTION} Do not ask questions; make sensible assumptions.`;
+      return `Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused and finish the conflict resolution.
+
+${MERGE_RESOLUTION_VALIDATION_INSTRUCTION}
+
+Do not ask questions; make sensible assumptions.`;
     case "creating-environment":
     case "starting-environment":
     case "waiting-for-setup":

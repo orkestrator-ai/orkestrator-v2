@@ -1,0 +1,44 @@
+# Copy-plan deadline test sees both children close before its deadline
+
+- **ID:** 9979
+- **Status:** open
+- **Date observed:** 2026-11-11
+- **Test:** `copy plan > the deadline fails the step even when neither child can be seen to close`
+- **File:** `apps/backend/tests/container-replacement.test.ts:89`
+
+## Observation (2026-11-11)
+
+- **Runs:** branch `remove-opencode-v1-ff22e7ad1c79-r1`, base `5f4e27b1c`
+  (merge base with `main`), macOS host.
+  - Multi Review validation of commit `5a0b47a88` through `mise run
+    test:full` (the backend group's `test:workspace`, `--parallel=2`):
+    failed after 104.54 ms.
+  - The owning file alone, `mise run test:logged -- --name
+    container-replacement.test -- bun test --cwd apps/backend --preload
+    ../../tests/setup-node.ts ./tests/container-replacement.test.ts
+    --parallel=1`: failed once (106.72 ms) with the same diff.
+  - The test alone, `bun test --cwd apps/backend --preload
+    ../../tests/setup-node.ts ./tests/container-replacement.test.ts -t "the
+    deadline fails the step"`: passed three times in three runs.
+  - The implementation-stage run of `apps/backend/tests` (`--parallel=4`)
+    on the same branch also failed it once; it passed when rerun alone.
+- **Failure:** `expect(result).toEqual({ absent: false, output: "",
+  producerFailed: true, daemonUnavailable: false })` received the same object
+  with `refused: false` added.
+
+## Hypothesis
+
+The extra key means `pipeContainerPath` settled through `finish()` (both
+children reported `close`, which returns the `refused` field) rather than
+through the deadline's settle timer (which omits it). The fake Docker script
+(`sleep 8 &` then `exec sleep 8`) relies on the backgrounded `sleep` keeping
+the pipes open after `SIGKILL`, so `close` never fires. On a loaded macOS host
+both closes were seen within the 100 ms settle grace, so the step still failed
+at the deadline, but by the other path. The behaviour under test (the step
+fails within the deadline) held: the duration assertion did not fail.
+
+Not reproduced deterministically. The code under test
+(`apps/backend/src/core/container-replacement.ts`, `pipeContainerPath`) is
+not changed by the observing branch; that branch only changed the OpenCode
+`select` list of `replacementCopyPlan` and its expectation in the same test
+file.

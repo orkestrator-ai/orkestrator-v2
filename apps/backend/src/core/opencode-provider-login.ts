@@ -24,6 +24,7 @@ import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./opencode2/client.js";
 import {
   exportOpenCode2Logins,
+  openCode2RefreshLineageFile,
   keepActiveOpenCode2Credential,
   removeOpenCode2Credentials,
 } from "./opencode2/credentials.js";
@@ -342,7 +343,9 @@ export function createOpenCodeProviderLogin(
     const file = dependencies.loginExportFile(context);
     if (!file) return;
     try {
-      await dependencies.exportLogins(client, file, [providerId], signal);
+      await dependencies.exportLogins(client, file, [providerId], signal, {
+        lineageFile: openCode2RefreshLineageFile(context.storage.getDataDir()),
+      });
     } catch (error) {
       log.warn("login.export-failed", { error: formatLogError(error, { message: false }) });
       throw new Error(OPENCODE_LOGIN_EXPORT_FAILED_MESSAGE);

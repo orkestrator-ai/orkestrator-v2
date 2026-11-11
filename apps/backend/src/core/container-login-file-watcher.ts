@@ -8,7 +8,11 @@ import {
   type PushedLoginProvider,
 } from "./agent-accounts-containers.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
-import { exportOpenCode2Refreshes, runningOpenCode2HostClient } from "./opencode2/credentials.js";
+import {
+  exportOpenCode2Refreshes,
+  openCode2RefreshLineageFile,
+  runningOpenCode2HostClient,
+} from "./opencode2/credentials.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("docker");
@@ -32,9 +36,9 @@ const log = createLogger("docker");
  * signed out of Grok has the container's imported copy removed.
  *
  * OpenCode's host logins live in the OpenCode 2.x database, where 2.x
- * refreshes them; each pass first renews the file's older OAuth copies from a
- * running host 2.x server (`exportOpenCode2Refreshes`), so a refresh reaches
- * containers as a file change like any other.
+ * refreshes them; each pass first renews the file's older OAuth copies of the
+ * same login from a running host 2.x server (`exportOpenCode2Refreshes`), so
+ * a refresh reaches containers as a file change like any other.
  *
  * Pi reloads its auth file and OpenCode's OAuth plugins re-read theirs on
  * every request, so a running bridge uses the pushed login without a restart.
@@ -84,7 +88,10 @@ async function renewOpenCodeLoginsFromStore(context: CommandContext): Promise<vo
   const localServers = context.runtime?.localServers;
   const client = file && localServers ? runningOpenCode2HostClient(localServers) : undefined;
   if (!file || !client) return;
-  await exportOpenCode2Refreshes(client, file, AbortSignal.timeout(OPENCODE_RENEWAL_TIMEOUT_MS));
+  await exportOpenCode2Refreshes(client, file, {
+    signal: AbortSignal.timeout(OPENCODE_RENEWAL_TIMEOUT_MS),
+    lineageFile: openCode2RefreshLineageFile(context.storage.getDataDir()),
+  });
 }
 
 async function fileFingerprint(file: string): Promise<string> {

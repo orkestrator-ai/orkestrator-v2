@@ -13,8 +13,16 @@
  *   which `ContainerLoginFileWatcher` polls. That file is kept in step with
  *   the database here: a sign-in change writes the provider's entry (or
  *   removes it), and while a host 2.x server runs, a login 2.x has refreshed
- *   replaces the file's older copy ({@link exportOpenCode2Refreshes}). The
- *   database's first start still imports the file once (2.x behaviour).
+ *   replaces the file's older copy of the same login
+ *   ({@link exportOpenCode2Refreshes}). The database's first start still
+ *   imports the file once (2.x behaviour), and a database from before 1.x was
+ *   retired is reconciled with the file once (`credential-upgrade.ts`).
+ * - **Only the same login is renewed.** Development profiles have their own
+ *   databases and can share the user's file, so a refresh is exported only
+ *   onto an entry provably of the same login: the same account where both
+ *   name one, otherwise a refresh token this database has held (its
+ *   lineage, kept as one-way fingerprints in `refresh-lineage.json` beside
+ *   the database, never the tokens).
  *
  * The mapping between the two shapes is exactly 2.x's own import
  * (`packages/core/src/database/migration/20260805200742_import_legacy_credentials.ts`
@@ -27,7 +35,7 @@
  * Credential values are secrets: they are read from the 2.x server's own API
  * or the file and written to the other, never logged, returned or kept.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -356,9 +364,17 @@ export async function exportOpenCode2Logins(
   file: string,
   providerIds: readonly string[],
   signal?: AbortSignal,
+  options: { lineageFile?: string } = {},
 ): Promise<void> {
   const integrationIds = providerIds.map(assertProviderId);
   const store = await readStoreAsLegacyLogins(client, signal);
+  // What the file is about to hold is this database's own login.
+  if (options.lineageFile) {
+    await recordOpenCode2RefreshLineage(
+      options.lineageFile,
+      new Map(integrationIds.map((id) => [id, store.get(id)])),
+    );
+  }
   await updateLoginFile(file, (entries) => {
     let changed = false;
     for (const integrationId of integrationIds) {
@@ -379,19 +395,146 @@ export async function exportOpenCode2Logins(
   });
 }
 
+// ── refresh lineage ──────────────────────────────────────────────────────────
+
+/** Fingerprints kept per integration; a login rotates its refresh token at most this often between passes. */
+const MAX_LINEAGE_PER_INTEGRATION = 16;
+const MAX_LINEAGE_INTEGRATIONS = 128;
+const MAX_LINEAGE_FILE_BYTES = 256 * 1024;
+
+/** Where a data directory keeps its database's refresh lineage. */
+export function openCode2RefreshLineageFile(dataDir: string): string {
+  return path.join(dataDir, "opencode2", "refresh-lineage.json");
+}
+
+/** A one-way fingerprint of a refresh token: enough to recognise it, never to use it. */
+export function openCode2RefreshFingerprint(refresh: string): string {
+  return createHash("sha256")
+    .update("orkestrator-opencode2-refresh\0")
+    .update(refresh)
+    .digest("hex");
+}
+
+type Lineage = Map<string, string[]>;
+
+/** The lineage; a missing, unreadable or malformed file is empty, which only withholds renewals. */
+async function readLineage(file: string): Promise<Lineage> {
+  try {
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.size > MAX_LINEAGE_FILE_BYTES) return new Map();
+    const parsed = record(JSON.parse(await readFile(file, "utf8")));
+    const integrations = record(parsed?.integrations);
+    if (parsed?.version !== 1 || !integrations) return new Map();
+    const lineage: Lineage = new Map();
+    for (const [id, value] of Object.entries(integrations).slice(0, MAX_LINEAGE_INTEGRATIONS)) {
+      if (!PROVIDER_ID_PATTERN.test(id) || !Array.isArray(value)) continue;
+      const prints = value.filter(
+        (print): print is string => typeof print === "string" && /^[0-9a-f]{64}$/.test(print),
+      );
+      lineage.set(id, prints.slice(-MAX_LINEAGE_PER_INTEGRATION));
+    }
+    return lineage;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Add each OAuth login's refresh fingerprint; returns whether anything was added. */
+function extendLineage(
+  lineage: Lineage,
+  logins: ReadonlyMap<string, Record<string, unknown> | undefined>,
+): boolean {
+  let changed = false;
+  for (const [integrationId, login] of logins) {
+    if (login?.type !== "oauth" || !nonEmpty(login.refresh)) continue;
+    const print = openCode2RefreshFingerprint(login.refresh);
+    const prints = lineage.get(integrationId) ?? [];
+    if (prints.includes(print)) continue;
+    if (!lineage.has(integrationId) && lineage.size >= MAX_LINEAGE_INTEGRATIONS) continue;
+    lineage.set(integrationId, [...prints, print].slice(-MAX_LINEAGE_PER_INTEGRATION));
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * Add `logins` to the file's lineage (one read-modify-write at a time per
+ * file) and return the result. A failed write keeps what was read.
+ */
+async function extendLineageFile(
+  file: string,
+  logins: ReadonlyMap<string, Record<string, unknown> | undefined>,
+): Promise<Lineage> {
+  return serialized(file, async () => {
+    const lineage = await readLineage(file);
+    if (!extendLineage(lineage, logins)) return lineage;
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const staged = path.join(path.dirname(file), `.refresh-lineage.${randomUUID()}.tmp`);
+    try {
+      const integrations = Object.fromEntries(lineage);
+      await writeFile(staged, JSON.stringify({ version: 1, integrations }), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      await rename(staged, file);
+    } finally {
+      await rm(staged, { force: true });
+    }
+    return lineage;
+  });
+}
+
+/** Record logins this database holds as its own lineage. */
+export async function recordOpenCode2RefreshLineage(
+  file: string,
+  logins: ReadonlyMap<string, Record<string, unknown> | undefined>,
+): Promise<void> {
+  await extendLineageFile(file, logins);
+}
+
+/**
+ * Whether the file's OAuth entry is provably the store's own login: where
+ * both name an account (and an enterprise host), those decide; otherwise the
+ * entry's refresh token must be one this database has held.
+ */
+function sameOAuthLogin(
+  current: Record<string, unknown>,
+  login: Record<string, unknown>,
+  lineage: readonly string[],
+): boolean {
+  const host = (entry: Record<string, unknown>) =>
+    nonEmpty(entry.enterpriseUrl) ? entry.enterpriseUrl : "";
+  if (host(current) !== host(login)) return false;
+  if (nonEmpty(current.accountId) && nonEmpty(login.accountId)) {
+    return current.accountId === login.accountId;
+  }
+  // One side naming an account the other does not is not evidence either way.
+  if (current.refresh === login.refresh) return true;
+  return (
+    nonEmpty(current.refresh) && lineage.includes(openCode2RefreshFingerprint(current.refresh))
+  );
+}
+
 /**
  * Hand containers the OAuth logins 2.x has refreshed: an entry the file holds
- * as an older OAuth login of the same provider takes the store's tokens.
- * Nothing else is written, so two backends with their own stores sharing the
- * user's file (development profiles) only ever move it forward. Returns how
- * many entries were renewed.
+ * as an older copy of the same login (`sameOAuthLogin`) takes the store's
+ * tokens. Nothing else is written, so two backends with their own stores
+ * sharing the user's file (development profiles) only ever move their own
+ * login forward and never replace another's, whichever expires later. With
+ * no `lineageFile` only an account match or an unchanged refresh token
+ * proves a login. Returns how many entries were renewed.
  */
 export async function exportOpenCode2Refreshes(
   client: Pick<OpenCode2Client, "api">,
   file: string,
-  signal?: AbortSignal,
+  options: { signal?: AbortSignal; lineageFile?: string } = {},
 ): Promise<number> {
-  const store = await readStoreAsLegacyLogins(client, signal);
+  const store = await readStoreAsLegacyLogins(client, options.signal);
+  // Every refresh the store holds now joins its lineage first, so a rotated
+  // token is still recognised in the file after the next rotation.
+  const lineage: Lineage = options.lineageFile
+    ? await extendLineageFile(options.lineageFile, store)
+    : new Map();
   let renewed = 0;
   await updateLoginFile(file, (entries) => {
     for (const [integrationId, login] of store) {
@@ -400,6 +543,7 @@ export async function exportOpenCode2Refreshes(
         const current = record(entries[key]);
         if (current?.type !== "oauth" || !validExpiry(current.expires)) continue;
         if ((login.expires as number) <= current.expires) continue;
+        if (!sameOAuthLogin(current, login, lineage.get(integrationId) ?? [])) continue;
         entries[key] = {
           ...current,
           refresh: login.refresh,

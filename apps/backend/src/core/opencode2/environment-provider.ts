@@ -63,6 +63,11 @@ import { OPENCODE2_EVIDENCE_SCAN_LIMIT, OpenCode2Provider } from "./provider.js"
 import type { OpenCode2SessionState } from "./session-state.js";
 import type { OpenCode2CoordinatorAuthority } from "./coordinator.js";
 import type { OpenCode2WorkerMailbox } from "./turn-connections.js";
+import {
+  exclusiveOpenCode2Reload,
+  openCode2ReloadGateKey,
+  withinOpenCode2Dispatch,
+} from "./reload-gate.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
 import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
 
@@ -126,7 +131,7 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   readonly messageReadLimit = OPENCODE2_EVIDENCE_SCAN_LIMIT;
   /** Ids a tab or workflow holds, re-registered on a replacement server's provider. */
   private readonly liveSessions = new Set<string>();
-  private current: { generation: string; provider: OpenCode2Provider } | undefined;
+  private current: { generation: string; gateKey: string; provider: OpenCode2Provider } | undefined;
   private disposed = false;
 
   readonly interactions: AgentInteractionProviderCapability;
@@ -165,9 +170,9 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
     label: string,
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
-    const id = await (
-      await this.required()
-    ).createSession(phase, label, this.withDefaults(options));
+    const id = await this.dispatching((provider) =>
+      provider.createSession(phase, label, this.withDefaults(options)),
+    );
     this.liveSessions.add(id);
     return id;
   }
@@ -175,7 +180,7 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   async prepareDispatch(sessionId: string, options?: ProviderPrepareDispatchOptions) {
     // The cold start (spawn and readiness) and the MCP registrations belong
     // before the at-most-once window.
-    return (await this.required()).prepareDispatch(sessionId, options);
+    return this.dispatching((provider) => provider.prepareDispatch(sessionId, options));
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
@@ -187,7 +192,9 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
       const reply = idleSteerPromptReply(prompt, "OpenCode");
       if (reply) throw new PromptRejectedError(reply);
     }
-    return (await this.required()).send(sessionId, prompt, this.withDefaults(options));
+    return this.dispatching((provider) =>
+      provider.send(sessionId, prompt, this.withDefaults(options)),
+    );
   }
 
   async dispatchStatus(sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
@@ -338,8 +345,35 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
       : { enhanced: true, commands: [], status: "stale" };
   }
 
+  /**
+   * The composer's explicit refresh. The server runs without file watchers
+   * (`server.ts`), so a running location never re-reads command files added
+   * or edited since it loaded; only a location reload does. An idle server is
+   * reloaded first, under the same gate as an MCP reload (it cancels pending
+   * permissions and forms, so never while any session on the server runs);
+   * a busy one is only re-read and says so.
+   */
   async refreshCommands(_sessionId?: string): Promise<ProviderCommandRefreshResult> {
-    return (await this.required()).refreshCommands();
+    const provider = await this.required();
+    // A coordinator's server offers no commands; nothing to reload for it.
+    if (provider.coordinator) return provider.refreshCommands();
+    const key = this.current?.gateKey;
+    const reload = key
+      ? await exclusiveOpenCode2Reload(key, async () => {
+          if (await provider.serverBusy()) return "busy" as const;
+          await provider.reloadLocations();
+          return "reloaded" as const;
+        })
+      : ("busy" as const);
+    const result = await provider.refreshCommands();
+    if (result.outcome !== "reread") return result;
+    return reload === "reloaded"
+      ? { outcome: "reloaded" }
+      : {
+          outcome: "reread",
+          message:
+            "OpenCode is busy, so command files changed since it started may not be listed yet. Refresh again once its sessions are idle.",
+        };
   }
 
   async slashCommands(sessionId?: string) {
@@ -350,19 +384,25 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
    * A settings edit to the user's MCP servers, applied to a running server:
    * its mirrored configuration is rewritten and every loaded location
    * rebuilt (`POST /api/location/reload`). That cancels pending permissions
-   * and forms, so a server with any session at work answers `busy`.
+   * and forms of every session on the server, and the server is shared with
+   * the environment's other providers (pipelines, reviews, graphs, suborks).
+   * So it runs under the server's reload gate (`reload-gate.ts`): `busy`
+   * while any provider's dispatch is open or any session on the server has a
+   * run, and no dispatch starts until it is done.
    */
   async reloadMcpConfiguration(): Promise<"reloaded" | "not-running" | "unsupported" | "busy"> {
     const connection = await this.deps.connection({ start: false });
     if (!connection) return "not-running";
     const provider = await this.observed();
     if (!provider) return "not-running";
-    if (!connection.refreshConfiguration) return "unsupported";
-    const activity = await provider.activityBatch([...this.liveSessions]);
-    if ([...activity.values()].some((state) => state !== "idle")) return "busy";
-    await connection.refreshConfiguration();
-    await provider.reloadLocations();
-    return "reloaded";
+    const refreshConfiguration = connection.refreshConfiguration?.bind(connection);
+    if (!refreshConfiguration) return "unsupported";
+    return exclusiveOpenCode2Reload(openCode2ReloadGateKey(connection), async () => {
+      if (await provider.serverBusy()) return "busy" as const;
+      await refreshConfiguration();
+      await provider.reloadLocations();
+      return "reloaded" as const;
+    });
   }
 
   /** A catalogue read never starts the server. */
@@ -394,7 +434,7 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
     _controls?: NativeAgentControlUpdate,
     _policy?: NativeAgentExecutionPolicy,
   ): Promise<string> {
-    const resumed = await (await this.required()).resumeSession(sessionId);
+    const resumed = await this.dispatching((provider) => provider.resumeSession(sessionId));
     this.liveSessions.add(resumed);
     return resumed;
   }
@@ -408,7 +448,9 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   }
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
-    const outcome = await (await this.required()).forkSession(sessionId, messageId);
+    const outcome = await this.dispatching((provider) =>
+      provider.forkSession(sessionId, messageId),
+    );
     // The fork's tab resumes it by this id next.
     this.liveSessions.add(outcome.sessionId);
     return outcome;
@@ -430,7 +472,8 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
-    return (await this.required()).performSessionAction(sessionId, action);
+    // Compact, undo and redo start runs of their own.
+    return this.dispatching((provider) => provider.performSessionAction(sessionId, action));
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -478,6 +521,17 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
     return provider;
   }
 
+  /**
+   * Run `operation` as one dispatch on the server's reload gate, so it waits
+   * out a configuration reload and holds the next one off while it runs.
+   */
+  private async dispatching<T>(operation: (provider: OpenCode2Provider) => Promise<T>): Promise<T> {
+    const provider = await this.required();
+    const key = this.current?.gateKey;
+    if (!key) return operation(provider);
+    return withinOpenCode2Dispatch(key, () => operation(provider));
+  }
+
   private observed(): Promise<OpenCode2Provider | undefined> {
     return this.serverProvider({ start: false });
   }
@@ -501,7 +555,11 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
         ...(workerMailbox ? { workerMailbox } : {}),
         ...(connection.coordinator ? { coordinator: connection.coordinator } : {}),
       });
-    this.current = { generation: connection.generation, provider };
+    this.current = {
+      generation: connection.generation,
+      gateKey: openCode2ReloadGateKey(connection),
+      provider,
+    };
     for (const sessionId of this.liveSessions) provider.registerSession(sessionId);
     if (previous) {
       void Promise.resolve(previous.provider.dispose()).catch((error: unknown) => {

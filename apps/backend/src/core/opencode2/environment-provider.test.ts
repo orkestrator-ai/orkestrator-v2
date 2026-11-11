@@ -12,16 +12,20 @@ import {
   openCode2TurnTerminalError,
   type OpenCode2ServerConnection,
 } from "./environment-provider.js";
+import { openCode2ReloadGateCount } from "./reload-gate.js";
 import type { OpenCode2Message } from "./types.js";
 import { openCode2CoordinatorPolicy, openCode2CoordinatorSignature } from "./coordinator.js";
 
 let server: FakeOpenCode2Server | undefined;
 let router: OpenCodeEnvironmentProvider | undefined;
+let peers: OpenCodeEnvironmentProvider[] = [];
 afterEach(async () => {
   await router?.dispose();
+  for (const peer of peers) await peer.dispose();
   server?.stop();
   router = undefined;
   server = undefined;
+  peers = [];
 });
 
 function setup(options: { running?: boolean; refreshConfiguration?: () => Promise<void> } = {}) {
@@ -37,23 +41,34 @@ function setup(options: { running?: boolean; refreshConfiguration?: () => Promis
   const state = { running: options.running ?? true, generation: "g1" };
   const connections: boolean[] = [];
   const created: OpenCode2Provider[] = [];
-  router = new OpenCodeEnvironmentProvider({
-    connection: async ({ start }) => {
-      connections.push(start);
-      if (start) state.running = true;
-      return state.running ? { ...connection, generation: state.generation } : undefined;
-    },
-    createProvider: () => {
-      const provider = new OpenCode2Provider(fake.client(), {
-        monitorEvents: false,
-        // Every provider, so the fixture model reaches the picker.
-        allowedModelProviders: async () => [],
-      });
-      created.push(provider);
-      return provider;
-    },
-  });
-  return { server: fake, router, state, connections, created };
+  const build = () =>
+    new OpenCodeEnvironmentProvider({
+      connection: async ({ start }) => {
+        connections.push(start);
+        if (start) state.running = true;
+        return state.running ? { ...connection, generation: state.generation } : undefined;
+      },
+      createProvider: () => {
+        const provider = new OpenCode2Provider(fake.client(), {
+          monitorEvents: false,
+          // Every provider, so the fixture model reaches the picker.
+          allowedModelProviders: async () => [],
+        });
+        created.push(provider);
+        return provider;
+      },
+    });
+  router = build();
+  /**
+   * Another provider on the same environment server, as a pipeline, review,
+   * graph or subork provider is: its own sessions, the same server.
+   */
+  const peer = () => {
+    const provider = build();
+    peers.push(provider);
+    return provider;
+  };
+  return { server: fake, router, state, connections, created, peer };
 }
 
 describe("OpenCodeEnvironmentProvider", () => {
@@ -283,6 +298,85 @@ describe("OpenCodeEnvironmentProvider", () => {
     expect(await plain.router.reloadMcpConfiguration()).toBe("unsupported");
     const stopped = setup({ running: false, refreshConfiguration });
     expect(await stopped.router.reloadMcpConfiguration()).toBe("not-running");
+  });
+
+  test("an MCP reload is refused while another provider's session runs on the shared server", async () => {
+    const refreshConfiguration = mock(async () => {});
+    const { server, router, peer } = setup({ refreshConfiguration });
+    // The tab's own session is idle; a pipeline's session on the same server is not.
+    await router.createSession("build", "tab");
+    const pipeline = peer();
+    const workflowSession = await pipeline.createSession("build", "pipeline");
+    await pipeline.send(workflowSession, "keep working", { requestId: "req-w" });
+
+    expect(await router.reloadMcpConfiguration()).toBe("busy");
+    expect(refreshConfiguration).not.toHaveBeenCalled();
+    expect(server.calls.some((call) => call.path === "/api/location/reload")).toBe(false);
+
+    // A session no provider in this backend registered counts as well.
+    server.finishRun(workflowSession);
+    expect(await router.reloadMcpConfiguration()).toBe("reloaded");
+    const stray = await pipeline.createSession("build", "stray");
+    pipeline.releaseSession(stray);
+    server.sessions.get(stray)!.running = true;
+    expect(await router.reloadMcpConfiguration()).toBe("busy");
+    expect(server.calls.filter((call) => call.path === "/api/location/reload")).toHaveLength(1);
+  });
+
+  test("a dispatch that arrives during a reload waits for it, on every provider of the server", async () => {
+    let releaseRefresh!: () => void;
+    let refreshStarted!: () => void;
+    const started = new Promise<void>((resolve) => (refreshStarted = resolve));
+    const refreshConfiguration = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+          refreshStarted();
+        }),
+    );
+    const { server, router, peer } = setup({ refreshConfiguration });
+    const id = await router.createSession("build", "tab");
+    const pipeline = peer();
+    const workflowSession = await pipeline.createSession("build", "pipeline");
+
+    const reload = router.reloadMcpConfiguration();
+    await started;
+    // Idle at the reload's check; both prompts arrive while it rewrites the configuration.
+    const tabPrompt = router.send(id, "after the reload", { requestId: "req-tab" });
+    const pipelinePrompt = pipeline.send(workflowSession, "after the reload too", {
+      requestId: "req-pipeline",
+    });
+    // A second reload while one runs is refused rather than queued behind it.
+    expect(await pipeline.reloadMcpConfiguration()).toBe("busy");
+
+    releaseRefresh();
+    expect(await reload).toBe("reloaded");
+    await Promise.all([tabPrompt, pipelinePrompt]);
+    // Both prompts reached the server only after the location was rebuilt:
+    // had either slipped past the gate, it would have been sent while the
+    // configuration rewrite was still paused, before the reload call.
+    const paths = server.calls.map((call) => call.path);
+    const reloadAt = paths.indexOf("/api/location/reload");
+    expect(reloadAt).toBeGreaterThanOrEqual(0);
+    expect(paths.lastIndexOf(`/api/session/${id}/prompt`)).toBeGreaterThan(reloadAt);
+    expect(paths.lastIndexOf(`/api/session/${workflowSession}/prompt`)).toBeGreaterThan(reloadAt);
+    expect(server.sessions.get(id)!.running).toBe(true);
+    expect(openCode2ReloadGateCount()).toBe(0);
+  });
+
+  test("a conversation id from OpenCode 1.x reads as missing and is never recreated", async () => {
+    // A tab that held a 1.x conversation keeps its id; the 2.x server never had it.
+    const { server, router } = setup();
+    const v1Id = "ses_1a2b3c4d5e6fV1conversation";
+    expect(await router.status(v1Id)).toBe("missing");
+    expect(await router.activity(v1Id)).toBe("idle");
+    await expect(router.resumeSession(v1Id)).rejects.toBeInstanceOf(PromptRejectedError);
+    await expect(router.resumeSession(v1Id)).rejects.toThrow("OpenCode session was not found");
+    // Nothing was made under that id, and nothing was imported from 1.x.
+    expect(server.sessions.has(v1Id)).toBe(false);
+    expect(
+      server.calls.some((call) => call.method === "POST" && call.path === "/api/session"),
+    ).toBe(false);
   });
 
   test("a disposed provider refuses further work", async () => {

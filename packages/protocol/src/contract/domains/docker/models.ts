@@ -17,7 +17,11 @@
  */
 import * as Schema from "effect/Schema";
 import { mutableArray } from "../../model-schema.js";
-import { IMAGE_CAPABILITIES, type ImageCapability } from "../../../image-manifest.js";
+import {
+  IMAGE_CAPABILITIES,
+  RETIRED_IMAGE_CAPABILITIES,
+  type ReportedImageCapability,
+} from "../../../image-manifest.js";
 import { ContainerResourceLimitsSchema } from "../environments/models.js";
 
 const nullableString = Schema.NullOr(Schema.String);
@@ -39,10 +43,19 @@ export const DockerAvailabilitySchema = Schema.Union([
   }),
 ]);
 
-const IMAGE_CAPABILITY_NAMES = Object.keys(IMAGE_CAPABILITIES) as [
-  ImageCapability,
-  ...ImageCapability[],
-];
+// Retired names stay in the vocabulary: removing a literal is a change an
+// older backend in the support window cannot be decoded across, because it
+// may still report one as missing (see `RETIRED_IMAGE_CAPABILITIES`). Each
+// keeps the position it had, so the result schema (and its manifest digest)
+// is the one older peers already declare.
+const RETIRED_CAPABILITY_POSITIONS: Readonly<Record<string, ReportedImageCapability>> = {
+  "opencode2-launch": "opencode-launch",
+} satisfies Record<string, (typeof RETIRED_IMAGE_CAPABILITIES)[number]>;
+
+const IMAGE_CAPABILITY_NAMES = Object.keys(IMAGE_CAPABILITIES).flatMap((name) => {
+  const retired = RETIRED_CAPABILITY_POSITIONS[name];
+  return retired ? [retired, name] : [name];
+}) as [ReportedImageCapability, ...ReportedImageCapability[]];
 
 export const ImageCapabilitySchema = Schema.Literals(IMAGE_CAPABILITY_NAMES);
 

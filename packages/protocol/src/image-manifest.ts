@@ -139,6 +139,24 @@ export const IMAGE_CAPABILITIES = {
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;
 
 /**
+ * Capability names this code no longer requires but that still appear on the
+ * wire. A backend in the Docker domain's support window may report one in
+ * `get_docker_image_status`'s `missingCapabilities`, so the response schema
+ * keeps accepting it. No image is checked for these, and
+ * `isImageCapability` rejects them, so a manifest that declares one has it
+ * dropped as unknown.
+ *
+ * - `opencode-launch`: the OpenCode 1.x container server launch, retired with
+ *   OpenCode 1.x on 2026-11-11.
+ */
+export const RETIRED_IMAGE_CAPABILITIES = ["opencode-launch"] as const;
+
+export type RetiredImageCapability = (typeof RETIRED_IMAGE_CAPABILITIES)[number];
+
+/** A capability name `ImageStatus.missingCapabilities` may carry. */
+export type ReportedImageCapability = ImageCapability | RetiredImageCapability;
+
+/**
  * Whether new containers may be created from this image: it takes staged
  * inputs rather than expecting whole host agent homes bound into it.
  */
@@ -347,7 +365,11 @@ export interface ImageStatus {
     ImageManifest,
     "appVersion" | "sourceRevision" | "capabilities" | "agents" | "runtimes"
   > | null;
-  missingCapabilities: ImageCapability[];
+  /**
+   * Capabilities the image lacks. A backend in the support window may still
+   * name a retired one (`RETIRED_IMAGE_CAPABILITIES`).
+   */
+  missingCapabilities: ReportedImageCapability[];
   /** Fixed remediation text. */
   remediation: string | null;
 }

@@ -68,6 +68,7 @@ import {
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
 import { readOpenCode2ModelCatalogue } from "./models.js";
 import { attachOpenCode2Instructions } from "./instructions.js";
+import { noteOpenCode2LocationsReloaded } from "./reload-gate.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
 import {
   OPENCODE2_EVENT_STREAM_SILENCE_MS,
@@ -643,14 +644,45 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   /**
+   * Whether any session on this server has a run in progress, whichever
+   * provider owns it: a tab's, a pipeline's, a review's or one no provider in
+   * this backend registered. A parked permission or form belongs to a run, so
+   * it reads busy too. One fresh `/api/session/active` read, never the cache.
+   */
+  async serverBusy(): Promise<boolean> {
+    const running = await this.client.activeSessions();
+    this.activityCache = { at: this.now(), running };
+    return running.size > 0;
+  }
+
+  /**
    * Rebuild every loaded location, so the server reads its configuration
    * again (`POST /api/location/reload`). It cancels pending permissions and
-   * forms; callers reload only an idle server.
+   * forms; callers reload only an idle server. It also drops the runtime MCP
+   * servers every provider registered, which the next turn re-registers
+   * (`mcp.ts`).
    */
   async reloadLocations(): Promise<void> {
-    await this.client.api("POST", "/api/location/reload", "OpenCode configuration reload", {
-      signal: AbortSignal.timeout(30_000),
-    });
+    try {
+      await this.client.api("POST", "/api/location/reload", "OpenCode configuration reload", {
+        signal: AbortSignal.timeout(30_000),
+      });
+      // The reload answers before the location is rebuilt, and a catalogue
+      // read in between answers an empty command list (seen on 2.2.6), which
+      // would be cached as the truth. The agent list waits for the rebuilt
+      // location, so the gate is held until reads see its new state.
+      await this.client
+        .api("GET", "/api/agent", "OpenCode agent list", { signal: AbortSignal.timeout(30_000) })
+        .catch((error: unknown) => {
+          log.debug("location.reload-unconfirmed", {
+            error: formatLogError(error, { message: false }),
+          });
+        });
+    } finally {
+      // Even an ambiguous failure may have rebuilt the location and dropped
+      // every runtime MCP server on it: no provider trusts its registrations.
+      noteOpenCode2LocationsReloaded(this.client.baseUrl);
+    }
     this.refreshCatalog();
   }
 

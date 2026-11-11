@@ -1911,7 +1911,10 @@ Decisions:
   loader, rather than a copy: the rules are identical, and a copy would
   drift. Command ids share the `opencode:` prefix; a session never changes
   line, so a 1.x selection never reaches a 2.x registry. Refresh re-reads the
-  list (`reread`); 2.x has no idle-gated reload here.
+  list (`reread`). Since 1.x was retired (2026-11-11) the server runs without
+  file watchers, so an explicit refresh first reloads an idle server's
+  location under the reload gate (`reloaded`); see "Review fixes after 1.x
+  was retired (2026-11-11)".
 - **Undo and Redo.** Undo stages a revert at the newest user row still
   showing (or the row the UI names); Redo clears the whole staged revert, as
   1.x `unrevert` does. The transcript hides the boundary and every later row
@@ -2714,7 +2717,20 @@ Tasks 3, 5, 7 and 8. The owner asked to remove the "Use OpenCode 2 for new sessi
 - **The retired setting and marker.** Chosen: keep both fields in the `config` and `native-sessions` contract schemas, read by nothing, and treat `openCodeProtocol` as a retired setting key for workspace-grant echoes, so no domain version changes; a register row in `version-compatibility.md` says when they can go. Alternative: remove them with a domain version bump, which would refuse older clients in the support window for no gain.
 - **Start-up time.** Two causes, both measured on 2.2.6 on macOS. First, every OpenCode tab started a 1.x `opencode serve` (database checks, MCP registration) before the 2.x server; that start is gone. Second, OpenCode 2 starts an `fs.watch` on every ancestor of the worktree, the config directory and `.git/HEAD` when a location boots, each taking 0.2 to 5 s under Bun: location boot 6,183 ms, first `/api/model` 7.25 s and shutdown 7.4 s in this worktree, against 39 ms, 0.24 s and 0.07 s with `OPENCODE_DISABLE_FILEWATCHER=1`, which every launch now sets. The watchers only live-reload configuration, so an MCP settings edit now reaches an idle running server through `POST /api/location/reload` instead.
 - **Sign-in.** The host 2.x database is where sign-ins live, through `/api/integration` and `/api/credential`; the host `auth.json` is kept only as the copy containers are handed (OAuth refreshes are exported to it). Alternatives: `auth.json` as the store with the database as a mirror (a start-time copy would overwrite tokens 2.x has refreshed), or containers reading the database directly (a server per sync, or a dependency on 2.x's SQLite schema).
-- **Shared system instructions.** The 2.x provider had never delivered Orkestrator's shared instructions (1.x sent them as the prompt's `system`, which 2.x's prompt route does not take). They now go on each session as a durable instruction entry (`PUT /api/experimental/session/:id/instructions/entries/orkestrator`, verified to store on 2.2.6), written at create and resume; a read-only coordinator gets none. Not yet seen reaching a model turn.
+- **Shared system instructions.** The 2.x provider had never delivered Orkestrator's shared instructions (1.x sent them as the prompt's `system`, which 2.x's prompt route does not take). They now go on each session as a durable instruction entry (`PUT /api/experimental/session/:id/instructions/entries/orkestrator`, verified to store on 2.2.6), written at create and resume; a read-only coordinator gets none. Seen reaching the model's system prompt against the pinned 2.2.6 binary (`opencode2-watchers-off.live.test.ts`).
+
+### Review fixes after 1.x was retired (2026-11-11)
+
+Tasks 5, 7 and 8. Multi Review of the retirement found six defects; each fix and its choice:
+
+- **The retired `opencode-launch` image capability (task 5).** Chosen: keep it as a deprecated literal of the `get_docker_image_status` response vocabulary, in its old position, while no image is checked for it (`RETIRED_IMAGE_CAPABILITIES`). The result schema's manifest digest is the pre-retirement one, so older Docker-domain peers still decode. Alternative: a Docker domain version bump, which refuses older peers in the support window for no gain.
+- **MCP reload on a shared server (task 8).** Chosen: one reload gate per server generation shared by every provider on it (`opencode2/reload-gate.ts`). A reload runs only when no provider has a dispatch open and `/api/session/active` lists no session at all; dispatches (create, preflight, prompt, fork, resume, session action) arriving during it wait. Alternatives: checking only the calling provider's sessions (the defect), or a per-provider fence (another provider's dispatch could still land mid-reload).
+- **MCP registrations after a reload (task 8).** A location reload drops every runtime MCP server, and a registration was trusted for 5 s, so a prompt right after a reload ran without its Orkestrator tools (seen live on 2.2.6). Chosen: a per-server reload count; a registration from before the current count is checked again. Alternative: clearing only the reloading provider's cache, which leaves other providers on the server stale.
+- **Reads during a location rebuild (task 8).** `/api/command` answered an empty list right after `POST /api/location/reload` while the rebuilt location booted (seen live); `GET /api/agent` waits for it, so the reload awaits that before releasing the gate.
+- **Command files with watchers off (task 7).** A command file added while the server runs was not listed until a reload (seen live). Chosen: the composer's explicit refresh reloads an idle server's location under the gate and reports `reloaded`; a busy server is only re-read, with a message. Alternative: turning watchers back on, which brings back the 6 to 8 s location boot.
+- **OAuth refresh export across profiles (task 8).** Chosen: export a refresh only onto an entry provably of the same login: matching account (and enterprise host) where both name one, otherwise a refresh token this database has held, recorded as SHA-256 fingerprints in `<data>/opencode2/refresh-lineage.json`. Alternatives: account id only (most providers have none, so rotated tokens would stop reaching containers), or keeping the last exported token itself (a second copy of a secret).
+- **Preview-era databases (task 8).** Chosen: a one-time reconcile with `auth.json` at the first host start after the upgrade (`opencode2/credential-upgrade.ts`), guarded by a marker, keeping a newer OAuth login of the same login. Alternative: a notice asking preview users to re-check their sign-ins, which leaves a signed-out provider usable on the host meanwhile.
+- **Host start budget (task 7).** The supervisor's generic 15 s readiness budget replaced the 60 s the separate 2.x host server had; the `opencode` kind now gets 300 polls (60 s) again for a first start that creates or migrates the database.
 
 ## Related
 

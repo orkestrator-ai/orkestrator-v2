@@ -123,6 +123,12 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A 2.x steer got no definite answer, so its delivery is reconciled from history. Error class only.",
       "provider.dispose-failed":
         "Disposing the 2.x provider of a replaced server failed. Error class only.",
+      "location.reload-unconfirmed":
+        "After a 2.x location reload, the read that waits for the rebuilt location failed; catalogues are re-read anyway. Error class only.",
+      "credential.legacy-reconciled":
+        "A host 2.x database from before OpenCode 1.x was retired was reconciled with auth.json once. Counts of credentials written and removed only.",
+      "credential.legacy-reconcile-failed":
+        "The one-time reconcile of a host 2.x database with auth.json failed; the next host start retries it. Error class only.",
       "transcript.unknown-row":
         "A 2.x history row of a kind the transcript does not know was dropped (a newer server). Its kind name only, once per kind.",
       "mcp.remove-failed":

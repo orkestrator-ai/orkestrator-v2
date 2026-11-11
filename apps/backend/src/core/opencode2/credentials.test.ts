@@ -9,6 +9,7 @@ import {
   keepActiveOpenCode2Credential,
   legacyLoginFromOpenCode2,
   openCode2AuthStatus,
+  openCode2RefreshFingerprint,
   openCode2CredentialFromLegacy,
   removeOpenCode2Credentials,
   runningOpenCode2HostClient,
@@ -228,7 +229,15 @@ describe("the container hand-off file", () => {
     const fake = store(
       [
         "openai",
-        { type: "oauth", methodID: "chatgpt-browser", refresh: "r2", access: "a2", expires: 200 },
+        // The same account's login, refreshed (and its refresh token rotated).
+        {
+          type: "oauth",
+          methodID: "chatgpt-browser",
+          refresh: "r2",
+          access: "a2",
+          expires: 200,
+          metadata: { accountID: "acct" },
+        },
       ],
       [
         "xai",
@@ -250,6 +259,118 @@ describe("the container hand-off file", () => {
     const before = (await stat(file)).mtimeMs;
     expect(await exportOpenCode2Refreshes(fake.client(), file)).toBe(0);
     expect((await stat(file)).mtimeMs).toBe(before);
+  });
+
+  test("a refresh never replaces another account's login, whichever expires later", async () => {
+    // Two profiles share auth.json: this one's store holds account A, the
+    // file account B's newer sign-in from the other profile.
+    const file = await authFile({
+      openai: { type: "oauth", refresh: "rb", access: "ab", expires: 100, accountId: "acct-b" },
+    });
+    const fake = store([
+      "openai",
+      {
+        type: "oauth",
+        methodID: "chatgpt-browser",
+        refresh: "ra",
+        access: "aa",
+        expires: 200,
+        metadata: { accountID: "acct-a" },
+      },
+    ]);
+    const lineageFile = path.join(dir!, "refresh-lineage.json");
+    expect(await exportOpenCode2Refreshes(fake.client(), file, { lineageFile })).toBe(0);
+    expect(await readJson(file)).toEqual({
+      openai: { type: "oauth", refresh: "rb", access: "ab", expires: 100, accountId: "acct-b" },
+    });
+
+    // The same account refreshed in the store still moves the file forward.
+    fake.credentials[0]!.value = {
+      type: "oauth",
+      methodID: "chatgpt-browser",
+      refresh: "rb2",
+      access: "ab2",
+      expires: 300,
+      metadata: { accountID: "acct-b" },
+    };
+    expect(await exportOpenCode2Refreshes(fake.client(), file, { lineageFile })).toBe(1);
+    expect((await readJson(file)).openai).toEqual({
+      type: "oauth",
+      refresh: "rb2",
+      access: "ab2",
+      expires: 300,
+      accountId: "acct-b",
+    });
+  });
+
+  test("without an account, only a refresh token from this store's lineage proves the login", async () => {
+    const lineageFile = path.join(await mkdtemp(path.join(tmpdir(), "ork-oc2-lineage-")), "l.json");
+    const file = await authFile({
+      // Another profile's login: a refresh token this store never held.
+      anthropic: { type: "oauth", refresh: "other", access: "o", expires: 100 },
+      xai: { type: "oauth", refresh: "x1", access: "x1", expires: 100 },
+    });
+    const fake = store(
+      [
+        "anthropic",
+        { type: "oauth", methodID: "oauth", refresh: "mine", access: "m", expires: 900 },
+      ],
+      ["xai", { type: "oauth", methodID: "device", refresh: "x1", access: "x2", expires: 200 }],
+    );
+    // xai: the store refreshed the access token and kept the refresh token.
+    expect(await exportOpenCode2Refreshes(fake.client(), file, { lineageFile })).toBe(1);
+    expect((await readJson(file)).anthropic).toEqual({
+      type: "oauth",
+      refresh: "other",
+      access: "o",
+      expires: 100,
+    });
+    // xai rotates its refresh token: the file's x1 is still this store's lineage.
+    fake.credentials[1]!.value = {
+      type: "oauth",
+      methodID: "device",
+      refresh: "x3",
+      access: "x3",
+      expires: 300,
+    };
+    // A second store with no lineage (another profile) cannot prove it.
+    expect(await exportOpenCode2Refreshes(fake.client(), file)).toBe(0);
+    expect(await exportOpenCode2Refreshes(fake.client(), file, { lineageFile })).toBe(1);
+    expect((await readJson(file)).xai).toEqual({
+      type: "oauth",
+      refresh: "x3",
+      access: "x3",
+      expires: 300,
+    });
+    // The lineage holds fingerprints, never the tokens.
+    const lineage = await readFile(lineageFile, "utf8");
+    for (const token of ["x1", "x3", "mine"]) {
+      expect(lineage).toContain(openCode2RefreshFingerprint(token));
+      expect(lineage).not.toContain(`"${token}"`);
+    }
+    expect((await stat(lineageFile)).mode & 0o777).toBe(0o600);
+    await rm(path.dirname(lineageFile), { recursive: true, force: true });
+  });
+
+  test("a sign-in export records its login, so a later rotation is recognised", async () => {
+    const lineageFile = path.join(await mkdtemp(path.join(tmpdir(), "ork-oc2-lineage-")), "l.json");
+    const file = await authFile({});
+    const fake = store([
+      "anthropic",
+      { type: "oauth", methodID: "oauth", refresh: "s1", access: "s1", expires: 100 },
+    ]);
+    await exportOpenCode2Logins(fake.client(), file, ["anthropic"], undefined, { lineageFile });
+    // 2.x rotates the refresh token before the next pass sees s1.
+    fake.credentials[0]!.value = {
+      type: "oauth",
+      methodID: "oauth",
+      refresh: "s2",
+      access: "s2",
+      expires: 200,
+    };
+    expect(await exportOpenCode2Refreshes(fake.client(), file, { lineageFile })).toBe(1);
+    expect((await readJson(file)).anthropic).toMatchObject({ refresh: "s2", expires: 200 });
+    await rm(path.dirname(lineageFile), { recursive: true, force: true });
   });
 
   test("concurrent exports to one file are serialized, so neither change is lost", async () => {

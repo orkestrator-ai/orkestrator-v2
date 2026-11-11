@@ -21,8 +21,9 @@
  * - **The record** ({@link recordOpenCodeHostServer}): password, directory
  *   and coordinator authority beside the process, in memory only
  *   (`host-server-state.ts`). The host database is where sign-ins live
- *   (`credentials.ts`); a start hands containers any OAuth login it has
- *   refreshed.
+ *   (`credentials.ts`); a start reconciles a database from before 1.x was
+ *   retired with `auth.json` once (`credential-upgrade.ts`) and hands
+ *   containers any OAuth login it has refreshed.
  */
 import { mkdir } from "node:fs/promises";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -52,7 +53,8 @@ import {
   openCode2CoordinatorSignature,
   writeOpenCode2CoordinatorConfig,
 } from "./coordinator.js";
-import { exportOpenCode2Refreshes } from "./credentials.js";
+import { reconcileLegacyOpenCodeLoginsBestEffort } from "./credential-upgrade.js";
+import { exportOpenCode2Refreshes, openCode2RefreshLineageFile } from "./credentials.js";
 import type { OpenCode2HostServerRecord } from "./host-server-state.js";
 import type { OpenCode2McpConnection } from "./mcp.js";
 import {
@@ -148,8 +150,15 @@ export async function recordOpenCodeHostServer(
     directory: server.directory,
   });
   const authFile = pushedLoginHostFile(context, "opencode");
-  // Best-effort: the container login watcher repeats it every pass.
-  if (authFile) await exportOpenCode2Refreshes(client, authFile).catch(() => undefined);
+  if (authFile) {
+    const dataDir = context.storage.getDataDir();
+    const lineageFile = openCode2RefreshLineageFile(dataDir);
+    // A database from before 1.x was retired matches the file once
+    // (`credential-upgrade.ts`); a failure is retried at the next start.
+    await reconcileLegacyOpenCodeLoginsBestEffort(client, { authFile, dataDir, lineageFile });
+    // Best-effort: the container login watcher repeats it every pass.
+    await exportOpenCode2Refreshes(client, authFile, { lineageFile }).catch(() => undefined);
+  }
   context.runtime.localServers.openCode2.record(environmentId, {
     child: server.child,
     port: server.port,

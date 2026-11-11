@@ -19,6 +19,14 @@ export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
  * binding than the lightweight HTTP bridges.
  */
 export const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
+/**
+ * OpenCode 2's first start creates its database or migrates one an older 2.x
+ * wrote before it answers `/api/info`, which can take far longer than binding
+ * a port on a busy host. About 60 s at the poll interval, the budget the
+ * separate 2.x host server had (`OPENCODE2_HOST_READY_TIMEOUT_MS`) before the
+ * supervisor took it over.
+ */
+export const OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS = 300;
 
 /**
  * Liveness probing for locally bound agent servers and bridges.
@@ -143,6 +151,7 @@ export function localServerHealthAttempts(kind: LocalServerKind): number {
   // start builds a model runtime and may refresh a provider catalogue over the
   // network before it can answer, which is slower than a bridge that only has
   // to bind a port.
+  if (kind === "opencode") return OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS;
   return kind === "cursor" || kind === "grok" || kind === "pi"
     ? ACP_LOCAL_SERVER_HEALTH_ATTEMPTS
     : LOCAL_SERVER_HEALTH_ATTEMPTS;

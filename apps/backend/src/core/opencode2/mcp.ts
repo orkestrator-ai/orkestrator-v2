@@ -50,6 +50,7 @@ import {
   openCode2TabMcpServer,
   type OpenCode2SessionMcpPrefix,
 } from "./permissions.js";
+import { openCode2LocationReloadCount } from "./reload-gate.js";
 import type { OpenCode2McpServer } from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
@@ -75,7 +76,11 @@ export interface OpenCode2McpDependencies {
   connectTimeoutMs?: number;
 }
 
-type Registration = { key: string; checkedAt: number };
+/**
+ * `reloads` is the server's location reload count when the registration was
+ * made or last confirmed: a reload since dropped it (`reload-gate.ts`).
+ */
+type Registration = { key: string; checkedAt: number; reloads: number };
 
 export class OpenCode2McpServers {
   private readonly registered = new Map<string, Registration>();
@@ -185,10 +190,19 @@ export class OpenCode2McpServers {
     if (pending?.key === key) return pending.promise;
     const promise = (async () => {
       if (pending) await pending.promise.catch(() => undefined);
+      const reloads = openCode2LocationReloadCount(this.client.baseUrl);
       const known = this.registered.get(name);
-      if (known?.key === key && this.now() - known.checkedAt < STATUS_TRUST_MS) return;
+      // A location reload since the registration dropped it, so it is not trusted.
+      if (
+        known?.key === key &&
+        known.reloads === reloads &&
+        this.now() - known.checkedAt < STATUS_TRUST_MS
+      ) {
+        return;
+      }
       if (known?.key === key && (await this.status(name)) === "connected") {
         known.checkedAt = this.now();
+        known.reloads = reloads;
         return;
       }
       this.registered.delete(name);
@@ -202,7 +216,7 @@ export class OpenCode2McpServers {
         timeout: { startup: 5_000, catalog: 5_000 },
       });
       await this.waitConnected(name);
-      this.registered.set(name, { key, checkedAt: this.now() });
+      this.registered.set(name, { key, checkedAt: this.now(), reloads });
       this.evictOldTabs();
     })();
     const entry = { key, promise };

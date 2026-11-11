@@ -437,14 +437,21 @@ the 24-hour evidence window only.
 **OpenCode reload.** OpenCode builds one location per directory and reads
 project files, `.opencode` and config directories and `OPENCODE_CONFIG` when
 it does. Once the backend sees every OpenCode session in the environment
-idle, the provider checks its sessions' activity again (any session at work
-answers `busy`, which keeps it queued), rewrites its mirrored user
-configuration and calls `POST /api/location/reload`, which rebuilds every
-loaded location (`reloadMcpConfiguration` in `opencode2/environment-provider.ts`).
-A reload cancels pending permissions and forms, so it only runs on an idle
-server. Each session's own Orkestrator MCP entries are posted again by its
-next dispatch (`opencode2/mcp.ts`), and the check then reads `GET /api/mcp`
-for the saved change. Apply still plans saves to the user files in
+idle, the provider takes the server's reload gate (`opencode2/reload-gate.ts`)
+and checks the whole server again: any session on it with a run, whichever
+provider owns it (a tab's, a pipeline's, a review's, a graph's), answers
+`busy`, which keeps the change queued, and so does a dispatch any provider of
+that server has open. It then rewrites its mirrored user configuration, calls
+`POST /api/location/reload`, which rebuilds every loaded location, and waits
+for the rebuilt location (`GET /api/agent`) before releasing the gate
+(`reloadMcpConfiguration` in `opencode2/environment-provider.ts`). A dispatch
+that arrives meanwhile waits for it. A reload cancels pending permissions and
+forms, so it only runs on an idle server. It also drops every runtime MCP
+server on the location: each completed reload advances the server's reload
+count, a registration made before it is no longer trusted, and each session's
+own Orkestrator MCP entries are posted again by its next dispatch
+(`opencode2/mcp.ts`). The check then reads `GET /api/mcp` for the saved
+change. Apply still plans saves to the user files in
 `$XDG_CONFIG_HOME/opencode`, and container servers, as `restart-required`
 (the rule was set when OpenCode 1.19.4 cached the user files for the server's
 lifetime). There is deliberately no "restart OpenCode to apply" action:

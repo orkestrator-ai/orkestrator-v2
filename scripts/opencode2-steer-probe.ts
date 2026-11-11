@@ -70,6 +70,8 @@ export class ScriptedModel {
    */
   readonly calls: Array<{
     userTexts: string[];
+    /** The request's system messages, where session instructions arrive. */
+    systemTexts: string[];
     lastRole: string;
     tools: string[];
     /** The newest tool result the model was handed, when the request ends in one. */
@@ -90,6 +92,9 @@ export class ScriptedModel {
         const body = (await request.json()) as ChatRequest;
         const messages = body.messages ?? [];
         const userTexts = messages.filter((m) => m.role === "user").map((m) => textOf(m.content));
+        const systemTexts = messages
+          .filter((m) => m.role === "system")
+          .map((m) => textOf(m.content));
         const lastRole = messages.at(-1)?.role ?? "";
         const tools = (body.tools ?? []).flatMap((tool) =>
           typeof tool.function?.name === "string" ? [tool.function.name] : [],
@@ -98,6 +103,7 @@ export class ScriptedModel {
         const reasoningEffort = (body as { reasoning_effort?: unknown }).reasoning_effort;
         this.calls.push({
           userTexts,
+          systemTexts,
           lastRole,
           tools,
           lastUserContent,
@@ -331,6 +337,11 @@ export async function startOpenCode2Fixture(
         OPENCODE_DB: join(dirs.data, "fixture.db"),
         OPENCODE_PASSWORD: password,
         OPENCODE_DISABLE_AUTOUPDATE: "1",
+        // As every Orkestrator launch runs it (`OPENCODE2_DISABLE_FILEWATCHER`
+        // in apps/backend/src/core/opencode2/server.ts), so the live set
+        // qualifies the server Orkestrator actually starts. `options.env`
+        // may turn the watchers back on.
+        OPENCODE_DISABLE_FILEWATCHER: "1",
         ...options.env,
       },
       stdout: "ignore",

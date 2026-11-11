@@ -32,6 +32,8 @@ const context = {
   },
   storage: {
     loadConfig: async () => ({ global: { openCodeModelProviders: ["opencode-go"] } }),
+    // Only named in the export's lineage path; the export itself is a mock here.
+    getDataDir: () => "/ork-test-data",
   },
 } as unknown as CommandContext;
 
@@ -202,7 +204,13 @@ afterEach(() => {
 function harness(overrides: Partial<OpenCodeProviderLoginDependencies> = {}) {
   const servers: string[] = [];
   const exportLogins = mock(
-    async (_client: unknown, _file: string, _providerIds: readonly string[]) => undefined,
+    async (
+      _client: unknown,
+      _file: string,
+      _providerIds: readonly string[],
+      _signal?: AbortSignal,
+      _options?: { lineageFile?: string },
+    ) => undefined,
   );
   const login = createOpenCodeProviderLogin({
     withServer: async (_context, use, options) => {
@@ -378,6 +386,10 @@ describe("OpenCode provider login", () => {
     expect(exportLogins.mock.calls.map((call) => [call[1], call[2]])).toEqual([
       [EXPORT_FILE, ["azure"]],
     ]);
+    // The exported login joins this database's refresh lineage (`credentials.ts`).
+    expect(exportLogins.mock.calls[0]![4]).toEqual({
+      lineageFile: "/ork-test-data/opencode2/refresh-lineage.json",
+    });
     expectNoCanary(output, "API key save output");
   });
 

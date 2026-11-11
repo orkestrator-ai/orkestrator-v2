@@ -750,10 +750,17 @@ to start under Bun, so the first `/api/model` or session request waited 6 to
 Every launch therefore sets `OPENCODE_DISABLE_FILEWATCHER=1`
 (`OPENCODE2_DISABLE_FILEWATCHER`): location boot drops to about 40 ms and
 shutdown to under 100 ms. The watchers only live-reload configuration,
-skills and `AGENTS.md`. Orkestrator writes those before the server starts, and
-an MCP settings edit reaches a running server through
+commands, skills and `AGENTS.md`. Orkestrator writes its own before the server
+starts. An MCP settings edit reaches a running server through
 `reloadMcpConfiguration`, which rewrites the mirror and calls
-`POST /api/location/reload` while no session is at work. Before 1.x was
+`POST /api/location/reload` while no session is at work, and the composer's
+explicit command refresh reloads an idle server's location the same way, so a
+command file added while it runs is listed (`refreshCommands`; a busy server
+is only re-read and says so). `opencode2-watchers-off.live.test.ts` qualifies
+this launch against the pinned binary: a second prompt, the shared
+instructions reaching the model, an added command file, and a reload that
+keeps a session's Orkestrator tools. The live fixture runs with the watchers
+off too. Before 1.x was
 retired, every OpenCode tab also started a 1.x `opencode serve` (with its own
 database checks and MCP registration) before the 2.x server, which is the
 other half of the 20 to 30 s first-turn delay this removed.

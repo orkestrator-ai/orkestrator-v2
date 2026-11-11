@@ -525,8 +525,26 @@ from OpenCode's `auth.json`
 (`~/.local/share/opencode/auth.json`), which is now only that hand-off copy:
 after each change the provider's entry there is brought in step with the
 database (`exportOpenCode2Logins`), and while a host server runs, a login
-OpenCode has refreshed replaces the file's older copy. A container copies
-`auth.json` in when it starts, so it needs a restart.
+OpenCode has refreshed replaces the file's older copy of the same login
+(`exportOpenCode2Refreshes`). A container copies `auth.json` in when it
+starts, so it needs a restart.
+
+Development profiles have their own databases and can share the user's
+`auth.json`, so a refresh is exported only onto an entry provably of the same
+login: where both name an account (and an enterprise host) those must match;
+otherwise the entry's refresh token must be one this database has held. That
+lineage is kept as one-way SHA-256 fingerprints in
+`<data>/opencode2/refresh-lineage.json` (mode 0600, never the tokens), and a
+sign-in export and each pass add to it. Another profile's login is left alone
+whichever expires later.
+
+A database that existed before OpenCode 1.x was retired (the preview's) is
+reconciled with `auth.json` once, at its first host server start after the
+upgrade (`opencode2/credential-upgrade.ts`): it takes the file's logins, as the
+old per-start reconcile did, except an OAuth login it holds newer than the
+file's copy of the same login, which it keeps; a login the file cannot hold
+(`external`) stays. A marker, `<data>/opencode2/legacy-credentials-reconciled`,
+keeps it to once; a failed attempt is retried at the next start.
 
 An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
 auth error that says so) gets the failed provider's sign-in inside its error

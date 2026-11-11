@@ -553,14 +553,17 @@ type TransportProbe = {
   gatewayClient: boolean;
   streamState: string | null;
   eventResource: string | null;
-  relayedToHost: number;
   invokesOverHttp: string[];
 };
 
 /**
  * Page code: run one command through `window.orkestrator` and wait for the
- * `resource-changed` event its mutation announces. `relayedToHost` counts the
- * same event on the preload's own listener, which only main's relay feeds.
+ * `resource-changed` event its mutation announces. The preload's own listener,
+ * which only main's relay feeds, stays installed after the probe returns and
+ * counts config changes into `window.__relayedToHost`; the test reads that
+ * counter only at its end ({@link readRelayedToHost}), so a relayed copy that
+ * arrives at any point during the rest of the test fails it, rather than only
+ * one inside a fixed sleep.
  */
 async function probeTransport(): Promise<TransportProbe> {
   type Api = {
@@ -580,12 +583,13 @@ async function probeTransport(): Promise<TransportProbe> {
     const payload = (value as { payload?: unknown })?.payload ?? value;
     return (payload as { resource?: string })?.resource === "config";
   };
-  let relayedToHost = 0;
-  const unlistenHost = host
-    ? await host.api.listen("resource-changed", (value) => {
-        if (configChange(value)) relayedToHost += 1;
-      })
-    : null;
+  const counter = window as unknown as { __relayedToHost?: number };
+  counter.__relayedToHost = 0;
+  if (host) {
+    await host.api.listen("resource-changed", (value) => {
+      if (configChange(value)) counter.__relayedToHost = (counter.__relayedToHost ?? 0) + 1;
+    });
+  }
   let unlisten: (() => void) | null = null;
   const received = new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("No resource-changed event arrived")), 30_000);
@@ -609,10 +613,7 @@ async function probeTransport(): Promise<TransportProbe> {
     patch: { experimentalScheduling: before.global?.experimentalScheduling === true },
   });
   const eventResource = await received;
-  // Long enough for a relayed copy, had main sent one, to have arrived too.
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
   (unlisten as (() => void) | null)?.();
-  unlistenHost?.();
   return {
     protocol: location.protocol,
     host: host ? Object.keys(host).sort() : null,
@@ -620,13 +621,53 @@ async function probeTransport(): Promise<TransportProbe> {
     gatewayClient: "orkestratorGateway" in page,
     streamState: api.eventStreamConnection?.state() ?? null,
     eventResource,
-    relayedToHost,
     invokesOverHttp: performance
       .getEntriesByType("resource")
       .map((entry) => entry.name)
       .filter((name) => name.includes("/__orkestrator/invoke"))
       .map((name) => new URL(name).origin),
   };
+}
+
+/**
+ * Page code, run at the end of the default-transport test: make one more
+ * config change, wait for its event on the window's own stream, and return how
+ * many config changes main relayed to the preload's listener since
+ * {@link probeTransport} installed it. Waiting on an event rather than a timer
+ * keeps the check from passing merely because a sleep was shorter than main.
+ */
+async function readRelayedToHost(): Promise<number> {
+  type Api = {
+    invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+    listen(event: string, callback: (payload: unknown) => void): (() => void) | Promise<() => void>;
+  };
+  const page = window as unknown as { orkestrator: Api; __relayedToHost?: number };
+  const api = page.orkestrator;
+  let unlisten: (() => void) | null = null;
+  const received = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("No resource-changed event arrived")), 30_000);
+    void Promise.resolve(
+      api.listen("resource-changed", (value) => {
+        const payload = (value as { payload?: unknown })?.payload ?? value;
+        if ((payload as { resource?: string })?.resource !== "config") return;
+        clearTimeout(timer);
+        resolve();
+      }),
+    ).then((stop) => {
+      unlisten = stop;
+    }, reject);
+  });
+  const before = await api.invoke<{ global?: { experimentalScheduling?: boolean } }>(
+    "get_config",
+    {},
+  );
+  await api.invoke("patch_global_config", {
+    patch: { experimentalScheduling: before.global?.experimentalScheduling === true },
+  });
+  await received;
+  (unlisten as (() => void) | null)?.();
+  if (page.__relayedToHost === undefined) throw new Error("probeTransport did not run");
+  return page.__relayedToHost;
 }
 
 /**
@@ -659,13 +700,16 @@ for (const transport of ["default", "relay"] as const) {
     let child: ReturnType<typeof spawn> | undefined;
     let stopped = false;
     await withCleanup(async () => {
-      const [rendererPort, gatewayPort] = await reserveLoopbackPorts(2);
+      // No fixed ports: the shipping window loads file://, so the renderer
+      // port is unused, and gateway port 0 has the backend bind whatever the
+      // OS hands it. The probe talks to main's control listener, which also
+      // binds port 0, so no port is ever released for another process to take.
       const profile = resolveRuntimeProfile({
         repositoryRoot: root,
         requestedId: `packaged-transport-${transport}`,
         flavor: "agent-test",
-        rendererPort: rendererPort!,
-        gatewayPort: gatewayPort!,
+        rendererPort: 0,
+        gatewayPort: 0,
         roots: {
           developmentRoot: path.join(scratch, "dev"),
           productionDataDir: path.join(scratch, "production"),
@@ -744,7 +788,6 @@ for (const transport of ["default", "relay"] as const) {
         // The control listener main already uses, on loopback; not the gateway port.
         expect(probe.hostOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
         expect(new Set(probe.invokesOverHttp)).toEqual(new Set([probe.hostOrigin]));
-        expect(probe.relayedToHost).toBe(0);
         // Settings shows the same default as main applied.
         dismissStartupDialogsOnPage(page);
         await page.getByRole("button", { name: "Global settings", exact: true }).click();
@@ -762,6 +805,12 @@ for (const transport of ["default", "relay"] as const) {
         await page.screenshot({
           path: path.join(previewDir, "local-transport-packaged-default-on.png"),
         });
+        // Main relayed neither config change: the preload's listener has been
+        // counting since the probe, through the Settings steps above.
+        expect(
+          await page.evaluate(readRelayedToHost),
+          "main relayed a config change to a direct-transport window",
+        ).toBe(0);
       } else {
         expect(probe.host).toBeNull();
         expect(probe.invokesOverHttp).toEqual([]);

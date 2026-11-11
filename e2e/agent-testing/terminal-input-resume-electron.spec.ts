@@ -5,7 +5,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -26,6 +26,9 @@ import { watchElectronStartup } from "./electron-startup-recovery";
  * same recovery flow as terminal-input-resume.spec.ts, through the real
  * Electron main process, IPC and BackendHttpClient. A wrapper around the main
  * process's fetch loses one write's response after the backend applied it.
+ * The wrapper sees only commands main forwards, so the window is pinned to
+ * main's relay: the direct gateway transport (the default since to-do 4501
+ * task 2) sends them from the renderer instead.
  */
 
 type Project = { id: string; name: string };
@@ -116,6 +119,13 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     },
   });
   const profilePath = await initializeProfile(profile);
+  // The fault injector wraps main's fetch, which a local window's commands
+  // reach only with the direct transport turned off.
+  await mkdir(profile.dataDir, { recursive: true });
+  await writeFile(
+    path.join(profile.dataDir, "config.json"),
+    JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: false } }),
+  );
   const projectPath = await prepareFixtureRepository(
     profile,
     path.join(repositoryRoot, "test-fixtures", "agent-project"),

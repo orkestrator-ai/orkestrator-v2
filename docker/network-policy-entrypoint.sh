@@ -201,10 +201,26 @@ staged_input_digest() {
     printf '%s\n' "$digest"
 }
 
+# Removes copies below the relay as node, who owns every path there. A
+# directory node left without write or search permission (a workload's chmod
+# 0500) is opened up and the removal tried again. Succeeds only when every
+# path is gone, checked by root, who can see past any mode node set.
+remove_relay_copies() {
+    local copy
+    [ "$#" -gt 0 ] || return 0
+    as_input_user rm -rf -- "$@" 2>/dev/null || {
+        as_input_user chmod -R u+rwx -- "$@" 2>/dev/null
+        as_input_user rm -rf -- "$@" 2>/dev/null
+    } || true
+    for copy in "$@"; do
+        if [ -e "$copy" ] || [ -L "$copy" ]; then return 1; fi
+    done
+}
+
 relay_staged_inputs() {
     local source_root="$1" relay_dir="$2" owner="$3" state_dir="${4:-${STAGED_INPUT_RELAY_STATE_DIR:-}}"
     local name source parent unreadable entries bytes digest previous index
-    local relay_names=() relay_digests=() kept=() remove=()
+    local relay_names=() relay_digests=() kept=() kept_digests=() remove=()
     # Root's own directory under root-owned /run, like the relay directory:
     # node cannot create entries there, so neither can be planted. Without
     # one, every mount is relayed in full.
@@ -235,26 +251,35 @@ relay_staged_inputs() {
         fi
         if [ -n "$digest" ] && [ "$previous" = "$digest" ] && as_input_user test -e "$relay_dir/$name"; then
             kept+=("$name")
+            kept_digests+=("$digest")
         else
             relay_names+=("$name")
             relay_digests+=("$digest")
             remove+=("$name")
         fi
     done
-    if [ "${#kept[@]}" -eq 0 ]; then
-        # rm never follows a link node left inside either directory.
-        rm -rf --one-file-system -- "$relay_dir"
-        [ -z "$state_dir" ] || rm -rf --one-file-system -- "$state_dir"
-    else
+    if [ "${#kept[@]}" -gt 0 ]; then
         # Each copy not kept goes, as node, who owns every path below the
         # relay directory; its digest goes first, so a copy is never kept on
-        # the strength of a digest whose relay did not finish.
+        # the strength of a digest whose relay did not finish. A copy that
+        # will not go must not stay readable at its live path, so the whole
+        # relay is then rebuilt by root, as when nothing is kept.
         local paths=()
         for name in "${remove[@]}"; do
             rm -f -- "$state_dir/${name//\//%2F}"
             paths+=("$relay_dir/$name")
         done
-        [ "${#paths[@]}" -eq 0 ] || as_input_user rm -rf -- "${paths[@]}" || true
+        if ! remove_relay_copies "${paths[@]}"; then
+            echo "Stale staged input copies could not be removed; relaying every staged input again" >&2
+            relay_names+=("${kept[@]}")
+            relay_digests+=("${kept_digests[@]}")
+            kept=()
+        fi
+    fi
+    if [ "${#kept[@]}" -eq 0 ]; then
+        # rm never follows a link node left inside either directory.
+        rm -rf --one-file-system -- "$relay_dir"
+        [ -z "$state_dir" ] || rm -rf --one-file-system -- "$state_dir"
     fi
     for index in "${!relay_names[@]}"; do
         name="${relay_names[$index]}"
@@ -268,7 +293,13 @@ relay_staged_inputs() {
         if ! tar -C "$(dirname "$source")" -cf - "$(basename "$source")" 2>/dev/null |
             as_input_user sh -c 'umask 077; exec tar -C "$1" -xf - --no-same-owner --no-same-permissions' sh "$parent"; then
             echo "Staged input /$name could not be relayed" >&2
-            as_input_user rm -rf -- "$relay_dir/$name" || true
+            if ! remove_relay_copies "$relay_dir/$name"; then
+                # A partial copy must not be read as the input: give up on
+                # the whole relay, so every input falls back to its mount.
+                rm -rf --one-file-system -- "$relay_dir"
+                [ -z "$state_dir" ] || rm -rf --one-file-system -- "$state_dir"
+                return 1
+            fi
             continue
         fi
         [ -n "$digest" ] || continue

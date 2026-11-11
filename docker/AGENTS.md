@@ -128,7 +128,10 @@ Users and isolation:
   (`relay_staged_inputs`). It leaves a copy alone when the digest root kept
   of that mount in its own `/run/orkestrator-relay-state` still matches;
   take that digest from the read-only mount only, never from the copy,
-  which `node` owns, and remove or replace a copy as `node`. `entrypoint.sh` reads a relayed copy in place of
+  which `node` owns, and remove or replace a copy as `node`
+  (`remove_relay_copies`). A copy that will not go must never stay at its
+  live path: fall back to root rebuilding the whole relay, as when nothing is
+  kept. `entrypoint.sh` reads a relayed copy in place of
   its mount (the copy helpers resolve their source root inline, and
   `staged_input_path` elsewhere); `workspace-setup.sh` uses `project_input`.
   Keep `STAGED_INPUT_MOUNTS` in step with the backend's mount targets

@@ -457,7 +457,12 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   cannot be named is not recorded rather than guessed. The
   link is written after the provider-session teardown lock is released (a
   resume holds its canvas lane while waiting for that lock), and recording
-  never fails the close.
+  never fails the close. The fallback to the kept identity is covered by
+  deterministic tests only (`commands-registry-teardown.test.ts`, "a Codex
+  session the bridge lost…"): `e2e/agent-testing/design-resume-clients-live.spec.ts`
+  restarts the Codex bridge before the close, but a restarted bridge restores
+  its registrations, so the live read still answers. Reaching the branch live
+  would need a fault hook in the bridge, so no live check is kept for it.
 - **Link states.** `design_session_link_states` reads each link's tab mapping
   from storage (no liveness route, nothing that defeats idle detachment) and
   reports `retained` or `missing`; it writes nothing. For closed links with a
@@ -504,6 +509,13 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   first one's link and live session without resuming again. The tab opens with
   `resumeSessionId` and `requireExistingResumeSession` and no initial prompt,
   so the design's opening prompt is never sent again.
+
+Links, Resume and two clients resuming at once were qualified live with Claude
+and Codex on 2026-10-24 and 2026-10-25; that record is in the retired to-do
+0038 (`git show 14df96544:docs/todo/design-canvas/0038-design-agent-conversation-links.md`).
+The archived state has deterministic and browser coverage; its live check
+with a real archived Codex thread is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 ## Bounds
 
@@ -564,7 +576,13 @@ apart with no page action between them flip between the two values; every
 `addEventListener` registration in the page and every listener on its nodes
 (DOMDebugger, iframes included) stayed constant in every sample; and a heap
 snapshot taken at a high reading held the low number of registered
-listeners. A leak raises the floor and still fails the check.
+listeners. A leak raises the floor and still fails the check. With the
+2026-10-22 parameters (3 runs × 1, 16 and 64 frames, 12 cycles) on beelink2 on
+2026-11-11, the floor rule passed all nine runs, including runs that read both
+values; one 16-frame run failed instead on `cdpFrames` reading 10 rather than 9
+on two late samples, on a heavily loaded host
+([7820](../todo/design-canvas/7820-design-perf-cdp-frames-transient.md)).
 `--listener-census` (with `--heap-snapshots <dir>`) repeats that
 investigation; it perturbs the page, so it is never used for measured
-numbers.
+numbers. The 2026-11-06 failures that prompted it are in the retired to-do
+7440 (`git show 14df96544:docs/todo/design-canvas/7440-design-perf-listener-count-two-states.md`).

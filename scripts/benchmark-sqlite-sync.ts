@@ -1,6 +1,7 @@
 /**
- * SQLite sync-cost probe (docs/todo/cross-cutting/5180-sqlite-durability-tiers.md,
- * task 3; docs/architecture/storage.md, "Durability and deletion").
+ * SQLite sync-cost probe (docs/architecture/storage.md, "Durability and
+ * deletion"; to-do 5180 task 3, retired: `git show
+ * 498b68766:docs/todo/cross-cutting/5180-sqlite-durability-tiers.md`).
  *
  * Answers, for the SQLite library Bun links on this host: which sync settings a
  * fresh connection has (`fullfsync`, `checkpoint_fullfsync`), and what a commit

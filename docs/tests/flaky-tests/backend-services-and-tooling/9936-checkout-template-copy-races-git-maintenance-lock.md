@@ -86,6 +86,34 @@ appears and disappears) before changing the fixture.
 
 The fix proposed under Hypothesis still applies; it was not attempted here.
 
+## Recurrence — 2026-11-11 (SQLite activity metrics branch)
+
+- **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; head `9530616a0` on
+  branch `sqlite-storage-tuning-d0d420a0c5e2-r1`, which changes only storage
+  instrumentation, the deletion scrub, diagnostics types and docs, not the
+  fixture or the failing tests. `mise run flaky:recurrence -- 9936 --base
+  498b68766` answered `open`.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+  default-tests-skip-guards -- mise run test` (macOS, 18 CPUs, load average
+  about 34–39, git 2.56.0). Backend group: 18334 pass, 7 fail.
+- **Failing tests with `ENOENT … lstat '<tmp>/ork-checkout-template-XXXXXX/.git/objects/maintenance.lock'`:**
+  - `production coordinator and leaf RPC share the raw/turn activity probe and exact session lookup` (`worker-session-activity.test.ts`, 1111 ms)
+  - `real scoped credentials prompt and launch jobs in leaf-only environments with durable delegations` (`control-mcp-node-auth.test.ts`, 272 ms)
+  - `a command node's coordinator sending to a leaf > an agent tab there can open the image from the path its own node wrote` (`coordinator-mail-attachments-nodes.test.ts`, 364 ms)
+  - `coordinator deliverNow > a busy native worker gets the message steered into its running turn` (`coordinator-deliver-now.test.ts`, 522 ms)
+- **Reruns:** the runner's one-file reruns passed `worker-session-activity`,
+  `control-mcp-node-auth` and `coordinator-mail-attachments-nodes`.
+  `coordinator-deliver-now` failed its runner rerun with the same
+  `maintenance.lock` error inside `MailWorld.create()` (28 pass, 1 fail),
+  then passed alone twice: `mise run test:logged -- --name
+  deliver-now-rerun-N -- mise exec -- bun --cwd=apps/backend test --preload
+  ../../tests/setup-node.ts src/core/coordinator-deliver-now.test.ts
+  --parallel=1` (11.9 s each). Failing alone under load fits the hypothesis
+  (the race is with Git's detached maintenance, not with sibling test files).
+- **Evidence:** `orkestrator-test-run.tVTJUs/` under the host temporary
+  directory (`workspace-…-toolchain.log.gz`,
+  `rerun-apps-backend-src-core-coordinator-deliver-now-test-ts.log.gz`).
+
 ## Recurrence and resolution (2026-11-11)
 
 Observed again on branch `webkit-scroll-fix-d230c4f38350-r1` (base

@@ -155,11 +155,64 @@ export interface SlowStorageOperationsSnapshot {
   recent: SlowStorageOperation[];
 }
 
+/**
+ * Upper bounds in milliseconds of the commit and read histograms; a time past
+ * the last counts in the final bucket.
+ */
+export const STORAGE_TIMING_BUCKETS_MS = [0.1, 0.25, 1, 4, 16, 64, 250, 1_000] as const;
+
+/** A count of timed SQLite calls, with their total, maximum and histogram. */
+export interface StorageTimingSeries {
+  count: number;
+  totalMs: number;
+  maxMs: number;
+  /** Per-bucket counts, one for each of {@link STORAGE_TIMING_BUCKETS_MS} plus the overflow. */
+  buckets: number[];
+}
+
+/** What one SQLite file's connections in this process did since {@link StorageActivitySnapshot.since}. */
+export interface StorageFileActivity {
+  /** Connections to the file this process opened. */
+  connections: number;
+  /**
+   * Write commits: transactions that ran a statement which changed something,
+   * and changing statements outside a transaction. With WAL each one appends
+   * to the WAL and, under `synchronous = FULL`, syncs it. Timed from the end of
+   * the transaction's body to its return (the COMMIT and its sync), or the
+   * whole statement outside a transaction.
+   */
+  commits: StorageTimingSeries;
+  /** Explicit `wal_checkpoint` calls, which sync the database file. */
+  checkpoints: StorageTimingSeries;
+  /**
+   * Read-only transactions and reads outside a transaction, timed by the
+   * time spent in SQLite statements, by store family (`web-annotations/<id>`
+   * counts as `web-annotations`), or `table:<name>` when no store was named.
+   */
+  reads: Record<string, StorageTimingSeries>;
+}
+
+/**
+ * Content-free counts of the commits and reads this process made, per
+ * database file (`main`, `ledger`, `other`). Counts only grow: a rate is the
+ * difference of two snapshots over the time between them.
+ */
+export interface StorageActivitySnapshot {
+  /** When counting began: this process's first connection. */
+  since: string;
+  bucketsMs: readonly number[];
+  files: Record<string, StorageFileActivity>;
+  /** Reads folded into `other` because a file's read table was full. */
+  readsOverflowed: number;
+}
+
 /** `get_database_stats`: the cached summary plus the live lease counters. */
 export interface DatabaseStats extends DatabaseSummary {
   leaseWaits: LeaseWaitSnapshot;
   /** Absent from a backend older than the slow-operation record. */
   slowOperations?: SlowStorageOperationsSnapshot;
+  /** Absent from a backend older than the commit and read counters. */
+  activity?: StorageActivitySnapshot;
 }
 
 export const DIAGNOSTICS_MANIFEST_SCHEMA_VERSION = 1;

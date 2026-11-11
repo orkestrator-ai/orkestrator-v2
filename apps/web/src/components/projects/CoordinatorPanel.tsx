@@ -130,6 +130,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }, [conversations, projectId, replacement]);
   const {
     layout,
+    layoutStatus,
+    retryLayout,
     backendSelectedId,
     updateLayout,
     changeLayout,
@@ -619,6 +621,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   );
                 }}
               />
+            ) : layoutStatus === "failed" ? (
+              <CoordinatorLayoutReadFailed onRetry={retryLayout} />
             ) : null}
           </div>
         </FloatingNoticeLayer>
@@ -669,5 +673,32 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         </AlertDialog>
       </div>
     </CoordinatorPullRequestWatchProvider>
+  );
+}
+
+/**
+ * The tab groups could not be read. Nothing is shown in their place: a
+ * default grouping saved now would replace the user's (to-do 5000, retired).
+ * The store reads again on its own; Retry reads at once.
+ */
+function CoordinatorLayoutReadFailed({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="grid h-full place-items-center p-8">
+      <div
+        className="max-w-md rounded-xl border border-border/70 bg-card p-6 text-center"
+        data-coordinator-layout-read-failed=""
+      >
+        <AlertCircle className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden="true" />
+        <h2 className="font-semibold">Could not load the tab groups</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Your conversations are still open. They appear here, in your groups, once the groups can
+          be read. Trying again automatically.
+        </p>
+        <Button className="mt-4" variant="outline" size="sm" onClick={onRetry}>
+          <RotateCcw className="size-4" />
+          Retry now
+        </Button>
+      </div>
+    </div>
   );
 }

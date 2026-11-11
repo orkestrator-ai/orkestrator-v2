@@ -4,7 +4,17 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { PORT_COLLISION_RETRIES, startDockerContainer } from "../src/core/container-start";
+import {
+  backendHostPortLabelArguments,
+  chooseBackendHostPorts,
+} from "../src/core/container-host-ports";
+import {
+  PORT_COLLISION_RETRIES,
+  PORT_HOLD_RETRY_DELAYS_MS,
+  startDockerContainer,
+} from "../src/core/container-start";
+import { createServer, type Server } from "node:net";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { runCommand } from "../src/core/shell";
 
 const image = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim();
@@ -21,7 +31,7 @@ afterAll(async () => {
   if (network) await docker(["network", "rm", network]);
 }, 180_000);
 
-async function fixture(hostPort = "") {
+async function fixture(hostPort = "", extra: string[] = []) {
   if (!network) {
     network = await docker([
       "network",
@@ -37,8 +47,7 @@ async function fixture(hostPort = "") {
     `orkestrator-qualification=${runId}`,
     "--network",
     network,
-    "-p",
-    `127.0.0.1:${hostPort}:8080`,
+    ...(extra.length > 0 ? extra : ["-p", `127.0.0.1:${hostPort}:8080`]),
     "--entrypoint",
     "bun",
     image!,
@@ -48,6 +57,21 @@ async function fixture(hostPort = "") {
   containers.push(id);
   return id;
 }
+/** Listens on 127.0.0.1:`port`; null when another socket already holds it. */
+function hold(port: number): Promise<Server | null> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(null));
+    server.listen(port, "127.0.0.1", () => resolve(server));
+  });
+}
+function release(server: Server | null): Promise<void> {
+  return new Promise((resolve) => (server ? server.close(() => resolve()) : resolve()));
+}
+async function rootless(): Promise<boolean> {
+  return (await docker(["info", "-f", "{{json .SecurityOptions}}"])).includes("name=rootless");
+}
+
 async function assertPublished(id: string) {
   const attached = JSON.parse(
     await docker(["inspect", "-f", "{{json .NetworkSettings.Networks}}", id]),
@@ -182,4 +206,65 @@ describe("Docker start recovery", () => {
       120_000,
     );
   }
+});
+
+describe("rootless backend-chosen host ports (to-do 7549 task 4)", () => {
+  live(
+    "the backend's ports start where Docker's next automatic ports are held",
+    async () => {
+      if (!(await rootless())) {
+        console.warn("skipped: the daemon is not rootless");
+        return;
+      }
+      // Where the daemon's automatic-port cursor stands now.
+      const probe = await fixture();
+      await startDockerContainer(probe);
+      const drawn = Number((await docker(["port", probe, "8080/tcp"])).split(":").at(-1));
+      await docker(["stop", "-t", "1", probe]);
+      // Hold a run of the ports it draws next, longer than the retries. A
+      // port another socket already holds is held all the same.
+      const run = PORT_COLLISION_RETRIES + 4;
+      const holders = await Promise.all(
+        Array.from({ length: run }, (_, index) => hold(drawn + 1 + index)),
+      );
+      try {
+        // Docker's own allocation walks the held run one port per start.
+        const automatic = await fixture();
+        await expect(startDockerContainer(automatic)).rejects.toThrow(
+          /address already in use|port is already allocated/i,
+        );
+        // The backend's choice is a port the host kernel reports free.
+        const chosen = await chooseBackendHostPorts(["-p", "127.0.0.1::8080/tcp"]);
+        const id = await fixture("", [
+          ...chosen.publishArguments,
+          ...backendHostPortLabelArguments(chosen.chosen),
+        ]);
+        const logs = captureLogs();
+        await startDockerContainer(id).finally(() => logs.restore());
+        expect(logs.records().filter((r) => r.event === "start.port-collision-retrying")).toEqual(
+          [],
+        );
+        expect(await docker(["port", id, "8080/tcp"])).toBe(`127.0.0.1:${chosen.chosen[0]}`);
+        await assertPublished(id);
+        // A later start that finds its backend-chosen port held retries that
+        // port after a pause, and starts once the holder has gone.
+        await docker(["stop", "-t", "1", id]);
+        const blocker = await hold(chosen.chosen[0]!);
+        expect(blocker).not.toBeNull();
+        const pauses: number[] = [];
+        await startDockerContainer(id, {
+          sleep: async (ms) => {
+            pauses.push(ms);
+            await release(blocker);
+          },
+        });
+        expect(pauses).toEqual([PORT_HOLD_RETRY_DELAYS_MS[0]!]);
+        expect(await docker(["port", id, "8080/tcp"])).toBe(`127.0.0.1:${chosen.chosen[0]}`);
+        await assertPublished(id);
+      } finally {
+        await Promise.all(holders.map(release));
+      }
+    },
+    180_000,
+  );
 });

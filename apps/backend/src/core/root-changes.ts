@@ -11,7 +11,7 @@ import { containerExecArgs } from "./tmux-shared.js";
 
 /**
  * The project checkout's uncommitted changes, and a user-approved patch of
- * some of them applied to a worker (todo 0142, item 1).
+ * some of them applied to a worker (coordinator.md, "Uncommitted changes in a worker").
  *
  * Reading the checkout never writes to it: the listing is `git status`
  * without optional locks, and the patch is `git diff HEAD` against a

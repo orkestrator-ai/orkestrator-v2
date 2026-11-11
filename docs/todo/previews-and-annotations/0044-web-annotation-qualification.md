@@ -105,7 +105,8 @@ specs already had. It then passed in full (16 passed, 2 container opt-ins
 skipped) inside a loopback-only network namespace, after a harness fix (the
 startup-dialog handler). `mise run test:agent:browser:isolated`: every
 annotation case passed; its three failures were two 2340 cases and one
-unrelated CLI case (to-do 7431). Headless means no Wayland or X11 window was exercised;
+unrelated CLI case (to-do 7431 (retired); cause and fix in flake
+[0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)). Headless means no Wayland or X11 window was exercised;
 OS-level focus stays task 9's. Details and decisions under "Runs on
 2026-11-06" and "Assumptions and decisions".
 
@@ -707,7 +708,7 @@ Reviewer / date: Claude (worker agent), 2026-11-06; awaiting human review
 | The two container cases, host namespace, pool shim on `PATH`, before the startup recovery | Fail twice in `beforeAll` (2340: 60–120 `ERR_NETWORK_CHANGED` lines); inside the namespace the environment could not be created (`resource-exhausted`: no free Docker address pool) |
 | The two container cases, host namespace, with the startup recovery | Pass: 2 passed, 50 s; each start reloaded once after `ERR_NETWORK_CHANGED`. Stored flags `[true, false]` (fixture HTML) and `[true, true]` (Vite app) |
 | Whole spec with the container opt-in, host namespace | Fail twice: once a descendant outlived a graceful quit (new flake [7432](../../tests/flaky-tests/previews-annotations-and-gateway/7432-annotation-restart-electron-child-outlives-quit.md), no `ERR_NETWORK_CHANGED`); once 2340 after a recovered startup (72 lines, 6 failed lazy imports when Kanban loaded) |
-| `mise run test:agent:browser:isolated` | 49 passed, 3 failed, 111 skipped (opt-in live, Docker and container cases), 1,057 s. Every annotation gateway case that runs there passed: overlapping batches, the count bound, evidence in the local worktree, web review of a desktop capture, the metrics baseline. Failures, none in annotation code: both `host maintenance rehydrates task completion while Settings is closed` cases (2340: 17 and 139 `ERR_NETWORK_CHANGED`; both passed rerun alone, 3.6 and 3.7 s) and `a CLI-initialized project and its cascade removal reach an open renderer` (failed again alone, deterministic: [to-do 7431](../cross-cutting/7431-cli-ui-cascade-removal-collapse-button.md)) |
+| `mise run test:agent:browser:isolated` | 49 passed, 3 failed, 111 skipped (opt-in live, Docker and container cases), 1,057 s. Every annotation gateway case that runs there passed: overlapping batches, the count bound, evidence in the local worktree, web review of a desktop capture, the metrics baseline. Failures, none in annotation code: both `host maintenance rehydrates task completion while Settings is closed` cases (2340: 17 and 139 `ERR_NETWORK_CHANGED`; both passed rerun alone, 3.6 and 3.7 s) and `a CLI-initialized project and its cascade removal reach an open renderer` (failed again alone, deterministic: to-do 7431 (retired); the helper raced the empty-project auto-collapse, fixed in flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)) |
 | `test:agent:docker` selection of `web-annotations-gateway.spec.ts`, profile `q0044-docker` (`--fixture-environments local,container`, credential-free, pool shim on `PATH`) | Pass: 2 passed, 1 skipped (live), 257 s. Evidence written as `node` at `/workspace/.orkestrator/annotations/<request>-<digest>.png`; container checks `exists,exists,missing,outside-workspace`; evidence removed 240 s after settlement; source hints `[true, false, false]` |
 | Focused unit tests | `web-annotations-native-captures.test.ts` 4 passed; `electron-startup-dialogs.test.ts` 2 passed, and fails against the old handler (negative control); `packaged-electron-app.test.ts` and `electron-display-setup.test.ts` pass; `source-hint-emitter-doc`, `source-hint-emitter-vite.integration` and `browser-preview-source-hints` pass |
 
@@ -740,7 +741,9 @@ Findings (fixed on this branch unless stated):
   local cases run in a loopback-only namespace; the container cases run in the
   host namespace with the startup recovery.
 - **The CLI cascade-removal browser case fails deterministically here** (to-do
-  7431; not investigated).
+  7431 (retired)). Its helper raced the sidebar's auto-collapse of an empty
+  project; fixed the same day, see flake
+  [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md).
 
 ### Runs on 2026-10-25 (macOS, arktech-mini)
 
@@ -951,8 +954,8 @@ Findings:
   unparseable logins dropped. When nothing usable remains, the launcher warns
   ("Grok is signed out in this profile: …") and seeds nothing. Containers
   now get the same access-only copy (2026-10-21; see "Single-use refresh
-  tokens" in
-  [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  tokens" in to-do 0018, retired 2026-11-11; now described in
+  [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 - **`results.json` kept the gateway cookie (fixed).** Playwright's JSON
   reporter writes after global teardown, so the sanitizer never saw
   `results.json`. A request that failed when the backend went away left
@@ -1558,7 +1561,7 @@ Made on 2026-10-25 without the user, to be validated.
   2026-11-11").
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.
-- [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker fixtures.
 - [web-page-annotations.md](../../architecture/web-page-annotations.md),
   including §"Request states" and §"Anchors and pins".

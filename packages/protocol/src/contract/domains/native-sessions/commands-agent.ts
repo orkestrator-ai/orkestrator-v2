@@ -210,7 +210,7 @@ export const getNativeAgentSessionCommand = defineCommand({
   critical: [],
 });
 
-/** The whole projection (the pre-progressive read). */
+/** The whole projection (the pre-progressive read). Pre-encoded rows: the gateway splices them. */
 export const getNativeAgentProjectionCommand = defineCommand({
   domain: nativeSessionsDomain,
   name: "get_native_agent_projection",
@@ -224,6 +224,7 @@ export const getNativeAgentProjectionCommand = defineCommand({
   }),
   result: NullableProjectionSchema,
   critical: [],
+  encoded: true,
 });
 
 /** Whether the tab's refused prompt goes out again after a sign-in. */

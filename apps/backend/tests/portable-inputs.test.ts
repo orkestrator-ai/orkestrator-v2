@@ -1168,7 +1168,6 @@ describe("Cursor MCP configuration", () => {
       "report_agent_copy_skips",
       "agent_source_path_has_symlink",
       "agent_destination_path_has_symlink",
-      "agent_input_record_copy",
       "agent_input_stamp",
       "agent_input_source_readable",
       "agent_input_manifest",

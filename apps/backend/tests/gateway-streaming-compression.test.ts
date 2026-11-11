@@ -1,6 +1,6 @@
 /**
  * Streaming SSE gzip (`--compression on`) behaviour the remote bandwidth
- * qualification relies on (todo 0052): every frame leaves in its own
+ * qualification relies on (docs/development/remote-bandwidth.md): every frame leaves in its own
  * sync-flushed block rather than waiting for a large chunk or the end of the
  * stream, nothing is encoded twice, clients that do not negotiate gzip get
  * identity, replay and keepalives survive compression, and every compressor

@@ -258,6 +258,68 @@ test("a settled progressive read keeps neither its epoch nor its snapshot share"
   );
 });
 
+test("a discovery read in flight does not pin a settled snapshot share", async () => {
+  let content = "first reply";
+  let releaseDiscovery!: () => void;
+  const discoveryHeld = new Promise<void>((resolve) => {
+    releaseDiscovery = resolve;
+  });
+  let discoveryEntered!: () => void;
+  const discoveryStarted = new Promise<void>((resolve) => {
+    discoveryEntered = resolve;
+  });
+  const stub = createProviderStub("claude", {
+    interactiveSnapshot: async () => ({ status: "idle", messages: [row(content)] }),
+    slashCommands: async () => {
+      discoveryEntered();
+      await discoveryHeld;
+      return [];
+    },
+  });
+  const session = { ...identity, agent: "claude" as const };
+  const gauges = () =>
+    recurringWorkDiagnostics().caches.find((cache) => cache.name === "native-projection")!.gauges;
+  await withService(
+    { prefix: "orkestrator-native-discovery-share-", provider: async () => stub.provider },
+    async ({ service }) => {
+      await service.ensureSession(session);
+      const transcript = () =>
+        service.getTranscriptUpdate({
+          ...session,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+      const state = () =>
+        service.getSessionStateUpdate({ ...session, viewVersion: 1, forceSnapshot: true });
+      try {
+        // Discovery runs behind the view that asked for it, so this read
+        // returns while the slash-command read is still held.
+        await service.getDiscoveryUpdate({ ...session, viewVersion: 1, sections: ["commands"] });
+        await discoveryStarted;
+        expect(gauges().progressiveReads).toBe(1);
+
+        const [first] = await Promise.all([transcript(), state()]);
+        if (first.status !== "snapshot") throw new Error("expected snapshot");
+        expect(JSON.stringify(first.value.messages)).toContain("first reply");
+        // The discovery read never joins a share, so it must not keep one.
+        expect(gauges()).toMatchObject({ progressiveReads: 1, interactiveSnapshotShares: 0 });
+      } finally {
+        releaseDiscovery();
+      }
+      await waitForCondition(async () => gauges().progressiveReads === 0);
+      expect(gauges().interactiveSnapshotShares).toBe(0);
+
+      content = "second reply";
+      const second = await transcript();
+      if (second.status !== "snapshot") throw new Error("expected snapshot");
+      expect(JSON.stringify(second.value.messages)).toContain("second reply");
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(2);
+      expect(gauges().interactiveSnapshotShares).toBe(0);
+    },
+  );
+});
+
 test("an evicted transcript takes its source token with it", async () => {
   const stub = createProviderStub("codex", {
     transcriptSnapshot: async (sessionId) => ({

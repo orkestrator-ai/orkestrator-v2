@@ -133,17 +133,21 @@ In `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`):
   reads the whole window and schedules its own recovery.
 - `interactiveSnapshotShares`: a share exists so that the transcript and
   state reads of one session issued together share one provider snapshot. A
-  settled share is now kept only while another progressive read of that
-  session is in flight, and the last of them to settle drops it. Kept for the
-  rest of its epoch, it answered every later read in that epoch, which moves
-  only on an invalidation, with an older snapshot.
+  settled share is now kept only while another transcript or state read of
+  that session is in flight, and the last of them to settle drops it. Kept
+  for the rest of its epoch, it answered every later read in that epoch,
+  which moves only on an invalidation, with an older snapshot. Discovery and
+  MCP action reads never take a share and do not count: a discovery read
+  settles without releasing shares, so counting it let a share outlive the
+  reads that used it (review round 2).
 
 Why: each map then tracks something that is already bounded (reads in
 flight, the progressive transcript cache), so no new constant is needed, and
 join behaviour within a read is unchanged. An LRU bound would have been a
 guess and could split a join. Tests: `native-agent-projection-cache-gauges.test.ts`
 asserts that a settled read keeps neither its epoch nor its share (and a
-later read gets the newer snapshot), and that an evicted transcript takes its
+later read gets the newer snapshot), that a discovery read still in flight
+does not keep a settled share, and that an evicted transcript takes its
 source token with it; `native-agent-service-progressive.test.ts` still pins
 that reads issued together share one snapshot. The projection, progressive
 and sync suites pass. Live: the

@@ -1863,9 +1863,10 @@ export class NativeAgentTranscriptProjection {
      * not on streamed rows, so a settled share kept for the rest of its epoch
      * answered every later read with an older snapshot and held a whole
      * snapshot per session ever read (todo 7100 task 3). Once it settles it is
-     * kept only while another read of the session is still in flight, which
-     * is what lets a state read join the transcript read it was issued with;
-     * the last of them to settle drops it (`releaseSettledSnapshotShares`).
+     * kept only while another transcript or state read of the session is in
+     * flight, which is what lets a state read join the transcript read it was
+     * issued with; the last of them to settle drops it
+     * (`releaseSettledSnapshotShares`).
      */
     const settle = () => {
       share.settled = true;
@@ -1875,12 +1876,25 @@ export class NativeAgentTranscriptProjection {
     return promise;
   }
 
+  /**
+   * Whether a read that can join an interactive snapshot share — a transcript
+   * or state read — is in flight for the session. Discovery and MCP action
+   * reads never take a share, and discovery settles without a session key, so
+   * counting them kept a settled share alive after the reads that shared it
+   * had finished, and nothing released it when the discovery did.
+   */
+  private snapshotShareReadInFlight(sessionKey: string): boolean {
+    const transcriptPrefix = `${sessionKey}\0progressive-v1\0transcript:`;
+    const stateKey = `${sessionKey}\0progressive-v1\0state`;
+    for (const candidate of this.progressiveReads.keys()) {
+      if (candidate === stateKey || candidate.startsWith(transcriptPrefix)) return true;
+    }
+    return false;
+  }
+
   private releaseSettledSnapshotShares(sessionKey: string): void {
     const sharePrefix = `${sessionKey}\0`;
-    const readPrefix = `${sessionKey}\0progressive-v1\0`;
-    for (const candidate of this.progressiveReads.keys()) {
-      if (candidate.startsWith(readPrefix)) return;
-    }
+    if (this.snapshotShareReadInFlight(sessionKey)) return;
     for (const [candidate, share] of Array.from(this.interactiveSnapshotShares)) {
       if (share.settled && candidate.startsWith(sharePrefix))
         this.interactiveSnapshotShares.delete(candidate);

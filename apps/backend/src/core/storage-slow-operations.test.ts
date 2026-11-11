@@ -405,6 +405,33 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
     ]);
   });
 
+  test("direct run and exec calls and a rolled-back transaction are each counted once", () => {
+    const { db, recorder, advance } = connection();
+    logs();
+    advance(2_000);
+    // Statements run on the database itself, not through query or prepare.
+    db.run("INSERT INTO stores (name) VALUES (timed_value(?))", [35]);
+    db.exec("INSERT INTO stores (name) VALUES (timed_value(25))");
+    // A transaction that throws is still one call, rollback included.
+    expect(() =>
+      db.transaction(() => {
+        db.query("INSERT INTO stores (name) VALUES (timed_value(?))").run(45);
+        throw new Error("rollback");
+      })(),
+    ).toThrow("rollback");
+    // A statement that fails is counted too; its error reaches the caller.
+    expect(() => db.run("INSERT INTO missing_table (name) VALUES ('x')")).toThrow();
+    expect(recorder.snapshot().recent).toEqual([]);
+    expect(recorder.stallContext({ fromMs: 2_000, toMs: 2_105 })).toEqual({
+      storageCalls: 4,
+      storageCallMs: 105,
+      storageMainCallMs: 105,
+      storageLedgerCallMs: 0,
+    });
+    // The rollback kept only the two direct inserts (this read is a fifth call).
+    expect(db.query("SELECT COUNT(*) AS rows FROM stores").get()).toEqual({ rows: 2 });
+  });
+
   test("calls under the threshold record nothing", () => {
     const { db, recorder, advance } = connection();
     db.transaction(() => {

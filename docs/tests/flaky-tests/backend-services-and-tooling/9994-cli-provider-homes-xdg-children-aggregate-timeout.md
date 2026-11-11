@@ -1,6 +1,6 @@
 # CLI provider-homes XDG case exceeds the five-second deadline under load
 
-- **ID:** 9979
+- **ID:** 9994
 - **Status:** open
 - **Date observed:** 2026-11-11
 - **Observing base:** `14df965440e658e09a7b3ce03530bc1781ac2b01` (`main`).

@@ -85,7 +85,7 @@ fixture.
   worker's merge notice`. The backend log has the same
   `updateCoordinatorWorkflowAssociations is not a function` reconcile error.
 - **Suite counts:** backend 18,552 pass and 21 fail; CLI 516 pass and 1 fail
-  ([9979](../backend-services-and-tooling/9979-cli-provider-homes-xdg-children-aggregate-timeout.md));
+  ([9994](../backend-services-and-tooling/9994-cli-provider-homes-xdg-children-aggregate-timeout.md));
   web 14,569 pass and 10 fail ([9932](../native-agents-and-transcripts/9932-virtuoso-cancellation-fake-clock-timer-count.md)).
   The root, bridge, guard and lockfile groups passed.
 - **Isolated rerun:** the runner's own reruns of all four files reported

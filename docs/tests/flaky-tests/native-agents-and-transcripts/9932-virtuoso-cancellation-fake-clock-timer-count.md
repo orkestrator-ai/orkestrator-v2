@@ -255,7 +255,7 @@ test; it does not touch this file or anything under `apps/web/`.
   navigation is still pending` and both `restored snapshot transitions from
   hidden to visible (cancel=%s)` cases.
 - **Suite counts:** web 14,569 pass and 10 fail; the backend (9978) and CLI
-  (9979) failures are recorded in their own cases; the root, bridge, guard
+  (9994) failures are recorded in their own cases; the root, bridge, guard
   and lockfile groups passed.
 - **Isolated rerun:** the runner's own rerun reported `FAILED ALONE (1.7s)`,
   and a manual `bun test` of the file from `apps/web` at the same load failed

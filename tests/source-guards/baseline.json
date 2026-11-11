@@ -136,7 +136,6 @@
     "e2e/StaticHtmlArtifact.spec.ts": 1,
     "e2e/TranscriptListRenders.spec.ts": 1,
     "e2e/agent-testing/agent-tab-requests-live.spec.ts": 2,
-    "e2e/agent-testing/container-files-wiring.spec.ts": 1,
     "e2e/agent-testing/idle-observation-live.spec.ts": 1,
     "e2e/agent-testing/mcp-probe-server.integration.test.ts": 1,
     "e2e/agent-testing/rich-transcripts-live.spec.ts": 1,

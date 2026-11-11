@@ -326,6 +326,30 @@ All files tab: while hidden the page sends no Files panel read, and the new
 entry shows on return. It also checks that a tree revision announced while the
 document was hidden still shows on a local worktree after return.
 
+The inactive-environment step returns to the container only once the backend's
+change projection (`changes_get_view`, read from the test process, never the
+page) lists the new file, so the change is proven to have landed while the
+environment was not shown. The hidden-document step is a negative check and
+stays a timed window, sized from the timings the spec runs with: three page
+polls, and two polls past the container tree cache. To keep that window short
+the spec sets two test-only timings (to-do
+[7569](../todo/cross-cutting/7569-docker-fixture-wall-clock-waits.md)):
+
+- **Page poll.** `window.orkestratorAgentTestTiming = { filesPanelPollMs }`
+  from an init script (`apps/web/src/lib/agent-test-timing.ts`). Only a Vite dev
+  renderer of an agent-test profile reads it; a production build drops the
+  branch. The spec reads the interval back from that module before sizing the
+  window, so an ignored override cannot make the window shorter than one poll.
+- **Backend periods.** `<data dir>/agent-test-fixtures/timing.json`, with
+  `containerTreeMaxAgeMs` (500–10 000 ms) and `webAnnotationGcEveryTicks`
+  (1–100 reconcile ticks of 3 s), read by
+  `apps/backend/src/core/agent-test-timing.ts`. It exists only where the
+  dispatch hold does (a source-run backend of flavor `agent-test` with
+  `ORKESTRATOR_AGENT_TEST_ISOLATED=1` and a non-default data directory), is
+  re-read when the file changes, can only shorten a period, and ignores
+  anything malformed. Removing the file restores the production values. The
+  annotation evidence spec uses the collection period the same way.
+
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:
 
@@ -3509,8 +3533,11 @@ waits for the load event, which a late font holds.
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
 owned by another profile. Its two annotation cases write evidence into the
-fixture container, check paths inside it and wait (up to about 5 minutes, one
-garbage-collection period) for settled-evidence cleanup; the live one needs
+fixture container, check paths and source hints inside it, and wait for
+settled-evidence cleanup. The cleanup case shortens the backend's
+garbage-collection period from 100 to 2 reconcile ticks through the profile's
+timing file (see [Container app wiring qualification](#container-app-wiring-qualification)),
+so it waits seconds rather than up to 5 minutes; the live one needs
 `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`.
 
 `web-annotations-approval-live.spec.ts` (opt-in

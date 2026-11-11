@@ -24,7 +24,7 @@ export const ALLOWLIST_ENTRY_HINT =
  * destinations, and an allowed service accepts what it is sent.
  */
 export const ALLOWLIST_RESIDUAL_RISK =
-  "The allowlist limits where a restricted container can connect, not what it sends: an allowed service such as GitHub, npm or a model provider's API accepts whatever an agent sends it, including to an account or key that is not yours. Containers from current images also check the name each connection and DNS lookup asks for, so other sites sharing an allowed address are refused. That check cannot see a name hidden inside encrypted traffic (an encrypted ClientHello, domain fronting), and UDP entries and protocols other than HTTPS and HTTP are checked by address only.";
+  "The allowlist limits where a restricted container can connect, not what it sends: an allowed service such as GitHub, npm or a model provider's API accepts whatever an agent sends it, including to an account or key that is not yours. Containers from current images also check the name each connection and DNS lookup asks for, so other sites sharing an allowed address are refused. That check cannot see a name hidden inside encrypted traffic (an encrypted ClientHello, domain fronting), and UDP entries and protocols other than HTTPS and HTTP are checked by address only. On a port an entry names, a protocol where the client speaks first must end its first command with a newline: a first message of plain text without one is held, then refused after 30 seconds.";
 
 export interface AllowlistEntry {
   domain: string;

@@ -1305,7 +1305,13 @@ Docker's own DNS rules:
   gets an `access_denied` alert, an HTTP client a 403 naming the gateway.
   Other protocols are refused on TCP 443 and relayed by address on any other
   named port; a server that speaks first (SSH, a database banner) is relayed
-  to the client while its first bytes are awaited.
+  to the client while its first bytes are awaited. A first write of
+  printable text with no newline yet is held, because it could still become
+  an HTTP request line sent a byte at a time; the daemon refuses it, with no
+  reply, after 30 s. A client-first text protocol on a named port must
+  therefore end its first command with a newline (SMTP, POP3, IMAP, Redis
+  and memcached do); a bare word such as `probe`, or `{"op":1}`, is never
+  relayed. Binary first bytes (TLS, PostgreSQL, MongoDB) are not held.
 - a redirect of every unmarked DNS query, to Docker's resolver or straight
   to any server, to the daemon. It forwards an allowlisted name (exact),
   GitHub's names and `*.docker.internal` (only when asked through Docker's
@@ -1351,7 +1357,13 @@ one moved; a restarted worker carries them on, and a new boot (fresh `/run`)
 starts at zero. The backend reads the file in the same `docker exec` as the
 firewall report and returns it as `effective.refusals` only beside
 `egressFilter: enforced` (`null` from an image before the counts), and the
-Network section says how many were refused. Counts only: no refused name,
+Network section says how many were refused. While it shows the counts and
+the window is visible, the section re-reads the policy every 15 s (one
+`docker exec` in the gateway each time) and once more when the window becomes
+visible again, so refusals made while it stays open appear without reopening
+it; closing the section stops the reads. Nothing is pushed: the file has no
+revision, and a watcher across the gateway boundary for one dialog's numbers
+was not worth its cost. Counts only: no refused name,
 part of one or digest of one is stored, logged or reported, because a refused
 name can carry the data an agent tried to send (`<secret>.attacker.tld`).
 `init-firewall.sh` holds `egress-filter.quiet` while its own boot checks ask
@@ -1368,6 +1380,23 @@ attacker's GitHub repository or a call with an attacker's API key. A
 connection to an allowed address now completes its TCP handshake with the
 daemon before the upstream answers, so an unreachable upstream shows as a
 reset rather than a refusal.
+
+These limits were decided, not overlooked (to-do 6102, retired 2026-11-11):
+
+- Names inside TLS stay unseen. Seeing them needs TLS termination with a
+  per-environment CA the workload must trust, which breaks pinned clients
+  and hands the gateway every byte. Refusing any ClientHello that carries
+  the ECH extension is not an option either: Chrome and Playwright send a
+  GREASE ECH extension on every connection.
+- Only the first request on a plain HTTP connection is checked. Checking
+  every one needs body framing (chunked, `Content-Length`, upgrades) on the
+  data path, for plain HTTP on a named port, which is rare and was answered
+  by the same server.
+- UDP entries and other protocols stay address-only. They are opt-in per
+  port, and reading a QUIC Initial's SNI needs QUIC decryption in the daemon.
+- A refused upstream stays a reset. Keeping it a refusal needs TPROXY with
+  `IP_TRANSPARENT` and policy routing in the gateway, and clients treat both
+  as a failed connection.
 
 The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
 gone: every image now runs the firewall step from the root entrypoint before

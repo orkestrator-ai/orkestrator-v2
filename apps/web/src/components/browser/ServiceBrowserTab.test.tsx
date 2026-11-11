@@ -933,7 +933,8 @@ describe("service browser tabs", () => {
           .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
     }
-    await Bun.sleep(5);
+    // Each refresh already settled inside act; flush any effect it queued.
+    await act(async () => {});
     expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
     expect(browserPreview.attach).not.toHaveBeenCalledWith(
       expect.objectContaining({ visible: false }),

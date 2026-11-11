@@ -272,6 +272,21 @@ For the invoker family that is left:
 - The invoker cancel was checked against the test node network (a routed read
   aborted on the leaf, no outcome record) and a real gateway socket (a real
   `fetch` abort aborts the call's signal), not across two running backends.
+- One failure from this work's default-suite runs has no flake case yet.
+  `review regressions > concurrent start and restart cannot reap an in-flight
+  launch` (`tests/unit/disposable-docker-daemon.test.ts:458`) failed once on
+  2026-11-11 in `mise run test` on beelink2 (Linux x86_64, 16 cores, shared
+  with other worktrees' runs). Base `14df96544`, head `afb5369d1`. It failed
+  `expect(isRunning(b)).toBe(true)` (received false, 85.84 ms): the first
+  launch, held at its `tools` gate, was running and the second was not. The
+  aggregate runner reran the unchanged file alone and it passed (3.4 s). The
+  next full run (r5) passed. This branch does not touch
+  `scripts/disposable-docker-daemon.ts` or that test. It is recorded here and
+  not as a flake case because both flake numbers this work was given (9982 and
+  9983) were taken on `main` first. Whoever sees it again opens a case under
+  the next free number and copies this evidence into it. The cause is
+  unconfirmed: reproduce it under `scripts/test-under-contention.ts` with
+  `--rerun-each` before changing the test, and do not loosen the assertion.
 
 ## Assumptions and decisions
 
@@ -463,6 +478,26 @@ critical-field checks do not read it.
 shared by every caller (review, guards, this read) and bounded by its own
 30 s timeout. Aborting it for this caller's shorter wait would stop it for the
 others, so it keeps its race, with a comment saying so.
+
+### Task 6: the disposable-daemon failure has no flake case
+
+The default suite on this work's branch once failed the disposable Docker
+daemon's concurrent-start test, which then passed alone (see Needs
+verification). A case was written as flake 9982, but `main` had already
+claimed 9982 and 9983, the only numbers this work was given. Options:
+
+- Renumber the case to the next free number on `main`. Pros: the flake
+  registry stays the only place flakes live. Cons: uses a number this work
+  was not given, which is what the number ranges exist to prevent.
+- Add it to an existing case as a recurrence. Pros: no new number. Cons: no
+  open case covers this test or its launcher, so it would land in an
+  unrelated case's history and be missed by anyone searching for the test.
+- Keep the evidence in this to-do and leave the case to whoever sees it
+  again (chosen). Pros: no number is taken or reused and the evidence is
+  kept. Cons: the failure is not listed in the flake index until then.
+
+A single failure that passed alone and in the next full run needs no fix yet,
+so waiting for a second sighting loses nothing.
 
 ## Related
 

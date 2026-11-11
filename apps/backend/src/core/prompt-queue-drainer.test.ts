@@ -249,6 +249,54 @@ describe("PromptQueueDrainer", () => {
     }
   });
 
+  test("mail presence uses the environment row its caller already read (todo 7567 task 2)", async () => {
+    const context = await harness();
+    const getEnvironment = spyOn(context.storage, "getEnvironment");
+    const target = { environmentId: ENVIRONMENT_ID, tabId: TAB_ID };
+    try {
+      const row = (await context.storage.getEnvironment(ENVIRONMENT_ID))!;
+      getEnvironment.mockClear();
+
+      // A passed row is used instead of a second read.
+      expect(await context.drainer.mailInjectPresence(target, { environment: row })).toBe("idle");
+      expect(getEnvironment).not.toHaveBeenCalled();
+      // The gate judges the row it was handed, not storage: a row the pass saw
+      // being deleted holds the mail even though storage still reads ready.
+      expect(
+        await context.drainer.mailInjectPresence(target, {
+          environment: { ...row, deletionRequestedAt: new Date().toISOString() },
+        }),
+      ).toBe("environment_unready");
+      expect(
+        await context.drainer.mailInjectPresence(target, {
+          environment: { ...row, status: "stopped" },
+        }),
+      ).toBe("environment_unready");
+      expect(getEnvironment).not.toHaveBeenCalled();
+
+      // A pass that found no row passes null: unready without reading again
+      // or probing tmux.
+      context.calls.length = 0;
+      expect(await context.drainer.mailInjectPresence(target, { environment: null })).toBe(
+        "environment_unready",
+      );
+      expect(getEnvironment).not.toHaveBeenCalled();
+      expect(context.calls).toEqual([]);
+
+      // Nothing passed: the gate reads the row itself.
+      expect(await context.drainer.mailInjectPresence(target, {})).toBe("idle");
+      expect(getEnvironment).toHaveBeenCalledTimes(1);
+      await context.storage.updateEnvironment(ENVIRONMENT_ID, {
+        deletionRequestedAt: new Date().toISOString(),
+      });
+      expect(await context.drainer.mailInjectPresence(target)).toBe("environment_unready");
+      expect(getEnvironment).toHaveBeenCalledTimes(2);
+    } finally {
+      getEnvironment.mockRestore();
+      await context.dispose();
+    }
+  });
+
   test("holds mail instead of starting a stopped tmux session", async () => {
     const context = await harness();
     try {

@@ -8,7 +8,11 @@
  * `coordinator-live-deliver-now.ts`), `goal` (a worker's goal runs to a passing
  * check and wakes the coordinator once, see `coordinator-live-goal.ts`),
  * `routing` (plain requests routed to the right workflow, see
- * `coordinator-live-routing.ts`) and `peer`. Every
+ * `coordinator-live-routing.ts`), `research` (a research MCP server call
+ * under the default research setting, attributed to that server in the
+ * transcript, see `coordinator-live-research.ts`), `gap-tools` (each
+ * gap-review tool called once against one worker, see
+ * `coordinator-live-gap-tools.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -115,7 +119,14 @@ import { deliverNowApplies } from "../../apps/desktop/scripts/dev/coordinator-li
 import { runGoalScenario } from "../../apps/desktop/scripts/dev/coordinator-live-goal-orchestration";
 import { goalApplies } from "../../apps/desktop/scripts/dev/coordinator-live-goal";
 import { runRoutingScenario } from "../../apps/desktop/scripts/dev/coordinator-live-routing-orchestration";
+import { runResearchScenario } from "../../apps/desktop/scripts/dev/coordinator-live-research-orchestration";
+import {
+  RESEARCH_SCENARIO_SETTINGS,
+  researchApplies,
+} from "../../apps/desktop/scripts/dev/coordinator-live-research";
+import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
+import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
 import {
   coordinatorTurn,
   deliverAsyncReport,
@@ -977,6 +988,36 @@ async function routingCase(input: {
 }
 
 /**
+ * The gap-tools scenario: one worker, and each tool from the coordinator gap
+ * review called once against it (changes split at HEAD, a fork, a stopped
+ * turn, a slash command, schedule edits, and the PR and question tools
+ * refusing a worker with neither).
+ */
+async function gapToolsCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, watch, mail } = await runGapToolsScenario(input);
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the gap-tools scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1033,6 +1074,31 @@ async function peerCase(input: {
   expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
 }
 
+/**
+ * The research scenario: under the default research setting, one turn asks
+ * for React's Context7 library ID, and passes only when a transcript row is
+ * attributed to the research server. Grok, which loads no research servers,
+ * is skipped with the reason before any turn is spent. Why each platform
+ * attributes the call as it does: `docs/architecture/coordinator-read-only-decisions.md`.
+ */
+async function researchCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const { checks, observed } = await runResearchScenario({
+    invoke: coordinator.invoke,
+    identity: coordinator.identity,
+    checkout: coordinator.checkout,
+    summary,
+    timeoutMs: TURN_TIMEOUT_MS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
+  const failures = recordChecks(summary, checks, observed);
+  expect(failures, `${platform}: the research scenario`).toEqual([]);
+}
+
 test.describe("live coordinator", () => {
   test.skip(
     !LIVE,
@@ -1073,6 +1139,30 @@ test.describe("live coordinator", () => {
             skip,
             cleanup,
           });
+        });
+      });
+    }
+
+    if (scenarios.includes("research")) {
+      test(`research on ${platform}: under the default research setting a coordinator calls the research MCP server, and the row is attributed to it`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.research);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "research", async ({ summary, skip, cleanup }) => {
+          const applies = researchApplies(platform);
+          if (!applies.applies) skip(applies.reason);
+          // The bridge reads the research setting at launch, so it is set
+          // before the conversation's agent starts.
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: { ...RESEARCH_SCENARIO_SETTINGS },
+            skip,
+            cleanup,
+          });
+          await researchCase({ coordinator, summary });
         });
       });
     }
@@ -1201,6 +1291,37 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await routingCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("gap-tools")) {
+      test(`gap tools on ${platform}: changes split at HEAD, a fork, a stopped turn, a slash command, schedule edits, and conflicts and question answers refused for a worker with neither`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests["gap-tools"]);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "gap-tools", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            // The schedule tools are offered only while scheduling, an
+            // experimental setting that is off by default, is on.
+            settings: { experimentalScheduling: true },
+            skip,
+            cleanup,
+          });
+          if (platform === "pi") {
+            // Pi refuses /compact on a session shorter than keepRecentTokens,
+            // and the worker's is a few short turns: keep almost nothing, in
+            // this profile's own Pi settings, so the command really compacts.
+            const dataDir = profileStatus().dataDir;
+            if (!dataDir) throw new Error("dev:status reported no data directory");
+            const restore = keepRecentTokensForShortSessions(dataDir);
+            cleanup.push(async () => restore());
+          }
+          await gapToolsCase({ coordinator, summary, cleanup });
         });
       });
     }

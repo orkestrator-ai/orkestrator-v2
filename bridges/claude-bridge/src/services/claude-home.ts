@@ -132,6 +132,11 @@ export function setClaudeHomeForTesting(home: string | null): void {
   overrideHome = home;
 }
 
+/** Exported for tests: the home `setClaudeHomeForTesting` set, so a test can restore it. */
+export function claudeHomeOverrideForTesting(): string | null {
+  return overrideHome;
+}
+
 /** Exported for tests: the account directory `claudeAccountJsonPath` uses; `undefined` restores the environment. */
 export function setClaudeAccountHomeForTesting(home: string | null | undefined): void {
   overrideAccountHome = home;

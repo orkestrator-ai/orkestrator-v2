@@ -1,7 +1,7 @@
 /**
  * Seeded entry-port preview services in the actual Electron window, with the
- * desktop tunnel enabled (docs/todo/previews-and-annotations/0045-preview-service-discovery.md,
- * task 1).
+ * desktop tunnel enabled (docs/architecture/browser-previews.md, "Local
+ * environments"; first written for to-do 0045, now retired).
  *
  * Launches Electron with a disposable agent-test profile under a temporary
  * root (never the user's profile or backend data). The fixture project gets

@@ -133,8 +133,21 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "NO_COLOR",
   "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH",
   "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY",
+  // A loopback origin for Claude and Codex plan-usage reads (to-do 7542 (retired)), so a
+  // two-backend spec can script fixture accounts' usage. The backend honours it
+  // only in an isolated agent-test profile, for a loopback origin
+  // (`agentTestUsageOrigin`). An address, never a credential.
+  "ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN",
+  // A loopback Anthropic origin every Claude bridge of the isolated backend
+  // is pointed at (to-do 7542 (retired)), under the same gate (`agentTestAnthropicOrigin`).
+  "ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",
+  // The gateway compression mode (`off`, `body`, `on`), so an isolated profile
+  // can measure the rollback against the default
+  // (docs/development/remote-bandwidth.md). A
+  // mode switch, never a credential.
+  "ORKESTRATOR_GATEWAY_COMPRESSION",
   // `off` skips the startup container-to-host probe, as other disposable test
   // backends do: each spec run is a new data directory, so its probe network
   // would belong to an owner no reaper revisits, and its result dialog takes

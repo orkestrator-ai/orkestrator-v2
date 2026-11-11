@@ -177,3 +177,18 @@ are also recorded in the Address Findings result for this validation attempt.
 Aggregate outcome: terminated at the 1,800 s deadline after starting 1,584 of
 1,810 cases, with 14 reported failures; no final pass/skip totals and no
 public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.gz`.
+
+## Recurrence 2026-11-11 (WebKit-scroll review)
+
+- **Branch and base:** `webkit-scroll-fix-d230c4f38350-r1` at `18b81d327`, base
+  `498b68766f5c9f357a3a86782406d1e9e0977559`. The branch does not touch the
+  spec or the Claude interaction surfaces.
+- **Command:** `ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name browser-rerun-3 -- mise run test:browser`
+  on macOS, host load average about 23 to 27: 1697 passed, 1 failed (22.8 min).
+- **Failure:** desktop-chromium, `"apiRequestContext.fetch: Target page, context or browser has been closed" while running route callback`
+  at `e2e/ClaudeInteractions.spec.ts:107`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name claude-interactions-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts`;
+  exit 0 (11.7 s).
+- **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
+
+No assertion, deadline, retry or skip was changed. The cause remains unconfirmed.

@@ -1438,7 +1438,7 @@ would widen a deliberate allowlist without a product decision.
 
 ## Related
 
-- [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): client-side
+- 0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): client-side
   bandwidth and the data-saving preference.
 - [7380-codex-idle-detach-observation.md](7380-codex-idle-detach-observation.md):
   the Codex half of task 10.

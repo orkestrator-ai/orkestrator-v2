@@ -10,9 +10,11 @@ import {
   withoutDisplay,
 } from "./electron-launch-switches";
 import {
+  designChromiumEnvironment,
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  stopPackagedAppThenRemoveProfile,
 } from "./packaged-electron-app";
 import packaged from "./playwright.packaged-electron.config";
 import electron from "./playwright.electron.config";
@@ -90,6 +92,21 @@ describe("packaged Electron app launch", () => {
     });
   });
 
+  test("forwards only a non-empty design Chromium override", () => {
+    expect(
+      designChromiumEnvironment({ ORKESTRATOR_DESIGN_CHROMIUM_PATH: "/opt/chromium/chrome" }),
+    ).toEqual({ ORKESTRATOR_DESIGN_CHROMIUM_PATH: "/opt/chromium/chrome" });
+    expect(designChromiumEnvironment({ ORKESTRATOR_DESIGN_CHROMIUM_PATH: "  " })).toEqual({});
+    expect(designChromiumEnvironment({ PATH: "/usr/bin" })).toEqual({});
+    // The general allowlist still drops it, with every other ORKESTRATOR_* value.
+    expect(
+      packagedLaunchEnvironment(
+        { ORKESTRATOR_DESIGN_CHROMIUM_PATH: "/opt/chromium/chrome" },
+        { home: "/tmp/run/home", profilePath: "/tmp/run/profile.json" },
+      ),
+    ).not.toHaveProperty("ORKESTRATOR_DESIGN_CHROMIUM_PATH");
+  });
+
   test("always runs headless on Linux", () => {
     expect(packagedLaunchSwitches("linux")).toEqual(HEADLESS_ELECTRON_SWITCHES);
     expect(HEADLESS_ELECTRON_SWITCHES).toContain("--ozone-platform=headless");
@@ -101,6 +118,7 @@ describe("packaged Electron app launch", () => {
     expect(packaged.testMatch).toEqual([
       "design-canvas-packaged-electron.spec.ts",
       "log-controls-packaged-electron.spec.ts",
+      "packaged-native-shortcuts-electron.spec.ts",
       "packaged-security-electron.spec.ts",
       "watcher-packaged-electron.spec.ts",
     ]);
@@ -108,6 +126,7 @@ describe("packaged Electron app launch", () => {
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("watcher-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("packaged-native-shortcuts-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });
 });
@@ -191,7 +210,9 @@ test("headless config selects only the supported specs", async () => {
   const { default: config } = await import("./playwright.electron-headless.config");
   expect(config.testMatch).toEqual([
     "design-canvas-electron.spec.ts",
+    "electron-cleanup.spec.ts",
     "web-annotations-electron.spec.ts",
+    "service-preview-seeded-electron.spec.ts",
   ]);
 });
 
@@ -214,6 +235,10 @@ test("global setup keeps a mixed Electron suite guarded despite the opt-in", () 
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
     displaySetup(config(["design-canvas-electron.spec.ts", "web-annotations-electron.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["service-preview-seeded-electron.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["service-preview-seeded-electron.spec.ts", "electron-main.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
     displaySetup(config(["web-annotations-electron.spec.ts", "electron-main.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
     displaySetup(config([]));
@@ -221,4 +246,64 @@ test("global setup keeps a mixed Electron suite guarded despite the opt-in", () 
   } finally {
     problem.mockRestore();
   }
+});
+
+describe("packaged spec cleanup", () => {
+  const steps = (snapshot: (app: string) => number[]) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      steps: {
+        snapshot: (app: string) => {
+          calls.push(`snapshot ${app}`);
+          return snapshot(app);
+        },
+        close: async (app: string, owned: number[]) => {
+          calls.push(`close ${app} ${owned.join(",")}`);
+        },
+        release: async () => {
+          calls.push("release");
+        },
+        waitForStopped: async (owned: number[]) => {
+          calls.push(`wait ${owned.join(",")}`);
+        },
+        removeProfile: async () => {
+          calls.push("remove profile");
+        },
+      },
+    };
+  };
+
+  test("stops a launched app's snapshotted tree before removing the profile", async () => {
+    const run = steps(() => [41, 42]);
+    await stopPackagedAppThenRemoveProfile("app", run.steps);
+    expect(run.calls).toEqual([
+      "snapshot app",
+      "close app 41,42",
+      "release",
+      "wait 41,42",
+      "remove profile",
+    ]);
+  });
+
+  test("keeps the profile when a launched app's process tree cannot be snapshotted", async () => {
+    const run = steps(() => {
+      throw new Error("ps failed");
+    });
+    const failure = await stopPackagedAppThenRemoveProfile("app", run.steps).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map((error: Error) => error.message)).toEqual([
+      "ps failed",
+      "Cannot remove profile without an owned-process snapshot",
+    ]);
+    expect(run.calls).toEqual(["snapshot app", "release"]);
+  });
+
+  test("removes the profile of a run that never launched an app", async () => {
+    const run = steps(() => [1]);
+    await stopPackagedAppThenRemoveProfile<string>(null, run.steps);
+    expect(run.calls).toEqual(["release", "wait ", "remove profile"]);
+  });
 });

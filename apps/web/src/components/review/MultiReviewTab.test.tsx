@@ -1114,7 +1114,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     const split = screen.getByTestId("multi-review-step-split");
-    expect(split.className).toContain("@min-[88rem]:grid-cols-2");
+    expect(split.className).toContain("@min-[88rem]:flex-row");
+    // Splitting must not change the split's `display`: WebKit rebuilds the
+    // boxes under one and drops the transcript tail's reading offset
+    // (docs/architecture/build-pipeline-view.md, "Shared flow graph").
+    expect(split.className).not.toMatch(/(^|\s|:)(grid|block|inline-flex)(\s|$)/);
     expect(split.children).toHaveLength(2);
     expect(
       split.querySelector(":scope > div:first-child [aria-label='Review validation']"),

@@ -63,7 +63,11 @@ checkout. The first failure stops the others. Each profile then runs its shard o
 as `test:agent:docker`, one spec at a time, while the other shards run in their
 own profiles; the shards are balanced by measured run time, and
 `isolated-browser.test.ts` fails when a spec with a `Docker fixture` test is in
-no shard or in two. A fixed `--agent-tools-port` can be bound by only one
+no shard or in two. Each shard profile is started with
+`--agent-tools-port auto`, so it takes its own free port from the documented
+range and one host firewall rule admits every concurrent run's containers
+(see [Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)).
+A fixed `--agent-tools-port <n>` passed by the caller can be bound by only one
 backend, so that run keeps every spec in one profile. Results are written per
 profile under `output/agent-testing/<profile>/browser/`. Every started profile
 is stopped and reset afterwards. The worktree's shared development image is kept
@@ -91,7 +95,7 @@ sequentially.
 To work around a host-specific problem without hand-assembling a profile, pass
 `dev:test` profile flags through: `--credential-source <name>` (repeatable),
 `--agent-platforms <list>`, `--no-agent-credentials`,
-`--use-dev-worktree-folder` and `--agent-tools-port <n>` (see
+`--use-dev-worktree-folder` and `--agent-tools-port <n|auto>` (see
 [Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)).
 A credential or platform flag replaces the
 matching default, for example:
@@ -663,7 +667,9 @@ open until all of the following have observed evidence:
 
 Record the commit, macOS/Electron versions, profile, exact commands, results
 and cleanup. A Linux pass or a mocked activation-policy call cannot close this
-qualification. Current task tracking is in
+qualification. Steps 1, 2 and 5 need a person watching the Mac's screen and
+are on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+steps 3 and 4 are agent work tracked in
 [2181, task 4](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),
@@ -763,6 +769,31 @@ mise run dev:test --profile container-qa --fixture --fixture-environments local,
   ports, and the installed app's agent tools port on the Linux qualification
   host), as is anything below 1024.
 - The flag belongs to `dev:test`; `mise run dev` rejects it.
+
+`--agent-tools-port auto` chooses the port instead: the first port of the
+range below that no other running profile has claimed and nothing listens on,
+recorded in the profile like an exact one. Concurrent profiles started by
+agents that cannot see one another (the one-shot Docker runner's shard
+profiles above all, which use it by default) each get a different port
+without passing numbers around.
+
+- Every launcher given a port, exact or `auto`, records a claim naming its
+  profile and its own PID and start time in
+  `<development root>/agent-tools-port-claims/<port>.json`, before Electron
+  and the bridges compile. Another profile's start therefore sees the port as
+  taken during the minute or so before the first backend binds it, which a
+  bind check alone would not. A claim holds only while its launcher runs: a
+  later start replaces a stopped launcher's claim, and `dev:reset` removes the
+  profile's own.
+- An exact port another running profile claimed is refused, naming that
+  profile, as a port something already listens on is.
+- A restart with `auto` tries the profile's recorded port first.
+- When every port of the range is claimed or in use, `auto` refuses and names
+  each port's reason rather than taking a port outside the range, which the
+  firewall rule would not admit.
+- Two launchers replacing the same stopped launcher's claim at the same
+  instant can still both proceed; the second backend's bind then fails its
+  start, which a retry clears.
 
 Use the range **31500–31509**: ten profiles, one firewall rule. It is below
 Linux's ephemeral range (32768–60999) and macOS's (49152–65535), so the OS
@@ -988,7 +1019,18 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 `<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
-(the profile setup is in the spec's header), and
+(the profile setup is in the spec's header).
+`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
+OpenCode 2: it turns the profile's preview setting on for the run and back off
+afterwards, and adds a `steer` case (a prompt queued from the composer while a
+turn runs is steered into it from its queue strip, then checked again after a
+reload) that every other platform records as skipped. `mise run
+verify:opencode2:real-stack` runs exactly that against the running profile
+named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
+`no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
+overrides the list). Start the profile with `--fixture --no-agent-credentials
+--agent-platforms opencode --headless`.
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
 container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
@@ -1019,12 +1061,51 @@ mise run dev:stop --profile qa-multi-review
 mise run dev:reset --profile qa-multi-review
 ```
 
-`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case. It
-starts an n-reviewer panel alternating Claude and Codex through
-`start_multi_review`, samples the backend's RSS and the reviewers setting up and
-running once a second, fails if more than four were ever seen setting up, and
-writes reviewer latency (p50, p95, max) and peak RSS to `scale.json` in the
-case's output folder. Run it with `-g scale`.
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case,
+run with `-g scale`. It starts an n-reviewer panel through
+`start_multi_review`, round-robin over
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS` (comma separated, default
+`claude,codex`; each must be enabled and signed in on the profile), with each
+platform's model from `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_<PLATFORM>_MODEL` (a
+picker label prefix) or its catalogue's first entry. It arms the backend's
+agent-test fan-out stats recorder (`agent-test-fanout-stats.ts`, a marker file
+under the profile's data directory, honoured only by an agent-test backend), so
+the scheduler's own per-pass peaks are checked, not sampled, from both sides:
+no peak above the admission or per-provider cap (4 each, pinned to the
+scheduler's defaults by `multi-review-scale-support.test.ts`), an admission
+peak no lower than the scheduler's first fill, and a peak for every panel
+platform. A run that settles before any fan-out pass still writes
+`scale.json`, then fails naming the missing stats. Once a second it samples the
+backend's RSS, the RSS of the backend's whole process tree (bridges and agent
+CLIs included, read-only `ps`), and the reviewers setting up and running. It
+writes the platforms, models, reviewer latency (p50, p95, max, and the max per
+platform), peak RSS of both kinds and the recorded peaks to `scale.json` in
+the case's output folder.
+
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1` runs the same case with
+no login and nothing billed. The panel defaults to Pi, and every slot
+(preparation, reviewers, consolidation) runs on the profile's real Pi bridge
+and Pi SDK against the scripted loopback model `auto-pipeline-fake-model.ts`,
+which answers each Multi Review result tool with a fixed, finding-free result.
+The case names it in the profile's isolated Pi `models.json` (never `~/.pi`)
+and restores that file afterwards, even when the environment cleanup fails.
+Because the fake answers every step, this mode passes only when the review is
+`ready` with a consolidated report, every reviewer completed, and the fake
+counted the preparation, every reviewer's report and the consolidation
+submission (`scaleFakeOutcomeProblems` in `multi-review-scale-support.ts`); a
+settled but failed panel fails the case. It measures the control plane (caps,
+latency, memory), not review quality:
+
+```bash
+mise run dev:test --profile qa-mr-scale-fake --fixture --headless --no-agent-credentials --agent-platforms pi
+# In a second terminal, for n in 8, 16 and 32:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mr-scale-fake ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 \
+  ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n> ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1 \
+  mise run test:logged -- --name multi-review-scale-fake -- mise run test:agent:browser -- \
+  e2e/agent-testing/multi-review-live.spec.ts -g scale
+mise run dev:stop --profile qa-mr-scale-fake
+mise run dev:reset --profile qa-mr-scale-fake
+```
 
 Every case writes a small change into a fresh environment. The other cases
 launch the review through the launcher: it right-clicks **Multi Review**, picks each row's
@@ -1186,6 +1267,16 @@ and separately waits for the running backend's one-minute check to revert raised
 log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
 macOS. Headless on Linux means the native menu bar itself is not drawn or read.
 
+`packaged-native-shortcuts-electron.spec.ts` is in the same config but skips
+unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`. It is the one packaged spec that
+is not headless: it opens the packaged Linux app as an X11 window and presses
+real keys with `xdotool` (Ctrl+Shift+/, Escape, Ctrl+K, the menu bar from the
+keyboard, typing) on the composer, a browser preview, an interactive artifact
+view and a design frame. Run it only on a disposable X display such as Xvfb:
+the keys go to whichever window has X focus. Prerequisites, the run command and
+recorded results are in
+[keyboard-shortcuts.md](../architecture/keyboard-shortcuts.md#packaged-native-qualification).
+
 ### Electron specs and their display
 
 The specs in `playwright.electron.config.ts` (`mise run test:agent:electron`)
@@ -1226,8 +1317,9 @@ failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
-`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
-with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts`,
+`web-annotations-electron.spec.ts` and `service-preview-seeded-electron.spec.ts`
+can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
 when it is limited to those). Each reads
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
@@ -1394,6 +1486,33 @@ live tail for gaps, duplicates and order without reading model prose.
   `OPENAI_API_KEY` (`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-loopback"}`),
   so no real login is copied in:
   `CODEX_HOME=<that dir> mise run dev:test --profile <name> --fixture --headless --credential-source codex --agent-platforms codex`.
+- **In a container environment.** `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`
+  runs the native case in the profile's seeded `fixture-container`
+  environment, so every transcript read crosses the container bridge. Start
+  the profile with `--fixture-environments local,container` (on a host whose
+  user cannot reach the Docker daemon, with `DOCKER_HOST` from
+  `mise run docker:disposable -- env --name <n>`, which then builds the image
+  inside that daemon; see
+  [container-qualification.md](container-qualification.md#disposable-docker-daemon)),
+  and run the spec with the same `DOCKER_HOST`: it copies the trail into the
+  container's `/workspace` with `docker exec`, and restarts the container's
+  bridge (`stop_codex_server`, `start_codex_server`). With the loopback model
+  the model runs inside the container, which the restricted firewall admits
+  because it is the container's own loopback, and the container's Codex home
+  (`$HOME/.codex/config.toml`) is pointed at it and restored afterwards. The
+  fixture container is used, never deleted; the trail is removed from it.
+- **In the Electron window.** `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron`
+  renders the native tab in the profile's own Electron window, so the
+  transcript reads go through the preload and IPC path instead of the
+  gateway. Start the profile with `ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`
+  (agent-test profiles only): its Electron then opens Chromium remote
+  debugging on an OS-chosen loopback port, and the spec attaches over CDP to
+  the endpoint recorded in the profile's `electron.log`, and only disconnects
+  afterwards. A headless profile is enough. Backend checks still go through
+  the gateway, and Playwright's automatic failure screenshot shows the
+  gateway page, not the window. Unlike the browser suite's headless
+  Chromium, which hides scrollbars, the window has classic ones, so
+  layout changes that add or remove a scrollbar happen there.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project
@@ -1628,6 +1747,27 @@ A spec that restarts a profile builds the launcher's arguments with
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
 
+### Loopback plan-usage origin
+
+A spec that scripts Claude or Codex account usage on a separate-process
+profile (to-do 7542 (retired), task 1) starts the profile with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN=http://127.0.0.1:<port>`. The launcher
+passes it to the isolated backend, which then reads `/api/oauth/usage`
+(Claude) and `/backend-api/codex/usage` (Codex) from that origin instead of
+the providers' hosts, so fixture tokens never leave the machine. The backend
+honours it only with flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`,
+a non-default data directory and a bare loopback origin
+(`agentTestUsageOrigin` in `apps/backend/src/core/agent-test-fixtures.ts`);
+anything else reads the real endpoints.
+
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`, under the same gate
+(`agentTestAnthropicOrigin`), starts every Claude bridge of the isolated
+backend with `ANTHROPIC_BASE_URL` set to that loopback origin and the CLI's
+nonessential traffic off. A coordinator's Claude needs it: its private
+configuration directory never holds the profile's `settings.json`, so
+pointing that file at a fake model reaches every Claude session except the
+coordinator's.
+
 ### Multi-client, restarts and an older backend (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
@@ -1680,6 +1820,55 @@ the two-client and queued cases for a p50/p95. Cases:
 Measurements land in `evidence-multi-client-*.json` beside the run, judged
 against the latency budgets in
 [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
+
+### Remote bandwidth matrix (fake model)
+
+`e2e/agent-testing/remote-bandwidth-live.spec.ts` runs the single-host remote
+bandwidth matrix ([remote-bandwidth.md](remote-bandwidth.md)): several headless browser clients on one
+Claude session and one environment's terminals, per gateway compression mode
+(`on`, `body`), terminal transport (the shared SSE stream, the opt-in
+WebSocket) and link (loopback, and a 512 kbit/s link with 40 ms each way). The
+provider is the profile's real Claude CLI sent to the loopback model
+(`fake-anthropic-model.ts`); a `[stream:<n>]` prompt streams `n` lines at
+25 ms and a `[bash:<word>]` prompt makes one `Bash` call, so a session under
+an "ask" policy parks a real approval. Nothing logs in and nothing is billed.
+
+Each client reaches the gateway through its own loopback link
+(`remote-bandwidth-meter.ts`), which counts exact wire bytes per request class
+(event streams, invokes, WebSocket, other) and shapes the slow-link cells in
+both directions. Setup invokes and `/metrics` reads go straight to the
+gateway URL, so they are neither counted nor shaped. The spec also diffs the gateway's `/metrics` per cell; its gzip counters cover
+browser listeners only, while its stream totals include the profile's own
+headless Electron window. It restarts the profile once per mode with
+`ORKESTRATOR_GATEWAY_COMPRESSION`, which agent-test backends accept for this.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile rbw52 --fixture --no-agent-credentials --agent-platforms claude --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=rbw52 ORKESTRATOR_AGENT_TEST_LIVE_REMOTE_BANDWIDTH=1 \
+ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43252 \
+  mise run test:logged -- --name remote-bandwidth -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  remote-bandwidth-live.spec.ts --workers=1
+mise run dev:stop --profile rbw52
+mise run dev:reset --profile rbw52
+```
+
+`ORKESTRATOR_AGENT_TEST_BANDWIDTH_MODES` (default `on,body`), `_PARTS`
+(`matrix,data-saving`), `_CLIENTS` (3), `_ROUNDS` (3) and `_IDLE_MS` (20000)
+narrow or lengthen a run.
+Cells: idle, a streamed agent turn (first-update and completion latency per
+client), terminal bursts of redundant build output in the visible and in a
+background terminal tab and of random printable output, and, in `on` mode,
+data saving off and on side by side (a running turn, an idle view, the Files
+panel, completion and approval latency). Evidence lands in `evidence-remote-bandwidth-*.json`
+beside the run: numbers and cell labels only. Each cell carries an `outcome`
+(`qualified`, `incomplete` or `over-budget`) and its `problems`
+(`remote-bandwidth-qualification.ts`): a timed-out or missing sample, an
+unfinished or unsettled terminal burst, or a p95 past the 3 s completion or
+2 s approval budget. The test fails at the end of its run unless every cell
+qualified; the evidence file is written either way.
 
 ### Live second node scope (two profiles)
 
@@ -2301,6 +2490,64 @@ proves the plumbing and the wording the model receives, not that a real model
 obeys it; that needs the billed `routing` run. The content-free summary is
 `output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
 
+### Coordinator worker surfaces (fake model)
+
+`mise run test:agent:coordinator:surfaces-fake` checks two coordinator worker
+surfaces ([coordinator.md, "Worker surfaces"](../architecture/coordinator.md#worker-surfaces))
+in the browser client on a loopback fake model, with no login and nothing
+billed. It starts a disposable `dev:test --fixture --fixture-environments
+local,container --headless --no-agent-credentials --agent-platforms pi`
+profile with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs
+`e2e/agent-testing/coordinator-surfaces-fake.spec.ts`, then stops and resets
+the profile. The first run on a host may build the workspace's development
+image. The spec points the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) at `coordinator-surfaces-fake-model.ts`
+(script in `coordinator-surfaces-fake-model-script.ts`) and opens a fresh Pi
+main coordinator conversation. Each prompt carries one
+`surfaces-fake: <tool> {json}` line, which the fake turns into exactly that
+tool call, so the arguments are the spec's.
+
+The fixture created both workers, not the coordinator, so the spec turns on the
+project's "Let the coordinator use environments it did not create" setting
+(`coordinatorOtherEnvironments`) for the run and restores it afterwards;
+`open_worker_browser` is refused without it. Then:
+
+- **Root changes.** The fixture checkout gets one modified, one deleted and
+  one new file. The coordinator calls `request_root_changes` three times
+  naming the modified and new files. In the approval dialog the spec rejects
+  the first (the local worker stays clean), then approves for the local worker
+  and for the container worker after also ticking the deleted file. All three
+  changes must land in each worker, the container's through `docker exec`.
+  The checkout's status and `HEAD` must not change. Each outcome must wake the
+  coordinator exactly once with its state, checked over an 8-second quiet
+  window.
+- **Container browser.** A server inside the container and a decoy on the
+  host's loopback listen on the same port. The container's is registered as a
+  `container` preview service, and the coordinator calls
+  `open_worker_browser` at `http://localhost:<port>/surfaces`. The tab must be
+  stored as an `agent-link` intent. `resolve_preview_target` must name the
+  container service. After a reload the browser client must bind the tab to
+  that service's `orkestrator-preview://service/…` URL. `probe_preview_service`
+  must report a `container-relay` transport with TCP `ok`. The container
+  publishes only its bridge ports, so the backend reaches the service through
+  its in-container relay, which cannot see the host decoy. The browser client
+  in compatibility mode cannot embed a relayed service (it has no host port;
+  see [browser-previews.md, "Rollback"](../architecture/browser-previews.md#rollback)),
+  so the page text is checked only when an embedded frame exists. The
+  desktop-app half is on the manual-test checklist (7568).
+
+The fake calls each tool because the prompt names it, so a pass proves the
+product path, not that a real model chooses these tools. The billed run is on
+the manual-test checklist. Screenshots of the dialog and the bound tab and a
+content-free summary go to
+`output/agent-testing/<profile>/coordinator-surfaces-fake/` (`pi-surfaces.json`).
+To rerun the spec against a profile you started yourself with the same flags,
+pass `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_SURFACES_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-surfaces-fake.config.ts`.
+Each rerun leaves its browser tab in the container worker, so reset the
+profile afterwards.
+
 ### Coordinator node mail between two profiles (fake model)
 
 `mise run test:agent:coordinator:node-mail-fake` qualifies mail between a
@@ -2349,7 +2596,151 @@ ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE=<leaf>
 ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
 --config e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts`.
 It attaches the leaf, adds projects and changes both profiles' messaging and
-Pi settings, so reset both afterwards.
+Pi settings, so reset both afterwards. The link setup it shares with the
+notice suite below is in `coordinator-two-node-support.ts`.
+
+### Coordinator usage-limit notices between two profiles (fixture accounts)
+
+`mise run test:agent:coordinator:notice-live` runs the coordinator notice
+hierarchy's live checks (to-do 7542 (retired), tasks 2 to 4) on two real
+backends with no login and nothing billed. The runner
+(`apps/desktop/scripts/test-agent-coordinator-notice-live.ts`) first starts
+`e2e/agent-testing/coordinator-notice-fake-model.ts` on loopback, then two
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms claude,pi` profiles with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` and
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN` naming it (see
+[Loopback plan-usage origin](#loopback-plan-usage-origin)) and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-notice-live.spec.ts` with
+`suiteRestartsProfiles` (the spec stops and starts both profiles itself),
+then stops and resets both and stops the provider.
+
+The spec writes, inside each profile only: Claude `settings.json` in
+`agent-credentials/claude/` (every account directory links it), which sends
+the pinned CLI's model calls to the provider and its other HTTPS traffic to
+a closed loopback proxy; fixture Claude accounts in `agent-accounts/claude/`
+with their registry (`backend-store.ts`); and, on the leaf, Pi's
+`models.json` for the leaf's Pi main coordinator. The provider
+(`coordinator-notice-fake-model-script.ts`) refuses a call that carries a
+run marker on a limited login with the API's plan-limit error, answers
+everything else with one line, scripts Pi's `launch_environment`, and
+answers usage reads per fixture token. Then:
+
+- **Task 2.** A leaf native tab, a delegated worker (launched by the leaf's
+  Pi coordinator) and a build pipeline on one limited account; the provider
+  parks their refusals until all three have asked. The command node's Claude
+  coordinator must be woken once with one notice listing one of each, and
+  the leaf's coordinator must get none.
+- **Task 3.** The command node's coordinator on its own entry of the leaf
+  tab's limited login, automatic switching on, a second account with
+  headroom. The command node must move there, unpinned, before the wake, and
+  no call may run on the limited login.
+- **Task 4.** The command node is stopped, a leaf tab stops on a third
+  limited login, the leaf profile is stopped and started, then the command
+  node is started. Its coordinator must be woken exactly once with that stop.
+
+The provider keeps counts and facts only (accounts, markers, session kinds
+each notice lists), never a prompt or token. A pass proves routing,
+grouping, the move and the outbox across restarts on real backends, not a
+real provider's refusal wording (the manual-test checklist holds that) or a
+link between two machines. The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-notice-live/summary.json`.
+
+### Coordinator gap tools on this node and a leaf (fake model)
+
+`mise run test:agent:coordinator:gap-tools-fake` runs the live coordinator
+suite's `gap-tools` case (above) on a loopback fake model, with no login and
+nothing billed (to-do 1021 (retired) tasks 1 and 4). It starts two disposable
+`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
+profiles, the second as a companion profile, with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs
+`e2e/agent-testing/coordinator-gap-tools-fake.spec.ts`, then stops and resets
+both. Each profile's isolated Pi `models.json` and `settings.json` (never
+`~/.pi`) name `coordinator-gap-tools-fake-model.ts` (one loopback server, base
+paths `/desk/v1` and `/leaf/v1`; script in
+`coordinator-gap-tools-fake-model-script.ts`), and set Pi's
+`compaction.keepRecentTokens` to 1: Pi refuses to compact a session shorter
+than that, and the fake worker's is a few hundred tokens, so without it
+`/compact` would be refused rather than run. The real backends, coordinator
+policy, Control MCP, Pi bridges and SDK, change tracking, fork, turn stop,
+slash-command dispatch, scheduled jobs, the question relay, status wakes and
+agent mail run; only the model is fake.
+
+- **This node.** A Pi coordinator on the command node's fixture project runs
+  the case against a worker it launches there.
+- **A connected node.** The command node attaches the leaf with `add_node`
+  over the leaf's real gateway (the token read in memory, never printed), both
+  profiles get a checkout of one shared repository, and the coordinator runs
+  the case with `nodeId` on every worker tool, so each goes through its
+  node-link-only controller command on the leaf. The harness reads the
+  worker's turn, interactions, mailbox and environments, and the fork's
+  checkout, from the leaf's own backend.
+
+The fake coordinator replays each turn's numbered steps; the fake worker runs
+the launch command through Pi's `bash` tool and parks its long turn until Pi
+aborts the request. Besides the case's own checks, the spec requires that the
+fake saw each gap tool called once, one parked and released worker request,
+at least one compaction summary request (offered no tools), and exactly one
+wake saying the coordinator stopped the turn. A pass proves
+the plumbing, not that a real model reads the tool descriptions right; that
+needs the billed run on the manual-test checklist. The content-free summaries
+are `output/agent-testing/<desk-profile>/coordinator-gap-tools-fake/local.json`
+and `remote.json`.
+
+To run the spec against two profiles you started yourself, start both with
+the same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_GAP_TOOLS_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_GAP_TOOLS_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-gap-tools-fake.config.ts`.
+It attaches the leaf, adds projects and changes both profiles' Pi settings, so
+reset both afterwards.
+
+### Coordinator pipeline step restart after a usage limit (fake model)
+
+`mise run test:agent:coordinator:restart-fake` qualifies
+`restart_build_pipeline_step` on a step a usage limit stopped, on this node and
+on a connected node, with no login and nothing billed (4680 (retired) task 2). It
+starts two disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profiles, the second as a companion profile and the
+first's leaf, with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-restart-fake.spec.ts`, then stops and resets
+both.
+
+Each profile's isolated Pi `models.json` and `settings.json` (never `~/.pi`)
+name `coordinator-restart-fake-model.ts` (one loopback server, base paths
+`/desk/v1` and `/leaf/v1`; script in
+`coordinator-restart-fake-model-script.ts`). The fake answers every build
+worker with HTTP 429 and a plan-limit message that Pi's SDK does not retry
+(`insufficient_quota`) and Orkestrator classifies as a usage limit, so the
+step fails the way a real limit fails it when there is no account to move to.
+A Pi main coordinator then runs one case on the command node's fixture project
+and one on a shared repository built on the leaf (`start_build_pipeline` with
+`nodeId`):
+
+- the coordinator is woken with the build `failed`, the usage limit in the
+  notice and `restart_build_pipeline_step` offered (with the leaf's `nodeId`
+  for the leaf's build);
+- it restarts the failed step with `stepId` omitted; the pipeline records one
+  coordinator restart and supersedes the failed build session;
+- the restarted step stops on the limit again, and the reopened follow wakes
+  the coordinator a second time;
+- it retries the restart under the same `requestId`; nothing restarts twice
+  (still one recorded restart and two build sessions) and no third wake comes.
+
+The fake counts facts about each wake and each restart answer, never their
+text. A pass proves the product's plumbing on real backends, a real node link
+and a real Pi SDK; it does not prove a real provider's limit text is
+classified or that a real model restarts on the notice, which need a billed
+run (on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md), 4680 (retired) task 2). The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-restart-fake/summary.json`.
+To run the spec against two profiles you started yourself, start both with the
+same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_RESTART_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_RESTART_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-restart-fake.config.ts`. It
+attaches the leaf, adds projects, starts builds and changes both profiles' Pi
+settings, so reset both afterwards.
 
 ### Coordinator checkout sync with a slow remote (fake model)
 
@@ -2425,7 +2816,9 @@ status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
 (`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
 coordinator once (`goal`), that plain requests naming no workflow start the right
-one (`routing`), and that peer mail between two ordinary environments wakes
+one (`routing`), that a coordinator under the default research setting reaches
+its research MCP server (`research`), that each tool from the coordinator gap
+review works against a real worker (`gap-tools`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -2755,8 +3148,96 @@ prompts and verdict are in `coordinator-live-routing.ts`;
 `coordinator-live-routing-orchestration.test.ts` runs the orchestration over a
 scripted command transport.
 
+The `research` case (formerly to-do 0026 task 3) checks that a platform's
+exact-name allowlist admits its research server's tools. Before the
+conversation's agent starts it writes the shipped research defaults (**Web
+search and research servers**, with Context7), since a bridge reads the
+setting at launch, then sends one build-mode turn asking the coordinator to
+resolve React's Context7 library ID with the server's own tool and end with one
+`COORDINATOR_LIVE_RESEARCH` line:
+
+```bash
+mise run test:agent:coordinator --credential-source pi --scenario research
+```
+
+A model can answer from memory, so the answer proves nothing: the case passes
+only when a tool row is attributed to the research server under the platform's
+own naming (`RESEARCH_TOOL_NAMING`: `mcp__context7__…` on Claude and Cursor,
+the `context7:…` title on Codex, `mcp_context7_…` on Pi, `context7_…` on
+OpenCode), at least one such row succeeded, the reported ID is a `/org/project`
+ID, no page fetch completed, the checkout digest is unchanged and no approval
+or question reached the harness. Grok, which loads no research servers, is
+skipped with that reason before any turn is spent. The summary records tool
+names and states only, never the prompt, the answer or the ID. The prompt and
+verdict are in `coordinator-live-research.ts`;
+`coordinator-live-research.test.ts` runs the orchestration over a scripted
+command transport.
+
+The `gap-tools` case (to-do 1021 (retired) task 1) calls each tool from the coordinator
+gap review once against one worker the coordinator launches, in seven harness
+turns. Every tool step in a prompt is one line naming the tool and its exact
+arguments, and `<tool.field>` stands for a field of an earlier result in the
+same turn, so a real model can follow it and a fake model can replay it:
+
+```bash
+mise run test:agent:coordinator --credential-source codex --scenario gap-tools
+```
+
+1. Launch: the worker's one shell command commits one line of a file and
+   leaves a second line uncommitted.
+2. `get_worker_changes` with `diffScope: "split"` must list the file as both
+   committed and uncommitted, with each line on its own side only
+   (`changes-split`). `fork_worker` with no prompt must name one new
+   environment that exists, whose reported base is the worker's HEAD (read
+   from the node that owns the worker, not from the tool) rather than the
+   coordinator base, and whose checkout, read from that node too, is at that
+   HEAD with the committed line and without the uncommitted one
+   (`fork-from-last-commit`).
+3. `send_prompt_to_tab` gives the worker a long turn (`sleep 900`), and
+   `stop_worker_turn` must stop it (`turn-stopped`) and wake the coordinator
+   once with a notice saying it stopped the turn itself (`stop-wakes-once`).
+4. `list_worker_commands` must list `/compact` (`commands-listed`), and
+   `run_worker_command` must run that row and behave as its kind says
+   (`command-ran-as-listed`). Orkestrator's own `/compact`, a session action
+   (Pi, Codex), answers without an agent turn or a delegation. A provider's
+   own `/compact` (Claude's SDK ships one, and Orkestrator defers to it)
+   starts a provider turn, so it must open exactly one delegation, which must
+   wake the coordinator once the turn ends; the harness waits for that wake.
+   Pi refuses to compact a session shorter than its
+   `compaction.keepRecentTokens`, and the worker's is a few short turns, so
+   on Pi the case sets that to 1 in the profile's own Pi `settings.json`
+   (`e2e/agent-testing/pi-profile-settings.ts`, never `~/.pi`) and restores
+   it afterwards.
+5. `create_schedule` (a self-timer six hours away), then `pause_schedule`,
+   `update_schedule` (`+7h`), `resume_schedule` and `cancel_schedule`:
+   paused; then the same schedule, still paused, firing about an hour later
+   than created; then active; then gone (`schedule-edits`). Scheduling is
+   experimental and its tools are offered only while it is on, so the case
+   turns `experimentalScheduling` on and restores it afterwards.
+6. `resolve_conflicts` and `answer_worker_question` against a worker with no
+   pull request and no question must both be refused with the owning node's
+   own reason ("has no pull request, so there are no conflicts to resolve",
+   "has no pending interaction with that id"), and no approval request may
+   be created (`resolve-refused-without-pr`,
+   `answer-refused-without-question`). Any other error, such as an unknown
+   tool or a broken node route, fails. Real conflicts, PR wakes and real
+   worker questions are on the manual-test checklist (7568).
+
+`each-gap-tool-called-once` requires exactly one call of each of the ten
+tools, and `no-user-action` also fails when the worker's own session was never
+read, since an unread worker proves nothing about its approvals. The prompts
+and verdict are in `coordinator-live-gap-tools.ts`, the orchestration in
+`coordinator-live-gap-tools-orchestration.ts`, and
+`coordinator-live-gap-tools-orchestration.test.ts` runs the orchestration over
+a scripted command transport, on this node and through a scripted leaf. The
+orchestration takes `nodeId`, the node's own backend and its project to run the
+same case against a worker on a connected node: the worker's turn,
+interactions, mailbox, HEAD and the fork's checkout are then read, and its
+approvals answered, through that node's backend. `mise run test:agent:coordinator:gap-tools-fake`
+(below) runs it on a fake model, on this node and through a leaf.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now`, `goal`, `routing` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal`, `routing`, `gap-tools` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

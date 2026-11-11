@@ -1,0 +1,103 @@
+name: Claude AppArmor qualification
+
+# Claude's Linux command sandbox on Ubuntu 24.04's stock AppArmor policy
+# (docs/todo/agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md,
+# task 3). CI's test shard already runs the paired qualification on
+# `ubuntu-latest` (26.04), where Ubuntu's bwrap-userns-restrict profile is
+# known to refuse the CLI's nested namespace. 24.04's answer was never
+# observed, so its first phase, `stock`, requires no particular answer: it
+# records the probe's and fails when the backend tier or the pinned CLI
+# disagrees with it. The second phase repeats CI's remediation and requires
+# a working sandbox. Every CLI turn talks to a local scripted endpoint with
+# fake credentials; no model service is used. Runs weekly (runner images
+# change), on demand, and on pull requests that change the probe, the
+# qualification or this workflow.
+on:
+  schedule:
+    - cron: "41 5 * * 2"
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/claude-apparmor-qualification.yml"
+      - "bridges/claude-bridge/src/conformance-apparmor-live.test.ts"
+      - "bridges/claude-bridge/test-fixtures/coordinator-sandbox-qualification.ts"
+      - "bridges/claude-bridge/src/services/claude-execution-sandbox.ts"
+      - "bridges/claude-bridge/src/services/read-only-policy.ts"
+      - "packages/protocol/src/node/claude-linux-sandbox.ts"
+      - "apps/backend/src/core/coordinator-providers.ts"
+      - "packages/toolchain/src/manifest.ts"
+
+# Only pull request runs supersede each other. Scheduled and manual runs need
+# unique groups so a newer pending run cannot replace an older one.
+concurrency:
+  group: claude-apparmor-qualification-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ubuntu-2404:
+    name: Claude AppArmor qualification (ubuntu-24.04)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Verify active Bun matches mise
+        run: test "$(bun --version)" = "$(mise current bun)"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download the pinned Claude CLI
+        run: mise run download:claude
+
+      - name: Install Claude sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap socat
+
+      # Must run before any sysctl or profile change below.
+      - name: Qualify Claude under stock AppArmor policy
+        env:
+          ORKESTRATOR_CLAUDE_APPARMOR_PHASE: stock
+          ORKESTRATOR_POLICY_CLAUDE_PATH: ${{ github.workspace }}/binaries/claude
+          ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE: ${{ runner.temp }}/claude-apparmor
+        run: mise run test:logged -- --name claude-apparmor-stock -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-apparmor-live.test.ts --parallel=1
+
+      # The same remediation as CI's test shard, acceptable on a disposable
+      # runner only (coordinator.md, "Claude's sandbox on Linux").
+      - name: Allow nested namespaces on the disposable runner
+        run: |
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_unconfined=0 || true
+          for profile in bwrap-userns-restrict unprivileged_userns; do
+            if [ -f "/etc/apparmor.d/$profile" ]; then
+              sudo apparmor_parser --remove "/etc/apparmor.d/$profile"
+            fi
+          done
+          bwrap --unshare-all --ro-bind / / true
+          bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc -- \
+            unshare --user --map-root-user true
+
+      - name: Qualify Claude after AppArmor remediation
+        env:
+          ORKESTRATOR_CLAUDE_APPARMOR_PHASE: remediated
+          ORKESTRATOR_POLICY_CLAUDE_PATH: ${{ github.workspace }}/binaries/claude
+          ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE: ${{ runner.temp }}/claude-apparmor
+        run: mise run test:logged -- --name claude-apparmor-remediated -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-apparmor-live.test.ts --parallel=1
+
+      - name: Upload Claude AppArmor evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: claude-apparmor-ubuntu-2404-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/claude-apparmor
+          if-no-files-found: error
+          retention-days: 30

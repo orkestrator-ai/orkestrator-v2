@@ -4,7 +4,11 @@ import path from "node:path";
 import {
   worktreeWatchPlanIo,
   listIgnoredDependencyTrees,
+  listIgnoredTrees,
   WATCH_PLAN_MAX_EXCLUDED,
+  WATCH_PLAN_MAX_IGNORED_CANDIDATES,
+  WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
+  type WorktreeWatchPlanIo,
 } from "../src/core/worktree-watch-plan";
 import {
   startWorktreeWatcher,
@@ -98,6 +102,8 @@ async function watchWorktree(worktree: string, overrides: Partial<WorktreeWatche
   let proofRead = plan === null;
   const opened = openWorktreeWatcher(worktree, {
     ...overrides,
+    // Linux reads the proof through `listIgnoredTrees` when the plan has it,
+    // macOS through `listExcluded`; either one counts.
     plan: plan && {
       ...plan,
       async listExcluded(root) {
@@ -107,6 +113,15 @@ async function watchWorktree(worktree: string, overrides: Partial<WorktreeWatche
           proofRead = true;
         }
       },
+      ...(plan.listIgnoredTrees && {
+        async listIgnoredTrees(root: string) {
+          try {
+            return await plan.listIgnoredTrees!(root);
+          } finally {
+            proofRead = true;
+          }
+        },
+      }),
     },
   });
   const deadline = Date.now() + DELIVERY_DEADLINE_MS;
@@ -145,6 +160,31 @@ async function expectNoticed(
   throw new Error(`no change noticed in ${directory}`);
 }
 
+/**
+ * The real plan, handing each dependency proof it reads to `onProof`. Linux
+ * reads it through `listIgnoredTrees`, macOS through `listExcluded`, so both
+ * are wrapped.
+ */
+function provingPlan(onProof: (proof: readonly string[] | undefined) => void): WorktreeWatchPlanIo {
+  return {
+    ...worktreeWatchPlanIo,
+    listExcluded: async (root) => {
+      const proof = await listIgnoredDependencyTrees(root);
+      onProof(proof);
+      return proof;
+    },
+    listIgnoredTrees: async (root) => {
+      const trees = await listIgnoredTrees(root);
+      onProof(trees?.dependencies);
+      return trees;
+    },
+  };
+}
+
+function isUnder(parent: string, candidate: string): boolean {
+  return candidate.startsWith(`${parent}${path.sep}`);
+}
+
 /** Observe both native delivery and completed Git proof before testing writes. */
 async function watchProof(worktree: string) {
   const raw = new Set<string>();
@@ -161,13 +201,9 @@ async function watchProof(worktree: string) {
           );
         listener(event, filename?.toString() ?? null);
       }),
-    plan: {
-      ...worktreeWatchPlanIo,
-      listExcluded: async (root) => {
-        proof = await listIgnoredDependencyTrees(root);
-        return proof;
-      },
-    },
+    plan: provingPlan((read) => {
+      proof = read;
+    }),
   });
   return { ...result, raw, proof: () => proof };
 }
@@ -265,6 +301,33 @@ describe("listIgnoredDependencyTrees", () => {
   });
 });
 
+describe("listIgnoredTrees", () => {
+  test("splits ignored, untracked directories into node_modules and the rest", async () => {
+    const worktree = await makeWorktree();
+    await write(worktree, ".gitignore", "node_modules/\noutput/\ndist\n");
+    await write(worktree, "output/disposable-docker/data/layer");
+    await write(worktree, "packages/app/dist/index.js");
+    // An ignored directory holding a tracked file is not listed: it must stay watched.
+    await write(worktree, "src/dist/kept.js");
+    git(worktree, "add", "-f", "src/dist/kept.js");
+    await write(worktree, "src/dist/built.js");
+    const trees = await listIgnoredTrees(worktree);
+    expect([...trees!.dependencies].sort()).toEqual(["node_modules", "packages/app/node_modules"]);
+    expect([...trees!.others].sort()).toEqual(["output", "packages/app/dist"]);
+  });
+
+  test("too many other candidates measures none, and keeps the dependency proof", async () => {
+    const worktree = await makeWorktree();
+    await write(worktree, ".gitignore", "node_modules/\nbuild-*/\n");
+    for (let index = 0; index <= WATCH_PLAN_MAX_IGNORED_CANDIDATES; index += 1) {
+      await write(worktree, `build-${index}/out.txt`);
+    }
+    const trees = await listIgnoredTrees(worktree);
+    expect(trees?.others).toEqual([]);
+    expect(trees?.dependencies.length).toBe(2);
+  });
+});
+
 describe("worktree watcher on this platform's real watch", () => {
   // Root bypasses mode bits, so this qualification needs a non-root Linux user.
   describe.skipIf(process.platform !== "linux" || process.geteuid?.() === 0)(
@@ -339,10 +402,9 @@ describe("worktree watcher on this platform's real watch", () => {
       const worktree = await makeWorktree();
       let proof: readonly string[] | undefined;
       const { seen } = await watchWorktree(worktree, {
-        plan: {
-          ...worktreeWatchPlanIo,
-          listExcluded: async (root) => (proof = await listIgnoredDependencyTrees(root)),
-        },
+        plan: provingPlan((read) => {
+          proof = read;
+        }),
       });
       // Proves the watch is delivering before the absence below can mean anything.
       await expectNoticed(worktree, seen, "src");
@@ -362,6 +424,54 @@ describe("worktree watcher on this platform's real watch", () => {
   );
 
   test(
+    "the per-directory plan leaves a large ignored tree unwatched and withdraws coverage",
+    async () => {
+      const worktree = await makeWorktree();
+      await write(worktree, ".gitignore", "node_modules/\noutput/\n");
+      // One more directory than the bound below `output/data`, plus `data` itself.
+      await Promise.all(
+        Array.from({ length: WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES }, (_, index) =>
+          fs.mkdir(path.join(worktree, `output/data/d-${index}`), { recursive: true }),
+        ),
+      );
+      const targets: string[] = [];
+      let measuredLarge: boolean | undefined;
+      const opened = openWorktreeWatcher(worktree, {
+        // The Linux strategy, forced so a Mac proves the plan too.
+        perDirectoryWatches: true,
+        plan: {
+          ...worktreeWatchPlanIo,
+          exceedsDirectories: async (root, relative, limit) => {
+            const over = await worktreeWatchPlanIo.exceedsDirectories!(root, relative, limit);
+            if (relative === "output") measuredLarge = over;
+            return over;
+          },
+        },
+        startWatch: (target, listener, settings) => {
+          targets.push(target);
+          return watch(target, { ...settings, persistent: false }, (event, name) =>
+            listener(event, name?.toString() ?? null),
+          );
+        },
+      });
+      const deadline = Date.now() + DELIVERY_DEADLINE_MS;
+      while (measuredLarge === undefined && Date.now() < deadline) await Bun.sleep(10);
+      expect(measuredLarge).toBe(true);
+      await expectNoticed(worktree, opened.seen, "src");
+      await write(worktree, "output/data/d-5/written-while-left-out.txt");
+      // Delivered in order, so anything from the write above has arrived by now.
+      await expectNoticed(worktree, opened.seen, "packages/app/src");
+      expect([...opened.seen].filter((name) => name.startsWith("output/"))).toEqual([]);
+      const output = path.join(worktree, "output");
+      expect(targets.filter((target) => target === output || isUnder(output, target))).toEqual([]);
+      expect(opened.watcher.watching).toBe(true);
+      expect(opened.watcher.qualified).toBe(false);
+      expect(opened.errors).toEqual([]);
+    },
+    DELIVERY_DEADLINE_MS * 4,
+  );
+
+  test(
     "replacing an ignored directory with a symlink refreshes proof and reports it",
     async () => {
       const worktree = await makeWorktree();
@@ -374,13 +484,9 @@ describe("worktree watcher on this platform's real watch", () => {
             listener(event, filename?.toString() ?? null),
           );
         },
-        plan: {
-          ...worktreeWatchPlanIo,
-          listExcluded: async (root) => {
-            proof = await listIgnoredDependencyTrees(root);
-            return proof;
-          },
-        },
+        plan: provingPlan((read) => {
+          proof = read;
+        }),
       });
       await expectNoticed(worktree, seen, "src");
       expect(proof).toContain("node_modules");

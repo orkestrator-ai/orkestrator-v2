@@ -2,12 +2,68 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useRestorePlaceAfterHistoryDrop } from "./useRestorePlaceAfterHistoryDrop";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { clearPersistedVirtuosoState, useVirtuosoScrollState } from "./useVirtuosoScrollState";
+import {
+  clearPersistedVirtuosoState,
+  useVirtuosoScrollState,
+  type ActivationPolicy,
+} from "./useVirtuosoScrollState";
+
+let frames: ControlledFrames | null = null;
 
 afterEach(() => {
+  frames?.restore();
+  frames = null;
   cleanup();
   clearPersistedVirtuosoState("return-key");
 });
+
+interface ControlledFrames {
+  /** Runs queued frames, and any they queue, until none is left. */
+  drain(): void;
+  /** Puts the real clock back; a frame still queued fails the test. */
+  restore(): void;
+}
+
+/**
+ * Holds animation frames until the test drains them. Activation positioning
+ * runs in a frame, so once every frame has run the decision has been carried
+ * out: a "did not move" check after `drain()` proves it, which a wall-clock
+ * wait could only suggest.
+ */
+function controlFrames(): ControlledFrames {
+  const originalRequest = globalThis.requestAnimationFrame;
+  const originalCancel = globalThis.cancelAnimationFrame;
+  const queued = new Map<number, FrameRequestCallback>();
+  let nextId = 1;
+  globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+    const id = nextId++;
+    queued.set(id, callback);
+    return id;
+  }) as typeof requestAnimationFrame;
+  globalThis.cancelAnimationFrame = ((id: number) => {
+    queued.delete(id);
+  }) as typeof cancelAnimationFrame;
+  let restored = false;
+  return {
+    drain() {
+      for (let round = 0; queued.size > 0; round += 1) {
+        if (round >= 50) throw new Error("animation frames kept queueing more frames");
+        const due = Array.from(queued.values());
+        queued.clear();
+        act(() => {
+          for (const callback of due) callback(performance.now());
+        });
+      }
+    },
+    restore() {
+      if (restored) return;
+      restored = true;
+      globalThis.requestAnimationFrame = originalRequest;
+      globalThis.cancelAnimationFrame = originalCancel;
+      if (queued.size > 0) throw new Error(`${queued.size} animation frame(s) never ran`);
+    },
+  };
+}
 
 /**
  * A scroller holding one row (`k5`) whose document position the test sets, so
@@ -80,6 +136,7 @@ describe("returning a detached reader to their semantic place", () => {
   });
 
   test("a remount reserves activation while paging to its persisted source part", async () => {
+    frames = controlFrames();
     const first = renderHook(
       ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "return-key" }),
       { initialProps: { isActive: true } },
@@ -126,9 +183,10 @@ describe("returning a detached reader to their semantic place", () => {
     const scroller = scrollerWithRow(() => 2300);
     scroller.firstElementChild!.setAttribute("data-transcript-part-id", "call5");
     act(() => second.result.current.scrollProps.scrollerRef(scroller));
-    await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+    frames.drain();
     expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
     expect(loadEarlier).toHaveBeenCalledTimes(1);
+    frames.restore();
     second.rerender({
       messages: [
         {
@@ -144,7 +202,8 @@ describe("returning a detached reader to their semantic place", () => {
     scroller.remove();
   });
 
-  test("a follower is not restored to a row: growth keeps them at the end", async () => {
+  test("a follower is not restored to a row: growth keeps them at the end", () => {
+    frames = controlFrames();
     const first = renderHook(
       ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "return-key" }),
       { initialProps: { isActive: true } },
@@ -159,11 +218,215 @@ describe("returning a detached reader to their semantic place", () => {
     second.result.current.virtuosoRef.current = scrollerHandle as never;
     const scroller = scrollerWithRow(() => 2000);
     act(() => second.result.current.scrollProps.scrollerRef(scroller));
-    await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+    frames.drain();
     expect(scrollerHandle.scrollToIndex).not.toHaveBeenCalled();
     expect(second.result.current.scrollProps.followOutput(true)).toBe("auto");
     act(() => second.result.current.scrollProps.totalListHeightChanged(5000));
     expect(scroller.scrollTop).toBe(4400);
+    scroller.remove();
+  });
+});
+
+type ViewProps = { isActive: boolean; visible: boolean; viewKey?: string };
+
+/** A detached reader at 1920 (k5 80px below the top) in a view with `activation`. */
+function detachedView(activation: ActivationPolicy, viewKey?: string) {
+  const view = renderHook(
+    ({ isActive, visible, viewKey: key }: ViewProps) =>
+      useVirtuosoScrollState({ isActive, visible, viewKey: key, activation }),
+    { initialProps: { isActive: true, visible: true, viewKey } as ViewProps },
+  );
+  const virtualizer = handle();
+  view.result.current.virtuosoRef.current = virtualizer as never;
+  let rowTop = 2000;
+  const scroller = scrollerWithRow(() => rowTop);
+  scroller.scrollTop = 4400;
+  act(() => view.result.current.scrollProps.scrollerRef(scroller));
+  act(() => {
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    scroller.scrollTop = 1920;
+    scroller.dispatchEvent(new Event("scroll"));
+  });
+  expect(view.result.current.scrollProps.followOutput(true)).toBe(false);
+  /** Moves k5 in the document, as a reflow would. */
+  const moveRow = (top: number) => {
+    rowTop = top;
+  };
+  return { view, virtualizer, scroller, moveRow };
+}
+
+describe("a `latest` view hidden inside an active host", () => {
+  function detachedLatestView() {
+    return detachedView("latest");
+  }
+
+  test("returning from another view in the same tab keeps the reader's place", () => {
+    frames = controlFrames();
+    const { view, virtualizer, scroller } = detachedLatestView();
+    frames.drain();
+    view.rerender({ isActive: true, visible: false });
+    view.rerender({ isActive: true, visible: true });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(1920);
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+    expect(view.result.current.scrollProps.followOutput(true)).toBe(false);
+    scroller.remove();
+  });
+
+  test("a follower back from another view catches up to the end", async () => {
+    const view = renderHook(
+      ({ isActive, visible }) =>
+        useVirtuosoScrollState({ isActive, visible, activation: "latest" }),
+      { initialProps: { isActive: true, visible: true } },
+    );
+    view.result.current.virtuosoRef.current = handle() as never;
+    const scroller = scrollerWithRow(() => 2000);
+    scroller.scrollTop = 4400;
+    act(() => view.result.current.scrollProps.scrollerRef(scroller));
+    view.rerender({ isActive: true, visible: false });
+    // Output arrived while hidden and left the hidden offset short of the end.
+    scroller.scrollTop = 3000;
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("returning to the tab still shows the latest message", async () => {
+    const { view, scroller } = detachedLatestView();
+    view.rerender({ isActive: false, visible: true });
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("leaving the tab while the view was hidden counts as a tab return", async () => {
+    frames = controlFrames();
+    const { view, scroller } = detachedLatestView();
+    frames.drain();
+    view.rerender({ isActive: true, visible: false });
+    view.rerender({ isActive: false, visible: false });
+    view.rerender({ isActive: true, visible: false });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(1920);
+    frames.restore();
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    scroller.remove();
+  });
+
+  test("a view return after a tab return is a view return again", async () => {
+    const { view, scroller } = detachedLatestView();
+    view.rerender({ isActive: false, visible: true });
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    // A browser fires `scroll` for the navigation's write; this fake does not.
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      scroller.scrollTop = 1920;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    frames = controlFrames();
+    view.rerender({ isActive: true, visible: false });
+    view.rerender({ isActive: true, visible: true });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(1920);
+    scroller.remove();
+  });
+
+  test("returning to other content in the same list shows its newest message", async () => {
+    // One pipeline transcript serves every stage: stage A, the Ticket, then stage B.
+    const { view, scroller } = detachedView("latest", "stage-a");
+    view.rerender({ isActive: true, visible: false, viewKey: "stage-a" });
+    view.rerender({ isActive: true, visible: true, viewKey: "stage-b" });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("other content arriving in the render that hides the view opens at its newest message", () => {
+    // Stage A's transcript, then a node whose remembered view is Tests: the
+    // hiding render already carries that node's session, which is then shown.
+    frames = controlFrames();
+    const { view, scroller } = detachedView("latest", "stage-a");
+    frames.drain();
+    view.rerender({ isActive: true, visible: false, viewKey: "stage-b" });
+    view.rerender({ isActive: true, visible: true, viewKey: "stage-b" });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(4400);
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("the same content back keeps the reader's place", () => {
+    frames = controlFrames();
+    const { view, virtualizer, scroller } = detachedView("latest", "stage-a");
+    frames.drain();
+    view.rerender({ isActive: true, visible: false, viewKey: "stage-a" });
+    view.rerender({ isActive: true, visible: true, viewKey: "stage-a" });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(1920);
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+    scroller.remove();
+  });
+});
+
+describe("a `respect-intent` view hidden inside an active host", () => {
+  test("a detached reader keeps the hidden element's offset, not an anchor", () => {
+    frames = controlFrames();
+    const { view, virtualizer, scroller, moveRow } = detachedView("respect-intent");
+    frames.drain();
+    view.rerender({ isActive: true, visible: false });
+    // Restoring the anchor captured on hide (k5, 80px down) would now land at 2220.
+    moveRow(2300);
+    view.rerender({ isActive: true, visible: true });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(1920);
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+    expect(view.result.current.scrollProps.followOutput(true)).toBe(false);
+    scroller.remove();
+  });
+
+  test("a follower back from another view catches up to the end", async () => {
+    const view = renderHook(
+      ({ isActive, visible }) =>
+        useVirtuosoScrollState({ isActive, visible, activation: "respect-intent" }),
+      { initialProps: { isActive: true, visible: true } },
+    );
+    view.result.current.virtuosoRef.current = handle() as never;
+    const scroller = scrollerWithRow(() => 2000);
+    scroller.scrollTop = 4400;
+    act(() => view.result.current.scrollProps.scrollerRef(scroller));
+    view.rerender({ isActive: true, visible: false });
+    scroller.scrollTop = 3000;
+    view.rerender({ isActive: true, visible: true });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("other content arriving in the render that hides the view opens at its newest message", () => {
+    frames = controlFrames();
+    const { view, scroller } = detachedView("respect-intent", "session-a");
+    frames.drain();
+    view.rerender({ isActive: true, visible: false, viewKey: "session-b" });
+    view.rerender({ isActive: true, visible: true, viewKey: "session-b" });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(4400);
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("a detached reader shown other content opens at its newest message", async () => {
+    const { view, scroller } = detachedView("respect-intent", "session-a");
+    view.rerender({ isActive: true, visible: false, viewKey: "session-a" });
+    view.rerender({ isActive: true, visible: true, viewKey: "session-b" });
+    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
     scroller.remove();
   });
 });

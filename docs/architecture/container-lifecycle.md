@@ -795,9 +795,23 @@ as links, within the revision bounds). `entrypoint.sh` and
 `workspace-setup.sh` read a relayed copy in place of its mount
 (`staged_input_path`), and the Claude key file is read from either. Nothing is
 widened on the host or for another user, and nothing is relayed on a rootful
-daemon, where `node` reads the mounts directly. The relay is rebuilt from the
-mounts on every boot, and revocation also removes the provider's relayed
-copies from the running container (`stagedInputRelayPaths`). On a rootless
+daemon, where `node` reads the mounts directly. Each boot checks the copies
+against the mounts: root keeps a digest of every mount it relayed (paths,
+types, modes, sizes, link targets and content, read from the read-only mount,
+never from `node`'s copy) in its own `0700` `/run/orkestrator-relay-state`, and
+a mount whose digest is unchanged and whose copy is still there is left as it
+is. Every other copy is removed and relayed again (or not at all, once the
+mount is readable, gone or over the bounds), and with no copy kept the whole
+relay directory is rebuilt, as it was before. `node` removes those copies,
+opening up any directory a workload left without write permission; if a copy
+still will not go, root rebuilds the whole relay rather than leave a stale copy
+at its live path, and a copy whose relay fails and cannot be removed takes the
+whole relay with it, so every input falls back to its unreadable mount. So the backend's rewrite of a
+login or a revocation's scrub reaches the copy at the next start, and
+revocation also removes the provider's relayed copies from the running
+container (`stagedInputRelayPaths`), which the next start relays again only if
+the mount still holds them. `node` owns its copy, so editing it changes only
+its own input, as editing its home does. On a rootless
 daemon an older image gets nothing readable: the backend logs it at creation
 and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 `imageRelaysStagedInputs`).
@@ -879,7 +893,33 @@ on revocation described above.
   made inside the container keeps its refresh token until the next restart and
   is kept, as is an API key. A host login that has only expired leaves the copy
   alone, since it has lapsed too. A container that used an added account
-  already had its copy removed by the account switch path.
+  already had its copy removed by the account switch path. Claude's host login
+  is removed at the next container start (`buildDropHostClaudeLoginCommand`):
+  host copies go, a login the container made itself (`claudeAiOauth` or
+  an `mcpOAuth` server) keeps its access token, and a file left with no login
+  is deleted. An entry carrying any token whose SHA-256 the backend saw on the
+  host for that slot (`HostClaudeTokenDigests`, in memory, handed to the drop,
+  restrict and merge commands on stdin) is a host copy, refresh token or not.
+  Otherwise a login the container made is one still holding a refresh token
+  (a push never carries one) or, once stripped, one whose access-token SHA-256
+  the strip recorded in `.credentials.json.orkestrator-owned`; the restrict
+  and drop commands write that record before stripping, and the merge carries
+  a recorded MCP login forward while the host's login has no entry for that
+  server, so the login survives later starts and pushes. Every merge, restrict
+  and drop writes the record, empty or not, so it also marks the container as
+  tracked. In a container no pass has touched since the record existed, an
+  older strip may have left the container's own logins access-only and
+  unrecorded, so a drop there keeps (and records) every entry it cannot name
+  as the host's: a host copy the backend never saw then stays until its access
+  token expires or the next push replaces it, as before this removal existed.
+  If `flock` or the locked pass fails, the drop falls back to the strip-only
+  pass rather than deleting the file. The host reads as signed out
+  (`hostClaudeSignedOut`) only when every place the login is looked up says
+  so: each `.credentials.json` absent or holding no login, and on macOS a
+  metadata-only `security find-generic-password` (no `-w`, so no access
+  prompt) exiting 44, item not found, for each keychain searched. An
+  unreadable file, an expired login or any other Keychain answer keeps the
+  older behaviour, stripping refresh tokens in place.
 - When a container's host-imported Codex or Grok login lapses, the tab's
   sign-in message (readiness `authentication-required`) is replaced by
   guidance to renew the login on the host (or the added Codex account in
@@ -940,7 +980,10 @@ on revocation described above.
   narrowed. It uses the cleanup review's evidence (`legacy-runtime-shape.ts`):
   no inputs-revision label *and* a bind at one of the old mount points. A
   runtime with no label and no such bind is `none`, and a failed inspect is
-  `unknown`, never `host-mounts`.
+  `unknown`, never `host-mounts`. A `staged` revision that holds no provider
+  and has nothing missing, disabled or revoked to report shows "Nothing was
+  staged into this container." in the environment's inputs section
+  (`EnvironmentInputsSection.tsx`), rather than an empty box.
 - Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
@@ -995,9 +1038,9 @@ full copy's, apart from the removal below.
   winning. Claude startup cleanup, publication and digest attribution share an
   exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
   publication commands. The lock file stays in place so concurrent writers always
-  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
-  but not removed after a host sign-out, as before
-  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+  lock the same inode. A Claude copy the backend pushed is left to the backend:
+  after a host sign-out the next start removes it (see the host sign-out item
+  under the access-only logins above).
 - **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
   layer, so a new runtime starts with a full copy. It holds names and digests,
   never contents. The workload can write it, so it is not a security boundary, and
@@ -1007,9 +1050,18 @@ full copy's, apart from the removal below.
   binds the same either way, so there is no gate to check.
 
 The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
-relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
-applies. Timings are in
-to-do 1202, task 15 (retired 2026-11-10).
+relay in `network-policy-entrypoint.sh` skips an unchanged mount the same way
+(see the relay above), and `copy_agent_directory` answers its entry bound, link
+check and size bound (allocated blocks, what `du -sk` sums) and the stamp's
+listing from one `find` walk, so a first start costs about five processes per
+copied directory rather than about fifteen. The walk uses GNU find's `-printf`;
+where find lacks it (BSD find, when the helpers run on macOS) the first walk
+lists nothing and the rest of the boot uses a portable walk
+(`agent_input_directory_walk`): `find -print0` classified with shell tests, and
+one `du -sk`, with the same bounds and listing. Timings are in
+[4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
+and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
+tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
@@ -1100,12 +1152,36 @@ host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
 start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
 dockerd hands out automatic ports in sequence, and short-lived outbound
-sockets held two in a row in a 2026-11-09 run. Docker 29.9 detaches the
+sockets held two in a row in a 2026-11-09 run (and four in a row right after
+a daemon restart on 2026-11-11, which hands ports out again from the bottom
+of the range;
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4). Docker 29.9 detaches the
 container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
 started container still has none. A collision past the retries, or one on
-a fixed port, is the existing `port-conflict`.
+a port the user fixed, is the existing `port-conflict`.
+
+Each failed start moves rootless dockerd on by one port, so no retry count
+gets past a held run longer than itself. On a rootless daemon the backend
+therefore chooses every automatic host port itself when it creates a
+runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
+the host, where the kernel sees every socket and prefers odd ports for
+`bind` (outbound `connect` prefers even ones), publishes the result as a
+fixed port and lists it in the `orkestrator-backend-host-ports` label. A
+stopped container's ports hold no host socket, so the choice also refuses
+the ports the same create fixes, the ports labelled on every container of
+the same owner (`docker ps -a`) and, for the window before a new container
+exists, the ports this backend chose in the last 30 minutes. The
+port then stays the container's own across starts and daemon restarts. A
+collision on a labelled port is retried on the same port after a pause
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+go; one still held after the retries is a `port-conflict` that says to stop
+the holder or rebuild the environment, which chooses new ports. A port the
+user fixed is still never retried. Rootful daemons keep
+Docker's own automatic ports, since they see the host's sockets, and a
+container created before this keeps them until it is rebuilt.
 
 The same rootless daemon refuses every `docker cp` into or out of a
 container with a read-only bind whose source filesystem is mounted
@@ -1121,6 +1197,19 @@ boot record read reports `boot-record-copy-refused` instead of
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
+
+`live-restore` cannot work on a rootless daemon: a rootless restart replaces
+RootlessKit, its user and network namespaces, containerd and the shims, so
+the new daemon reports every container exited while the old containers'
+processes keep running in the old namespaces with no network, on the same
+volumes the restarted containers then mount (observed 2026-11-11,
+[evidence](../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)).
+The backend starts those containers again as it does after any restart with
+`live-restore` off, and cannot find or stop the orphans, so it warns once per
+process when a rootless daemon reports `live-restore` on (`docker`
+`daemon.rootless-live-restore`, from the capacity probe in
+`container-resources.ts`); the remedy is `"live-restore": false` in that
+daemon's `daemon.json`.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,

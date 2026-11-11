@@ -70,6 +70,18 @@ export interface PrintedPdfRef {
   createdAt: string;
 }
 
+/**
+ * The text Find searches in an `html-static` document, read by the worker from
+ * the effective HTML of one receipt (`staticHtmlDocumentText`). The bytes are a
+ * content-addressed UTF-8 asset.
+ */
+export interface StaticSearchTextRef {
+  /** The receipt's effective-document hash the text was read from. */
+  effectiveSourceHash: string;
+  sha256: string;
+  byteLength: number;
+}
+
 /** Derived representations of one immutable revision; the revision row is never rewritten. */
 export interface StoredDerived {
   schemaVersion: 1;
@@ -78,6 +90,8 @@ export interface StoredDerived {
   prepared: PreparedDocumentRef[];
   /** Optional (additive): printed PDFs, at most a few per revision. */
   printed?: PrintedPdfRef[];
+  /** Optional (additive): static document text for Find, one per verified effective document. */
+  searchTexts?: StaticSearchTextRef[];
 }
 
 export type StoredOperation = ArtifactOperation & {
@@ -366,7 +380,8 @@ const CHECKS = {
     isString(v.artifactId) &&
     isPositive(v.revision) &&
     Array.isArray(v.prepared) &&
-    (v.printed === undefined || Array.isArray(v.printed)),
+    (v.printed === undefined || Array.isArray(v.printed)) &&
+    (v.searchTexts === undefined || Array.isArray(v.searchTexts)),
   operation: (v) =>
     isString(v.operationId) &&
     isString(v.artifactId) &&

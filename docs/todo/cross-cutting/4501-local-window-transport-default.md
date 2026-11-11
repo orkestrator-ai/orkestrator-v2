@@ -2,21 +2,23 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `585cf97d8`.
+Analysed 2026-11-06 against `main` at `585cf97d8`; rechecked 2026-11-11 against `main` at `498b68766`.
 
 ### Tasks
 
-1. **Qualify a packaged window**: run the new transport on a packaged `file://` renderer. Status: open.
-2. **Flip the default**: after one release behind the setting. Status: open (depends on 1).
-3. **Retire the relay for local windows**: remove the second path once the default has held. Status: open (depends on 2).
+1. **Qualify a packaged window**: run the new transport on a packaged `file://` renderer. Status: done (2026-11-11).
+2. **Flip the default**: after one release behind the setting. Status: done (2026-11-11).
+3. **Retire the relay for local windows**: remove the second path once the default has held. Status: open (depends on 2 having shipped in a release and held through the next one with no open report against the direct transport).
 
 ### 1. Qualify a packaged window
 
-**Problem.** The transport has only run on the dev renderer, over `http://`.
+**Problem.** The transport had only run on the dev renderer, over `http://`.
 
 **Context.** To-do 1202 task 12 (retired 2026-11-10) shipped it behind `global.localWindowGatewayTransport`, off by default. `local-gateway-transport-electron.spec.ts` drives a real window, but through Vite.
 
-**Investigation.** A `<meta>` Content Security Policy only reaches a production build (`renderer-security.md`). From code: `connect-src` allows `http:`, and main rewrites `Origin` on the two routes, so a `file://` page should behave the same. Neither has been seen working.
+**Investigation.** A `<meta>` Content Security Policy only reaches a production build (`renderer-security.md`). From code: `connect-src` allows `http:`, and main rewrites `Origin` on the two routes, so a `file://` page should behave the same.
+
+Done 2026-11-11 on mini (macOS, Apple Silicon, Electron 45): `packaged-security-electron.spec.ts` gained two tests, `packaged file:// window: the direct gateway transport by default` and `… an explicit false keeps main's relay`. Each launches the unsigned shipping `--dir` build (`release/mac-arm64`, fuses verified by `scripts/verify-packaged-security.ts`) on a disposable profile with its windows hidden, attaches over CDP, and from the `file://` page runs `get_config` and `patch_global_config` through `window.orkestrator`, then waits for the `resource-changed` event that mutation announces. On the direct transport the page holds `orkestratorDesktopHost` (`api`, `baseUrl`), both commands appear as resource timings to the backend's loopback control origin, the event arrives on the page's own stream, and main's relay delivers no copy to the preload's listener; Settings → Experimental shows the switch on. With `false` stored the page has no host and makes no HTTP command at all. Both passed (21.3 s for the pair), and again on a re-run against the same build later that day (16.4 s for the pair, `--grep "packaged file:// window"`). The first run found only harness faults: the window talks to the control listener rather than the gateway port, and the "GitHub CLI Not Found" startup dialog hid Settings until it was dismissed (`dismissStartupDialogsOnPage`).
 
 **Decisions.**
 
@@ -30,11 +32,13 @@ Analysed 2026-11-06 against `main` at `585cf97d8`.
 
 ### 2. Flip the default
 
-**Problem.** Local windows still pay the relay's cost unless a user opts in.
+**Problem.** Local windows paid the relay's cost unless a user opted in.
 
 **Context.** Decided 2026-11-01: the default moves after one release behind the setting. Moving the terminal to the WebSocket is a separate decision.
 
-**Investigation.** The flip waits for the release and task 1. The setting is a boolean read as `=== true`, so a flip must not turn a user's explicit `false` into on.
+**Investigation.** The flip waits for the release and task 1. The setting was a boolean read as `=== true`, so a flip must not turn a user's explicit `false` into on.
+
+Both conditions held on 2026-11-11: the setting shipped in 2.36.2-beta (#1741, after 2.36.1) and has been in every release since, through 2.37.5-beta, and task 1 passed. Done the same day: `readLocalWindowGatewayTransport` now answers on unless `config.json` says `false` (a missing setting, file or unparseable file is on), Settings shows unset as on and stores an explicit `false` when turned off, and the description says it is on by default. Specs that measure or exercise main's relay now pin it with an explicit `false` (`relayed-events-electron.spec.ts`, the relay run of `local-gateway-transport-stack.ts`).
 
 Main's CPU no longer argues against the flip. On 2026-11-05 `local-gateway-transport-electron.spec.ts` measured the direct transport costing Electron main more than the relay with two windows (113–131 ms against 39–67 ms for the 1.29 MB burst). The cause is the measuring harness, not the transport. To-do 5760 profiled that burst on 2026-11-06 (macOS, Apple Silicon, Electron 45, the Vite dev renderer), and its findings are recorded here because 5760 was closed:
 
@@ -90,7 +94,7 @@ What has not been measured is a packaged `file://` window (task 1) and any platf
 
 **Context.** The rollback exists so that a user with a broken window can fall back without a new build. Remote windows still use main's relay and are not part of this.
 
-**Investigation.** Not started. Removal would touch `relayBackendEvent`, `setTerminalOutputRelay` and the host split in the preload. Main's own event consumers (`hostUpdates`, `liveLogPolicy`) still need its stream.
+**Investigation.** Not started, and not startable yet: by its own decision below it waits until the flip has shipped in a release and held through the next one with no open report against the direct transport. As of 2026-11-11 the flip is on this branch only. Removal would touch `relayBackendEvent`, `setTerminalOutputRelay` and the host split in the preload. Main's own event consumers (`hostUpdates`, `liveLogPolicy`) still need its stream. Specs that pin the relay with an explicit `false` (task 2) go with it.
 
 **Decisions.**
 
@@ -122,6 +126,23 @@ per-measurement desync recovery, validated run counts and unconditional cleanup
 make invalid or interrupted measurements fail explicitly. Seven focused regressions, a real-browser overflow check (301 completions
 with a 250-entry buffer), and enabled one-run-per-transport qualification
 passed.
+
+### Qualifying the packaged window (task 1, 2026-11-11)
+
+Chose to extend `packaged-security-electron.spec.ts`, as the task recommended, rather than a hand check: it already launches the shipping binary under the packaged policy, and the new tests run in the same `mise run test:package:security`. Each transport gets its own launch, so the existing security test is left as it was. The window is hidden through `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS` so the run takes no focus. The event used is `resource-changed` from a config patch that re-states a value: it needs no fixture repository or environment, and it is a backend event main would relay to a relay window, so its absence on the preload's listener shows the direct window got it from its own stream. Terminal output over the filtered stream is not part of the packaged check; it uses the same client code as the dev renderer, where `local-gateway-transport-electron.spec.ts` covers it.
+
+### How the default is stored (task 2, 2026-11-11)
+
+Implemented the recommended option: the boolean stays, unset is on, and only an explicit `false` keeps the relay. No config migration. An unreadable or unparseable `config.json` also counts as on, because it is the default; before the flip it fell back to off for the same reason. The setting stays under Settings → Experimental as the rollback until task 3.
+
+### When to flip (task 2, 2026-11-11)
+
+Flipped in this change rather than waiting for another release: the 2026-11-01 condition (one release behind the setting) had been met many times over, and task 1 was the other condition. Not re-measured on the packaged window (the option "also re-measure on a packaged `file://` window" was not recommended in task 2's Decisions).
+
+## Needs verification
+
+- The packaged transport tests ran on macOS only. Linux runs the same tests through `mise run test:package:security` on a Linux host (for example `omarchy-hp`); not run for this change.
+- The existing `shipping binary has the L3 fuses …` test in the same spec now runs on the direct transport by default and was not re-run here, because it opens a visible window on macOS. Run the whole `mise run test:package:security` before the release.
 
 ## Related
 

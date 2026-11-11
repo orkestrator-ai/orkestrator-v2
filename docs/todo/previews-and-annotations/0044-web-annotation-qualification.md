@@ -5,7 +5,9 @@
 Analysed 2026-10-27 against `main` at `863b5782`.
 
 Checked against `main` at `ba7cc8d4` (2026-10-25). Tasks 5, 7 and 8 were run
-against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
+against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink). Tasks 6 and 9
+were rechecked, and task 6 run, against `main` at `498b68766` on 2026-11-11
+(Linux, beelink2), with 2580 task 4 and 0124 task 1 (both now retired).
 
 ### Tasks
 
@@ -17,7 +19,9 @@ against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
 5. **Linux re-run after #969 and #983**: the first "Needs verification" item.
    Status: done (2026-11-06, headless; see "Runs on 2026-11-06").
 6. **Quiet-host baselines and targets**: repeat the baselines and decide
-   whether to set targets. Status: open.
+   whether to set targets. Status: done (2026-11-11: baselines re-measured
+   after 0124's change, at a quarter of the earlier load; no targets, as
+   recommended; see "Runs on 2026-11-11").
 7. **Gateway synthetic-capture parity**: the second "Needs verification" item.
    Status: done (2026-11-06: the gateway replays recorded desktop captures,
    which the Electron spec checks on every run).
@@ -30,10 +34,15 @@ against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
 9. **Electron OS-focus assertions on a frontmost host**: the gated `nativeFocus`,
    `getFocusedWebContents()` and `isFocused()` polls run and pass when Electron
    is really frontmost. Moved from to-do 1170 (deleted 2026-11-06).
-   Status: open (the recommended host, Linux under Xvfb, needs no person).
+   Status: open (the recommended host, Linux under Xvfb, needs no person, but
+   none was available on 2026-11-11: beelink2 has no Xvfb and that run's
+   ticket forbade one; headless Electron reports focus unconditionally, so it
+   cannot stand in).
 
 Code items 1 to 6, the keychain item and the create-cost item (moved to
-[0124](0124-web-annotation-commit-cost.md)) are done.
+0124, retired on 2026-11-11 with its numbers in
+[web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost))
+are done.
 
 ### 1. Record the human review of sign-offs A to C
 
@@ -122,6 +131,17 @@ stale.
   - **Set targets from the re-measurement and assert them in the spec.**
     - Pros: a real latency guard.
     - Cons: timing assertions are the flake source already recorded in 0225.
+
+**Outcome (2026-11-11).** Done as recommended, with 0124's run, on beelink2
+(16 cores, load 5 to 14 against ~45 for the 2026-10-25 numbers). The whole
+Electron spec ran headless, and its `baselines` case gave selection → spool
+median 133 ms (p90 151, max 158; 18 captures) and spool → saved median 34 ms
+(p90 66, max 164; 19), with backend `command_ms` create mean 2 / max 6 ms and
+asset stage 2 / 4 ms. The backend create cost is now flat in the collection
+size (0124's profile, recorded in
+[web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost)).
+No target is set. Shared agent hosts are never idle, so a fully quiet run was
+not attempted; see "Assumptions and decisions".
 
 ### 7. Gateway synthetic-capture parity
 
@@ -248,6 +268,14 @@ checklist (7568).
    shortcuts dialog) and the annotation keyboard test's `isFocused()`.
 3. Record the results, and decide whether an Xvfb CI job is worth adding.
 
+Rechecked on 2026-11-11 at `498b68766`: still open. beelink2 has no Xvfb
+(`Xvfb` and `xvfb-run` are not installed) and that run's ticket forbade
+installing one or using the user's display. The headless run of the
+annotation spec reported `window-focused true` and
+`preview-focused-while-selecting true` again, which headless Ozone reports
+whether or not anything is frontmost, so it is not evidence for this task.
+Next run: a Linux host with Xvfb installed, or a CI job (step 3).
+
 **Decisions.**
 
 - **Which host?**
@@ -296,7 +324,8 @@ that names what was actually tested.
   - The real renderer draws the Notes column beside the native view. The view
     must sit on its host at app zoom 0.8, 1 and 1.25 and never cover the
     column, its resize handle or a focus ring (within the one DIP that integer
-    view bounds allow). A menu and a dialog hide the view. At 150% app zoom,
+    view bounds allow). A modal dialog hides the view; since #2110 a menu
+    hides it only where the two overlap (the spec checks both). At 150% app zoom,
     and in a 900 px window, the narrow Preview/Notes switch takes over.
   - Create and send by keyboard alone.
   - Capture pixels and the selection highlight stay on the target at preview
@@ -335,7 +364,8 @@ that names what was actually tested.
   `request_enqueue_ms`, `request_dispatch_ms` and `request_duration_ms`
   histograms. Capture-to-saved is measured at the client by the Electron
   spec's baseline case (selection → spool, spool → backend commit); see
-  "Baselines" under "Runs on 2026-10-25".
+  "Runs on 2026-11-11" (the latest) and "Baselines" under "Runs on
+  2026-10-25".
 - Since 2026-11-06 the Electron spec (18 tests) runs headless on Linux with
   `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` through
   `playwright.electron-headless.config.ts`. It has a real Vite 8 dev-server
@@ -343,6 +373,10 @@ that names what was actually tested.
   `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) and a case that checks the
   recorded desktop captures the gateway spec replays
   (`web-annotations-native-captures.json`, task 7).
+- Since 2026-11-11 (19 tests) it also saves an element note and a quote inside
+  the fixture's open shadow root (`/pricing`, `fixture-shadow-card`) from the
+  desktop's own preview view, then pins both and shows the element note on
+  the page again after a reload (2580 task 4, retired).
 
 ## Outstanding work
 
@@ -451,7 +485,9 @@ Test code the runs below depend on.
   `outside-workspace`; `unavailable` is covered at unit level for a failed or
   malformed container check, `outside-workspace` on the real stack with a
   symlink).
-- Done 2026-10-25: baselines recorded (below). No target is set yet.
+- Done 2026-10-25: baselines recorded (below). Re-measured on 2026-11-11
+  after 0124's commit change (see "Runs on 2026-11-11"); no targets are set
+  (task 6).
 - Done 2026-11-06 on Linux (see "Runs on 2026-11-06"): the Electron spec
   (headless) and the isolated browser suite after #969 and #983, the gateway's
   Docker cases, the Electron container cases, and source hints from a real
@@ -487,7 +523,7 @@ The remote, iOS and native-focus runs moved to the manual-test checklist
   (as on 2026-10-17) and the Electron spec deliberately has no live provider
   (its Codex probe refuses launches).
 - **Create cost grows with the collection (low). Located; moved to
-  [0124](0124-web-annotation-commit-cost.md).** Every commit deep-copies the
+  0124 (retired 2026-11-11).** Every commit deep-copies the
   manifest (`structuredClone` in `commitManifest`) and re-serializes every
   index row to diff it (`planRows`); each is about half the cost at 1,900
   notes. The fix is a storage redesign, so it is new work in 0124. The bench
@@ -574,6 +610,52 @@ Capability matrix and known limitations: as milestone A
 Migration and rollback verification: not run
 Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
 ```
+
+### Runs on 2026-11-11 (Linux, beelink2)
+
+Linux 7.2.15 (Omarchy, x86_64, 16 logical CPUs), Electron 45.2.3, Playwright
+1.65.0; branch `web-annotation-tasks-2b461fddc9da-r1` from `main` at
+`498b68766`. Other agent work was running throughout (load average 5 to 14).
+No display, Docker, provider turn, login or host credential was used. The
+Electron runs were headless (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`,
+display variables removed, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) inside
+the loopback-only namespace from
+[agent-testing.md](../../development/agent-testing.md), each through
+`mise run test:logged`. The temporary `93018933` worktree used for 0124's
+"before" side was removed afterwards.
+
+| Command (abbreviated) | Result |
+| --- | --- |
+| `web-annotations-electron.spec.ts --grep 'open shadow root are saved\|real Notes column shrinks'` | Pass: 2 passed |
+| `--grep 'real Notes column shrinks'` with the spec as on `main` (negative control) | Fail: `expect.poll(...visible).toBe(false)` timed out with the menu open; since #2110 the view stays visible beside a menu that does not overlap it |
+| Whole `web-annotations-electron.spec.ts` | Pass: 17 passed, 2 skipped (container opt-ins), 90 s |
+| `bun scripts/web-annotation-commit-profile.ts --json`, four interleaved rounds on `93018933` and on this branch | Recorded in [web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost): at 1,900 notes 26.3–32.8 ms before, 3.8–4.1 ms after; 6 rows serialized and 5 collections copied at every size |
+| `web-annotation-payloads.bench.test.ts` on both checkouts | Pass both (6 tests). Growth batches 29 / 71 / 110 ms before, 20 / 21 / 25 ms after |
+
+Shadow root (2580 task 4), from the desktop's preview view:
+
+| Check | Result |
+| --- | --- |
+| Element mode, trusted click on the button in `fixture-shadow-card` | Captured as `button` with scope `shadow` (`fixture-shadow-card`), saved |
+| Text mode, native drag across the root's paragraph | Quote `Shadow root card`, container scope `shadow`, saved |
+| Pins built from the stored notes, before a reload | Element `matched/semantic-context` on the button; quote `matched/text-quote` inside the paragraph |
+| After a reload (a new document; the page defines the element again) | The same for both |
+| Both pins drawn together, then Show on page from the element note | Both `matched`; `shown`, `navigated: false` |
+
+Native window, menu and dialog (the changed assertion): the server menu opened
+at (12, 81, 288 × 124) DIP and the native view at (381, 162, 695 × 774) stayed
+visible beside it (`covered: false`); the "New connection" dialog hid the
+view, and after Escape it was back on its host.
+
+Baselines: under task 6.
+
+Findings:
+
+- **The native-window case failed on `main` since #2110 (fixed).** It expected
+  any menu to hide the preview; #2110 hides the view only under an overlay
+  that covers it. The case now requires the view hidden when the menu overlaps
+  it and visible when it does not, and records the geometry
+  (`menu-and-view`). The dialog step is unchanged.
 
 ### Runs on 2026-11-06 (Linux, beelink)
 
@@ -1237,6 +1319,50 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
 
 ## Assumptions and decisions
 
+### Task 6: baselines only, from a shared host at a quarter of the earlier load (2026-11-11)
+
+Options: wait for an idle machine; re-measure here and record baselines only;
+set targets and assert them. Chose the second, the analysis's recommendation.
+Pros: the numbers now reflect 0124's commit change and a host at load 5 to
+14 rather than ~45; no timing assertion is added to a spec whose timing
+cases are already a recorded flake source (0225). Cons: the absolute figures
+still come from a shared host; if a target is ever wanted it needs its own
+run on an idle machine, and nothing here enforces latency.
+
+### 2580 task 4: the desktop's preview view, headless (2026-11-11)
+
+2580 recommended adding a web-component page to the fixture and running it
+through this file's desktop checklist. The fixture already had one (the open
+root on `/pricing`), so the case was added to the Electron spec instead of a
+hand run. Pros: it exercises what the Chromium check could not (the
+preview's isolated world, the main-side parse, backend storage and a reload)
+and runs on every Electron run. Cons: it ran headless, not in a Wayland, X11
+or macOS window; that gap is task 9's and the manual checklist's (7568, 0044
+task 4), not specific to shadow roots. 2580 was retired with it.
+
+### 0124 task 1: closed with a second shared-host run (2026-11-11)
+
+0124 owed its before/after commit profile and payload bench on a quiet host.
+Options: keep the file open for an idle developer machine; run the pair here
+and retire it. Chose to run it here (four interleaved profile rounds per side
+on a temporary `93018933` worktree, at load 7 to 10) and retire the file, with
+the table in
+[web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost).
+Pros: a second machine reproduces the 2026-10-26 proportions (about 7x less
+CPU per create at 1,900 notes, flat in the collection size); the regression
+guard is the bench's row-count assertion, which does not depend on timing.
+Cons: no idle-machine absolute figures exist; the doc says to read the
+proportions.
+
+### The native-window menu step follows #2110 (2026-11-11)
+
+Options: restore "a menu always hides the view"; assert overlap-based hiding.
+Chose the second, because #2110 changed the product deliberately (a menu
+beside the view no longer blanks it) and the invariant that matters is that
+the view never paints over a menu or dialog. The step checks both branches
+of the overlap rule from the measured geometry, so it still fails if a
+covering menu leaves the view visible.
+
 ### Task 5: run the Electron spec headless, in a loopback-only namespace (2026-11-06)
 
 This host has no disposable display (the ticket forbids installing Xvfb) and
@@ -1402,13 +1528,14 @@ Made on 2026-10-25 without the user, to be validated.
 - Linux with a real window. The 2026-11-06 Linux runs were headless (Ozone
   headless, GPU off), so Wayland and X11 window behaviour and OS focus are
   unverified there (task 9).
-- The baselines were taken on a host at load ~45; repeat them on a quiet host
-  before setting targets.
 
 ## Related
 
-- [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md),
-  [0124-web-annotation-commit-cost.md](0124-web-annotation-commit-cost.md).
+- [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md).
+  Retired 2026-11-11: 0124 (commit cost; its numbers are in
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost))
+  and 2580 (shadow-root follow-ups; its last task's run is in "Runs on
+  2026-11-11").
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.
 - [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)

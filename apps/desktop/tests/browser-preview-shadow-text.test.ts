@@ -1,5 +1,5 @@
 /**
- * Text selections inside open shadow roots (todo 2580 task 2). happy-dom has no
+ * Text selections inside open shadow roots (todo 2580 (retired) task 2). happy-dom has no
  * `getComposedRanges`, so `selectAcross` installs one that follows the standard:
  * an endpoint inside a root not listed reads as the position around its host,
  * and `getRangeAt` retargets as Chromium does. The real API, real pointer input

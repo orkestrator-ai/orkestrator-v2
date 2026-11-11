@@ -35,6 +35,11 @@
  *   the view must settle within the completion budget.
  * - `no-renderer`: the only page is closed while a turn runs. A second client
  *   signs in afterwards and must see the completed, idle conversation.
+ * - `steer`: OpenCode 2 only (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`).
+ *   While a turn runs a shell command, a prompt queued from the composer is
+ *   steered into it from its queue strip. The turn must end on the steer's
+ *   reply, never the first prompt's, with the steer shown once, before and
+ *   after a reload. Every other platform records it `skipped`.
  * - `detach`: the session sits idle past the provider's idle detach (10 min
  *   for Claude, Cursor and Pi), recording the view's idle read cadence, then a
  *   prompt must reattach and settle.
@@ -66,7 +71,10 @@
  * provider merged into the profile's own global `opencode.json`
  * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
  * so no turn or title request can reach a hosted model; it needs no
- * credential source either.
+ * credential source either. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
+ * switches the profile's OpenCode 2 preview on for the run (and back after),
+ * so the OpenCode cases run on 2.x, whose server mirrors the same profile
+ * configuration (todo 0008 task 7).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -197,6 +205,13 @@ const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIME
 const DETACH_WAIT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS ?? "630000");
 const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
 const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "container";
+/**
+ * `v2` runs the OpenCode cases on OpenCode 2 (todo 0008 task 7): the profile's
+ * preview setting is switched on before the environment's tab is created and
+ * put back afterwards. The 2.x server mirrors the same profile-local global
+ * configuration, so the fake provider reaches it too.
+ */
+const OPENCODE_PROTOCOL = process.env.ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL?.trim();
 
 // Budgets (p95) from docs/architecture/recurring-work.md#latency-budgets.
 const COMPLETION_BUDGET_MS = 3_000;
@@ -533,6 +548,8 @@ test.describe("live idle observation", () => {
       const fakeModels: FakeModelHandle[] = [];
       /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
       let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
+      /** Puts the profile's OpenCode protocol setting back; set only when the run changed it. */
+      let restoreOpenCodeProtocol: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -566,6 +583,25 @@ test.describe("live idle observation", () => {
               PI_FAKE_PROVIDER,
             );
           }
+        }
+        if (platform === "opencode" && OPENCODE_PROTOCOL) {
+          expect(OPENCODE_PROTOCOL, "ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL").toBe("v2");
+          const global =
+            (await bootstrapInvoke<{ global?: Record<string, unknown> }>("get_config")).global ??
+            {};
+          const had = Object.hasOwn(global, "openCodeProtocol");
+          const original = global.openCodeProtocol;
+          await bootstrapInvoke("patch_global_config", { patch: { openCodeProtocol: "v2" } });
+          restoreOpenCodeProtocol = async () => {
+            await client.invoke(
+              "patch_global_config",
+              had
+                ? { patch: { openCodeProtocol: original } }
+                : { patch: {}, unset: ["openCodeProtocol"] },
+            );
+          };
+          summary.openCodeProtocol = "v2";
+          progress("OpenCode 2 preview on");
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -1816,6 +1852,80 @@ test.describe("live idle observation", () => {
           );
         });
 
+        await runCase("steer", async (record) => {
+          // OpenCode 2 is the line whose composer steer had not been driven
+          // through the UI (todo 0008 task 7); the other fakes do not script it.
+          if (platform !== "opencode" || OPENCODE_PROTOCOL !== "v2") {
+            record.status = "skipped";
+            record.notes.push("composer steer is checked on OpenCode 2 only");
+            return;
+          }
+          const baseWord = `IDLEQA-STEER-BASE-${nonce()}`;
+          const steeredWord = `IDLEQA-STEERED-${nonce()}`;
+          const steerText = `Reply with exactly ${steeredWord} and nothing else.`;
+          const before = await messageIds();
+          await sendFromComposer(
+            `Run this shell command and wait for it: sleep 8\nThen reply with exactly ${baseWord} and nothing else.`,
+          );
+          await expect(stopButton()).toBeVisible({ timeout: 30_000 });
+          // Enter while a turn runs queues the prompt; its strip offers Steer.
+          await composer().fill(steerText);
+          await composer().press("Enter");
+          const strip = page().getByTestId("compose-queue-strip");
+          const steer = strip.getByRole("button", { name: /^Steer queued prompt 1 of \d+:/ });
+          await expect(steer).toBeVisible({ timeout: 15_000 });
+          const steeredAt = Date.now();
+          await steer.click();
+          await expect(steer).toHaveCount(0, { timeout: 15_000 });
+          record.timings.steerAcceptedMs = Date.now() - steeredAt;
+          await expect
+            .poll(
+              async () => {
+                const current = await projection();
+                return (
+                  current?.turn.phase === "idle" &&
+                  current.messages.some(
+                    (message) => !before.has(message.id) && textOf(message).includes(steeredWord),
+                  )
+                );
+              },
+              { timeout: TURN_TIMEOUT_MS },
+            )
+            .toBe(true);
+          record.timings.steeredReplyMs = Date.now() - steeredAt;
+          const check = async (when: string) => {
+            const fresh = ((await projection())?.messages ?? []).filter(
+              (message) => !before.has(message.id),
+            );
+            // Steered into the running turn: it ended on the steer's reply and
+            // never gave the reply the first prompt asked for.
+            expect(
+              fresh.some(
+                (message) => message.role === "assistant" && textOf(message).includes(baseWord),
+              ),
+              `${when}: the first prompt's own reply`,
+            ).toBe(false);
+            expect(
+              fresh.filter((message) => message.role === "user" && textOf(message) === steerText)
+                .length,
+              `${when}: the steer appears once`,
+            ).toBe(1);
+          };
+          await check("live");
+          // Rehydrate from a fresh mount, then check the same picture.
+          await goToEnvironment();
+          await expect(page().getByText(steeredWord, { exact: true }).first()).toBeVisible({
+            timeout: 30_000,
+          });
+          await expect(stopButton()).toHaveCount(0);
+          await check("after reload");
+          await expect
+            .poll(() => sidebarActivity(page(), environmentName), {
+              timeout: SIDEBAR_BOUND_MS,
+            })
+            .toBe("idle");
+        });
+
         await runCase("detach", async (record) => {
           const before = await projection();
           // The no-touch read, not the projection's cached runtime: a provider
@@ -1948,6 +2058,12 @@ test.describe("live idle observation", () => {
           if (restoreOpenCodeAllowlist) {
             await restoreOpenCodeAllowlist().catch((error: unknown) => {
               summary.allowlistRestoreError = String(error).slice(0, 300);
+              writeSummary();
+            });
+          }
+          if (restoreOpenCodeProtocol) {
+            await restoreOpenCodeProtocol().catch((error: unknown) => {
+              summary.protocolRestoreError = String(error).slice(0, 300);
               writeSummary();
             });
           }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ARTIFACT_TOOL_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import { ARTIFACT_VERSIONS, type ArtifactKind } from "@orkestrator/protocol/transcript-artifacts";
+import { referencedAssets } from "./gc.js";
 import { conversationKeyForTab } from "./owner.js";
 import {
   CONVERSATION,
@@ -190,6 +191,59 @@ describe("artifact lifecycle per kind", () => {
     expect(source.data).toContain("<script>");
     expect(operation.evidence.captures).toHaveLength(1);
     expect(operation.visualInspection).toBe("not-assessed");
+  });
+
+  test("static HTML keeps the worker's document text for Find, tied to its receipt (5780)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const text = "Quarterly report\nRevenue grew 😀";
+    h.runner.staticSearchText = text;
+    const { published, created } = await createPreviewPublish("html-static");
+    const read = await h.service.readRepresentation({
+      ...scope,
+      publicationId: published.publicationId,
+      representation: "search-text",
+    });
+    expect(read).toMatchObject({
+      representation: "search-text",
+      encoding: "utf8",
+      mimeType: "text/plain; charset=utf-8",
+      data: text,
+      nextOffsetBytes: null,
+      executableOutsideOrkestrator: false,
+    });
+    const records = h.service.store.records(ENV);
+    const derived = records.get("derived", `${created.artifactId}/1`)!;
+    const view = await h.service.getPublication(scope, published.publicationId);
+    expect(derived.searchTexts).toEqual([
+      {
+        effectiveSourceHash: view.source.effectiveSha256,
+        sha256: read.sha256,
+        byteLength: new TextEncoder().encode(text).byteLength,
+      },
+    ]);
+    expect(referencedAssets(records).has(read.sha256)).toBe(true);
+  });
+
+  test("a static publication verified without document text answers invalid_input (5780)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    h.runner.staticSearchText = null;
+    const { published } = await createPreviewPublish("html-static");
+    await expect(
+      h.service.readRepresentation({
+        ...scope,
+        publicationId: published.publicationId,
+        representation: "search-text",
+      }),
+    ).rejects.toMatchObject({ error: { code: "invalid_input" } });
+    h.runner.staticSearchText = "text";
+    const chart = await createPreviewPublish("chart");
+    await expect(
+      h.service.readRepresentation({
+        ...scope,
+        publicationId: chart.published.publicationId,
+        representation: "search-text",
+      }),
+    ).rejects.toMatchObject({ error: { code: "invalid_input" } });
   });
 
   test("interactive HTML records the prepared document, probes and a live session", async () => {

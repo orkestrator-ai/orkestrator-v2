@@ -119,6 +119,15 @@ function subscribeEpoch(listener: () => void): () => void {
 
 const readEpoch = () => cacheEpoch;
 
+/**
+ * Changes whenever cached reads are cleared. A read made outside
+ * `useScopedArtifactRead` compares it across its await, so a clear (logout,
+ * deletion, revocation) is never undone by a response that was in flight.
+ */
+export function artifactRequestEpoch(): number {
+  return cacheEpoch;
+}
+
 export function clearArtifactRequestCache(): void {
   settled.clear();
   inflight.clear();
@@ -689,7 +698,8 @@ export function useArtifactRepresentation(
  * A card writes it when it has loaded and is showing that body (chart or
  * workflow labels, Mermaid source while the source view is shown, a static
  * document's text once its frame reports it) and clears it when it stops
- * showing it. Find's message projection reads it synchronously
+ * showing it. An open Find bar also writes a static document's stored text
+ * for a card the reader has not reached (`useStaticDocumentSearchIndex`). Find's message projection reads it synchronously
  * (`artifactPartSearchSegments` in `rich-search-text.ts`), so an unloaded body
  * contributes nothing and a loaded one matches the card's body search root
  * exactly. Each entry names its conversation, so clearing that conversation's

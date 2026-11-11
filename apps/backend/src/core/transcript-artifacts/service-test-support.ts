@@ -62,6 +62,8 @@ export class FakePreviewRunner implements PreviewRunner {
   started = deferred();
   /** Override a job's outcome. */
   respond: ((job: PreviewJob) => PreviewJobResult | null) | null = null;
+  /** The document text a static verification reports, as a worker that reads it would. */
+  staticSearchText: string | null = null;
   /** Current renderer bundle identity per kind (reported in status). */
   bundleHashes: NonNullable<PreviewRunnerStatus["rendererBundleHashes"]> = {
     "html-static": "bundle-1",
@@ -170,6 +172,7 @@ export class FakePreviewRunner implements PreviewRunner {
             executableUrls: 0,
           },
           elementCount: 3,
+          ...(this.staticSearchText !== null ? { searchText: this.staticSearchText } : {}),
         };
       case "html-interactive":
         return {

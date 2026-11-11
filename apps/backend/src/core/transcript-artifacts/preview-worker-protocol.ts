@@ -102,6 +102,8 @@ export interface WorkerResult {
     executableUrls: number;
   };
   elementCount?: number;
+  /** The document's text for Find (`staticHtmlDocumentText` over `effectiveHtml`). */
+  searchText?: string;
   // html-interactive
   probeResults?: ArtifactProbeResultV1[];
   runtimeErrors?: number;

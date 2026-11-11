@@ -522,12 +522,13 @@ indices) with no normalization — projected-text offsets, source offsets and
 `native-message-search.ts` indexes text parts from the renderer's own parse
 (`markdown-search.ts`), including hidden disclosure bodies, diagram source
 and chart labels, and artifact cards by their search roots: the summary,
-then — once the card has loaded and is showing it — the body
+then — once the card has loaded and is showing it, or for a static document
+once Find has read its stored text — the body
 (`artifactPartSearchSegments` in `lib/chat/rich-search-text.ts`). A chart
 artifact's body root holds its labels (`chartSpecSearchText`), a workflow
 snapshot's its title, description, node and edge labels, a static document's
-the text its frame reported ([Static document
-presentation](#static-document-presentation)), all as hidden mirrors bounded to
+the text its frame reported or the text stored when it was verified ([Static
+document presentation](#static-document-presentation)), all as hidden mirrors bounded to
 64 Ki characters; a Mermaid artifact's source is a search root only while its
 source view is shown. The card writes that text to a synchronous cache keyed by
 publication id and bounded by count and total characters
@@ -883,7 +884,12 @@ digest: no receipt is re-verified and no image rebuilt
 `rich-content-policy.ts` is different. The worker imports it, and
 `STATIC_PRESENTATION_POLICY` stays in its bundle, so a new value in that table does
 change the digest. A limit only the frame reads therefore lives beside the runtime
-(`STATIC_HTML_MAX_FIND_QUERY_CHARACTERS`).
+(`STATIC_HTML_MAX_FIND_QUERY_CHARACTERS`). The worker also bundles
+`staticHtmlDocumentText` (`static-html-document-text.ts`), a copy of the frame's
+text walk that reads a document's text at verification (see Find below): changing
+it changes the digest, and adding it did (staged context
+`sha256:5b9f98e0…` before, `sha256:fbed1f2f…` after, 2026-11-11), so every install
+with a prepared worker image is asked to prepare it again once.
 
 **Channel.** `render`, `theme` and `find` from the host; `ready`, `rendered`, `text`,
 `size`, `error`, `interaction`, `link-request`, `escape` and `find-match` from the
@@ -936,6 +942,36 @@ counts if a frame reported it earlier, and the match leads to the card. So does 
 query past the limit, and text hidden only by the document's own CSS, which reports
 a height of 0.
 
+**Documents the reader has not reached.** Verification stores the document's text
+with the publication. After serializing the effective HTML, the preview worker runs
+`staticHtmlDocumentText` on those bytes in its page (`DOMParser`, an inert
+document) and returns it bounded to the 64 Ki limit; the runner refuses a longer
+one, and the backend keeps it as a UTF-8 asset referenced from the revision's
+`derived` row (`searchTexts`, keyed by the receipt's effective hash, kept by the
+collector) and serves it as the `search-text` representation. A failed read loses
+only the stored text, never the verification. The walk is a copy of the frame's,
+not a shared function, because each is serialized into a page on its own;
+`static-html-document-text.test.ts` runs the design runtime's serializer, the copy
+and the real presentation runtime over the reference, hostile and edge-case
+documents and requires the same text character for character.
+
+While a Find bar is open with a query, `useStaticDocumentSearchIndex`
+(`components/chat/static-document-search-index.ts`, called by
+`VirtualizedMessageList` with `getSearchText.artifacts`) reads that text for every
+`html-static` card in the loaded transcript whose text is not in Find's cache, and
+puts it there exactly as the frame would (`rememberArtifactSearchBody`). Find
+follows the cache, so the count, the card's mirror and the frame's later report
+agree; a frame that reports first keeps its text. Each document is read at most
+once per Find session, two at a time and at most 64 per session; nothing is read
+until the reader searches, nothing is framed, and a read that crosses a clear of
+protected content (`artifactRequestEpoch`) or a newer session generation is
+discarded. The hosted client and the `staticPresentation` switch read nothing,
+because their cards never show the text. A publication verified before the text
+was stored, and an older backend, answer `invalid_input`; such a document counts
+once its card has shown it, as before. There is no backfill: one would launch a
+browser per old document when Find opens, the cost the stored text exists to
+avoid, and re-verifying a revision stores its text.
+
 **Theme.** `--ork-*` tokens and `--ork-chart-1…8` (`readStaticHtmlThemeTokens`).
 The application currently ships dark only (`class="dark"`), while verified
 captures default to a light profile. Authored documents often hard-code colours,
@@ -956,6 +992,7 @@ paint an opaque canvas over a transparent themed document.
 | Frames per window | 4 | Initial resource policy, qualified below; not a performance guarantee |
 | Render timeout | 15 s | Then released, with retry. The saved preview stays on screen meanwhile, so it errs long: a page under a saturated host took over 5 s |
 | Text for Find | 64 Ki characters, in chunks of 2 Ki | The limit of other artifact bodies. A chunk of three-byte characters stays within `FRAME_CHANNEL_POLICY.maxMessageBytes`, and a full report's 32 chunks fit its burst of 40 |
+| Stored text Find reads | 64 documents per Find session, 2 reads at a time, 192 KiB each | One read per document per session; 192 KiB is the UTF-8 of 64 Ki UTF-16 units at three bytes each, so a whole text always fits one bounded read |
 | Find query sent to a frame | 1,024 characters | Three-byte characters this many still fit `FRAME_CHANNEL_POLICY.maxMessageBytes`, which a test pins. Beside the runtime rather than in `STATIC_PRESENTATION_POLICY`, because that table feeds the worker's digest |
 
 **Allocation (`stores/staticHtmlFrameSlots.ts`).** Ranks, highest first:
@@ -1008,11 +1045,13 @@ on a static document, so the frame bound is also asserted by
 The gate never held four frames on screen at once: the fixture's documents are 150
 messages apart, so four simultaneous frames are not separately measured.
 
-**Limits.** Find covers a document only after its frame has rendered it in this
-session, so a report the reader has not reached matches only by its summary. Text
-beyond 64 Ki characters is not searchable, and the card does not say so. Indexing
-a report that was never shown is open:
-[`5780`](../todo/transcripts-and-observation/5780-find-inside-static-documents.md).
+**Limits.** A report verified before its text was stored is covered only after its
+frame has rendered it in this session, so until then it matches only by its
+summary. Find reads stored text only for the loaded part of a transcript, at most
+64 documents per session. Text beyond 64 Ki characters is not searchable, and the
+card does not say so. The container-isolated worker image has not yet been run
+with the text step:
+[`7670`](../todo/transcripts-and-observation/7670-static-search-text-container-worker.md).
 Multiple automatically executing JavaScript documents, more chart types and a
 convenience publishing tool are out of scope:
 [`4650`](../todo/transcripts-and-observation/4650-static-html-presentation-follow-ups.md).

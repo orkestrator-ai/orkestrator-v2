@@ -29,6 +29,8 @@ import type {
   NativeMessagePart,
 } from "../../apps/web/src/lib/chat/native-message-types";
 import { sha256Hex } from "../../packages/protocol/src/graphs/sha256";
+import { STATIC_PRESENTATION_POLICY } from "../../packages/protocol/src/rich-content-policy";
+import { staticHtmlDocumentText } from "../../packages/protocol/src/static-html-document-text";
 
 // ---------------------------------------------------------------------------
 // Feature-detected modules (absent at the baseline commit).
@@ -85,6 +87,8 @@ interface PerfCounters {
   unexpectedCommands: number;
   streamTicks: number;
   streamChars: number;
+  /** `search-text` reads answered: Find fetching stored document text. */
+  storedTextReads: number;
 }
 
 const counters: PerfCounters = {
@@ -98,6 +102,7 @@ const counters: PerfCounters = {
   unexpectedCommands: 0,
   streamTicks: 0,
   streamChars: 0,
+  storedTextReads: 0,
 };
 
 // Count module workers (the highlighter) without changing their behaviour.
@@ -651,6 +656,35 @@ function representationFor(publicationId: string, representation: string) {
       sha256: SHA,
       byteLength: CAPTURE_PNG.length,
       totalBytes: CAPTURE_PNG.length,
+      nextOffsetBytes: null,
+      executableOutsideOrkestrator: false,
+    };
+  }
+  if (ref.kind === "html-static" && representation === "search-text") {
+    // `?storedText=1`: publications verified by a worker that stored the
+    // document's text. Otherwise they predate it, as an older backend's do.
+    if (new URLSearchParams(window.location.search).get("storedText") !== "1")
+      throw Object.assign(new Error("Representation search-text is not available"), {
+        code: "invalid_input",
+      });
+    // The worker's own extraction, here over the fixture's effective document.
+    const text = staticHtmlDocumentText({
+      html: staticReport(k),
+      maxCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
+    });
+    const bytes = new TextEncoder().encode(text).byteLength;
+    counters.storedTextReads += 1;
+    return {
+      artifactId: ref.artifactId,
+      revision: ref.revision,
+      representation,
+      mimeType: "text/plain; charset=utf-8",
+      filename: `artifact-${k}.txt`,
+      encoding: "utf8",
+      data: text,
+      sha256: sha256Hex(text),
+      byteLength: bytes,
+      totalBytes: bytes,
       nextOffsetBytes: null,
       executableOutsideOrkestrator: false,
     };

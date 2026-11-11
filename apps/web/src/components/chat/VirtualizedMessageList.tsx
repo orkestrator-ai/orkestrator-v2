@@ -72,6 +72,7 @@ import {
   useLiveArrivals,
   type LiveArrivalBatch,
 } from "@/lib/transcript-scroll/arrivals";
+import { useStaticDocumentSearchIndex } from "./static-document-search-index";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
@@ -550,6 +551,13 @@ export function VirtualizedMessageList<TMessage>({
     ownerRef: rootRef,
     onNavigate: handleFindNavigate,
   });
+  // Static documents the reader has not reached are searched through the text
+  // stored at verification, fetched only while this bar is searching.
+  useStaticDocumentSearchIndex(
+    messages,
+    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.artifacts,
+    Boolean(find?.isActive && chatFind.isOpen && chatFind.query.trim()),
+  );
   // What the static documents in this transcript are asked about. Held as plain
   // values, so a streaming update that moves no match leaves the cards alone.
   const activeDocument = useMemo(() => {

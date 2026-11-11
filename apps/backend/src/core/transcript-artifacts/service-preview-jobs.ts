@@ -56,6 +56,11 @@ export type Outcome =
       semantics: "not-assessed" | "probes-passed";
       assets: StoredAssetRef[];
       prepared?: PreparedDocumentRef;
+      /**
+       * `html-static`: the document's text for Find. Not one of `assets`: it is
+       * registered on its own, so failing to keep it never fails verification.
+       */
+      searchText?: StoredAssetRef;
     }
   | {
       ok: false;
@@ -282,6 +287,10 @@ export class ArtifactPreviewJobs {
             effective,
           ]);
         }
+        const searchText =
+          typeof result.searchText === "string" && result.searchText.length > 0
+            ? await store(new TextEncoder().encode(result.searchText), "text/plain")
+            : undefined;
         return {
           ok: true,
           gates: ["schema", "syntax", "supervised-visual"],
@@ -295,6 +304,7 @@ export class ArtifactPreviewJobs {
           omitted: result.omittedDiagnostics,
           semantics: "not-assessed",
           assets: [effective, ...captures],
+          ...(searchText ? { searchText } : {}),
         };
       }
       case "html-interactive": {

@@ -235,3 +235,34 @@ transcript-scroll code.
   `PASSED ALONE (851ms)`, and a later
   `bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
   (`NODE_ENV=test`, host load average about 4 on 16 cores) passed.
+
+## Recurrence — 2026-11-11 (terminal visible-text review repairs)
+
+Observed 2026-11-11 on `terminal-event-reproduction-58a6a9a0fc85-r1`
+(head `e4777ac3a`), base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence 9932 --base 14df96544…` answered "open. Record
+the failure as a recurrence"). The branch changes only documentation, two
+agent-testing Electron specs, the headless Electron spec list and its unit
+test; it does not touch this file or anything under `apps/web/`.
+
+- **Command:** `env -u NODE_ENV mise run test:logged -- --name review-default-tests-rerun2 -- mise run test`
+  on beelink2 (Linux x86_64, 16 cores), with the browser suite running
+  alongside it and a host load average of 35 to 67.
+- **Failure:** ten cases with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), including
+  `control: without cancellation the library retries the index target after a
+  refresh`, `controller deactivation reveals a snapshot whose initial
+  navigation is still pending` and both `restored snapshot transitions from
+  hidden to visible (cancel=%s)` cases.
+- **Suite counts:** web 14,569 pass and 10 fail; the backend (9978) and CLI
+  (9979) failures are recorded in their own cases; the root, bridge, guard
+  and lockfile groups passed.
+- **Isolated rerun:** the runner's own rerun reported `FAILED ALONE (1.7s)`,
+  and a manual `bun test` of the file from `apps/web` at the same load failed
+  9 of 14. Once the load average fell to about 17,
+  `bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
+  passed.
+- **Note:** an earlier rerun from the same shell inherited
+  `NODE_ENV=production` from the agent session. React's production build then
+  failed every case of this file with `React.act is not a function`; that is
+  the environment, not this flake, which is why the runs above unset it.

@@ -280,6 +280,13 @@ export interface IsolatedBrowserOptions {
    * `ORKESTRATOR_AGENT_TEST_PROFILE`; the suite's own env names the others).
    */
   companionProfiles?: readonly string[];
+  /**
+   * The suite stops and starts its profiles itself (with `dev:stop` and a new
+   * `dev:test` launcher), so a launcher exiting during the suite is not a
+   * failure. Cleanup still stops and resets every profile by name, which
+   * covers a launcher the suite started.
+   */
+  suiteRestartsProfiles?: boolean;
   signal?: AbortSignal;
   root?: string;
   env?: NodeJS.ProcessEnv;
@@ -535,7 +542,11 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         Promise.race([
           handle.done,
           ...launchers
-            .filter((started) => started.name === name || companions.includes(started.name))
+            .filter(
+              (started) =>
+                !options.suiteRestartsProfiles &&
+                (started.name === name || companions.includes(started.name)),
+            )
             .map((started) =>
               started.handle.done.then(() => {
                 throw new Error("Isolated profile exited during browser tests");

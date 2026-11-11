@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { normalizeTicketContent } from "@orkestrator/protocol/ticket-sections";
+import { isTicketSections, normalizeTicketContent } from "@orkestrator/protocol/ticket-sections";
 import { parseTicketSyncItem } from "@orkestrator/protocol/ticket-sync";
 import { createLogger } from "@orkestrator/protocol/logger";
 
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import {
@@ -26,6 +27,10 @@ const log = createLogger("storage");
  * repeated reads return the same row.
  */
 export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
+  // Rows from before v2.34.2-beta (or synced from such a node) carry no
+  // sections. Once the floor passes, this becomes a one-time record upgrade;
+  // the `sectionsBasis` check below stays (to-do 7570 task 2).
+  if (!isTicketSections(task.sections)) compatibilityPathUsage.record("kanban.legacy-row-derived");
   const content = normalizeTicketContent(task, { now: task.createdAt });
   return { ...task, ...content };
 }

@@ -8,10 +8,12 @@ import {
   type MachineAgentAccountsResult,
   type PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 
 import { runWithTimeout, WorkTimeoutError } from "./abortable-timing.js";
 import type { CommandContext } from "./commands-context.js";
 import { listAgentAccounts } from "./agent-accounts.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { readHostAgentSignIns } from "./agent-sign-ins.js";
 import { NodeUnavailableError } from "./nodes/index.js";
 
@@ -88,7 +90,12 @@ export async function listMachineAgentAccounts(
           timeoutMs,
         ).then(
           (routed) => (routed.outcome === "ok" ? parseHostAgentSignIns(routed.result) : undefined),
-          () => undefined,
+          (error: unknown) => {
+            if (incompatibility(error, "read_host_agent_sign_ins")?.code === "unknown-command") {
+              compatibilityPathUsage.record("host-agent-sign-ins.older-node");
+            }
+            return undefined;
+          },
         );
         try {
           const routed = await routedWithTimeout(

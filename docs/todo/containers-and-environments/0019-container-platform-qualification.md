@@ -25,7 +25,7 @@ Analysed 2026-11-06 against `main` at `c1724ab74` (tasks 2, 6 and 7; tasks 1 and
 - **Run 40338400817** (0109 branch): every suite passed, C22 network included.
 - **Run 40409285999** (0109 branch head `e53ea683`, now merged): every suite passed except "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw `/codex-home/config.toml` as `node`, which is unreadable on a non-1000 host; this is a test bug, found in todo 0058's analysis (retired on 2026-10-29) and tracked in [0728](0728-container-ci-c14-assumes-uid-1000.md).
 
-So the next weekly run on `main` should fail only that C14 case. The benchmark numbers from these runs are analysed in [0022](0022-container-resource-budgets-and-performance.md)'s task analysis. They miss the Docker-calls target (26–28 against ≤ 21), and on x64 also fresh-to-ready and warm start.
+So the next weekly run on `main` should fail only that C14 case. The benchmark numbers from these runs are analysed in to-do 0022's task analysis (retired 2026-11-11) and recorded in [container-qualification.md](../../development/container-qualification.md#benchmarks-on-linux-engine-ci-and-the-call-and-start-time-misses-2026-10-28). They miss the Docker-calls target (26–28 against ≤ 21), and on x64 also fresh-to-ready and warm start.
 
 **Decisions.**
 
@@ -48,7 +48,7 @@ So the next weekly run on `main` should fail only that C14 case. The benchmark n
 
 **Problem.** On a host that delegates `memory pids` but not `cpu`, the budget read-back must not claim a CPU limit it cannot apply.
 
-**Context.** omarchy-hp's rootless daemon delegates `cpu memory pids`, so it cannot show this case. Unit tests already cover a rootless daemon with only memory delegated (`commands-registry-resource-limits.test.ts`, 0061 item 11). The built-in default drops and reports an unenforceable axis (0022 decision 4).
+**Context.** omarchy-hp's rootless daemon delegates `cpu memory pids`, so it cannot show this case. Unit tests already cover a rootless daemon with only memory delegated (`commands-registry-resource-limits.test.ts`, 0061 item 11). The built-in default drops and reports an unenforceable axis (retired to-do 0022 decision 4; see [Built-in default](../../architecture/container-lifecycle.md#built-in-default)).
 
 **Investigation.** 2026-11-06: not run then; it waited for the repo-owned [disposable daemon launcher](../../development/container-qualification.md#disposable-docker-daemon) (to-do 4730, retired 2026-11-10; merged since) rather than hand-building a third private daemon on a shared host. Run on 2026-11-10: see the result below. Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
 
@@ -1387,7 +1387,9 @@ were removed.
   (what the rootless runs left, after the retired to-do 0109),
   [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md)
   (what is left of the retired to-do 0018's gateway qualification),
-  [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md),
+  to-do 0022 (retired 2026-11-11; the default budget is in
+  [container-lifecycle.md](../../architecture/container-lifecycle.md#built-in-default) and its
+  measurements in [container-qualification.md](../../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25)),
   [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)
   (container deletion through the ledger on Desktop).
 - [Container qualification](../../development/container-qualification.md):

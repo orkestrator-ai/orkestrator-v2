@@ -666,12 +666,30 @@ async function main(): Promise<void> {
     // Startup dialogs can open over the workspace: "Claude Code Is Not Logged
     // In" in a credential-free profile, or "Docker containers can't reach
     // Orkestrator" behind a host firewall (which this probe never changes; no
-    // agent runs). Each is dismissed for this page only, by its "Continue
-    // Without" button or Escape, and its title is reported.
+    // agent runs). Some open only once the first environments exist, after the
+    // shell is up, and a modal overlay then swallows every sidebar click. Each
+    // is dismissed for this page only, by its "Continue Without" button or
+    // Escape, whenever one is open: while the shell loads, before the first
+    // click and before each phase. Its title is reported.
     const startupDialog = page
       .locator('[role="dialog"]:visible, [role="alertdialog"]:visible')
       .first();
     const continueWithout = page.getByRole("button", { name: /^Continue Without / }).first();
+    const dismissOpenDialogs = async () => {
+      for (let attempt = 0; attempt < 5 && (await startupDialog.isVisible()); attempt += 1) {
+        const title = await startupDialog
+          .evaluate((dialog) => {
+            const labelledBy = dialog.getAttribute("aria-labelledby");
+            const label = labelledBy ? document.getElementById(labelledBy) : null;
+            return (label ?? dialog.querySelector("h1, h2, h3"))?.textContent ?? null;
+          })
+          .catch(() => null);
+        dismissedDialogs.push((title ?? "untitled").slice(0, 80));
+        if (await continueWithout.isVisible()) await continueWithout.click();
+        else await page.keyboard.press("Escape");
+        await startupDialog.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => undefined);
+      }
+    };
     await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
     const projectToggle = page.getByRole("button", { name: /^(Expand|Collapse) project / }).first();
     // The dev server's transient "Failed to fetch dynamically imported module"
@@ -686,17 +704,7 @@ async function main(): Promise<void> {
         );
       }
       if (await startupDialog.isVisible()) {
-        const title = await startupDialog
-          .evaluate((dialog) => {
-            const labelledBy = dialog.getAttribute("aria-labelledby");
-            const label = labelledBy ? document.getElementById(labelledBy) : null;
-            return (label ?? dialog.querySelector("h1, h2, h3"))?.textContent ?? null;
-          })
-          .catch(() => null);
-        dismissedDialogs.push((title ?? "untitled").slice(0, 80));
-        if (await continueWithout.isVisible()) await continueWithout.click();
-        else await page.keyboard.press("Escape");
-        await startupDialog.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => undefined);
+        await dismissOpenDialogs();
       } else if (await couldNotConnect.isVisible()) {
         if (rendererReloads >= 2) throw new Error("The renderer failed to start three times");
         rendererReloads += 1;
@@ -753,6 +761,7 @@ async function main(): Promise<void> {
       busyContainers[0]!,
     ]).stdout.trim();
 
+    await dismissOpenDialogs();
     const expand = page.getByRole("button", { name: /^Expand project / }).first();
     if (await expand.isVisible()) await expand.click();
     for (const environment of environments) {
@@ -779,6 +788,7 @@ async function main(): Promise<void> {
         }
       }
       await sleep(options.settleSeconds * 1000);
+      await dismissOpenDialogs();
       const start = hostSample();
       const probeContainerCpuPercent = containerCpu(busyContainers);
 

@@ -341,14 +341,17 @@ the spec sets two test-only timings (to-do
   branch. The spec reads the interval back from that module before sizing the
   window, so an ignored override cannot make the window shorter than one poll.
 - **Backend periods.** `<data dir>/agent-test-fixtures/timing.json`, with
-  `containerTreeMaxAgeMs` (500–10 000 ms) and `webAnnotationGcEveryTicks`
-  (1–100 reconcile ticks of 3 s), read by
+  `containerTreeMaxAgeMs` (500–10 000 ms), `webAnnotationGcEveryTicks`
+  (1–100 reconcile ticks of 3 s) and `coordinatorRepairIntervalMs`
+  (1 000–60 000 ms, the delay before the next pass that closes a stopped
+  worker's delegation; the pass already scheduled keeps its delay), read by
   `apps/backend/src/core/agent-test-timing.ts`. It exists only where the
   dispatch hold does (a source-run backend of flavor `agent-test` with
   `ORKESTRATOR_AGENT_TEST_ISOLATED=1` and a non-default data directory), is
   re-read when the file changes, can only shorten a period, and ignores
   anything malformed. Removing the file restores the production values. The
-  annotation evidence spec uses the collection period the same way.
+  annotation evidence spec uses the collection period the same way, and the
+  coordinator view test the repair interval.
 
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:

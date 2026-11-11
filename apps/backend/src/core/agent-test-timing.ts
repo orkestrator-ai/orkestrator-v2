@@ -3,7 +3,7 @@ import path from "node:path";
 import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
 
 /**
- * Test-only shortening of two backend periods (to-do 7569, tasks 2 and 3),
+ * Test-only shortening of three backend periods (to-do 7569, tasks 2, 3 and 5),
  * so a Docker fixture spec does not wait out a production period whose
  * length it is not testing:
  *
@@ -13,6 +13,10 @@ import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
  * - `webAnnotationGcEveryTicks`: how many web annotation reconcile ticks (3 s
  *   each) pass between garbage-collection passes, which remove settled
  *   evidence (`WEB_ANNOTATION_GC_EVERY_TICKS`, 100).
+ * - `coordinatorRepairIntervalMs`: the delay before the next coordinator
+ *   repair pass, which closes delegations whose worker environment stopped
+ *   (`MAINTENANCE_JOB_MS`, 60 s). It applies from the pass after the file is
+ *   read, so the pass already scheduled keeps its delay.
  *
  * A spec arms them by writing `{"containerTreeMaxAgeMs": 2000}` (either key,
  * or both) to `<data dir>/agent-test-fixtures/timing.json`, and removes the
@@ -36,6 +40,7 @@ const MAX_TIMING_FILE_BYTES = 4 * 1024;
 export const AGENT_TEST_TIMING_BOUNDS = {
   containerTreeMaxAgeMs: [500, 10_000],
   webAnnotationGcEveryTicks: [1, 100],
+  coordinatorRepairIntervalMs: [1_000, 60_000],
 } as const satisfies Record<string, readonly [number, number]>;
 
 export type AgentTestTimingKey = keyof typeof AGENT_TEST_TIMING_BOUNDS;

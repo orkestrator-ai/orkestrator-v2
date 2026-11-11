@@ -1,5 +1,5 @@
 /**
- * The test-only timing overrides (to-do 7569, tasks 2 and 3): off outside an
+ * The test-only timing overrides (to-do 7569, tasks 2, 3 and 5): off outside an
  * isolated agent-test backend; inside one they can only shorten a period,
  * and a running backend picks up a changed or removed file.
  */
@@ -116,6 +116,11 @@ describe("parseTiming", () => {
     expect(
       parseTiming(JSON.stringify({ containerTreeMaxAgeMs: 500, webAnnotationGcEveryTicks: 100 })),
     ).toEqual({ containerTreeMaxAgeMs: 500, webAnnotationGcEveryTicks: 100 });
+    expect(parseTiming(JSON.stringify({ coordinatorRepairIntervalMs: 999 }))).toEqual({});
+    expect(parseTiming(JSON.stringify({ coordinatorRepairIntervalMs: 60_001 }))).toEqual({});
+    expect(parseTiming(JSON.stringify({ coordinatorRepairIntervalMs: 5_000 }))).toEqual({
+      coordinatorRepairIntervalMs: 5_000,
+    });
   });
 });
 

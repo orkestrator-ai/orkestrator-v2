@@ -6,7 +6,7 @@ import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
-import { agentTestTiming, timingValue } from "./agent-test-timing.js";
+import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -401,6 +401,8 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
   private uninstallDispatchHold?: () => void;
+  /** Agent-test profiles only: a spec's shortened periods (`agent-test-timing.ts`). */
+  private readonly agentTestTiming: AgentTestTiming | undefined;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
@@ -686,6 +688,7 @@ export class OrkestratorBackend {
       dataDir: options.dataDir,
       runtimeFlavor: options.runtimeFlavor,
     });
+    this.agentTestTiming = timing;
     this.runtime =
       options.runtime ??
       new BackendRuntime({
@@ -2726,6 +2729,11 @@ export class OrkestratorBackend {
           run: async () => {
             reconcileCoordinatorWorkflows();
             await coordinatorWorkflowReconcileInFlight;
+            // Agent-test profiles only: a spec may shorten the period after
+            // which a stopped worker's delegation closes. Nothing elsewhere.
+            return this.agentTestTiming
+              ? timingValue(this.agentTestTiming, "coordinatorRepairIntervalMs", MAINTENANCE_JOB_MS)
+              : undefined;
           },
           ...jobLog("coordinator-repair"),
         },

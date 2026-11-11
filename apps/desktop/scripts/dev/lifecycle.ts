@@ -507,6 +507,32 @@ export type ProfileSeedDependencies = {
  * no PATH fallback, and the difference between seeding and downloading is
  * minutes of startup, not whether the profile works.
  */
+/**
+ * The Vite dev server's environment. A launcher shell may descend from a
+ * production backend or build shell that set `NODE_ENV=production`; Vite then
+ * serves the source with `import.meta.env.DEV` false, which silently turns
+ * off every dev-renderer gate, including the agent-test harnesses (plan item
+ * 2013, to-do 7569). The backend launcher drops it for the same reason
+ * (`apps/desktop/electron/backend-process.ts`).
+ */
+export function rendererDevServerEnv(
+  base: NodeJS.ProcessEnv,
+  profile: Pick<RuntimeProfile, "rendererHost" | "rendererPort" | "id" | "flavor">,
+  rendererInstance: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    VITE_DEV_HOST: profile.rendererHost,
+    ORKESTRATOR_RENDERER_INSTANCE: rendererInstance,
+    VITE_DEV_PORT: String(profile.rendererPort),
+    VITE_ORKESTRATOR_PROFILE: profile.id,
+    // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
+    VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
+  };
+  if (env.NODE_ENV === "production") delete env.NODE_ENV;
+  return env;
+}
+
 export async function seedAgentTestProfileState(
   profile: RuntimeProfile,
   flavor: "development" | "agent-test",
@@ -1036,15 +1062,7 @@ export async function startDevelopment(
         cwd: webRoot,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          VITE_DEV_HOST: profile.rendererHost,
-          ORKESTRATOR_RENDERER_INSTANCE: rendererInstance,
-          VITE_DEV_PORT: String(profile.rendererPort),
-          VITE_ORKESTRATOR_PROFILE: profile.id,
-          // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
-          VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
-        },
+        env: rendererDevServerEnv(process.env, profile, rendererInstance),
       });
       viteExited = childExit(vite);
       attachLog(vite, path.join(profile.logDir, "vite.log"));

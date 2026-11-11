@@ -18,11 +18,13 @@ import {
   localName,
   login,
   openSecondWindow,
+  profileStatus,
   reloadApp,
   selectEnvironment,
   setDocumentHidden,
   type Environment,
 } from "./container-wiring-support";
+import { setBackendTiming } from "./agent-test-timing-support";
 
 /**
  * Container app wiring in a real browser, part two (todo 0048, task 4). Same
@@ -463,6 +465,12 @@ test("Docker fixture coordinator view follows delegations and context across swi
   const container = await fixtureEnvironment(containerName);
   const local = await fixtureEnvironment(localName);
   expect(container.environmentType).toBe("containerized");
+  // A stopped worker's delegation closes on the coordinator repair pass,
+  // every 60 s in production; this test shortens it to 5 s (to-do 7569,
+  // task 5). The pass already scheduled when the file is written keeps its
+  // delay, so the sweep budget below still allows one full production period.
+  const dataDir = profileStatus().dataDir;
+  if (!dataDir) throw new Error("dev:status reported no data directory");
   const projects = await invoke<Project[]>("get_projects");
   const checkout = projects.find((project) => project.id === container.projectId)?.localPath;
   if (!checkout) throw new Error("The fixture project has no checkout");
@@ -569,6 +577,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
   phaseDone("login");
+  const repairTiming = setBackendTiming(dataDir, { coordinatorRepairIntervalMs: 5_000 });
   try {
     let panel = await openCoordinator(page);
     if (baseline === 0) await awaiting(0);
@@ -578,7 +587,9 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await selectEnvironment(page, containerName);
       await expect(page.locator("#project-panel-coordinator")).toHaveCount(0);
       expect((await delegate(container.id, "container")).opened).toBe(true);
-      await page.waitForTimeout(3_000);
+      // The backend's record has it while the coordinator view is not shown
+      // (to-do 7569, task 5: was a fixed 3 s sleep).
+      await awaiting(baseline + 1);
       panel = await openCoordinator(page);
       await awaiting(baseline + 1);
     });
@@ -586,7 +597,8 @@ test("Docker fixture coordinator view follows delegations and context across swi
     await test.step("a delegation survives a hidden document and the coordinator remains usable", async () => {
       await setDocumentHidden(page, true);
       expect((await delegate(local.id, "local")).opened).toBe(true);
-      await page.waitForTimeout(6_000);
+      // Recorded while the document is hidden (was a fixed 6 s sleep).
+      await awaiting(baseline + 2);
       await setDocumentHidden(page, false);
       panel = await openCoordinator(page);
       await awaiting(baseline + 2);
@@ -635,6 +647,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await second.close();
     });
   } finally {
+    repairTiming.restore();
     phaseStarted = Date.now();
     if (git("branch", "--show-current") !== originalBranch) {
       git("checkout", "-q", originalBranch);

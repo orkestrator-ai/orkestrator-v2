@@ -821,8 +821,11 @@ The billed Grok `costUsdTicks` run moved to the
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed Grok turns of task 11) moved there on 2026-11-10.
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) owns removing the Claude
   `services/mcp-config.ts` parse.
-- [0016-slash-command-catalogue.md](../cli-and-slash-commands/0016-slash-command-catalogue.md) owns the Claude
-  command-discovery probe.
+- The Claude command-discovery probe and its terminal-marker check are
+  described in [native-agent-commands.md](../../architecture/native-agent-commands.md#provider-notes)
+  and checked on every SDK bump in
+  [upgrade-agents.md](../../development/upgrade-agents.md#how-to-upgrade-claude)
+  (to-do 0016, which owned them, was retired on 2026-11-11).
 - [agent-engines.md](../../architecture/agent-engines.md) and
   [upgrade-agents.md](../../development/upgrade-agents.md).
 - The living-doc drift once listed here (Grok Build's inbound-request

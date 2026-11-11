@@ -697,6 +697,15 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `getSettings` still exists; if `ModelInfo` ever gains an Ultracode flag,
    gate the toggle on it instead of on `xhigh` support.
 
+   Check whether `SlashCommand` in the new `sdk.d.ts` has gained a marker for
+   terminal-only commands (at 0.3.322 it is still
+   `{ name, description, argumentHint, aliases?, builtin? }`, and only the
+   init frame's `terminal_slash_commands` names them). If it has, read it from
+   the probe's rows and delete the per-CLI-version list in
+   `bridges/claude-bridge/src/services/claude-terminal-commands.ts`, which
+   closes the first-tab gap described under Claude in
+   [native-agent-commands.md](../architecture/native-agent-commands.md#provider-notes).
+
    Re-prove how a running CLI handles MCP updates. The bridge relies on
    `setMcpServers` unloading only servers an earlier call gave it, and on an
    unchanged restatement not reconnecting a server

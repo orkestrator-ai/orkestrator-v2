@@ -472,7 +472,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
   expect(container.environmentType).toBe("containerized");
   // A stopped worker's delegation closes on the coordinator repair pass,
   // every 60 s in production; this test shortens it to 5 s (to-do 7569 (retired),
-  // tasks 4 and 5); the backend applies it within a second of the file being
+  // task 4); the backend applies it within a second of the file being
   // written. The sweep budget below still allows one full production period,
   // so a backend that ignores the override makes the test slower, not red.
   const dataDir = profileStatus().dataDir;

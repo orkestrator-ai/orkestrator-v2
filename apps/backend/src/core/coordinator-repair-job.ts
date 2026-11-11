@@ -34,7 +34,7 @@ export interface CoordinatorRepairJobOptions {
  *
  * Without agent-test timing it is the plain 60 s job. In an isolated
  * agent-test profile a spec may shorten the period with
- * `coordinatorRepairIntervalMs` (to-do 7569 (retired), tasks 4 and 5). There
+ * `coordinatorRepairIntervalMs` (to-do 7569 (retired), task 4). There
  * the job wakes every {@link COORDINATOR_REPAIR_TIMING_CHECK_MS} and repairs
  * only once the period in force has passed since the last repair (or since
  * start-up), so an override written mid-period applies within a second

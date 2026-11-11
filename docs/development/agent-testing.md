@@ -380,6 +380,26 @@ container UI on the same profile:
   hidden document, a reload and a second window. The coordinator test stops
   and restarts both fixture environments.
 
+Where the coordinator view test spends its time (to-do 7569, retired, task 4):
+the test records the phases outside a `test.step` as `phase-ms` annotations,
+and the JSON report (`output/agent-testing/<run-id>/browser/results.json`)
+holds each step's duration. Measured on beelink (Linux, Docker fixture shard 2):
+
+| Run (2026-11-11) | Total | Delegations close | Everything else |
+| --- | --- | --- | --- |
+| Before the repair override | 124 s | 90 s | fixed 3 s and 6 s sleeps; set-up, login, reload, second window and fixture restart 0.6–7 s each |
+| Override armed, applied after the 60 s pass already queued (4 runs) | 44–69 s | 12–53 s | no fixed waits; same phases, 0.4–7.4 s each |
+| Override applied within a second (`ef953263b`) | 23 s | 8 s | login 2.1 s, reload 2.2 s, second window 2.7 s, fixture restart 4.1 s |
+
+Almost all of the time went on the coordinator repair pass that closes a
+stopped worker's delegation (60 s in production). The two sleeps now wait on
+the backend's delegation record, and the test shortens the repair period to
+5 s through `coordinatorRepairIntervalMs`, which the backend applies within a
+second. What is left is real work: signing in, reloading, opening a second
+window and restarting the two fixture environments. There is no other fixed
+wait to take out. In that last run the whole `test:agent:docker:isolated` task
+took 250 s (shards 195 s and 160 s; 26 passed, 5 skipped, 0 failed).
+
 Both specs' tests are named "Docker fixture", so `mise run test:agent:docker`
 runs them. Results are recorded in
 [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).

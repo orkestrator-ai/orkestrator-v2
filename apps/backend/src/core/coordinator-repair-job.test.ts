@@ -1,6 +1,6 @@
 /**
  * The coordinator-repair job's agent-test override (to-do 7569 (retired),
- * tasks 4 and 5), driven through the real activity-job scheduler: a timing
+ * task 4), driven through the real activity-job scheduler: a timing
  * file written mid-period shortens the period within a second, removing it
  * restores the production period, and without an override the job keeps its
  * interval.
@@ -99,7 +99,7 @@ describe("coordinatorRepairJob", () => {
       }),
     );
     // Twenty seconds into the first 60 s period, as the coordinator view
-    // test arms it after login (to-do 7569 task 5): the pass already
+    // test arms it after login (to-do 7569 (retired), task 4): the pass already
     // scheduled does not hold the override back to 60 s.
     await time.advance(20_000);
     expect(runs).toEqual([]);

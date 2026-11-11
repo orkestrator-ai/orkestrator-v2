@@ -78,3 +78,17 @@ result for this validation attempt.
 Aggregate outcome: terminated at the 1,800 s deadline after starting 1,584 of
 1,810 cases, with 14 reported failures; no final pass/skip totals and no
 public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.gz`.
+
+## WebKit-scroll review round 2 recurrence — 2026-11-11
+
+Branch `webkit-scroll-fix-d230c4f38350-r1`, base
+`498b68766f5c9f357a3a86782406d1e9e0977559`, head `7fac685f4` (a scroll-hook
+change for callers that pass `viewKey`; the sidebar fixture does not use the
+hook). `ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name browser-rerun -- mise run test:browser`,
+at host load average about 30, failed `e2e/SidebarMotion.spec.ts:26` on
+desktop at line 47: three content sizes instead of at most two. The suite was
+stopped by the 30-minute group deadline at 1849 of 1852 cases with three
+failures (this one, CoordinatorActions line 383 in case 9924 and flake 1602).
+The complete owner then passed alone:
+`ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name owner-SidebarMotion -- bunx playwright test --config e2e/playwright.config.ts e2e/SidebarMotion.spec.ts --retries=0`
+(exit 0, 30.5 s). No assertion, timeout or sidebar implementation changed.

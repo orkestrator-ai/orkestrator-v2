@@ -264,3 +264,31 @@ touch `apps/web`.
   recurrence. (Without `NODE_ENV=test` the shell's `NODE_ENV=production`
   loads React's production build and every case fails with
   `React.act is not a function`, which is unrelated to this flake.)
+
+## Recurrence — 2026-11-11 (streaming compression review repairs), fails alone under load
+
+Observed 2026-11-11 on `streaming-compression-fixes-a3d14897aa2a-r1` at
+`070820ff9`, base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes backend gateway metrics,
+gateway tests, a probe script and docs; it does not touch `apps/web` or the
+transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  (default suite, web package at its default worker count), rerunning the
+  review's incomplete default-suite run.
+- **Failure:** four cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`):
+  - `a function follow prop that answers false is still truthy to the viewport-shrink path` (67.8 ms)
+  - `literal false: a detached reader is not moved when the viewport shrinks` (45.7 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (73.1 ms, 28.9 ms)
+- **Suite counts:** web 14,575 passed and 4 failed; backend 18,590 passed and
+  0 failed; CLI 517 passed; the root, bridge and lockfile groups passed.
+- **Isolated rerun:** the aggregate runner's automatic rerun queued for host
+  capacity and ended `INCOMPLETE` after 600 s with no verdict. Run by hand
+  with `NODE_ENV=test bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`,
+  the file passed 14 of 14 earlier in the session. At a load average of
+  about 89 to 91 on 16 cores it then failed alone three times, with 9 or 10 of
+  14 cases failing, all with Received 1.
+
+Status stays open; no assertion, timeout or skip changed.

@@ -21,6 +21,7 @@
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
 import { kanbanDomain } from "./domain.js";
+import { LINEAR_BOARD_COMMANDS } from "./linear-commands.js";
 import {
   FeaturePlanBuildClaimSchema,
   FeaturePlanListSchema,
@@ -464,7 +465,8 @@ export const getLinearIssuesCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({}),
+  // With projectId, only the issues on that project's linked board.
+  args: Schema.Struct({ projectId: Schema.optionalKey(Schema.String) }),
   result: Schema.mutable(Schema.Array(LinearIssueListItemSchema)),
   critical: [],
 });
@@ -475,7 +477,8 @@ export const getLinearIssueCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ issueId: Schema.String }),
+  // With projectId, refused unless the issue is on that project's linked board.
+  args: Schema.Struct({ issueId: Schema.String, projectId: Schema.optionalKey(Schema.String) }),
   result: LinearIssueDetailSchema,
   critical: [],
 });
@@ -486,7 +489,12 @@ export const postLinearIssueCommentCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: false,
-  args: Schema.Struct({ issueId: Schema.String, body: Schema.String }),
+  args: Schema.Struct({
+    issueId: Schema.String,
+    body: Schema.String,
+    // With projectId, refused unless the issue is on that project's linked board.
+    projectId: Schema.optionalKey(Schema.String),
+  }),
   result: LinearIssueCommentSchema,
   critical: [],
 });
@@ -537,4 +545,5 @@ export const KANBAN_COMMANDS = [
   getLinearIssueCommand,
   postLinearIssueCommentCommand,
   postLinearCompletionCommentCommand,
+  ...LINEAR_BOARD_COMMANDS,
 ] as const;

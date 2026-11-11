@@ -93,3 +93,26 @@ mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence 2026-11-11 (WebKit-scroll review)
+
+Branch `webkit-scroll-fix-d230c4f38350-r1`, base
+`498b68766f5c9f357a3a86782406d1e9e0977559`. The branch changes the shared
+`useVirtuosoScrollState` hook, but only for callers that pass `visible` or
+`viewKey` (the build pipeline transcript); the paging fixture passes neither,
+so its activation path is unchanged.
+
+- A browser suite run on a host at load average about 40, with two other
+  worktrees' suites running, hit the 30-minute group deadline at 1199 of
+  1850 tests. Among its 17 failures, mostly `page.reload`/`page.goto`
+  timeouts, this case failed on mobile.
+- The ten failing owners rerun together (`bunx playwright test --config e2e/playwright.config.ts <ten specs>`,
+  default workers, same load) failed this case on both viewports:
+  `expect(received).toBe(expected)`, expected 1, received 0, after the 30 s
+  poll for `Reached stop 0.` (282 passed, 27 failed, mostly reload timeouts).
+- The next complete `mise run test:browser` on the same tree (load about 31
+  to 35) started this case on both viewports and did not fail it; its only
+  failure was flake 1310.
+- `mise run flaky:recurrence -- 1602 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.

@@ -142,6 +142,12 @@ export type NavigationTarget =
       /** A precise box inside a row, e.g. a find match; resolved every frame. */
       kind: "rect";
       rect: () => DOMRect | null;
+      /**
+       * The row the box lies in. While the box cannot be resolved (the row
+       * left the rendered window as rows above it measured), the navigation
+       * brings this row back by index rather than waiting out its budget.
+       */
+      row?: Extract<NavigationTarget, { kind: "row" }>;
     };
 
 export type OperationOutcome =
@@ -175,6 +181,13 @@ export interface ScrollDiagnostics {
 }
 
 type RowTarget = Extract<NavigationTarget, { kind: "row" }>;
+
+/** The row a target can be brought back to by index, if it names one. */
+function rowOf(target: NavigationTarget): RowTarget | null {
+  if (target.kind === "row") return target;
+  if (target.kind === "rect") return target.row ?? null;
+  return null;
+}
 
 /**
  * An eased navigation's progress. A rendered target is tracked directly; an
@@ -622,12 +635,13 @@ export class TranscriptScrollController {
       return false;
     }
     const mounted = this.resolve(target) !== null;
-    if (!mounted && (target.kind === "rect" || !this.adapter.ready)) return false;
+    if (!mounted && ((target.kind === "rect" && !target.row) || !this.adapter.ready)) return false;
     const op = this.begin(owner, target, "instant");
     if (mounted && target.kind === "row" && target.partId) {
       op.partDelta = this.measurePartDelta(target);
     }
-    if (!mounted && target.kind === "row") this.issueIndexNavigation(op, target);
+    const row = rowOf(target);
+    if (!mounted && row) this.issueIndexNavigation(op, row);
     this.schedule(op);
     return true;
   }
@@ -673,6 +687,8 @@ export class TranscriptScrollController {
     if (op && op.owner === owner && this.isCurrent(op)) {
       op.target = target;
       op.stableFrames = 0;
+      // Waiting for the new target to mount starts again.
+      op.unmountedFrames = 0;
       return true;
     }
     if (this.state.generation !== since) return false;
@@ -807,6 +823,12 @@ export class TranscriptScrollController {
     if (previous === 0 || Math.abs(width - previous) < 1) return;
     if (!this.state.active || this.state.wantsFollow) return;
     if (this.op && this.op.owner !== "reflow") return;
+    // A history recovery owns the reader's place until their part is back,
+    // and the anchor names a part the list no longer holds. Dropping that
+    // history usually shortens the list enough to remove a classic vertical
+    // scrollbar, which widens the scroller; a reflow navigation then would
+    // bump the generation and cancel the recovery (to-do 0050, task 4).
+    if (this.historyRecoveryPending) return;
     const anchor = this.lastReadingAnchor;
     if (!anchor) return;
     this.navigateTo(
@@ -1307,18 +1329,21 @@ export class TranscriptScrollController {
     if (!rectOf) {
       if (phase === "frame") op.unmountedFrames += 1;
       // The target left the rendered window (estimates moved it): navigate by
-      // index at once — pre-paint when this is a layout delivery.
-      if (target.kind === "row" && !op.indexIssued) {
-        this.issueIndexNavigation(op, target);
+      // index at once — pre-paint when this is a layout delivery. A box
+      // navigates to the row it lies in; its owner resolves the box afresh
+      // once that row is back.
+      const row = rowOf(target);
+      if (row && !op.indexIssued) {
+        this.issueIndexNavigation(op, row);
         return;
       }
       if (
-        target.kind === "row" &&
+        row &&
         op.unmountedFrames >= REISSUE_AFTER_UNMOUNTED_FRAMES &&
         op.reissues < MAX_INDEX_REISSUES
       ) {
         op.reissues += 1;
-        this.issueIndexNavigation(op, target);
+        this.issueIndexNavigation(op, row);
       }
       return;
     }

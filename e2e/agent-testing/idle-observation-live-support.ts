@@ -14,6 +14,7 @@ export const IDLE_OBSERVATION_CASES = [
   "reconnect",
   "hidden",
   "no-renderer",
+  "steer",
   "detach",
 ] as const;
 export type IdleObservationCase = (typeof IDLE_OBSERVATION_CASES)[number];

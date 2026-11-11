@@ -283,19 +283,28 @@ are required for the escape and network cases.
 
 CI also runs `conformance-apparmor-live.test.ts` twice on the same Ubuntu
 runner, before and after its existing AppArmor remediation. The opt-in
-`ORKESTRATOR_CLAUDE_APPARMOR_PHASE` must be `restricted` or `remediated`;
-missing opt-in skips the test, but an unexpected host/probe result fails it.
+`ORKESTRATOR_CLAUDE_APPARMOR_PHASE` must be `restricted`, `stock` or
+`remediated`; missing opt-in skips the test, but an unexpected host/probe
+result fails it. `stock` is the first phase of the separate
+`claude-apparmor-qualification.yml` workflow on `ubuntu-24.04` (weekly, on
+demand, and on pull requests that change its inputs): it accepts whichever
+namespace answer the probe gives and requires the backend tier and the pinned
+CLI to agree with it, failing only on a setup error such as missing programs.
 Set `ORKESTRATOR_POLICY_CLAUDE_PATH` to the pinned native executable (its
 version is checked and every query uses that path). The restricted phase
 requires the real nested namespace refusal, a `provider-configured` backend
-tier, the CLI's `apply-seccomp` failure, successful hook-only reads, a hook
+tier, the CLI's `apply-seccomp` failure, a required-sandbox read the CLI does
+not run (also required for every refused `stock` answer, whatever the cause),
+successful hook-only reads, a hook
 write refusal, and an HTTP 422 provider-sandbox prompt refusal before dispatch.
 The remediated phase requires `enforced`, a successful sandboxed read and
 provider write control, and a coordinator sandbox write refusal without the
 hook. These use the scripted local endpoint and temporary homes, with no
 external model calls. `ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE` selects the output
-directory for `restricted.json` and `remediated.json`; CI uploads both with
-OS, kernel, revision, pinned CLI version and assertion outcomes. Remediation
+directory for `restricted.json` (or `stock.json`) and `remediated.json`; CI uploads both with
+OS, kernel, revision, pinned CLI version and assertion outcomes. Each report is
+written once the probe has answered and rewritten when the phase ends, with
+`outcome` and the `failedStage`, so a failing phase still leaves one. Remediation
 belongs only on a disposable runner; the test never changes host policy.
 
 OpenCode and Grok conformance read actual fixture project configuration using
@@ -735,8 +744,9 @@ same suite, `e2e/agent-testing/service-preview-seeded-electron.spec.ts`. It
 gives the fixture project an `entryPort` and a `run` command, creates two local
 environments, and checks the wait state, two servers on one port with the
 port-move offer, a restart, agent links and framework hints in the real window
-([0045](../todo/previews-and-annotations/0045-preview-service-discovery.md),
-task 1). Both specs launch Electron through
+([browser-previews.md](../architecture/browser-previews.md#local-environments)).
+It also runs headless on Linux through `playwright.electron-headless.config.ts`
+with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`. Both specs launch Electron through
 `e2e/agent-testing/service-preview-electron-launch.ts`.
 
 Record results in the evidence log of
@@ -1305,7 +1315,8 @@ turns; the idle tab with its transcript bound; the container stopped with
 `recurringWork` counters and every `docker exec` Docker itself reports for
 the container (`docker events --filter event=exec_start`), labelled by
 program only. Use Docker's count to compare commits: the claude-tmux tab
-loop has no recurring kind on any commit so far (`tmux-poll` is the
+loop has its own recurring kind, `tmux-tab-loop` (B30), only from
+2026-11-11 (todo 7567, retired that day); on older commits it is uncounted (`tmux-poll` is the
 per-container Claude state poll), and an older backend leaves more loops
 uncounted. Afterwards it starts the container again, removes the fake model
 and stops the tab.
@@ -1318,8 +1329,8 @@ the public `environment.stop` action (so the presence pass meets stopped
 environments that own mailboxes), and starts them again.
 
 ```bash
-PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
 ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
 ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
   mise run dev:test --profile ctab --fixture --fixture-environments local,container \
   --no-agent-credentials --agent-platforms claude --headless
@@ -1336,6 +1347,11 @@ mise run dev:test --profile <the kept profile> --fixture --fixture-environments 
 mise exec -- bun scripts/busy-item-counts-live.ts --profile <the kept profile> \
   --out output/benchmarks/items.json
 ```
+
+Set `ORKESTRATOR_QUALIFICATION_DOCKER` before `PATH`: Bash expands these
+assignments in order, so with the shim's directory already on `PATH`
+`command -v docker` names the shim itself, which then execs itself in a loop
+and the profile never leaves `starting` (seen 2026-11-11).
 
 The busy driver needs `packages/cli/dist` (`bun run --cwd packages/cli
 build`) in whichever checkout runs the profile; with `--checkout` its busy

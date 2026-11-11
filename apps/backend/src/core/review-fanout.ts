@@ -675,6 +675,21 @@ export class ReviewFanoutRunner {
       count: stats.maxActive,
       elapsedMs: Date.now() - passStartedAt,
     });
+    // The pass's peaks against each cap, so a recording observer (an agent-test
+    // profile's, `agent-test-fanout-stats.ts`) can show the caps held.
+    this.branches.record({
+      operation: "reviewer.admission_concurrency",
+      reviewers: reviewers.length,
+      count: stats.maxActiveByPool.admission,
+    });
+    for (const [group, count] of Object.entries(stats.maxActiveByGroup)) {
+      this.branches.record({
+        operation: "reviewer.provider_concurrency",
+        platform: efficiencyPlatform(group),
+        reviewers: reviewers.length,
+        count,
+      });
+    }
     if (fatal) {
       if (isReviewSnapshotError(fatal.error)) {
         // These end the whole pass rather than one reviewer, so the abort the

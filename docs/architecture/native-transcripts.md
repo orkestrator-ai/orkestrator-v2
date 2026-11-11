@@ -217,24 +217,53 @@ client falls back to a snapshot. Other clients keep whole-message deltas.
 ### Response encoding
 
 Four transcript reads mark their result (`markSpliceableResult`), and the
-gateway writes those with `spliceEncodedJson`, copying each row's memoised
-JSON instead of serialising it again: `get_native_agent_transcript_update`,
-`get_native_agent_live_update`, `get_native_agent_projection_update` and
-`get_native_agent_message_page`. The output is byte-identical to
-`JSON.stringify`; anything that is not a plain object or array is serialised
-whole.
+gateway writes those with `spliceEncodedJsonBytes`, copying each row's
+memoised JSON instead of serialising it again:
+`get_native_agent_transcript_update`, `get_native_agent_live_update`,
+`get_native_agent_projection_update` and `get_native_agent_message_page`.
+Everything except the rows is serialised natively in one `JSON.stringify`,
+with a random per-process placeholder string where each memoised row goes;
+the rows are then written straight into one buffer sized from their memoised
+byte counts. The output is byte-identical to `JSON.stringify`: anything that
+is not a plain object or array is serialised whole, and a body in which some
+field already spells a placeholder is serialised whole too. The gateway sends
+that buffer and reads the response size from it; an unmarked result is
+encoded to bytes once the same way, rather than sized as a string first.
 
-The legacy `get_native_agent_projection` is deliberately not marked. Measured
-on 2026-11-10 with the changed-read benchmark (`legacy-spliced` against
-`legacy`), splicing its whole-session projection cost more CPU per
-read than `JSON.stringify` on every row shape the benchmark has: about
-600 µs against 450 to 500 µs on the 100-row, 430 KB window. The row copy is a
-small win, but the walk over the projection's many other fields runs in
-JavaScript, and the gateway sizes the joined body, which copies it again.
+The first version (E11 part 0340) walked the whole result in JavaScript and
+joined strings, and the gateway then sized the joined string before writing
+it. That made a first snapshot, the read a tab pays on open, reload and every
+snapshot fallback, slower than plain `JSON.stringify`, by up to about twice on
+rows of a few KiB. Measured on 2026-11-11 (to-do 7553, retired) with
+`bun scripts/benchmark-transcript-changed-read.ts --snapshot --gateway
+--samples=600`, on beelink2 (Intel Core Ultra 9 285H, Bun 1.4.4) while other
+builds were running, so the host was busy; each figure is the median of
+per-round means with the two encodings alternating, from two or three runs.
+In-process, each column is the gateway's whole encoding (bytes and their
+size); through the gateway it is the round trip of one loopback request:
+
+| First snapshot | Body | `JSON.stringify` | Old splice | New splice | Gateway, old splice | Gateway, new splice |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `tool-parts`, 20 rows | 46 KB | 14–15 µs | 22 µs | 7–8 µs | 156–170 µs | 113–123 µs |
+| `revised`, 100 + 20 rows | 242 KB | 61–73 µs | 125–135 µs | 39–41 µs | 326–345 µs | 187–194 µs |
+| `near-full`, 100 rows | 423 KB | 108–153 µs | 202–205 µs | 61–66 µs | 448–488 µs | 243–270 µs |
+| `short-incomplete`, 60 rows | 62 KB | 17–20 µs | 30–31 µs | 14–16 µs | 102–108 µs | 79–85 µs |
+
+Changed reads answer with small deltas and were unaffected either way.
+
+The legacy `get_native_agent_projection` is marked too, since 2026-11-11
+(to-do 7755, retired). On 2026-11-10 the first splice cost more CPU per read
+than `JSON.stringify` on its 100-row, 430 KB projection (about 600 µs against
+450 to 500 µs), so it was left out; with the new splice the same benchmark
+(`legacy-spliced` against `legacy`) measured 570 to 690 µs against 740 to
+820 µs CPU per read on 2026-11-11, and 826 to 873 µs against 987 to 1,044 µs
+in a second pair of runs that day with two `dev:test` profiles also running.
+Its contract definition now sets `encoded`, like the other four, so its
+result is no longer schema-checked in development. Its callers are mostly
+in-process (Control MCP environment tools, node coordination), which receive
+the same plain object; only reads that cross the gateway gain.
 `commands-registry-native-splice.test.ts` pins which commands are marked;
-re-measure before marking another. The same probe found the marked commands'
-snapshot responses slower than `JSON.stringify` for rows of a few KiB; that is
-[to-do 7553](../todo/transcripts-and-observation/7553-transcript-splice-slower-on-large-rows.md).
+re-measure before marking another.
 
 ### Incomplete previews and exact recovery
 

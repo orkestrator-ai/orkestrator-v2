@@ -7,7 +7,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 ### Tasks
 
 1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews, by emitting the frame document in the hosted build with its own header rule. Status: blocked (waits on 7568: 4650 task 1, approval of the hosted policy change and the check on a real Vercel deployment).
-2. **Include document text in Find**: text inside a static frame is not indexed. Status: done (2026-11-05); see Assumptions and decisions. What it leaves is in [5780](5780-find-inside-static-documents.md).
+2. **Include document text in Find**: text inside a static frame is not indexed. Status: done (2026-11-05); see Assumptions and decisions. What it left went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`).
 3. **Share one sanitizer with the design runtime**: remove the pinned copy. Status: open (do with the next intentional design-runtime change).
 4. **Consider a thin visual publishing tool**: only if real provider sessions show the lifecycle is cumbersome. Status: blocked (waits on 7568: 4650 task 4, evidence from real provider sessions).
 
@@ -121,7 +121,7 @@ This fixes a gap outside the file's wording, because document text would otherwi
 - Reports that were never shown stay unindexed, the cost this option accepts.
 - An open Find bar does not refresh when text arrives; it updates on its next query or transcript change, as other artifact bodies do.
 
-All three are in [5780](5780-find-inside-static-documents.md).
+All three went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`); the architecture is in [`rich-transcripts.md`](../../architecture/rich-transcripts.md#static-document-presentation).
 
 ## Related
 

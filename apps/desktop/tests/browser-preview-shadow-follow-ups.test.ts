@@ -1,5 +1,5 @@
 /**
- * Shadow-root annotation follow-ups (todo 2580): sensitive fields inside open
+ * Shadow-root annotation follow-ups (todo 2580, retired): sensitive fields inside open
  * shadow roots are masked in screenshots, failing closed when the scan cannot
  * finish, and a pin whose host is defined (and attaches its root) after pins
  * were shown resolves without waiting for an unrelated DOM change.

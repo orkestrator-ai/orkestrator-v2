@@ -4,7 +4,7 @@ import {
   readOnlyCommandSandboxOffNote,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
-import { claudeReportedPolicy } from "./claude-query-config.js";
+import { CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE, claudeReportedPolicy } from "./claude-query-config.js";
 
 const sessionPolicy: NativeAgentExecutionPolicy = {
   id: "interactive-host",
@@ -73,5 +73,53 @@ describe("claudeReportedPolicy", () => {
         sessionPolicy,
       );
     }
+  });
+
+  test("a Linux provider sandbox with full network says loopback is out of direct reach", () => {
+    const provider: NativeAgentExecutionPolicy = { ...sessionPolicy, sandbox: "provider" };
+    const reported = claudeReportedPolicy({ executionPolicy: provider, status: "idle" }, "linux");
+    // The network axis stays full: every host but loopback is reachable.
+    expect(reported).toEqual({ ...provider, note: CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE });
+    expect(reported?.note).toContain("loopback");
+    // A caveat the session already carries is kept, and the note is not repeated.
+    const noted = { ...provider, note: "Earlier caveat." };
+    const once = claudeReportedPolicy({ executionPolicy: noted, status: "idle" }, "linux");
+    expect(once?.note).toBe(`Earlier caveat. ${CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE}`);
+    expect(claudeReportedPolicy({ executionPolicy: once, status: "idle" }, "linux")).toEqual(once);
+    // The session's own policy object is never mutated.
+    expect(provider.note).toBeUndefined();
+  });
+
+  test("the loopback note is Linux-only and needs both the provider sandbox and full network", () => {
+    const provider: NativeAgentExecutionPolicy = { ...sessionPolicy, sandbox: "provider" };
+    const cases: [NativeAgentExecutionPolicy, NodeJS.Platform][] = [
+      // macOS's Seatbelt honours allowLocalBinding.
+      [provider, "darwin"],
+      [provider, "win32"],
+      // Restricted network refuses loopback on every system, as intended.
+      [{ ...provider, networkAccess: "restricted" }, "linux"],
+      // No provider sandbox, no namespace.
+      [sessionPolicy, "linux"],
+      [{ ...sessionPolicy, sandbox: "container" }, "linux"],
+    ];
+    for (const [policy, platform] of cases) {
+      expect(claudeReportedPolicy({ executionPolicy: policy, status: "idle" }, platform)).toEqual(
+        policy,
+      );
+    }
+    expect(claudeReportedPolicy({ executionPolicy: undefined, status: "idle" }, "linux")).toBe(
+      undefined,
+    );
+    // A running read-only turn reports its own restricted policy, never the note.
+    const readOnly = claudeReportedPolicy(
+      {
+        executionPolicy: provider,
+        status: "running",
+        commandDiscoveryInputs: { readOnly: true, includeLocalSettings: false },
+      },
+      "linux",
+    );
+    expect(readOnly?.networkAccess).toBe("restricted");
+    expect(readOnly?.note).not.toContain(CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE);
   });
 });

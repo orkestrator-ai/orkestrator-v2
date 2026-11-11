@@ -318,11 +318,14 @@ event that main forwards, which the relay's IPC delivery does not produce
 
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
-rollback. The terminal transport default has not changed. The evidence and the
-remaining measurement plan are in
-[0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md);
-the harnesses are `apps/backend/scripts/sse-route-probe.ts` and
-`apps/backend/scripts/remote-bandwidth-baseline.ts`.
+rollback. The terminal transport stays the shared SSE stream: on the
+single-host matrix of 2026-11-11, `on` SSE carried redundant build output in
+about a thirteenth of the opt-in WebSocket's bytes and kept a 512 kbit/s link
+at its latency. The measurements, the harnesses
+(`apps/backend/scripts/sse-route-probe.ts`,
+`apps/backend/scripts/remote-bandwidth-baseline.ts` and
+`e2e/agent-testing/remote-bandwidth-live.spec.ts`) and the decisions they
+settled are in [remote-bandwidth.md](../development/remote-bandwidth.md).
 
 `apps/backend/tests/gateway-sse-gzip-routes.test.ts` and
 `e2e/SseGzipStreaming.spec.ts` prove incremental delivery directly, through
@@ -355,7 +358,8 @@ live runs still to do, are in
 [4400-gateway-502-under-load-live-evidence.md](../todo/cross-cutting/4400-gateway-502-under-load-live-evidence.md).
 
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
-changes a gzip stream; the steps for a real tailnet are in the to-do.
+changes a gzip stream; the steps for a real tailnet, and the 2026-11-01 results,
+are in [remote-bandwidth.md](../development/remote-bandwidth.md#running-the-probe-through-tailscale-serve).
 
 A second cause gives the same empty 502: more new connections than the accept
 queue holds (`kern.ipc.somaxconn`, 128 on macOS) arriving during even a 10 ms
@@ -611,10 +615,15 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   mode gives up this protection: on Docker Desktop even at a loopback bind,
   on the tested rootless Linux daemon (host loopback off) at a non-loopback bind
   and at Tailscale Serve's port, and on rootful Linux as far as a host firewall
-  such as ufw allows. Enabling rootless host loopback is expected to make
-  loopback-bound host services reachable too, potentially including the gateway;
-  that configuration was not qualified. Remaining Linux checks are tracked in
-  [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
+  such as ufw allows. With rootless host loopback enabled, a `full` container
+  reaches every loopback-bound host service, the gateway included, and arrives
+  as `127.0.0.1`; restricted runtimes, including ones from images built before
+  the egress gateway, were still held to the named service port
+  ([record](../development/container-qualification.md#host-loopback-rootful-reach-and-workload-firewalls-on-linux-engine-2026-11-09),
+  [pre-gateway images](../development/container-qualification.md#pre-gateway-images-under-the-current-backend-on-rootless-linux-engine-2026-11-11)).
+  The remaining Linux checks (a real gateway on a Tailscale address, a
+  bare-metal rootful host without a firewall, arm64) are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
   Observed on Docker Desktop
   ([record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04))
   and on Linux Engine

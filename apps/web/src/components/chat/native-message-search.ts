@@ -353,10 +353,28 @@ export function getNativeMessageSearchProjection(message: NativeMessage): Search
 }
 
 /**
- * The searchable text of a message, carrying its semantic projection
- * (`getSearchText.projection`) so find pairs rich-block matches per block.
+ * The artifact references a message's cards show, in part order: exactly the
+ * artifact parts `getNativeMessageSearchProjection` indexes (none for peer
+ * mail, system and error rows, which index no parts).
  */
-export const getNativeMessageSearchText = withSearchProjection(
-  nativeMessageSearchText,
-  getNativeMessageSearchProjection,
+export function nativeMessageArtifacts(message: NativeMessage): unknown[] {
+  if (
+    message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX) ||
+    message.role === "system" ||
+    message.id.startsWith("system-") ||
+    message.id.startsWith("error-")
+  )
+    return [];
+  return message.parts.flatMap((part) => (part.type === "artifact" ? [part.artifact] : []));
+}
+
+/**
+ * The searchable text of a message, carrying its semantic projection
+ * (`getSearchText.projection`) so find pairs rich-block matches per block, and
+ * its artifact references (`getSearchText.artifacts`) so Find can fetch the
+ * stored text of a static document no card has reported yet.
+ */
+export const getNativeMessageSearchText = Object.assign(
+  withSearchProjection(nativeMessageSearchText, getNativeMessageSearchProjection),
+  { artifacts: nativeMessageArtifacts },
 );

@@ -46,6 +46,14 @@ operation owns it) or **inactive**.
   layer: its frames, the library's pending work (`cancelPendingNavigation`)
   and, after user input, a native smooth scroll in flight (one same-position
   instant write). Every callback re-checks the generation before writing.
+- Find refines its row navigation onto the match's box (a `rect` target).
+  The box names its row: when the rows above measure shorter than estimated
+  and the list moves that row out of its rendered window, the box no longer
+  resolves, so the navigation returns to the row by index, with the same
+  re-issue bound as a row target, and the list resolves the box afresh in the
+  remounted row (`retarget` restarts the unmounted count). Without the row the
+  first find on a freshly opened transcript ran out its budget above the match
+  (`e2e/FirstFindLands.spec.ts`).
 - Pauses (`selection`, `find`, `expanded-artifact`) are idempotent reason
   tokens. Taking one retires an incompatible operation (find keeps its own
   navigation). Releasing the last owes a still-following reader the growth
@@ -125,8 +133,9 @@ applied the new row sizes; correcting in the resize delivery as well
 compensated the same growth twice for one painted frame. A follower is kept at
 the end by growth, and another navigation keeps converging on its own target.
 A hidden pane (zero width) keeps its last width, so showing it at another
-width counts as a reflow. Persisted pixel snapshots from another layout are
-not restored (see Activation and persistence).
+width counts as a reflow. A width change while a history recovery is pending
+only records the new width (see below). Persisted pixel snapshots from
+another layout are not restored (see Activation and persistence).
 
 Growing the keep-mounted overscan (a row takes focus or a selection) is held
 the same way (`holdPlaceAcrossOverscan`). It mounts rows Virtuoso has only
@@ -190,8 +199,15 @@ element's top relative to the viewport.
   and an accepted navigation; ordinary held-page restoration and automatic
   paging stand aside meanwhile. A remounted controller inherits its persisted
   semantic anchor, so a missing part in its first live tail is recoverable
-  too. Activation waits while that history recovery owns the place. Covered live by `transcript-paging-live.spec.ts`'s
-  Codex bridge-restart step.
+  too. Activation waits while that history recovery owns the place, and so
+  does a width reflow: the drop usually shortens the list enough to remove a
+  classic vertical scrollbar, which widens the scroller, and a `reflow`
+  navigation then would supersede the recovery's generation and leave the
+  reader on the bare tail (found in the Electron window on 2026-11-11;
+  headless Chromium hides scrollbars). Covered live by
+  `transcript-paging-live.spec.ts`'s Codex bridge-restart step, in the browser,
+  in the Electron window (`ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron`) and
+  in a container environment (`ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`).
 
 ## Activation and persistence
 

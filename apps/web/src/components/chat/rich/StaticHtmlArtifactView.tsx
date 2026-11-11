@@ -19,6 +19,8 @@ import { openInBrowser } from "@/lib/backend";
 import {
   artifactConversationStatus,
   isArtifactPermissionError,
+  releaseArtifactSearchBody,
+  withholdArtifactSearchBody,
   type ArtifactReadScope,
 } from "@/lib/chat/artifact-requests";
 import { useRichBlockVisibility, useRichRenderPriority } from "@/lib/chat/rich-render-priority";
@@ -234,11 +236,37 @@ export function StaticHtmlArtifactView({
     reached && !revoked,
   );
   const ready: VerifiedStaticDocument | null = verified.status === "ready" ? verified.value : null;
+  // A card that cannot display its document keeps Find's index from writing
+  // the stored text back (`useStaticDocumentSearchIndex`); a frame that
+  // displays it again releases it.
+  const { publicationId, artifactId, revision } = artifactRef;
+  const { backendId, environmentId, logicalSessionKey } = scope;
+  const withholdText = useCallback(() => {
+    withholdArtifactSearchBody({ publicationId, artifactId, revision }, occurrenceKey, {
+      backendId,
+      environmentId,
+      logicalSessionKey,
+    });
+    onDocumentText(null);
+  }, [
+    artifactId,
+    backendId,
+    environmentId,
+    logicalSessionKey,
+    occurrenceKey,
+    onDocumentText,
+    publicationId,
+    revision,
+  ]);
+  const releaseText = useCallback(
+    () => releaseArtifactSearchBody({ publicationId, artifactId, revision }, occurrenceKey),
+    [artifactId, occurrenceKey, publicationId, revision],
+  );
   // Text from an earlier visit is not a fallback for a read that now fails.
   const readFailed = verified.status === "error";
   useEffect(() => {
-    if (readFailed) onDocumentText(null);
-  }, [onDocumentText, readFailed]);
+    if (readFailed) withholdText();
+  }, [readFailed, withholdText]);
 
   const [attempt, setAttempt] = useState(0);
   const baseKey = `${scope.generation}:${expectedSha256}:${attempt}`;
@@ -287,14 +315,17 @@ export function StaticHtmlArtifactView({
 
   const inlineEvents = useMemo<StaticFrameEvents>(
     () => ({
-      onRendered: () => updateInline({ rendered: true }),
+      onRendered: () => {
+        releaseText();
+        updateInline({ rendered: true });
+      },
       onReleased: () => updateInline({ rendered: false, interacting: false }),
       onHeight: (height) => {
         setOverflowing(height > FRAME_CHANNEL_POLICY.maxInlineHeight);
         setMeasuredHeight(height);
       },
       onFailure: (failure) => {
-        onDocumentText(null);
+        withholdText();
         updateInline({ failure, rendered: false, interacting: false });
       },
       onText: onDocumentText,
@@ -302,15 +333,18 @@ export function StaticHtmlArtifactView({
       onLink: setLink,
       onEscape: () => container.current?.focus(),
     }),
-    [onDocumentText, setMeasuredHeight, updateInline],
+    [onDocumentText, releaseText, setMeasuredHeight, updateInline, withholdText],
   );
   const dialogEvents = useMemo<StaticFrameEvents>(
     () => ({
-      onRendered: () => updateDialog({ rendered: true }),
+      onRendered: () => {
+        releaseText();
+        updateDialog({ rendered: true });
+      },
       onReleased: () => updateDialog({ rendered: false }),
       onHeight: () => {},
       onFailure: (failure) => {
-        onDocumentText(null);
+        withholdText();
         updateDialog({ failure, rendered: false });
       },
       onText: onDocumentText,
@@ -318,7 +352,7 @@ export function StaticHtmlArtifactView({
       onLink: setLink,
       onEscape: onCloseExpanded,
     }),
-    [onCloseExpanded, onDocumentText, updateDialog],
+    [onCloseExpanded, onDocumentText, releaseText, updateDialog, withholdText],
   );
 
   if (revoked) {

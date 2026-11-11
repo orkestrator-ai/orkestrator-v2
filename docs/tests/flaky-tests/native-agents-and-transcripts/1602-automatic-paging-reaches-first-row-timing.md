@@ -160,3 +160,27 @@ NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flak
 That run (40 passed, one skipped, one failed in 6.3 m) failed only the mobile
 byte-bounded prepend case recorded in 0483. Status stays open. No assertion,
 timeout or skip changed.
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Branch `transcript-history-efficiency-60750035e24d-r1` (base `498b68766f5c`, validated at `b0dc43135`): this case failed in the completed rerun of `mise run test:logged -- --name browser -- mise run test:browser` (11 failed, 1,681 passed; full list in [0382](../web-ui/0382-component-browser-parallel-load.md)). The branch changes `TranscriptScrollController.holdPlaceAcrossReflow`, which this owner runs. The complete ToolGroupFold, TranscriptPaging and MailTiles owners then passed together with one worker, with that change in place (exit 0, 337.3 s). `mise run flaky:recurrence -- 1602 --base 498b68766f5c` reported a recurrence. Status stays open. No assertion, timeout or skip changed.
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `bdc583ce4` (base `498b68766`), a
+targeted ten-spec browser run beside another checkout's browser suite (load
+average about 30 to 36, default workers) failed `native: history pages in without a click, opening with a page and paging near the top` on both projects (`:478`). The complete unchanged
+owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
+--base 498b68766` reported the case open. Details and commands:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Second Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `fa5a841ca` (base `498b68766`),
+the recorded `mise run test:browser` rerun (default workers, stopped at its
+30-minute group deadline) failed the mobile case. The complete unchanged owner
+passed alone with two workers in 133.0 s. `mise run flaky:recurrence -- 1602
+--base 498b68766` reported the case open. Details:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.

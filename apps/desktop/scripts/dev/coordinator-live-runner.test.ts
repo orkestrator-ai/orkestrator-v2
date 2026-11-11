@@ -163,13 +163,14 @@ test("every scenario runs by default, each in its own summary, combined per plat
   expect(run.exitCode).toBe(0);
   const tests = (await f.events()).filter((event) => event.task === "playwright");
   expect(tests.map((event) => event.scenarios)).toEqual([
-    "read-only,async,family,status,deliver-now,goal,routing,gap-tools,peer",
+    "read-only,research,async,family,status,deliver-now,goal,routing,gap-tools,peer",
   ]);
   expect(run.results[0]).toMatchObject({
     platform: "claude",
     verdict: "passed",
     scenarios: [
       { scenario: "read-only", verdict: "passed" },
+      { scenario: "research", verdict: "passed" },
       { scenario: "async", verdict: "passed" },
       { scenario: "family", verdict: "passed" },
       { scenario: "status", verdict: "passed" },

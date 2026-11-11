@@ -17,6 +17,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
   // asyncCase has seven sequential step waits.
   const waits: Record<CoordinatorLiveScenario, number> = {
     "read-only": turn,
+    // One turn: a research call or two and the report line.
+    research: turn,
     async: step * 7,
     family: step * 2 + family,
     // Waiter startup uses the turn budget; launch/review/delegation waits use five steps.

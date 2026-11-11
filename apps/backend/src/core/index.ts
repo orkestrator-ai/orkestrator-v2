@@ -4,6 +4,7 @@ import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
+import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -1524,6 +1525,12 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        // Agent-test profiles only: the fan-out's peak concurrency for the live
+        // scale case. Undefined (the no-op observer) everywhere else.
+        ...multiReviewEfficiencyOption({
+          dataDir: options.dataDir,
+          runtimeFlavor: options.runtimeFlavor,
+        }),
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,

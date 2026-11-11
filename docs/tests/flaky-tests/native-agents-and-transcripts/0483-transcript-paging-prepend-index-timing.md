@@ -115,3 +115,44 @@ original tool position` case kept prepend index 1 at
 skipped, one failed in 6.3 m. It was not among the failures of the preparation's
 nine-worker browser suite, which passed it. Root cause remains unconfirmed.
 Status stays open. No assertion, timeout or skip changed.
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Branch `transcript-history-efficiency-60750035e24d-r1` (base `498b68766f5c`, validated at `b0dc43135`): this case failed in the completed rerun of `mise run test:logged -- --name browser -- mise run test:browser` (11 failed, 1,681 passed; full list in [0382](../web-ui/0382-component-browser-parallel-load.md)). The branch changes `TranscriptScrollController.holdPlaceAcrossReflow`, which this owner runs. The complete ToolGroupFold, TranscriptPaging and MailTiles owners then passed together with one worker, with that change in place (exit 0, 337.3 s). `mise run flaky:recurrence -- 0483 --base 498b68766f5c` reported a recurrence. Status stays open. No assertion, timeout or skip changed.
+
+## First-find navigation fix — 2026-11-11
+
+On the `document-find-bug-3a3f9ad04ef2-r1` branch (to-do 6620, base
+`498b68766`), with a find match box that now carries its row
+(`transcript-scroll-controller.ts`),
+`ORKESTRATOR_E2E_PORT=14937 mise run test:logged -- --name scroll-e2e -- bunx playwright test --config e2e/playwright.config.ts VirtuosoFollow.spec.ts TranscriptPaging.spec.ts TranscriptHold.spec.ts FirstFindLands.spec.ts TranscriptListRenders.spec.ts StaticHtmlTranscript.spec.ts NativeFollowStability.spec.ts`
+(default workers) failed one of 128 starts: mobile `native: paging before prose
+in a byte-bounded view holds the original tool position` kept prepend index 1
+at `:138` (107 passed, 20 skipped, 2.9 m). The case does not open find, so the
+changed path is not reached. Rerun alone,
+`ORKESTRATOR_E2E_PORT=14937 mise run test:logged -- --name paging-rerun -- bunx playwright test --config e2e/playwright.config.ts TranscriptPaging.spec.ts:42 --project mobile-chromium --repeat-each 5`
+passed all 25 starts in 70.6 s. `mise run flaky:recurrence -- 0483 --base HEAD`
+reported the case open. No assertion, skip or timeout changed; root cause
+remains unconfirmed.
+
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `bdc583ce4` (base `498b68766`), a
+targeted ten-spec browser run beside another checkout's browser suite (load
+average about 30 to 36, default workers) failed mobile `paging before prose in a byte-bounded view` and mobile `a same-minute page growing row zero` (prepend index at `:138`). The complete unchanged
+owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
+--base 498b68766` reported the case open. Details and commands:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Second Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `fa5a841ca` (base `498b68766`),
+the recorded `mise run test:browser` rerun (default workers, stopped at its
+30-minute group deadline) failed mobile `native: paging before prose holds the
+original tool position` with the prepend index at 1 (`:138`). The complete
+unchanged owner passed alone with two workers in 133.0 s. `mise run
+flaky:recurrence -- 0483 --base 498b68766` reported the case open. Details:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.

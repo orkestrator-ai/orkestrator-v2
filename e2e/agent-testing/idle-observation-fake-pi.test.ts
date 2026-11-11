@@ -66,6 +66,28 @@ describe("scripted fake Pi model", () => {
     ).not.toHaveProperty("background");
   });
 
+  test("calls OpenCode 2's shell tool, which 2.x offers in place of bash", () => {
+    const messages = [{ role: "user", content: warmup }];
+    const openCode2Shell = [
+      {
+        type: "function",
+        function: {
+          name: "shell",
+          parameters: { properties: { command: {}, description: {}, timeout: {} } },
+        },
+      },
+    ];
+    const call = piAssistantMessage({ messages, tools: openCode2Shell }, 1).toolCall!;
+    expect(call.name).toBe("shell");
+    expect(JSON.parse(call.arguments)).toEqual({
+      command: "sleep 5; echo IDLEQA-WARM-1",
+      description: "Run the requested command",
+    });
+    // Without any shell tool on offer the step replies in text.
+    const readOnly = [{ type: "function", function: { name: "read" } }];
+    expect(piAssistantMessage({ messages, tools: readOnly }, 1).toolCall).toBeUndefined();
+  });
+
   test("calls Pi's bash tool for a command, then replies once its result is back", () => {
     const asked = {
       messages: [

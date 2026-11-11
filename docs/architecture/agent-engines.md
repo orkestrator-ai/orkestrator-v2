@@ -1037,8 +1037,14 @@ difference follows from the CLI: `network.allowLocalBinding` is macOS-only,
 and on Linux each command gets its own network namespace whose only way out
 is the proxy, which `NO_PROXY` skips for loopback. So with full network a
 sandboxed command on Linux cannot reach a service on the machine's loopback
-directly (a dev server, a local database); on macOS it can. Agent Info does
-not say so yet ([7563](../todo/agent-engines/7563-claude-linux-sandbox-loopback-under-full-network.md)).
+directly (a dev server, a local database); on macOS it can. On Linux the
+Claude bridge's reported policy for such a session keeps `networkAccess:
+"full"` (true for every host but loopback) and adds a `note` naming the
+exception, which Agent Info shows under the policy
+(`CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE` in
+`bridges/claude-bridge/src/services/claude-query-config.ts`). Orkestrator does
+not work around it: the SDK exposes no way to take loopback out of `NO_PROXY`,
+and a proxy of Orkestrator's own would take over the CLI's network filtering.
 `mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
 either system (to-do 0001 task 9).
 

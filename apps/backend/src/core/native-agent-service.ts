@@ -3345,8 +3345,16 @@ export class NativeAgentService {
     }
   }
 
-  /** Delivery gate; recovers proven-unsent mail before checking its durable fence. */
-  async mailInjectPresence(input: NativeAgentProjectionInput): Promise<MailboxPresence> {
+  /**
+   * Delivery gate; recovers proven-unsent mail before checking its durable fence.
+   * `known.environment` is a read of the environment row the caller made in
+   * the same pass (the presence pass reads each environment once); absent, the
+   * gate reads it itself (todo 7567 task 2).
+   */
+  async mailInjectPresence(
+    input: NativeAgentProjectionInput,
+    known: { environment?: Environment | null } = {},
+  ): Promise<MailboxPresence> {
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -3355,7 +3363,9 @@ export class NativeAgentService {
     const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
     const draftKey = `${input.agent}:${input.environmentId}:${encodeURIComponent(input.logicalSessionKey)}`;
     let [environment, session, queue, draft] = await Promise.all([
-      this.storage.getEnvironment(input.environmentId),
+      known.environment !== undefined
+        ? known.environment
+        : this.storage.getEnvironment(input.environmentId),
       this.storage.getNativeAgentSession(sessionKey),
       this.storage.getPromptQueue(queueKey),
       this.storage.getComposeDraft(draftKey),

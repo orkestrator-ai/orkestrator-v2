@@ -10,7 +10,7 @@ Analysed 2026-11-10 against `main` at `04639b12b` (first analysed 2026-11-06 at
 ### Tasks
 
 1. **Approve a command from the CLI**: `orkestrator session interactions resolve` cannot approve an approval that has no questions. Status: done (2026-11-10).
-2. **One Multi Review stalled 3.5 minutes after its plan was accepted**: seen once in the smoke run, not in 33 later reviews nor in 18 more on 2026-11-10. Status: open (needs reproduction).
+2. **One Multi Review stalled 3.5 minutes after its plan was accepted**: seen once in the smoke run, not in 33 later reviews nor in 18 more on 2026-11-10; recurred on 2026-11-11 (see Assumptions and decisions). Status: open (evidence recorded; read it and close or keep).
 
 ### 1. Approve a command from the CLI
 
@@ -108,7 +108,12 @@ queued prompt, approval, mail, review; no duplicated dispatch). Each run
 still exited 1, because the driver's `workflow-sample` check failed in every
 round on "missing or ambiguous submit_review_preparation -> reviewing" while
 every review reached `ready`; that is a sampling mismatch in the driver,
-filed as [7558](7558-busy-driver-review-preparation-sample.md). The first
+filed as 7558 (retired 2026-11-11): these reruns predate #2063, which
+dropped the build-pipeline-only `submit_review_preparation` pairing
+(`scripts/recurring-live-ab-busy.ts`, pinned by
+`tests/unit/recurring-live-ab-busy.test.ts`); a 150-round busy run on
+2026-11-11 at `83731af28` recorded no `workflow-sample` failure in 150
+reviews. The first
 attempt refused to start the busy phase ("needs the fixture's ready local
 environment") only because the worktree had no CLI build
 (`packages/cli/dist`); `mise run build:cli` fixed it. All four kept profiles
@@ -155,7 +160,24 @@ review's `validationRuns` entry and the kept profile's backend log before
 resetting it. A large `queuedMs` means the host test queue; a small one
 means a missed wake.
 
+### Task 2: a recurrence on 2026-11-11
+
+Recorded during to-do 7562's reproduction run, not a run for this task:
+150 busy rounds (0 to 2 clients, 10 environments, 2,500-file bursts) on
+beelink2 at `83731af28`, with `--keep-profiles`, on a host shared with other
+worktrees' builds. Two of its 150 reviews waited: one review's validation
+plan took 627,639 ms to `reviewing` (launch to `ready` 630,810 ms), with that
+validation run at 623,450 ms queued, 16 ms of command and 624,533 ms in all;
+another run queued 71,309 ms (72,461 ms in all). Every other run queued under
+5.1 s, most under 25 ms. The kept profile's backend log had nothing about
+the review or its validation run around those rounds (no slow command for
+it, one 254 ms main-database commit in the whole run). By this task's own
+criterion, a large `queuedMs` means the host test queue: the command waited
+behind other worktrees' suites in the host-wide scheduler, and no missed
+wake shows. What is left is that judgement: close the task as the host
+queue, or keep it for a wake that the queue would hide.
+
 ## Related
 
 - [0048](0048-recurring-work-qualification.md) task 1: the busy profile run.
-- [7558](7558-busy-driver-review-preparation-sample.md): the driver's review-preparation sample, found by the task 2 reruns.
+- 7558 (retired 2026-11-11): the driver's review-preparation sample, found by the task 2 reruns and already fixed on `main` by #2063.

@@ -122,3 +122,40 @@ load average 61 to 72) failed nine cases of this file in the web group
 This is the first observation where the runner's single-file rerun also
 failed: under heavy host load one rerun is not enough to clear the late
 timer, which still fits the Happy DOM frame hypothesis. Status stays open.
+
+## Recurrence — 2026-11-11 (container probe rerun review repairs), fails alone under load
+
+Observed 2026-11-11 on `container-probe-rerun-6defadbc4752-r1`, base commit
+`498b68766f5c9f357a3a86782406d1e9e0977559`, which contains the fix above
+(`mise run flaky:recurrence -- 9932 --base 498b68766` answered "open. Record
+the failure as a recurrence"). The branch changes container test harnesses,
+the UI perf probe, docs and one assertion in
+`apps/web/src/components/browser/ServiceBrowserTab.test.tsx`; it does not
+touch this file or the transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  (default suite, web package at its default worker count). The host load
+  average was 61–65 on 16 cores from other worktrees' work, and the aggregate
+  runner's scheduler reported 14–16 of 16 slots reserved.
+- **Failure:** three cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`, after the
+  bounded extra settle rounds):
+  - `literal false: a detached reader is not moved when the viewport shrinks` (24.9 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (16.1 ms, 22.4 ms)
+- **Suite counts:** web 14,466 passed and 3 failed; backend 18,370,
+  protocol 5,817, desktop 2,033, web-public 52 and toolchain 135 passed, as
+  did the root, bridge and lockfile groups.
+- **Isolated rerun:** as in the egress name-check observation above, the
+  file **failed alone** too. The aggregate runner's automatic rerun reported
+  `FAILED ALONE (589.5s)` (2 of 14 failed, after waiting 588 s for a slot),
+  and four further one-worker runs at the same load failed 8, 9, 7 and 7 of
+  14 cases with the same assertion
+  (`bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`,
+  three with `NODE_ENV=test`, one without). The extra cases include
+  `indexJumpThenRefresh` (line 140) and `followThenRefresh` (line 177) callers.
+
+At a load average around 60, the late timer is no longer an aggregate-only
+effect: one process on its own leaves a fake timer pending after every
+settle round. That still fits the Happy DOM real-immediate frame hypothesis,
+and it gives a way to reproduce it: run the file alone on a host loaded to
+about four times its core count. No assertion, timeout or skip changed.

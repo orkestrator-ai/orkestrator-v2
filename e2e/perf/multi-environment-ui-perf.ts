@@ -408,6 +408,43 @@ export async function watchWindow(
   );
 }
 
+/** At most this many dialogs are dismissed in one pass, so a dialog that reopens cannot loop. */
+const MAX_DIALOGS_PER_PASS = 5;
+
+/**
+ * Dismisses every visible dialog for this page only, by its "Continue Without"
+ * button or Escape, and appends each title to `dismissed`. Notices can open
+ * over the workspace at any time, not only at startup ("Claude Code Is Not
+ * Logged In" in a credential-free profile, "Docker containers can't reach
+ * Orkestrator" behind a host firewall), and an open alert dialog's overlay
+ * takes every click. The probe calls this before each measured interaction,
+ * outside the measured interval. Returns how many it dismissed.
+ */
+export async function dismissDialogs(
+  page: Page,
+  dismissed: string[],
+  hiddenTimeoutMs = 5_000,
+): Promise<number> {
+  const dialog = page.locator('[role="dialog"]:visible, [role="alertdialog"]:visible').first();
+  const continueWithout = page.getByRole("button", { name: /^Continue Without / }).first();
+  let count = 0;
+  while (count < MAX_DIALOGS_PER_PASS && (await dialog.isVisible())) {
+    const title = await dialog
+      .evaluate((element) => {
+        const labelledBy = element.getAttribute("aria-labelledby");
+        const label = labelledBy ? document.getElementById(labelledBy) : null;
+        return (label ?? element.querySelector("h1, h2, h3"))?.textContent ?? null;
+      })
+      .catch(() => null);
+    dismissed.push((title ?? "untitled").slice(0, 80));
+    count += 1;
+    if (await continueWithout.isVisible()) await continueWithout.click();
+    else await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden", timeout: hiddenTimeoutMs }).catch(() => undefined);
+  }
+  return count;
+}
+
 /** Arms the watcher for one switch; the click itself is a real Playwright click. */
 async function armSwitch(page: Page, name: string): Promise<void> {
   await page.evaluate(
@@ -663,33 +700,11 @@ async function main(): Promise<void> {
     // The one-shot login URL stays in memory and never reaches output.
     const { loginUrl } = profileCommand<{ loginUrl?: unknown }>(options.profile, "dev:login");
     if (typeof loginUrl !== "string") throw new Error("dev:login returned no login URL");
-    // Startup dialogs can open over the workspace: "Claude Code Is Not Logged
-    // In" in a credential-free profile, or "Docker containers can't reach
-    // Orkestrator" behind a host firewall (which this probe never changes; no
-    // agent runs). Some open only once the first environments exist, after the
-    // shell is up, and a modal overlay then swallows every sidebar click. Each
-    // is dismissed for this page only, by its "Continue Without" button or
-    // Escape, whenever one is open: while the shell loads, before the first
-    // click and before each phase. Its title is reported.
-    const startupDialog = page
-      .locator('[role="dialog"]:visible, [role="alertdialog"]:visible')
-      .first();
-    const continueWithout = page.getByRole("button", { name: /^Continue Without / }).first();
-    const dismissOpenDialogs = async () => {
-      for (let attempt = 0; attempt < 5 && (await startupDialog.isVisible()); attempt += 1) {
-        const title = await startupDialog
-          .evaluate((dialog) => {
-            const labelledBy = dialog.getAttribute("aria-labelledby");
-            const label = labelledBy ? document.getElementById(labelledBy) : null;
-            return (label ?? dialog.querySelector("h1, h2, h3"))?.textContent ?? null;
-          })
-          .catch(() => null);
-        dismissedDialogs.push((title ?? "untitled").slice(0, 80));
-        if (await continueWithout.isVisible()) await continueWithout.click();
-        else await page.keyboard.press("Escape");
-        await startupDialog.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => undefined);
-      }
-    };
+    // Dialogs over the workspace (see `dismissDialogs`; this probe never
+    // changes the host firewall and runs no agent) are dismissed for this page
+    // only and their titles reported, here and before each measured click or
+    // lifecycle command.
+    const clearDialogs = () => dismissDialogs(page, dismissedDialogs);
     await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
     const projectToggle = page.getByRole("button", { name: /^(Expand|Collapse) project / }).first();
     // The dev server's transient "Failed to fetch dynamically imported module"
@@ -703,9 +718,7 @@ async function main(): Promise<void> {
           `The app shell never showed the project (dialogs dismissed: ${dismissedDialogs.join(", ") || "none"})`,
         );
       }
-      if (await startupDialog.isVisible()) {
-        await dismissOpenDialogs();
-      } else if (await couldNotConnect.isVisible()) {
+      if ((await clearDialogs()) === 0 && (await couldNotConnect.isVisible())) {
         if (rendererReloads >= 2) throw new Error("The renderer failed to start three times");
         rendererReloads += 1;
         await page.reload({ waitUntil: "domcontentloaded" });
@@ -761,8 +774,8 @@ async function main(): Promise<void> {
       busyContainers[0]!,
     ]).stdout.trim();
 
-    await dismissOpenDialogs();
     const expand = page.getByRole("button", { name: /^Expand project / }).first();
+    await clearDialogs();
     if (await expand.isVisible()) await expand.click();
     for (const environment of environments) {
       await page.getByText(environment.name, { exact: true }).first().waitFor({ timeout: 60_000 });
@@ -772,6 +785,7 @@ async function main(): Promise<void> {
     const coldSelect: Array<number | null> = [];
     const coldSettled: Array<number | null> = [];
     for (const environment of environments) {
+      await clearDialogs();
       const result = await measureSwitch(page, environment.name);
       coldSelect.push(result.selectMs);
       coldSettled.push(result.settledMs);
@@ -788,7 +802,7 @@ async function main(): Promise<void> {
         }
       }
       await sleep(options.settleSeconds * 1000);
-      await dismissOpenDialogs();
+      await clearDialogs();
       const start = hostSample();
       const probeContainerCpuPercent = containerCpu(busyContainers);
 
@@ -797,6 +811,7 @@ async function main(): Promise<void> {
       const selectMs: Array<number | null> = [];
       const settledMs: Array<number | null> = [];
       for (let round = 0; round < options.switches; round += 1) {
+        await clearDialogs();
         const result = await measureSwitch(page, environments[round % environments.length]!.name);
         selectMs.push(result.selectMs);
         settledMs.push(result.settledMs);
@@ -815,6 +830,7 @@ async function main(): Promise<void> {
       const lag = (result: StatusResult) =>
         result.ok && result.visibleMs !== null ? result.visibleMs - result.invokeMs : null;
       for (let cycle = 0; cycle < options.statusCycles; cycle += 1) {
+        await clearDialogs();
         const stopped = await measureStatus(page, target, "stop_environment");
         statusSamples.stopInvokeMs.push(stopped.ok ? stopped.invokeMs : null);
         statusSamples.stopVisibleMs.push(stopped.visibleMs);

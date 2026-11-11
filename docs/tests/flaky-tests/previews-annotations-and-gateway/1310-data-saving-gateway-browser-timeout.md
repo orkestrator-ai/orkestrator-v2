@@ -274,6 +274,40 @@ retry or skip was changed. This establishes intermittency, not its cause.
 The full run and remaining undetermined failures are recorded in
 [9924](../aggregate-validation-runs/9924-auto-pipeline-fix-browser-owners.md).
 
+## Recurrence 2026-11-11 (WebKit-scroll review)
+
+- **Branch and base:** `webkit-scroll-fix-d230c4f38350-r1` at `f239600f2`, base
+  `498b68766f5c9f357a3a86782406d1e9e0977559`. The branch does not touch the
+  spec or the gateway.
+- **Command:** `ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name browser-rerun-2 -- mise run test:browser`
+  on macOS, host load average about 31 to 35 with other worktrees' suites
+  running: 1697 passed, 152 skipped, 1 failed (25.4 min).
+- **Failure:** mobile-chromium, `Test timeout of 60000ms exceeded`, then
+  `browserContext.close: Target page, context or browser has been closed` at
+  `e2e/DataSavingGateway.spec.ts:170`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name data-saving-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts`;
+  exit 0 (23.2 s), both viewport projects.
+- **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
+
+No assertion, deadline, retry or skip was changed. The cause remains
+unconfirmed.
+
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 1310 --base 498b68766` reported `open`.
+The owning spec and its implementation are unchanged on the branch.
+
+Review preparation's nine-worker `mise run test:browser` repeated the mobile
+deadline (60 s, during context cleanup). The unchanged owner passed both
+viewports with one worker in the two-owner rerun:
+
+```sh
+NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flake-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts --workers=1 e2e/TranscriptPaging.spec.ts e2e/DataSavingGateway.spec.ts
+```
+
+Status stays open. No assertion, deadline, retry or skip changed.
+
 ## Launch-override marker review repair — 2026-11-11
 
 On `launch-override-marker-043a84998c41-r1` (base `498b68766`), the mobile case

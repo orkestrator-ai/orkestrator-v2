@@ -237,6 +237,52 @@ describe("mail presence for environments that are not running", () => {
     }
   });
 
+  test("one config read and one environment read a pass, handed to each gate (todo 7567 task 2)", async () => {
+    const { storage, dataDir } = await fixture();
+    const known: Array<{ environmentId: string; environment: unknown }> = [];
+    const service = new AgentMailService(
+      storage,
+      {
+        reconcileMailInject: async () => "unknown",
+        sessionActivitySnapshot: () => "idle",
+        mailInjectPresence: async (input, given = {}) => {
+          known.push({ environmentId: input.environmentId, environment: given.environment });
+          return "idle";
+        },
+        dispatchMailInject: async (input) => ({ outcome: "accepted", requestId: input.requestId }),
+      },
+      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+    );
+    const loadConfig = spyOn(storage, "loadConfig");
+    const listMailboxes = spyOn(storage, "listAgentMailboxes");
+    const getEnvironment = spyOn(storage, "getEnvironment");
+    try {
+      await service.init();
+      loadConfig.mockClear();
+      listMailboxes.mockClear();
+      getEnvironment.mockClear();
+      known.length = 0;
+      await service.refreshPresence();
+      // The listing reuses the pass's config: one revision check, not two.
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+      expect(listMailboxes.mock.calls.every(([options]) => options?.config !== undefined)).toBe(
+        true,
+      );
+      // Each gate takes the row the pass read rather than reading it again.
+      expect(getEnvironment.mock.calls.map(([id]) => id).sort()).toEqual(["recipient", "sender"]);
+      expect(known.map((entry) => entry.environmentId).sort()).toEqual(["recipient", "sender"]);
+      for (const entry of known) {
+        expect((entry.environment as { id?: string } | undefined)?.id).toBe(entry.environmentId);
+      }
+    } finally {
+      loadConfig.mockRestore();
+      listMailboxes.mockRestore();
+      getEnvironment.mockRestore();
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("a tmux delivery hands the presence it read to its dispatch, and none when it read none", async () => {
     const { storage, dataDir } = await fixture();
     try {

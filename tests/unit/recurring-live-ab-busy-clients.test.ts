@@ -3,6 +3,7 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import {
   pageClient,
   playwrightBusyClients,
+  playwrightSoakReader,
   reviewTabIdSuffix,
   toProcessClock,
 } from "../../scripts/recurring-live-ab-busy-clients";
@@ -353,4 +354,107 @@ test("factory opens a review view as its own signed-in context on the environmen
   await client!.close();
   expect(contexts).toEqual(["context-1", "context-2", "closed context-2", "closed context-1"]);
   await factory.close();
+});
+
+test("soak reader closes each context whose sign-in fails and reuses a signed-in page", async () => {
+  let contexts = 0;
+  let closed = 0;
+  let launches = 0;
+  let browserClosed = 0;
+  let signInOk = false;
+  const selected: string[] = [];
+  const tab = {
+    waitFor: async () => {},
+    click: async () => {},
+  };
+  const page = {
+    setDefaultTimeout: () => {},
+    goto: async () => ({ ok: () => signInOk }),
+    screenshot: async () => undefined,
+    getByRole: () => ({
+      first: () => tab,
+      nth: () => tab,
+      count: async () => 2,
+    }),
+    waitForFunction: async () => {},
+  } as unknown as Page;
+  const reader = playwrightSoakReader(
+    "fixture",
+    { browserUrl: "http://127.0.0.1:1234" },
+    undefined,
+    {
+      launch: async () => {
+        launches += 1;
+        return {
+          newContext: async () => {
+            contexts += 1;
+            return {
+              newPage: async () => page,
+              close: async () => {
+                closed += 1;
+              },
+            };
+          },
+          close: async () => {
+            browserClosed += 1;
+          },
+        } as unknown as Browser;
+      },
+      loginPath: () => "/bootstrap",
+      selectEnvironment: async (_page, environment) => {
+        selected.push(environment);
+      },
+    },
+  );
+  await expect(reader.read("fixture")).rejects.toThrow("soak reader: sign-in failed");
+  await expect(reader.read("fixture")).rejects.toThrow("soak reader: sign-in failed");
+  // Every failed sign-in closed its own context; none is left open.
+  expect(contexts).toBe(2);
+  expect(closed).toBe(2);
+  expect(selected).toEqual([]);
+
+  signInOk = true;
+  expect(await reader.read("fixture")).toBe(2);
+  expect(await reader.read("other")).toBe(2);
+  // The signed-in page is reused rather than opening a context per read.
+  expect(contexts).toBe(3);
+  expect(closed).toBe(2);
+  expect(selected).toEqual(["fixture", "other"]);
+
+  await reader.close();
+  expect(closed).toBe(3);
+  expect(browserClosed).toBe(1);
+  expect(launches).toBe(1);
+});
+
+test("soak reader closes its context when sign-in throws before a response", async () => {
+  let closed = 0;
+  const reader = playwrightSoakReader(
+    "fixture",
+    { browserUrl: "http://127.0.0.1:1234" },
+    undefined,
+    {
+      launch: async () =>
+        ({
+          newContext: async () => ({
+            newPage: async () =>
+              ({
+                setDefaultTimeout: () => {},
+                goto: async () => {
+                  throw new Error("net::ERR_CONNECTION_REFUSED");
+                },
+              }) as unknown as Page,
+            close: async () => {
+              closed += 1;
+            },
+          }),
+          close: async () => {},
+        }) as unknown as Browser,
+      loginPath: () => "/bootstrap",
+    },
+  );
+  await expect(reader.read("fixture")).rejects.toThrow("ERR_CONNECTION_REFUSED");
+  expect(closed).toBe(1);
+  await reader.close();
+  expect(closed).toBe(1);
 });

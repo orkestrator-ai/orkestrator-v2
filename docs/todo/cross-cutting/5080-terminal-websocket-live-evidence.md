@@ -44,6 +44,6 @@ What was left of `docs/reports/efficiency-logging-database/0100-e19-terminal-web
 ## Related
 
 - to-do 1202 efficiency follow-ups, tasks 3 and 11 (retired 2026-11-10)
-- [0052 remote client bandwidth](../transcripts-and-observation/0052-remote-client-bandwidth.md) (terminal transport choice)
+- 0052 remote client bandwidth (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md#what-is-settled)): the terminal transport stays the shared SSE stream
 - [Version compatibility](../../architecture/version-compatibility.md#register)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 2, the user part of task 3: a real remote backend over Tailscale Serve and a phone) moved there on 2026-11-10.

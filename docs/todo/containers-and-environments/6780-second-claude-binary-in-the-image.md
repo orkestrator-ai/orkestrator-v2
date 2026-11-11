@@ -80,7 +80,7 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 ## Related
 
 - to-do 1202 efficiency follow-ups, task 14 (retired 2026-11-10)
-- [0022 container resource budgets](0022-container-resource-budgets-and-performance.md)
+- To-do 0022, container resource budgets (retired 2026-11-11): [Built-in default](../../architecture/container-lifecycle.md#built-in-default) and [Optimisations measured and not taken](../../development/container-qualification.md#optimisations-measured-and-not-taken)
 - Efficiency, logging and database outcome (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), closing note for 0693
 - [`upgrade-agents.md`](../../development/upgrade-agents.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the maintainer's choice for the second binary) moved there on 2026-11-10.

@@ -1301,14 +1301,17 @@ function MultiReviewOverviewTab({
           {splitDetails ? (
             // Keep the transcript mounted as validation arrives. Split only
             // once both columns fit at a readable width; stack otherwise.
+            // The split turns the column into a row rather than switching to
+            // grid: WebKit rebuilds the boxes under a `display` change and puts
+            // a container query scroller (the transcript tail) back at the top.
             <div
               data-testid="multi-review-step-split"
-              className={cn(
-                "flex flex-1 flex-col gap-4",
-                details && "@min-[88rem]:grid @min-[88rem]:grid-cols-2",
-              )}
+              className={cn("flex flex-1 flex-col gap-4", details && "@min-[88rem]:flex-row")}
             >
-              <div className="min-w-0 @min-[88rem]:self-start" hidden={!details}>
+              <div
+                className="min-w-0 @min-[88rem]:flex-[1_1_0px] @min-[88rem]:self-start"
+                hidden={!details}
+              >
                 {details}
               </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">{transcriptTabs}</div>

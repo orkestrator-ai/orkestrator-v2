@@ -770,8 +770,8 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
 - [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test
   temp-directory leaks.
 - Other residuals from the 2026-09-15 security review: restricted containers
-  still need `NET_ADMIN`
-  ([0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  needed `NET_ADMIN`; a gateway runtime no longer has it
+  ([egress gateway](../../architecture/container-lifecycle.md#egress-gateway-egress-gateway1)).
   Renderer windows now run `sandbox: true` on CommonJS preloads
   ([renderer-security.md](../../architecture/renderer-security.md#os-sandbox)).
 - Living-doc drift: the flake registry reuses 29 IDs across 74 case files:

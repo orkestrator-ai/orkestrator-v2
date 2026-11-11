@@ -54,7 +54,9 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * requests that name no workflow and checks which one the coordinator chose;
  * `surfaces` calls each worker-surface tool once on a worker of this node and
  * has the root-changes approval accepted in the dialog (Claude only, see
- * `coordinator-live-surfaces.ts`); `peer` drives two ordinary environments' mail with Wake peers on, and runs
+ * `coordinator-live-surfaces.ts`); `gap-tools` calls each tool from the
+ * coordinator gap review once against one worker
+ * (`coordinator-live-gap-tools.ts`); `peer` drives two ordinary environments' mail with Wake peers on, and runs
  * last because it is the one case that changes the messaging defaults. Each
  * writes its own summary, and the platform's verdict combines them.
  */
@@ -67,6 +69,7 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "goal",
   "routing",
   "surfaces",
+  "gap-tools",
   "peer",
 ] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];

@@ -396,17 +396,20 @@ that would have become ready a few seconds later had to be retried by hand.
 daemon (the CLI's "cannot connect" wording, or a timeout) as unknown, and the
 wait keeps polling until its deadline; a failed `inspect` for any other
 reason (a container that no longer exists) still reads as exited. Unit
-tests in `container-readiness.test.ts` cover a daemon that returns and one
-that never does (a `timed-out` refusal, never `container-exited`); the first
-fails without the fix.
+tests in `container-readiness.test.ts` cover a daemon that returns, one that
+never does (a `timed-out` refusal, never `container-exited`), and an
+`inspect` that hangs past its timeout; the first and last fail without the
+fix.
 
-**CI.** `container-live-qualification.yml` gains a last step, "Live Docker
-daemon restart (C09, C15)", that runs both scenarios with
+**CI.** `container-live-qualification.yml` gains two last steps, "Live
+Docker daemon restart during launch (C09)" and "... during rebuild copy
+(C15)", one per scenario so a failure in one still reports the other. They run
+the scenarios with
 `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND="sudo systemctl restart docker"`
 (the runner's own daemon, `live-restore` off) and a 1 GiB copy, so the
-restart is qualified weekly on both architectures. It runs after every other
-step so no other suite shares a restarted daemon. Its first run is this
-change's pull request; it had not run when this was written.
+restart is qualified weekly on both architectures. They run after every other
+step so no other suite shares a restarted daemon. Their first run is this
+change's pull request; they had not run when this was written.
 
 **Also run.** The whole readiness file on the rootful daemon: 9/10, the
 tenth being the C22 host-service reply, which reports itself INCOMPLETE

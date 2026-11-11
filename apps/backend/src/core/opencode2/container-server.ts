@@ -110,7 +110,7 @@ export function openCode2ContainerPlugins(): ReadonlyArray<{ id: string; source:
   ];
 }
 
-/** The container's copy of the user's global OpenCode configuration, which 1.x reads. */
+/** The container's copy of the user's global OpenCode configuration (OpenCode's default global directory). */
 export const OPENCODE_CONTAINER_USER_CONFIG_DIR = "/home/node/.config/opencode";
 
 /** Mirrors the user's configuration into the 2.x config directory (`user-config.ts`). */

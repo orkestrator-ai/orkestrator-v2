@@ -186,15 +186,14 @@ function readOnlyBoundary(platform: AgentPlatform, host: AgentEnforcementHost): 
       // switched off by the workspace.
       return { tier: "enforced" };
     case "opencode":
-      // One tier for both lines, because conversations started before the
-      // OpenCode 2 preview stay on 1.x. A coordinator on 2.x additionally
-      // runs without the checkout's project configuration and behind a
-      // server-side tool gate (backend `opencode2/coordinator.ts`), qualified
-      // with a scripted model only; see coordinator.md "Provider qualification".
+      // A coordinator runs without the checkout's project configuration and
+      // behind a server-side tool gate (backend `opencode2/coordinator.ts`),
+      // qualified with a scripted model only, so the tier stays
+      // provider-configured; see coordinator.md "Provider qualification".
       return {
         tier: "provider-configured",
         reason:
-          "OpenCode denies mutating tools through its own permission rules, but loads the checkout's project configuration. A coordinator started under the OpenCode 2 preview runs without it, behind a server-side gate that is not yet qualified with a live model.",
+          "OpenCode denies mutating tools through its own permission rules and a server-side gate, and a coordinator runs without the checkout's project configuration. The gate is not yet qualified with a live model.",
       };
     case "cursor":
       return {

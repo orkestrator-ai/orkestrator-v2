@@ -14,7 +14,7 @@
  *   must be rebuilt;
  * - on an `opencode2-launch=1` image, started by the root-owned launcher from
  *   root's binary and configuration, with its listening socket recorded
- *   (`opencode2-container-launch.ts`), as 1.x is; on an older image, by
+ *   (`opencode2-container-launch.ts`), as 1.x was; on an older image, by
  *   `buildOpenCode2ContainerStartScript` from node's login shell. Either way
  *   the password goes on stdin to a root-only file (`opencode2-token`) and to
  *   the server alone, the credential plugin keeps it from the agent's tools,

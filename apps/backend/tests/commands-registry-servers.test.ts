@@ -6,6 +6,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { bridgeRestarts } from "../src/core/bridge-restarts.js";
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
+import { buildRestrictContainerClaudeCredentialCommand } from "../src/core/agent-accounts-containers.js";
 
 import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";
@@ -1478,7 +1479,8 @@ exit 0
         const log = await fs.readFile(logs.exec, "utf8");
         const reconcile = log.indexOf("rm -f /home/node/.claude/.credentials.json");
         const stamp = log.indexOf(`printf '%s' '${accountId}'`);
-        const restrict = log.indexOf("let changed = false");
+        // The whole restrict command (refresh tokens stripped in place), as piped.
+        const restrict = log.indexOf(buildRestrictContainerClaudeCredentialCommand());
         const launch = log.indexOf(
           boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log"),
         );

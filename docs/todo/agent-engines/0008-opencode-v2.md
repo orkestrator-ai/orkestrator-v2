@@ -2289,6 +2289,8 @@ What exists now:
   stays `provider-configured`; the reason in `capability-enforcement.ts` now
   says a coordinator under the preview runs without project configuration
   behind a server-side gate that is not yet qualified with a live model.
+  (Reworded on 2026-11-11 when 1.x was retired: every OpenCode coordinator
+  now runs that way, so the reason no longer mentions the preview.)
 
 Decisions:
 

@@ -356,7 +356,7 @@ export class OpenCode2SessionFeatures {
     const todos = history ? openCode2TodoCount(history.rows) : undefined;
     return {
       summary: {
-        state: "OpenCode 2 preview",
+        state: "Running",
         ...(todos === undefined ? {} : { todos }),
         ...(commands ? { commands: commands.commands.length } : {}),
       },

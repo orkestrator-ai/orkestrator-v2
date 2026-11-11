@@ -4,10 +4,12 @@ import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-
 import {
   applyRendererLogLevel,
   canOfferDeveloperTools,
+  canOfferWebInspector,
   DEBUG_LOG_STORAGE_KEY,
   readDebugPreference,
   rendererDebugLoggingActive,
   reportRendererDebugLogging,
+  reportWebInspectable,
   setRendererDebugPreference,
 } from "./debug-log";
 
@@ -119,6 +121,25 @@ describe("the Settings switch and the desktop report", () => {
     expect(canOfferDeveloperTools({})).toBe(false);
     expect(() => reportRendererDebugLogging({})).not.toThrow();
     expect(() => reportRendererDebugLogging(undefined)).not.toThrow();
+  });
+
+  test("the iOS shell hears the same state for Safari's Web Inspector; elsewhere nothing", () => {
+    const setWebInspectable = mock(async (_enabled: boolean) => true);
+    localStorage.setItem(DEBUG_LOG_STORAGE_KEY, "1");
+    applyRendererLogLevel();
+    reportWebInspectable({ setWebInspectable });
+    localStorage.removeItem(DEBUG_LOG_STORAGE_KEY);
+    applyRendererLogLevel();
+    reportWebInspectable({ setWebInspectable });
+    expect(setWebInspectable.mock.calls.map(([enabled]) => enabled)).toEqual([true, false]);
+    expect(canOfferWebInspector({ setWebInspectable })).toBe(true);
+    expect(canOfferWebInspector({})).toBe(false);
+    expect(canOfferWebInspector(undefined)).toBe(false);
+    const rejecting = mock(async () => {
+      throw new Error("older app");
+    });
+    expect(() => reportWebInspectable({ setWebInspectable: rejecting })).not.toThrow();
+    expect(() => reportWebInspectable({})).not.toThrow();
   });
 });
 

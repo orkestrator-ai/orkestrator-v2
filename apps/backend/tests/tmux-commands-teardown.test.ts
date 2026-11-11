@@ -10,6 +10,7 @@ import {
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { QUIET_ENVIRONMENT_RECHECK_MS } from "../src/core/tmux-runtime";
 import { TmuxBackend } from "../src/core/tmux-backend";
+import type { TmuxSession } from "../src/core/tmux-session-manager";
 import { existsSync, promises as fs } from "node:fs";
 import {
   readHostTmuxSessions,
@@ -865,6 +866,163 @@ describe("orphan sweep of quiet environments", () => {
       } finally {
         nowSpy.mockRestore();
         await fs.rm(path.join(alive, orphanName), { force: true });
+      }
+    });
+  });
+
+  // Sweeps one minute later and reports whether it listed tmux sessions.
+  const sweepListing = async (
+    handlers: ReturnType<typeof createHandlers>,
+    context: Record<string, unknown>,
+    log: string,
+    advance: () => void,
+  ): Promise<boolean> => {
+    await fs.writeFile(log, "");
+    advance();
+    await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context)).resolves.toEqual({
+      reaped: 0,
+      skipped: false,
+    });
+    return (await fs.readFile(log, "utf8")).includes("list-sessions");
+  };
+
+  test("a hook cleanup that did not finish is retried next minute, not cached as quiet", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = sweepContext(environment);
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      const removeDir = spyOn(TmuxBackend.prototype, "tryRemoveDir");
+      const removeFile = spyOn(TmuxBackend.prototype, "tryRemoveFile");
+      const sweep = () => sweepListing(handlers, context, log, () => (now += 60_001));
+      try {
+        // The runtime root is still there: retried next minute.
+        removeDir.mockResolvedValueOnce(false);
+        expect(await sweep()).toBe(true);
+        expect(removeDir).toHaveBeenCalledTimes(1);
+
+        // The settings backup is still there: retried again.
+        removeFile.mockResolvedValueOnce(false);
+        expect(await sweep()).toBe(true);
+        expect(removeDir).toHaveBeenCalledTimes(2);
+
+        // A removal that throws is not a finished cleanup either.
+        removeFile.mockRejectedValueOnce(new Error("rm failed"));
+        expect(await sweep()).toBe(true);
+
+        // A cleanup that finishes ends the retries.
+        expect(await sweep()).toBe(true);
+        const removalsAfterSuccess = removeDir.mock.calls.length;
+        expect(await sweep()).toBe(false);
+        expect(removeDir).toHaveBeenCalledTimes(removalsAfterSuccess);
+      } finally {
+        removeDir.mockRestore();
+        removeFile.mockRestore();
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  test("a session registered while the sweep runs makes the quiet record it writes stale", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = sweepContext(environment);
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      const sessions = harnessRuntime().tmux.sessions;
+      const exec = TmuxBackend.prototype.exec;
+      let raced = false;
+      const spy = spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (
+        this: TmuxBackend,
+        ...args: Parameters<TmuxBackend["exec"]>
+      ) {
+        if (!raced && args[0][0] === "tmux" && args[0][1] === "list-sessions") {
+          // A start registers (and here also drops) a session after the sweep
+          // read the generation but before it decides the environment is quiet.
+          raced = true;
+          const stub = { environmentId: environment.id } as unknown as TmuxSession;
+          sessions.insert(environment.id, "tab-mid-sweep", stub);
+          sessions.remove(environment.id, "tab-mid-sweep");
+        }
+        return exec.apply(this, args);
+      });
+      const sweep = () => sweepListing(handlers, context, log, () => (now += 60_001));
+      try {
+        expect(await sweep()).toBe(true);
+        expect(raced).toBe(true);
+        // The record that sweep wrote predates the insert, so it is not trusted.
+        expect(await sweep()).toBe(true);
+        expect(await sweep()).toBe(false);
+      } finally {
+        spy.mockRestore();
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  test("a deleted environment's quiet record is pruned", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = sweepContext(environment);
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      const advance = () => (now += 60_001);
+      try {
+        expect(await sweepListing(handlers, context, log, advance)).toBe(true);
+        expect(await sweepListing(handlers, context, log, advance)).toBe(false);
+
+        // The environment is gone for one sweep. If it comes back under the
+        // same id it is a new environment and must be swept again.
+        const deleted = {
+          ...context,
+          storage: { ...context.storage, loadEnvironments: async () => [] },
+        };
+        expect(await sweepListing(handlers, deleted, log, advance)).toBe(false);
+        expect(await sweepListing(handlers, context, log, advance)).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  test("a session a pane layout still references keeps the environment swept", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
+      const tabId = "tab-referenced";
+      const referencedName = tmuxSessionName(environment.id, tabId);
+      await fs.mkdir(alive, { recursive: true });
+      await fs.writeFile(path.join(alive, referencedName), "");
+      const base = sweepContext(environment);
+      const context = {
+        ...base,
+        storage: {
+          ...base.storage,
+          loadPaneLayoutsForReconciliation: async () => ({
+            available: true,
+            layouts: {
+              [environment.id]: {
+                root: { kind: "leaf", tabs: [{ type: "claude-tmux", id: tabId }] },
+              },
+            },
+          }),
+        },
+      };
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      try {
+        for (let sweep = 0; sweep < 3; sweep += 1) {
+          expect(
+            await sweepListing(handlers, context, log, () => (now += 60 * 60 * 1_000 + 60_001)),
+          ).toBe(true);
+        }
+        expect(existsSync(path.join(alive, referencedName))).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+        await fs.rm(path.join(alive, referencedName), { force: true });
       }
     });
   });

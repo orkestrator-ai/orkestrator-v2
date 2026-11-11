@@ -711,10 +711,9 @@ export function registerTmuxBackendCommands(
             path.join(runtimeRootPrefixForContext(context), environment.id),
             workspace,
           );
-          const uninstalled = await uninstallWorkspaceHooks(backend, hookPaths).then(
-            () => true,
-            () => false,
-          );
+          // Only a verified cleanup ends the retries: a failed restore or a
+          // backup or runtime root still present is swept again next minute.
+          const uninstalled = await uninstallWorkspaceHooks(backend, hookPaths).catch(() => false);
           if (uninstalled)
             tmux.markOrphanSweepQuiet(environment.id, backendIdentity, generation, now);
         }

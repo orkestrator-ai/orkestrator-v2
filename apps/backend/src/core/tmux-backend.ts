@@ -294,6 +294,35 @@ export class TmuxBackend {
     await this.exec(["rm", "-rf", dirPath]);
   }
 
+  /**
+   * Removes a file and reports whether it is gone (an absent file counts).
+   * Unlike {@link removeFile}, a failed `rm` or an unreachable container
+   * answers `false` rather than passing silently, for callers that must know
+   * the cleanup happened before they stop retrying it.
+   */
+  async tryRemoveFile(filePath: string): Promise<boolean> {
+    if (this.kind === "local") {
+      return await fs.rm(filePath, { force: true }).then(
+        () => true,
+        () => false,
+      );
+    }
+    const out = await this.exec(["rm", "-f", filePath]).catch(() => null);
+    return out?.status === 0;
+  }
+
+  /** {@link tryRemoveFile} for a directory tree. */
+  async tryRemoveDir(dirPath: string): Promise<boolean> {
+    if (this.kind === "local") {
+      return await fs.rm(dirPath, { recursive: true, force: true }).then(
+        () => true,
+        () => false,
+      );
+    }
+    const out = await this.exec(["rm", "-rf", dirPath]).catch(() => null);
+    return out?.status === 0;
+  }
+
   async ensureDir(dirPath: string): Promise<void> {
     if (this.kind === "local") {
       await fs.mkdir(dirPath, { recursive: true });

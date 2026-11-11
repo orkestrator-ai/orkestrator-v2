@@ -489,24 +489,6 @@ export function stoppedRuntimeStatusIfUnchanged(
   return { ...latest, status: "stopped", updatedAt };
 }
 
-export type ProfileSeedDependencies = {
-  seedModelCatalogCaches?: typeof seedInstalledModelCatalogCaches;
-  seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
-  seedAgentToolchains?: typeof seedInstalledAgentToolchains;
-  prefetchAgentToolchains?: typeof prefetchAgentToolchains;
-  log?: (message: string) => void;
-  warn?: (message: string) => void;
-};
-
-/**
- * Pre-populate an isolated profile from the host installation, before Electron.
- *
- * Only `agent-test` seeds anything: an ordinary `dev` run uses the durable
- * per-installation state and has nothing to copy into. Electron downloads
- * whatever is still missing, so this must complete first — Cursor and Grok have
- * no PATH fallback, and the difference between seeding and downloading is
- * minutes of startup, not whether the profile works.
- */
 /**
  * The Vite dev server's environment. A launcher shell may descend from a
  * production backend or build shell that set `NODE_ENV=production`; Vite then
@@ -533,6 +515,24 @@ export function rendererDevServerEnv(
   return env;
 }
 
+export type ProfileSeedDependencies = {
+  seedModelCatalogCaches?: typeof seedInstalledModelCatalogCaches;
+  seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
+  seedAgentToolchains?: typeof seedInstalledAgentToolchains;
+  prefetchAgentToolchains?: typeof prefetchAgentToolchains;
+  log?: (message: string) => void;
+  warn?: (message: string) => void;
+};
+
+/**
+ * Pre-populate an isolated profile from the host installation, before Electron.
+ *
+ * Only `agent-test` seeds anything: an ordinary `dev` run uses the durable
+ * per-installation state and has nothing to copy into. Electron downloads
+ * whatever is still missing, so this must complete first — Cursor and Grok have
+ * no PATH fallback, and the difference between seeding and downloading is
+ * minutes of startup, not whether the profile works.
+ */
 export async function seedAgentTestProfileState(
   profile: RuntimeProfile,
   flavor: "development" | "agent-test",

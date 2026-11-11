@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (288 items): run each check under
+1. **Manual tests and live checks** (289 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -78,8 +78,8 @@ agent can apply it.
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
-| Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 288 | 53 |
+| Transcripts, observation and bandwidth | 24 | 3 |
+| **Total** | 289 | 53 |
 
 ## Outstanding work
 
@@ -627,6 +627,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[5380](../transcripts-and-observation/5380-bearer-terminal-stream-live-evidence.md) task 2: which real routes still use HTTP/1.1.** Alongside 0052's Tailscale Serve run, open the web client through a real Tailscale Serve route and through the hosted client, and read `nextHopProtocol` from each client's boot metrics (`sendBootMetrics` in `apps/web/src/lib/native/web-gateway.ts`, posted to `/client-metrics`). Record: in 5380's Current state, the protocol each route negotiated (`http/1.1`, `h2` or `h3`).
 - [ ] **5700 (retired) task 1: one real Claude mail delivery into a tmux tab.** On an isolated profile (`mise run dev:test --profile tmux-mail-qa --fixture --credential-source claude --agent-platforms claude`), open a Claude tmux tab, let it go idle, and deliver one agent mail to it (for example `send_message` from a second tab's agent); this may spend one provider turn. Check that the tmux chat draws the delivered mail as a mail tile, and that the resume dialog does not title the session with the envelope. Record: reply to the coordinator with tile or raw text; if raw, the content-free shape of the stored row (for example a prefix before `<orkestrator-peer-message`). Behaviour: [agent-messaging.md](../../architecture/agent-messaging.md#budgets).
 - [ ] **[6260](../transcripts-and-observation/6260-projection-hashing-measurements.md) task 3: how often a part-trimmed head streams in real use.** On an isolated `dev:test` profile with Codex credentials, run one long real Codex turn whose head row grows past the 512 KiB window, count recovery reads per streaming turn (exact head-row recovery is limited to one provider read a second per view, `PROGRESSIVE_HYDRATION_SETTLE_MS`) and watch whether the view moves about once a second. Record: in 6260's task 3 Investigation, recovery reads per turn, what the view did, and how often your real sessions reach a part-trimmed head; or record that you prefer a content-free recovery-read counter instead of a billed turn.
+- [ ] **[7100](../transcripts-and-observation/7100-long-soak-follow-ups.md) task 2: a Linux node whose agent can reach Docker, for the container long soak.** beelink2's agent account cannot reach Docker (it is not in the `docker` group, and RootlessKit is not installed for `mise run docker:disposable`), so the soak cannot start there. Either let an agent use a Docker daemon (install RootlessKit on beelink2 so `docker:disposable` can start a rootless daemon, or name a fleet node whose agent already reaches Docker; adding an account to the `docker` group is root-equivalent, so decide that deliberately), or run the soak yourself with the command in 7100 task 2 on such a host and `mise run dev:stop`/`dev:reset` its `rw-ctrsoak` profiles if the driver did not. Record: the node (or "ran it myself" with the host), and for a run of your own its output JSON path, cycles completed, any failed steps and the footprint trend, in 7100 task 2's Investigation; an agent then runs or reads the soak.
 
 ### Decisions, approvals and outward actions
 

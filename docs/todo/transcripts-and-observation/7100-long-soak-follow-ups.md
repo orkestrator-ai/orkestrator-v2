@@ -10,7 +10,7 @@ at `281de1a17`), from the long soak of
 ### Tasks
 
 1. **Release a deleted environment's projection caches**: environment deletion left every session's cached view, revision counter, epoch and projected rows resident. Status: done (2026-11-06; see Assumptions and decisions).
-2. **Container lifecycle in a long soak**: the long soak ran local environments only, because the host's Docker address pools were full. Status: open (needs a node whose agent can reach Docker; beelink2's cannot, see the task).
+2. **Container lifecycle in a long soak**: the long soak ran local environments only, because the host's Docker address pools were full. Status: open (depends on 7568: 7100 task 2, a node whose agent can reach Docker; beelink2's cannot, see the task).
 3. **Projection maps with no eviction**: three per-session maps of the native projection are emptied only by an invalidation or shutdown. Status: done (2026-11-11).
 4. **A soak with a browser reader**: no client read session transcripts during the soak, so the progressive-read caches stayed at zero. Status: done (2026-11-11).
 
@@ -38,7 +38,7 @@ at `281de1a17`), from the long soak of
 
 **Context.** On beelink, 29 of the daemon's 34 networks were unattached `ork-<owner>-reach-probe-net` networks created between 2026-10-31 and 2026-11-02 by other backends, so `dev:test` failed with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. Removing them is the user's call (to-do 0241, retired 2026-11-10; the sweep is `mise run disk:report -- --fix probe-networks`, see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)). This work may remove only what it created, and network pruning is banned. Full pools no longer block a run: the test-only network shim (`apps/desktop/scripts/dev/docker-qualification-bin`, first on `PATH` with `ORKESTRATOR_QUALIFICATION_DOCKER`; see [container qualification](../../development/container-qualification.md)) retries a labelled `network create` on an unrouted /29.
 
-**Investigation.** The driver already takes `--soak-environments local,container --fixture-environments local,container`; nothing else is missing. The 10-cycle container soak of 2026-10-25 left no leaked footprint. On 2026-11-11 the run could not start on beelink2: the agent's user there is not in the `docker` group (`/var/run/docker.sock` is `root:docker` 0660, so every call through the shim answers `permission denied`), and `mise run docker:disposable` needs RootlessKit, which is not installed. A rootful nested daemon needs the outer daemon too. The run therefore needs a fleet node whose agent can reach a Docker daemon, with the shim on `PATH`:
+**Investigation.** The driver already takes `--soak-environments local,container --fixture-environments local,container`; nothing else is missing. The 10-cycle container soak of 2026-10-25 left no leaked footprint. On 2026-11-11 the run could not start on beelink2: the agent's user there is not in the `docker` group (`/var/run/docker.sock` is `root:docker` 0660, so every call through the shim answers `permission denied`), and `mise run docker:disposable` needs RootlessKit, which is not installed. A rootful nested daemon needs the outer daemon too. The run therefore needs a fleet node whose agent can reach a Docker daemon, with the shim on `PATH`. Granting that access (installing RootlessKit, or a rootful daemon an agent may use) is the user's call, so it is the checklist item [7568](../manual-test/7568-manual-test-checklist.md) (7100 task 2); once a node is named, an agent runs:
 
 ```bash
 env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
@@ -202,7 +202,12 @@ rows) and change tracking's `deletedEnvironments` (1 to 40, one per deleted
 environment). None grew by a session that had gone quiet. Backend RSS was 247
 MiB before and 393 MiB after. Both profiles were reset by the driver.
 
+### Task 2: waits on the checklist (2026-11-11)
+
+The container soak itself is agent work, but no node this agent can use reaches Docker, and giving an account Docker access (RootlessKit on beelink2, or the rootful daemon) is a host change only the user may make ([Human-only work](../../README.md#human-only-work)). The access is therefore a checklist item in 7568, and this file is `blocked` on it rather than retired, because the run and its reading stay agent work once a node is named.
+
 ## Related
 
+- [7568-manual-test-checklist.md](../manual-test/7568-manual-test-checklist.md): 7100 task 2, a node whose agent can reach Docker.
 - [0048-recurring-work-qualification.md](0048-recurring-work-qualification.md), task 10.
 - To-do 0241 (retired 2026-11-10): the probe-network sweep, described in [disk usage](../../development/disk-usage.md#what-you-clean-yourself).

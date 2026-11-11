@@ -20,13 +20,17 @@ import {
   sweepStalePreviewScratch,
 } from "./preview-supervisor.js";
 
+const FAKE_WORKER = path.join(import.meta.dir, "fixtures/fake-preview-worker.ts");
+/** The fake worker exits once this process, its launcher, is gone. */
+const FAKE_WORKER_ARGS = [FAKE_WORKER, `--fake-launcher-pid=${process.pid}`];
+
 for (const source of ["split-utf8", "malformed", "output-limit"]) {
   test(`stdout framing: ${source}`, async () => {
     const worker = superviseWorker(
       {
         isolation: "process",
         command: process.execPath,
-        args: [path.join(import.meta.dir, "fixtures/fake-preview-worker.ts")],
+        args: FAKE_WORKER_ARGS,
       },
       { job: { kind: "mermaid", source, theme: "light" } } as Parameters<typeof superviseWorker>[1],
       { workerWallMs: 5000, readinessHardMs: 3000, mermaidRenderMs: 3000, cleanupGraceMs: 100 },
@@ -53,7 +57,7 @@ test("a process worker's scratch is named for its backend and removed after a ve
     {
       isolation: "process",
       command: process.execPath,
-      args: [path.join(import.meta.dir, "fixtures/fake-preview-worker.ts")],
+      args: FAKE_WORKER_ARGS,
     },
     { job: { kind: "mermaid", source: "split-utf8", theme: "light" } } as Parameters<
       typeof superviseWorker
@@ -160,7 +164,7 @@ test("startup recovery checks real process identity and preserves the live backe
     {
       isolation: "process",
       command: process.execPath,
-      args: [path.join(import.meta.dir, "fixtures/fake-preview-worker.ts")],
+      args: FAKE_WORKER_ARGS,
       scratchRoot: root,
     },
     { job: { kind: "mermaid", source: "hang", theme: "light" } } as Parameters<
@@ -338,9 +342,9 @@ test("a fake worker whose launcher has died exits with its grandchild (0248)", a
       "sh",
       [
         "-c",
-        '"$0" "$1" <"$2" >"$3" 2>/dev/null & echo $!; while [ ! -s "$3" ]; do sleep 0.05; done',
+        '"$0" "$1" --fake-launcher-pid=$$ <"$2" >"$3" 2>/dev/null & echo $!; while [ ! -s "$3" ]; do sleep 0.05; done',
         process.execPath,
-        path.join(import.meta.dir, "fixtures/fake-preview-worker.ts"),
+        FAKE_WORKER,
         job,
         out,
       ],
@@ -361,6 +365,45 @@ test("a fake worker whose launcher has died exits with its grandchild (0248)", a
   } finally {
     // Only processes this test started, by the PIDs it recorded.
     for (const pid of pids) if (isRunning(pid)) process.kill(pid, "SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("a fake worker whose launcher died before it started exits at once (0248)", async () => {
+  // The launcher exits before the worker's module runs, so the worker is
+  // already reparented when it starts. Its own `process.ppid` would then name
+  // init, never change, and a `hang` job would run forever; the PID the
+  // launcher passed is what tells it the launcher is gone. `$$` in the
+  // subshell is still the outer shell's PID, and `exec` makes `$!` the worker.
+  const dir = mkdtempSync(path.join(tmpdir(), "ork-fake-orphan-early-"));
+  let worker = 0;
+  try {
+    const job = path.join(dir, "job.json");
+    const out = path.join(dir, "out.ndjson");
+    writeFileSync(job, JSON.stringify({ job: { kind: "mermaid", source: "hang" } }));
+    const launcher = spawnSync(
+      "sh",
+      [
+        "-c",
+        '( sleep 0.3; exec "$0" "$1" --fake-launcher-pid=$$ <"$2" >"$3" 2>/dev/null ) >/dev/null 2>&1 & echo $!',
+        process.execPath,
+        FAKE_WORKER,
+        job,
+        out,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    worker = Number(launcher.stdout.trim());
+    expect(worker).toBeGreaterThan(0);
+
+    const deadline = Date.now() + 10_000;
+    while (isRunning(worker) && Date.now() < deadline) await Bun.sleep(50);
+    expect(isRunning(worker)).toBe(false);
+    // It left before reading its job, so it never announced a launch.
+    expect(existsSync(out) ? readFileSync(out, "utf8") : "").toBe("");
+  } finally {
+    // Only the process this test started, by the PID it recorded.
+    if (worker > 0 && isRunning(worker)) process.kill(worker, "SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
 }, 20_000);

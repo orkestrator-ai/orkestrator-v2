@@ -14,13 +14,24 @@
  * in-use check then keeps too). One was found 13 hours after its test died
  * (0248). So the worker leaves, with its grandchild, once the process that
  * started it is gone.
+ *
+ * The launcher passes its own PID as `--fake-launcher-pid=<pid>` (every test
+ * that starts this fixture does). Reading `process.ppid` here instead would
+ * be too late: a launcher that died between spawn and this module running has
+ * already handed the worker to init, which would then be recorded as the
+ * parent and never change. With the expected PID the check also runs once at
+ * startup, before any job is read or grandchild started. Without the flag
+ * the worker falls back to the parent it first observes.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const ORPHAN_CHECK_MS = 250;
-const parentPid = process.ppid;
+const LAUNCHER_FLAG = "--fake-launcher-pid=";
+const launcherArg = process.argv.find((arg) => arg.startsWith(LAUNCHER_FLAG));
+const parentPid = launcherArg ? Number(launcherArg.slice(LAUNCHER_FLAG.length)) : process.ppid;
+if (process.ppid !== parentPid) process.exit(0);
 let childPid: number | null = null;
 setInterval(() => {
   if (process.ppid === parentPid) return;

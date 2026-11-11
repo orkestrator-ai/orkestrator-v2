@@ -589,8 +589,8 @@ costing real space.
 The preview supervisor starts workers detached, in their own process group,
 and reaps them itself; a test process that is killed or times out never does.
 Options: (a) the fake worker exits, killing its `spawn-child` grandchild, once
-its parent PID changes (checked every 250 ms, unreferenced so it never keeps
-a worker alive); (b) start test workers non-detached so they die with the
+its parent is no longer the launcher (checked at startup and every 250 ms,
+unreferenced so it never keeps a worker alive); (b) start test workers non-detached so they die with the
 test's group; (c) a sweep that kills orphaned fake workers by name. Chose
 (a). (b) would change what the tests exercise, since detached spawning is
 what production does; (c) is killing by name, which this repository forbids.
@@ -602,6 +602,18 @@ a killed test would. On 2026-11-11 the whole file passed with the change
 (`bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-supervisor.test.ts`
 through `test:logged`), and the new test failed with the worker restored to
 its previous version, its `finally` reaping the processes it started.
+
+Review round 1 (2026-11-11) found that reading `process.ppid` inside the
+worker is too late when the launcher dies between spawn and the worker's
+module running: the worker is already reparented, records init as its parent
+and never sees it change. Every launcher of the fixture now passes its own PID
+as `--fake-launcher-pid=<pid>` (the supervisor, admission and isolation tests
+pass `process.pid`; the shell launchers pass `$$`), and the worker exits at
+startup when its parent is already someone else, before it reads a job or
+starts a grandchild. Without the flag it falls back to the parent it first
+observes. The test "a fake worker whose launcher died before it started exits
+at once (0248)" makes the shell exit before it `exec`s the worker; it passed
+with the change and timed out with the startup check reverted.
 
 ## Related
 

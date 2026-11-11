@@ -12,7 +12,7 @@ Analysed 2026-11-11 against `main` at `498b68766` (earlier: 2026-10-27 at `863b5
 
 1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to 0247.
 2. **Surface permanently failing cleanup (Code 2)**: a `disk:report` row for ledger entries that stopped retrying. Status: done.
-3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: open (needs a macOS node, which this Linux node is not; run it with a throwaway *development* profile from `mise run dev`, not `dev:test`, see decision 15).
+3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: open (needs a macOS node, which this Linux node is not; run it with a throwaway *development* profile from `bun run --cwd apps/desktop dev --profile <id>`, not `dev:test`, see decision 15).
 4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: done (2026-11-01): no guard; the invariant is documented and pinned by a test (decision 9).
 5. **Retrying exhausted entries (open question)**: should an entry at the attempt cap ever be retried? Status: done (2026-11-01): one more cycle per backend version that never attempted it (decision 10).
 6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: done (2026-11-01): defer external stray deletion until durable ownership proof exists (decision 14).
@@ -47,7 +47,7 @@ The folder index row now says what remains: task 3's macOS run.
 
 **Investigation.** The code is in place: `removeProfileKeychainItem` (`apps/desktop/scripts/dev/profile-cleanup.ts:161-190`, `delete-generic-password` at `:186`), `keychainRoots` (`:229`, `:316`, `:371`, `:471`) and `runtimeProfileElectronTitle` (`apps/desktop/electron/runtime-profile.ts:178`). The file has not changed since `7809191f`.
 
-Rechecked 2026-11-11 at `498b68766` on beelink (Linux): the code is unchanged, but the steps were wrong. They started a `dev:test` profile, and `dev:test` is the `agent-test` flavor, which on macOS runs with Chromium's `use-mock-keychain` switch (`chromiumSwitchesForRuntime`, `apps/desktop/electron/runtime-profile.ts`), so it never creates a login Keychain item and the check could never pass. Only the `development` flavor (`mise run dev --profile <id>`) uses the real Keychain. `dev:stop` and `dev:reset` read the stored `profile.json`, so they act on a development profile of that id too, and its title is the same `runtimeProfileElectronTitle(id)`. The steps in item 3 below now use `mise run dev` (decision 15). The run itself still needs a macOS node.
+Rechecked 2026-11-11 at `498b68766` on beelink (Linux): the code is unchanged, but the steps were wrong. They started a `dev:test` profile, and `dev:test` is the `agent-test` flavor, which on macOS runs with Chromium's `use-mock-keychain` switch (`chromiumSwitchesForRuntime`, `apps/desktop/electron/runtime-profile.ts`), so it never creates a login Keychain item and the check could never pass. Only the `development` flavor (`apps/desktop/scripts/dev.ts`, started as `bun run --cwd apps/desktop dev --profile <id>`) uses the real Keychain. `dev:stop` and `dev:reset` read the stored `profile.json`, so they act on a development profile of that id too, and its title is the same `runtimeProfileElectronTitle(id)`. The steps in item 3 below now start that script directly (decision 15). The run itself still needs a macOS node.
 
 **Decisions.**
 
@@ -298,9 +298,11 @@ What remains is a live macOS run of the Keychain change.
 
    Still owed (needs a macOS host; omarchy-hp and beelink are Linux): start a
    development profile with
-   `mise run dev --profile qa-keychain-0023`
+   `bun run --cwd apps/desktop dev --profile qa-keychain-0023`
    (main awaits `safeStorage` before its first window, which creates the
-   item). Not `dev:test`: its `agent-test` profiles use Chromium's mock
+   item). Not `mise run dev --profile ...`: that task runs turbo without
+   forwarding arguments, and turbo takes `--profile` as its own trace flag,
+   so the default development profile would start instead. Not `dev:test`: its `agent-test` profiles use Chromium's mock
    Keychain on macOS and never create the item (decision 15). The
    development flavor shows its window, so run it on the macOS node's own
    desktop session. Stop it with
@@ -631,8 +633,8 @@ Decisions made on 2026-11-11 on beelink (Linux x86_64) against `main` at
 needs a macOS node, so nothing in this file could be run here.
 
 15. **Which profile the Keychain run uses (task 3).** Options: (a) keep the
-    `dev:test` steps; (b) use a development profile (`mise run dev --profile
-    qa-keychain-0023`); (c) close the task on the unit tests. Chose (b). Pros:
+    `dev:test` steps; (b) use a development profile (`bun run --cwd apps/desktop
+    dev --profile qa-keychain-0023`); (c) close the task on the unit tests. Chose (b). Pros:
     it is the only flavor that writes the real login Keychain item, and it is
     the flavor whose leftovers the task exists for (agent-test profiles on
     macOS stopped creating items when they moved to `use-mock-keychain`);
@@ -640,7 +642,12 @@ needs a macOS node, so nothing in this file could be run here.
     Cons: the development flavor is never headless, so the run shows a window
     on the macOS node. (a) cannot pass: an agent-test profile never creates
     the item. (c) keeps the original objection that `security`'s exit codes
-    and Electron's item naming would never be checked live.
+    and Electron's item naming would never be checked live. The command
+    calls the desktop package's `dev` script directly rather than
+    `mise run dev`: the mise task (`mise.toml`) has no `raw_args` and runs
+    `turbo run dev`, which reads `--profile` as its own trace option, so the
+    profile id would never reach `scripts/dev.ts`. The turbo `dev` task has
+    no dependencies, so calling the script skips nothing.
 16. **Linux secret stores (decision 8), rechecked.** Headless agent-test
     profiles on Linux start Electron with `--password-store=basic`
     (`HEADLESS_ELECTRON_SWITCHES`, `runtime-profile.ts`), so the runs agents

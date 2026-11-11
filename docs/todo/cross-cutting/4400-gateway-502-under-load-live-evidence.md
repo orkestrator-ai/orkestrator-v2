@@ -111,4 +111,4 @@ Fix 2's cost, measured on a busy machine, so no reading is from a truly idle one
 ## Related
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 2, 3, 5 and 6) moved there on 2026-11-10.
-- `docs/todo/transcripts-and-observation/0052-remote-client-bandwidth.md`, "Live run through Tailscale Serve".
+- [remote-bandwidth.md](../../development/remote-bandwidth.md#running-the-probe-through-tailscale-serve), "Running the probe through Tailscale Serve" (moved from to-do 0052, retired 2026-11-11).

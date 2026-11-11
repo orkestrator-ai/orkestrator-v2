@@ -769,11 +769,11 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
         platform: "claude",
         accountId: deskAccounts.ids["desk-b"],
       });
-      // The command node's ticks travel to the leaf by email, so the leaf's
+      // A leaf takes its ticks from its command node, by email, so the leaf's
       // other limited logins are left out there: the leaf's tab stays stopped
-      // rather than moving to them.
+      // rather than moving to one of them.
       for (const name of ["leaf-a", "leaf-c"] as const) {
-        await leaf.invoke("set_agent_account_auto_switch", {
+        await desk.invoke("set_agent_account_auto_switch", {
           platform: "claude",
           email: FIXTURE_ACCOUNTS[name].email,
           included: false,

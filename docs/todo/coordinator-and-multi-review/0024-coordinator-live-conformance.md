@@ -204,7 +204,8 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
      and its output carries the sandbox refusal; the prompt asks Codex for
      cells in that shape.
    - Final fix: the bridge now shows those cells in the live transcript
-     (item 11 in [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md)),
+     (to-do 0026 item 11, retired; see "Codex refused cells" in
+     [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)),
      so the case reads them there under the same rule, and no longer reads
      rollout files. Codex's `exec` rows answer only through that rule
      (`transcriptCellEvidence`), never as ordinary calls.
@@ -329,8 +330,8 @@ for prerequisites and how to batch them with other provider runs.
     seen pending while the coordinator was busy and the prompt queued.
   - No coordinator ran `sleep` or called `list_environments` in any async or
     family run; the only `read_messages` calls were the poll turn's five.
-    Recorded in [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md)
-    and in todo 0028 (retired on 2026-10-29; the poll guard is in
+    Recorded as D4 in [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+    (to-do 0026, retired) and in todo 0028 (retired on 2026-10-29; the poll guard is in
     [`coordinator.md`](../../architecture/coordinator.md#control-mcp), "Control MCP").
   - Earlier read-only history: first full run 2026-10-16 (Claude and OpenCode
     passed; Codex failed on hosted search and phantom denials, both fixed;
@@ -911,7 +912,8 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
 
 ## Related
 
-- [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md).
+- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+  (to-do 0026, retired 2026-11-11).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 - [`coordinator.md`](../../architecture/coordinator.md) ("Worker delegation",
   "Tests that exist today"), [`agent-messaging.md`](../../architecture/agent-messaging.md)

@@ -23,7 +23,7 @@ repeated as tasks; their live checks are. The open questions and the
 3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: open. The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
-9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented and its Agent Info note is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md)).
+9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented, and since 2026-11-11 Agent Info carries a note for it (7563 (retired))).
 
 ### 1. Grok project resources off
 
@@ -202,7 +202,7 @@ Linux half done on 2026-11-10 on `beelink2` (Arch/Omarchy, kernel 7.2.15, x86_64
 | `control-proxy-full-ask` | reached the server after a second card | Bash, then `SandboxNetworkAccess` | Yes |
 | `control-direct-full` | **refused**: `Could not connect to server`; 0 requests | none | **No**: macOS reaches it |
 
-So `allowUnsandboxedCommands: false` and `strictAllowlist` hold under bubblewrap exactly as under Seatbelt, and the controls show both refusals are the options' doing. The one difference is a documented vendor limit, not a bridge defect: `allowLocalBinding` is "macOS only" in the SDK's types, and the CLI runs each Linux command in its own network namespace, so with full network a sandboxed command reaches loopback only through the proxy, and a plain `curl localhost:…` (which `NO_PROXY` sends direct) fails. Agent Info still says "full network" for such a session; whether it should add a note is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md). The 14-turn check passed three times on 2026-11-10 (15.1 s, 14.7 s, 27.5 s). A Linux host whose bubblewrap cannot nest the namespace (Ubuntu's AppArmor profile) skips it with the probe's reason; there the bridge would refuse every turn with 422, which 0145's CI pair already covers.
+So `allowUnsandboxedCommands: false` and `strictAllowlist` hold under bubblewrap exactly as under Seatbelt, and the controls show both refusals are the options' doing. The one difference is a documented vendor limit, not a bridge defect: `allowLocalBinding` is "macOS only" in the SDK's types, and the CLI runs each Linux command in its own network namespace, so with full network a sandboxed command reaches loopback only through the proxy, and a plain `curl localhost:…` (which `NO_PROXY` sends direct) fails. Agent Info said only "full network" for such a session; since 2026-11-11 the Claude bridge's reported policy adds a note naming the loopback exception on Linux (7563 (retired); `CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE` in `bridges/claude-bridge/src/services/claude-query-config.ts`). The 14-turn check passed three times on 2026-11-10 (15.1 s, 14.7 s, 27.5 s). A Linux host whose bubblewrap cannot nest the namespace (Ubuntu's AppArmor profile) skips it with the probe's reason; there the bridge would refuse every turn with 422, which 0145's CI pair already covers.
 
 **Decisions.**
 
@@ -1037,7 +1037,7 @@ Task 9. Chose to lift the macOS-only gate of `claude-provider-sandbox.live.test.
 
 ### Task 9: assert Linux's direct-loopback refusal rather than drop the control (2026-11-10)
 
-Task 9. `control-direct-full` was a macOS control (full network reaches loopback directly). On Linux it is refused. Options were dropping the control on Linux, or asserting the refusal as the platform's behaviour. Chose to assert it: the SDK documents `allowLocalBinding` as macOS-only, so a later CLI that starts reaching loopback on Linux is a network-model change an upgrade should notice. `control-proxy-full` still shows that a full-network command reaches the server, so the restricted turns' refusals keep their meaning. Whether users should be told is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md); no production code changed for it here.
+Task 9. `control-direct-full` was a macOS control (full network reaches loopback directly). On Linux it is refused. Options were dropping the control on Linux, or asserting the refusal as the platform's behaviour. Chose to assert it: the SDK documents `allowLocalBinding` as macOS-only, so a later CLI that starts reaching loopback on Linux is a network-model change an upgrade should notice. `control-proxy-full` still shows that a full-network command reaches the server, so the restricted turns' refusals keep their meaning. Users are told through a note on the reported policy, added on 2026-11-11 by 7563 (retired); no production code changed for it here.
 
 ### Task 2: keep a skill written during a running turn as residual risk
 
@@ -1100,8 +1100,8 @@ server as loaded; the address is never contacted.
   (Orkestrator-owned "always allow" rules, applied as allow-once; meets decision 1's
   list-and-revoke constraint without a provider rule).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
-- [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md)
-  (coordinator safety tiers, `coordinator-providers.ts`).
+- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+  (coordinator safety tiers, `coordinator-providers.ts`; to-do 0026, retired 2026-11-11).
 - [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md) (provider
   sign-in and readiness).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md)
@@ -1109,9 +1109,10 @@ server as loaded; the address is never contacted.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Docker and provider runs.
 - [agent-engines.md](../../architecture/agent-engines.md) "Execution policy".
-- [7563-claude-linux-sandbox-loopback-under-full-network.md](7563-claude-linux-sandbox-loopback-under-full-network.md)
-  (task 9's Linux finding: a full-network provider sandbox does not reach
-  loopback directly).
+- 7563 (retired 2026-11-11, `git show 498b68766:docs/todo/agent-engines/7563-claude-linux-sandbox-loopback-under-full-network.md`):
+  task 9's Linux finding, a full-network provider sandbox does not reach
+  loopback directly; done as the Agent Info note described in
+  [agent-engines.md](../../architecture/agent-engines.md#execution-policy).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (filing the xAI request from task 1, the live Grok runs from task 3, tasks 4, 5 and 6) moved there on 2026-11-10.
 
 ## Replaces

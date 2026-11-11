@@ -156,7 +156,15 @@ export type ArtifactRepresentation =
    * isolated preview worker under a fixed print profile (`paper`). Produced
    * on demand, then stored; always an attachment.
    */
-  | "pdf";
+  | "pdf"
+  /**
+   * `html-static` only: the text Find searches in the document, read by the
+   * preview worker from the effective HTML when it verified it
+   * (`staticHtmlDocumentText`), bounded to
+   * `STATIC_PRESENTATION_POLICY.maxSearchTextCharacters`. Publications
+   * verified before it existed have none and answer `invalid_input`.
+   */
+  | "search-text";
 
 /** Paper of the fixed artifact print profile. */
 export type ArtifactPrintPaper = "a4" | "letter";

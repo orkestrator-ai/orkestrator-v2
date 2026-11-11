@@ -44,6 +44,13 @@ export type Scenario =
   | "default-sandbox-writes"
   /** A real required sandbox fails to read under stock Ubuntu AppArmor. */
   | "apparmor-sandbox-reads"
+  /**
+   * Any host the probe calls unusable: the same required sandbox, with
+   * bubblewrap left on PATH, must not run the reading command. The CLI may
+   * refuse the whole turn or fail the command; both count, but a command that
+   * reads the checkout means the probe was wrong.
+   */
+  | "required-sandbox-refused"
   /** The coordinator sandbox alone, no hook: the same write is refused. */
   | "coordinator-sandbox-refuses"
   /** The coordinator sandbox still lets a command read the checkout. */
@@ -153,6 +160,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
               ? "sort --out=out.txt in.txt"
               : scenario === "coordinator-sandbox-reads" ||
                   scenario === "apparmor-sandbox-reads" ||
+                  scenario === "required-sandbox-refused" ||
                   scenario === "unavailable-hook-reads" ||
                   scenario === "read-only-unavailable-reads" ||
                   scenario === "read-only-host-reads" ||
@@ -362,6 +370,15 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       expect(refusal).toContain("Sandbox required but unavailable");
       return { scenario, modelCalls: 0, toolError: false, written: false };
     }
+    if (scenario === "required-sandbox-refused" && endpoint.modelCalls() === 0) {
+      // The CLI's own availability check refused the turn before any model call.
+      const refusal = JSON.stringify([
+        failure instanceof Error ? failure.message : failure,
+        ...messages.filter((message) => message.type === "result"),
+      ]);
+      expect(refusal).toContain("Sandbox required but unavailable");
+      return { scenario, modelCalls: 0, toolError: false, written: false, refusal: "turn" };
+    }
     expect(failure).toBeUndefined();
     expect(endpoint.networkHits()).toBe(helperNetworkHits);
     expect(existsSync(join(cwd, "helper-sentinel"))).toBe(false);
@@ -391,6 +408,12 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       expect(output).toContain("setgroups");
       expect(output).toContain("Permission denied");
       expect(written).toBe(false);
+    } else if (scenario === "required-sandbox-refused") {
+      // The turn started, so the sandbox must have stopped the command itself.
+      expect(toolResults[0]!.is_error).toBe(true);
+      expect(JSON.stringify(toolResults[0]!.content)).not.toContain("a\\na\\nb");
+      expect(written).toBe(false);
+      return { scenario, modelCalls: 2, toolError: true, written, refusal: "command" };
     } else if (
       scenario === "coordinator-sandbox-reads" ||
       scenario === "unavailable-hook-reads" ||

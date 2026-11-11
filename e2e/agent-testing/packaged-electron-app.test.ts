@@ -210,6 +210,7 @@ test("headless config selects only the supported specs", async () => {
   const { default: config } = await import("./playwright.electron-headless.config");
   expect(config.testMatch).toEqual([
     "design-canvas-electron.spec.ts",
+    "electron-cleanup.spec.ts",
     "web-annotations-electron.spec.ts",
     "service-preview-seeded-electron.spec.ts",
   ]);

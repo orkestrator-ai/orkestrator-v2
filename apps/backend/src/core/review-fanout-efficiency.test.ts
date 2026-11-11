@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -8,8 +11,18 @@ import {
   type BuildPipelineProvider,
   type ProviderSendOptions,
 } from "./build-pipeline-provider.js";
+import {
+  FANOUT_STATS_FILE,
+  FANOUT_STATS_FIXTURE_DIR,
+  FANOUT_STATS_MARKER,
+  type FanoutStatsRecord,
+  multiReviewEfficiencyOption,
+} from "./agent-test-fanout-stats.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
-import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
+import {
+  type MultiReviewEfficiencyObserver,
+  RecordingEfficiencyObserver,
+} from "./multi-review-efficiency.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   ReviewFanoutRunner,
@@ -170,6 +183,8 @@ function harness(
     providers?: Record<string, FakeProvider>;
     clock?: { now: number };
     concurrency?: ReviewFanoutHost["concurrency"];
+    /** Also receives every event, as the backend's configured observer would. */
+    observer?: MultiReviewEfficiencyObserver;
   } = {},
 ) {
   const providers = options.providers ?? { claude: new FakeProvider() };
@@ -215,7 +230,14 @@ function harness(
     captureReviewerUsage: true,
     progress: tracker,
     concurrency: options.concurrency,
-    efficiency,
+    efficiency: options.observer
+      ? {
+          record(event) {
+            efficiency.record(event);
+            options.observer!.record(event);
+          },
+        }
+      : efficiency,
   };
   return {
     host,
@@ -584,6 +606,56 @@ describe("bounded concurrent admission", () => {
     await pass;
     expect(providers.claude.maxActiveCreates).toBe(2);
     expect(providers.codex.maxActiveCreates).toBe(2);
+    // The pass reports the peaks the caps bounded, per platform and for
+    // admission, so a recording observer can show the caps held live.
+    for (const platform of ["claude", "codex"] as const) {
+      expect(
+        h.efficiency.events.filter(
+          (event) =>
+            event.operation === "reviewer.provider_concurrency" && event.platform === platform,
+        ),
+      ).toEqual([expect.objectContaining({ count: 2, reviewers: 8 })]);
+    }
+    expect(
+      h.efficiency.events.filter((event) => event.operation === "reviewer.admission_concurrency"),
+    ).toEqual([expect.objectContaining({ count: 4, reviewers: 8 })]);
+  });
+
+  test("the backend's agent-test efficiency option records a real pass's peaks", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ork-fanout-option-"));
+    try {
+      expect(
+        multiReviewEfficiencyOption({ dataDir, runtimeFlavor: "production", env: {} }),
+      ).toEqual({});
+      const option = multiReviewEfficiencyOption({
+        dataDir,
+        runtimeFlavor: "agent-test",
+        env: { ORKESTRATOR_AGENT_TEST_ISOLATED: "1" } as NodeJS.ProcessEnv,
+      });
+      expect(option.efficiency).toBeDefined();
+      const statsDirectory = path.join(dataDir, FANOUT_STATS_FIXTURE_DIR);
+      // Arm it as the scale spec does.
+      mkdirSync(statsDirectory, { recursive: true });
+      writeFileSync(path.join(statsDirectory, FANOUT_STATS_MARKER), "run-1\n");
+      const reviewers = Array.from({ length: 8 }, (_, index) =>
+        pendingReviewer(index, index % 2 === 0 ? "claude" : "codex"),
+      );
+      const h = harness(reviewers, {
+        providers: { claude: new FakeProvider("claude"), codex: new FakeProvider("codex") },
+        observer: option.efficiency!,
+      });
+      await h.runner().advanceReviewers(reviewers);
+      const stats = JSON.parse(
+        readFileSync(path.join(statsDirectory, FANOUT_STATS_FILE), "utf8"),
+      ) as FanoutStatsRecord;
+      expect(stats).toMatchObject({ runId: "run-1", passes: 1, maxAdmission: 4 });
+      for (const platform of ["claude", "codex"] as const) {
+        expect(stats.maxByPlatform[platform]).toBeGreaterThanOrEqual(2);
+        expect(stats.maxByPlatform[platform]).toBeLessThanOrEqual(4);
+      }
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   test("32 reviewers stay within the default bounds and all dispatch once", async () => {

@@ -14,6 +14,7 @@ import {
   MERMAID_POLICY,
   PREVIEW_CAPTURE_POLICY,
   STATIC_HTML_POLICY,
+  STATIC_PRESENTATION_POLICY,
   utf8ByteLength,
 } from "@orkestrator/protocol/rich-content-policy";
 import {
@@ -56,6 +57,11 @@ export type Outcome =
       semantics: "not-assessed" | "probes-passed";
       assets: StoredAssetRef[];
       prepared?: PreparedDocumentRef;
+      /**
+       * `html-static`: the document's text for Find. Not one of `assets`: it is
+       * registered on its own, so failing to keep it never fails verification.
+       */
+      searchText?: StoredAssetRef;
     }
   | {
       ok: false;
@@ -282,6 +288,16 @@ export class ArtifactPreviewJobs {
             effective,
           ]);
         }
+        // Only a document its card can display gets text: a card shows the
+        // saved preview instead of one over the inline budget or element
+        // limit, so Find could count a match in it but never highlight it.
+        const displayable =
+          effective.byteLength <= STATIC_PRESENTATION_POLICY.maxDocumentBytes &&
+          result.elementCount <= STATIC_PRESENTATION_POLICY.maxElements;
+        const searchText =
+          displayable && typeof result.searchText === "string" && result.searchText.length > 0
+            ? await this.storeSearchText(store, result.searchText)
+            : undefined;
         return {
           ok: true,
           gates: ["schema", "syntax", "supervised-visual"],
@@ -295,6 +311,7 @@ export class ArtifactPreviewJobs {
           omitted: result.omittedDiagnostics,
           semantics: "not-assessed",
           assets: [effective, ...captures],
+          ...(searchText ? { searchText } : {}),
         };
       }
       case "html-interactive": {
@@ -530,6 +547,23 @@ export class ArtifactPreviewJobs {
         : {}),
       assets: captures,
     };
+  }
+
+  /**
+   * Keep a static document's text for Find. It is optional: a failed write
+   * leaves the publication without `search-text` (its card's frame reports the
+   * text once shown) and never fails the verification it rides on.
+   */
+  private async storeSearchText(
+    store: (bytes: Uint8Array, mimeType: string) => Promise<ArtifactOutputRef>,
+    text: string,
+  ): Promise<ArtifactOutputRef | undefined> {
+    try {
+      return await store(new TextEncoder().encode(text), "text/plain");
+    } catch {
+      this.ctx.metrics.increment("search_text_unstored");
+      return undefined;
+    }
   }
 
   private countBlocked(blocked: Record<string, number>): void {

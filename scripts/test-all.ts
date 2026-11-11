@@ -888,6 +888,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/remote-bandwidth-qualification.test.ts",
   "./e2e/agent-testing/auto-pipeline-fake-model.test.ts",
   "./e2e/agent-testing/profile-restart-args.test.ts",
+  "./e2e/agent-testing/multi-review-scale-support.test.ts",
   "./e2e/agent-testing/coordinator-routing-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-surfaces-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-node-mail-fake-model.test.ts",

@@ -44,7 +44,7 @@ work across the window"), so the shape upgrade itself never goes away.
   `native-agent-service.ts` (`:2933`, `:3164`, `:3266`),
   `prompt-queue-drainer.ts` (`:140`, `:159` after the post-await queue refetch,
   `:213`, `:232`, `:280`),
-  `web-annotation-dispatch.ts` (`:189` claim observation, `:439` destination
+  `web-annotations/dispatch.ts` (`:189` claim observation, `:439` destination
   holds, `:705` same-body deduplication, `:1058` admission blocked reason),
   `storage-prompts.ts` (`:229`, `:320`, `:388`, `:563`),
   `storage-native-deliveries.ts:374`, `public-api/run-observer.ts:121` and

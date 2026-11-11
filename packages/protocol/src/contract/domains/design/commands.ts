@@ -666,6 +666,7 @@ export const DesignSessionLinkStatesSchema = modelRecord<DesignSessionLinkStates
     modelRecord<DesignSessionLinkState>()({
       linkId: Str,
       session: Schema.Literals(["retained", "missing"]),
+      archived: Schema.optionalKey(Bool),
     }),
   ),
 });
@@ -978,7 +979,10 @@ export const designSessionLinkStatesCommand = defineCommand({
 export const designSessionResumeCommand = defineCommand({
   ...common,
   name: "design_session_resume",
-  args: v2Args("environmentId", "canvasId", "linkId", "expectedTabId", "tabId"),
+  // restoreArchived: unarchive the recorded conversation before resuming it
+  // (the user chose "Unarchive and resume"). Not critical: a backend that
+  // ignores it resumes as before, and the agent refuses an archived one.
+  args: v2Args("environmentId", "canvasId", "linkId", "expectedTabId", "tabId", "restoreArchived"),
   result: designResult(DesignSessionResumeResultSchema),
   // expectedTabId: the compare-and-set on the link's tab; a receiver ignoring
   // it would let two windows adopt one conversation.

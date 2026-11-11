@@ -88,21 +88,32 @@ exit 125
   }, 90_000);
   test("the deadline fails the step even when neither child can be seen to close", async () => {
     // A killed child's descendant still holds the pipes, so `close` does not fire:
-    // the same wait a lost completion event leaves.
-    await withDockerScript("#!/bin/sh\nsleep 8 &\nexec sleep 8\n", async () => {
-      const started = Date.now();
-      const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
-        timeoutMs: 100,
-        settleGraceMs: 100,
-      });
-      expect(result).toEqual({
-        absent: false,
-        output: "",
-        producerFailed: true,
-        daemonUnavailable: false,
-      });
-      expect(Date.now() - started).toBeLessThan(4_000);
-    });
+    // the same wait a lost completion event leaves. Each fake `docker` logs its
+    // pid once its pipe-holding `sleep` exists.
+    await withDockerScript(
+      '#!/bin/sh\nsleep 8 &\necho "$$" >> "$FAKE_DOCKER_LOG"\nexec sleep 8\n',
+      async (log) => {
+        const started = Date.now();
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+          // The deadline must fire after both shells have forked their holder;
+          // nothing can be awaited for that, because the timer starts at spawn.
+          // At 100 ms a loaded macOS host killed both shells first in 2 of 25
+          // runs (flake 9979): with no holder both closed, and the step failed
+          // through `close` instead. 1.5 s leaves a wide margin for the fork.
+          timeoutMs: 1_500,
+          settleGraceMs: 100,
+        });
+        // The scenario held: both children had a descendant holding the pipes.
+        expect((await log.read()).split("\n").filter(Boolean)).toHaveLength(2);
+        expect(result).toEqual({
+          absent: false,
+          output: "",
+          producerFailed: true,
+          daemonUnavailable: false,
+        });
+        expect(Date.now() - started).toBeLessThan(6_000);
+      },
+    );
   }, 15_000);
   test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
     // Reaching no daemon (its socket gone) also says "no such file"; that
@@ -155,10 +166,8 @@ exit 125
       select: [".codex/*.sqlite", ".codex/*.sqlite-wal", ".codex/*.sqlite-shm"],
     });
     const opencode = plan.find((step) => step.target.subdir === "opencode/db");
+    // OpenCode 1.x's opencode.db is left behind.
     expect(opencode?.select).toEqual([
-      "opencode/opencode.db",
-      "opencode/opencode.db-wal",
-      "opencode/opencode.db-shm",
       "opencode/opencode2.db",
       "opencode/opencode2.db-wal",
       "opencode/opencode2.db-shm",
@@ -898,4 +907,103 @@ exit 1
       expect(calls).not.toContain("version --format");
     },
   );
+});
+
+// Engine 29.9.3's wording when the daemon stops (SIGTERM) or dies (SIGKILL)
+// under an attached helper. The step must fail as an outage, not as files that
+// failed verification, and must say so without asking the daemon again: on a
+// systemd host that probe waits for the restarted daemon and answers "up".
+describe("copy step names a daemon lost while its helper waited", () => {
+  const LOST = [
+    "Error waiting for container: Canceled: grpc: the client connection is closing: context canceled",
+    "error waiting for container: unexpected EOF",
+  ];
+
+  for (const message of LOST) {
+    test(`streamed step: ${message}`, async () => {
+      const { context, owner } = await fixture();
+      const candidate = planStorageSet("env-lifecycle", owner, 1, "candidate");
+      const step = replacementCopyPlan("legacy-layer")[0]!;
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = cp ]; then printf 'archive'; exit 0; fi
+cat >/dev/null
+printf '%s\\n' '${message}' >&2
+exit 125
+`,
+        async (log) => {
+          const result = await runCopyStep(
+            context,
+            "sha256:fixture",
+            step,
+            {
+              containerId: "source-container",
+              storage: { format: "legacy-layer", workspaceGeneration: 1 },
+            },
+            candidate,
+          );
+          expect(result).toEqual({ ok: false, reason: "daemon-unavailable" });
+          if (result.ok) throw new Error("Expected copy failure");
+          expect(String(await replacementCopyFailure(result.reason))).toContain(
+            "ContainerLifecycleError:daemon-unavailable",
+          );
+          expect(await log.read()).not.toContain("version --format");
+        },
+      );
+    });
+
+    test(`volume step: ${message}`, async () => {
+      const { context, owner } = await fixture();
+      const source = planStorageSet("env-lifecycle", owner, 1, "source");
+      const candidate = planStorageSet("env-lifecycle", owner, 2, "candidate");
+      const step = replacementCopyPlan("volume-v1")[0]!;
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+printf '%s\\n' '${message}' >&2
+exit 125
+`,
+        async (log) => {
+          const result = await runCopyStep(
+            context,
+            "sha256:fixture",
+            step,
+            { containerId: "source-container", storage: source },
+            candidate,
+          );
+          expect(result).toEqual({ ok: false, reason: "daemon-unavailable" });
+          if (result.ok) throw new Error("Expected copy failure");
+          expect(String(await replacementCopyFailure(result.reason))).toContain(
+            "ContainerLifecycleError:daemon-unavailable",
+          );
+          expect(await log.read()).not.toContain("version --format");
+        },
+      );
+    });
+  }
+
+  test("a helper whose daemon answered with connection wording is not an outage", async () => {
+    const { context, owner } = await fixture();
+    const source = planStorageSet("env-lifecycle", owner, 1, "source");
+    const candidate = planStorageSet("env-lifecycle", owner, 2, "candidate");
+    const step = replacementCopyPlan("volume-v1")[0]!;
+    await withDockerScript(
+      `#!/bin/sh
+echo 'Error waiting for container: Error response from daemon: dial tcp 10.0.0.2:5000: connect: connection refused' >&2
+exit 125
+`,
+      async () => {
+        const result = await runCopyStep(
+          context,
+          "sha256:fixture",
+          step,
+          { containerId: "source-container", storage: source },
+          candidate,
+        );
+        expect(result.ok).toBe(false);
+        expect(result).not.toEqual({ ok: false, reason: "daemon-unavailable" });
+      },
+    );
+  });
 });

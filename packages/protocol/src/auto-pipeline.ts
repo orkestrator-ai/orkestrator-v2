@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import type { KeyInformationPatch } from "./build-pipeline-key-information.js";
 import { asModel } from "./contract/model-schema.js";
+import { AUTO_PIPELINE_TOOL_NAME } from "./auto-pipeline-tool.js";
 
 const text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32000));
 const texts = Schema.Array(text).check(Schema.isMaxLength(100));
@@ -178,6 +179,29 @@ export const autoPipelineResultSchema = {
     },
   },
 };
+/**
+ * The Orkestrator MCP tool an interactive agent tab calls to hand its work to
+ * Auto-pipeline. It is offered to every interactive tab in a prompt
+ * environment, so asking for a pipeline in plain chat works the same as the
+ * toolbar button, which only sends {@link autoPipelineDraftPrompt}.
+ */
+export { AUTO_PIPELINE_TOOL_NAME } from "./auto-pipeline-tool.js";
+
+/**
+ * What the "To pipeline" button sends to the tab. The agent writes the draft
+ * from its own record of the session and from the repository, so nothing is
+ * copied into a prompt and the draft cannot outgrow one.
+ */
+export function autoPipelineDraftPrompt(): string {
+  return [
+    `Convert this conversation and the work in this environment into a pipeline draft for review. Call the Orkestrator tool \`${AUTO_PIPELINE_TOOL_NAME}\` once with:`,
+    "- title: one line.",
+    "- description: Summary, Problem and Context sections.",
+    "- acceptanceCriteria: each one line and independently checkable.",
+    "- notes: only what you observed. Record decisions as a concise engineering summary (the choice, the options with their pros and cons, and the justification from requirements, code or test results), the files you touched, the checks you ran with their results, and any unfinished work. Do not reconstruct private reasoning or invent alternatives.",
+    "Work from your own record of this session and from the repository: read `git status`, `git diff` and `git log` rather than relying on memory for what changed. Do not edit files, commit or send messages. When the tool accepts the draft, say that it is ready to review in the Auto-pipeline tab and stop.",
+  ].join("\n");
+}
 export function parseAutoPipelineTicket(value: unknown): AutoPipelineTicket {
   const ticket = Schema.decodeUnknownSync(AutoPipelineTicketSchema)(value);
   if (

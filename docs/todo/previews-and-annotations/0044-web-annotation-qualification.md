@@ -60,7 +60,7 @@ at `docs/README.md:57`, and `docs/architecture/web-page-annotations.md:6`,
 (`web-page-annotations.md:549-560`) is current.
 
 **Investigation.** The rollout default is still `enabled`
-(`apps/backend/src/core/web-annotation-rollout.ts:2`, `:122`). The records cite
+(`apps/backend/src/core/web-annotations/rollout.ts:2`, `:122`). The records cite
 evidence from #1250 (`4db5bb2a`). Since then 0124 rewrote the storage commit
 path that milestone A depends on (`cdaa1bb1`); the 2026-11-06 Linux runs of
 `mise run test:agent:electron` and `mise run test:agent:browser:isolated`
@@ -309,7 +309,7 @@ that names what was actually tested.
   `-threads.ts`, `-requests.ts`, `-results.ts`); #967 moved the protocol
   fixtures to `packages/protocol/src/testing/web-annotations-fixtures.ts`;
   #947 added a Home native-preview test to the Electron spec.
-- The rollout switch (`apps/backend/src/core/web-annotation-rollout.ts`)
+- The rollout switch (`apps/backend/src/core/web-annotations/rollout.ts`)
   defaults to `enabled`. `ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it.
   `read-only` blocks every `author` command but keeps reads, resolution, drafts
   and recovery. `disabled` keeps only capabilities, rollout and metrics. In
@@ -362,7 +362,7 @@ that names what was actually tested.
   untouched compose draft (`web-annotation-dispatch-flow.test.ts`). So are the
   stale-result acceptance race (`web-annotation-service-results.test.ts`) and
   migration crash and retry (`web-annotation-migration*.test.ts`).
-- `WebAnnotationMetrics` (`apps/backend/src/core/web-annotation-metrics.ts`),
+- `WebAnnotationMetrics` (`apps/backend/src/core/web-annotations/metrics.ts`),
   read through `web_annotations_metrics`, has `command_ms`,
   `request_enqueue_ms`, `request_dispatch_ms` and `request_duration_ms`
   histograms. Capture-to-saved is measured at the client by the Electron
@@ -1308,7 +1308,7 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
 - Keep unverified capabilities disabled where the missing evidence affects
   safety or correctness.
 - The default stays `enabled` (decided 2026-10-15). Dispatch publishes into the
-  same per-tab prompt queue as chat sends (`web-annotation-dispatch.ts`).
+  same per-tab prompt queue as chat sends (`web-annotations/dispatch.ts`).
   Annotation-specific failures show on the request card (`unknown`, Answer in
   chat, a sign-in reason, an empty change) rather than losing data. Settings ›
   Web annotations or `ORKESTRATOR_WEB_ANNOTATIONS_MODE` rolls it back. Holding
@@ -1318,7 +1318,7 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   Claude, Codex, Cursor and OpenCode pass; Grok and Pi had no login and held
   safely in `queued` with the reason; no trigger appeared.
 - Rollback must stop new operations while keeping reads, spool recovery and
-  reconciliation of requests already sent. `web-annotation-rollout.ts` already
+  reconciliation of requests already sent. `web-annotations/rollout.ts` already
   behaves this way; any rollout test must keep it.
 - Initial-release targets from the plan: no duplicate execution under fault
   injection, deterministic recovery at every acknowledged boundary, and

@@ -582,9 +582,11 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
 ## Current state
 
 - Pins (upgraded 2026-11-06, [1031](1031-provider-upgrade-2026-11-06.md)):
-  Claude Agent SDK `0.3.319` / CLI `2.1.319`, Codex `0.167.0`, OpenCode SDK and
-  CLI `1.19.5`, `@cursor/sdk` `1.3.1`, Pi `1.5.0`, Grok `1.0.77`,
-  `@agentclientprotocol/sdk` `2.4.0`. `tests/unit/version-drift.test.ts` keeps
+  Claude Agent SDK `0.3.319` / CLI `2.1.319`, Codex `0.167.0`, `@cursor/sdk`
+  `1.3.1`, Pi `1.5.0`, Grok `1.0.77`, `@agentclientprotocol/sdk` `2.4.0`.
+  OpenCode is the 2.x binary `opencode2` `2.2.6` with no SDK
+  (`packages/toolchain/src/manifest.ts`): the 1.x SDK and CLI `1.19.5` were
+  retired on 2026-11-11 (see 0008 "OpenCode 1.x retired (2026-11-11)"). `tests/unit/version-drift.test.ts` keeps
   every mirror of each pin in step.
 - Drift detection:
   - Each bridge dispatches over its vendor's typed union and turns an unknown
@@ -592,12 +594,14 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
     (`NativeAgentRuntimeDrift` and the `advisory` notice in
     `packages/protocol/src/native-agent.ts`).
   - Both provider kinds implement `runtimeHealth?()` (`http-bridge-provider.ts`,
-    `opencode-provider.ts`), and every bridge serves
+    and `opencode2/provider.ts` since the 1.x `opencode-provider.ts` was
+    retired on 2026-11-11), and every bridge serves
     `GET /session/:id/runtime-health`.
   - Per-bridge tests feed invented variants: for example
     `bridges/claude-bridge/src/sdk-compatibility.test.ts`,
-    `bridges/acp-bridge/src/acp-drift.test.ts` and
-    `apps/backend/src/core/opencode-drift.test.ts`.
+    `bridges/acp-bridge/src/acp-drift.test.ts`. The OpenCode 1.x one,
+    `opencode-drift.test.ts`, was retired with 1.x on 2026-11-11
+    (`git show 5f4e27b1c:apps/backend/src/core/opencode-drift.test.ts`).
   - Codex checks its generated protocol with `mise run codex:protocol:check`.
 - `nativeAgentCapabilities()` (`packages/protocol/src/native-agent.ts`) is the
   source of truth for what each platform supports. The capability matrix in the
@@ -821,8 +825,11 @@ The billed Grok `costUsdTicks` run moved to the
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed Grok turns of task 11) moved there on 2026-11-10.
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) owns removing the Claude
   `services/mcp-config.ts` parse.
-- [0016-slash-command-catalogue.md](../cli-and-slash-commands/0016-slash-command-catalogue.md) owns the Claude
-  command-discovery probe.
+- The Claude command-discovery probe and its terminal-marker check are
+  described in [native-agent-commands.md](../../architecture/native-agent-commands.md#provider-notes)
+  and checked on every SDK bump in
+  [upgrade-agents.md](../../development/upgrade-agents.md#how-to-upgrade-claude)
+  (to-do 0016, which owned them, was retired on 2026-11-11).
 - [agent-engines.md](../../architecture/agent-engines.md) and
   [upgrade-agents.md](../../development/upgrade-agents.md).
 - The living-doc drift once listed here (Grok Build's inbound-request

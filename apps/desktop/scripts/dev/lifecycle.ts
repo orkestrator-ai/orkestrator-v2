@@ -528,9 +528,9 @@ export async function seedAgentTestProfileState(
   if (toolchains.failed.length > 0) {
     warn(`Could not seed from the host install: ${toolchains.failed.join(", ")}`);
   }
-  // Entries are `tool@version`, and a platform can need several tools (OpenCode
-  // installs `opencode` and `opencode2`), so it is covered only once every one
-  // of them is. A platform with no pinned tool is matched by its own name.
+  // Entries are `tool@version`, and a platform's tools need not share its name
+  // (OpenCode installs `opencode2`), so it is covered only once every one of
+  // them is. A platform with no pinned tool is matched by its own name.
   const covers = (entries: readonly string[], platform: string) => {
     const tools = agentToolchainsForPlatform(platform);
     return (tools.length > 0 ? tools : [platform]).every((tool) =>

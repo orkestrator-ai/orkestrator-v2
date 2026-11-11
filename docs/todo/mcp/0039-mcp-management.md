@@ -30,20 +30,23 @@ no login and no billed turn (see
 OpenCode cells worked on 2026-11-10 against `main` at `c98b20e6f`, again on
 the loopback model only, reached through a custom OpenCode provider (see
 [OpenCode on the loopback model](#opencode-on-the-loopback-model-2026-11-10)).
+Task 1's agent part (the standalone repro) done on 2026-11-11 against `main`
+at `14df96544` (pins: Claude 2.1.319, Agent SDK 0.3.319), credential-free;
+only the canary flip, which waits on an upstream fix, is left.
 
 ### Tasks
 
-1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (the standalone repro can be written now; the canary flip waits on 7568: 0039 task 1, the report filing, and an upstream Claude Code fix).
+1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (depends on 7568: 0039 task 1, the report filing, and an upstream Claude Code fix). The repro is done (2026-11-11: `claude-mcp-replace-linger.live-probe.ts`, run beside the canary; at 2.1.319 a server loaded at launch lingers when replaced, one added through `setMcpServers` does not); only the canary flip is left.
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
-5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed).
+5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed: that real-login rerun is a 7568 item, 0039 task 5).
 6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor's cells moved to the manual-test checklist (7568) on 2026-11-10: they need a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in.
-7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task).
+7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task; the real-model full run is a 7568 item, 0039 task 7).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into [0040](0040-mcp-environment-delivery.md) task 3).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
-12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
-13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's).
+12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun: it is a 7568 item, 0039 task 12).
+13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's; the real-login run is a 7568 item, 0039 task 13).
 14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: done (2026-11-06; credential-free case in `mcp-ui-matrix.spec.ts`).
 
 ### 1. Replaced Claude server processes linger (code item 8)
@@ -77,6 +80,71 @@ report can carry (the drafted one points at the internal
 `session-manager-prompt-mcp-sync.live-probe.ts`, scenario `replace`), and,
 once an upstream release stops the old process, changing the canary to
 `alive: ["alpha"]` and closing code item 8.
+
+**Outcome (2026-11-11): standalone repro written; canary unchanged.**
+
+- `bridges/claude-bridge/src/services/claude-mcp-replace-linger.live-probe.ts`
+  is one file that imports only `@anthropic-ai/claude-agent-sdk` and Node
+  built-ins and is its own fixture MCP server (`--server`), so it can be
+  attached to the issue as is (`bun add @anthropic-ai/claude-agent-sdk`, then
+  `bun claude-mcp-replace-linger.live-probe.ts`; `CLAUDE_CLI_PATH` picks the
+  executable). It runs each CLI in a temporary `HOME` and `CLAUDE_CONFIG_DIR`
+  and sends no prompt, so no login and no model request. It loads `alpha` in
+  one of three ways, replaces it through `setMcpServers` under the same name
+  with another argument and env value, waits until the new version is
+  connected, and reports which processes are still alive. Exit 1 means
+  reproduced, 0 not reproduced, 2 an error; the last line is
+  `REPLACE_LINGER_RESULT <json>`.
+- Result on CLI 2.1.319 (pinned toolchain installed into a throwaway data
+  directory; three runs, identical):
+
+  | Scenario | How `alpha` v1 was loaded | After the replacement | After the CLI exits |
+  | --- | --- | --- | --- |
+  | `options` | the SDK's `mcpServers` option at launch | v2 connected; v1 and v2 running | none running |
+  | `dynamic` | an earlier `setMcpServers` call | v2 connected; v1 stopped | none running |
+  | `settings` | `mcpServers` in `.claude.json` | v2 connected; v1 and v2 running | none running |
+
+  So the leak is narrower than the draft said: only a server the CLI loaded
+  at launch (from the SDK options or a settings file) outlives its
+  replacement; a server first added through `setMcpServers` is stopped. The
+  bridge passes servers at launch, so its sessions are in the leaking case.
+  The draft in code item 8 and the 7568 item are updated to match.
+- `session-manager-prompt-mcp-sync.live.test.ts` gained a second test that
+  runs the repro and pins this table, so the file a maintainer attaches keeps
+  reproducing on the pin. Both it and the canary fail when upstream fixes the
+  leak: flip both then. `mise run verify:claude:mcp-live` with
+  `CLAUDE_CLI_PATH` at the throwaway 2.1.319 install
+  (`mise run toolchain:install --data-dir <throwaway dir>` into the worktree's
+  `output/p0039-r2/toolchain-data`, removed after the run; point
+  `CLAUDE_CLI_PATH` at `toolchains/claude/2.1.319/linux-x64/claude` there) and every
+  variable naming the real data directory unset (`CLAUDE_CONFIG_DIR`,
+  `ORKESTRATOR_CLAUDE_ACCOUNT_HOME`, `CLAUDE_CODE_EXECPATH`,
+  `ORKESTRATOR_RESOURCE_ROOT`, `ORKESTRATOR_APP_ROOT`): passed, 26.2 s
+  (2026-11-11). The canary in that run also still passes
+  (`alive: ["alpha", "alpha"]`), so the bug is not fixed upstream at 2.1.319.
+  Disclosure: two earlier runs of the same task on 2026-11-11 (2 pass,
+  13 expects, 25.9 s, and one after the SIGTERM fix) inherited the session's
+  `CLAUDE_CLI_PATH`, so they executed the host's pinned 2.1.319 from the real
+  data directory's `toolchains/bin`. That was a read-only execution; the
+  probes give the CLI temporary `HOME` and `CLAUDE_CONFIG_DIR` and send no
+  prompt, so no login or model request was made. The run above replaces them
+  as the recorded evidence.
+- Guard against a repeat (2026-11-11): the live Claude MCP checks now refuse
+  a `CLAUDE_CLI_PATH` inside the real data directory before they start
+  anything (`bridges/claude-bridge/src/services/live-cli-guard.ts`, called by
+  `session-manager-prompt-mcp-sync.live-probe.ts`, `plugin-mcp.live-probe.ts`
+  and both tests in `session-manager-prompt-mcp-sync.live.test.ts`; the repro
+  itself stays self-contained). A path lexically inside is refused without
+  touching it; one outside is resolved so a symlink into the data directory
+  also counts. `ORKESTRATOR_LIVE_ALLOW_REAL_DATA_DIR_CLI=1` is the operator's
+  deliberate opt-in. Evidence: `live-cli-guard.test.ts` passes (8 tests); with
+  this shell's inherited `CLAUDE_CLI_PATH` both `session-manager-prompt-mcp-sync.live.test.ts`
+  tests and both `claude-plugin-mcp-live.test.ts` tests fail at once with the
+  refusal and no CLI is spawned; with `CLAUDE_CLI_PATH` and the other
+  real-data-directory variables unset, `mise run verify:claude:mcp-live`
+  (44.5 s) and `verify:claude:plugin-mcp-live` (13.5 s) pass on the SDK's
+  bundled CLI.
+- Left: filing the report (7568) and, after an upstream fix, the canary flip.
 
 ### 2. Re-derive Grok rules at 1.0.70
 
@@ -189,7 +257,7 @@ option, first half.
   policies that restrict user MCP servers, which the live spec does not set.
 
 **What the Pi rerun needs** (not done here: it needs a real login and billed
-turns):
+turns; it is the 7568 item "0039 task 5"):
 
 - A Pi login with a provider and model the login accepts, shared into a
   disposable profile as in the [Pi record](#live-apply-record-pi-2026-10-22):
@@ -464,7 +532,7 @@ two-machine run, so it is not dropped. The stale "every container target
 **Outcome (2026-11-06).** Both recommended options taken. Neither needed new product code, because each keeps what already ships; building them meant checking that the shipped behaviour matches the decision, closing the open items and recording the decisions where a maintainer will meet them.
 
 - **No "restart OpenCode to apply" button.** User-file saves keep `restart-required` with the guidance "OpenCode keeps its user configuration until its server restarts; stop and start the environment to load the change." (`OPENCODE_USER_RESTART` in `apply.ts`). The re-check is already wired to each bump: step 6 of the OpenCode upgrade in `docs/development/upgrade-agents.md` runs `verify:opencode:mcp-live` and says what to do if the user file starts being reloaded. The open question is closed, and `docs/architecture/mcp-management.md` now says the button is deliberately absent and why.
-- **CLI route for OpenCode MCP sign-in.** A `needs-auth` row carries `OPENCODE_MCP_SIGN_IN_GUIDANCE` (`packages/protocol/src/native-agent.ts`), and the backend refuses a sign-in request with the same text (`opencode-capabilities.ts`); no code calls `mcp.auth.authenticate`. The "Needs verification" item is dropped, and the architecture doc gives the reason not to drive it from the panel.
+- **CLI route for OpenCode MCP sign-in.** A `needs-auth` row carries `OPENCODE_MCP_SIGN_IN_GUIDANCE` (`packages/protocol/src/native-agent.ts`), and the backend refused a sign-in request with the same text (`opencode-capabilities.ts`, removed with OpenCode 1.x on 2026-11-11; the guidance now reaches the panel through `apps/backend/src/core/mcp-management/providers.ts`); no code calls `mcp.auth.authenticate`. The "Needs verification" item is dropped, and the architecture doc gives the reason not to drive it from the panel.
 - Nothing found while doing this gave a reason to take the other options. The pin is still 1.19.5, so the cache evidence above is current.
 
 ### 12. Agent-account homes
@@ -491,7 +559,7 @@ two-machine run, so it is not dropped. The stale "every container target
 - **Fixed.** The editor now refreshes every added Claude account's copy after a save of `claude:user` or `claude:local` (`mcp-management/claude-account-copies.ts`, same lock and merge as the launch sync), before apply. The backend marks an account bridge with `ORKESTRATOR_CLAUDE_ACCOUNT_HOME` (only when the copy's source is the `HOME/.claude.json` the bridge reads), and the bridge reports servers only the copy names as stale from launch and refuses their tools with their own reason (`claudeAccountOnlyMcpServerNames` in `mcp-config.ts`, `accountOnly` in `session-manager-prompt-mcp-sync.ts`). Codex accounts are unaffected (they link `config.toml`).
 - **UI note.** While an added Claude account exists, the `claude:user` and `claude:local` sources carry the note "Added Claude accounts use their own copy of these servers. Orkestrator replaces each copy with this file's servers when you save here and before it starts Claude on an account, so servers added inside an account's own configuration are overwritten, and Orkestrator sessions do not use them." It shows in the source header above its servers (no renderer change).
 - **Evidence.** A new `account` scenario in `session-manager-prompt-mcp-sync.live-probe.ts`, run by `mise run verify:claude:mcp-live` on the real CLI without credentials: the CLI never loads a host-only SSE server (it does not read the host file), the copy-only `extra` runs and is stale from launch, a host add loads and a host removal unloads in the running CLI. Unit tests: `mcp-config-account.test.ts`, `session-manager-prompt-mcp-sync.test.ts`, `service-claude-accounts.test.ts`, `agent-accounts-active.test.ts`, `McpStatusAndStates.test.tsx`. Documented in `docs/architecture/agent-accounts.md`.
-- **Not proven.** No session on a real signed-in account ran; the backend-to-bridge handoff is unit-tested. A host-file edit made outside the editor reaches an account's copy only at the next bridge launch or editor save (reported stale and refused meanwhile). Bridges launched before this change report nothing for account-only servers until they relaunch.
+- **Not proven.** No session on a real signed-in account ran (7568, 0039 task 12); the backend-to-bridge handoff is unit-tested. A host-file edit made outside the editor reaches an account's copy only at the next bridge launch or editor save (reported stale and refused meanwhile). Bridges launched before this change report nothing for account-only servers until they relaunch.
 
 ### 13. Claude MCP reconnect on a running CLI
 
@@ -689,12 +757,16 @@ collects the live evidence the shipped behaviour has never had.
   rebuilt instance's `mcp.status` lists the change; the user files in
   `$XDG_CONFIG_HOME/opencode` and container servers stay `restart-required`,
   because OpenCode 1.19.4 caches the user files for the server's lifetime.
+  Since OpenCode 1.x was retired (2026-11-11) the rebuild is OpenCode 2's
+  `POST /api/location/reload`, answered `busy` while any session works
+  (`reloadMcpConfiguration` in `apps/backend/src/core/opencode2/environment-provider.ts`).
   Grok is `restart-required`, then `applied` once the bridge process is
   replaced. The live record below confirms the Claude, Codex, OpenCode and
   Cursor strategies of 2026-10-18 on real providers; the new Codex turn
   evidence and OpenCode reload have unit tests, and the OpenCode reload's
-  mechanism is proven on the pinned binary (`mise run
-  verify:opencode:mcp-live`), not yet with a model in a live session. Pi's
+  mechanism was proven on the pinned 1.x binary (`verify:opencode:mcp-live`,
+  a mise task removed with OpenCode 1.x on 2026-11-11), not yet with a model
+  in a live session. Pi's
   strategy was seen live on 2026-10-22 (`pending-next-turn`, then `applied`
   per probed tab), but its user-scope probes failed; a fake-model rerun on
   2026-11-06 passed both scopes, so the runtime side is shown, not a real
@@ -824,7 +896,9 @@ collects the live evidence the shipped behaviour has never had.
    `commands-registry-mcp.test.ts` ("OpenCode reload probe"),
    `opencode-capabilities.test.ts` ("OpenCode MCP sign-in"), and
    `apps/backend/tests/opencode-mcp-reload-live.test.ts` on the real pinned
-   1.19.4 (`mise run verify:opencode:mcp-live`, 2 passed, 3.4 s): a project
+   1.19.4 (`verify:opencode:mcp-live`, 2 passed, 3.4 s; both tests and the
+   task were removed with OpenCode 1.x on 2026-11-11,
+   `git show 5f4e27b1c:apps/backend/tests/opencode-mcp-reload-live.test.ts`): a project
    file edit is not seen until `instance.dispose`, then the rebuilt instance
    lists only the renamed server, the old server's process and the
    runtime-added server are gone, and a stored session survives; a user-file
@@ -855,8 +929,9 @@ collects the live evidence the shipped behaviour has never had.
    init statuses and layers (`mcp-runtime-status.ts`; test in
    `session-manager-catalog-transport.test.ts`); the count-only tiles are gone
    whenever the server list is reported (`AgentInfoButton.test.tsx`); every
-   bridge's error text is redacted (tests in `opencode-capabilities.test.ts`
-   and `http-bridge-mcp-inventory.test.ts`).
+   bridge's error text is redacted (tests in `opencode-capabilities.test.ts`,
+   removed with OpenCode 1.x on 2026-11-11, and
+   `http-bridge-mcp-inventory.test.ts`).
 7. ~~**Unmodelled layers.**~~ Decided 2026-10-25, per layer. No passive reader
    exists for Cursor plugins and team settings (held by Cursor's service),
    OpenCode remote configuration (fetched from `<url>/.well-known/opencode`
@@ -865,22 +940,26 @@ collects the live evidence the shipped behaviour has never had.
    `--profile`), so they stay unmodelled and the live join names such rows as
    coming from a layer this editor does not read. Claude plugins do have one
    (`installed_plugins.json` and each plugin's `.mcp.json`), but mirroring
-   them needs the CLI's enablement rules; that is
-   [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md).
+   them needs the CLI's enablement rules; that was 0121 (retired 2026-11-11;
+   see "Claude plugins" in
+   [`mcp-management.md`](../../architecture/mcp-management.md#recorded-discrepancies-and-provider-rules)).
 8. **Replaced Claude server processes linger (blocked upstream).** Still true
-   on CLI 2.1.309: the live probe's new "replace" scenario edits a server under
+   on CLI 2.1.319 (2026-11-11; first seen on 2.1.309): the live probe's new "replace" scenario edits a server under
    the same name and finds both processes alive, while only the new one is
    connected and offered. `session-manager-prompt-mcp-sync.live.test.ts` now
    asserts that, so it fails when the CLI starts stopping the old process;
    then expect one `alpha` and close this item. Not yet reported to
    Anthropic: filing moved to the manual-test checklist (7568) on
-   2026-11-10; a standalone repro for it is task 1's agent part. Draft:
-   "Claude Code 2.1.309, Agent SDK `Query.setMcpServers`: replacing a stdio
-   server's configuration under the same name connects a new process but
-   never stops the old one; the old process keeps its environment until the
-   CLI exits. Same for a server first loaded from `.claude.json` and then
-   replaced. Repro: `bridges/claude-bridge/src/services/session-manager-prompt-mcp-sync.live-probe.ts`,
-   scenario `replace`."
+   2026-11-10; the standalone repro is written (task 1, 2026-11-11). Draft:
+   "Claude Code 2.1.319, Agent SDK 0.3.319 `Query.setMcpServers`: replacing
+   a stdio server's configuration under the same name connects a new process
+   but never stops the old one when the old one was loaded at launch (the
+   SDK's `mcpServers` option, or `mcpServers` in `.claude.json`); the old
+   process keeps its environment until the CLI exits. A server first added
+   through `setMcpServers` is stopped correctly when replaced. Repro:
+   `bridges/claude-bridge/src/services/claude-mcp-replace-linger.live-probe.ts`
+   (self-contained; `bun add @anthropic-ai/claude-agent-sdk`, then run it with
+   `bun`; it exits 1 and prints the scenarios when it reproduces)."
 12. ~~**OpenCode rename probe calls the new name.**~~ Done 2026-10-25 in the
     harness: a probe that must fail, where the model called another probe
     server instead, passes only when the session's own MCP inventory (read
@@ -911,7 +990,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   runtime `applied` while the model answered "unavailable" without a tool
   call. On 2026-11-06 a fake-model rerun at Pi 1.4.0 passed every probe in
   both scopes, so the rebuild offers the tool (task 5); a real-login rerun
-  would only add model behaviour. Claude, Codex, OpenCode and Cursor have
+  would only add model behaviour (7568, 0039 task 5). Claude, Codex, OpenCode and Cursor have
   historical observations, with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
@@ -939,7 +1018,8 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   save, a cut event stream, reload, a bridge restart (newer generation), a
   removal, a pre-marker bridge and a shared user file. Full model-facing
   qualification remains open. Both parts below ran on 2026-11-06 on a fake
-  model and passed (task 7); a real-model full run is still unrun.
+  model and passed (task 7); a real-model full run is still unrun (7568, 0039
+  task 7).
   - Rerun the spec in full mode (without `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`)
     once the seeded Claude login is not rate limited. That proves the model's
     tool calls after the edit, the removal, the older bridge and the shared
@@ -971,7 +1051,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 Read from the JavaScript embedded in the pinned binary
 (`toolchains/opencode/1.19.4/darwin-arm64/opencode`, `Config.loadInstanceState`
 and `ConfigPaths`), and checked live where it matters for apply
-(`mise run verify:opencode:mcp-live`). Later layers win; `mcp` entries are
+(`verify:opencode:mcp-live`, removed with OpenCode 1.x on 2026-11-11). Later layers win; `mcp` entries are
 deep-merged.
 
 | Order | Layer | Re-read on `instance.dispose`? |
@@ -1500,8 +1580,11 @@ directory and were deleted with it.
   servers, so the running-CLI sync cannot rely on it either.
 - Mirrored merge and acceptance rules must be re-traced on every pin upgrade.
   For Pi the two parity tests fail when either side moves; for OpenCode,
-  `verify:opencode:mcp-live` fails when the user-file cache or the in-place
-  reload changes; Claude's running-CLI behaviour has `verify:claude:mcp-live`;
+  `verify:opencode:mcp-live` failed when the 1.x user-file cache or the
+  in-place reload changed (removed with OpenCode 1.x on 2026-11-11; OpenCode
+  2's MCP routes and user configuration are guarded by
+  `opencode2/opencode2-mcp.live.test.ts` and
+  `opencode2/opencode2-user-config.live.test.ts`, `mise run verify:opencode2:live`); Claude's running-CLI behaviour has `verify:claude:mcp-live`;
   Codex and Grok have `verify:codex:mcp-live` and `verify:grok:mcp-live`
   (since 2026-10-31).
 - Terminal sessions get guidance only; no command is injected.
@@ -1570,8 +1653,9 @@ directory and were deleted with it.
   to apply" for the user files. A server restart drops every pending question
   and permission in the environment, which is a bigger step than apply has
   taken so far; user-file saves keep `restart-required` with guidance, and
-  the OpenCode upgrade step reruns `verify:opencode:mcp-live`, which fails if
-  a bump stops caching the user files.
+  the OpenCode upgrade step reran `verify:opencode:mcp-live`, which failed if
+  a bump stopped caching the user files (removed with OpenCode 1.x on
+  2026-11-11).
 
 ## Needs verification
 
@@ -1588,9 +1672,54 @@ directory and were deleted with it.
 - ~~Agent-account homes: when a running Claude account session sees an
   editor write, the UI note, and stale reporting for account-only servers.~~
   Done 2026-10-31 (task 12), proven on the real CLI without credentials; a
-  session on a real signed-in account is still unrun.
+  session on a real signed-in account is still unrun (7568, 0039 task 12).
 
 ## Assumptions and decisions
+
+### 2026-11-11: task 1, the standalone repro
+
+Made without stopping to ask. No login, no model request and no outward
+action: the report itself stays with the maintainer (7568).
+
+#### Task 1: one self-contained file, kept in the bridge
+
+Chose a single TypeScript file that imports only the Agent SDK and Node
+built-ins and serves as its own fixture MCP server, placed beside the
+existing probe and run by the existing live test. The alternatives were a
+script outside the source tree (not typechecked or run, so it could silently
+stop reproducing) or pointing the report at the internal probe (it imports
+bridge modules, so an outside reader cannot run it). Keeping it under
+`src/services/` with the `.live-probe.ts` suffix gets it typechecked and
+lint-exempt for `console`, and the second live test fails when it stops
+reproducing.
+
+#### Task 1: three load paths instead of one
+
+The internal probe's `replace` scenario loads the server both inline and
+from `.claude.json` at once, so it could not say which path leaks. The repro
+loads it each way separately, which showed that a server added through
+`setMcpServers` is stopped correctly. That narrows the report and keeps the
+upstream fix easy to verify; the canary itself is left as it was.
+
+#### Task 1: the toolchain came from a throwaway data directory
+
+This shell's `CLAUDE_CLI_PATH` points into the real data directory's
+toolchains, which this work was not allowed to touch. The direct repro runs
+used the pinned 2.1.319 installed with
+`mise run toolchain:install --data-dir <worktree>/output/p0039/toolchain-data
+--tool claude`, removed afterwards. The first two `mise run
+verify:claude:mcp-live` runs did not: they inherited `CLAUDE_CLI_PATH` and
+executed the host's binary from the real data directory (read-only,
+temporary `HOME` and `CLAUDE_CONFIG_DIR`, no prompt; see task 1's
+disclosure). That cannot be undone; none of the recorded evidence comes from
+those runs. The probes now refuse such a path themselves (task 1, "Guard
+against a repeat"), so the same inheritance fails at once instead of running
+the binary. The recorded `verify:claude:mcp-live` and
+`verify:claude:plugin-mcp-live` results are reruns with `CLAUDE_CLI_PATH` at
+a second throwaway install (`output/p0039-r2`, removed afterwards) and every
+variable naming the real data directory unset. Anyone rerunning these tasks
+under the same constraint should set `CLAUDE_CLI_PATH` the same way, because
+both live tests take the executable from it.
 
 ### 2026-11-10: task 6, OpenCode on a loopback model
 
@@ -1795,7 +1924,7 @@ Made on 2026-10-25 while closing the code items, without stopping to ask.
 | Codex `applied` (item 3) | (a) a bridge field on `/runtime-health` (per-thread last `turn/start`); (b) the backend's own `dispatchedRequestIds` | (b): Codex's session routes can cold-start app-server, so a bridge read is not no-touch; the backend already records every accepted dispatch | No bridge or protocol change; works across bridge restarts and for "not running" | Proves a turn was dispatched after the reload, not what the thread loaded; a dispatch open at reload completion is excluded, so that turn alone never proves it |
 | Strategy name | (a) new `McpApplyStrategy` value for OpenCode; (b) keep `directory-restart`, change the description | (b): older renderers label the existing value | No compatibility path | The name says less than it does |
 | Grok per-session apply (item 4) | (a) pass user servers in `session/new`; (b) keep restart-based apply | (b): Grok already loads the files at process start; a session copy would run beside it with undocumented collision rules and merge with it in a name-keyed inventory | No duplicate servers; nothing new to qualify without a login | A Grok change still needs a restart |
-| Unmodelled layers (item 7) | (a) model every layer; (b) model only layers with a passive reader | (b): only Claude plugins qualify, and they need the CLI's enablement rules, so they moved to their own file (0121) | No guessed sources; the live join already labels such rows | Plugin servers stay visible only in the live panel for now |
+| Unmodelled layers (item 7) | (a) model every layer; (b) model only layers with a passive reader | (b): only Claude plugins qualify, and they need the CLI's enablement rules, so they moved to their own file (0121, retired 2026-11-11) | No guessed sources; the live join already labels such rows | Plugin servers stay visible only in the live panel for now |
 | Live row join (item 5) | (a) name only (as before); (b) name, scope and target; (c) also by runtime | (c): exact name and target, live scope picks the source, then effective status and precedence; the session's apply outcome by `runtimeId` | One highlighted row; explains injected, plugin and unknown rows | Pi's sanitized names are matched by rule, which must track the bridge |
 | Count-only MCP tiles (item 6) | (a) delete; (b) show only when no list is reported | (b): an older bridge that reports only the count still shows something | No duplicate number beside the list | Two code paths |
 | Rename probe (item 12) | (a) a tool name the model cannot substitute; (b) pin another model; (c) accept a substitution when the runtime's inventory proves the old name gone | (c): a renamed process keeps its label and tool, so (a) cannot work; (b) breaks when the model changes | Absence is proven by the runtime, not by the model's choice | Needs the session to report an inventory (OpenCode does) |
@@ -2060,15 +2189,17 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1's upstream report filing, task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1's upstream report filing, task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10, and the container session half of retired 0121 task 1.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).
 - [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action)
   in `native-transcripts.md`: the fix for the stale live panel found under
   task 14 (todo 7221, closed 2026-11-09); task 8's reconnect case passes again.
-- [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) for a
-  read-only Claude plugin source (split from item 7).
+- 0121 (retired 2026-11-11), the read-only Claude plugin source split from
+  item 7: its rules and evidence are under "Claude plugins" in
+  [`mcp-management.md`](../../architecture/mcp-management.md#verification-status),
+  and its container session half is a 7568 item.
 - [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,
   remote backends and environment-private configuration.
 - [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md) and

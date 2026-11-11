@@ -15,7 +15,9 @@
  * (including ones that leave the package). The original suffix style (`.js`,
  * `.ts` or none) is kept. In every tracked text file (tests, scripts, docs,
  * AGENTS.md) it then rewrites `…/<dir>/<old file>` path strings. Bare file
- * names in prose are not rewritten.
+ * names in prose are not rewritten, and neither is a path that is part of a
+ * Git `<revision>:<path>` expression (`git show 0d254a3a^:apps/…`): at that
+ * revision the file still had its old name.
  */
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -150,6 +152,20 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * A Git revision written before `:<path>`: an abbreviated or full SHA, `HEAD`
+ * and its kin, `main`/`master`, a remote-tracking or `refs/` name, or a
+ * release tag, each optionally followed by `^`, `^N`, `~` or `~N` steps.
+ * Deliberately not any word, so prose such as `see:apps/…` still moves.
+ */
+const revisionToken = String.raw`(?:[0-9a-fA-F]{7,40}|(?:FETCH_|ORIG_)?HEAD|main|master|(?:origin|upstream)\/[\w./-]+|refs\/[\w./-]+|v\d+\.\d+\.\d+(?:-[\w.]+)?)(?:[~^]\d*)*`;
+
+/**
+ * Matches when the text before a path string ends in `<revision>:` plus any
+ * leading directories of the path (`0d254a3a^:apps/backend/src/`).
+ */
+const revisionPathLead = String.raw`(?<![\w./-])${revisionToken}:(?:[\w.-]+\/)*`;
+
 /** `core/design-service.ts` → `core/design/service.ts`, and the `.js` spelling. */
 function pathStringRewrites(moves: Map<string, string>): Array<[RegExp, string]> {
   const rewrites: Array<[RegExp, string]> = [];
@@ -171,7 +187,10 @@ function pathStringRewrites(moves: Map<string, string>): Array<[RegExp, string]>
       ]);
     }
     for (const [oldText, newText] of variants) {
-      rewrites.push([new RegExp(`(?<![\\w-])${escapeRegExp(oldText)}(?![\\w-])`, "g"), newText]);
+      rewrites.push([
+        new RegExp(`(?<![\\w-])(?<!${revisionPathLead})${escapeRegExp(oldText)}(?![\\w-])`, "g"),
+        newText,
+      ]);
     }
   }
   return rewrites;

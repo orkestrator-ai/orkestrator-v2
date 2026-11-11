@@ -87,7 +87,7 @@ can be set for an agent-test profile.
 annotation evidence inside the container, checks paths there, and removes it
 after settlement", waits for settled evidence to be removed. Removal runs on
 the reconciler's garbage-collection pass, every `GC_EVERY_TICKS = 100` ticks
-of 3 s (`apps/backend/src/core/web-annotation-service-requests.ts:75`,
+of 3 s (`apps/backend/src/core/web-annotations/service-requests.ts:75`,
 called at line 1419), so the test can wait up to 300 s. It took 68–203 s in
 the three runs above, and its timeout is 9 minutes.
 

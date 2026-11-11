@@ -24,18 +24,22 @@ projectId, conversationKey }`:
 - Agent tools derive the owner from the authenticated tool credential
   (`AgentToolScope`). Callers can never nominate a project, environment,
   conversation, path or target message.
-- When the credential is environment-wide (OpenCode's server registration),
-  the tools require `scopeCapability`: an artifact-only grant minted at
+- When the credential is environment-wide (OpenCode 1.x's server
+  registration, retired 2026-11-11), the tools require `scopeCapability`: an artifact-only grant minted at
   dispatch (`artifactDispatch.beginTurn` in the native agent service), bound
   to owner, provider session, turn and verbs, with its own HMAC secret and
   signing domain (`grants.ts`), at most 24 hours, digest-only persistence,
   revoked when the turn's outcome is recorded, and also when the provider
-  send throws (rejected or ambiguous dispatch). OpenCode receives it in the
-  prompt request's `system` field, never in visible prompt text. Because the
-  model passes it back as a tool argument, `redactArtifactGrantArgs`
+  send throws (rejected or ambiguous dispatch). OpenCode 1.x received it in
+  the prompt request's `system` field, never in visible prompt text; an
+  OpenCode 2 turn instead connects with a tab-scoped credential, or, on a
+  workflow-result broker turn, gets the grant as an artifact-only server
+  (`opencode2/turn-connections.ts`). Because a model passes a grant back as a
+  tool argument, `redactArtifactGrantArgs`
   (`@orkestrator/protocol/transcript-artifacts`) replaces `scopeCapability`
   with `"[redacted]"` in OpenCode transcript normalization
-  (`opencode-messages.ts`) and in every projected part (`projectionPart`,
+  (`opencode2/transcript-tools.ts`, and `opencode-display-transcript.ts` for
+  stored 1.x transcripts) and in every projected part (`projectionPart`,
   before the projected-message cache), for canonical artifact tool calls and
   for any value shaped like a grant (`oag1.`). The provider's own history may
   keep the (revoked) value. Grants never appear in results, diagnostics or

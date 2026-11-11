@@ -28,7 +28,7 @@ updated: 2026-11-07
 
 Found while doing [7004](7004-domain-previews-annotations-artifacts-design.md): 35 non-test files in `apps/backend/src` still import `zod`.
 
-- MCP and agent tool input schemas (29 files): `agent-tools*.ts`, `control-mcp-*.ts`, `build-pipeline-key-information-tools.ts`, `graph-agent-tools.ts`, `scheduled-jobs/tools.ts`, `ticket-tool-fields.ts`, `transcript-artifacts/tools.ts`, `web-annotation-tools.ts`, `workflow-result-tools.ts`, `design/tools.ts`.
+- MCP and agent tool input schemas (29 files): `agent-tools*.ts`, `control-mcp-*.ts`, `build-pipeline-key-information-tools.ts`, `graph-agent-tools.ts`, `scheduled-jobs/tools.ts`, `ticket-tool-fields.ts`, `transcript-artifacts/tools.ts`, `web-annotations/tools.ts`, `workflow-result-tools.ts`, `design/tools.ts`.
 - The design service's own parsing (6 files): `design/schemas.ts`, `records.ts`, `intents.ts`, `history.ts`, `library.ts`, `errors.ts`.
 - The MCP server SDK in use accepts the JSON Schema an Effect Schema exports, so tool registration does not need Zod.
 

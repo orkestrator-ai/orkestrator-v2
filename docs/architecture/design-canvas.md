@@ -2,8 +2,7 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md)
-and [0038-design-agent-conversation-links.md](../todo/design-canvas/0038-design-agent-conversation-links.md).
+[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
 dialog has three tabs: **New design** (optionally with Claude or Codex, or a
@@ -458,25 +457,47 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   cannot be named is not recorded rather than guessed. The
   link is written after the provider-session teardown lock is released (a
   resume holds its canvas lane while waiting for that lock), and recording
-  never fails the close.
+  never fails the close. The fallback to the kept identity is covered by
+  deterministic tests only (`commands-registry-teardown.test.ts`, "a Codex
+  session the bridge lost…"): `e2e/agent-testing/design-resume-clients-live.spec.ts`
+  restarts the Codex bridge before the close, but a restarted bridge restores
+  its registrations, so the live read still answers. Reaching the branch live
+  would need a fault hook in the bridge, so no live check is kept for it.
 - **Link states.** `design_session_link_states` reads each link's tab mapping
-  from storage (no bridge, no liveness route, nothing that defeats idle
-  detachment) and reports `retained` or `missing`; it writes nothing. The
-  dialog asks once when it opens and again on **Retry**, never on a timer, and
-  shows: open (the tab is in this client's pane layout), can be resumed
-  (closed, the link records a session), no conversation to resume (closed and
+  from storage (no liveness route, nothing that defeats idle detachment) and
+  reports `retained` or `missing`; it writes nothing. For closed links with a
+  recorded session on an agent that can archive (of the design agents, Codex),
+  it also asks that agent's bridge for its archived conversations, once per
+  agent and only when the bridge is already running
+  (`NativeAgentService.archivedResumableSessionIdsIfRunning`, observe only:
+  never started for this read), within 3 seconds
+  (`DESIGN_ARCHIVED_READ_DEADLINE_MS`). A link whose session the list shows
+  as archived carries `archived: true`; no bridge, a failed list or a late one
+  leaves the flag off, so "not known" never reads as archived. The dialog asks
+  once when it opens and again on **Retry**, never on a timer, and shows: open
+  (the tab is in this client's pane layout), can be resumed (closed, the link
+  records a session), archived by the agent (closed, and the agent lists the
+  recorded session as archived), no conversation to resume (closed and
   nothing recorded: it never started, or it closed before links kept
   sessions; remove it or start a new conversation), could not check (the
   backend failed or did not answer within 8 seconds: **Retry**, never a
   replacement; a late answer still replaces it) and closed (a backend older
-  than this command, or an agent without resume). Codex conversations can
-  now be archived from the resume list
-  ([agent-engines.md](agent-engines.md#removing-a-conversation-from-the-resume-list));
-  links do not show an archived state yet
-  ([0038](../todo/design-canvas/0038-design-agent-conversation-links.md)).
+  than this command, or an agent without resume). Archive itself is the
+  resume list's **Remove from list**
+  ([agent-engines.md](agent-engines.md#removing-a-conversation-from-the-resume-list)).
+  A Codex thread archived while its bridge was not running reads as can be
+  resumed until a later check finds the bridge up; Resume then fails with the
+  agent's refusal in the dialog, and nothing opens.
 - **Resume conversation.** A closed link that can be resumed is offered ahead
   of a new conversation, alone or as the destination for new context
-  ("Resume and add to composer"). The resume tab id is derived from the link
+  ("Resume and add to composer"). An archived one offers **Unarchive and
+  resume** beside **Remove link**, and can be chosen as the destination
+  ("Unarchive, resume and add to composer"), but is never chosen for the user,
+  because reaching it writes provider state. It sends `restoreArchived: true`
+  (an optional, non-critical argument: an older backend resumes as before and
+  the agent refuses the archived thread): the backend unarchives the recorded
+  session (`setProjectionResumableSessionArchived`, Codex `thread/unarchive`)
+  before resuming it, and a refused restore does not resume or move the link. The resume tab id is derived from the link
   (`design-resume-<linkId>-<hash of its current tab id>`). `design_session_resume`
   then, in the canvas lane, compare-and-sets the link's tab, resumes the
   recorded session for the new tab through the ordinary native-agent resume
@@ -488,6 +509,13 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   first one's link and live session without resuming again. The tab opens with
   `resumeSessionId` and `requireExistingResumeSession` and no initial prompt,
   so the design's opening prompt is never sent again.
+
+Links, Resume and two clients resuming at once were qualified live with Claude
+and Codex on 2026-10-24 and 2026-10-25; that record is in the retired to-do
+0038 (`git show 14df96544:docs/todo/design-canvas/0038-design-agent-conversation-links.md`).
+The archived state has deterministic and browser coverage; its live check
+with a real archived Codex thread is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 ## Bounds
 
@@ -534,5 +562,34 @@ Vite; `design-canvas-packaged-electron.spec.ts`
 Linux app and its `file://` renderer. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
 exports from a running container and interrupts it.
+`e2e/DesignAgentLinks.spec.ts` renders the Ask agent dialog's closed-link
+states, archived included, against fixed backend answers.
 `scripts/benchmark-design.ts` measures transfer, commit and latency fixtures,
 and `e2e/perf/design-canvas-perf.ts` measures the client in a real browser.
+Its leak check compares the cycle halves' maximum for every signal except
+`jsEventListeners`, where it compares their minimum. That CDP counter also
+counts listener objects no event target holds any more until Blink finalizes
+them, and a forced collection does not wait for that, so on Linux a sample
+reads one of two fixed values at random (+25, +55 and +85 listeners at 1, 16
+and 64 frames, measured 2026-11-11 on beelink2). Two readings taken a second
+apart with no page action between them flip between the two values; every
+`addEventListener` registration in the page and every listener on its nodes
+(DOMDebugger, iframes included) stayed constant in every sample; and a heap
+snapshot taken at a high reading held the low number of registered
+listeners. A leak raises the floor and still fails the check. A second half
+that read only the high value looks the same, so before failing on the floor
+the check takes up to eight more readings a second apart with no page action
+between them; noise drops one back to the floor and clears the verdict, a leak
+keeps every one raised. A false failure then needs all six late samples and all
+eight readings to be high (about one run in 16,000 at even odds, against about
+one in 65 for the floor rule alone; `tests/unit/design-canvas-leak-verdict.test.ts`
+simulates both). With the
+2026-10-22 parameters (3 runs × 1, 16 and 64 frames, 12 cycles) on beelink2 on
+2026-11-11, the floor rule passed all nine runs, including runs that read both
+values; one 16-frame run failed instead on `cdpFrames` reading 10 rather than 9
+on two late samples, on a heavily loaded host
+([7820](../todo/design-canvas/7820-design-perf-cdp-frames-transient.md)).
+`--listener-census` (with `--heap-snapshots <dir>`) repeats that
+investigation; it perturbs the page, so it is never used for measured
+numbers. The 2026-11-06 failures that prompted it are in the retired to-do
+7440 (`git show 14df96544:docs/todo/design-canvas/7440-design-perf-listener-count-two-states.md`).

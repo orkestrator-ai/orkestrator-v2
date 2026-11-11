@@ -175,6 +175,52 @@ describe("extension discovery parsers", () => {
       ).mcpServers,
     ).toEqual([{ name: "github", status: "configured" }]);
   });
+
+  test("merges OpenCode 2.x's list of configuration sources", () => {
+    // `opencode2 debug config` on 2.2.6: one entry per document read, in
+    // load order, beside the directories searched.
+    const sources = [
+      {
+        type: "document",
+        path: "/home/node/.config/opencode/opencode.json",
+        info: {
+          mcp: {
+            servers: {
+              docs: { type: "remote", url: "https://example.test/mcp" },
+              local: { type: "local", command: ["echo"] },
+            },
+          },
+          plugins: ["@team/review"],
+        },
+      },
+      {
+        type: "document",
+        path: "/workspace/opencode.json",
+        info: {
+          mcp: { servers: { local: { type: "local", command: ["echo"], enabled: false } } },
+          plugins: [["file:///workspace/plugin.ts", { option: true }]],
+        },
+      },
+      { type: "directory", path: "/home/node/.config/opencode" },
+    ];
+    expect(parseOpenCodeConfig(JSON.stringify(sources))).toEqual({
+      mcpServers: [
+        { name: "docs", status: "configured" },
+        { name: "local", status: "disabled" },
+      ],
+      plugins: [
+        { name: "@team/review", status: "configured" },
+        { name: "file:///workspace/plugin.ts", status: "configured" },
+      ],
+    });
+
+    // One document's unreadable section fails that surface alone.
+    const broken = JSON.stringify([
+      { type: "document", path: "/a", info: { mcp: "nope", plugins: ["@team/review"] } },
+    ]);
+    expect(() => parseOpenCodeMcpServers(broken)).toThrow("unreadable mcp section");
+    expect(parseOpenCodePlugins(broken)).toEqual([{ name: "@team/review", status: "configured" }]);
+  });
 });
 
 describe("parseClaudeMcpList edge cases", () => {

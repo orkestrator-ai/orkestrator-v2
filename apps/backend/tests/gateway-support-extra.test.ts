@@ -1052,6 +1052,53 @@ describe("remote gateway", () => {
     expect(metrics.commands.__unknown__).toMatchObject({ count: 1, failures: 1 });
   }, 30_000);
 
+  test("keeps a size histogram of the whole-file base64 readers' answers", async () => {
+    // A 3 MiB base64 string: what a file of about 2.25 MiB answers with.
+    const encoded = "A".repeat(3 * 1024 * 1024);
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "read_container_file_base64") throw new Error("not running");
+        return command === "read_file_base64" ? encoded : "small";
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const invoke = (command: string) =>
+      requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ command, args: { filePath: "/not/recorded.png" } }),
+      });
+
+    expect((await invoke("read_file_base64")).status).toBe(200);
+    expect((await invoke("read_environment_file_base64")).status).toBe(200);
+    expect((await invoke("read_container_file_base64")).status).toBe(500);
+    expect((await invoke("read_file")).status).toBe(200);
+
+    const metrics = await readGatewayMetrics(info);
+    const sizes = metrics.base64FileReads;
+    const answerBytes = Buffer.byteLength(JSON.stringify({ result: encoded }));
+    expect(sizes.read_file_base64).toEqual({
+      count: 1,
+      maxBytes: answerBytes,
+      buckets: expect.objectContaining({ upTo4MiB: 1, upTo1MiB: 0 }),
+    });
+    expect(sizes.read_file_base64!.maxBytes).toBe(metrics.commands.read_file_base64!.responseBytes);
+    expect(sizes.read_environment_file_base64).toMatchObject({
+      count: 1,
+      buckets: { upTo64KiB: 1 },
+    });
+    // A failed read is a small error body, not a file.
+    expect(sizes.read_container_file_base64).toMatchObject({ count: 0, maxBytes: 0 });
+    expect(Object.keys(sizes).sort()).toEqual([
+      "read_container_file_base64",
+      "read_environment_file_base64",
+      "read_file_base64",
+    ]);
+    // Content-free: neither the path asked for nor any of the file is kept.
+    expect(JSON.stringify(sizes)).not.toContain("recorded");
+    expect(JSON.stringify(sizes)).not.toContain("AAAA");
+  });
+
   test("treats a loopback browser listener as remote for compression rollout while control stays identity", async () => {
     const { info } = await startGateway({
       bindAddress: "127.0.0.1",

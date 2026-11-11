@@ -551,6 +551,7 @@ describe("bridge measurements", () => {
       snapshotBytes: body.byteLength,
       changedRows: 2,
       rows: 2,
+      trimmedHeads: 0,
       estimatedDeltaBytes:
         Buffer.byteLength(JSON.stringify(changed)) +
         Buffer.byteLength(JSON.stringify(added)) +
@@ -568,6 +569,23 @@ describe("bridge measurements", () => {
     counter.recordSnapshot("one", Buffer.from('{"status":"unchanged"}'), false);
     expect(counter.delta.snapshots).toBe(3);
   });
+  test("counts snapshots whose head row was part-trimmed", () => {
+    const counter = createCounter();
+    const trimmed = (omittedParts?: number) =>
+      Buffer.from(
+        JSON.stringify({
+          status: "snapshot",
+          value: {
+            messages: [{ id: "head", text: "tail" }],
+            messageWindow: { truncated: true, ...(omittedParts ? { omittedParts } : {}) },
+          },
+        }),
+      );
+    counter.recordSnapshot("one", trimmed(3), false);
+    counter.recordSnapshot("one", trimmed(), false);
+    counter.recordSnapshot("one", gzipSync(trimmed(1)), true);
+    expect(counter.delta.trimmedHeads).toBe(2);
+  });
   test("state repeats compare decoded bodies per route and session", () => {
     const counter = createCounter();
     const body = Buffer.from('{"phase":"idle"}');
@@ -584,6 +602,7 @@ describe("bridge measurements", () => {
       estimatedDeltaBytes: 50,
       changedRows: 1,
       rows: 2,
+      trimmedHeads: 1,
     };
     const route = { count: 1, bytes: 10, decodedBytes: 100, ms: 2, maxMs: 2, repeats: 1 };
     const file: CounterFile = {
@@ -606,6 +625,7 @@ describe("bridge measurements", () => {
       repeats: 2,
     });
     expect(result.delta.snapshots).toBe(2);
+    expect(result.delta.trimmedHeads).toBe(2);
     expect(() => summarizeCounters([], 1000, 2000)).toThrow("Missing bridge instrumentation");
     expect(() => summarizeCounters([{ ...file, flushedAt: 1999 }], 1000, 2000)).toThrow(
       "not flushed",
@@ -619,11 +639,29 @@ describe("bridge measurements", () => {
     const window = {
       bridge: {
         routes: { "GET /session/:id": route, "GET /session/:id/transcript?version=2": route },
-        delta: { snapshots: 1, snapshotBytes: 1, estimatedDeltaBytes: 1, changedRows: 1, rows: 1 },
+        delta: {
+          snapshots: 1,
+          snapshotBytes: 1,
+          estimatedDeltaBytes: 1,
+          changedRows: 1,
+          rows: 1,
+          trimmedHeads: 0,
+        },
       },
       renderer: { first: { "transcript:delta": 1, "state:unchanged": 1 } },
     };
     expect(() => assertWindowEvidence(window, ["first"], true)).not.toThrow();
+    const codex = {
+      ...window,
+      bridge: {
+        ...window.bridge,
+        routes: {
+          "GET /session/:id/status": route,
+          "GET /session/:id/transcript?version=2": route,
+        },
+      },
+    };
+    expect(() => assertWindowEvidence(codex, ["first"], true)).not.toThrow();
     expect(() => assertWindowEvidence(window, ["first", "second"], true)).toThrow("viewer");
     expect(() =>
       assertWindowEvidence(

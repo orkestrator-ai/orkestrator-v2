@@ -1369,8 +1369,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       } catch {
         return { outcome: "unknown", requestId: action.requestId };
       }
-      if (response.status === 404)
+      if (response.status === 404) {
+        this.steerQualification.forget(sessionId);
         throw new PromptRejectedError(`${this.agent} session was not found`);
+      }
       const payload = asRecord(
         await boundedJson(response, `${this.agent} steer`).catch(() => ({})),
       );
@@ -1492,5 +1494,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
+    this.steerQualification.forget(sessionId);
   }
 }

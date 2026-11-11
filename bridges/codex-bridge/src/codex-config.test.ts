@@ -1,5 +1,6 @@
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
@@ -688,9 +689,13 @@ describe("Codex app-server configuration", () => {
         ...ARTIFACT_TOOL_NAMES,
         ...AGENT_GOAL_TOOL_NAMES,
         ...AGENT_SUBORK_TOOL_NAMES,
+        ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
         ...KEY_INFORMATION_TOOL_NAMES,
       ].map((name) => `mcp_servers.orkestrator.tools.${name}.approval_mode`),
     ]);
+    expect(overrides["mcp_servers.orkestrator.tools.convert_to_pipeline.approval_mode"]).toBe(
+      JSON.stringify("approve"),
+    );
     expect(overrides["mcp_servers.orkestrator.tools.send_message.approval_mode"]).toBe(
       JSON.stringify("approve"),
     );

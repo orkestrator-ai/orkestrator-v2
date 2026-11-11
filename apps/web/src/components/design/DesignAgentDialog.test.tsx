@@ -381,10 +381,10 @@ describe("DesignAgentDialog", () => {
     expect(screen.queryByTestId("design-link-gone") === null).toBe(true);
   });
 
-  /** Answers the link-state check with these per-link sessions. */
+  /** Answers the link-state check with these per-link sessions ("archived": missing, archived). */
   function backendLinks(
     sessions: DesignSessionLink[],
-    states: Record<string, "retained" | "missing">,
+    states: Record<string, "retained" | "missing" | "archived">,
     recorded: Record<string, string> = {},
   ) {
     let current = sessions.map((entry) =>
@@ -396,7 +396,11 @@ describe("DesignAgentDialog", () => {
           ok: true,
           value: {
             sessions: current,
-            states: Object.entries(states).map(([linkId, session]) => ({ linkId, session })),
+            states: Object.entries(states).map(([linkId, session]) =>
+              session === "archived"
+                ? { linkId, session: "missing", archived: true }
+                : { linkId, session },
+            ),
           },
         });
       if (command === "design_session_resume") {
@@ -465,6 +469,75 @@ describe("DesignAgentDialog", () => {
     ).toEqual([]);
     expect(commandCalls("design_session_link")).toHaveLength(0);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("an archived conversation offers Unarchive and resume, and is never the default", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat", platform: "codex" })];
+    backendLinks(sessions, { kept: "archived" }, { kept: "thread-archived" });
+    const { onOpenChange } = await renderDialog({ sessions });
+
+    const row = screen.getByTestId("design-link-kept");
+    expect(row.textContent).toContain("Closed — archived by the agent");
+    expect(within(row).queryByRole("button", { name: "Resume Design chat" }) === null).toBe(true);
+    expect(within(row).getByRole("button", { name: "Remove link to Design chat" })).toBeTruthy();
+    // Reaching it unarchives it, so a new conversation stays the default.
+    expect(screen.getByRole("button", { name: "Start a new conversation" })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Unarchive and resume Design chat" }),
+      );
+    });
+
+    const resume = commandCalls("design_session_resume");
+    expect(resume).toHaveLength(1);
+    expect(resume[0]?.[1]).toMatchObject({
+      linkId: "kept",
+      expectedTabId: "agent-closed",
+      restoreArchived: true,
+    });
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock.mock.calls[0]![0]).toBe("codex");
+    expect(createTabMock.mock.calls[0]![1]?.initialPrompt).toBeUndefined();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("choosing an archived conversation unarchives it, resumes it and adds the context", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat", platform: "codex" })];
+    backendLinks(sessions, { kept: "archived" }, { kept: "thread-archived" });
+    await renderDialog({ sessions });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("radio", { name: "Send to Design chat" }));
+    });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Unarchive, resume and add to composer" }),
+      );
+    });
+
+    expect(commandCalls("design_session_resume")[0]?.[1]).toMatchObject({ restoreArchived: true });
+    const options = createTabMock.mock.calls[0]![1]!;
+    const draft = nativeComposeDraft(
+      appCommandStore(nativeComposeStore).getState(),
+      createSessionKey("env-1", options.tabId!),
+    );
+    expect(draft.annotations).toHaveLength(1);
+  });
+
+  test("a resumable conversation is resumed without asking to unarchive it", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat", platform: "codex" })];
+    backendLinks(sessions, { kept: "missing" }, { kept: "thread-live" });
+    await renderDialog({ sessions });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume Design chat" }));
+    });
+
+    expect(commandCalls("design_session_resume")[0]?.[1]).not.toHaveProperty("restoreArchived");
   });
 
   test("a conversation the agent no longer has is reported, and nothing opens", async () => {

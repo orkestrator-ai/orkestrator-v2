@@ -189,8 +189,8 @@ When touching any of them:
 - **Close is non-destructive.** It stops owned work, denies parked approvals,
   questions and plan approvals, settles dispatch claims, and releases the
   bridge's live mapping. It never deletes vendor history: no Claude SDK
-  `deleteSession`, no Codex `thread/delete`, no OpenCode
-  `client.session.delete`.
+  `deleteSession`, no Codex `thread/delete`, no OpenCode session delete
+  (`DELETE /api/session/:id`).
 - **Only a 2xx that affirms `closed: true` is a confirmed close.** 200
   `{ closed: true, retained: true }` or `{ closed: true, missing: true }`.
   Anything else, including an empty or malformed 2xx, is not a close.

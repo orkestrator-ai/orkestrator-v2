@@ -8,11 +8,11 @@
  * keep using it. The bridges' signatures (`bridge-authority.ts`) need a
  * verifier inside the server, which OpenCode does not have.
  *
- * So on an `opencode-launch=1` image, once the server the backend launched has
+ * So on an `opencode2-launch=1` image, once the server the backend launched has
  * answered the fresh password only it was given and loaded the plugin that
  * makes it non-dumpable, a root exec records the inode of the socket listening
- * on the port in root-only `/run/orkestrator-bridge`
- * ({@link recordOpenCodeListenerScript}). Every later read of the password
+ * on the port in root-only `/run/orkestrator-bridge` (`opencode2-listener`,
+ * {@link recordOpenCodeListenerScript}). Every later read of the password
  * (`readContainerBridgeToken`) lists the port's listening sockets in the same
  * root exec, and the password is withheld unless that one socket is still the
  * only one ({@link judgeOpenCodeListener}). Anything else listening there had
@@ -28,25 +28,24 @@
  * refused connection or an unexpected answer (`opencode-listener-recheck.ts`);
  * see docs/architecture/agent-approvals.md.
  *
- * The 2.x server on an `opencode2-launch=1` image has its own record
- * (`opencode2-listener`) on its own port, by the same rules.
+ * The OpenCode 1.x server's record (`opencode-listener`, port 4096) was
+ * retired with 1.x.
  */
 
-/** The root-owned binary `orkestrator-bridge-launch opencode` runs. */
-export const OPENCODE_CONTAINER_BINARY = "/opt/opencode/bin/opencode";
 /** The root-owned 2.x binary `orkestrator-bridge-launch opencode2` runs. */
 export const OPENCODE2_CONTAINER_BINARY = "/opt/opencode/bin/opencode2";
 
 /** The record of the socket the backend's server listens on; root-only, beside the password. */
-export const OPENCODE_LISTENER_RECORD = "/run/orkestrator-bridge/opencode-listener";
-/** The same record for the 2.x server on an `opencode2-launch=1` image. */
 export const OPENCODE2_LISTENER_RECORD = "/run/orkestrator-bridge/opencode2-listener";
 
-/** Which of the container's two OpenCode servers a record, a port and a password belong to. */
-export type OpenCodeServerKind = "opencode" | "opencode2";
+/**
+ * The container's OpenCode server, whose record, port and password these
+ * are: OpenCode 2.x, the credential kind `opencode2`.
+ */
+export type OpenCodeServerKind = "opencode2";
 
-export function openCodeListenerRecord(kind: OpenCodeServerKind): string {
-  return kind === "opencode2" ? OPENCODE2_LISTENER_RECORD : OPENCODE_LISTENER_RECORD;
+export function openCodeListenerRecord(_kind: OpenCodeServerKind): string {
+  return OPENCODE2_LISTENER_RECORD;
 }
 
 export interface OpenCodeListenerSnapshot {
@@ -114,7 +113,7 @@ export function judgeOpenCodeListener(
  */
 export function recordOpenCodeListenerScript(
   port: number,
-  record: string = OPENCODE_LISTENER_RECORD,
+  record: string = OPENCODE2_LISTENER_RECORD,
 ): string {
   return [
     "set -eu",

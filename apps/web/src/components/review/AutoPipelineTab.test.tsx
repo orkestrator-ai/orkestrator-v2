@@ -58,7 +58,7 @@ const goTo = (name: RegExp) => fireEvent.click(screen.getByRole("button", { name
 test("drafting shows progress in the tab and leaving it does not cancel the draft", async () => {
   const { node } = client({ phase: "drafting" });
   const view = render(node);
-  expect(await screen.findByText(/Drafting ticket and Build notes/)).toBeTruthy();
+  expect(await screen.findByText(/Waiting for the agent in the source tab/)).toBeTruthy();
   expect(screen.getByRole("navigation", { name: "Auto-pipeline steps" })).toBeTruthy();
   view.unmount();
   expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(0);

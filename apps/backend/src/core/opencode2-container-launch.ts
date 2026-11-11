@@ -1,12 +1,14 @@
 /**
- * The container's OpenCode 2.x server on an `opencode2-launch=1` image
- * (#2091; docs/architecture/agent-approvals.md): the 2.x twin of `opencode-container-launch.ts`.
+ * The container's OpenCode (2.x) server on an `opencode2-launch=1` image
+ * (#2091; docs/architecture/agent-approvals.md).
  *
- * Started from `node`'s login shell, 2.x ran node's own
+ * OpenCode loads plugins from every configuration directory it reads, at every
+ * instance start, and a plugin runs inside the server, beside the password it
+ * compares. Started from `node`'s login shell, 2.x ran node's own
  * `~/.opencode/bin/opencode2` with `OPENCODE_CONFIG_DIR` in node's home, read
  * the checkout's `.opencode/` and `opencode.json` (both can load a plugin
  * beside the password), and nothing checked who listened on its port.
- * Here instead, as for 1.x:
+ * Here instead:
  *
  * - a root exec rebuilds `/run/orkestrator-opencode2` before every start
  *   ({@link openCode2LaunchConfigScript}): `opencode/` is `OPENCODE_CONFIG_DIR`,
@@ -55,10 +57,6 @@ import {
   OPENCODE_DB_DIRECTORY,
 } from "./container-state-layout.js";
 import {
-  OPENCODE_HOST_CONFIG_INPUT,
-  OPENCODE_HOST_CONFIG_MAX_KIB,
-} from "./opencode-container-launch.js";
-import {
   OPENCODE2_LISTENER_RECORD,
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
@@ -77,6 +75,7 @@ import {
 } from "./opencode2/container-server.js";
 import {
   OPENCODE2_CREDENTIAL_PLUGIN_ID,
+  OPENCODE2_DISABLE_FILEWATCHER,
   OPENCODE2_FLAGS,
   buildOpenCode2CredentialPluginSource,
 } from "./opencode2/server.js";
@@ -85,6 +84,16 @@ import {
   buildOpenCode2UserConfigMergeCommand,
 } from "./opencode2/user-config.js";
 import { runCommand } from "./shell.js";
+
+/**
+ * The read-only mount of the user's host `~/.config/opencode`; root copies the
+ * server's configuration from it, never from the container's copy of it,
+ * which node can change.
+ */
+export const OPENCODE_HOST_CONFIG_INPUT = "/opencode-config";
+
+/** A host configuration larger than this is not copied; OpenCode starts with ours alone. */
+export const OPENCODE_HOST_CONFIG_MAX_KIB = 64 * 1024;
 
 /** The plugins a launched 2.x server starts with, by id. */
 export function openCode2LaunchPlugins(): ReadonlyArray<{ id: string; source: string }> {
@@ -203,6 +212,8 @@ export function openCode2Launch(
         env: {
           OPENCODE_PASSWORD: password,
           OPENCODE_FLAGS: OPENCODE2_FLAGS,
+          // Its location watchers stall start and shutdown (`server.ts`).
+          ...OPENCODE2_DISABLE_FILEWATCHER,
           // 2.x always gets a database of its own: its default is 1.x's `opencode.db`.
           OPENCODE_DB: persistentDatabase ? OPENCODE2_DB_PATH : OPENCODE2_LEGACY_DB_PATH,
         },
@@ -262,12 +273,8 @@ export async function recordOpenCode2Listener(containerId: string): Promise<void
  */
 export async function startOpenCode2WithLauncher(containerId: string): Promise<string> {
   await asRoot(containerId, openCode2LaunchConfigScript());
-  await asRoot(
-    containerId,
-    openCodePackageCacheScript("opencode2"),
-    OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
-  );
-  await stageProjectOpenCodeConfig(containerId, "opencode2");
+  await asRoot(containerId, openCodePackageCacheScript(), OPENCODE_PACKAGE_CACHE_TIMEOUT_MS);
+  await stageProjectOpenCodeConfig(containerId);
   const persistentDatabase =
     (
       await dockerExec(

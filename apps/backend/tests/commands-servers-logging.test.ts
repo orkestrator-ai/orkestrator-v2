@@ -16,7 +16,7 @@ describe("local server logging environment", () => {
       const root = await createTempDir("ork-server-logging-");
       const bin = path.join(root, "bin");
       await fs.mkdir(bin);
-      for (const name of ["bun", "claude", "codex", "grok", "pi", "opencode"]) {
+      for (const name of ["bun", "claude", "codex", "grok", "pi", "opencode2"]) {
         await fs.writeFile(path.join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       }
       for (const bridge of ["claude", "codex", "cursor", "acp", "pi"]) {

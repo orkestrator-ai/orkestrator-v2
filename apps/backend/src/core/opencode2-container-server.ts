@@ -1,17 +1,20 @@
 /**
- * The OpenCode 2.x server inside a container environment
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 3), and the
- * one entry point the native-agent service uses for either kind of
- * environment ({@link openCode2EnvironmentServer}).
+ * The OpenCode server inside a container environment, and the one entry
+ * point the native-agent service uses for either kind of environment
+ * ({@link openCode2EnvironmentServer}). The container commands
+ * (`start_opencode_server`, `stop_opencode_server`, `get_opencode_server_status`)
+ * reach it through {@link startOpenCodeContainerServer},
+ * {@link stopOpenCodeContainerServer} and {@link openCodeContainerServerStatus}.
  *
- * A second process beside the container's 1.x `opencode serve`, started only
- * when an OpenCode 2.x session needs it, on {@link OPENCODE2_SERVER_PORT}:
+ * Started only when an OpenCode session needs it, on
+ * {@link OPENCODE2_SERVER_PORT}:
  *
  * - only in a container whose image lists `opencode2` and that publishes the
- *   port ({@link containerRunsOpenCode2}); an older image stays on 1.x;
+ *   port ({@link containerRunsOpenCode2}); a container from an older image
+ *   must be rebuilt;
  * - on an `opencode2-launch=1` image, started by the root-owned launcher from
  *   root's binary and configuration, with its listening socket recorded
- *   (`opencode2-container-launch.ts`), as 1.x is; on an older image, by
+ *   (`opencode2-container-launch.ts`), as 1.x was; on an older image, by
  *   `buildOpenCode2ContainerStartScript` from node's login shell. Either way
  *   the password goes on stdin to a root-only file (`opencode2-token`) and to
  *   the server alone, the credential plugin keeps it from the agent's tools,
@@ -24,9 +27,11 @@
  *   the current plugins, and adopted after a backend restart (it outlives
  *   the backend, as every container server does).
  *
- * Observers (`start: false`) never start one. A container stop ends it; the
- * 1.x stop command leaves it alone. Starts share the container's OpenCode
- * bridge-operation queue, so they never race a 1.x start or login sync.
+ * Observers (`start: false`) never start one. A container stop ends it.
+ * Starts share the container's OpenCode bridge-operation queue, so they never
+ * race a login sync. A server this backend started and checked within
+ * `OBSERVED_VALIDITY_MS` is reused without another round of `docker exec`s:
+ * every provider call that needs the server asks for it.
  */
 import { createHash } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -74,7 +79,7 @@ import {
   manifestRunsOpenCode2,
   publishesOpenCode2Port,
 } from "./opencode2/container-server.js";
-import type { OpenCode2RouteConnection } from "./opencode2/routing-provider.js";
+import type { OpenCode2ServerConnection } from "./opencode2/environment-provider.js";
 import {
   OPENCODE2_LAUNCH_FINGERPRINT,
   recordOpenCode2Listener,
@@ -97,7 +102,7 @@ const PROBE_TIMEOUT_MS = 3_000;
 
 interface ContainerServerRecord {
   containerId: string;
-  connection: OpenCode2RouteConnection;
+  connection: OpenCode2ServerConnection;
   checkedAt: number;
 }
 
@@ -131,7 +136,7 @@ export function openCode2ContainerConnection(
   password: string,
   recheck: OpenCodeListenerRecheck = () =>
     recheckContainerOpenCodeListener(containerId, "opencode2"),
-): OpenCode2RouteConnection {
+): OpenCode2ServerConnection {
   const passwordTag = createHash("sha256").update(password).digest("hex").slice(0, 12);
   return {
     baseUrl: `http://127.0.0.1:${hostPort}`,
@@ -142,7 +147,7 @@ export function openCode2ContainerConnection(
   };
 }
 
-async function answersAs2x(connection: OpenCode2RouteConnection): Promise<boolean> {
+async function answersAs2x(connection: OpenCode2ServerConnection): Promise<boolean> {
   try {
     const info = await new OpenCode2Client(connection).info(AbortSignal.timeout(PROBE_TIMEOUT_MS));
     return info.version.startsWith("2.");
@@ -249,7 +254,7 @@ export async function startContainerOpenCode2Server(
   credentialMode: () => Promise<OpenCode2ContainerMode> = () =>
     containerOpenCode2Mode(context, containerId),
   warmTimeoutMs = 30_000,
-): Promise<{ connection: OpenCode2RouteConnection; wasRunning: boolean }> {
+): Promise<{ connection: OpenCode2ServerConnection; wasRunning: boolean }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
     throw retryableBridgeStartupError("Container is not running");
@@ -389,7 +394,7 @@ async function containerEnvironment(
 export async function ensureOpenCode2ContainerServer(
   context: CommandContext,
   environmentId: string,
-): Promise<OpenCode2RouteConnection> {
+): Promise<OpenCode2ServerConnection> {
   const environment = await containerEnvironment(context, environmentId);
   const { containerId } = environment;
   const servers = serversOf(context);
@@ -400,6 +405,8 @@ export async function ensureOpenCode2ContainerServer(
     throw new ProviderUnavailableError("Backend is shutting down; OpenCode 2 cannot start");
   }
   context.runtime.environments.fence.assertNotMoving(environmentId);
+  const known = await reusableRecord(servers, environmentId, containerId);
+  if (known) return known;
   if (!(await containerRunsOpenCode2(context, environment))) {
     throw new ProviderUnavailableError(
       "This container's image has no OpenCode 2; rebuild it from a current image to use OpenCode 2",
@@ -427,6 +434,81 @@ export async function ensureOpenCode2ContainerServer(
 }
 
 /**
+ * A server this backend started in this container, checked recently or
+ * answering now; undefined sends the caller through the full start.
+ */
+async function reusableRecord(
+  servers: ContainerServers,
+  environmentId: string,
+  containerId: string,
+  now: () => number = Date.now,
+): Promise<OpenCode2ServerConnection | undefined> {
+  const known = servers.records.get(environmentId);
+  if (known?.containerId !== containerId) return undefined;
+  if (now() - known.checkedAt < OBSERVED_VALIDITY_MS) return known.connection;
+  if (!(await answersAs2x(known.connection))) return undefined;
+  known.checkedAt = now();
+  return known.connection;
+}
+
+function hostPortOf(connection: OpenCode2ServerConnection): number {
+  return Number(new URL(connection.baseUrl).port);
+}
+
+/**
+ * `start_opencode_server`: the container's server, started when none is
+ * running, as a bridge connection (the password is its token).
+ */
+export async function startOpenCodeContainerServer(
+  context: CommandContext,
+  containerId: string,
+): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
+  const operationId = await containerBridgeOperationId(context, containerId);
+  return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
+    // 2.x imports the login once, on its first start, so it is synced first.
+    if ((await syncContainerLoginUnlocked(context, "opencode", containerId)) === "failed")
+      throw new ProviderUnavailableError("OpenCode credential synchronization failed");
+    const started = await startContainerOpenCode2Server(context, containerId);
+    if ((await syncContainerLoginUnlocked(context, "opencode", containerId)) === "failed")
+      throw new ProviderUnavailableError("OpenCode credential synchronization failed");
+    return {
+      hostPort: hostPortOf(started.connection),
+      wasRunning: started.wasRunning,
+      authToken: started.connection.password,
+    };
+  });
+}
+
+/** `stop_opencode_server`: stop the container's server and forget its password. */
+export async function stopOpenCodeContainerServer(
+  context: CommandContext,
+  containerId: string,
+): Promise<void> {
+  const operationId = await containerBridgeOperationId(context, containerId);
+  await enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
+    for (const [environmentId, record] of serversOf(context).records) {
+      if (record.containerId === containerId) serversOf(context).records.delete(environmentId);
+    }
+    await stopOpenCode2Listeners(containerId).catch(() => undefined);
+    await dockerExec(containerId, STOP_OPENCODE2_CONTAINER_SERVER_SCRIPT);
+    await removeContainerBridgeCredential(containerId, "opencode2").catch(() => undefined);
+  });
+}
+
+/** `get_opencode_server_status`: whether the container's server answers. */
+export async function openCodeContainerServerStatus(
+  containerId: string,
+): Promise<{ running: boolean; hostPort: number | null; authToken?: string }> {
+  const hostPort = await getHostPort(containerId, OPENCODE2_SERVER_PORT);
+  const password = hostPort ? await readContainerBridgeToken(containerId, "opencode2") : null;
+  const running =
+    !!hostPort &&
+    !!password &&
+    (await answersAs2x(openCode2ContainerConnection(containerId, hostPort, password)));
+  return { running, hostPort, ...(running && password ? { authToken: password } : {}) };
+}
+
+/**
  * The running 2.x server's connection, never starting one. A server this
  * backend did not start (one from before a backend restart) is adopted
  * through its persisted password, at most every {@link ADOPT_RETRY_MS}.
@@ -435,7 +517,7 @@ export async function peekOpenCode2ContainerServer(
   context: CommandContext,
   environmentId: string,
   now: () => number = Date.now,
-): Promise<OpenCode2RouteConnection | undefined> {
+): Promise<OpenCode2ServerConnection | undefined> {
   const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
   const containerId = environment?.containerId?.trim();
   if (
@@ -484,7 +566,7 @@ export async function openCode2EnvironmentServer(
   context: CommandContext,
   environmentId: string,
   options: { start: boolean },
-): Promise<OpenCode2RouteConnection | undefined> {
+): Promise<OpenCode2ServerConnection | undefined> {
   const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
   if (environment?.environmentType === "containerized") {
     return options.start

@@ -1479,7 +1479,9 @@ exit 0
         const log = await fs.readFile(logs.exec, "utf8");
         const reconcile = log.indexOf("rm -f /home/node/.claude/.credentials.json");
         const stamp = log.indexOf(`printf '%s' '${accountId}'`);
-        const restrict = log.indexOf("let changed = false");
+        // The restrict command's own strip pass (#2150); the sign-out drop
+        // embeds it only as a fallback behind its flock.
+        const restrict = log.indexOf("const stripped = [];");
         const launch = log.indexOf(
           boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log"),
         );
@@ -1487,6 +1489,7 @@ exit 0
         expect(stamp).toBeGreaterThan(reconcile);
         expect(restrict).toBeGreaterThan(stamp);
         expect(launch).toBeGreaterThan(restrict);
+        expect(log).not.toContain(".orkestrator-lock");
         expect(log).not.toContain("NEVER-DELIVER");
         expect(log).not.toContain("exec -i container-claude-login-start bash");
       });

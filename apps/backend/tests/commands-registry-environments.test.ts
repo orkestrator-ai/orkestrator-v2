@@ -260,15 +260,19 @@ exit 0
           expect(execLog.indexOf("workspace-setup.sh --prepare-only")).toBeLessThan(
             execLog.indexOf("git -C /workspace rev-parse --verify 'HEAD^{commit}'"),
           );
+          // Setup runs as a tracked terminal session (#2114): a bash wrapper
+          // records the session, then execs the login shell that runs setup.
           expect(ptySpawn).toHaveBeenCalledWith(
             "docker",
             expect.arrayContaining([
               "exec",
               "-it",
+              "--env",
+              expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=/),
               "container-1",
-              "zsh",
-              "-lc",
-              expect.stringContaining("/usr/local/bin/workspace-setup.sh"),
+              "bash",
+              "-c",
+              expect.stringMatching(/exec zsh -lc .*\/usr\/local\/bin\/workspace-setup\.sh/s),
             ]),
             expect.any(Object),
           );

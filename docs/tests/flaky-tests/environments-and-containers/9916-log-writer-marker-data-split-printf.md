@@ -14,7 +14,7 @@
 - **Run:** `docker build $(bun scripts/docker-image-build-args.ts) -t orkestrator-v2:q5510-c6de4733c -f docker/Dockerfile .`
   on a disposable rootless daemon (`mise run docker:disposable`) on beelink2
   (Arch Linux, kernel 7.2.15, x86_64, 16 cores, load average about 50), for
-  to-do 5510. Branch `20261109-224629-a4b698fad8f5`, base `c6de4733c`.
+  to-do 5510 (retired 2026-11-11). Branch `20261109-224629-a4b698fad8f5`, base `c6de4733c`.
 - **Failure:** Dockerfile step `RUN su node -s /bin/bash -c 'bash /tmp/orkestrator-log-writer-test.sh …'`
   exited 1 with `FAIL: expected content in …/marker-data-failure.log: [orkestrator-log-writer] dropped 1 lines`,
   `kept`, `par`.

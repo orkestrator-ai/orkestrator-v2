@@ -933,7 +933,9 @@ describe("service browser tabs", () => {
           .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
     }
-    await Bun.sleep(5);
+    // Each refresh was awaited inside act(); flush one more render pass
+    // rather than sleeping before the negative assertion.
+    await act(async () => {});
     expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
     expect(browserPreview.attach).not.toHaveBeenCalledWith(
       expect.objectContaining({ visible: false }),

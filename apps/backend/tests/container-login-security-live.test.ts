@@ -177,6 +177,11 @@ live(
           file,
         ]),
       ).toBe('{"claude":false,"mcp":["owned"],"refresh":false}');
+      // The next start keeps it too, now that its refresh token is gone.
+      await docker(["exec", container, "bash", "-ec", buildDropHostClaudeLoginCommand()]);
+      expect(await docker(["exec", container, "jq", "-c", ".mcpOAuth.owned", file])).toBe(
+        '{"accessToken":"own"}',
+      );
       await docker([
         "exec",
         container,

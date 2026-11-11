@@ -484,6 +484,10 @@ export function VirtualizedMessageList<TMessage>({
   );
 
   const controller = scrollProps.controller;
+  const controllerRef = useRef(controller);
+  useLayoutEffect(() => {
+    controllerRef.current = controller;
+  }, [controller]);
   const forwardScrollerRef = scrollProps.scrollerRef;
   // A library-independent name for the transcript's own scroller, distinct
   // from any nested virtualized viewport (an open long tool group).
@@ -631,21 +635,78 @@ export function VirtualizedMessageList<TMessage>({
       setSelectionRowKey(key);
       if (key !== null) setVisibleRange(latestRangeRef.current);
     };
-    const onFocusIn = (event: FocusEvent) => {
-      const key = rowKeyOf(root, event.target as Node | null);
+    const protectFocus = (key: string | null) => {
       setFocusRowKey(key);
       if (key !== null) setVisibleRange(latestRangeRef.current);
     };
+    // A press focuses its control at pointerdown. Protecting that row grows
+    // the overscan, and measuring the rows it mounts shrinks the list. A
+    // follower stays pinned to the end, but a released reader near the end
+    // is clamped and only put back a frame later, so the control can move
+    // before pointerup: the click lands on another element and is lost. For
+    // a released reader, protect the row once the press has finished (after
+    // its click, which the browser dispatches in the same task as pointerup).
+    // A follower keeps protection at once: deferred, its rows would mount
+    // while the click's own growth is being followed.
+    const view = ownerDocument.defaultView ?? window;
+    let pressing = false;
+    let pressedFocusKey: string | null | undefined;
+    let pressTimer: ReturnType<typeof setTimeout> | null = null;
+    const onPointerDown = () => {
+      const current = controllerRef.current;
+      pressing = current !== undefined && !current.wantsFollow;
+    };
+    const onPointerEnd = () => {
+      if (!pressing) return;
+      pressing = false;
+      if (pressedFocusKey === undefined || pressTimer !== null) return;
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        // Another press began meanwhile: its own end applies the focus.
+        if (pressing) return;
+        const key = pressedFocusKey;
+        pressedFocusKey = undefined;
+        if (key !== undefined) protectFocus(key);
+      }, 0);
+    };
+    // Focus that moves outside a press supersedes one a press left pending.
+    const cancelPressedFocus = () => {
+      pressedFocusKey = undefined;
+      if (pressTimer !== null) clearTimeout(pressTimer);
+      pressTimer = null;
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      const key = rowKeyOf(root, event.target as Node | null);
+      if (pressing) {
+        pressedFocusKey = key;
+        return;
+      }
+      cancelPressedFocus();
+      protectFocus(key);
+    };
     const onFocusOut = (event: FocusEvent) => {
-      setFocusRowKey(rowKeyOf(root, event.relatedTarget as Node | null));
+      const key = rowKeyOf(root, event.relatedTarget as Node | null);
+      if (pressing) {
+        pressedFocusKey = key;
+        return;
+      }
+      cancelPressedFocus();
+      setFocusRowKey(key);
     };
     ownerDocument.addEventListener("selectionchange", onSelectionChange);
     root.addEventListener("focusin", onFocusIn);
     root.addEventListener("focusout", onFocusOut);
+    root.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
+    view.addEventListener("pointerup", onPointerEnd, { capture: true, passive: true });
+    view.addEventListener("pointercancel", onPointerEnd, { capture: true, passive: true });
     return () => {
       ownerDocument.removeEventListener("selectionchange", onSelectionChange);
       root.removeEventListener("focusin", onFocusIn);
       root.removeEventListener("focusout", onFocusOut);
+      root.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      view.removeEventListener("pointerup", onPointerEnd, { capture: true });
+      view.removeEventListener("pointercancel", onPointerEnd, { capture: true });
+      cancelPressedFocus();
     };
   }, []);
 

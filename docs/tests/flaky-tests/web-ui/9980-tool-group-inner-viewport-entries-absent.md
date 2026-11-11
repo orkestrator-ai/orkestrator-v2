@@ -1,7 +1,7 @@
 # Tool group fold: a long group's inner viewport shows no entries in time
 
 - **ID:** 9980
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Base:** `14df965440e658e09a7b3ce03530bc1781ac2b01` (`main`).
 - **Observed head:** `aa7b41b35` on branch `fix-failing-ci-fc33ea27615f-r1`.
@@ -41,3 +41,58 @@ Unconfirmed. A count of 0, not a small one, suggests the inner viewport had
 not mounted its list (or had not measured a height) within 5 s of the click,
 rather than a scroll race. That would fit a slow first render of a
 1500-call group on a loaded host.
+
+## Resolution (2026-11-11)
+
+Base `51456e887` (`main`), branch `fix-flaky-tests-400972eda2c6-r1`.
+
+- **Root cause:** the click on `Show 1500 tool calls` was lost, so the
+  group never opened and its inner viewport never existed (a count of 0, not
+  a small one). Pressing the head line focuses its button at pointerdown.
+  `VirtualizedMessageList`'s focus protection then grows Virtuoso's overscan
+  (`keepMountedOverscan`, two margin rows each side), mounting rows Virtuoso
+  had only estimated at 320 px; measuring them shrinks the list by about
+  400 px. A follower stays pinned to the end, but a reader who is not
+  following and is near the end is clamped by the browser and only put back
+  a frame later by `holdPlaceAcrossOverscan` (to the anchor captured when
+  they last settled). The button moved between pointerdown and pointerup, so
+  pointerup landed on the row's footer, the click went to their common
+  ancestor and Radix never toggled the group. A per-event probe showed it:
+  pointerdown on the button at y 816, pointerup on `DIV: Assistant · Sep 21`
+  at y 772 after `scrollTop` 22662 → 22287, then the hold moving it back.
+  A reader stops following without scrolling when virtualizer compensation
+  lowers `scrollTop` and raises the gap (the controller's idle departure
+  check); such a release was observed directly on this host when rows
+  mounted during the group's open animation. The state of the failing runs'
+  transcript at the click was not captured, so that this release preceded
+  them is inferred from the matching symptom.
+- **Fix:** `apps/web/src/components/chat/VirtualizedMessageList.tsx`. When
+  the transcript controller reports the reader is not following
+  (`controller.wantsFollow === false`), focus that arrives during a press is
+  protected once the press ends, in a task after pointerup (the browser
+  dispatches the click in the pointerup task, from the same hit test). A
+  follower keeps protection at pointerdown as before: deferring it there
+  mounted the rows while the click's own growth was being followed, and the
+  compensation released the follower (observed: `a 1,500-call group opens in
+  a bounded viewport` then failed 3 of 5 mobile repeats with the transcript
+  moved 370 px). Keyboard focus is unchanged. Regression tests in
+  `VirtualizedMessageList.keep-mounted.test.tsx` (released reader defers, and
+  fails against the old code; follower protects at once).
+- **Reproduced:** yes, for the mechanism. A probe spec (scratch copy, not
+  committed) released the reader 20 to 100 px above the end by wheel or by
+  `scrollTop`, then clicked `Show 1500 tool calls` exactly as the owner
+  does. Before the fix, mobile Chromium lost the click in 12 of 12 runs at
+  60 px and, in a 48-case sweep, 6 of the 24 mobile cases (`opened=false`,
+  0 entries, the owner's symptom; a seventh probe timed out). After the fix: 48 of 48 opened with entries rendered,
+  and the event probe shows pointerup on the button. The owning tests
+  themselves did not fail on this host in 120 nine-worker repeats (host load
+  average 100 to 150 from other worktrees), 190 full-owner repeats or under
+  CDP CPU throttling of 6x and 20x (failures there were page-load or 30 s
+  test timeouts only), so the exact release that preceded the recorded
+  failures was not reproduced here.
+- **Stress:** `ORKESTRATOR_E2E_PORT=1493 mise run test:logged -- --name tgf-full-after2 -- bun scripts/test-under-contention.ts --burners 16 -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --repeat-each=5 --workers=9 --retries=0`
+  passed 190 of 190 (171.5 s). Both owning tests, with Chromium CPU
+  throttled 10x (`Emulation.setCPUThrottlingRate`, scratch copy of the spec),
+  passed 32 of 32, and the 1,500-call bounded-viewport case 16 of 16, in
+  the run recorded in
+  [0793](0793-live-tool-group-overscan.md#resolution-2026-11-11).

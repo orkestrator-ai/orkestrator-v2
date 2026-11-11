@@ -111,8 +111,11 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
  * The OpenCode server a bridge connection names, for a caller that passes no
  * {@link ProviderDependencies.openCode}: `start_*_opencode_server` answers
  * the environment's OpenCode server, whose password is the connection's token.
+ * Its generation is derived from a hash of that token, never the token
+ * itself, so a replaced server (new password) is a new generation.
+ * Exported for its tests.
  */
-function openCodeServerFromConnection(
+export function openCodeServerFromConnection(
   connection: BridgeConnection,
 ): OpenCodeEnvironmentDependencies {
   const tag = createHash("sha256")

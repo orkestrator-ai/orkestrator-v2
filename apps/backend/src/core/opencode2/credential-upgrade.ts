@@ -15,8 +15,13 @@
  * the file's tokens may no longer work. The refresh export then moves the
  * file forward.
  *
- * A marker in the data directory records that it ran; it runs again only if
- * it failed. A database created by this start imported the file itself
+ * Every user of the host database runs it before its first request: the
+ * environment server's start (`host-launch.ts`) and the private or reused
+ * server that Settings sign-in and the host model catalogue use
+ * (`opencode2-host-database-server.ts`), so a container-only user, who may
+ * never start a local environment, is reconciled too. A marker in the data
+ * directory records that it ran; it runs again only if it failed, and
+ * concurrent first users share one run. A database created by this start imported the file itself
  * (2.x behaviour), so the reconcile changes nothing there. A login the file
  * cannot hold (an `external` one) is left in the database.
  *
@@ -154,14 +159,40 @@ function sameValue(
 }
 
 /**
+ * The reconcile running for each data directory's marker. Every host 2.x
+ * server shares that directory's database, so concurrent first users (an
+ * environment start, Settings listing providers, a catalogue refresh) join
+ * one reconcile rather than each passing the marker check and rewriting the
+ * same logins. An entry lives only while its reconcile runs, so the map holds
+ * at most one per data directory in use.
+ */
+const reconcilesInFlight = new Map<string, Promise<"reconciled" | "already-reconciled">>();
+
+/**
  * Make the database hold what the file holds, once per data directory.
- * Returns what happened; the caller decides whether a failure matters.
+ * Returns what happened; the caller decides whether a failure matters. A call
+ * made while one runs for the same data directory waits for that one and
+ * shares its outcome (a failure is retried by the next call after it).
  */
 export async function reconcileLegacyOpenCodeLoginsOnce(
   client: Pick<OpenCode2Client, "api">,
   options: { authFile: string; dataDir: string; lineageFile?: string },
 ): Promise<"reconciled" | "already-reconciled"> {
   const marker = openCode2LegacyReconcileMarker(options.dataDir);
+  const running = reconcilesInFlight.get(marker);
+  if (running) return running;
+  const attempt = reconcileUnshared(client, options, marker).finally(() => {
+    if (reconcilesInFlight.get(marker) === attempt) reconcilesInFlight.delete(marker);
+  });
+  reconcilesInFlight.set(marker, attempt);
+  return attempt;
+}
+
+async function reconcileUnshared(
+  client: Pick<OpenCode2Client, "api">,
+  options: { authFile: string; dataDir: string; lineageFile?: string },
+  marker: string,
+): Promise<"reconciled" | "already-reconciled"> {
   if (await exists(marker)) return "already-reconciled";
   const fileLogins = await readFileLogins(options.authFile);
   const stored = await readStore(client);

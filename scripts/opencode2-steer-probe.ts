@@ -26,7 +26,7 @@ import { join } from "node:path";
 type Json = Record<string, unknown>;
 type ChatRequest = {
   messages?: Array<{ role: string; content?: unknown }>;
-  tools?: Array<{ function?: { name?: string } }>;
+  tools?: Array<{ function?: { name?: string; description?: string } }>;
 };
 
 const STEP_SLEEP_SECONDS = 3;
@@ -79,6 +79,18 @@ export class ScriptedModel {
     lastUserContent?: unknown;
     reasoningEffort?: unknown;
   }> = [];
+  /**
+   * A live test's own script, consulted before the defaults below: given
+   * every message's text (any role), the last role and the offered tools, it
+   * answers with one tool call or a final text, or undefined for the defaults.
+   */
+  respond?: (call: {
+    texts: string[];
+    lastRole: string;
+    tools: string[];
+    /** Each offered tool's description, by name. */
+    descriptions: Record<string, string>;
+  }) => { tool: string; arguments: Json } | { text: string } | undefined;
   private server: ReturnType<typeof Bun.serve> | undefined;
 
   start(): string {
@@ -110,6 +122,22 @@ export class ScriptedModel {
           reasoningEffort,
           ...(lastRole === "tool" ? { toolResult: textOf(messages.at(-1)?.content) } : {}),
         });
+        const custom = this.respond?.({
+          texts: messages.map((m) => textOf(m.content)),
+          lastRole,
+          tools,
+          descriptions: Object.fromEntries(
+            (body.tools ?? []).flatMap((tool) =>
+              typeof tool.function?.name === "string"
+                ? [[tool.function.name, tool.function.description ?? ""]]
+                : [],
+            ),
+          ),
+        });
+        if (custom && "tool" in custom) {
+          return sse(namedToolCallChunks(custom.tool, JSON.stringify(custom.arguments)));
+        }
+        if (custom) return sse(answerChunks(custom.text));
         const latestUser = userTexts.at(-1) ?? "";
         // A turn asking for a slow tool gets one bash call, then (after the tool result) an answer.
         // `RUN_BASH:<command>` runs that command instead (fixture-only; the model is scripted).

@@ -6,15 +6,27 @@
  * Every host 2.x server shares one database under `<data>/opencode2/`
  * (`openCode2HostPaths`), so:
  *
- * - **A running host 2.x server** is used as it is, unless the caller asks
- *   for a private one; a write through it reaches every one (2.x reads
- *   credentials from the database per use).
+ * - **A running environment's host 2.x server** is used unless the caller
+ *   asks for a private one; a write through it reaches every one (2.x reads
+ *   credentials from the database per use). Its client is scoped to
+ *   Orkestrator's probe directory, never the environment's worktree: 2.x
+ *   resolves configuration per location (`x-opencode-directory`), and host
+ *   work such as the model catalogue must not see one project's
+ *   `opencode.json` providers or restrictions. A coordinator's server is
+ *   never used: it runs under the coordinator's own configuration directory
+ *   and authority, not the host's.
  * - **Otherwise a private server is started** from the managed binary with
- *   the same database and configuration, in Orkestrator's probe directory,
- *   used and stopped. It is owned like every short-lived probe, so backend
- *   shutdown stops it, and only this child is ever signalled. A database that
- *   does not exist yet is created by it, importing the user's `auth.json`
- *   once (2.x behaviour).
+ *   the same database and configuration, in the probe directory, used and
+ *   stopped. It is owned like every short-lived probe, so backend shutdown
+ *   stops it, and only this child is ever signalled. A database that does
+ *   not exist yet is created by it, importing the user's `auth.json` once
+ *   (2.x behaviour).
+ * - **Either way the one-time reconcile of a preview-era database** with
+ *   `auth.json` (`opencode2/credential-upgrade.ts`) runs before `use`, so the
+ *   first sign-in listing or catalogue refresh after the upgrade sees the
+ *   reconciled logins even when no local environment has started. It is
+ *   marker-gated and shared between concurrent callers, so it costs a file
+ *   check once done.
  *
  * Nothing here logs or returns a credential.
  */
@@ -23,11 +35,14 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
+import { pushedLoginHostFile } from "./agent-accounts-containers.js";
 import { resolveOpenCode2Binary } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { allocateLocalPort } from "./commands-servers.js";
 import { OpenCode2Client } from "./opencode2/client.js";
-import { runningOpenCode2HostClient } from "./opencode2/credentials.js";
+import { reconcileLegacyOpenCodeLoginsBestEffort } from "./opencode2/credential-upgrade.js";
+import { openCode2RefreshLineageFile } from "./opencode2/credentials.js";
+import { openCode2ServerKey } from "./opencode2/host-server-state.js";
 import {
   openCode2HostLaunch,
   waitForOpenCode2Ready,
@@ -60,6 +75,39 @@ export type WithOpenCode2HostDatabaseServer = <T>(
   options?: OpenCode2HostDatabaseServerOptions,
 ) => Promise<T>;
 
+/**
+ * A running environment's (not a coordinator's) host 2.x server, as a client
+ * scoped to `directory`, so nothing location-dependent reads that
+ * environment's project configuration.
+ */
+function runningHostServerClient(
+  localServers: CommandContext["runtime"]["localServers"],
+  directory: string,
+): OpenCode2Client | undefined {
+  for (const [environmentId, entry] of localServers.openCode2.live()) {
+    if (entry.coordinator) continue;
+    if (localServers.process(openCode2ServerKey(environmentId)) !== entry.child) continue;
+    return new OpenCode2Client({
+      baseUrl: `http://127.0.0.1:${entry.port}`,
+      password: entry.password,
+      directory,
+    });
+  }
+  return undefined;
+}
+
+/** The once-per-data-directory reconcile with `auth.json`, before the first use. */
+async function reconcileBeforeUse(context: CommandContext, client: OpenCode2Client): Promise<void> {
+  const authFile = pushedLoginHostFile(context, "opencode");
+  if (!authFile) return;
+  const dataDir = context.storage.getDataDir();
+  await reconcileLegacyOpenCodeLoginsBestEffort(client, {
+    authFile,
+    dataDir,
+    lineageFile: openCode2RefreshLineageFile(dataDir),
+  });
+}
+
 /** A running host 2.x server, else a private one on the same database, for `use`. */
 export async function withOpenCode2HostDatabaseServer<T>(
   context: CommandContext,
@@ -68,8 +116,11 @@ export async function withOpenCode2HostDatabaseServer<T>(
 ): Promise<T> {
   const localServers = context.runtime.localServers;
   if (!options.private) {
-    const running = runningOpenCode2HostClient(localServers);
-    if (running) return use(running);
+    const running = runningHostServerClient(localServers, await probeWorkingDirectory(context));
+    if (running) {
+      await reconcileBeforeUse(context, running);
+      return use(running);
+    }
   }
   if (localServers.isShuttingDown()) {
     throw new Error("Backend is shutting down; OpenCode cannot be started");
@@ -116,6 +167,7 @@ export async function withOpenCode2HostDatabaseServer<T>(
     } finally {
       release();
     }
+    await reconcileBeforeUse(context, client);
     return await use(client);
   } finally {
     await localServers.terminate(key, child).catch((error: unknown) => {

@@ -286,32 +286,36 @@ Both use the same path: the bridge is reached through `graphAgentBridgeConnectio
 and the tool connection names `host` or `container`, with the reachability check a
 container turn needs. The guard's probe is the backend's
 `get_environment_uncommitted_paths` command, which answers for both kinds. Provider
-fakes cover both paths. A local environment had real-process evidence on OpenCode
-1.x (below); OpenCode 2 has none yet. No container run with a real provider has been done yet
+fakes cover both paths. A local environment has real-process evidence on OpenCode
+2 (below), as it had on OpenCode 1.x. No container run with a real provider has been done yet
 ([4340](../todo/agent-engines/4340-suborks-live-qualification.md)).
 
 ## Real-process evidence
 
-On 2026-11-04 `native-agent-suborks-opencode.live.test.ts` ran the pinned
-OpenCode 1.x `opencode serve` (1.19.5) against a scripted OpenAI-compatible model
-on loopback, with throwaway `HOME` and XDG directories, so it made no billed turn
-and needed no login. Everything else was real: the agent tools server, the subork
-service, the branch runner and the mail drain. The test was removed with OpenCode
-1.x on 2026-11-11 (`git show
-5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`), and
-OpenCode 2 has no real-process subork run yet
-([4340](../todo/agent-engines/4340-suborks-live-qualification.md)). It showed, in a
-local environment:
+`opencode2/opencode2-suborks.live.test.ts` runs the pinned OpenCode 2
+`opencode2 serve` (2.2.6) against a scripted OpenAI-compatible model on loopback,
+with a throwaway `HOME`, XDG directories and database (`startOpenCode2Fixture`), so
+it makes no billed turn and needs no login. It is part of `mise run
+verify:opencode2:live`. Everything else is real: the agent tools server, the subork
+service, the branch runner and the mail drain. It passed on 2026-11-11 and shows,
+in a local environment:
 
 - The plain-text request *"Please ask codex and opencode to review this
-  index.html"* reaches a model that is offered `orkestrator_ask_agents` with the
-  shared description. OpenCode's own MCP client carried the call, on the
-  environment-wide credential with the tab named, and got the handle back.
-- The real OpenCode subork ran as a plan turn without `edit` or `write`, saw
-  neither `ask_agents` nor any other environment-wide tool, saw the prompt and not
+  index.html"* reaches a model that is offered the caller tab's `ask_agents` (on
+  its per-tab MCP server, `orkestrator_tab_<hash>_ask_agents`) with the shared
+  description. OpenCode 2's own MCP client carried the call on the tab's
+  credential and got the handle back.
+- The real OpenCode 2 subork ran as a read-only result turn: it was offered
+  neither `edit`, `write` nor 2.x's own `subagent`, no `ask_agents` and no tab
+  tool, only Orkestrator tools of its result connection; it saw the prompt and not
   the caller's words, and answered through `submit_subork_answer`.
 - Both answers (the second from a Codex fake) arrived labelled in one mail, and the
   real mail drain continued the real caller session with them.
+
+The same run on OpenCode 1.x (`native-agent-suborks-opencode.live.test.ts`,
+2026-11-04, removed with 1.x on 2026-11-11: `git show
+5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`) showed
+the same on the environment-wide credential.
 
 The script, not a model, decided to call the tool. Whether real models choose
 `ask_agents` for plain text, and how the other five providers behave against a live

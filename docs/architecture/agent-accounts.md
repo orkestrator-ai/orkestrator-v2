@@ -539,12 +539,23 @@ sign-in export and each pass add to it. Another profile's login is left alone
 whichever expires later.
 
 A database that existed before OpenCode 1.x was retired (the preview's) is
-reconciled with `auth.json` once, at its first host server start after the
-upgrade (`opencode2/credential-upgrade.ts`): it takes the file's logins, as the
-old per-start reconcile did, except an OAuth login it holds newer than the
-file's copy of the same login, which it keeps; a login the file cannot hold
-(`external`) stays. A marker, `<data>/opencode2/legacy-credentials-reconciled`,
-keeps it to once; a failed attempt is retried at the next start.
+reconciled with `auth.json` once, at its first use after the upgrade
+(`opencode2/credential-upgrade.ts`): an environment's host server start, or
+the server that Settings sign-in and the host model catalogue use
+(`opencode2-host-database-server.ts`), so a user who only runs containers is
+reconciled too. It takes the file's logins, as the old per-start reconcile
+did, except an OAuth login it holds newer than the file's copy of the same
+login, which it keeps; a login the file cannot hold (`external`) stays. A
+marker, `<data>/opencode2/legacy-credentials-reconciled`, keeps it to once;
+concurrent first users share one run, and a failed attempt is retried at the
+next use.
+
+Host work with no session (sign-in, the host model catalogue) may borrow a
+running environment's host server, but always as the probe location
+(`<data>/model-catalog-probe`), never the environment's worktree: 2.x resolves
+configuration per location, so a project's own `opencode.json` providers and
+restrictions must not reach the host catalogue. A coordinator's server is
+never borrowed.
 
 An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
 auth error that says so) gets the failed provider's sign-in inside its error

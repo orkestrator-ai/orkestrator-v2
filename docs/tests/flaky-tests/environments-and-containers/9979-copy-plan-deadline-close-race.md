@@ -1,7 +1,7 @@
 # Copy-plan deadline test sees both children close before its deadline
 
 - **ID:** 9979
-- **Status:** open
+- **Status:** resolved (2026-11-11)
 - **Date observed:** 2026-11-11
 - **Test:** `copy plan > the deadline fails the step even when neither child can be seen to close`
 - **File:** `apps/backend/tests/container-replacement.test.ts:89`
@@ -51,3 +51,37 @@ Not reproduced deterministically. The code under test
 not changed by the observing branch; that branch only changed the OpenCode
 `select` list of `replacementCopyPlan` and its expectation in the same test
 file.
+
+## Root cause and fix (2026-11-11)
+
+**Root cause (confirmed).** The test's premise depended on timing. Its
+100 ms deadline starts when `pipeContainerPath` spawns the two fake `docker`
+children. On a loaded macOS host the deadline's `SIGKILL` sometimes reached
+both shells before either had forked the backgrounded `sleep` that holds
+the pipes. With no descendant left, both children closed at once, and the step
+failed through `finish()` (which adds `refused: false`) rather than through the
+deadline's settle timer. The code under test behaved correctly either way: the
+step failed within the deadline. A user on a slow machine gets the same correct
+failure, so this is not a product race.
+
+**Evidence.** A throwaway probe used the same script, logging the shell's pid
+after `sleep 8 &`. It ran 25 times under six busy loops on this host. The close
+path occurred in exactly the 2 runs where neither shell had logged (0 of 2
+markers), and never when both had. The unchanged test (commit `3c77793e4`)
+failed 1 of 25 runs under the same load (`bun test --cwd apps/backend --preload
+../../tests/setup-node.ts ./tests/container-replacement.test.ts -t "the deadline
+fails the step" --rerun-each 25`).
+
+**Fix.** In `apps/backend/tests/container-replacement.test.ts`, each fake
+`docker` now logs its pid once its holder exists. The test asserts both did,
+so a broken premise is reported as such. Its deadline is 1.5 s instead of
+100 ms, which gives the fork a wide margin: nothing can be awaited for the
+fork, because the timer starts at spawn. The duration bound rises from 4 s
+to 6 s to match. `pipeContainerPath` is unchanged. The result assertion is
+unchanged too.
+
+**Verification.** Under the same six-loop load the fixed test passed 15 of 15,
+then 40 of 40 (`--rerun-each`). The owning file passed alone through `mise
+run test:logged -- --name container-replacement.test -- bun test --cwd
+apps/backend --preload ../../tests/setup-node.ts
+./tests/container-replacement.test.ts --parallel=1`.

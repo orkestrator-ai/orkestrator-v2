@@ -151,6 +151,34 @@ describe("the one-time reconcile of a database from before 1.x was retired", () 
     expect(byIntegration(fake)).toEqual({ openai: { type: "key", key: FILE_KEY } });
   });
 
+  test("concurrent first users share one reconcile of the same data directory", async () => {
+    const { dataDir, authFile, lineageFile, fake } = await fixture({
+      anthropic: { type: "api", key: FILE_KEY },
+    });
+    // Two servers on one database: each caller has its own client.
+    const posts: string[] = [];
+    const counted = () => {
+      const client = fake.client();
+      const api = client.api.bind(client);
+      client.api = ((method: string, route: string, ...rest: unknown[]) => {
+        if (method === "POST") posts.push(route);
+        return (api as (...args: unknown[]) => Promise<unknown>)(method, route, ...rest);
+      }) as typeof client.api;
+      return client;
+    };
+    const outcomes = await Promise.all([
+      reconcileLegacyOpenCodeLoginsOnce(counted(), { authFile, dataDir, lineageFile }),
+      reconcileLegacyOpenCodeLoginsOnce(counted(), { authFile, dataDir, lineageFile }),
+    ]);
+    expect(outcomes).toEqual(["reconciled", "reconciled"]);
+    expect(posts).toEqual(["/api/credential"]);
+    expect(fake.credentials).toHaveLength(1);
+    // Settled: the next caller reads the marker rather than joining a run.
+    expect(
+      await reconcileLegacyOpenCodeLoginsOnce(counted(), { authFile, dataDir, lineageFile }),
+    ).toBe("already-reconciled");
+  });
+
   test("a missing auth.json signs the database out of what the file could hold", async () => {
     const { dataDir, authFile, fake } = await fixture(undefined);
     seed(fake, "openai", { type: "key", key: STORE_KEY });

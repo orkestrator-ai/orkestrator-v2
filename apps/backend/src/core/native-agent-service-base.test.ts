@@ -1865,6 +1865,48 @@ describe("NativeAgentService", () => {
     ).finally(close);
   });
 
+  test("replaces a genuinely missing OpenCode native-session mapping with a new conversation", async () => {
+    // A tab that held a 1.x conversation: its id names nothing on the 2.x
+    // server. The activity sweep's no-touch read leaves the mapping alone (it
+    // is never evidence of deletion); the tab's next ensure reads the session
+    // missing, starts a fresh 2.x conversation and persists it in its place.
+    const { provider, close } = await createOpenCodeLifecycleProvider([]);
+    await withService(
+      {
+        prefix: "orkestrator-native-opencode-missing-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-deleted");
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-deleted",
+          providerSessionId: "ses_v1_legacy_conversation",
+        });
+
+        await service.reconcileAgentActivity();
+        expect(await storage.getNativeAgentSession(key)).toMatchObject({
+          providerSessionId: "ses_v1_legacy_conversation",
+        });
+
+        const session = await service.ensureSession({
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-deleted",
+        });
+        expect(session.providerSessionId).toBeTruthy();
+        expect(session.providerSessionId).not.toBe("ses_v1_legacy_conversation");
+        expect(await storage.getNativeAgentSession(key)).toMatchObject({
+          providerSessionId: session.providerSessionId,
+        });
+        // The replacement is a real conversation on the 2.x server.
+        expect(await provider.status(session.providerSessionId)).not.toBe("missing");
+      },
+    ).finally(close);
+  });
+
   test("coalesces overlapping scans and shutdown waits for the active read", async () => {
     let signalEntered!: () => void;
     const entered = new Promise<void>((resolve) => {

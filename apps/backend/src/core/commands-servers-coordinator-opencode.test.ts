@@ -8,7 +8,7 @@ import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { CoordinatorService } from "./coordinator-service.js";
-import { peekOpenCode2HostServer } from "./opencode2-host-server.js";
+import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
 
@@ -192,5 +192,34 @@ process.on("SIGTERM", () => process.exit(0));
     expect(second.pid).not.toBe(first.pid);
     expect((await launched(second.port, second.authToken!)).research).toBe("search");
     expect(peekOpenCode2HostServer(context, runtimeId)?.coordinator?.research.mode).toBe("search");
+  });
+
+  test("a busy coordinator keeps its server across a research edit until its work settles", async () => {
+    const { context, runtimeId } = await coordinatorContext();
+    let busy = true;
+    context.nativeAgents = {
+      hasObservedLiveWork: async () => busy,
+    } as unknown as CommandContext["nativeAgents"];
+    const first = await ensureOpenCode2HostServer(context, runtimeId);
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, coordinatorWebResearch: "search" });
+
+    // Mid-turn: every provider read (snapshot, status, interactive state)
+    // resolves the same generation under its original authority, rather than
+    // asking the supervisor for a replacement it must refuse.
+    const during = await ensureOpenCode2HostServer(context, runtimeId);
+    expect(during.generation).toBe(first.generation);
+    expect(during.coordinator?.research.mode).toBe("off");
+    const again = await ensureOpenCode2HostServer(context, runtimeId);
+    expect(again.generation).toBe(first.generation);
+
+    // Settled: the next call goes through the supervisor and gets an idle
+    // replacement launched under the new setting.
+    busy = false;
+    const after = await ensureOpenCode2HostServer(context, runtimeId);
+    expect(after.generation).not.toBe(first.generation);
+    expect(after.coordinator?.research.mode).toBe("search");
+    const port = Number(new URL(after.baseUrl).port);
+    expect((await launched(port, after.password)).research).toBe("search");
   });
 });

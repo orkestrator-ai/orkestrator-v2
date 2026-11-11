@@ -7,7 +7,7 @@
  * `opencode:<environmentId>`, so it is stopped with the environment, by
  * backend shutdown and on a worktree move, reaped if a previous backend left
  * it orphaned, and replaced when a coordinator's research setting changes
- * once it is idle. Its launch is `opencode2/host-launch.ts`:
+ * once it is idle (until then a busy coordinator keeps its current server). Its launch is `opencode2/host-launch.ts`:
  *
  * - the managed `opencode2` binary, with its own `OPENCODE_DB` and config
  *   directory under Orkestrator's data directory (never the user's
@@ -94,6 +94,13 @@ export function peekOpenCode2HostServer(
  * a provider call can use it without the supervisor's health probes: the
  * same worktree and, for a coordinator, the same research setting. Anything
  * else goes through the supervisor, which replaces what no longer matches.
+ *
+ * A coordinator launched under another research setting is kept while it has
+ * observed live work: launch authority cannot change on a running agent, and
+ * the supervisor refuses to replace it until it is idle. Reads of the current
+ * run (snapshots, status, interactive state) and the turn's own follow-up
+ * calls stay on the server it started on; the first call after it settles
+ * goes through the supervisor, which replaces it under the new setting.
  */
 async function runningServes(
   context: CommandContext,
@@ -104,10 +111,12 @@ async function runningServes(
   if (coordinatorIdFromRuntimeId(environmentId)) {
     if (!running.coordinator) return false;
     const research = await loadCoordinatorResearch(context.storage);
-    return (
-      running.coordinator.signature ===
-      openCode2CoordinatorSignature({ mode: research.mode, servers: research.servers })
-    );
+    const signature = openCode2CoordinatorSignature({
+      mode: research.mode,
+      servers: research.servers,
+    });
+    if (running.coordinator.signature === signature) return true;
+    return (await context.nativeAgents?.hasObservedLiveWork(environmentId, "opencode")) === true;
   }
   return worktreePath !== undefined && running.directory === worktreePath;
 }

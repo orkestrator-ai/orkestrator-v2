@@ -740,8 +740,8 @@ None; see "Open questions answered" above.
   its remaining checks are in 0048 tasks 16–20).
   The real-browser check of `WorktreeSnapshotState.remote` on the Files panel's
   Changes tab is open in [0048 task 19](../transcripts-and-observation/0048-recurring-work-qualification.md#19-changes-tab-remote-freshness),
-  [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)
-  (Docker status sampler), [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
+  to-do 0022 (retired 2026-11-11; the Docker status sampler options it measured are under
+  [Optimisations measured and not taken](../../development/container-qualification.md#optimisations-measured-and-not-taken)), [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
   (Linux Engine and rootless hosts).
 - [Event and snapshot recovery](../../architecture/event-snapshot-recovery.md)
   (worktree snapshot revisions).

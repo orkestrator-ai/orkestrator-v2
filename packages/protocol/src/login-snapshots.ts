@@ -209,7 +209,9 @@ export type ProviderAuthFormat = "opencode" | "pi";
 /**
  * OAuth providers whose stored `refresh` is a long-lived token that refreshing
  * reuses rather than rotates, so a copy that refreshes cannot spend the host's.
- * Checked against OpenCode 1.19.0 and Pi 1.4.0 (2026-10-21), and Pi 1.5.0 (2026-11-06):
+ * Checked against OpenCode 1.19.0 and Pi 1.4.0 (2026-10-21), Pi 1.5.0 (2026-11-06),
+ * and OpenCode 1.19.5 and 2.2.6 (2026-11-11; docs/development/upgrade-agents.md,
+ * "Re-check OAuth refresh-token rotation"):
  *
  * - `github-copilot`: `refresh` is the GitHub OAuth token. OpenCode sends it
  *   directly (`access` is the same token, `expires` 0); Pi exchanges it for a
@@ -218,10 +220,11 @@ export type ProviderAuthFormat = "opencode" | "pi";
  *   API key and cannot itself be renewed.
  *
  * Every other OAuth provider is treated as rotating. Anthropic, OpenAI (Codex
- * and ChatGPT), xAI, Kimi and Radius all return a new refresh token on
+ * and ChatGPT), xAI, Kimi, Radius and GitLab all return a new refresh token on
  * refresh, and the OpenAI and xAI ones are known to be single-use. Pi's
- * OpenRouter login stores an empty `refresh` that never expires, so blanking it
- * changes nothing.
+ * OpenRouter login stores an empty `refresh` that never expires, and
+ * OpenCode's Poe login stores its API key as `refresh` (an empty one on 2.x)
+ * and never refreshes, so blanking either changes nothing.
  */
 const NON_ROTATING_OAUTH_PROVIDERS: Record<ProviderAuthFormat, ReadonlySet<string>> = {
   opencode: new Set(["github-copilot"]),

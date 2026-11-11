@@ -1512,7 +1512,7 @@ All three checked on 2026-10-24.
   encoded patch bytes and multi-client runs.
 - [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md): reviewer
   transcripts, progress probes and the multi-review benchmark.
-- [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md): the
+- 0049 (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`): the
   read side of idle native sessions.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): the
   container file-tree watcher deferred from the file-tree cache work.

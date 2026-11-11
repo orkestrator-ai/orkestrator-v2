@@ -924,7 +924,7 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
 ## Related
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: the matrix and a browser through Tailscale Serve from a second machine, with exact terminal recovery over that link) moved there on 2026-11-10.
-- [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md):
+- 0049 (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`):
   qualifying Claude and Codex for quiet backoff.
 - `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06):
   transport disconnect signals and jittered reconnect.

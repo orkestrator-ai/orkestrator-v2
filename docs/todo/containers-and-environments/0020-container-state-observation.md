@@ -732,8 +732,8 @@ None; see "Open questions answered" above.
   completed fix retained in git history)
   (found during the 2026-10-26 qualification).
 
-- [0049-native-agent-idle-observation.md](../transcripts-and-observation/0049-native-agent-idle-observation.md) (idle
-  observation of bridge sessions),
+- 0049 (retired 2026-11-11; idle
+  observation of bridge sessions, summarised in [agent-testing.md](../../development/agent-testing.md)),
   [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
   (container fetch failure-ladder tuning, app-level fetch qualification),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;

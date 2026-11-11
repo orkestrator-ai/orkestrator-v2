@@ -261,7 +261,7 @@ The backend counts each emitted invalidation by cause and by the platform it
 named (`environment` when it named none) in
 `native-session-invalidation-metrics.ts`, reported as `sessionInvalidations`
 in `get_recurring_work_diagnostics` and the `recurringWork` block of the gateway's `/__orkestrator/metrics`. That is how an idle
-view's reads are attributed (todo 0049 task 4); the live idle-observation spec
+view's reads are attributed (todo 0049 task 4, retired); the live idle-observation spec
 records the per-cause deltas over its idle window.
 
 Several mounted views of one session share one coordinated read

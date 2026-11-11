@@ -882,6 +882,19 @@ Before any 2.x pin reaches production:
 - The GitHub-token plugin is ported to `@opencode/plugin`.
 - Background test: run a turn, switch environments, let it progress, and check
   that it rehydrates correctly on return.
+- Background shell (from 0049 task 8, retired 2026-11-11; summary in
+  [agent-testing.md](../../development/agent-testing.md)): done 2026-11-11 on a loopback model. 2.2.6 names its shell tool
+  `shell`, which takes `background: true` ("run the command in the
+  background and return immediately"); 1.19.5's `bash` has no such
+  parameter (only `task` runs in the background). With
+  `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` the idle-observation
+  spec's `background` case runs on a 2.x session and the fake sends
+  `background: true`: the call settled `success` at once, no card was left
+  running, the turn went idle, and when the 20 s command ended 2.x resumed
+  the idle session by itself (a `system` row carrying the output, then an
+  assistant reply), which the idle page showed without a turn from the
+  test. 2.x has no background-task surface (no running-task indicator), so
+  nothing on the page says the command is still running during those 20 s.
 - Replay tests cover subscribe-before-snapshot, SSE overflow
   (`SubscriberOverflowError`) and bounded memory.
 - Capability flags match 2.x (share, todos and LSP off).

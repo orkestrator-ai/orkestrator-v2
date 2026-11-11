@@ -6,7 +6,12 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { closeElectronWithin, electronProcessTree } from "./design-electron-cleanup";
 import { processAlive, signalProcess, waitForStopped } from "../process-cleanup";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
 
 // The runner's `screenshot: "only-on-failure"` captures every page of a
@@ -44,15 +49,23 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
       app.whenReady().then(() => new BrowserWindow({ show: false }).loadURL("about:blank"));
     `,
     );
+    // HEADLESS_CAPABLE_ELECTRON_SPECS lists this spec, so it must honour the
+    // opt-in: without it a Linux run with no display falls back to the
+    // session's Ozone platform (Wayland on a Wayland desktop) and exits at
+    // launch.
+    const headless = headlessElectronRequested();
     const app = await electron.launch({
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
         "--no-sandbox",
         `--user-data-dir=${path.join(directory, "profile")}`,
         fixture,
       ],
-      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
+      env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
+        ELECTRON_RUN_AS_NODE: undefined,
+      }),
     });
     owned = electronProcessTree(app);
     const helper = Number(await readFile(helperFile, "utf8"));

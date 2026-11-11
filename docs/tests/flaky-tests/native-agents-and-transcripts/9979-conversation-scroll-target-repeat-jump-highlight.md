@@ -18,8 +18,10 @@ number here if it recurred.
 
 - **Branch and base:** `backend-domain-restructure-13639d788e59-r1` at
   `98f77e1d0`, base `14df965440e658e09a7b3ce03530bc1781ac2b01`. The branch
-  moves backend web-annotation modules and edits docs and a codemod script;
-  it touches no web code.
+  moves backend web-annotation modules and edits docs and a codemod script.
+  Its only web change is one comment in
+  `apps/web/src/stores/conversationScrollTargetStore.ts`, which this test's
+  hook uses; a comment cannot change its behaviour.
 - **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
   (Linux x86_64, Bun 1.4.4), with 14 to 16 of 16 scheduler slots reserved
   and a 15-minute load average of about 45 on 16 cores.

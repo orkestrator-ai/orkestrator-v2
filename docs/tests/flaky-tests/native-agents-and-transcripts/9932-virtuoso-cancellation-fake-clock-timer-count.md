@@ -242,7 +242,9 @@ Observed 2026-11-11 on `backend-domain-restructure-13639d788e59-r1` at
 `98f77e1d0`, base `14df965440e658e09a7b3ce03530bc1781ac2b01`
 (`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
 the failure as a recurrence"). The branch moves backend web-annotation
-modules and edits docs and a codemod script; it touches no web code.
+modules and edits docs and a codemod script; its only web change is one
+comment in `apps/web/src/stores/conversationScrollTargetStore.ts`, outside
+the transcript-scroll code.
 
 - **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
   on a host with 14 to 16 of 16 scheduler slots reserved.

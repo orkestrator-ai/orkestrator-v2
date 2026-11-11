@@ -11,6 +11,7 @@ import {
   coordinatorPaneLayoutStore,
   selectCoordinatorPaneLayout,
   selectCoordinatorPaneLayoutReady,
+  selectCoordinatorPaneLayoutStatus,
   useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -45,13 +46,19 @@ export function useCoordinatorSelection({
    * focused group and drops closed ones, so it never decides what is open.
    * Nothing is reconciled before the first snapshot and the stored layout are
    * both read, which would otherwise read as "every conversation closed" (or
-   * "no layout") and discard the remembered one.
+   * "no layout") and discard the remembered one. A read that failed is not
+   * ready either (to-do 5000, retired): `layoutStatus` says so, and the panel
+   * shows that instead of groups.
    */
   const storedLayout = useCoordinatorPaneLayoutStore(selectCoordinatorPaneLayout(projectId));
   const storedLayoutReady = useCoordinatorPaneLayoutStore(
     selectCoordinatorPaneLayoutReady(projectId),
   );
+  const layoutStatus = useCoordinatorPaneLayoutStore(selectCoordinatorPaneLayoutStatus(projectId));
   const setStoredLayout = useCoordinatorPaneLayoutStore((state) => state.setLayout);
+  const retryLayout = useCallback(() => {
+    void paneLayouts.getState().retry(projectId);
+  }, [paneLayouts, projectId]);
   useEffect(() => {
     void paneLayouts.getState().hydrate(projectId);
   }, [paneLayouts, projectId]);
@@ -159,6 +166,8 @@ export function useCoordinatorSelection({
   const selectionPending = useCallback(() => selectionRef.current?.pending === true, []);
   return {
     layout,
+    layoutStatus,
+    retryLayout,
     backendSelectedId,
     updateLayout,
     changeLayout,

@@ -342,7 +342,7 @@ The nested daemon's bridges, `host-gateway` and NAT live in the dind
 container's network namespace, so the script had to run there to see what a
 host process sees. Options: run it in a container on the **outer** daemon
 with `--network container:<dind>` (chosen), or in a `--network host`
-container on the **inner** daemon, as 5510 did. The chosen form needs only
+container on the **inner** daemon, as 5510 (retired) did. The chosen form needs only
 `oven/bun:1.4.4` (already on the host) and the dind image's static CLI, not a
 6 GB qualification image copied into the inner daemon; both put the server in
 the same namespace. Running the script directly against the host's own
@@ -350,7 +350,7 @@ Engine was possible on beelink but not chosen: the ticket asked for the
 disposable daemon, and it keeps the script's networks off a daemon other
 builds share. The outer daemon was the host's rootful Engine
 (`outerRootless: false`), so the nested daemon is root in the initial user
-namespace, unlike 5510's run inside a rootless outer daemon; that makes this
+namespace, unlike 5510's (retired) run inside a rootless outer daemon; that makes this
 a privileged dind on a rootful host, the topology 4730 task 4 (now in the manual-test checklist, 7568) asks about, but
 only the launcher's start and stop were observed for that task.
 

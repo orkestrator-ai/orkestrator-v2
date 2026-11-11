@@ -10,6 +10,12 @@ import {
   type ResolvedAgentAccount,
 } from "./agent-accounts-active.js";
 import { CommandFailedError, runCommand } from "./shell.js";
+import {
+  CLAUDE_HOST_REFRESH_ARGS,
+  CLAUDE_HOST_REFRESH_TIMEOUT_MS,
+} from "./claude-host-login-refresh-command.js";
+
+export { CLAUDE_HOST_REFRESH_MODEL } from "./claude-host-login-refresh-command.js";
 
 /**
  * Have the host's own Claude Code refresh one account's login.
@@ -20,20 +26,20 @@ import { CommandFailedError, runCommand } from "./shell.js";
  * on the config directory, a re-read that adopts a token another process
  * already saved, and a compare-and-swap save. The API then refuses the model
  * before any inference, so it costs no usage (since 2.1.314 the CLI sends the
- * unknown model rather than refusing it itself). Checked against Claude Code
- * 2.1.314 in a container with a fake login; see
- * container-network-and-credential-isolation.md, task 5.
+ * unknown model rather than refusing it itself). Checked with a fake login
+ * against Claude Code 2.1.314 and 2.1.319; rerun
+ * scripts/claude-host-refresh-trigger-probe.ts on every Claude Code bump
+ * (docs/development/upgrade-agents.md, "Re-check OAuth refresh-token rotation").
  *
- * Settings, hooks, MCP servers, tools and session persistence are all off, so
- * nothing of the user's runs and no transcript is written. The CLI does create
+ * `CLAUDE_HOST_REFRESH_ARGS` turns settings, hooks, MCP servers, tools and
+ * session persistence off, so nothing of the user's runs and no transcript is
+ * written. The CLI does create
  * an empty project directory for its working directory, which is a private
  * directory under the data dir.
  *
  * The caller judges success by reading the login again; this never throws for
  * the expected failing exit.
  */
-export const CLAUDE_HOST_REFRESH_MODEL = "orkestrator-login-refresh";
-
 export async function refreshHostClaudeLogin(
   context: CommandContext,
   account: ResolvedAgentAccount,
@@ -53,22 +59,11 @@ export async function refreshHostClaudeLogin(
   // login and leave it unrefreshed.
   stripInheritedAgentCredentials(env);
   if (account.home) env.CLAUDE_CONFIG_DIR = account.home;
-  await run(
-    binary,
-    [
-      "-p",
-      "ok",
-      "--model",
-      CLAUDE_HOST_REFRESH_MODEL,
-      "--setting-sources",
-      "",
-      "--strict-mcp-config",
-      "--tools",
-      "",
-      "--no-session-persistence",
-    ],
-    { cwd, env, timeoutMs: 60_000 },
-  ).catch((error: unknown) => {
+  await run(binary, [...CLAUDE_HOST_REFRESH_ARGS], {
+    cwd,
+    env,
+    timeoutMs: CLAUDE_HOST_REFRESH_TIMEOUT_MS,
+  }).catch((error: unknown) => {
     // The deliberately unknown model normally exits 1. Infrastructure failures
     // must reach the keeper, which warns once per refresh backoff window.
     if (

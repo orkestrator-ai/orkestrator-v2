@@ -32,3 +32,16 @@ and `graph-designer-editing.spec.ts` with `--workers=1 --retries=0` on the same
 profile: 5 passed, 1 failed (this case, 34.2 s), 1 skipped. Sanitized browser
 artifacts were under `output/agent-testing/graph-sidebar-2922/browser/artifacts/`
 in that worktree. No assertion, timeout or skip changed for this failure.
+
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 3610 --base 498b68766` reported
+`open`. The spec and the Graphs designer are unchanged on the branch. Review
+preparation's `mise run test:agent:browser:isolated` failed this case:
+`locator('[data-graph-designer]')` was not visible within 5 s. The case alone on
+fresh credential-free profile `e3a4-ring-r1` (`--agent-platforms claude`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) passed:
+`mise run test:logged -- --name agent-browser-owners -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts:2859 e2e/agent-testing/graph-run-view.spec.ts:48`
+(the two `browser-gateway` cases in that run are recorded in 0484). No assertion,
+timeout or skip changed.

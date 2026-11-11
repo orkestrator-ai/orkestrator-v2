@@ -116,6 +116,20 @@ overviews use it; where the browser keeps the offset, the restore writes the
 value already there. Whether desktop Safari and iOS Safari behave like
 Playwright WebKit here has not been checked.
 
+The same engine behaviour is reached without a hide when an ancestor of such
+a scroller changes its `display`: WebKit rebuilds the boxes beneath it and
+puts the scroller back at the top, firing an ordinary `scroll` with
+`scrollHeight` unchanged. A width change alone does not do it, and a scroller
+with no container query keeps its offset either way (an engine-only page,
+Playwright WebKit build 2388, 2026-11-11). The Multi Review package step met
+it when "Publish validation" switched its split from a flex column to a grid,
+which lost a package reader's place at 1600 px (to-do 6960, retired
+2026-11-11). The split now turns the column into a row instead
+(`MultiReviewTab.tsx`), so `display` never changes. Lay out around a
+container query scroller by changing `flex-direction`, grid tracks or sizes,
+never `display`; `e2e/MultiReviewPackageLayout.spec.ts` covers the package
+reader and passes in Playwright WebKit.
+
 ### The Multi Review graph
 
 `MultiReviewFlowGraph.tsx` draws review package, reviewer panel,

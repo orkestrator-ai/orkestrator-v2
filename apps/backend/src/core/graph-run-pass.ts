@@ -105,6 +105,16 @@ export function graphRunLockedWorkspace(run: Pick<GraphRun, "environmentId" | "m
 
 /** Default observation cadence of a running activation (report §8.2: as reviewers are). */
 export const GRAPH_RUN_OBSERVATION_MS = 3_000;
+/**
+ * Cadence while an accepted result waits for the turn that submitted it to
+ * end (todo 7564; Multi Review's is todo 7557). The model submits through a
+ * tool call inside its turn, so the acceptance's wake can find the turn still
+ * running, and nothing announces the turn's end: workflow sessions are not
+ * native agent sessions. Bounded to one observation interval from the
+ * acceptance, so a model that keeps working after it submitted cannot hold
+ * this cadence.
+ */
+export const GRAPH_RUN_RESULT_SETTLE_MS = 250;
 /** Cadence of a run that is provisioning, cancelling or has new work to plan. */
 export const GRAPH_RUN_PROGRESS_MS = 1_000;
 /** Safety cadence of a run that only waits for a person. */
@@ -158,6 +168,12 @@ export class GraphRunMemory {
   /** Activations to observe at the next pass (an accepted result slot, an answer). */
   readonly flagged = new Set<string>();
   readonly cancelAttempts = new Map<string, number>();
+  /**
+   * Activation → monotonic time until which an accepted result of its turn is
+   * followed at {@link GRAPH_RUN_RESULT_SETTLE_MS} while it still reports
+   * running (one observation interval from the acceptance).
+   */
+  readonly settleUntil = new Map<string, number>();
   /** The delay the last pass asked for; `null` when nothing is owed. */
   nextDelayMs: number | null = null;
 
@@ -171,7 +187,12 @@ export class GraphRunMemory {
     for (const table of [this.handled, this.flagged]) {
       for (const key of table) if (!admitted.has(key)) table.delete(key);
     }
-    for (const table of [this.observedAt, this.observeAfter, this.cancelAttempts]) {
+    for (const table of [
+      this.observedAt,
+      this.observeAfter,
+      this.cancelAttempts,
+      this.settleUntil,
+    ]) {
       for (const key of table.keys()) if (!admitted.has(key)) table.delete(key);
     }
   }
@@ -608,6 +629,8 @@ class GraphRunPass {
             key,
             report.observeAfterMs === null ? null : Math.max(0, report.observeAfterMs),
           );
+        } else if (this.settling(key, report, now)) {
+          this.memory.observeAfter.set(key, GRAPH_RUN_RESULT_SETTLE_MS);
         } else {
           this.memory.observeAfter.delete(key);
         }
@@ -616,6 +639,19 @@ class GraphRunPass {
         this.applyCancel(call, report, at);
       }
     }
+  }
+
+  /**
+   * Whether an activation that still reports running is inside the settle
+   * window of a result accepted from its turn. The window ends once it has
+   * passed, or with any other report.
+   */
+  private settling(key: string, report: GraphActivationReport, now: number): boolean {
+    const until = this.memory.settleUntil.get(key);
+    if (until === undefined) return false;
+    if ((report.state === "running" || report.state === "unchanged") && now < until) return true;
+    this.memory.settleUntil.delete(key);
+    return false;
   }
 
   private apply(key: string, report: GraphActivationReport, at: string): void {
@@ -981,6 +1017,9 @@ class GraphRunPass {
     const now = this.deps.monotonic();
     const interval = this.deps.observationIntervalMs;
     let earliest = Number.POSITIVE_INFINITY;
+    // A result's settle follow-up is due exactly on time: the per-run spread
+    // below would cost more than the 250 ms it waits.
+    let settleEarliest = Number.POSITIVE_INFINITY;
     const activity = graphRunActivity(run);
     for (const activation of run.activations) {
       if (!isGraphActivationAdmitted(activation.state)) continue;
@@ -993,11 +1032,20 @@ class GraphRunPass {
         : interval;
       if (after === null) continue;
       const last = this.memory.observedAt.get(activation.key) ?? now;
+      if (after === GRAPH_RUN_RESULT_SETTLE_MS && this.memory.settleUntil.has(activation.key)) {
+        settleEarliest = Math.min(settleEarliest, Math.max(0, last + after - now));
+        continue;
+      }
       earliest = Math.min(earliest, last + after - now);
     }
     // Ready work blocked by a lock or a cap is retried on the observation
     // cadence; a release elsewhere wakes it sooner.
     if (activity.ready > 0 && run.status !== "paused") earliest = Math.min(earliest, interval);
+    if (settleEarliest !== Number.POSITIVE_INFINITY) {
+      return earliest === Number.POSITIVE_INFINITY
+        ? settleEarliest
+        : Math.min(settleEarliest, Math.max(0, earliest) + stableSpreadMs(run.id, interval / 3));
+    }
     if (earliest === Number.POSITIVE_INFINITY) {
       if (activity.awaitingHuman > 0) return GRAPH_RUN_HUMAN_WAIT_MS;
       if (run.status === "paused") return null;

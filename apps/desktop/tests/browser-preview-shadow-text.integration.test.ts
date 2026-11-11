@@ -1,5 +1,5 @@
 /**
- * Text selections inside open shadow roots (todo 2580 task 2) in real Chromium,
+ * Text selections inside open shadow roots (todo 2580 (retired) task 2) in real Chromium,
  * with the page scripts in a CDP isolated world as the desktop runs them,
  * selected with real pointer input, and resolved again after a real reload.
  * happy-dom has neither `getComposedRanges` nor selection gestures, which is

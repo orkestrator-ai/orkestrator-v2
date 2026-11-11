@@ -1825,6 +1825,8 @@ export class StorageService {
       includeTombstoned?: boolean;
       currentEnvironmentId?: string;
       environmentId?: string;
+      /** The config the caller already read for this pass; read here when absent. */
+      config?: AppConfig;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
     return this.repos.agentMailboxes.listAgentMailboxes(options);

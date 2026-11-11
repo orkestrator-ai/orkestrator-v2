@@ -256,7 +256,7 @@ describe("free-page release with live backend writes", () => {
   }, 30_000);
 
   for (const operation of ["vacuum", "checkpoint"] as const) {
-    test(`a slow ${operation} ends the run and the next check resumes it (to-do 7210 task 4)`, async () => {
+    test(`a slow ${operation} ends the run and the next check resumes it`, async () => {
       const { main } = await fixture();
       const before = main.releasableFreePages();
       // Step 2 is slower than the threshold: its pages count, then the child stops

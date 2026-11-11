@@ -27,6 +27,7 @@ import {
   type SlowStorageOperations,
   type SqliteConnectionTiming,
 } from "./storage-slow-operations.js";
+import type { StorageActivityMetrics } from "./storage-activity-metrics.js";
 import type { CacheGaugeName, CacheGaugeSource } from "./recurring-diagnostics.js";
 
 const log = createLogger("storage");
@@ -57,7 +58,7 @@ export { applyArrayRowUpdate };
  */
 export const CHANGE_LEDGER_DATABASE_FILE = "change-tracking.sqlite";
 
-/** Freed pages returned per scrub (4 KiB pages: at most 16 MiB at a time). */
+/** Free pages {@link StorageDatabase.releaseFreePages} returns by default (4 KiB pages: 16 MiB). */
 const INCREMENTAL_VACUUM_PAGES = 4096;
 
 /**
@@ -306,6 +307,11 @@ export interface StorageDatabaseOptions {
    * `slowStorageOperations` by default. Tests pass their own.
    */
   slowOperations?: SlowStorageOperations;
+  /**
+   * Where this connection counts its commits and reads; the process-wide
+   * `storageActivityMetrics` by default. Tests pass their own.
+   */
+  activity?: StorageActivityMetrics;
 }
 
 /** Content-free size of one connection's row cache. */
@@ -398,7 +404,7 @@ export class StorageDatabase {
     this.timing = instrumentSqliteConnection(
       this.db,
       storageDatabaseName(options.file ?? STORAGE_DATABASE_FILE),
-      { recorder: options.slowOperations },
+      { recorder: options.slowOperations, activity: options.activity },
     );
     try {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
@@ -424,7 +430,7 @@ export class StorageDatabase {
       // Apple builds it with DEFAULT_CKPTFULLFSYNC; plain fsync there neither
       // flushes the drive cache nor orders writes. Set it rather than inherit
       // the build default. A no-op on Linux. `fullfsync` (each commit) stays
-      // off: storage.md, "Durability and deletion", and to-do 5180.
+      // off: storage.md, "Durability and deletion".
       this.db.exec("PRAGMA checkpoint_fullfsync = ON");
       // Deleting user content must not leave it readable in free pages.
       this.db.exec("PRAGMA secure_delete = ON");
@@ -1348,6 +1354,13 @@ export class StorageDatabase {
    * freed pages in the main file; a truncating checkpoint moves the deleting
    * transaction there and discards the old frames.
    *
+   * It does not return the freed pages to the filesystem: they hold zeros
+   * already, so that only gives space back, and an in-process
+   * `incremental_vacuum` held the event loop for 250–450 ms after a deletion
+   * on a 512 MiB database (storage.md, "Durability and deletion"). The main
+   * file's five-minute upkeep releases them in a child process
+   * (`runDatabaseUpkeep`), and the ledger's retention pass releases its own.
+   *
    * The checkpoint never waits. A reader holding an older snapshot (an hourly
    * snapshot copy, another backend's long read) would make a truncating
    * checkpoint call the busy handler for the whole busy timeout, blocking the
@@ -1359,15 +1372,6 @@ export class StorageDatabase {
    * older reader finishing. Never throws.
    */
   scrubDeletedContent(): void {
-    try {
-      if (this.releaseFreePages() >= 0) log.recovered("scrub.vacuum-failed", "scrub-vacuum");
-    } catch (error) {
-      log.throttled("warn", "scrub.vacuum-failed", {
-        scope: "scrub-vacuum",
-        error,
-        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
-      });
-    }
     if (this.tryTruncateWal()) {
       this.cancelScrubRetry();
       return;

@@ -190,6 +190,24 @@ export class FakeOpenCode2Server {
     this.emit(sessionId, type, data, durable);
   }
 
+  /** `GET /api/event` connections opened so far. */
+  eventConnections = 0;
+
+  /** Write the real server's idle keepalive, a `: heartbeat` comment, to every open stream. */
+  heartbeat(): void {
+    this.broadcast(": heartbeat\n\n");
+  }
+
+  /** End every open `/api/event` body from the server side, as a dropped subscriber sees it. */
+  endEvents(): void {
+    for (const controller of Array.from(this.events)) {
+      this.events.delete(controller);
+      try {
+        controller.close();
+      } catch {}
+    }
+  }
+
   /** A fresh `msg_`/`ses_`/`per_`/`frm_` id in the server's ascending format. */
   nextId(prefix: string): string {
     return this.id(prefix);
@@ -212,6 +230,10 @@ export class FakeOpenCode2Server {
       data: { sessionID: sessionId, ...data },
       ...(durable ? { durable: { aggregateID: sessionId, seq, version: 1 } } : {}),
     })}\n\n`;
+    this.broadcast(frame);
+  }
+
+  private broadcast(frame: string): void {
     const bytes = new TextEncoder().encode(frame);
     for (const controller of this.events) {
       try {
@@ -250,6 +272,7 @@ export class FakeOpenCode2Server {
     if (path === "/api/event") {
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
+          this.eventConnections += 1;
           this.events.add(controller);
           controller.enqueue(new TextEncoder().encode(`data: {"type":"server.connected"}\n\n`));
         },

@@ -470,7 +470,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
     if (!this.supervisor || event.kind !== "graph-output") return;
     const owner = this.resultKeys.owner(event.resultKey);
     if (owner) {
-      this.memory(owner.runId).flagged.add(owner.activationKey);
+      this.noteAcceptedResult(owner.runId, owner.activationKey);
       this.supervisor.wake(owner.runId, "result-accepted", event.environmentId);
       return;
     }
@@ -483,12 +483,26 @@ export class GraphRunService implements KeyedWorkflowOwner {
           const found = GraphRunResultKeys.find(run, event.resultKey);
           if (!found) continue;
           this.resultKeys.note(run);
-          this.memory(found.runId).flagged.add(found.activationKey);
+          this.noteAcceptedResult(found.runId, found.activationKey);
           this.supervisor?.wake(found.runId, "result-accepted", event.environmentId);
           return;
         }
       })
       .catch(() => undefined);
+  }
+
+  /**
+   * Observes the activation at the run's next pass and, while it still
+   * reports running, follows it at the settle cadence for one observation
+   * interval: the turn that submitted the result ends silently (todo 7564).
+   */
+  private noteAcceptedResult(runId: string, activationKey: string): void {
+    const memory = this.memory(runId);
+    memory.flagged.add(activationKey);
+    memory.settleUntil.set(
+      activationKey,
+      this.passDeps.monotonic() + this.passDeps.observationIntervalMs,
+    );
   }
 
   // ------------------------------------------------------------ reads

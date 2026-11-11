@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildDropHostClaudeLoginCommand,
   buildDropImportedLoginCommand,
   buildMergeContainerClaudeCredentialCommand,
   buildRestrictContainerClaudeCredentialCommand,
@@ -156,6 +157,42 @@ live(
           file,
         ]),
       ).toBe("false");
+      // A host sign-out: the host's subscription login and its MCP copies go,
+      // the container's own MCP login stays without its refresh token.
+      await docker([
+        "exec",
+        container,
+        "bash",
+        "-ec",
+        `printf '%s' '{"claudeAiOauth":{"accessToken":"host"},"mcpOAuth":{"imported":{"accessToken":"i"},"owned":{"accessToken":"own","refreshToken":"own-refresh"}}}' > ${file}`,
+      ]);
+      await docker(["exec", container, "bash", "-ec", buildDropHostClaudeLoginCommand()]);
+      expect(
+        await docker([
+          "exec",
+          container,
+          "jq",
+          "-c",
+          '{claude: has("claudeAiOauth"), mcp: (.mcpOAuth | keys), refresh: (.mcpOAuth.owned | has("refreshToken"))}',
+          file,
+        ]),
+      ).toBe('{"claude":false,"mcp":["owned"],"refresh":false}');
+      // The next start keeps it too, now that its refresh token is gone.
+      await docker(["exec", container, "bash", "-ec", buildDropHostClaudeLoginCommand()]);
+      expect(await docker(["exec", container, "jq", "-c", ".mcpOAuth.owned", file])).toBe(
+        '{"accessToken":"own"}',
+      );
+      await docker([
+        "exec",
+        container,
+        "bash",
+        "-ec",
+        `printf '%s' '{"claudeAiOauth":{"accessToken":"only-host"}}' > ${file}`,
+      ]);
+      await docker(["exec", container, "bash", "-ec", buildDropHostClaudeLoginCommand()]);
+      expect(
+        await docker(["exec", container, "bash", "-ec", `test ! -e ${file} && echo gone`]),
+      ).toBe("gone");
       const grok = "/home/node/.grok/auth.json";
       await docker([
         "exec",

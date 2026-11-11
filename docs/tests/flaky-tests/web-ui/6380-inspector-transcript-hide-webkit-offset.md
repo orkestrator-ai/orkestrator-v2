@@ -30,7 +30,8 @@ reader's offset recorded before the hide: `mobile-chromium` received 12686 in al
 four runs (expected 12688, 12715, 12707, 12759) and `desktop-chromium` received
 11953 in the three runs that failed there (expected 12005, 11991, 12004). The
 expected value varies and the received one does not. This is the brief offset
-[to-do 5620](../../../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md),
+to-do 5620 (retired 2026-11-11; see
+[transcript-scroll.md](../../../architecture/transcript-scroll.md#activation-and-persistence)),
 task 2, describes. CI runs on 2026-11-06 (42222311479, 42222507446, 42222625263,
 42223318261, 42224936443) failed the same way at line 125, with received values
 11953 or 12153 on desktop and 12686 on the phone.

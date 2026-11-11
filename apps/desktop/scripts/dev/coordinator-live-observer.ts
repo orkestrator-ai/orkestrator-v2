@@ -32,6 +32,7 @@ export interface DelegationCoordinator {
   projectId: string;
 }
 const HEARTBEAT_MS = 60_000;
+const MAX_TOOL_ERROR_CHARS = 500;
 
 /** Cleanup errors are content-free, and never prevent later cleanup steps. */
 export async function runCoordinatorCleanup(
@@ -98,6 +99,14 @@ type EnvironmentRow = { id: string; name?: string };
  * leaves pending instead: the status scenario needs a worker that stays
  * waiting on an approval. They are recorded apart (`held`) and answered only
  * by `release`.
+ *
+ * `worker` is the backend that owns the workers and their project there,
+ * when that is not the coordinator's own: a worker on a connected node keeps
+ * its session, its interactions, its mailbox and its environment row on that
+ * node. Every worker read and answer goes there; the coordinator's own turn,
+ * delegations, mailbox and queue stay on `invoke`. `workerObserved` says
+ * whether a worker's session was ever read, so a scenario can refuse to
+ * claim "no interaction escaped" for a worker it never saw.
  */
 export function createDelegationWatch(
   invoke: Invoke,
@@ -107,9 +116,14 @@ export function createDelegationWatch(
   options: {
     holdWorkerInteractions?: (environmentId: string) => boolean;
     onProjection?: (projection: Projection | null) => void;
+    worker?: { invoke: Invoke; projectId: string };
   } = {},
 ) {
   const { identity, conversation, projectId } = coordinator;
+  const workerInvoke = options.worker?.invoke ?? invoke;
+  const workerProjectId = options.worker?.projectId ?? projectId;
+  /** Workers whose own session was read at least once. */
+  const observedWorkers = new Set<string>();
   const coordinatorMailbox = { environmentId: identity.environmentId, tabId: conversation.tabId };
   const queueKey = `${identity.agent}\0${identity.logicalSessionKey}`;
   const observations: DelegationObservation[] = [];
@@ -141,9 +155,9 @@ export function createDelegationWatch(
     agent: identity.agent,
     logicalSessionKey: `env-${environmentId}:${workerTabs.get(environmentId) ?? "startup-agent"}`,
   });
-  const answer = async (target: SessionIdentity, answers: TurnAnswer[]) => {
+  const answer = async (target: SessionIdentity, answers: TurnAnswer[], via: Invoke = invoke) => {
     for (const item of answers) {
-      await invoke("resolve_native_agent_interaction", {
+      await via("resolve_native_agent_interaction", {
         ...target,
         interactionId: item.interactionId,
         resolution: {
@@ -154,9 +168,9 @@ export function createDelegationWatch(
       });
     }
   };
-  const mailbox = async (environmentId: string, tabId: string) =>
+  const mailbox = async (environmentId: string, tabId: string, via: Invoke = invoke) =>
     (
-      await invoke<MailboxPage>("get_agent_mail_mailbox", {
+      await via<MailboxPage>("get_agent_mail_mailbox", {
         environmentId,
         tabId,
         limit: 200,
@@ -173,6 +187,8 @@ export function createDelegationWatch(
     workerPhase: (environmentId: string) => workerPhases.get(environmentId) ?? "unknown",
     escaped: () => coordinatorTurn.escapedInteractions(),
     workerEscaped: () => [...workerTurns.values()].flatMap((turn) => turn.escapedInteractions()),
+    /** The worker's own session was read at least once. */
+    workerObserved: (environmentId: string) => observedWorkers.has(environmentId),
     /** Interactions held for a worker named by `holdWorkerInteractions`, in arrival order. */
     held: (environmentId: string) =>
       [...(held.get(environmentId)?.values() ?? [])].map(
@@ -191,13 +207,17 @@ export function createDelegationWatch(
       for (const [interactionId, request] of pending) {
         if (request.releasedAt !== undefined) continue;
         try {
-          await answer(workerIdentity(environmentId), [
-            {
-              interactionId,
-              sessionId: request.sessionId,
-              action: isApprovalKind(request.kind) ? "deny" : "cancel",
-            },
-          ]);
+          await answer(
+            workerIdentity(environmentId),
+            [
+              {
+                interactionId,
+                sessionId: request.sessionId,
+                action: isApprovalKind(request.kind) ? "deny" : "cancel",
+              },
+            ],
+            workerInvoke,
+          );
           request.releasedAt = Date.now();
         } catch (error) {
           failures.push(error);
@@ -239,8 +259,8 @@ export function createDelegationWatch(
           watch.workers.push(association.resourceId);
       }
       if (watch.workers.some((id) => !names.has(id))) {
-        for (const environment of await invoke<EnvironmentRow[]>("get_environments", {
-          projectId,
+        for (const environment of await workerInvoke<EnvironmentRow[]>("get_environments", {
+          projectId: workerProjectId,
         })) {
           if (environment.name) names.set(environment.id, environment.name);
         }
@@ -255,8 +275,8 @@ export function createDelegationWatch(
         watch.workers.map(async (worker) => {
           const target = workerIdentity(worker);
           const [workerMail, workerProjection] = await Promise.all([
-            mailbox(worker, workerTabs.get(worker) ?? "startup-agent"),
-            invoke<Projection | null>("get_native_agent_projection", {
+            mailbox(worker, workerTabs.get(worker) ?? "startup-agent", workerInvoke),
+            workerInvoke<Projection | null>("get_native_agent_projection", {
               ...target,
               messageLimit: 20,
             }).catch(() => null),
@@ -269,6 +289,7 @@ export function createDelegationWatch(
       for (const { worker, target, workerMail, workerProjection } of workerReads) {
         mail.push(...workerMail);
         if (workerProjection) {
+          observedWorkers.add(worker);
           workerPhases.set(worker, workerProjection.turn.phase);
           phases[worker] = workerProjection.turn.phase;
           if (workerProjection.turn.phase === "error") {
@@ -294,7 +315,7 @@ export function createDelegationWatch(
         }
         const turn = workerTurns.get(worker) ?? createTurnWatch();
         workerTurns.set(worker, turn);
-        await answer(target, turn.observe(workerProjection).answers);
+        await answer(target, turn.observe(workerProjection).answers, workerInvoke);
       }
       const observation: DelegationObservation = {
         at: Date.now(),
@@ -369,7 +390,9 @@ export function createDelegationWatch(
       const latest = observations.at(-1)?.mail ?? [];
       return Promise.all(
         latest.map(async (message) => {
-          const full = await invoke<{ body?: string } | null>("get_agent_mail_message", {
+          // A worker's mailbox lives on the node that owns the worker.
+          const via = watch.workers.includes(message.toEnvironmentId) ? workerInvoke : invoke;
+          const full = await via<{ body?: string } | null>("get_agent_mail_message", {
             environmentId: message.toEnvironmentId,
             tabId: message.toTabId,
             messageId: message.id,
@@ -397,15 +420,19 @@ export function createDelegationWatch(
           orkestratorToolCalls([{ name: record.toolName, args: "", state: "unknown" }], tool)
             .length > 0
         ) {
+          // A failed call reads as `{"isError":true,"error":…}`, its message
+          // bounded: evaluations read it, and a check detail may quote it.
+          const failed = (error: string) =>
+            JSON.stringify({ isError: true, error: error.slice(0, MAX_TOOL_ERROR_CHARS) });
           let text = typeof record.toolOutput === "string" ? record.toolOutput : "";
+          if (!text && typeof record.toolError === "string" && record.toolError)
+            text = failed(record.toolError);
           if (!text && typeof record.detailRef === "string") {
             const details = await invoke<ToolDetails | null>("get_native_agent_tool_details", {
               ...identity,
               detailRef: record.detailRef,
             }).catch(() => null);
-            text = details?.toolError
-              ? JSON.stringify({ isError: true })
-              : (details?.toolOutput ?? "");
+            text = details?.toolError ? failed(details.toolError) : (details?.toolOutput ?? "");
           }
           outputs.push(text);
         }

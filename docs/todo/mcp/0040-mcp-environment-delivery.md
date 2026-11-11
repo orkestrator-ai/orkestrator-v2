@@ -201,7 +201,7 @@ All six code items are done; the decisions behind them are in
 ### Qualification
 
 Container runs batch with
-[0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md);
+0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md));
 remote runs with
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
@@ -552,7 +552,7 @@ None left; both earlier questions are answered in decisions 9 and 10.
   provider rules.
 - [container lifecycle](../../architecture/container-lifecycle.md) for state
   layout and staged inputs, and
-  [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)
+  [environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2)
   for the allowlist and staged-input credentials.
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
   ("Provider state", the provider-state inventory).

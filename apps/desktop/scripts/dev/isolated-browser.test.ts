@@ -8,6 +8,7 @@ import {
   DOCKER_FIXTURE_SHARDS,
   IMAGE_QUALIFICATION_TESTS,
   dockerFixtureShards,
+  dockerProfileArguments,
   isolatedLauncherTimeoutMs,
   isolatedProfileArguments,
   runIsolatedBrowser,
@@ -206,6 +207,13 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "31505",
   ]);
   expect(() => isolatedProfileArguments(["--agent-tools-port", "34121"])).toThrow("reserved");
+  // Fixture environments without the Docker qualification run (`test:agent:coordinator:surfaces-fake`).
+  expect(isolatedProfileArguments(["--fixture-environments", "local,container"]).slice(-2)).toEqual(
+    ["--fixture-environments", "local,container"],
+  );
+  expect(() => isolatedProfileArguments(["--fixture-environments", "remote"])).toThrow(
+    "local,container",
+  );
   expect(() => isolatedProfileArguments(["--agent-platforms", "nope"])).toThrow("accepts");
 
   const f = await fixture();
@@ -520,6 +528,8 @@ exit 0
     for (const start of starts) {
       expect(start.args).toContain("--fixture-environments");
       expect(start.args).toContain("local,container");
+      // Each shard profile takes its own port from the firewall range (to-do 7500).
+      expect(start.args[start.args.indexOf("--agent-tools-port") + 1]).toBe("auto");
       expect(alive(start.pid)).toBe(false);
     }
     // Each profile runs exactly its own shard's files, in its own scheduler.
@@ -558,6 +568,28 @@ exit 0
     expect(qualification.launcherStarted).toBe(true);
   },
 );
+
+test("a Docker run keeps the caller's --fixture-environments and adds no second pair", async () => {
+  const f = await fixture();
+  await writeFile(path.join(f.root, "docker"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFakeBun(f.root);
+  expect(
+    await runIsolatedBrowser({
+      ...f,
+      docker: true,
+      profileArgs: ["--fixture-environments", "container"],
+    }),
+  ).toBe(0);
+  const starts = (await f.events()).filter((event) => event.task === "dev:test");
+  expect(starts).toHaveLength(DOCKER_FIXTURE_SHARDS.length);
+  for (const start of starts) {
+    const flags = start.args.filter((arg) => arg === "--fixture-environments");
+    expect(flags).toHaveLength(1);
+    expect(start.args[start.args.indexOf("--fixture-environments") + 1]).toBe("container");
+    expect(start.args).not.toContain("local,container");
+  }
+});
 
 test("a failed image qualification stops the starting profiles before any test and cleans them up", async () => {
   const f = await fixture("startup-hang");
@@ -607,6 +639,29 @@ test("one shard's profile exiting fails the run and still stops and resets every
     "qa-docker-shards": ["dev:stop", "dev:reset"],
     "qa-docker-shards-2": ["dev:stop", "dev:reset"],
   });
+});
+
+test("a Docker run takes an automatic agent-tools port unless the caller chose one", () => {
+  expect(dockerProfileArguments(["--fixture"])).toEqual([
+    "--fixture",
+    "--fixture-environments",
+    "local,container",
+    "--agent-tools-port",
+    "auto",
+  ]);
+  expect(dockerProfileArguments(["--agent-tools-port", "31505"])).toEqual([
+    "--agent-tools-port",
+    "31505",
+    "--fixture-environments",
+    "local,container",
+  ]);
+  // `auto` passes the launcher's own validation, and keeps one profile per shard.
+  expect(parseAgentTestArguments(dockerProfileArguments([])).agentToolsPort).toBe("auto");
+  expect(isolatedProfileArguments(["--agent-tools-port", "auto"]).slice(-2)).toEqual([
+    "--agent-tools-port",
+    "auto",
+  ]);
+  expect(dockerFixtureShards(["--agent-tools-port", "auto"])).toBe(DOCKER_FIXTURE_SHARDS);
 });
 
 test("a fixed agent-tools port keeps every Docker spec in one profile", async () => {

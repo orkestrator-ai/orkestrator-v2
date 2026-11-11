@@ -2,6 +2,11 @@
 
 ## Task analysis
 
+Analysed 2026-11-11 against main at 498b68766 (task 12: the client-only and
+validation candidates measured on Linux and decided, decisions C1 to C7, see
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux);
+tasks 8 and 18 rechecked and still need a macOS node and a headed browser).
+
 Analysed 2026-11-10 against main at c98b20e6f (task 13: the `multi-review`
 rollback driver removed, decision W6).
 
@@ -38,14 +43,14 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 (now in 7568) and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 6. **Live providers**: delegated to 0049. Status: blocked (waits on 0049).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
-8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 run was on Linux; the physical-device run moved to 7568 on 2026-11-10).
+8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 and 2026-11-11 runs were on Linux; the physical-device run moved to 7568 on 2026-11-10).
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
-12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (the two PR candidates are blocked (waits on 7568: 0048 task 5); the client-only and validation candidates can run now) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (only the two PR candidates are left, blocked (waits on 7568: 0048 task 5)) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to [7745](7745-tmux-interactive-capture-orphans.md), decision C5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (waits on 7568: 0048 task 5; 0049) (left: the `feature-planning` and `build-pipeline` rollback drivers and the switch itself, which wait for task 5's live GitHub run, now in 7568; `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waits for 0049) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
-18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 host runs browsers headless only, and the busy profile's hidden client is emulated, so its timers are not throttled).
+18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 and 2026-11-11 hosts run browsers headless only, with no virtual display, and the busy profile's hidden client is emulated, so its timers are not throttled).
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
 20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in 7200, two fixed with tests).
 21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: done (2026-11-06).
@@ -351,6 +356,9 @@ device or simulator, and this run was on Linux. The busy profile's hidden
 client (one client, `visibilityState` emulated) resumed in p95 123 ms, which
 says nothing about iOS suspension.
 
+**Outcome (2026-11-11, not done).** Not run: the host was Linux again
+(beelink2), with no Xcode or simulator.
+
 ### 10. Long soak and cache gauges
 
 **Problem.** A 10-cycle soak left no leaked footprint, but a slow leak or an RSS that never plateaus would only show over a long run with sessions open. Worktree snapshot and row caches have no gauge.
@@ -469,6 +477,36 @@ the busy profile has run (decision B7):
   shared display clock (browser profiling), the validation reader's spawn per
   poll, B19 and B20 (the busy profile ran nine validation runs a run, 1.1 s
   each, but measured neither the reader nor crash recovery).
+
+**Outcome (2026-11-11, Linux).** Rechecked on `498b68766`: every value above
+still holds (`DOCKER_AVAILABILITY_POLL_INTERVAL_MS` is at `App.tsx:99`,
+`DESIGN_CANVAS_CURSOR_CHECK_MS` at `design-controller.ts:46`). The six
+candidates that never needed task 1 were measured on this host, each at the
+cost it actually pays; numbers in
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux):
+
+- Docker availability sharing (C09): one probe is a `docker info`, about
+  60 ms of CPU, once a minute per visible client. Kept (decision C1).
+- The design canvas cursor check (C12): an unchanged check costs the design
+  service under 0.1 ms. Kept at 3 s; missed-final-hint recovery is still
+  qualified only by its unit test, which a longer interval would need first
+  (decision C2).
+- A shared display clock: a real browser saves at most a few milliseconds of
+  main-thread time a second even with 200 clocks. Kept as is (decision C3).
+- The validation reader's `bun` spawn per poll (C06): about 10 ms a poll
+  locally, plus a `docker exec` in a container, only while a person has the
+  output open on a running result. Kept (decision C4).
+- B19: an attached terminal's capture is about 2 ms locally but one
+  `docker exec` (about 50 ms wall, 60 to 70 ms CPU) in a container. Demand
+  gating is needed for terminals nobody detached, not for attached views: a
+  reload or a closed window leaves the loop running until the environment's
+  tmux cleanup. Moved to [7745](7745-tmux-interactive-capture-orphans.md)
+  (decision C5).
+- B20: the 500 ms tick costs under 0.1 ms; splitting the liveness write would
+  save about half of that. Kept (decision C6).
+
+Left here: the two PR candidates, which wait for task 5 (now 7568: 0048
+task 5).
 
 ### 13. Remove the rollback drivers
 
@@ -656,6 +694,11 @@ headless only, and a headless page is never really backgrounded. The busy
 profile's one-client rounds emulate a hidden document (decision B5), which
 covers the read coordinator's pause and resume but not timer throttling.
 
+**Outcome (2026-11-11, not done).** Not run: the host (beelink2) allows
+headless browsers only and no virtual display (Xvfb), so a page can still not
+be put in a real background tab. The next run needs a host with a display or a
+disposable one.
+
 ### 19. Changes-tab remote freshness
 
 **Problem.** 0020 still owed a real-browser check of the remote snapshot state;
@@ -773,8 +816,9 @@ credential-free idle A/B run. The instrumentation fixes are done and a
 credential-free macOS idle A/B with freshness probes has run. Since then the
 long soak (task 10) and, on 2026-11-06, the busy live profile (task 1) have
 run. What remains here is the provider runs (0049), an iOS simulator run, a
-real background tab, the client-only measured candidates, and then removing
-the rest of the rollback drivers once live GitHub has run. The live GitHub,
+real background tab, and then the two PR candidates and the rest of the
+rollback drivers once live GitHub has run; the client-only and validation
+candidates were decided on 2026-11-11. The live GitHub,
 iOS device, host suspend and two-machine runs moved to the
 [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
 2026-11-10. On 2026-10-25 the feature-planning keyed row read landed (the one
@@ -1092,7 +1136,7 @@ container, so every fetch was a real `git fetch`.
   `fixtures/test-project`. The first start's container kept a bind to the
   deleted origin (empty inside, `does not appear to be a git repository`),
   and its local worktree's `.git` pointed at a deleted repository. Recorded as
-  2180 (deleted 2026-11-06; its live check is task 7 of [0019](../containers-and-environments/0019-container-platform-qualification.md));
+  2180 (deleted 2026-11-06; its live check was task 7 of 0019, retired 2026-11-11, done 2026-11-06);
   the run above used the second start's container.
 
 Real-browser QA, on a fresh profile after `dev:reset` (headless Chromium, run
@@ -1626,6 +1670,55 @@ ready local environment".
   [7564](7564-graph-run-result-turn-end-tail.md), with graph runs, which
   read their turns the way Multi Review did.
 
+### Client-only and validation candidates (2026-11-11, Linux)
+
+Task 12's six candidates that never needed task 1, measured on beelink2
+(Linux 7.2, 16 cores, x86_64) at `498b68766`. No backend, profile, provider
+or login was used: each cost was measured where it is paid, with the real
+code where the code is in this repository. Docker ran only on a disposable
+rootless daemon (`mise run docker:disposable -- start`) through
+`apps/desktop/scripts/dev/docker-qualification-bin`, with one `busybox:1.37`
+container; the container, the image and the daemon were removed afterwards.
+The scratch benchmarks lived under the git-ignored `output/benchmarks/` and
+were deleted. CPU is user plus system time; a child's comes from
+`Bun.spawnSync`'s resource usage, a daemon's from `/proc/<pid>/stat`
+(including its waited-for children, so runc counts under the shim).
+
+| What | How | Result |
+| --- | --- | --- |
+| C09: one Docker availability probe (`docker info`, `checkDockerAvailability`) | 3 runs of 40 against the empty disposable daemon | wall p50 41.4 to 43.0 ms, p95 44.0 to 48.1 ms; CLI CPU p50 60.9 to 62.4 ms (the CLI loads its plugins to list them); dockerd and RootlessKit 2.5 to 2.75 ms a probe |
+| `docker exec` floor (B19 container capture, C06 container reader) | 3 runs of 30 `docker exec <busybox> sh -c 'cat /proc/uptime'` | wall p50 47.9 to 57.2 ms; CLI CPU p50 25.7 to 28.7 ms; dockerd, RootlessKit, containerd and the shim with runc 33.7 to 41.0 ms an exec |
+| B19: one local capture (`tmux capture-pane -p -e`) | 2 runs of 100 on a private tmux server (`-L`), 120×30 pane full of text | wall p50 2.08 to 2.39 ms, p95 2.92 to 3.16 ms; client CPU p50 1.58 to 1.80 ms (the tmux server's own CPU was not read) |
+| C12: one unchanged design canvas cursor check | `DesignService.sync` at the current revision, in process (`createDesignHarness`), 3 runs of 2,000 | 2 frames 33 to 52 µs wall, 58 to 70 µs CPU; 20 frames of 2 KB HTML 40 to 80 µs wall, 72 to 96 µs CPU; a 123-byte `unchanged` answer. The gateway hop was not measured |
+| C06: one validation output poll, local | the real `readReviewValidationOutput` with its spawned `bun` reader, append mode on a 200 KB stdout that grew a line per poll, 2 runs of 40 | wall p50 10.4 to 10.8 ms, p95 11.3 to 15.0 ms; the backend's own CPU 0.80 to 0.85 ms a poll; a bare `bun -e` child, the reader's floor, 9.0 to 9.1 ms CPU p50 |
+| B20: one 500 ms heartbeat tick | the worker's tick (cancel checks, `persist`: stringify, `wx` write, rename) on a running run, 3,000 ticks, in the worktree's filesystem (btrfs), 2 runs | 6 commands (4.4 KB state) 63 to 76 µs CPU, 79 to 126 µs wall; 20 commands (14 KB) 84 µs CPU, 116 to 128 µs wall. A heartbeat-only write of the same tick: 29 to 31 µs and 45 to 48 µs CPU |
+| Display clocks | headless Chromium (Playwright 1.65), a production React bundle of the real `useElapsedTimer` and `usePromptDeadline`, half turn clocks and half prompt deadlines, against one reference-counted shared clock; Performance metrics over 30 s after a 3 s settle, one run | script time a second: 1 clock 0.24 / 0.24 ms (each / shared), 10 clocks 2.24 / 0.34 ms, 50 clocks 1.26 / 0.74 ms, 200 clocks 4.77 / 0.70 ms; all main-thread task time: 1.42 / 1.31, 4.94 / 1.51, 4.12 / 4.65, 9.64 / 4.03 ms; layouts a second 1 to 2.2 / 1 |
+
+What each pays at its cadence, from the rows above:
+
+- C09: about 64 ms of CPU a minute per visible client (about 0.1 % of one
+  core); a hidden client does not poll (`startCoordinatedPoll`). Sharing
+  across clients would save that much per visible client after the first.
+- C12: 20 checks a minute per visible canvas, about 1.2 to 1.9 ms of design
+  service CPU a minute, plus the unmeasured gateway round trip.
+- Display clocks: at 10 running clocks the per-component intervals cost about
+  2 ms of script a second more than a shared clock (0.2 % of the main
+  thread); at 200, about 4 ms. The 50-clock row shows the run-to-run noise.
+- C06: locally about 10 ms of CPU every 2 s (0.5 % of one core) while the
+  output modal is open on a queued or running result; a container adds one
+  `docker exec`, about 60 to 70 ms, so about 4 % of one core while open.
+- B19: locally about 1.7 ms a second for an idle attached pane (0.2 % of a
+  core). A container capture is one `docker exec` (about 62 to 70 ms of CPU
+  with the capture), so an idle attached container pane costs about 6 to 7 %
+  of one core and a changing one (4 captures a second) about 25 %. The loop
+  stops only on an explicit detach, the environment's tmux cleanup or backend
+  shutdown; the client detaches on unmount, which a reload, a closed window
+  or a lost connection never runs (read from `tmux-interactive.ts`,
+  `tmux-commands.ts` and `ClaudeTmuxInteractiveTerminal.tsx`; not observed
+  live, 7745 task 2).
+- B20: two ticks a second, about 0.15 ms of CPU a second for a 20-command
+  run; the split would save about 0.07 ms a second.
+
 ## Outstanding work
 
 ### Qualification
@@ -1703,7 +1796,10 @@ credentials or a platform CI lacks are batched in
 ### Measured candidates
 
 Decide each from the live data; change nothing without evidence. The
-2026-10-22 idle A/B decides none of them. It has no PRs, no GitHub, no
+2026-10-22 idle A/B decides none of them (the six client-only and
+validation candidates were measured on their own on 2026-11-11, see
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux)).
+It has no PRs, no GitHub, no
 fetching container, a single client, no design canvas, no validation output
 and no interactive terminal, so every candidate below except the
 feature-planning row read (decided from the deterministic harness on
@@ -1724,18 +1820,25 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 - Raising the priority of a queued discovery scan when an interactive read
   joins it; `WorkAdmissionPool` has no re-prioritisation.
 - A coarser `mail-retention` deadline (60 s today).
-- Sharing Docker availability across clients
-  (`DOCKER_AVAILABILITY_POLL_INTERVAL_MS`, 60 s, `apps/web/src/App.tsx`).
-- A longer quiet interval for the design canvas cursor check
+- ~~Sharing Docker availability across clients
+  (`DOCKER_AVAILABILITY_POLL_INTERVAL_MS`, 60 s, `apps/web/src/App.tsx`).~~
+  Decided 2026-11-11: kept (decision C1).
+- ~~A longer quiet interval for the design canvas cursor check
   (`DESIGN_CANVAS_CURSOR_CHECK_MS`, 3 s, `design-controller.ts`), after
-  missed-final-hint recovery is qualified.
-- One shared visible display clock for `useElapsedTimer` and
-  `usePromptDeadline` (not profiled).
-- The validation reader's in-environment `bun` spawn per poll.
-- Demand gating for interactive tmux capture (B19, `tmux-interactive.ts`).
-- Splitting the validation worker's 500 ms liveness write from changed-result
+  missed-final-hint recovery is qualified.~~ Decided 2026-11-11: kept at 3 s
+  (decision C2).
+- ~~One shared visible display clock for `useElapsedTimer` and
+  `usePromptDeadline` (not profiled).~~ Profiled and decided 2026-11-11: not
+  built (decision C3).
+- ~~The validation reader's in-environment `bun` spawn per poll.~~ Decided
+  2026-11-11: kept (decision C4).
+- ~~Demand gating for interactive tmux capture (B19, `tmux-interactive.ts`).~~
+  Decided 2026-11-11: needed only for terminals no client detached, in
+  [7745](7745-tmux-interactive-capture-orphans.md) (decision C5).
+- ~~Splitting the validation worker's 500 ms liveness write from changed-result
   writes (B20, `review-validation-worker.ts`), only with cross-process
-  crash-recovery and cancellation proof.
+  crash-recovery and cancellation proof.~~ Decided 2026-11-11: kept (decision
+  C6).
 - ~~A keyed row read for feature planning's per-record pass.~~ Done
   2026-10-25: `getFeaturePlan` reads one row, and a warm keyed read is served
   from the row cache. Evidence: harness counts unchanged, bytes in "Harness
@@ -2557,6 +2660,9 @@ collide with other tasks' decisions.
 ## Related
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 5, 9, 16 and 17, and the device run of task 8) moved there on 2026-11-10.
+- [7745-tmux-interactive-capture-orphans.md](7745-tmux-interactive-capture-orphans.md):
+  an interactive tmux terminal no client detached keeps capturing (task 12,
+  decision C5).
 - [7202-busy-profile-follow-ups.md](7202-busy-profile-follow-ups.md): what
   task 1's busy profile found (approving from the CLI, one unexplained
   review stall).
@@ -2572,7 +2678,7 @@ collide with other tasks' decisions.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and
-  [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
+  0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the
   container Files panel status exec and `containerRevertFileCommand`'s inline
@@ -2726,3 +2832,72 @@ collide with other tasks' decisions.
 The harness now associates each result submission identity with its tool's expected consuming phase. It requires exactly one submission for each of the four scripted slots and rejects missing, ambiguous or reversed observations. Submission precedes acceptance, so the new row is explicitly an upper bound from submission to backend phase observation, not acceptance latency. Delayed or absent model callbacks cannot silently erase samples. These revised timings have unit coverage but have not been qualified live.
 
 Failed rounds release fake-model waiters and stop both owned sessions. A stop that cannot confirm completion aborts the phase, avoiding reuse of an uncertain session. This adds recovery overhead only to failed rounds; continuing with unresolved approvals could cascade failures. Tests cover a hidden approval in round one followed by a successful second round.
+
+### Task 12: client-only and validation candidates (2026-11-11, Linux)
+
+Numbered Cn so they do not collide with other tasks' decisions. Numbers are in
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux).
+
+- **C1 Share Docker availability across clients?** One `docker info` probe
+  costs about 60 ms of CPU, once a minute per visible client; hidden clients
+  do not poll. Options: let `check_docker` answer a poll from the backend's
+  `DockerAvailabilityCache` while it is under 30 s old, keeping explicit
+  retries and startup probes fresh; or keep one probe per client. Chosen:
+  keep. Pros: no change to the onboarding and recovery paths that read a
+  fresh answer; the saving is about 0.1 % of one core per extra visible
+  client. Cons: two visible clients probe twice; reopen if a node routinely
+  serves many visible clients.
+- **C2 A longer quiet interval for the design canvas cursor check?** An
+  unchanged check costs the design service 58 to 96 µs and answers 123 bytes,
+  so 20 a minute cost under 2 ms a minute per visible canvas before the
+  gateway hop (not measured). Options: lengthen it once missed-final-hint
+  recovery is qualified live; or keep 3 s. Chosen: keep 3 s. Pros: the check
+  is the recovery path for a missed final hint, and lengthening it would
+  slow that recovery for a saving of well under 0.01 % of a core. Cons: the
+  gateway's share of each check is unmeasured; it would have to be two
+  orders of magnitude larger to change this.
+- **C3 One shared visible display clock?** In headless Chromium the real
+  hooks cost 2.2 ms of script a second at 10 running clocks against 0.3 ms
+  for a shared clock, and 4.8 ms against 0.7 ms at 200. Options: build a
+  reference-counted shared clock; or keep one interval per running clock.
+  Chosen: keep. Pros: each clock stays local to the small component that
+  shows it (the reason `LiveElapsed` exists), and the saving is about 0.2 %
+  of the main thread at a realistic count. Cons: one run, headless, on Linux;
+  a page showing hundreds of live clocks would reopen it.
+- **C4 Stop spawning `bun` for each validation output poll?** A local poll is
+  about 10 ms of CPU, a container poll adds a `docker exec` (60 to 70 ms), at
+  2 s, and only while the output modal is open on a running result. Options:
+  read local output in the backend process and keep the in-environment reader
+  for containers; or keep one reader for both. Chosen: keep. Pros: one reader
+  whose confinement and offset rules are the same for both kinds of
+  environment; the cost is paid only while a person watches the output.
+  Cons: about 4 % of one core for a watched container run; reopen if the
+  modal is shown by default.
+- **C5 Demand gating for interactive tmux capture (B19)?** An attached pane
+  is captured at 250 ms to 1 s; locally that is about 0.2 % of a core, but a
+  container capture is one `docker exec`, so an idle attached container pane
+  costs about 6 to 7 % of a core. An attached pane is demand, but the loop
+  also keeps running for a terminal no client detached (a reload, a closed
+  window, a lost connection), found by reading the code. Options: slow the
+  idle cadence for containers; gate the loop on a client lease or the owning
+  connection; or keep it. Chosen: keep the cadence for attached views and
+  stop orphaned loops, in [7745](7745-tmux-interactive-capture-orphans.md)
+  (task 1 there). Pros: the user watching a pane keeps its 1 s freshness, and
+  the unbounded part of the cost is removed. Cons: the fix needs a client
+  signal the backend does not have today (a contract change), so it is its
+  own change; the orphan has not been observed live (7745 task 2).
+- **C6 Split B20's liveness write from result writes?** In the worktree's
+  filesystem a tick costs 63 to 84 µs of CPU; a heartbeat-only write would
+  cost 29 to 48 µs, saving under 0.01 % of a core. Options: split it, with the
+  cross-process crash-recovery and cancellation proof the inventory asks
+  for; or keep it. Chosen: keep. Pros: no change to the state file the
+  control process, the reader and recovery all read. Cons: none measurable.
+- **C7 How to measure these candidates.** Options: a busy `dev:test` profile
+  with clients, as task 1 did; or each cost where it is paid, with the real
+  code (the design service, the output reader, the worker's tick, the hooks
+  in a real browser) and the real commands (`docker info`, `docker exec`,
+  `tmux capture-pane`). Chosen: the second. Pros: each figure belongs to one
+  candidate, and none of them depends on load the busy profile adds. Cons:
+  the gateway hop of a design check and a validation poll is not included,
+  Docker ran on a rootless daemon rather than the host's, and the B19 orphan
+  is inferred from the code rather than seen.

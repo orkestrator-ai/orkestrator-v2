@@ -535,6 +535,7 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_PREVIEW_TRANSPORT: "1",
         ORKESTRATOR_PREVIEW_RELAY: "0",
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
+        ORKESTRATOR_GATEWAY_COMPRESSION: "body",
         CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES: "262144",
       },
       "2.8.2",
@@ -570,6 +571,9 @@ describe("Electron backend process supervisor", () => {
     // And the startup container-to-host probe switch, so a disposable spec
     // backend can skip it.
     expect(isolated.ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
+    // And the gateway compression mode, so a profile can measure `body`
+    // against the default `on`.
+    expect(isolated.ORKESTRATOR_GATEWAY_COMPRESSION).toBe("body");
     // And Cursor's trim threshold, so a short run can reach the producer bound.
     expect(isolated.CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES).toBe("262144");
     expect(isolated.HOME).toBe("/profiles/qa/credentials/home");

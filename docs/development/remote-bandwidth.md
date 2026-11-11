@@ -115,6 +115,48 @@ Every client paid for the turn separately: a watcher costs nearly what the
 sender does (multi-client bytes scale with clients; nothing is shared on the
 wire). All completions were inside the 3 s budget.
 
+These tables were taken with the first version of the relay and spec. A
+review then found four measurement defects, all fixed before the `on`-mode
+rerun below: the slow link counted 1,024 bits per kbit (so it ran at
+524 kbit/s, 2.4 % fast); a completion check could match an earlier round's
+identical last line; a connection's end of stream could overtake its queued
+bytes; and requests split across TCP writes could be misattributed. The rerun
+reproduces the byte and terminal findings, so the decisions stand on it.
+
+### Rerun after the harness corrections, 2026-11-11
+
+The same spec, `on` mode only, three clients and three rounds, on `beelink2`
+with profile `rbwfix52`, from the working tree that became `bbf46aee2`. The
+relay now parses requests incrementally, delivers a connection's end of
+stream after its queued bytes, honours socket backpressure and shapes at
+512 kbit/s of 1,000 bits in both directions. Completion is now measured only
+when the round's own answer row holds its last line, and every cell must
+qualify (expected samples, finished and settled bursts, p95 budgets) or the
+run fails. All 25 cells qualified in 507 s.
+
+| Transport | Link | KiB per client per turn (sender / watchers) | First update p50 / p95 ms | Completion p50 / p95 ms | Build KiB / last byte ms | Background tab KiB / last byte ms | Random KiB / last byte ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SSE | loopback | 52.9 / 52.3, 49.4 | 341 / 732 | 585 / 2,271 | 19.3 / 103 | 18.7 / 102 | 152.0 / 66 |
+| SSE | slow | 46.8 / 36.9, 36.9 | 717 / 753 | 691 / 1,348 | 19.1 / 406 | 18.5 / 368 | 151.8 / 2,500 |
+| WebSocket | loopback | 45.5 / 41.4, 40.6 | 324 / 886 | 385 / 1,134 | 239.3 / 722 | 239.0 / 125 | 200.2 / 43 |
+| WebSocket | slow | 50.8 / 39.6, 40.0 | 779 / 981 | 655 / 2,486 | 238.9 / 3,904 | 238.9 / 3,924 | 200.2 / 3,284 |
+
+Completions stayed inside the 3 s budget, but with a wider tail than the
+first run (p95 up to 2.5 s against 1.2 s); the smallest sample was 104 ms, so
+no round completed before its own last delta. Per-turn bytes were 10 to 35 %
+higher than the first run's on a busier host. The terminal results repeat:
+`on` SSE carries the build burst in 19 KiB against 239 KiB over the
+WebSocket, and on the slow link delivers it in 0.4 s against 3.9 s. The
+slow link's queue peaked at 18 KiB per client for an SSE build burst and
+about 246 KiB for the WebSocket.
+
+Data saving, same run, client 1 off and client 2 on: a running turn held for
+30 s cost 101.6 against 57.1 KiB (71 against 40 invokes); an idle view
+6.5 KiB each; the Files panel's All files tab 46.3 against 36.2 KiB (44
+against 26 invokes). Completion p50 / p95 was 452 / 513 ms off and
+505 / 572 ms on; approval card visible 33 / 62 ms off and 33 / 95 ms on, five
+rounds each.
+
 Terminal bursts, written to a terminal session through the backend: 4,000
 lines of redundant build output (about 500 KiB of serialised SSE per stream),
 the same in the background tab, and 150,000 random bytes as base64 (about

@@ -1210,6 +1210,15 @@ export function KanbanTaskDialog({
           ref={dialogContentRef}
           className={TASK_VIEW_DIALOG_CONTENT_CLASS}
           onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(event) => {
+            // Start on the selected tab, not on the first button (Delete).
+            const selected = dialogContentRef.current?.querySelector<HTMLElement>(
+              '[role="tab"][aria-selected="true"]',
+            );
+            if (!selected) return;
+            event.preventDefault();
+            selected.focus();
+          }}
         >
           <Tabs
             value={activeTab}
@@ -1218,7 +1227,7 @@ export function KanbanTaskDialog({
             }
             className="flex min-h-0 flex-1 flex-col gap-0"
           >
-            <DialogHeader className="shrink-0 gap-2 border-b border-divider bg-background px-6 pt-4 pr-14 pb-0 sm:px-6 sm:pr-14">
+            <DialogHeader className="m-0 shrink-0 gap-2 px-4 pt-4 pr-12 pb-0 text-left sm:m-0 sm:px-6 sm:pt-5 sm:pr-14">
               <DialogDescription className="sr-only">
                 View and edit task details, build actions, images, and comments.
               </DialogDescription>

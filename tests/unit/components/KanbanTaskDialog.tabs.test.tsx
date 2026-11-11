@@ -155,6 +155,8 @@ describe("the ticket view's tabs", () => {
     withNotes();
     renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     const list = screen.getByRole("tablist", { name: "Ticket view" });
+    // Keyboard users start on the selected tab, never on Delete.
+    expect(document.activeElement).toBe(tab("Ticket"));
     expect(
       within(list)
         .getAllByRole("tab")

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { toast } from "sonner";
 import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-preview";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 
 import { invoke } from "@/lib/native/backend";
@@ -13,6 +14,18 @@ import { environmentStore } from "@/stores/environmentStore";
 import { previewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 import { appCommandStore } from "@/test/app-command-store";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+
+const LEAF = "bk_leaf-mbp" as BackendId;
+
+/** A leaf node client with the loopback resolver a real leaf lease has. */
+function leafClient(): FakeNodeClient {
+  return Object.assign(new FakeNodeClient({ nodeId: LEAF }), {
+    resolveLoopbackUrl: (url: string) =>
+      `https://workstation.tailnet.ts.net/__orkestrator/nodes/${LEAF}/__orkestrator/proxy/loopback/${new URL(url).port}`,
+  });
+}
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -86,7 +99,12 @@ describe("openLinkExternally", () => {
     stopListening = listenForTerminalBrowserTabRequests((request) => tabRequests.push(request));
   });
 
+  let windowScope: WindowScope | null = null;
+
   afterEach(() => {
+    windowScope?.dispose();
+    windowScope = null;
+    window.orkestratorDesktopIdentity = undefined;
     stopListening();
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
@@ -255,5 +273,56 @@ describe("openLinkExternally", () => {
     expect(openExternal).toHaveBeenLastCalledWith("http://localhost:3000/");
     expect(openService).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalledWith("resolve_preview_target", expect.anything());
+  });
+
+  test("a link from an environment on this computer opens as written", async () => {
+    window.orkestratorDesktopIdentity = {
+      connectionId: "connection-1",
+      backendId: "bk_command-mini",
+      legacyOrigin: null,
+      localInstallationId: LEAF,
+    };
+    windowScope = new WindowScope();
+    const leaf = windowScope.open({ role: "leaf", client: leafClient() });
+    leaf.store(environmentStore).setState({
+      environments: [{ id: "env-here", environmentType: "local" }] as unknown as Environment[],
+    });
+
+    await openLinkExternally({
+      environmentId: "env-here",
+      sourceTabId: "tab-1",
+      url: "http://127.0.0.1:3917/browser-tests/app-shell?surface=a",
+      origin: "agent",
+      scope: leaf,
+    });
+
+    expect(openExternal).toHaveBeenCalledWith(
+      "http://127.0.0.1:3917/browser-tests/app-shell?surface=a",
+    );
+    expect(openService).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("resolve_preview_target", expect.anything());
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  test("a fallback for a leaf on another computer uses that leaf's proxy", async () => {
+    window.orkestratorDesktopIdentity = {
+      connectionId: "connection-1",
+      backendId: "bk_command-mini",
+      legacyOrigin: null,
+      localInstallationId: "bk_some-other-machine",
+    };
+    windowScope = new WindowScope();
+    const leaf = windowScope.open({ role: "leaf", client: leafClient() });
+
+    await openLinkExternally({
+      environmentId: "env-unknown-here",
+      sourceTabId: "tab-1",
+      url: "http://localhost:3000/",
+      scope: leaf,
+    });
+
+    expect(openExternal).toHaveBeenCalledWith(
+      `https://workstation.tailnet.ts.net/__orkestrator/nodes/${LEAF}/__orkestrator/proxy/loopback/3000`,
+    );
   });
 });

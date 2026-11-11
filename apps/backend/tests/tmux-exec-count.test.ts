@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as backendModule from "../src/core/tmux-backend";
 import * as sessionModule from "../src/core/tmux-session-manager";
+import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
 import { SCENARIOS, measureTmuxExecs } from "../scripts/tmux-exec-count";
 
 /**
@@ -51,6 +52,30 @@ describe("tmux poll exec budget", () => {
   test("an idle sibling stays below the old idle budget while a busy tab rings four times a second", async () => {
     const counts = (await run("idle sibling of a busy ringing tab"))!;
     expect(counts.total).toBeLessThanOrEqual(seconds + 8);
+  });
+
+  test("every exec of the loop is charged to its tmux-tab-loop tick (todo 7567)", async () => {
+    for (const scenario of SCENARIOS) {
+      const metrics = new RecurringWorkMetrics({ enabled: true });
+      const counts = await measureTmuxExecs(
+        sessionModule as never,
+        backendModule as never,
+        scenario,
+        seconds,
+        { metrics },
+      );
+      if (!counts) continue;
+      const snapshot = metrics.snapshot();
+      const loop = snapshot.kinds["tmux-tab-loop"];
+      // Nothing escapes to the unattributed bucket or another kind.
+      expect(loop?.workUnits["docker-exec"]).toBe(counts.total);
+      expect(snapshot.unattributed.workUnits["docker-exec"] ?? 0).toBe(0);
+      // One attempt per tick, and a tick costs at most a snapshot plus its
+      // search, drains and tail reads.
+      expect(loop?.started).toBeGreaterThan(0);
+      expect(loop?.started).toBeLessThanOrEqual(counts.total);
+      expect(loop?.failed).toBe(0);
+    }
   });
 
   test("a busy tab costs one exec per fast tick", async () => {

@@ -1622,9 +1622,10 @@ ready local environment".
 - **Validation.** Still bimodal, 2312 to 2671 ms in four reviews and 5060
   and 5069 ms in two, with runs of 1132 to 1180 ms: the validation run's
   completion raises no wake and is read on the observation cadence. The row
-  has no budget; it is task 3 of
-  [7564](7564-graph-run-result-turn-end-tail.md), with graph runs, which
-  read their turns the way Multi Review did.
+  has no budget; it was task 3 of 7564 (retired 2026-11-11), with graph
+  runs, which read their turns the way Multi Review did. Both now follow
+  the step on a short cadence
+  ([recurring-work.md](../../architecture/recurring-work.md#latency-budgets)).
 
 ## Outstanding work
 

@@ -270,6 +270,15 @@ const DEFAULT_OBSERVATION_MS = 3_000;
  * acceptance, after which the ordinary cadence is no slower.
  */
 const RESULT_SETTLE_POLL_MS = 250;
+/**
+ * How long after a validation run starts it is read on the fast cadence
+ * (todo 7564 task 3). The run is a detached worker in the environment and
+ * nothing announces its end, so a short run waited for the next observation
+ * pass (3 s plus a spread) before the review could start. Past the window the
+ * ordinary cadence applies, so a run that takes minutes pays at most two extra
+ * status reads.
+ */
+const VALIDATION_FAST_WINDOW_MS = DEFAULT_OBSERVATION_MS;
 /** Workflows advanced at once; each carries its own bounded reviewer pool. */
 const MAX_CONCURRENT_WORKFLOW_PASSES = 8;
 const CONTROLLER_LEASE_MS = 15_000;
@@ -283,6 +292,24 @@ const MAX_AUTO_PR_ATTEMPTS = 3;
 /** Observation passes an unsettled interactive Address Findings outcome may wait before it counts as unknown. */
 const MAX_ADDRESS_FINDINGS_OUTCOME_POLLS = 20;
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
+
+/**
+ * Whether the workflow's validation run is running and started less than
+ * `windowMs` ago. A short run usually ends inside that window, and its end
+ * raises no wake (todo 7564 task 3).
+ */
+function validationRunJustStarted(
+  workflow: MultiReviewWorkflow,
+  now: number,
+  windowMs: number,
+): boolean {
+  const run = workflow.validationRun;
+  if (workflow.phase !== "preparing" || run?.status !== "running") return false;
+  if (isGraphEngineProjection(workflow)) return false;
+  if (workflow.validationStopRequested === true) return false;
+  const startedAt = Date.parse(run.startedAt);
+  return Number.isFinite(startedAt) && now - startedAt < windowMs;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -2817,6 +2844,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       this.options.observationIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS;
     if (await this.acceptedResultAwaitsTurnEnd(workflow, now, observeMs)) {
       return Math.min(RESULT_SETTLE_POLL_MS, observeMs);
+    }
+    if (validationRunJustStarted(workflow, now, Math.min(VALIDATION_FAST_WINDOW_MS, observeMs))) {
+      return Math.min(fastMs, observeMs);
     }
     // Spread workflows restored together across a third of the interval.
     return observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);

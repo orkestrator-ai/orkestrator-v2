@@ -53,6 +53,13 @@ export const SCENARIOS: readonly Scenario[] = [
 
 export type ExecCounts = Record<ExecKind, number> & { total: number };
 
+/**
+ * A recurring-work recorder (`RecurringWorkMetrics`). When given, the session
+ * reports its ticks into it, and every fake exec is charged as the
+ * `docker exec` the real capture boundary would charge (todo 7567).
+ */
+export type ExecMetrics = { work(unit: "docker-exec", count?: number): void };
+
 type SessionModule = {
   TmuxSession: new (
     environmentId: string,
@@ -61,7 +68,7 @@ type SessionModule = {
     runtimeRootPrefix: string,
     resumeSessionId?: string,
     claudeCommand?: string,
-    timing?: { pollTick?: (intervalMs: number) => Promise<void> },
+    timing?: { pollTick?: (intervalMs: number) => Promise<void>; metrics?: ExecMetrics },
   ) => Record<string, unknown>;
 };
 type BackendModule = { TmuxBackend: { container(id: string): Record<string, unknown> } };
@@ -136,6 +143,7 @@ export async function measureTmuxExecs(
   backendModule: BackendModule,
   scenario: Scenario,
   seconds: number,
+  options: { metrics?: ExecMetrics } = {},
 ): Promise<ExecCounts | null> {
   const counts: ExecCounts = {
     snapshot: 0,
@@ -153,6 +161,7 @@ export async function measureTmuxExecs(
   const backend = backendModule.TmuxBackend.container("c".repeat(64));
   const record = (args: string[]) => {
     const kind = classify(args);
+    options.metrics?.work("docker-exec");
     counts[kind] += 1;
     counts.total += 1;
     return answer(args, scenario);
@@ -199,6 +208,7 @@ export async function measureTmuxExecs(
     {
       pollTick: (intervalMs) =>
         new Promise<void>((resolve) => timers.push({ due: now + intervalMs, resolve })),
+      ...(options.metrics ? { metrics: options.metrics } : {}),
     },
   );
   (session as { busy: boolean }).busy = scenario.busy;

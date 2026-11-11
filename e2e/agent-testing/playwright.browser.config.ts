@@ -23,6 +23,7 @@ export default defineConfig({
     "pipeline-delete.spec.ts",
     "environment-delete-retry.spec.ts",
     "headless-profile.spec.ts",
+    "renderer-error-ring-browser.spec.ts",
     "pull-request-pane.spec.ts",
     "backend-owned-state.spec.ts",
     "agent-accounts.spec.ts",

@@ -889,6 +889,8 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/coordinator-routing-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-surfaces-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-node-mail-fake-model.test.ts",
+  "./e2e/agent-testing/coordinator-gap-tools-fake-model.test.ts",
+  "./e2e/agent-testing/pi-profile-settings.test.ts",
   "./e2e/agent-testing/coordinator-slow-remote-support.test.ts",
   "./e2e/agent-testing/container-fake-claude-api.test.ts",
   "./e2e/agent-testing/container-fake-claude-install.test.ts",

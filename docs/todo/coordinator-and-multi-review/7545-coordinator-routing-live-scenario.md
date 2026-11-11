@@ -74,7 +74,7 @@ model's wording.
     - Cons: three extra full Builds or reviews per platform; many minutes and billed turns for little extra evidence.
 - **One scenario or four?**
   - **One `routing` scenario with four ordered cases (recommended).**
-    - Pros: one profile boot; matches how 1021 and 0395 plan their scenarios.
+    - Pros: one profile boot; matches how 1021 (retired) and 0395 plan their scenarios.
     - Cons: an early failure hides later cases unless each case records its own result first.
   - **Four scenarios.**
     - Pros: independent failures.

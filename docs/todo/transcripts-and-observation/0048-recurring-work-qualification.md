@@ -1668,9 +1668,10 @@ ready local environment".
 - **Validation.** Still bimodal, 2312 to 2671 ms in four reviews and 5060
   and 5069 ms in two, with runs of 1132 to 1180 ms: the validation run's
   completion raises no wake and is read on the observation cadence. The row
-  has no budget; it is task 3 of
-  [7564](7564-graph-run-result-turn-end-tail.md), with graph runs, which
-  read their turns the way Multi Review did.
+  has no budget; it was task 3 of 7564 (retired 2026-11-11), with graph
+  runs, which read their turns the way Multi Review did. Both now follow
+  the step on a short cadence
+  ([recurring-work.md](../../architecture/recurring-work.md#latency-budgets)).
 
 ### Client-only and validation candidates (2026-11-11, Linux)
 
@@ -2013,6 +2014,23 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
   (identical counts on both fixtures, 1284 to 1347 ms → 785 to 881 ms per
   run) and the case has an explicit 30 s timeout. Evidence in
   [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md#resolution--2026-10-25).
+- Whether the counters now match Docker for an open claude-tmux tab, and
+  what one native Claude session costs the activity sweep, live. From
+  to-do 7567 (retired 2026-11-11), which added the `tmux-tab-loop` kind
+  (B30), stopped the change-evidence pull repeating an acknowledgment the
+  bridge had already accepted, and observed `change-evidence-pull` as its
+  own kind; each is proven by a deterministic test
+  (`tmux-exec-count.test.ts`, `service-evidence.test.ts`), not live. Rerun
+  `scripts/container-tmux-tab-live.ts` and `scripts/human-prompt-reads-live.ts`
+  ([testing guide](../../development/testing-guide.md#a-claude-tmux-tab-in-a-container-and-per-item-counts-on-a-busy-profile)):
+  `tmux-tab-loop` plus `tmux-poll` should account for Docker's
+  `docker exec` count within the tab cleanup's share (7531), and
+  `native-activity-sweep` should make about one provider request per read
+  pass (36 a minute idle and 89 to 90 working before), with
+  `change-evidence-pull` carrying about one more. Not run on 2026-11-11:
+  the build host's session could not reach the Docker socket (its user is
+  not in the `docker` group). This needs a host where the agent can reach
+  Docker, not the user.
 
 ## Assumptions and decisions
 

@@ -214,7 +214,8 @@ read that sees a change outside the coordinator (an announced revision, a
 checkpoint, a mutation) calls `noteActivity()` to restore its base cadence.
 Variants today: C01 running/blocked/cancelling/recovering 1 s; C02 quiet
 backoff through 10, 15 and 30 s on a watched worktree, 10 s otherwise; C05
-quiet backoff through 8, 15 and 30 s. These are trial values (todo 0052).
+quiet backoff through 8, 15 and 30 s. These are trial values, measured live in
+[remote-bandwidth.md](../development/remote-bandwidth.md#data-saving-in-real-browsers-2026-11-11).
 
 ### Rollback switches
 
@@ -386,7 +387,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | Recovery after a deliberately missed hint | Safety scans and discovery passes | Unchanged or better | Required before reducing any polling |
 
 With data saving on, the client accepts slower backstops for what it shows
-(todo 0052): approval and question visibility (≤ 2 s) and turn completion
+([remote-bandwidth.md](../development/remote-bandwidth.md)): approval and question visibility (≤ 2 s) and turn completion
 (≤ 3 s) keep their budgets, because both arrive through observation
 invalidations that read at once and the responsive backstop is 1 s. The Files
 panel accepts ≤ 2 s after an announced revision on a watched worktree and

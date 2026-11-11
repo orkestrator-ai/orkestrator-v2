@@ -3,15 +3,17 @@
 ## Task analysis
 
 Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
-`main` at `4d9ff8690`, and on 2026-11-06 against `main` at `c1724ab74` (task 1's
-macOS half, tasks 2 and 3, on the Mac `arktech-mini`).
+`main` at `4d9ff8690`, on 2026-11-06 against `main` at `c1724ab74` (task 1's
+macOS half, tasks 2 and 3, on the Mac `arktech-mini`), and on 2026-11-11 against
+`main` at `498b68766` (task 1's Linux re-check and the CI real-display run, on
+the Linux host `omarchy-hp`).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; macOS qualified 2026-11-06; real-display Electron qualification remains open; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (waits on 7568: 6303 task 2, a host with a disposable display, for the full Electron suite under a real display). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
-4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: open (implementation done 2026-11-06 on Linux with unit tests; the live check on a Mac remains).
+4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: open (implementation done 2026-11-06 on Linux with unit tests; the browser smoke and native-dialog checks need an agent on a Mac; the checks that need a person watching the Mac's screen moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-11).
 
 ### 1. A headless mode for agent-test Electron
 
@@ -20,6 +22,17 @@ macOS half, tasks 2 and 3, on the Mac `arktech-mini`).
 **Context.** The browser suites drive the gateway with their own headless Chromium; they need Electron only to own the backend and announce readiness. `chromiumSwitchesForRuntime` (`apps/desktop/electron/runtime-profile.ts`) adds switches per flavour but none for headless.
 
 **Investigation.** 0048's run used a workaround outside the repository: `ELECTRON_OVERRIDE_DIST_PATH` pointing at a directory whose `electron` script unsets `DISPLAY` and `WAYLAND_DISPLAY` and execs the real binary with `--ozone-platform=headless`, plus `env -u DISPLAY -u WAYLAND_DISPLAY` around `mise run dev:test`. Electron 45 started, reported ready, and served both browser specs; no window appeared. By 2026-11-03 two opt-ins had landed separately: `--headless-electron` (to-do 0022) and `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` (to-do 0036). Neither was a default, they used different switches, and the flag was an error on macOS and Windows.
+
+On 2026-11-11 the implementation was still in place on `main` at `498b68766`
+and still behaved as recorded (Current state, "Linux re-check"). What remained
+was the Electron specs under a real display. CI's native-menu workflow is the
+only place they run under one (Xvfb on Linux, the real desktop on Windows), and
+it had failed `electron-cleanup.spec.ts` five times out of five on Linux and
+Windows since the Playwright 1.65.0 bump (#2107). That was a test-fixture
+problem, fixed here (Assumptions and decisions). The full
+`mise run test:agent:electron` under a disposable display needs a host with
+Xvfb, which no agent host has and which is the user's decision
+([7568](../manual-test/7568-manual-test-checklist.md), 6303 task 2).
 
 **Decisions.**
 
@@ -94,6 +107,16 @@ menu, Dock activation, notification click, second launch), and an accessory app
 has neither a Dock icon nor a menu bar; dialog attention already does nothing
 for agent-test.
 
+The live check is the procedure in
+[`agent-testing.md`](../../development/agent-testing.md#live-macos-hidden-profile-qualification).
+Its steps 1, 2 and 5 are observations of the Mac's screen (focus staying put,
+no Dock icon even for a moment, no window, and the `--no-headless` window
+appearing); those are on [7568](../manual-test/7568-manual-test-checklist.md)
+since 2026-11-11. Steps 3 (`mise run test:agent:browser` against a hidden
+profile) and 4 (an instrumented disposable Electron run that triggers each
+native dialog source and checks the `hidden-cancelled` events) are agent work
+that needs a Mac; this Linux host cannot run them.
+
 **Decisions.**
 
 - **How should a macOS profile stay off the desktop?**
@@ -108,6 +131,50 @@ for agent-test.
     - Cons: the reported problem stays.
 
 ## Assumptions and decisions
+
+### Task 1: repair `electron-cleanup.spec.ts` rather than call it a flake (2026-11-11)
+
+CI's native-menu workflow failed this spec 5 of 5 on Linux (Xvfb) and Windows
+in every run after the Playwright 1.65.0 bump: the bump's own PR (run
+42915046527), and the next two PRs, including the 2.37.5-beta release PR (runs
+42919185176, 42938555611). The run just before the bump passed (42914911189). It
+reproduced here, headless, 5 of 5. Two causes, both in the spec's fixture:
+
+- Playwright 1.65's `electron.launch()` does not return while the app's only
+  window has loaded no page. The fixture's window loaded nothing, so the case
+  hung until its 120 s timeout. The window now loads `about:blank`, which the
+  other inline fixtures (`electron-main.spec.ts`) already do.
+- With a page to capture, the config's `screenshot: "only-on-failure"` held
+  `app.close()` for about four seconds before Playwright called `app.quit()`,
+  so `before-quit` never ran inside the spec's 500 ms bound. The spec now turns
+  screenshots off: its window is hidden and draws nothing. Measured: about
+  100 ms to `before-quit` with screenshots off.
+
+Raising the 500 ms bound was not chosen: the bound is what proves the cleanup is
+bounded, and four seconds of screenshot work is not what the case tests. The
+spec also joins `HEADLESS_CAPABLE_ELECTRON_SPECS`, honouring
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` like the other two, because its
+window is never shown; that is how it could be reproduced and proved on this
+host without a display. Its CI runs keep their real display. Not recorded as a
+flake: it failed every time.
+
+### Task 1: the real-display run waits on a display host (2026-11-11)
+
+The full `mise run test:agent:electron` under a disposable display cannot run
+on any agent host: `omarchy-hp` and beelink have no Xvfb, an agent may not
+install it, and the specs must never use the signed-in desktop. Whether a
+fleet host gets Xvfb is already a user decision in 7568 (6303 task 2), so task
+1 now waits on that item instead of adding a second one. The CI workflow covers
+three of the specs under Xvfb. Once a display host exists, an agent runs the
+suite there and records it here.
+
+### Task 4: split the Mac check between a person and an agent (2026-11-11)
+
+Moved steps 1, 2 and 5 of the macOS procedure to 7568, because they are
+observations of the screen (a Dock icon that flashes for a moment, where focus
+went). Kept steps 3 and 4 here, because an agent on a Mac can run and record
+them without anyone watching. The alternative, moving the whole check, would
+leave work an agent can do on the user's list.
 
 ### Task 4: cancel native dialogs while hidden (2026-11-06 review repair)
 
@@ -426,23 +493,59 @@ Every `get_terminal_output_snapshot` read in `e2e/`:
 not a terminal snapshot, so it is outside this audit. The backend scripts under
 `apps/backend/scripts/` read snapshots for measurement only and assert nothing.
 
+### Linux re-check, 2026-11-11 (task 1)
+
+On `omarchy-hp` (Linux, Hyprland), `main` at `498b68766`. Profile `t2181-hp`
+(`mise run dev:test --profile t2181-hp --fixture --no-agent-credentials
+--agent-platforms codex`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), started
+with stdin from `/dev/null` and output to a file, with fake
+`DISPLAY=:4242` and `WAYLAND_DISPLAY=ork-no-such-display`. Stopped and reset
+afterwards.
+
+| Check | Result |
+| --- | --- |
+| Launcher | Ready; `Electron is headless (no terminal); the app is at browserUrl and no window will open.` |
+| Electron command line | `--ozone-platform=headless --disable-gpu --password-store=basic` |
+| `/proc/<pid>/environ` of Electron and its five descendants | No `DISPLAY`, `WAYLAND_DISPLAY` or `ELECTRON_OZONE_PLATFORM_HINT`; core file limit 0 in each |
+| `hyprctl clients` | No client for the profile (5 clients on the desktop, none matching) |
+| `headless-profile.spec.ts` through `test:agent:browser`, `ORKESTRATOR_AGENT_TEST_HEADLESS=1` | 1 expected, 0 skipped, 0 unexpected |
+
+### CI's real-display Electron run, 2026-11-11 (task 1)
+
+| Run | `electron-cleanup.spec.ts` |
+| --- | --- |
+| Native menu workflow before the Playwright 1.65.0 bump (42914911189, 42811237362) | Passed on Linux (Xvfb) and Windows |
+| The bump's PR and the next two PRs (42915046527, 42919185176, 42938555611) | Failed 5 of 5 on Linux and Windows, `Test timeout of 120000ms exceeded`; the menu and renderer-log specs passed |
+| This branch, headless on `omarchy-hp`, before the repair | Failed 5 of 5 (no `before-quit` within the bound) |
+| This branch, headless on `omarchy-hp`, after the repair | Passed 10 of 10 |
+
+This branch's own native-menu run (Linux under Xvfb, and Windows) is the
+real-display confirmation of the repair. It is still pending: the branch had not
+been pushed when this was written, so no such run exists yet. Record its run ID
+and result here once CI has run it on the pull request.
+
 ## Needs verification
 
-- The Electron specs under a real display. This host has no Xvfb and they must not
-  open on the user's session, so only their no-display preflight and the design
-  canvas spec's headless opt-in ran here. That spec is intermittent on this host
-  (flake [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
-  with and without this change. CI's native-menu job covers two of them under Xvfb.
-- Task 4 on a Mac. Implemented and unit-tested on Linux only. Start a profile
-  from an agent shell with no flag, then with `--no-headless`, and check that
-  the first shows no window, Dock icon or DevTools and keeps focus where it was,
-  that `mise run test:agent:browser` passes against it, and that the second
-  still opens its window. Also check that the `accessory` policy set before
-  `ready` holds, with no Dock icon flashing at launch.
+- The Electron specs under a real display: the full `mise run test:agent:electron`
+  under `xvfb-run`, once 7568's 6303 task 2 provides a host. No agent host has
+  Xvfb and the specs must not open on the user's session, so only their
+  no-display preflight and the headless-capable specs have run on Linux hosts.
+  The design canvas spec is intermittent on beelink (flake
+  [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
+  with and without this change. CI's native-menu job covers three of them under
+  Xvfb; its run on this branch's pull request is still to confirm the
+  `electron-cleanup.spec.ts` repair on a real display (see Current state). Until
+  it has run, the repair's evidence is the headless 10-of-10 run on `omarchy-hp`.
+- Task 4 on a Mac, agent part: steps 3 and 4 of
+  [Live macOS hidden-profile qualification](../../development/agent-testing.md#live-macos-hidden-profile-qualification)
+  (`mise run test:agent:browser` against a hidden profile; the instrumented
+  native-dialog run). The steps that need a person watching the screen are in
+  [7568](../manual-test/7568-manual-test-checklist.md).
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows check of task 1) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), and 6303 task 2, the display host task 1 waits on.
+- [6303](6303-window-close-during-request-throws.md), whose task 2 asks for the host with a disposable display.
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - [7340](7340-shared-terminal-visible-text-helper.md), found in task 3's audit.
 - 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

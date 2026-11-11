@@ -105,7 +105,7 @@ export const BUSY_ROWS = {
   "burst-clear": { budgetMs: 2_400, side: "client", label: "Burst removed: badge back" },
   // The next burst writes as many one-line files into the turn environment,
   // so a removal the backend only rescanned together with it would leave the
-  // numbers unchanged and the burst uncounted (to-do 7765).
+  // numbers unchanged and the burst uncounted (to-do 7765, retired).
   "turn-clear-backend": {
     budgetMs: null,
     side: "backend",
@@ -261,7 +261,7 @@ export type BusyResult = {
   /** Held turns that had `busyTurnFiles` files written while they ran. */
   turnFileRounds: number;
   /**
-   * Each round's burst as the backend saw it (to-do 7765): how far the
+   * Each round's burst as the backend saw it (to-do 7765, retired): how far the
    * `diff-scan` changed counter moved by the end of the wait, and every
    * environment's stats read just before the burst and when the wait ended.
    */
@@ -915,7 +915,7 @@ export async function measureBusy(
           if (changedBefore !== null) {
             // Which environments' scans the backend reflected by the end of the
             // wait, so a timeout can tell a lost rescan from one that found
-            // nothing new to count (to-do 7765).
+            // nothing new to count (to-do 7765, retired).
             const changedAfter = diffChanged(await readMetrics());
             const statsAfter = await readDiffStats();
             result.burstRescans.push({

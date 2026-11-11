@@ -275,7 +275,7 @@ export function ClaudeTmuxInteractiveTerminal({
     };
     // The backend stops capturing a terminal whose client stops renewing, so a
     // reload, a closed window or a cut link no longer leaves its capture loop
-    // running for nobody (to-do 7745). Unmount still detaches at once.
+    // running for nobody (to-do 7745, retired). Unmount still detaches at once.
     async function renewLease(): Promise<void> {
       const sessionId = createdSessionId;
       if (renewInFlight || cancelled || !sessionId || detached) return;

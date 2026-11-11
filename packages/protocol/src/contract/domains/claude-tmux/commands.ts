@@ -457,7 +457,7 @@ export const claudeTmuxHoldHookCommand = defineCommand({
 
 /**
  * How long an interactive terminal created with `leased: true` keeps
- * capturing after its last renewal (to-do 7745). A page reload, a closed
+ * capturing after its last renewal (to-do 7745, retired). A page reload, a closed
  * window, a renderer crash or a cut link never sends a detach, so without a
  * lease the backend captured the pane for nobody until the environment's
  * tmux cleanup or a restart.

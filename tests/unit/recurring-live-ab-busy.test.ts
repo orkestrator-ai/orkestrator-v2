@@ -59,7 +59,7 @@ type Scenario = {
    * The backend never rescans the held turn's files' removal on its own: it
    * is seen only together with the next burst, which writes as many one-line
    * files, so the turn environment's numbers do not move and its scan does
-   * not count as changed (to-do 7765).
+   * not count as changed (to-do 7765, retired).
    */
   turnFilesMaskBurst?: boolean;
   /** The removal is rescanned, but only once time passes (a poll's sleep). */
@@ -658,7 +658,7 @@ describe("busy phase", () => {
   });
 
   test("waits for the held turn's files to be rescanned away before the next burst", async () => {
-    // The 7765 pattern: the round ends by removing 5 one-line files and the
+    // The pattern of to-do 7765 (retired): the round ends by removing 5 one-line files and the
     // next burst writes 5 more into the same environment. Seen in one scan,
     // the numbers would not move and the burst would go uncounted.
     const h = busyHarness({ lateTurnRemovalRescan: true });

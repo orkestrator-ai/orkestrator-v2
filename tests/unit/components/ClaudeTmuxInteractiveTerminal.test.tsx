@@ -973,7 +973,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
     expect(startInteractiveTerminalMock).not.toHaveBeenCalled();
   });
-  // To-do 7745: the backend stops capturing a terminal nobody renews, so a
+  // To-do 7745 (retired): the backend stops capturing a terminal nobody renews, so a
   // reload or a closed window no longer leaves a capture loop behind.
   describe("interactive terminal lease", () => {
     const becomeVisible = () =>

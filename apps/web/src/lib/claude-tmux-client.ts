@@ -384,7 +384,7 @@ export function createClaudeTmuxClient(client: BackendClient, events: TmuxEventS
     environmentId: string,
   ): Promise<string> {
     // `leased`: this client renews the terminal, so the backend may stop its
-    // capture loop once the renewals stop (to-do 7745).
+    // capture loop once the renewals stop (to-do 7745, retired).
     return tmux().claude_tmux_create_interactive_terminal({
       tabId,
       environmentId,

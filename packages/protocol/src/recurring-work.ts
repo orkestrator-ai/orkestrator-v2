@@ -270,7 +270,7 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   "tmux-tab-loop": backend("B30", "interval", "progress", 250, "per-key-serial", "next-tick"),
   // Per attached interactive terminal: 250 ms, doubling to 1 s while the pane
   // is unchanged. A leased terminal stops when its client stops renewing
-  // (to-do 7745). One timer capture is one attempt.
+  // (to-do 7745, retired). One timer capture is one attempt.
   "tmux-interactive-capture": backend(
     "B19",
     "completion",

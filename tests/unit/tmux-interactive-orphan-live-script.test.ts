@@ -5,7 +5,7 @@ import {
   perMinute,
 } from "../../scripts/tmux-interactive-orphan-live";
 
-describe("tmux interactive orphan live script (to-do 7745)", () => {
+describe("tmux interactive orphan live script (to-do 7745, retired)", () => {
   test("parses its options and refuses impossible ones", () => {
     expect(
       parseOptions(["--profile", "orphan", "--window-ms", "60000", "--out", "x.json"]),

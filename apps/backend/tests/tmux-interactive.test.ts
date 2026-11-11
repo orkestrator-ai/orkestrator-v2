@@ -375,7 +375,7 @@ describe("interactive tmux terminal snapshots", () => {
   });
 
   test("a leased terminal no client renewed stops capturing at its next tick", async () => {
-    // A reload, a closed window or a cut link sends no detach (to-do 7745).
+    // A reload, a closed window or a cut link sends no detach (to-do 7745, retired).
     const harness = createInteractiveHarness(["initial"], [], { leased: true });
     await harness.manager.start(harness.id, harness.context);
     harness.advance(LEASE_MS);

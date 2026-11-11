@@ -118,7 +118,7 @@ export type InteractiveTerminalSession = {
   /** When the armed timer is due, so a reschedule can tell sooner from later. */
   nextCaptureAt?: number;
   /**
-   * When the client's lease runs out (to-do 7745). Unset for a terminal whose
+   * When the client's lease runs out (to-do 7745, retired). Unset for a terminal whose
    * client never announced a lease (an older renderer), which keeps today's
    * detach-on-unmount behaviour.
    */
@@ -346,7 +346,7 @@ export class InteractiveTmuxTerminalManager {
       const context = terminal.context;
       if (!context || this.terminals.get(terminal.id) !== terminal) return;
       // No client renewed the lease: whoever attached reloaded, closed the
-      // window or lost the link without detaching (to-do 7745).
+      // window or lost the link without detaching (to-do 7745, retired).
       if (this.lapsed(terminal)) {
         this.detachForLapse(terminal);
         return;

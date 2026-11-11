@@ -24,7 +24,7 @@ import { withTerminationSignals } from "./recurring-live-ab";
 import { gatewayFor } from "./tmux-mail-inject-live";
 
 /**
- * To-do 7745 task 2: the interactive terminal's capture loop (B19) left
+ * To-do 7745 task 2 (retired 2026-11-11): the interactive terminal's capture loop (B19) left
  * behind by a client that vanished without detaching, before and after the
  * client lease, counted live in a container.
  *

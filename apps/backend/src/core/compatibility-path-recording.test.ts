@@ -88,7 +88,18 @@ test("the local branch read and the upstream auto-merge setting count every call
   compatibilityPathUsage.record = record as typeof compatibilityPathUsage.record;
   try {
     const registry = createCommandRegistry();
+    // Any use of the fetch scheduler would mean the read went past path
+    // validation, so touching it fails the test with its own message.
+    const gitFetchScheduler = new Proxy(
+      {},
+      {
+        get: (_target, property) => {
+          throw new Error(`git fetch scheduler used: ${String(property)}`);
+        },
+      },
+    );
     const context = {
+      runtime: { diffStats: { gitFetchScheduler } },
       storage: {
         getProject: async (id: string) => ({ id }),
         clientState: {
@@ -97,15 +108,16 @@ test("the local branch read and the upstream auto-merge setting count every call
         },
       },
     } as unknown as CommandContext;
-    // Refused before any I/O; the count comes first. The container read's
-    // count is asserted in `tests/commands-io-coverage.test.ts`.
+    // Path validation refuses the read before any I/O; the count comes
+    // first. The container read's count is asserted in
+    // `tests/commands-io-coverage.test.ts`.
     await expect(
       (async () =>
         registry.get("read_local_file_at_branch")!(
           { worktreePath: "/nonexistent-worktree", filePath: "../outside.txt", branch: "main" },
           context,
         ))(),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Invalid filePath: parent directory traversal is not allowed");
     await expect(
       registry.get("get_coordinator_upstream_auto_merge")!({ projectId: "p1" }, context),
     ).resolves.toEqual({ enabled: false });

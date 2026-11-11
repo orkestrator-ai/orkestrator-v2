@@ -154,6 +154,6 @@ unchanged; it still cannot say why a ring was lost.
 
 - [0020-container-state-observation.md](0020-container-state-observation.md) (the signals and the run this file continues).
 - To-do 0241 (retired 2026-11-10): why this host's Docker address pools were exhausted; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself).
-- [7500-agent-tools-port-auto-choice.md](7500-agent-tools-port-auto-choice.md) (choosing a free port in the range automatically, for concurrent profiles).
+- 7500 (retired 2026-11-11; `git show 498b68766:docs/todo/containers-and-environments/7500-agent-tools-port-auto-choice.md`): `--agent-tools-port auto`, which takes a free port in the range for concurrent profiles and is what the one-shot Docker runner's profiles use.
 - [agent-testing.md](../../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port) (the flag, the range and the rule).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: adding the ufw rule on beelink or naming an unfirewalled Linux Engine host) moved there on 2026-11-10.

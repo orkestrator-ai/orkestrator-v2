@@ -14,16 +14,27 @@
  *   `steadyLost` counts the numbered files never reported, against
  *   `controlLost` for the same writes with no churn.
  *
+ * - **`--host`.** Every watch goes through the backend's helper process
+ *   (`WatchHost`) instead of this process's own `fs.watch`. The live watch then
+ *   also records the helper's "events lost" flags (to-do 7551), and
+ *   `steadyUncovered` counts the lost files that no flag arrived for within a
+ *   second of the write: the changes an owner would still learn of only at its
+ *   next event or safety scan.
+ *
  * Linux has no shared stream, so there it is a control. Results are local
  * measurements, not guarantees. `--parent` must be on a volume that delivers
  * events (not macOS's system temporary directory).
  *
- *   bun scripts/benchmark-recursive-watch-stall.ts --count=20 [--churn=10] [--parent=output/benchmarks] [--json]
+ *   bun scripts/benchmark-recursive-watch-stall.ts --count=20 [--churn=10] [--host] [--parent=output/benchmarks] [--json]
  */
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
-import type { FSWatcher } from "node:fs";
 import path from "node:path";
+import { WatchHost } from "../apps/backend/src/core/watch-host";
+
+interface Watch {
+  close(): void;
+}
 
 function arg(name: string, fallback: string): string {
   const match = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -39,13 +50,34 @@ if (!Number.isInteger(churnRounds) || churnRounds < 0 || churnRounds > 100) {
 const parent = path.resolve(arg("parent", path.join(import.meta.dir, "../output/benchmarks")));
 const deliveryDeadlineMs = Number(arg("deadline-ms", "30000"));
 const asJson = process.argv.includes("--json");
+const throughHost = process.argv.includes("--host");
+const host = throughHost ? new WatchHost() : null;
+
+/** Opens a recursive watch here or in the helper; `onLost` hears the helper's flag. */
+function open(
+  directory: string,
+  listener: (name: string | null) => void,
+  onLost?: () => void,
+): Watch {
+  if (host) {
+    const handle = host.watch(directory, (_type, name) => listener(name), { recursive: true });
+    if (onLost) handle.onEventsLost?.(onLost);
+    return handle;
+  }
+  return watch(directory, { recursive: true, persistent: false }, (_type, name) =>
+    listener(name === null ? null : String(name)),
+  );
+}
+
+/** One flag can only cover writes made before it, and only soon before it. */
+const FLAG_COVERS_MS = 1_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const round = (value: number) => Math.round(value);
 
 mkdirSync(parent, { recursive: true });
 const root = realpathSync(mkdtempSync(path.join(parent, "watch-stall-")));
-const watchers = new Set<FSWatcher>();
+const watchers = new Set<Watch>();
 try {
   const directories = Array.from({ length: count }, (_, index) => {
     const directory = path.join(root, `entry-${index}`);
@@ -59,7 +91,7 @@ try {
     const times: number[] = [];
     const opened = directories.map((directory, index) => {
       const at = performance.now();
-      const watcher = watch(directory, { recursive: true, persistent: false }, (_type, name) => {
+      const watcher = open(directory, (name) => {
         if (String(name ?? "").includes("probe") && !seenAt.has(index)) {
           seenAt.set(index, performance.now());
         }
@@ -70,7 +102,7 @@ try {
     });
     return { opened, times };
   };
-  const closeAll = (opened: FSWatcher[]) =>
+  const closeAll = (opened: Watch[]) =>
     opened.map((watcher) => {
       const at = performance.now();
       watcher.close();
@@ -97,14 +129,22 @@ try {
   const steady = path.join(root, "steady");
   mkdirSync(steady);
   const steadySeen = new Set<string>();
-  const steadyWatcher = watch(steady, { recursive: true, persistent: false }, (_type, name) => {
-    if (name) steadySeen.add(String(name));
-  });
+  const lostFlags: number[] = [];
+  const steadyWatcher = open(
+    steady,
+    (name) => {
+      if (name) steadySeen.add(name);
+    },
+    () => lostFlags.push(performance.now()),
+  );
   watchers.add(steadyWatcher);
   await sleep(1_000);
   const writeSteady = async (prefix: string, during: () => Promise<void>) => {
     let written = 0;
+    const writtenAt: number[] = [];
+    const flagsBefore = lostFlags.length;
     const timer = setInterval(() => {
+      writtenAt.push(performance.now());
       writeFileSync(path.join(steady, `${prefix}-${written}.txt`), "x");
       written += 1;
     }, 10);
@@ -112,11 +152,16 @@ try {
     clearInterval(timer);
     // Time for the last writes to be reported.
     await sleep(3_000);
+    const flags = lostFlags.slice(flagsBefore);
     let lost = 0;
+    let uncovered = 0;
     for (let index = 0; index < written; index += 1) {
-      if (!steadySeen.has(`${prefix}-${index}.txt`)) lost += 1;
+      if (steadySeen.has(`${prefix}-${index}.txt`)) continue;
+      lost += 1;
+      const at = writtenAt[index]!;
+      if (!flags.some((flag) => flag >= at && flag - at <= FLAG_COVERS_MS)) uncovered += 1;
     }
-    return { written, lost };
+    return { written, lost, uncovered, flags: flags.length };
   };
   const churnMs = churnRounds * 200;
   const control = await writeSteady("control", () => sleep(churnMs));
@@ -135,6 +180,7 @@ try {
   const result = {
     platform: process.platform,
     bun: Bun.version,
+    through: host ? "helper" : "process",
     watches: count,
     startTotalMs: round(started.times.reduce((sum, value) => sum + value, 0)),
     startLongestMs: round(Math.max(...started.times)),
@@ -150,11 +196,19 @@ try {
     controlLost: control.lost,
     steadyWritten: churn.written,
     steadyLost: churn.lost,
+    ...(host
+      ? {
+          controlLostFlags: control.flags,
+          steadyLostFlags: churn.flags,
+          steadyUncovered: churn.uncovered,
+        }
+      : {}),
   };
   if (asJson) console.log(JSON.stringify(result));
   else console.table(result);
 } finally {
   for (const watcher of watchers) watcher.close();
+  host?.stop();
   rmSync(root, { recursive: true, force: true });
 }
 process.exit(0);

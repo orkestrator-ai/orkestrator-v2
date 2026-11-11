@@ -6,10 +6,44 @@
  * `env-report` answers with its environment, cwd, and the contents of
  * `$HOME/canary.txt` if readable (the supervisor's scrubbing is observed
  * from inside the worker it launched).
+ *
+ * The supervisor starts workers detached, in their own process group, and
+ * reaps them itself. A test process that is killed or times out never does,
+ * and a `hang` worker then ran on indefinitely, reparented to the init
+ * process, holding its scratch inside the test's private TMPDIR (which the
+ * in-use check then keeps too). One was found 13 hours after its test died
+ * (0248). So the worker leaves, with its grandchild, once the process that
+ * started it is gone.
+ *
+ * The launcher passes its own PID as `--fake-launcher-pid=<pid>` (every test
+ * that starts this fixture does). Reading `process.ppid` here instead would
+ * be too late: a launcher that died between spawn and this module running has
+ * already handed the worker to init, which would then be recorded as the
+ * parent and never change. With the expected PID the check also runs once at
+ * startup, before any job is read or grandchild started. Without the flag
+ * the worker falls back to the parent it first observes.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+
+const ORPHAN_CHECK_MS = 250;
+const LAUNCHER_FLAG = "--fake-launcher-pid=";
+const launcherArg = process.argv.find((arg) => arg.startsWith(LAUNCHER_FLAG));
+const parentPid = launcherArg ? Number(launcherArg.slice(LAUNCHER_FLAG.length)) : process.ppid;
+if (process.ppid !== parentPid) process.exit(0);
+let childPid: number | null = null;
+setInterval(() => {
+  if (process.ppid === parentPid) return;
+  if (childPid !== null) {
+    try {
+      process.kill(childPid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  process.exit(0);
+}, ORPHAN_CHECK_MS).unref();
 
 const chunks: Buffer[] = [];
 for await (const chunk of process.stdin as AsyncIterable<Buffer>) chunks.push(chunk);
@@ -18,7 +52,6 @@ const pkg = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
 };
 const source = pkg.job.source ?? "";
 
-let childPid: number | null = null;
 if (source === "spawn-child") {
   const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: "ignore" });
   childPid = child.pid ?? null;

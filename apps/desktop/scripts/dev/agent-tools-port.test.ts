@@ -96,7 +96,9 @@ describe("dev:test startup with --agent-tools-port", () => {
       productionDataDir: path.join(root, "production"),
       homeDir: root,
     };
-    const profileFile = path.join(roots.developmentRoot, "profiles", "atp-qa", "profile.json");
+    const profileFileOf = (profile: string) =>
+      path.join(roots.developmentRoot, "profiles", profile, "profile.json");
+    const profileFile = profileFileOf("atp-qa");
     const checked: number[] = [];
     let busy = false;
     const seeds = [
@@ -108,16 +110,17 @@ describe("dev:test startup with --agent-tools-port", () => {
       }),
     ];
     const notice = spyOn(console, "log").mockImplementation(() => {});
-    const statusFile = path.join(path.dirname(profileFile), "runtime", "status.json");
     /** Starts until the (stubbed) Electron compile, which fails on purpose. */
-    const start = async (extra: string[]) => {
+    const start = async (extra: string[], profile = "atp-qa") => {
       // The failed start left a status naming this process as its launcher,
       // which a restart would take for a live profile.
-      await rm(statusFile, { force: true });
+      await rm(path.join(path.dirname(profileFileOf(profile)), "runtime", "status.json"), {
+        force: true,
+      });
       return startDevelopment(
         parseAgentTestArguments([
           "--profile",
-          "atp-qa",
+          profile,
           "--no-agent-credentials",
           "--agent-platforms",
           "claude",
@@ -135,8 +138,8 @@ describe("dev:test startup with --agent-tools-port", () => {
         },
       );
     };
-    const stored = async () =>
-      JSON.parse(await readFile(profileFile, "utf8")) as { agentToolsPort?: number };
+    const stored = async (profile = "atp-qa") =>
+      JSON.parse(await readFile(profileFileOf(profile), "utf8")) as { agentToolsPort?: number };
     return {
       start,
       stored,
@@ -182,6 +185,36 @@ describe("dev:test startup with --agent-tools-port", () => {
       );
       expect(await stat(f.profileFile).catch(() => null)).toBeNull();
       expect(f.checked).toEqual([31504]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  test("auto takes a free port from the range and keeps it across restarts", async () => {
+    const f = await fixture();
+    const { first } = AGENT_TEST_AGENT_TOOLS_PORT_RANGE;
+    try {
+      await expect(f.start(["--agent-tools-port", "auto"])).rejects.toThrow(
+        "Electron compilation failed",
+      );
+      expect((await f.stored()).agentToolsPort).toBe(first);
+      // Another profile while this launcher (the test process) still holds
+      // the claim, before any backend has bound the port, gets the next one.
+      await expect(f.start(["--agent-tools-port", "auto"], "atp-qa-2")).rejects.toThrow(
+        "Electron compilation failed",
+      );
+      expect((await f.stored("atp-qa-2")).agentToolsPort).toBe(first + 1);
+      // An exact request for a port another running profile claimed is refused.
+      await expect(f.start(["--agent-tools-port", String(first)], "atp-qa-3")).rejects.toThrow(
+        `--agent-tools-port ${first} is claimed by the running profile atp-qa`,
+      );
+      // A restart, with or without auto, keeps the profile's own port.
+      await expect(f.start(["--agent-tools-port", "auto"], "atp-qa-2")).rejects.toThrow(
+        "Electron compilation failed",
+      );
+      await expect(f.start([], "atp-qa-2")).rejects.toThrow("Electron compilation failed");
+      expect((await f.stored("atp-qa-2")).agentToolsPort).toBe(first + 1);
+      expect(f.checked).toEqual([first, first + 1, first + 1, first + 1]);
     } finally {
       await f.cleanup();
     }

@@ -1096,7 +1096,7 @@ container, so every fetch was a real `git fetch`.
   `fixtures/test-project`. The first start's container kept a bind to the
   deleted origin (empty inside, `does not appear to be a git repository`),
   and its local worktree's `.git` pointed at a deleted repository. Recorded as
-  2180 (deleted 2026-11-06; its live check is task 7 of [0019](../containers-and-environments/0019-container-platform-qualification.md));
+  2180 (deleted 2026-11-06; its live check was task 7 of 0019, retired 2026-11-11, done 2026-11-06);
   the run above used the second start's container.
 
 Real-browser QA, on a fresh profile after `dev:reset` (headless Chromium, run

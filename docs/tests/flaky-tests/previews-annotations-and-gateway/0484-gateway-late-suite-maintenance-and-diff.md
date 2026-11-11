@@ -23,3 +23,34 @@
 ## Runtime-state ownership main merge — 2026-10-24
 
 The merge parents are feature `3b5f889149d8c3603c869cd15b51d67af39c9aa6` and main `0014505caeed69395b3cc996dd541fcc6df12c23`. The renderer and both browser owning files match `origin/main`; no assertion, timeout or skip changed. `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` used credential-free Codex profile `qa-browser-a81b23d3-fdf`, one browser worker, alongside other validating worktrees. It reached its 900 s test deadline after starting case 56 of 83, with four recorded failures and no complete Playwright summary (923.2 s including lifecycle). Its runner stopped/reset the profile. Evidence: host temporary artifact `orkestrator-test-run.flXegA/merge-isolated-browser.log.gz`. The 390px maintenance case could not find the drawer toggle at its five-second deadline. The complete unchanged gateway owner ran on credential-free Codex/Docker fixture `merge-runtime-docker-1024`: `ORKESTRATOR_AGENT_TEST_PROFILE=merge-runtime-docker-1024 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-runtime-docker-1024-gateway mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`. It reported 13 passed, ten opt-in skips and one failed (316.6 s logged). The narrow host-picker case passed; the narrow maintenance case still failed while opening Updates. Evidence: `orkestrator-test-run.75cYgS/merge-gateway-owner.log.gz` under the host temporary directory and `output/agent-testing/merge-runtime-docker-1024-gateway/browser/`. The maintenance recurrence remains unresolved in the complete owner; the persisted-diff case passed.
+
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 0484 --base 498b68766` reported
+`open`. Neither `browser-gateway.spec.ts` nor the Settings dialog shell changed on
+the branch (its only Settings change is wording in `RendererDebugSettings.tsx`).
+
+- Review preparation's `mise run test:agent:browser:isolated` failed the 390px
+  case at `browser-gateway.spec.ts:2894`: `locator.click: Timeout 1000ms exceeded`
+  on **Open projects and environments**, because the open **Settings** dialog
+  intercepted pointer events. The same run later reached the pipeline's command
+  deadline (1529 s, about case 79 of 183).
+- The case alone, on fresh credential-free `dev:test` profiles started with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`:
+  `mise run test:logged -- --name agent-browser-maintenance -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts:2859`.
+  - Profile `e3a4-ring-r1b` (`--agent-platforms codex`): 1280px passed, 390px
+    failed the same way, from the first `openUpdates()` call (`:2914`). The
+    failure screenshot shows **Settings** open on General.
+  - Profile `e3a4-ring-r1` (`--agent-platforms claude`): both widths failed, but
+    the "Claude Code Is Not Logged In" alert covered the page, which is how a
+    credential-free Claude profile starts. That run is no evidence either way.
+- **Hypothesis (not confirmed):** the narrow `toPass` body is not idempotent. Its
+  first attempt clicks **Global settings**, the first Settings open (a lazily
+  loaded chunk on a dev server) is not visible within the 1 s inner check, and
+  every retry then tries to open the drawer underneath the open dialog. A body
+  that skips the drawer when **Settings** is already visible would test the same
+  path.
+
+Both profiles were stopped and reset. No source, assertion, timeout or skip
+changed.

@@ -6,13 +6,13 @@ Checked against `main` at `31d0fb06` (2026-10-17); items 1–3 worked on
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-11 against `main` at `498b68766` (earlier: 2026-10-27 at `863b5782`).
 
 ### Tasks
 
 1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to 0247.
 2. **Surface permanently failing cleanup (Code 2)**: a `disk:report` row for ledger entries that stopped retrying. Status: done.
-3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: open (run it on a macOS node with a throwaway `dev:test` profile).
+3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: open (needs a macOS node, which this Linux node is not; run it with a throwaway *development* profile from `bun run --cwd apps/desktop dev --profile <id>`, not `dev:test`, see decision 15).
 4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: done (2026-11-01): no guard; the invariant is documented and pinned by a test (decision 9).
 5. **Retrying exhausted entries (open question)**: should an entry at the attempt cap ever be retried? Status: done (2026-11-01): one more cycle per backend version that never attempted it (decision 10).
 6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: done (2026-11-01): defer external stray deletion until durable ownership proof exists (decision 14).
@@ -43,9 +43,11 @@ The folder index row now says what remains: task 3's macOS run.
 
 **Problem.** Each development profile leaves a `<title> Safe Storage` item in the macOS login Keychain, and the run host had 292 of them. The new removal code has never run against a real Keychain.
 
-**Context.** The file gives the exact steps: a `dev:test` profile, then `dev:stop`, then `dev:reset`, then `security find-generic-password` checks. omarchy-hp is Linux.
+**Context.** The file gives the exact steps: a development profile, then `dev:stop`, then `dev:reset`, then `security find-generic-password` checks. omarchy-hp and beelink are Linux.
 
 **Investigation.** The code is in place: `removeProfileKeychainItem` (`apps/desktop/scripts/dev/profile-cleanup.ts:161-190`, `delete-generic-password` at `:186`), `keychainRoots` (`:229`, `:316`, `:371`, `:471`) and `runtimeProfileElectronTitle` (`apps/desktop/electron/runtime-profile.ts:178`). The file has not changed since `7809191f`.
+
+Rechecked 2026-11-11 at `498b68766` on beelink (Linux): the code is unchanged, but the steps were wrong. They started a `dev:test` profile, and `dev:test` is the `agent-test` flavor, which on macOS runs with Chromium's `use-mock-keychain` switch (`chromiumSwitchesForRuntime`, `apps/desktop/electron/runtime-profile.ts`), so it never creates a login Keychain item and the check could never pass. Only the `development` flavor (`apps/desktop/scripts/dev.ts`, started as `bun run --cwd apps/desktop dev --profile <id>`) uses the real Keychain. `dev:stop` and `dev:reset` read the stored `profile.json`, so they act on a development profile of that id too, and its title is the same `runtimeProfileElectronTitle(id)`. The steps in item 3 below now start that script directly (decision 15). The run itself still needs a macOS node.
 
 **Decisions.**
 
@@ -294,11 +296,16 @@ What remains is a live macOS run of the Keychain change.
    under another root, a locked Keychain, and the prune outcome. The suite's command runner now records `security` calls, so
    no test can reach a host Keychain.
 
-   Still owed (needs a macOS host; omarchy-hp is Linux): start a development
-   profile, for example
-   `mise run dev:test --profile qa-keychain-0023 --fixture --no-agent-credentials`
+   Still owed (needs a macOS host; omarchy-hp and beelink are Linux): start a
+   development profile with
+   `bun run --cwd apps/desktop dev --profile qa-keychain-0023`
    (main awaits `safeStorage` before its first window, which creates the
-   item; sign in with `mise run dev:login` if it does not), stop it with
+   item). Not `mise run dev --profile ...`: that task runs turbo without
+   forwarding arguments, and turbo takes `--profile` as its own trace flag,
+   so the default development profile would start instead. Not `dev:test`: its `agent-test` profiles use Chromium's mock
+   Keychain on macOS and never create the item (decision 15). The
+   development flavor shows its window, so run it on the macOS node's own
+   desktop session. Stop it with
    `mise run dev:stop --profile qa-keychain-0023`, and confirm `security find-generic-password -s "Orkestrator AI — DEV [qa-keychain-0023] Safe Storage"`
    finds it. Then run `mise run dev:reset --profile qa-keychain-0023`, check
    the output says `Removed 1 login Keychain item(s).`, that the same
@@ -620,6 +627,46 @@ Decisions made on 2026-11-01 while working through tasks 4–6.
     separate creation and identity lifecycle. Chose (b). Exact ledger-recorded
     worktree cleanup remains available. Tests also pin that live exhausted
     entries are not rearmed by a new backend version.
+
+Decisions made on 2026-11-11 on beelink (Linux x86_64) against `main` at
+`498b68766`, while checking what is still true. Only task 3 is open, and it
+needs a macOS node, so nothing in this file could be run here.
+
+15. **Which profile the Keychain run uses (task 3).** Options: (a) keep the
+    `dev:test` steps; (b) use a development profile (`bun run --cwd apps/desktop
+    dev --profile qa-keychain-0023`); (c) close the task on the unit tests. Chose (b). Pros:
+    it is the only flavor that writes the real login Keychain item, and it is
+    the flavor whose leftovers the task exists for (agent-test profiles on
+    macOS stopped creating items when they moved to `use-mock-keychain`);
+    `dev:stop` and `dev:reset` already resolve a development profile by id.
+    Cons: the development flavor is never headless, so the run shows a window
+    on the macOS node. (a) cannot pass: an agent-test profile never creates
+    the item. (c) keeps the original objection that `security`'s exit codes
+    and Electron's item naming would never be checked live. The command
+    calls the desktop package's `dev` script directly rather than
+    `mise run dev`: the mise task (`mise.toml`) has no `raw_args` and runs
+    `turbo run dev`, which reads `--profile` as its own trace option, so the
+    profile id would never reach `scripts/dev.ts`. The turbo `dev` task has
+    no dependencies, so calling the script skips nothing.
+16. **Linux secret stores (decision 8), rechecked.** Headless agent-test
+    profiles on Linux start Electron with `--password-store=basic`
+    (`HEADLESS_ELECTRON_SWITCHES`, `runtime-profile.ts`), so the runs agents
+    make on Linux nodes never write the Secret Service or KWallet. Only a
+    development or `--no-headless` profile on a desktop session can. The
+    host keyring was still not read; no to-do is opened.
+17. **Sweeps that act on names alone.** The ticket requires that no sweep
+    deletes a folder it cannot prove belongs to Orkestrator. Rechecked the
+    sweeps this file and 0248 own: the ledger steps act on exact recorded
+    paths inside the data directory or recorded worktree root; the stray
+    sweep covers only the backend's own root (decision 14); bridge state,
+    branch and preview-scratch sweeps need an Orkestrator-specific name (an
+    id hash, a namespace, `ork-artifact-preview-<pid>-`); the design profile
+    sweep removes only profiles its own ledger recorded (0248). The test
+    sweeps that still accept a legacy `<prefix><random>` name by age alone
+    (`tests/isolate-git-config.ts`, `apps/backend/tests/standalone.test.ts`,
+    `environment-move.test.ts`) use `orkestrator-`/`ork-env-move-` prefixes
+    only tests create. Chose to leave them: the name is the same proof the
+    other sweeps accept. No change was made.
 
 ## Related
 

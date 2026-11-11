@@ -22,6 +22,7 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { egressGatewayOf } from "../src/core/container-network-owner";
 import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
+import { startDockerContainer } from "../src/core/container-start";
 import {
   attributeCalls,
   collectBreakdowns,
@@ -92,7 +93,8 @@ function recordDockerCalls() {
 }
 
 /**
- * Starts a runtime the way `startRuntime` (`container-live-start.ts`) does,
+ * Starts a runtime the way `startContainerWithAgentAccounts`
+ * (`agent-accounts-containers.ts`) does, without its login staging,
  * timing its three steps: the egress gateway brought up to an applied
  * firewall, the runtime's `docker start`, and its entrypoint to current-boot
  * readiness.
@@ -112,7 +114,9 @@ async function bootRuntime(
   await prepareEgressGatewayForStart(containerId);
   mark("gateway");
   step("boot.runtimeStart");
-  await runCommand("docker", ["start", containerId], { timeoutMs: 120_000 });
+  // The production start, so a rootless daemon's automatic-port collision is
+  // retried here as it is for users rather than failing the run.
+  await startDockerContainer(containerId, { timeoutMs: 120_000 });
   mark("runtimeStart");
   step("boot.ready");
   await waitForContainerBoot(containerId);

@@ -348,3 +348,26 @@ recurrence.
 - **Hypothesis (unconfirmed):** the daemon auto-start is asynchronous, and under
   load `git fsmonitor--daemon status` can run before the daemon reports
   watching. Not investigated further in this change.
+
+## Flaky-test fixes review preparation recurrence — 2026-11-11
+
+`mise run flaky:recurrence 1253 --base acc3d6834cafd02e76729958b25078c7337253b0`
+reported `open`: record it as a recurrence.
+
+- **Branch / base:** `fix-flaky-tests-400972eda2c6-r1` at `e758b359b`, merge
+  base `acc3d6834cafd02e76729958b25078c7337253b0`. The branch changes web
+  transcript code, e2e specs, CLI and backend tests, and one backend test
+  helper (`agent-mail-world-test-support.ts`, imported only by tests). It does
+  not change the owner, `git-fsmonitor.ts`, `ProjectGitService` or any module
+  the owner imports.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups).
+- **Failure:** the same signature as the launch-override recurrence above:
+  `git fsmonitor > project-home status auto-starts and preserves the
+  configured daemon` failed at 11,313.37 ms because `git fsmonitor--daemon
+  status` rejected at `git-fsmonitor.test.ts:281` after `status` returned.
+- **Suite counts:** backend 18,016 pass, 200 skip, 1 fail across 1,272 files
+  (173.57 s).
+- **Isolated rerun:** the runner's one-file rerun of
+  `apps/backend/src/core/git-fsmonitor.test.ts` passed alone (3.5 s).
+

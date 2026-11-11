@@ -42,7 +42,10 @@ function create(options: Partial<PreviewRunnerOptions> = {}) {
   runner = new TranscriptPreviewRunner({
     isolation: "process",
     executablePath: () => "/bin/sh",
-    workerCommand: () => ({ command: process.execPath, args: [FAKE_WORKER] }),
+    workerCommand: () => ({
+      command: process.execPath,
+      args: [FAKE_WORKER, `--fake-launcher-pid=${process.pid}`],
+    }),
     ...options,
   });
   return runner;

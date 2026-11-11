@@ -592,6 +592,34 @@ describe("worker slash commands", () => {
     expect(await w.openDelegations()).toHaveLength(0);
   });
 
+  test("a /compact the worker's provider refuses reports the provider's reason", async () => {
+    // What an HTTP bridge provider throws for the Pi bridge's 409 nothing-to-compact
+    // refusal (`http-bridge/compact.test.ts` pins that translation).
+    const reason =
+      "pi session compaction failed (HTTP 409): Nothing to compact (session too small)";
+    const w = await world();
+    const performSessionAction = async () => {
+      throw new Error(reason);
+    };
+    Object.assign(w.stub.provider, { performSessionAction });
+    // A session action runs only when the provider reports the session idle.
+    w.stub.setStatus(async () => "idle");
+    w.activity("idle");
+    await expect(
+      w.run("run_coordinator_worker_command", {
+        input: {
+          requestId: "compact",
+          environmentId: "env-1",
+          tabId: w.tabId,
+          command: "/compact",
+        },
+      }),
+    ).rejects.toThrow(new Error(`The worker refused /compact: ${reason}`));
+    // Nothing ran, so no turn is awaited.
+    expect(await w.openDelegations()).toHaveLength(0);
+    expect(w.stub.sends).toHaveLength(1);
+  });
+
   test("keeps session.command's refusals and refuses /steer", async () => {
     const w = await world([
       command("/review", { inputPolicy: { arguments: "required" } }),

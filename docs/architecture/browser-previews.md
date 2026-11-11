@@ -151,6 +151,30 @@ router: on remote desktop connections a registered service opens externally,
 and an unresolved port opens a preview tab. Coordinator and mail transcripts
 have no environment and keep the plain behaviour.
 
+**`orkestrator environment exec` is not a managed root.** A dev server started
+through `environment exec` runs under a detached exec worker keyed by the
+operation, not the environment, so it is `unattributed` and its seeded service
+waits for **Show any process**. This is deliberate (to-do 0045 task 2, decided
+2026-11-11). The worker records the child's pid, process group and start time
+in its own state file, but the backend holds no live handle to it, which is
+what makes terminal and bridge roots safe against pid reuse; exec runs are
+also bounded (30-minute default, 6-hour cap) rather than meant for
+long-running servers. Revisit only if CLI-driven setups report the one click
+per seeded service as a real cost; the change would need the
+operation-to-environment mapping and a `ps` start-time check against the
+persisted `childPid`.
+
+**Qualification.** The in-app checks (wait state, two environments on one
+port with the move offer, restart and fast restart inside the verification
+window, agent links, framework hints) are
+`e2e/agent-testing/service-preview-seeded-electron.spec.ts`, run on macOS
+(`lsof`) and headless on Linux through both `ss` and `lsof`; the runs are in
+the evidence log of
+[0042](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
+The design decisions behind this section were recorded in to-do 0045, retired
+2026-11-11 (read it with
+`git show 498b68766:docs/todo/previews-and-annotations/0045-preview-service-discovery.md`).
+
 **Automatic host ports.** A port mapping with **Auto** (`hostPortMode: "auto"`,
 `hostPort: 0`) is published as `127.0.0.1::<port>` so Docker chooses a free
 host port. The resolver reads the real binding, so an auto mapping gets a
@@ -890,7 +914,7 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   generated local services wait for confirmation. A listener owned by another
   OS user cannot be attributed. Servers started through `orkestrator environment exec` run
   under detached exec workers, which are not managed roots, so they are
-  `unattributed`. Inside the verification window only the listener's pid is
+  `unattributed` (see **Local environments**). Inside the verification window only the listener's pid is
   rechecked, so a pid reused within those 5 seconds would pass, and a server
   replaced between the lookup and the connect (milliseconds, or the length of a
   lookup already in flight that the connection joined) is not caught until the

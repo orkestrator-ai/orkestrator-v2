@@ -6,6 +6,7 @@ import { DatabaseSummaryCache } from "./database-summary.js";
 import { DiagnosticsBundles } from "./diagnostics-bundle.js";
 import { HealthSummary, readHealthRows, type HealthRow } from "./health-summary.js";
 import type { StorageDatabase } from "./storage-database.js";
+import { storageActivityMetrics } from "./storage-activity-metrics.js";
 import { leaseWaitMetrics } from "./storage-lease-metrics.js";
 import { slowStorageOperations } from "./storage-slow-operations.js";
 import { openBackendDatabase } from "./storage-stores.js";
@@ -62,6 +63,7 @@ export class BackendDiagnostics {
       ...this.databaseSummary.read(),
       leaseWaits: leaseWaitMetrics.snapshot(),
       slowOperations: slowStorageOperations.snapshot(),
+      activity: storageActivityMetrics.snapshot(),
     };
   }
 

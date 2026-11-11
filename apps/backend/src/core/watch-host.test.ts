@@ -93,6 +93,45 @@ describe("WatchHost", () => {
     ]);
   });
 
+  test("a lost flag reaches only that watch's lost listeners, after its events", async () => {
+    const { host, helpers } = hostWith();
+    const seen: string[] = [];
+    const a = host.watch("/a", (type, name) => seen.push(`a ${type} ${name}`), {
+      recursive: true,
+    });
+    const b = host.watch("/b", (type, name) => seen.push(`b ${type} ${name}`), {
+      recursive: true,
+    });
+    a.onEventsLost?.(() => seen.push("a lost"));
+    b.onEventsLost?.(() => seen.push("b lost"));
+    helpers[0]!.say({
+      type: "events",
+      batches: [
+        [1, [["rename", "x"]], false, true],
+        [2, [["change", "y"]], false, false],
+        // An older helper sends no flag at all.
+        [2, [["change", "z"]], false],
+      ],
+    });
+    await tick();
+    expect(seen).toEqual(["a rename x", "a lost", "b change y", "b change z"]);
+
+    // A watch closed by one of its own listeners hears nothing more.
+    seen.length = 0;
+    const c = host.watch(
+      "/c",
+      () => {
+        seen.push("c event");
+        c.close();
+      },
+      { recursive: true },
+    );
+    c.onEventsLost?.(() => seen.push("c lost"));
+    helpers[0]!.say({ type: "events", batches: [[3, [["rename", "q"]], false, true]] });
+    await tick();
+    expect(seen).toEqual(["c event"]);
+  });
+
   test("a close returns at once, tells the helper, and silences late events", async () => {
     const { host, helpers } = hostWith();
     const seen: Array<string | null> = [];

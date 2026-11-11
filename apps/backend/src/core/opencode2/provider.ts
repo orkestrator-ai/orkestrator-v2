@@ -66,6 +66,11 @@ import {
 } from "../agent-provider-contract.js";
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
+import {
+  OPENCODE2_EVENT_STREAM_SILENCE_MS,
+  OpenCodeStreamSilenceWatchdog,
+  type OpenCodeSilenceClock,
+} from "../opencode-stream-silence.js";
 import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
 import { OpenCode2McpServers, openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
@@ -96,6 +101,13 @@ const MAX_TEXT_BYTES = 1024 * 1024;
 export interface OpenCode2ProviderDependencies {
   /** Overrides the event-stream retry delay (tests). */
   monitorRetryMs?: number;
+  /**
+   * Longest silence the event monitor accepts once its stream has sent a
+   * heartbeat (`OPENCODE2_EVENT_STREAM_SILENCE_MS` by default).
+   */
+  monitorSilenceMs?: number;
+  /** Test seam for the silence watchdog's clock and timers. */
+  monitorClock?: OpenCodeSilenceClock;
   /** Disable the live event monitor (tests that only exercise reads). */
   monitorEvents?: boolean;
   now?: () => number;
@@ -729,12 +741,33 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
    * Live events only mark sessions dirty; reads stay authoritative. A dropped
    * stream, a sequence gap or an oversized frame marks everything dirty so the
    * next read goes to the server.
+   *
+   * A stream that stays open but goes quiet is a loss too: while it counts as
+   * connected the transcript may answer "unchanged" without a read. Each
+   * connection gets a silence watchdog, armed by the server's first
+   * `: heartbeat` comment and fed by every chunk read, that aborts the
+   * connection onto the same loss path (to-do 7559, retired; see
+   * recurring-work.md B22). It is stopped whenever the connection ends
+   * (AGENTS.md invariant 15).
    */
   private async watchEvents(): Promise<void> {
     const retryMs = this.dependencies.monitorRetryMs ?? 1_000;
     while (!this.disposed) {
+      const connection = new AbortController();
+      const abortConnection = () => connection.abort();
+      this.monitor.signal.addEventListener("abort", abortConnection, { once: true });
+      const watchdog = new OpenCodeStreamSilenceWatchdog(
+        (silenceMs) => {
+          log.warn("monitor.silent", { silenceMs });
+          connection.abort();
+        },
+        {
+          silenceMs: this.dependencies.monitorSilenceMs ?? OPENCODE2_EVENT_STREAM_SILENCE_MS,
+          ...(this.dependencies.monitorClock ? { clock: this.dependencies.monitorClock } : {}),
+        },
+      );
       try {
-        const body = await this.client.openEvents(this.monitor.signal);
+        const body = await this.client.openEvents(connection.signal);
         // Whatever changed while the stream was down was never hinted.
         this.reads.transcript.invalidateAll(true);
         this.streamConnected = true;
@@ -754,12 +787,15 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
             this.reads.observe(sessionId, signal.event);
             if (durable) this.markDirty(sessionId);
           },
-          this.monitor.signal,
+          connection.signal,
+          (heartbeat) => watchdog.frame(heartbeat),
         );
       } catch (error) {
         if (this.disposed) return;
         log.debug("events.dropped", { error: formatLogError(error, { message: false }) });
       } finally {
+        watchdog.stop();
+        this.monitor.signal.removeEventListener("abort", abortConnection);
         this.streamConnected = false;
       }
       this.reads.transcript.invalidateAll(true);

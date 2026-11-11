@@ -41,7 +41,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [agent-registry.md](architecture/agent-registry.md) | Every agent tab and what it is doing: `get_agent_registry`, Control MCP `list_agents`, sidebar hover counts. |
 | [native-agent-service.md](architecture/native-agent-service.md) | `NativeAgentService` as one class wiring collaborators: what each owns, host wiring, lifecycle order, invariants kept, and how tests reach collaborator state. Follow-up: [0057-native-agent-service-size.md](todo/backend-structure/0057-native-agent-service-size.md). |
 | [backend-runtime.md](architecture/backend-runtime.md) | Per-backend process state in `BackendRuntime`: terminal, local-server, environment-operation, tmux and account clusters and the smaller owners, the rules for reaching them, test construction options, shutdown order, and the state that is process-wide on purpose. |
-| [coordinator.md](architecture/coordinator.md) | Current Coordinator: ownership, one main plus side agents, tiers, async delegation, MCP actions. Remaining work: [0026-coordinator-read-only-adapters.md](todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md), [0024-coordinator-live-conformance.md](todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md), [0142-coordinator-product-surfaces.md](todo/coordinator-and-multi-review/0142-coordinator-product-surfaces.md), [0395-coordinator-worker-surfaces-follow-ups.md](todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md). |
+| [coordinator.md](architecture/coordinator.md) | Current Coordinator: ownership, one main plus side agents, tiers, async delegation, MCP actions. Remaining work: [0026-coordinator-read-only-adapters.md](todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md), [0024-coordinator-live-conformance.md](todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md), [0395-coordinator-worker-surfaces-follow-ups.md](todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md). |
 | [native-transcripts.md](architecture/native-transcripts.md) | Native transcript pipeline: v1/v2 bridge reads and capability discovery, summaries and detail locators, history pages and the two cursor namespaces, revised rows, row boundaries, deltas and patches, display-tail checkpoints, progress probes, pipeline transcript store, ceilings, retained fallbacks. |
 | [transcript-scroll.md](architecture/transcript-scroll.md) | Transcript scrolling: one controller per viewport, follow intent, cancellation at every layer (Virtuoso patch), measured convergence, semantic anchors and history paging, activation policy, bounded tool-group viewports, streaming Markdown prefix reuse, diagnostics, limitations. |
 | [rich-transcripts.md](architecture/rich-transcripts.md) | Rich transcript rendering: Markdown pipeline, code/diagram/table/callout/disclosure/media blocks, native charts, workflow snapshots, identities, bounded caches, find and copy, publication placement. |
@@ -121,6 +121,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [ssh-routes.md](development/ssh-routes.md) | Managed SSH routes: `--loopback-client-port`, SSH alias rules, host-key trust and recovery, prompts and BatchMode, platform support, failure codes, real-sshd integration test. |
 | [federation-migration.md](development/federation-migration.md) | Catalogue v1→v2 migration, what older clients see, storage-key migration, feature flags and rollback, client/backend compatibility table. |
 | [federation-benchmarks.md](development/federation-benchmarks.md) | Synthetic 1/3/10/25-machine runtime benchmark results and what is not measured. |
+| [remote-bandwidth.md](development/remote-bandwidth.md) | Remote client bandwidth: compression, terminal transport and data-saving measurements, their harnesses, the Tailscale Serve probe and the decisions they settled. |
 | [federation-handoff.md](development/federation-handoff.md) | Federated client handoff: architecture summary, schema versions, validation evidence, deviations and untested cases. |
 | [flaky-tests.md](development/flaky-tests.md) | Pointer to the flake registry in `tests/`. |
 
@@ -313,9 +314,11 @@ can act), just as its rating is, and keep the counts in
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
   The layout example the repository instructions name is a live one-task
   to-do in that format:
-  [`7500-agent-tools-port-auto-choice.md`](todo/containers-and-environments/7500-agent-tools-port-auto-choice.md).
-  The example they named before it, to-do 0241, was retired on 2026-11-10
+  [`6160-static-if-modified-since-compression.md`](todo/cross-cutting/6160-static-if-modified-since-compression.md).
+  The examples they named before it were retired: to-do 7500 on 2026-11-11
   (read it with
+  `git show 498b68766:docs/todo/containers-and-environments/7500-agent-tools-port-auto-choice.md`)
+  and to-do 0241 on 2026-11-10 (read it with
   `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`).
 - After any row removal, insertion, or move, renumber that folder's ranks to
   `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.

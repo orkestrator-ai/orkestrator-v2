@@ -1,7 +1,7 @@
 /**
  * A committed Git checkout for fixtures that need a real repository but not a
  * particular one: one `main` branch, one commit of `README.md`, and a local
- * identity. Building it is five Git spawns, so each test file builds it once
+ * identity. Building it is seven Git spawns, so each test file builds it once
  * and every fixture gets its own copy. A copied repository holds no absolute
  * paths and shares no objects with its source, so worktrees, branches and
  * commits made in one copy never reach another.
@@ -28,6 +28,12 @@ function committedCheckoutTemplate(): Promise<string> {
     await runCommand("git", ["init", "-b", "main"], { cwd: checkout });
     await runCommand("git", ["config", "user.email", "test@example.invalid"], { cwd: checkout });
     await runCommand("git", ["config", "user.name", "Orkestrator Test"], { cwd: checkout });
+    // Without these the commit starts detached auto-maintenance, which creates
+    // and removes `.git/objects/maintenance.lock` while a copy may be listing
+    // the directory, failing it with ENOENT (flake 9936). Copies keep the
+    // config, so commits in them start none either.
+    await runCommand("git", ["config", "maintenance.auto", "false"], { cwd: checkout });
+    await runCommand("git", ["config", "gc.auto", "0"], { cwd: checkout });
     await fs.writeFile(path.join(checkout, "README.md"), "initial\n");
     await runCommand("git", ["add", "README.md"], { cwd: checkout });
     await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });

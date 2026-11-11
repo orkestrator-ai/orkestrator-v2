@@ -210,6 +210,9 @@ describe("native chat scroll wiring", () => {
 
     expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
       isActive: false,
+      // Shown in the inspector; the one list is reused for every stage.
+      visible: true,
+      viewKey: "build-key",
       persistKey: "build-pipeline:pipeline-1",
       environmentId: "env-build",
       activation: "latest",

@@ -1,6 +1,7 @@
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
- * Does a route hold or re-encode gzip SSE? (todo 0052, task 1.) Sends a slow,
+ * Does a route hold or re-encode gzip SSE? (to-do 0052 (retired), task 1; see
+ * docs/development/remote-bandwidth.md.) Sends a slow,
  * steady synthetic stream from a real gateway and reports what reaches the far
  * end of the route, so the same command can compare Tailscale Serve with the
  * direct tailnet listener:

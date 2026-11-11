@@ -721,8 +721,9 @@ export async function runContainerTabBenchmark(
     log(`wrote ${options.out}`);
     for (const window of windows) {
       const poll = window.kinds["tmux-poll"];
+      const tab = window.kinds["tmux-tab-loop"];
       log(
-        `${window.name}: container execs ${window.containerExecs.perMinute}/min (counted ${window.dockerExecPerMinute}/min); tmux-poll starts ${poll?.started ?? 0}/min, docker exec ${poll?.units["docker-exec"] ?? 0}/min`,
+        `${window.name}: container execs ${window.containerExecs.perMinute}/min (counted ${window.dockerExecPerMinute}/min); tmux-poll starts ${poll?.started ?? 0}/min, docker exec ${poll?.units["docker-exec"] ?? 0}/min; tmux-tab-loop starts ${tab?.started ?? 0}/min, docker exec ${tab?.units["docker-exec"] ?? 0}/min`,
       );
     }
   }

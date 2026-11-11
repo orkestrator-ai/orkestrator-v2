@@ -272,6 +272,11 @@ export interface OpenCode2Fixture {
   directory: string;
   model: ScriptedModel;
   version: string;
+  /**
+   * Stop the server and start it again on the same port, password, database
+   * and directories, as a crash or an upgrade restart would.
+   */
+  restart(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -313,50 +318,60 @@ export async function startOpenCode2Fixture(
   );
   const password = crypto.randomUUID();
   const port = await freePort();
-  const server = Bun.spawn([binary, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: dirs.work,
-    env: {
-      PATH: process.env.PATH,
-      HOME: dirs.home,
-      XDG_CONFIG_HOME: dirs.config,
-      XDG_DATA_HOME: dirs.data,
-      XDG_STATE_HOME: dirs.state,
-      XDG_CACHE_HOME: dirs.cache,
-      OPENCODE_DB: join(dirs.data, "fixture.db"),
-      OPENCODE_PASSWORD: password,
-      OPENCODE_DISABLE_AUTOUPDATE: "1",
-      ...options.env,
-    },
-    stdout: "ignore",
-    stderr: "ignore",
-  });
+  const spawnServer = () =>
+    Bun.spawn([binary, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: dirs.work,
+      env: {
+        PATH: process.env.PATH,
+        HOME: dirs.home,
+        XDG_CONFIG_HOME: dirs.config,
+        XDG_DATA_HOME: dirs.data,
+        XDG_STATE_HOME: dirs.state,
+        XDG_CACHE_HOME: dirs.cache,
+        OPENCODE_DB: join(dirs.data, "fixture.db"),
+        OPENCODE_PASSWORD: password,
+        OPENCODE_DISABLE_AUTOUPDATE: "1",
+        ...options.env,
+      },
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  let server = spawnServer();
+  /** Signal only the process this fixture spawned, and wait for it to exit. */
+  const stopServer = async () => {
+    const current = server;
+    current.kill("SIGTERM");
+    await Promise.race([current.exited, Bun.sleep(5000)]);
+    if (current.exitCode === null && current.signalCode === null) {
+      current.kill("SIGKILL");
+      await current.exited;
+    }
+  };
   const stop = async () => {
-    server.kill("SIGTERM");
-    await Promise.race([server.exited, Bun.sleep(5000)]);
-    if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
+    await stopServer();
     model.stop();
     if (!process.env.OPENCODE2_PROBE_KEEP) await rm(root, { recursive: true, force: true });
     else log("kept", root);
   };
   const baseUrl = `http://127.0.0.1:${port}`;
   const api = new Api(baseUrl, password, dirs.work);
-  try {
+  const healthy = async (): Promise<string> => {
     for (let attempt = 0; ; attempt++) {
       const info = await api.call("GET", "/api/info").catch(() => null);
-      if (info?.status === 200) {
-        return {
-          baseUrl,
-          password,
-          directory: dirs.work,
-          model,
-          version: String((info.data as Json).version),
-          stop,
-        };
-      }
+      if (info?.status === 200) return String((info.data as Json).version);
       if (server.exitCode !== null) throw new Error(`opencode exited with ${server.exitCode}`);
       if (attempt > 120) throw new Error("opencode did not become healthy");
       await Bun.sleep(250);
     }
+  };
+  const restart = async () => {
+    await stopServer();
+    server = spawnServer();
+    await healthy();
+  };
+  try {
+    const version = await healthy();
+    return { baseUrl, password, directory: dirs.work, model, version, restart, stop };
   } catch (error) {
     await stop();
     throw error;

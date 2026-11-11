@@ -320,3 +320,23 @@ jobs:
             output/benchmarks/exec-cost-*.json
           if-no-files-found: ignore
           retention-days: 30
+
+      # Last, so nothing else runs on a daemon that was just restarted: a real
+      # daemon restart (the runner's own `systemctl restart docker`, live-restore
+      # off) while a launch waits for readiness and while a rebuild's copy
+      # helper is writing (to-do 0019 task 5, retired; see
+      # docs/development/container-qualification.md). One step per scenario,
+      # like every suite above, so a launch failure still reports the copy
+      # result. 1 GiB keeps the copy scenario within the runner's disk.
+      - name: Live Docker daemon restart during launch (C09)
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND: sudo systemctl restart docker
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1 --test-name-pattern 'Docker daemon restart'
+
+      - name: Live Docker daemon restart during rebuild copy (C15)
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND: sudo systemctl restart docker
+          ORKESTRATOR_LIVE_RESTART_COPY_MIB: "1024"
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rebuild-faults.test.ts --parallel=1 --test-name-pattern 'Docker daemon restart'

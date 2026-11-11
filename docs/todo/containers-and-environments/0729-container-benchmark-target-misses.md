@@ -401,7 +401,7 @@ Took the recommended host, during todo
 - To-do 0022 (retired 2026-11-11): the source; its arm64 item. Its measurements are in
   [container-qualification.md](../../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25)
 - Todo 0109 (retired on 2026-11-10): the staged-input relay and the gateway seed copy, described in [container lifecycle](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs) and [environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2)
-- [0728-container-ci-c14-assumes-uid-1000.md](0728-container-ci-c14-assumes-uid-1000.md) (the same uid difference on CI)
+- 0728 (retired 2026-11-11, once CI passed; see [C14 staged inputs on any host uid](../../development/container-qualification.md#c14-staged-inputs-on-any-host-uid-linux-engine-2026-10-28)) (the same uid difference on CI)
 - [0870-container-start-poll-quantisation.md](0870-container-start-poll-quantisation.md) (the start-time fix split from task 3)
 - [Benchmark harness and regression targets](../../development/container-qualification.md#benchmarks)
 

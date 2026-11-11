@@ -623,7 +623,7 @@ Decisions made on 2026-11-01 while working through tasks 4–6.
 
 ## Related
 
-- [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   (Desktop runs), [container lifecycle](../../architecture/container-lifecycle.md#recovery-copies)
   (recovery copies and volumes the ledger removes),
   [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md),

@@ -56,12 +56,14 @@ type Scenario = {
   /** Pane layout writes are ignored, so review tabs pile up. */
   keepReviewTabs?: boolean;
   /**
-   * The held turn's files are still in the backend's stats when the next
-   * burst lands (their removal was never rescanned on its own), and the burst
-   * writes as many one-line files, so the turn environment's numbers do not
-   * move and its scan does not count as changed (to-do 7765).
+   * The backend never rescans the held turn's files' removal on its own: it
+   * is seen only together with the next burst, which writes as many one-line
+   * files, so the turn environment's numbers do not move and its scan does
+   * not count as changed (to-do 7765).
    */
   turnFilesMaskBurst?: boolean;
+  /** The removal is rescanned, but only once time passes (a poll's sleep). */
+  lateTurnRemovalRescan?: boolean;
 };
 
 /**
@@ -89,6 +91,8 @@ function busyHarness(scenario: Scenario = {}) {
   let burst = 0;
   /** The backend's file count per environment id. */
   const files = new Map<string, number>();
+  /** The held turn's files are removed on disk but not yet rescanned. */
+  let unscannedTurnRemoval = false;
   let mails = 0;
   let reviewReads = 0;
   let commits = 0;
@@ -429,18 +433,21 @@ function busyHarness(scenario: Scenario = {}) {
       expect(relative.startsWith("busy-burst/")).toBe(true);
       burst = count;
       for (const entry of environments) {
-        const masked = scenario.turnFilesMaskBurst && entry.id === "env-busy-1";
-        if (masked && (files.get(entry.id) ?? 0) === count) continue;
-        files.set(entry.id, (masked ? 0 : (files.get(entry.id) ?? 0)) + count);
-        changed += 1;
+        const previous = files.get(entry.id) ?? 0;
+        // One scan sees the removal and the burst together.
+        const next = entry.id === "env-busy-1" && unscannedTurnRemoval ? count : previous + count;
+        files.set(entry.id, next);
+        if (next !== previous) changed += 1;
       }
+      unscannedTurnRemoval = false;
     },
     removeBurst: (worktrees, relative) => {
       if (relative.startsWith("busy-turn/")) {
         expect(worktrees).toEqual(["/worktrees/busy-1"]);
         turnFilesRemoved.push(relative);
-        // Rescanned only together with whatever lands next.
-        if (!scenario.turnFilesMaskBurst) files.delete("env-busy-1");
+        if (scenario.turnFilesMaskBurst || scenario.lateTurnRemovalRescan)
+          unscannedTurnRemoval = true;
+        else files.delete("env-busy-1");
         return;
       }
       for (const entry of environments) {
@@ -465,6 +472,10 @@ function busyHarness(scenario: Scenario = {}) {
     now: () => now,
     sleep: async (ms) => {
       now += ms;
+      if (scenario.lateTurnRemovalRescan && unscannedTurnRemoval) {
+        unscannedTurnRemoval = false;
+        files.delete("env-busy-1");
+      }
     },
   };
   return {
@@ -646,10 +657,24 @@ describe("busy phase", () => {
     expect(burstRescanLine(result)).toBe("Burst rescans: 0 of 2 rounds timed out.");
   });
 
-  test("names the held turn's environment when its leftover files mask the next burst", async () => {
-    // The 7765 pattern: from the second round on, the turn environment's
-    // numbers read the same before and after the burst, so the counter moves
-    // one short and the wait runs out.
+  test("waits for the held turn's files to be rescanned away before the next burst", async () => {
+    // The 7765 pattern: the round ends by removing 5 one-line files and the
+    // next burst writes 5 more into the same environment. Seen in one scan,
+    // the numbers would not move and the burst would go uncounted.
+    const h = busyHarness({ lateTurnRemovalRescan: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 3, busyTurnFiles: 5 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts).toEqual({});
+    expect(result.samples["turn-clear-backend"]).toHaveLength(3);
+    expect(result.burstRescans.map((entry) => entry.changed)).toEqual([4, 4, 4]);
+  });
+
+  test("a removal the backend never rescans fails its own row and names the masked burst", async () => {
     const h = busyHarness({ turnFilesMaskBurst: true });
     const result = await measureBusy(
       h.gateway,
@@ -658,6 +683,8 @@ describe("busy phase", () => {
       undefined,
       h.runtime,
     );
+    expect(result.timeouts["turn-clear-backend"]).toBe(3);
+    expect(busyFailed(result)).toBe(true);
     expect(result.burstRescans.map((entry) => entry.timedOut)).toEqual([false, true, true]);
     expect(result.timeouts["burst-backend"]).toBe(2);
     const masked = result.burstRescans[1]!.environments.find((entry) => entry.turn)!;

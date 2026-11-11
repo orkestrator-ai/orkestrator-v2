@@ -103,6 +103,14 @@ export const BUSY_ROWS = {
   // ≤ 2 s after the save settles, timed from the write: 2.4 s (0048 decision M1).
   "burst-badge": { budgetMs: 2_400, side: "client", label: "Burst: change badge shows it" },
   "burst-clear": { budgetMs: 2_400, side: "client", label: "Burst removed: badge back" },
+  // The next burst writes as many one-line files into the turn environment,
+  // so a removal the backend only rescanned together with it would leave the
+  // numbers unchanged and the burst uncounted (to-do 7765).
+  "turn-clear-backend": {
+    budgetMs: null,
+    side: "backend",
+    label: "Held turn's files removed: environment rescanned",
+  },
   "activity-working": {
     budgetMs: 4_000,
     side: "client",
@@ -811,6 +819,7 @@ export async function measureBusy(
         roundIndex += 1;
         const roundStartedAt = runtime.now();
         const failuresBefore = result.failures.length;
+        const turnFileRoundsBefore = result.turnFileRounds;
         const fail = (stepName: string, detail?: string) =>
           result.failures.push({
             clients: clientCount,
@@ -1292,8 +1301,26 @@ export async function measureBusy(
           // Release model waiters; parked provider approvals require session.stop below.
           for (const id of [held, queued, approval]) fakeModel.release(id);
         }
-        if (options.busyTurnFiles > 0)
+        if (options.busyTurnFiles > 0) {
+          const turnClearAt = runtime.now();
           runtime.removeBurst([turnEnvironment.worktree], turnFilesPath);
+          // Only a round whose turn wrote its files has a removal to wait for.
+          if (result.turnFileRounds > turnFileRoundsBefore)
+            record(
+              "turn-clear-backend",
+              await until(
+                "turn-clear-backend",
+                turnClearAt,
+                async () => {
+                  const stats = (await readDiffStats())?.get(turnEnvironment.id);
+                  return (
+                    stats !== null && stats !== undefined && stats.files < options.busyTurnFiles
+                  );
+                },
+                BACKEND_WAIT_MS,
+              ),
+            );
+        }
         if (result.failures.length > failuresBefore) {
           for (const id of [held, queued, approval]) fakeModel.release(id);
           // A successful stop confirms provider work ended, including parked approvals.

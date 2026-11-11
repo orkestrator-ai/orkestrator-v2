@@ -1909,6 +1909,23 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
   (identical counts on both fixtures, 1284 to 1347 ms → 785 to 881 ms per
   run) and the case has an explicit 30 s timeout. Evidence in
   [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md#resolution--2026-10-25).
+- Whether the counters now match Docker for an open claude-tmux tab, and
+  what one native Claude session costs the activity sweep, live. From
+  to-do 7567 (retired 2026-11-11), which added the `tmux-tab-loop` kind
+  (B30), stopped the change-evidence pull repeating an acknowledgment the
+  bridge had already accepted, and observed `change-evidence-pull` as its
+  own kind; each is proven by a deterministic test
+  (`tmux-exec-count.test.ts`, `service-evidence.test.ts`), not live. Rerun
+  `scripts/container-tmux-tab-live.ts` and `scripts/human-prompt-reads-live.ts`
+  ([testing guide](../../development/testing-guide.md#a-claude-tmux-tab-in-a-container-and-per-item-counts-on-a-busy-profile)):
+  `tmux-tab-loop` plus `tmux-poll` should account for Docker's
+  `docker exec` count within the tab cleanup's share (7531), and
+  `native-activity-sweep` should make about one provider request per read
+  pass (36 a minute idle and 89 to 90 working before), with
+  `change-evidence-pull` carrying about one more. Not run on 2026-11-11:
+  the build host's session could not reach the Docker socket (its user is
+  not in the `docker` group). This needs a host where the agent can reach
+  Docker, not the user.
 
 ## Assumptions and decisions
 

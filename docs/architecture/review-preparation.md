@@ -550,6 +550,94 @@ exercise the backend command path, sealing, integrity, and environment cleanup.
 The browser gateway suite includes a real-worker test that switches environments,
 lets validation finish, reloads, and reads the same completed snapshot.
 
+## Fan-out supervision
+
+One runner, `ReviewFanoutRunner` (`apps/backend/src/core/review-fanout.ts`),
+drives the reviewers of standalone Multi Review and of Build Pipeline review
+stages. Its control plane (admission, observation, persistence, evidence
+verification and consolidation input) must stay bounded, and independent of
+retained review history, as a panel grows to the 32-reviewer maximum. These
+rules hold for every change to it. Open scale and cost work is in
+[0027](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+
+- **The ten invariants.** Every change must keep all of these.
+  1. The backend owns workflow state. Closing a tab, switching environment or
+     unmounting React never pauses or cancels a review.
+  2. Provider events are wake hints. Status, transcript, interactions and
+     results are recovered from snapshots.
+  3. Per reviewer: persist `dispatching`, make the send the next
+     reviewer-local fallible operation, then persist `sent`. Never retry an
+     ambiguous send under a new request ID.
+  4. Controller fencing is authoritative. A controller that lost its lease
+     cannot commit reviewer or workflow state.
+  5. Cancellation, provider disconnect, approval timeout, malformed structured
+     output and generation death fail closed.
+  6. A package snapshot or integrity failure is workflow-fatal. A reviewer's
+     provider failure is isolated to that reviewer.
+  7. Every queue, transcript response, report, consolidation payload, metric
+     label and log has an explicit byte and count bound.
+  8. Metrics and logs carry no prompt, transcript, report, command, file,
+     artifact, credential, token or attachment content.
+  9. Standalone Multi Review and Build Pipeline stages use the one runner and
+     behave the same.
+  10. Default two-reviewer quality must not regress to gain speed.
+- **Load-bearing guarantees.** Validation runs once and reviewers share its
+  sealed artifacts instead of rerunning suites. The package pins one evidence
+  state for every reviewer. Provider instances are shared per environment and
+  platform. Preparation and consolidation reuse one session where the model
+  allows. The reviewer tab polls its transcript only while it is active.
+  Optimisations work around these, never replace them.
+- **Safety commits versus observational checkpoints.** A transition that
+  changes what may safely happen after a crash commits immediately, fenced:
+  controller acquisition, release and cancellation ownership; reviewer session
+  identity; request IDs and dispatch journal states; accepted results and
+  terminal errors; phase transitions and consolidation or fix dispatch;
+  snapshot identity, stale evidence and integrity failures; and user commands
+  whose acknowledgement promises durable state. Token deltas, progress
+  digests, `stalledSince` and non-authorising status refreshes are staged and
+  flushed once per pass, and before any safety commit, shutdown or lease
+  handoff. A failed observational flush is logged, never turned into a retry.
+  A lost fence still propagates.
+- **Lease and state stay together.** Do not split the controller lease from
+  workflow state unless both commit in one transaction. A per-row
+  `updateStoreRow` keeps the atomic fence-and-state commit.
+- **Fence reads take no lease.** A fence check is only true at the instant it
+  reads, and a lease held for it would be released before the caller acts, so
+  it never protected the provider I/O that follows. Invariant 4 rests on the
+  commit: the only commit path (`saveNow` → `saveMultiReviewWorkflow`) re-checks
+  the fence and the expected revision inside its transaction. A SQLite read
+  sees only committed state, and a takeover needs an expired lease, which the
+  check already rejects, so a read racing a takeover answers as a serialized
+  one would. Writers must stay serialized: a save carries the stored lease
+  forward, so an unserialized claim racing it could lose a renewal.
+- **Evidence verification is a safety boundary, not a cache.** It must still
+  catch a changed package or artifact, a worktree or snapshot mismatch,
+  evidence regenerated under a new validation run, a restart that lost trust
+  state, paths swapped through links or mounts, and consolidation against
+  different evidence from the reviewers'. Never cache a verification on path,
+  mtime or size, and never persist a "verified" flag: files can change while
+  the backend is down. Permits are scoped to workflow, phase, generation and
+  controller token. They are dropped on failure, release, retry, reviewer
+  restart and step restart. A watcher may invalidate early, but a missing
+  watcher event is never proof of immutability.
+- **At-most-once dispatch under concurrency.** Concurrency is across reviewers
+  only. Nothing fallible runs on a reviewer between committing `dispatching`
+  and its single send. A timeout, disconnect or unknown response parks the
+  same request ID for explicit reconciliation. Never hold the commit queue or
+  a storage lock across provider I/O. Cancellation beats queued admission.
+- **Error scopes.**
+
+  | Event | Scope | Result |
+  | --- | --- | --- |
+  | Package or snapshot verification failure | Workflow or stage | Stop admission, abandon live work, fail the owner |
+  | Retryable provider create or prepare error | Reviewer | Stay pending or retrying; peers continue |
+  | Ambiguous prompt send | Reviewer | Park the same request ID; peers continue |
+  | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
+  | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. Codex and Claude report one |
+  | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
+  | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
+  | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
+
 ## Fan-out budgets and benchmark
 
 After sealing, `ReviewFanoutRunner`

@@ -4,14 +4,14 @@ Checked against `main` at `06297124` (2026-10-23).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-11 against `main` at `498b68766`.
 
 ### Tasks
 
 1. **Code items 1 to 3 (overlap metric, corpus, cache-read capture)**: already struck through as done. Status: done.
-2. **A Codex driver for the consolidation comparison**: add the recommended `codex exec` driver with an output schema to `scripts/multi-review-evaluation.ts` `live`, so a non-Claude model can consolidate the corpus repeatably. The billed rounds themselves moved to 7568. Status: open.
-3. **Prefix-cache measurement: check the reviewers' working directory**: before the real panels run, confirm from the code whether the reviewers of one review share a working directory (a different directory alone defeats the Claude cache hit) and record it under **Qualification**. The real panel runs moved to 7568. Status: open.
-5. **What each provider's `cacheReadTokens` means**: the open question; Claude measured, the rest from code only. Record Grok's semantics from `bridges/acp-bridge/src/usage.ts` now; compare the other providers' counters with their turn counts once the 7568 panels (0025 task 3) report. Status: partly done (the Grok part can start now).
+2. **A Codex driver for the consolidation comparison**: `live --provider codex` drives `codex exec` with the report schema (2026-11-11). The billed rounds are in 7568. Status: done.
+3. **Prefix-cache measurement: check the reviewers' working directory**: checked from the code on 2026-11-11: the reviewers of one review share it. The real panel runs are in 7568. Status: done.
+5. **What each provider's `cacheReadTokens` means**: Claude measured; Codex, OpenCode, Pi, Cursor and now Grok (2026-11-11) read from the code. Left: compare each provider's counter with its turn count once the 7568 panels (0025 task 3) report. Status: open (depends on 7568, 0025 task 3).
 
 ### 1. Code items 1 to 3
 
@@ -35,7 +35,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** #833 shipped the compact envelope on deterministic tests alone. The first live round (Claude `sonnet`, five cases, two samples) found no regression, but it is too small to rule out a small one, and no non-Claude model has consolidated the corpus.
 
-**Split 2026-11-10.** The billed rounds (more samples, the four untested cases, Claude and Codex) are on the manual-test checklist (7568, 0025 task 2). What stays here is the Codex driver the first decision below recommends; the sample and reopen decisions below are the rules that run follows.
+**Split 2026-11-10.** The billed rounds (more samples, the four untested cases, Claude and Codex) are on the manual-test checklist (7568, 0025 task 2). What stayed here was the Codex driver the first decision below recommends; the sample and reopen decisions below are the rules that run follows.
+
+**Done 2026-11-11.** `bun scripts/multi-review-evaluation.ts live --provider codex` runs each consolidation through `codex exec --json --output-schema <file> --output-last-message <file>` (`scripts/multi-review-evaluation-drivers.ts`): ephemeral, read-only sandbox, approvals off, user config and rules ignored, and the session-title runner's tool-free feature profile (`session-title-runners.ts`), on the CLI's default model unless `--model` names one. Answers and `run.json` go under `output/multi-review-evaluation/live/codex/`. Evidence: `tests/unit/multi-review-evaluation-drivers.test.ts` (8 tests, against fake Claude and Codex CLIs: the arguments, schema and answer files, usage from the last `turn.completed`, failures without content). Not run against the real pinned Codex CLI: that needs a signed-in Codex home, which this work did not touch; the first billed Codex round in 7568 is also the flag check.
 
 **Context.** Still to do, per the file: at least three samples per prompt, the four untested cases (`clean-panel`, `invalid-and-failed`, `coverage-gaps`, `limit-boundaries`) and one non-Claude model. The "Needs verification" item asks the same question and is answered only for Claude.
 
@@ -67,7 +69,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### 3. Prefix-cache measurement on real reviewer panels
 
-**Split 2026-11-10.** The real Claude and Codex panels are on the manual-test checklist (7568, 0025 task 3). What stays here is the working-directory check the Investigation names, which reads code only.
+**Split 2026-11-10.** The real Claude and Codex panels are on the manual-test checklist (7568, 0025 task 3). What stayed here was the working-directory check the Investigation names, which reads code only.
+
+**Done 2026-11-11: they share one.** Every reviewer of a Multi Review gets its provider from `MultiReviewService.providerInstance` (`apps/backend/src/core/multi-review-service.ts`), keyed by the workflow and the reviewer's platform and connected to the review environment's bridge for that platform. Build Pipeline reviewers get theirs from `provider(pipeline, agent)` (`build-pipeline-review-fanout.ts`), the pipeline environment's bridge. `ProviderCreateSessionOptions` carries no directory, and each bridge runs every session in its one process-wide workspace (`claudeWorkspaceCwd` in the Claude bridge, the app-server child's `cwd` in the Codex bridge, `workingDirectory` in the Pi bridge). So two same-platform reviewers of one review run in the same directory, and the directory alone does not break the Claude hit. Anything else the CLI puts before the prompt (for Claude Code, a snapshot of `git status`) is the same for reviewers that start on an unchanged worktree, which read-only reviewers do not change; that part is an inference, not a measurement.
 
 **Problem.** The stable prompt prefix was meant to make reviewers share prompt-cache reads. On Claude the consolidation measurements suggest it cannot, because Claude Code caches only at message boundaries and each reviewer prompt is a single user message. Real reviewer prompts have never been measured, so whether the prefix saves anything is unknown.
 
@@ -98,7 +102,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The code reading is that Claude, Codex and OpenCode report cumulative session totals, while Pi and Cursor report the latest turn. The stored value is the maximum seen (assumption 5), which is exact for totals and a lower bound for latest-turn providers.
 
-**Investigation.** Pi maps `assistantUsage.cacheRead` (`bridges/pi-bridge/src/prompt.ts:727`) and Cursor maps `usage.cacheReadTokens` (`bridges/cursor-bridge/src/prompt.ts:749`). The ACP bridge also reports cache reads (`bridges/acp-bridge/src/usage.ts`, persisted in `acp-persistence.ts`), so Grok reviewers produce a value whose meaning the file does not record.
+**Investigation.** Pi maps `assistantUsage.cacheRead` (`bridges/pi-bridge/src/prompt.ts:727`) and Cursor maps `usage.cacheReadTokens` (`bridges/cursor-bridge/src/prompt.ts:749`). The ACP bridge also reports cache reads (`bridges/acp-bridge/src/usage.ts`, persisted in `acp-persistence.ts`), so Grok reviewers produce a value whose meaning the file did not record.
+
+**Grok, read from the code on 2026-11-11.** Grok's value is its latest turn, like Pi and Cursor. `parseAcpTurnUsage` (`bridges/acp-bridge/src/usage.ts`) reads `cachedReadTokens` (or `cacheReadTokens`, `cache_read_input_tokens`, `cached_read_tokens`) from Grok's vendor `_meta`, `turn_completed` and `response_completed` carriers and from ACP `PromptResponse.usage`. `recordTurnUsage` (`acp-session.ts`) merges the up to three carriers Grok announces for one turn into that turn's usage, sums it across a turn's continued attempts (`accumulateAttemptUsage`), and replaces it at the next turn; only the context occupancy, the window and the cost are session snapshots. So the stored maximum is a lower bound for a multi-turn Grok reviewer, as for Pi and Cursor. Whether Grok's own per-turn figure sums every model call in the turn is Grok's to say and needs a signed-in run; no Grok reviewer is in the 7568 panels, so it stays unmeasured.
 
 **Decisions.**
 
@@ -183,8 +189,8 @@ providers, and a cache measurement of real reviewer panels.
   `multi-review-evaluation.ts` provides `evaluationConsolidationPrompt`
   (`compact`, or `full`: the `d680ccdb` evidence inside today's prompt),
   `referenceConsolidation`, `scoreConsolidation` and `summarizePanelValue`.
-  `scripts/multi-review-evaluation.ts` (`prompts`, `score`, `panel`) is the
-  operator entry point. The durable description is in
+  `scripts/multi-review-evaluation.ts` (`prompts`, `score`, `panel`, and
+  `live` on the Claude or Codex CLI) is the operator entry point. The durable description is in
   [`review-preparation.md`](../../architecture/review-preparation.md#panel-value-measurements).
 - **Reviewer lenses (shipped 2026-10-29).** Built by graphs item 005
   (`plans/graphs/005-reviewer-lenses.md`, decision D19 in
@@ -271,8 +277,9 @@ and real review stacks; batch them with
     this model, and one full-variant provenance defect that compact avoided.
     Two samples per prompt and one model are not enough to rule out a small
     regression.
-  - Still to do here: a Codex driver for `live` (task 2); `live` drives only
-    the Claude CLI. The wider billed rounds are in 7568 (0025 task 2).
+  - The Codex driver for `live` exists since 2026-11-11 (`--provider codex`,
+    task 2). The wider billed rounds, on Claude and Codex, are in 7568 (0025
+    task 2).
 - **Prefix-cache measurement.** Partly measured, on Claude only, through the
   same `live` path.
   - Separate sessions with a byte-identical prompt and the same working
@@ -299,9 +306,10 @@ and real review stacks; batch them with
     (about 340 tokens) before the evidence, below OpenAI's 1,024-token
     prefix-cache minimum, so they cannot show anything. Real reviewer prompts
     can.
-  - Still to do here: the working-directory check (task 3). The real
-    panels are in 7568 (0025 task 3). Pi and Cursor values are latest-turn
-    only.
+  - The reviewers of one review share a working directory (task 3, read
+    from the code on 2026-11-11), so the directory does not break the hit
+    between them. The real panels are in 7568 (0025 task 3). Pi, Cursor and
+    Grok values are latest-turn only.
 - **Overlap from real panels.** First data from the four completed real Multi
   Reviews stored on the development host (2026-10-23). All four used the same
   panel: claude/opus, codex, cursor, and opencode (deepseek flash) at
@@ -376,8 +384,9 @@ different default panel) are in 7568 (0025 task 6). Lenses shipped on
   some report only provider-side context caching? Partly answered.
   - From the code: Claude (`cache_read_input_tokens`), Codex
     (`cachedInputTokens`) and OpenCode (`cache.read`) report cumulative session
-    totals of the provider's prompt-cache reads. Pi and Cursor report the
-    latest turn's value.
+    totals of the provider's prompt-cache reads. Pi, Cursor and Grok report
+    the latest turn's value (Grok's merged over the carriers it announces for
+    one turn and summed over that turn's continued attempts).
   - Measured on Claude: the value counts real cross-session prompt-cache hits,
     but only for a byte-identical prefix up to a message boundary.
   - Other providers are not measured.
@@ -502,6 +511,26 @@ reports the whole compact prompt is about 2% larger, because the explanation of
 round agrees: the compact prompt's uncached tokens (Claude's cache writes) were
 2% lower for the three-reviewer case and 7% lower for the five-reviewer case,
 and about 1% higher for the two-reviewer cases.
+
+10. **Task 2: how the Codex driver runs a consolidation.**
+    - Choice: `codex exec` with `--output-schema` and `--output-last-message`,
+      ephemeral and read-only, user config and rules ignored, the
+      session-title runner's disabled-feature list, environment context off,
+      in a fresh empty directory per call.
+    - Why: it is the recommended option; reusing the title runner's profile
+      keeps one tool-free Codex configuration in the repository rather than
+      two that could drift. Environment context off keeps the working
+      directory out of the prompt, so answers depend on the evidence alone.
+    - Pros: repeatable and schema-checked, like the Claude driver.
+    - Cons: Codex reports no cost or cache writes, so the Codex scores carry
+      token and cache-read counts only. Tested only against a fake CLI here.
+11. **Task 3: answered from the code, not a probe run.** The task asks for a
+    code check before the panels run, and the provider wiring decides it: one
+    bridge per environment and platform, one workspace per bridge. A probe
+    would have needed a signed-in panel, which is the 7568 run.
+12. **Task 5: Grok recorded as latest-turn, not measured.** Read from
+    `usage.ts` and `acp-session.ts`. The comparison against turn counts waits
+    for the 7568 panels; the file stays open (blocked) for that reading only.
 
 ## Related
 

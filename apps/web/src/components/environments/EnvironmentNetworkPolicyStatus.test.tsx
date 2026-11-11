@@ -59,6 +59,19 @@ describe("environment network policy status", () => {
     expect(screen.getByText(/reachable on\s+every port/)).toBeTruthy();
   });
 
+  test("an answer with no policy shows nothing rather than failing", async () => {
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async () => undefined);
+    const view = render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.some((call) => call[0] === "get_environment_network_policy"),
+      ).toBe(true),
+    );
+    await act(async () => {});
+    expect(view.container.innerHTML).toBe("");
+  });
+
   test("says where the firewall is enforced and whether a root terminal can change it", async () => {
     install({ ...base, enforcement: "gateway" });
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);

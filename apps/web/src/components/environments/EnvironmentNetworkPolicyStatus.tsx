@@ -198,10 +198,17 @@ interface ShownPolicy {
 function withPolicy(
   previous: ShownPolicy | null,
   forEnvironment: string,
-  next: EnvironmentNetworkPolicy,
+  next: EnvironmentNetworkPolicy | null | undefined,
   keepOnUnreadable = false,
 ): ShownPolicy {
   const prior = previous?.environmentId === forEnvironment ? previous : null;
+  // An answer with no policy at all (an older or stubbed backend) shows
+  // nothing, as before, and is not a report to keep refreshing on.
+  if (!next) {
+    return keepOnUnreadable && prior?.policy
+      ? prior
+      : { environmentId: forEnvironment, policy: null, polling: false };
+  }
   const polling =
     showsRefusalCounts(next) || (!reportsNoRefusalCounts(next) && (prior?.polling ?? false));
   if (keepOnUnreadable && next.policyVersion === null && prior?.policy) {

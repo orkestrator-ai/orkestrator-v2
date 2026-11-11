@@ -155,7 +155,7 @@ soft budgets after which the work is meant to keep running) and stay as they
 are. `opencode-commands.ts` must not abort on timeout, because the command may
 already have been sent (it was removed with OpenCode 1.x on 2026-11-11, so its
 race no longer counts). `change-tracking/worktree-owner.ts` resolves an
-outcome rather than throwing. `web-annotation-tools.ts` was fixed in plain
+outcome rather than throwing. `web-annotations/tools.ts` was fixed in plain
 code by the adoption change.
 
 **Decisions.**

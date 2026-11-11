@@ -27,11 +27,11 @@ export type CommandContext = {
   design?: import("./design/index.js").DesignService;
   previews?: import("./preview-runtime.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/index.js").McpManagementService;
-  webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
+  webAnnotations?: import("./web-annotations/index.js").WebAnnotationService;
   /** Transcript artifacts: durable revisions, receipts and publications. */
   transcriptArtifacts?: import("./transcript-artifacts/index.js").TranscriptArtifactService;
   /** Backend rollout switch for web annotations (enabled / read-only / disabled). */
-  webAnnotationRollout?: import("./web-annotation-rollout.js").WebAnnotationRollout;
+  webAnnotationRollout?: import("./web-annotations/index.js").WebAnnotationRollout;
   storage: StorageService;
   emit: BackendEmit;
   appRoot: string;

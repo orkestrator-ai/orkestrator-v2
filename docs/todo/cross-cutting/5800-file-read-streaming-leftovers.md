@@ -74,7 +74,7 @@ Analysed 2026-11-11 against `main` at `14df96544` (first analysed 2026-11-05 aga
 
 **Problem.** Some renderer readers still take whole files as base64: an unpinned transcript image resolved by `media-resolver.ts` (`read_file_base64` for a host path, `read_container_file_base64` for a container path), `readBinaryFile` in `apps/web/src/lib/backend/kanban.ts`, and the base64 fallbacks kept for older backends.
 
-**Context.** The resolver returns `data:` URLs that its callers cache (`image-preview-cache.ts`), size and decode (`imageDimensionsFromDataUrl`, `FilePreview`'s download), so moving it to capability URLs changes more than a fetch. Pinned images (`transcript_media_pin`) and PDF previews (read in process by the backend, never crossing the channel) are not affected. Server-side reads by `commands-pdf.ts` and `web-annotation-migration.ts` call the commands in process, so they never reach the gateway's histogram.
+**Context.** The resolver returns `data:` URLs that its callers cache (`image-preview-cache.ts`), size and decode (`imageDimensionsFromDataUrl`, `FilePreview`'s download), so moving it to capability URLs changes more than a fetch. Pinned images (`transcript_media_pin`) and PDF previews (read in process by the backend, never crossing the channel) are not affected. Server-side reads by `commands-pdf.ts` and `web-annotations/migration.ts` call the commands in process, so they never reach the gateway's histogram.
 
 **Investigation.** Not started; waits on task 2's numbers from a working profile (7568: 5800 task 2).
 

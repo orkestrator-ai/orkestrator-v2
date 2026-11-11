@@ -150,14 +150,14 @@ const ACTIVITY_JOB_MS = 2_000;
 const MAINTENANCE_JOB_MS = 60_000;
 /** Safety cadence for rename intent when none is pending. */
 const RENAME_SAFETY_MS = 30_000;
-import { WebAnnotationService } from "./web-annotation-service.js";
-import { WebAnnotationRollout } from "./web-annotation-rollout.js";
-import { WebAnnotationDispatchAdapter } from "./web-annotation-dispatch.js";
 import {
   compileWebAnnotationBrief,
   composeWebAnnotationDispatchText,
-} from "./web-annotation-brief.js";
-import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+  WebAnnotationDispatchAdapter,
+  WebAnnotationRollout,
+  WebAnnotationService,
+  type WebAnnotationToolHost,
+} from "./web-annotations/index.js";
 import {
   combineProvisionalFindingSinks,
   type ProvisionalFindingSink,

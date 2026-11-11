@@ -14,6 +14,13 @@
  * The closure happens once per pull request. The ticket remembers the merged
  * pull request that closed it (`prMergeDoneUrl`), so a ticket the user moves
  * back out of done afterwards is not closed again for the same merge.
+ *
+ * A build's pull request that closes without merging sends its ticket back to
+ * the backlog (`kanbanTaskReturnsForClosedPullRequest`), through
+ * `KanbanRepository.returnKanbanTaskForClosedPullRequest`, called by the PR
+ * monitor and by a build that detects the closure itself
+ * (`build-pipeline-service-recovery.ts`, `persistPullRequest`). Each closed
+ * pull request is decided once (`prClosedReturnUrl`).
  */
 import type { KanbanTask } from "./storage-shared.js";
 
@@ -45,14 +52,19 @@ function pullRequestComment(text: string): { url: string; merged: boolean } | nu
 
 /**
  * The merged pull request a ticket records, or null. The linked pull request
- * decides when there is one; a ticket with no link falls back to the latest
- * pull-request comment, which counts only when it is the monitor's merged
- * comment (a later raised or closed comment means other work followed).
+ * decides when there is one. A command node's ticket built on another machine
+ * links nothing itself; that machine reports its pull request as the ticket's
+ * work location (`sync.work`), which decides next. A ticket with neither falls
+ * back to the latest pull-request comment, which counts only when it is the
+ * monitor's merged comment (a later raised or closed comment means other work
+ * followed).
  */
 export function mergedPullRequestOnTicket(
-  task: Pick<KanbanTask, "prUrl" | "prState" | "comments">,
+  task: Pick<KanbanTask, "prUrl" | "prState" | "comments" | "sync">,
 ): string | null {
   if (task.prUrl) return task.prState === "merged" ? task.prUrl : null;
+  const work = task.sync?.work;
+  if (work?.prUrl) return work.prState === "merged" ? work.prUrl : null;
   for (let index = task.comments.length - 1; index >= 0; index -= 1) {
     const comment = pullRequestComment(task.comments[index]!.text);
     if (comment) return comment.merged ? comment.url : null;
@@ -80,4 +92,39 @@ export function pendingMergeClosures(tasks: readonly KanbanTask[]): KanbanMergeC
     const prUrl = mergedPullRequestOnTicket(task);
     return prUrl && kanbanTaskAwaitsMergeClosure(task, prUrl) ? [{ taskId: task.id, prUrl }] : [];
   });
+}
+
+/**
+ * Whether a ticket goes back to the backlog because its build's pull request
+ * `prUrl` closed without merging: it is not done, that pull request never
+ * merged it, its closure was not decided once already, and the build that
+ * raised `prUrl` is the one that put the ticket in the column it is in now.
+ * A ticket the user moved by hand since keeps its place, even one moved away
+ * and back (any other status change clears `lifecycleStatus`), and so does one
+ * a newer build owns (`lifecyclePrUrl` names that build's pull request).
+ */
+export function kanbanTaskReturnsForClosedPullRequest(
+  task: Pick<
+    KanbanTask,
+    "status" | "lifecycleStatus" | "lifecyclePrUrl" | "prMergeDoneUrl" | "prClosedReturnUrl"
+  >,
+  prUrl: string,
+): boolean {
+  if (task.status === "done" || task.status === "backlog") return false;
+  if (task.prMergeDoneUrl === prUrl || task.prClosedReturnUrl === prUrl) return false;
+  if (task.lifecyclePrUrl !== prUrl) return false;
+  return task.lifecycleStatus === task.status;
+}
+
+/**
+ * Clears the build lifecycle's claim on a ticket's column: called for every
+ * status change that is not a lifecycle write (by hand here, or applied from
+ * another machine), so the next lifecycle event has to establish it afresh.
+ */
+export function clearKanbanLifecycleOwnership(
+  task: Pick<KanbanTask, "lifecycleStatus" | "lifecyclePrUrl" | "lifecycleEcho">,
+): void {
+  delete task.lifecycleStatus;
+  delete task.lifecyclePrUrl;
+  delete task.lifecycleEcho;
 }

@@ -60,6 +60,7 @@ import { GraphRunFlowFixture } from "./GraphRunFlowFixture";
 import { KeyInformationTabFixture } from "./KeyInformationTabFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
 import { DeliveryPolicyFixture } from "./DeliveryPolicyFixture";
+import { TicketViewFixture } from "./TicketViewFixture";
 import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
@@ -2190,6 +2191,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
   if (window.location.pathname === "/pipeline-flow") return <PipelineFlowFixture />;
   if (window.location.pathname === "/delivery-policy") return <DeliveryPolicyFixture />;
+  if (window.location.pathname === "/ticket-view") return <TicketViewFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {

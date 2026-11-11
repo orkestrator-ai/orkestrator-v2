@@ -17,6 +17,7 @@ import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-
 import { drainContainerProcesses } from "./container-readiness.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
+import { settleTicketsOfDeletedEnvironment } from "./build-pipeline-kanban-environment-deleted.js";
 import { scheduleEnvironmentCleanupReconcile } from "./environment-cleanup-reconciler.js";
 import { removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
 import { removeEnvironmentGraphBranchWorktrees } from "./graph-branch-worktrees.js";
@@ -257,6 +258,10 @@ export async function deleteEnvironment(
       await storage.deleteMultiReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.
+      // Its ticket gets the ending the build can no longer give it first.
+      if (environment && typeof storage.listBuildPipelines === "function" && storage.kanban) {
+        await settleTicketsOfDeletedEnvironment(storage, environment);
+      }
       await storage.deleteBuildPipelinesByEnvironment(environmentId, environment?.buildPipelineId);
       // A graph run is scoped to one environment (D7) and its artifacts to the
       // run: both go with it, like a pipeline.

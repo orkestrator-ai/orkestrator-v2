@@ -90,6 +90,7 @@ import {
  * | ---------------------------------- | ------------------------------------------------ | ----------------------------------- |
  * | Environment PR fields              | environment `prUrl`/`prState` (`persistPr`)      | same value rewritten; retried by re-detection while `persistencePending` |
  * | Linked task → done (merged only)   | task `status`, `prMergeDoneUrl`                  | once per PR (`kanban-merge-closure.ts`) |
+ * | Linked task → backlog (closed only) | task `status`, `prClosedReturnUrl`              | once per PR, only for the build that raised it; skipped when moved by hand |
  * | Linked task PR link                | task `prUrl`/`prState`, `prMergeCommented:false` | compared before writing             |
  * | Linked task terminal comment       | task comment text (URL-specific)                 | exact text check                    |
  * | Linked task completion flag        | task `prMergeCommented:true` for that URL/state  | durable marker                      |
@@ -210,6 +211,12 @@ export interface PrMonitorEffects {
   findTaskForEnvironment: (environmentId: string) => Promise<PrMonitorKanbanTask | null>;
   /** Moves the task to done for this merged pull request; the store skips a task already closed by it. */
   closeTaskForMerge: (taskId: string, prUrl: string) => Promise<void>;
+  /**
+   * Sends the task back to the backlog for this pull request closing without
+   * merging, unless the user moved it by hand since its build did; the store
+   * decides (`kanban-merge-closure.ts`). Optional for embedded adapters.
+   */
+  returnTaskForClosedPr?: (taskId: string, prUrl: string) => Promise<void>;
   addTaskComment: (taskId: string, text: string) => Promise<void>;
   updateTaskPrMetadata: (
     taskId: string,
@@ -1697,6 +1704,15 @@ export class PrMonitorService {
           await this.options.effects.closeTaskForMerge(task.taskId, detection.url);
           if (!this.isCurrent(entry, generation)) return false;
         }
+        progress.add("status");
+      }
+      if (terminalState === "closed" && !progress.has("status")) {
+        // The store decides each closed pull request once (`prClosedReturnUrl`)
+        // and only for the build that raised it, so a replay after a restart
+        // keeps a later move, and closed metadata a build recorded first (a
+        // conflict resolution's re-detection) does not skip the return.
+        await this.options.effects.returnTaskForClosedPr?.(task.taskId, detection.url);
+        if (!this.isCurrent(entry, generation)) return false;
         progress.add("status");
       }
 

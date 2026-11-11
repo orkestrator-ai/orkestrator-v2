@@ -111,10 +111,11 @@ export const updateTicketAction: GraphSystemActionHandler = {
     await ctx.effect(ctx.slotKey(), async () => {
       const task = await findTask(ctx);
       const kanban = ctx.deps.storage.kanban;
-      // A run ending never reopens a done ticket, which its merged pull
-      // request may have closed (`kanban-merge-closure.ts`).
-      const ending = ctx.params.lifecycle === "complete" || ctx.params.lifecycle === "failed";
-      if (ending && task.status === "done") delete update.status;
+      // A lifecycle event never reopens a done ticket, which its merged pull
+      // request may have closed (`kanban-merge-closure.ts`). A status the
+      // graph's author set by hand still applies.
+      const lifecycle = ctx.params.lifecycle !== undefined;
+      if (lifecycle && task.status === "done") delete update.status;
       const moves =
         (update.status !== undefined && task.status !== update.status) ||
         (update.prUrl !== undefined && task.prUrl !== update.prUrl) ||
@@ -128,7 +129,7 @@ export const updateTicketAction: GraphSystemActionHandler = {
             ...(update.prState ? { prState: update.prState } : {}),
           },
           undefined,
-          { preserveDoneStatus: ending },
+          { lifecycle },
         );
       }
       const comment =

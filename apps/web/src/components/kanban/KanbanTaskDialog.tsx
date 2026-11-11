@@ -23,16 +23,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Trash2,
-  Send,
   CheckCircle2,
   Hammer,
   ExternalLink,
+  FileText,
   Loader2,
   Paperclip,
   ImageIcon,
   Pencil,
+  StickyNote,
   X,
 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   TICKET_KINDS,
   TICKET_KIND_LABELS,
@@ -41,7 +43,21 @@ import {
   type TicketKind,
 } from "@orkestrator/protocol/ticket-sections";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
-import { TicketKindBadge, TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
+import { TicketKindBadge, ticketSectionEntries } from "@/components/tickets/TicketSectionsGrid";
+import { TicketActionBar } from "./ticket-view/TicketActionBar";
+import { TicketDocument, type TicketDocumentSection } from "./ticket-view/TicketDocument";
+import { TicketNotesTab } from "./ticket-view/TicketNotesTab";
+import {
+  TicketComments,
+  TicketLinkedWork,
+  ticketLinkedPullRequest,
+} from "./ticket-view/TicketViewParts";
+import {
+  defaultTicketViewTab,
+  ticketNotesAvailability,
+  type TicketViewTab,
+} from "./ticket-view/ticket-view-model";
+import { useEnvironmentStore } from "@/stores";
 import { ticketContentOf } from "@/components/tickets/ticket-content";
 import { useCriteriaEnvironmentHead } from "@/components/tickets/useCriteriaEnvironmentHead";
 import { pipelineDeliveryTooLateNote } from "@orkestrator/protocol/build-pipeline";
@@ -176,12 +192,25 @@ interface KanbanTaskDialogProps {
   onOpenChange: (open: boolean) => void;
   /** When set, dialog opens in create mode for this project */
   createForProjectId?: string;
+  /**
+   * The board column the ticket was opened from. A ticket opened from Review
+   * with Notes opens on its Notes tab; absent, the ticket's own column.
+   */
+  openedFrom?: KanbanStatus;
 }
 
 const TASK_DIALOG_CONTENT_CLASS =
   "[--modal-max-width:560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
-/** An existing ticket is wider so its section tiles can sit side by side. */
-const TASK_VIEW_DIALOG_CONTENT_CLASS = `${TASK_DIALOG_CONTENT_CLASS} md:[--modal-max-width:48rem]`;
+/**
+ * An existing ticket reads like the full-tab Notes page: the largest modal on
+ * the container scale (72rem), and most of the window's height, so its index
+ * and its one content column both have room.
+ */
+const TASK_VIEW_DIALOG_CONTENT_CLASS =
+  "[--modal-max-width:72rem] h-[90vh] max-h-[90vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
+/** Workspace-tab styling: a 2px Signal Blue underline on the active tab (DESIGN.md). */
+const TICKET_VIEW_TAB_CLASS =
+  "h-9 flex-none rounded-none border-0 border-b-2 border-transparent px-1 pb-2 text-sm text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-primary dark:data-[state=active]:bg-transparent";
 const KIND_OPTIONS = TICKET_KINDS.map((kind) => ({ value: kind, label: TICKET_KIND_LABELS[kind] }));
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
@@ -192,6 +221,7 @@ export function KanbanTaskDialog({
   open,
   onOpenChange,
   createForProjectId,
+  openedFrom,
 }: KanbanTaskDialogProps) {
   const nodeBackend = useScopeBackend();
   const kanban = useNodeScope().store(kanbanStore);
@@ -221,6 +251,17 @@ export function KanbanTaskDialog({
     open,
     ticketPipeline ? `${ticketPipeline.phase}:${ticketPipeline.backendRevision}` : undefined,
   );
+  const ticketEnvironment = useEnvironmentStore((s) =>
+    task?.environmentId ? s.getEnvironmentById(task.environmentId) : undefined,
+  );
+  const notes = ticketNotesAvailability(task ?? {}, ticketPipeline);
+  // The tab the user picked for this ticket; until then, the default for the
+  // column it was opened from. Cleared on close, so a reopen starts afresh.
+  const [chosenTab, setChosenTab] = useState<{ taskId: string; tab: TicketViewTab } | null>(null);
+  const defaultTab = defaultTicketViewTab(openedFrom ?? task?.status ?? "backlog", notes);
+  const pickedTab = task && chosenTab?.taskId === task.id ? chosenTab.tab : defaultTab;
+  const activeTab: TicketViewTab = pickedTab === "notes" && !notes.available ? "ticket" : pickedTab;
+  const ticketScrollRef = useRef<HTMLDivElement>(null);
   const [isSavingDelivery, setIsSavingDelivery] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);
@@ -417,6 +458,7 @@ export function KanbanTaskDialog({
       setCreatedTaskForBuild(null);
       setPreviewImage(null);
       setImageUrlCache({});
+      setChosenTab(null);
     }
     onOpenChange(newOpen);
   };
@@ -592,6 +634,9 @@ export function KanbanTaskDialog({
       setEditKind(content.kind);
       setEditMarkdown(originalMarkdown || ticketMarkdownTemplate(content.kind));
     }
+    // The editor and its Save and Cancel live on the Ticket tab; editing from
+    // the shared header (the title) on Notes switches there with it.
+    if (task) setChosenTab({ taskId: task.id, tab: "ticket" });
     setIsEditing(true);
   };
 
@@ -695,13 +740,6 @@ export function KanbanTaskDialog({
     if (commentText.trim() && task) {
       void addComment(task.id, commentText.trim());
       setCommentText("");
-    }
-  };
-
-  const handleCommentKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleAddComment();
     }
   };
 
@@ -811,16 +849,19 @@ export function KanbanTaskDialog({
   const allImages = isCreateMode ? pendingImages : displayImages;
 
   // Image thumbnails component — show in create mode always, in edit mode only when images exist
-  const renderImageSection = () => {
-    if (!isCreateMode && allImages.length === 0) return null;
+  // `bare` is the ticket view's Images section, which has its own heading.
+  const renderImageSection = (bare = false) => {
+    if (!bare && !isCreateMode && allImages.length === 0) return null;
 
     return (
       <>
-        <Separator />
+        {bare ? null : <Separator />}
         <div>
           <div className="flex items-center gap-1.5 mb-2">
             <ImageIcon className="h-4 w-4 text-muted-foreground" />
-            <h4 className="text-sm font-medium">Images ({allImages.length})</h4>
+            <h4 className={bare ? "sr-only" : "text-sm font-medium"}>
+              Images ({allImages.length})
+            </h4>
             <Button
               variant="ghost"
               size="icon"
@@ -1040,6 +1081,114 @@ export function KanbanTaskDialog({
 
   if (!task) return null;
 
+  const existingPipeline = getPipelineByTaskId(task.id);
+  const hasActiveBuild =
+    !!existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
+  const deliveryControl = {
+    onChange: handleDeliveryPolicyChange,
+    disabled: isSavingDelivery,
+    tooLateNote:
+      ticketPipeline &&
+      pipelineDeliveryTooLateNote(ticketPipeline, content?.sections.delivery?.policy),
+  };
+  const sectionEntries = ticketSectionEntries({
+    sections: content?.sections ?? {},
+    deliveryControl,
+    environmentHead: criteriaHead,
+  });
+  const onlyTheDeliveryControl =
+    sectionEntries.length === 1 &&
+    !content?.sections.delivery?.policy &&
+    !content?.sections.delivery?.note;
+  const emptyPrompt = (
+    <button
+      type="button"
+      className="w-full rounded-md border border-dashed border-border/60 p-3 text-left text-sm text-muted-foreground/60 italic transition-colors hover:border-border"
+      onClick={handleStartEdit}
+    >
+      Click to add a description and acceptance criteria...
+    </button>
+  );
+  const ticketSections: TicketDocumentSection[] = isEditing
+    ? [
+        {
+          key: "edit",
+          title: "Editing",
+          body: (
+            <div className="space-y-2" data-testid="ticket-markdown-editor">
+              <Textarea
+                value={editMarkdown}
+                onChange={(e) => setEditMarkdown(e.target.value)}
+                placeholder="Summary first, then ## headings: Problem, Context, Acceptance criteria (one - item per line), Out of scope, Notes…"
+                aria-label="Ticket text"
+                rows={18}
+                className="max-h-[calc(32lh+1rem)] overflow-y-auto font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                Markdown. Each <code>##</code> heading is a section; unknown headings are kept as
+                their own sections. Criteria whose text you leave alone keep their Verify result.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => void handleSaveEdit()}
+                  disabled={!editTitle.trim() || isSavingEdit}
+                >
+                  {isSavingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  Save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ),
+        },
+      ]
+    : [
+        ...(sectionEntries.length === 0 || onlyTheDeliveryControl
+          ? [{ key: "description", title: "Description", body: emptyPrompt }]
+          : []),
+        ...sectionEntries.map((entry) => ({
+          key: entry.key,
+          title: entry.title,
+          meta: entry.aside,
+          testId: `ticket-tile-${entry.key}`,
+          body: entry.body,
+        })),
+      ];
+  const pullRequest = ticketLinkedPullRequest(task, ticketEnvironment);
+  ticketSections.push(
+    {
+      key: "images",
+      title: "Images",
+      meta: task.images.length > 0 ? String(task.images.length) : undefined,
+      body: renderImageSection(true),
+    },
+    {
+      key: "comments",
+      title: "Comments and activity",
+      meta: task.comments.length > 0 ? String(task.comments.length) : undefined,
+      body: (
+        <TicketComments
+          comments={task.comments}
+          commentText={commentText}
+          onCommentTextChange={setCommentText}
+          onAdd={handleAddComment}
+          onDelete={(commentId) => void deleteComment(task.id, commentId)}
+          // The PR pane sits behind this modal, so a pull request opened
+          // there closes it unless edits are open.
+          renderText={(text) => <CommentText text={text} />}
+        />
+      ),
+    },
+    {
+      key: "pull-request",
+      title: "Pull request",
+      body: <TicketLinkedWork task={task} pullRequest={pullRequest} pipeline={ticketPipeline} />,
+    },
+  );
+
   return (
     <PullRequestOpenerProvider
       open={(ref, view) => {
@@ -1055,237 +1204,164 @@ export function KanbanTaskDialog({
           ref={dialogContentRef}
           className={TASK_VIEW_DIALOG_CONTENT_CLASS}
           onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(event) => {
+            // Start on the selected tab, not on the first button (Delete).
+            const selected = dialogContentRef.current?.querySelector<HTMLElement>(
+              '[role="tab"][aria-selected="true"]',
+            );
+            if (!selected) return;
+            event.preventDefault();
+            selected.focus();
+          }}
         >
-          <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
-            <div className={TASK_DIALOG_BODY_INNER_CLASS}>
-              <DialogHeader className="-mx-6 -mt-6 border-b border-divider bg-background px-6 py-4 pr-14 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pr-14">
-                <DialogDescription className="sr-only">
-                  View and edit task details, build actions, images, and comments.
-                </DialogDescription>
-                <div className="flex items-center justify-between pr-6">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
-                      {STATUS_LABELS[task.status]}
-                    </span>
-                    {content ? <TicketKindBadge kind={content.kind} /> : null}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                    onClick={handleDelete}
-                    aria-label="Delete task"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) =>
+              setChosenTab({ taskId: task.id, tab: value as TicketViewTab })
+            }
+            className="flex min-h-0 flex-1 flex-col gap-0"
+          >
+            <DialogHeader className="m-0 shrink-0 gap-2 px-4 pt-4 pr-12 pb-0 text-left sm:m-0 sm:px-6 sm:pt-5 sm:pr-14">
+              <DialogDescription className="sr-only">
+                View and edit task details, build actions, images, and comments.
+              </DialogDescription>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    {STATUS_LABELS[task.status]}
+                  </span>
+                  {content ? <TicketKindBadge kind={content.kind} /> : null}
                 </div>
-                {isEditing ? (
-                  <div className="space-y-2 pt-1">
-                    <DialogTitle className="sr-only">Edit {task.title}</DialogTitle>
-                    <Input
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      className="text-lg font-semibold"
-                      aria-label="Ticket title"
-                      autoFocus
-                    />
-                    <SegmentedSelector
-                      value={editKind}
-                      options={KIND_OPTIONS}
-                      onValueChange={setEditKind}
-                      ariaLabel="Ticket kind"
-                    />
-                  </div>
-                ) : (
-                  <div className="flex items-start justify-between gap-2">
-                    <DialogTitle
-                      className="min-w-0 cursor-pointer text-lg break-words"
-                      onClick={handleStartEdit}
-                    >
-                      {task.title}
-                    </DialogTitle>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="shrink-0 gap-1.5"
-                      onClick={handleStartEdit}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      Edit
-                    </Button>
-                  </div>
-                )}
-              </DialogHeader>
-
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                  onClick={handleDelete}
+                  aria-label="Delete task"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
               {isEditing ? (
-                <div className="space-y-2" data-testid="ticket-markdown-editor">
-                  <Textarea
-                    value={editMarkdown}
-                    onChange={(e) => setEditMarkdown(e.target.value)}
-                    placeholder="Summary first, then ## headings: Problem, Context, Acceptance criteria (one - item per line), Out of scope, Notes…"
-                    aria-label="Ticket text"
-                    rows={14}
-                    className="max-h-[calc(24lh+1rem)] overflow-y-auto font-mono text-xs"
+                <div className="space-y-2">
+                  <DialogTitle className="sr-only">Edit {task.title}</DialogTitle>
+                  <Input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="text-lg font-semibold"
+                    aria-label="Ticket title"
+                    autoFocus
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Markdown. Each <code>##</code> heading is a section; unknown headings are kept
-                    as their own tiles. Criteria whose text you leave alone keep their Verify
-                    result.
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => void handleSaveEdit()}
-                      disabled={!editTitle.trim() || isSavingEdit}
-                    >
-                      {isSavingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                      Save
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
-                      Cancel
-                    </Button>
-                  </div>
+                  <SegmentedSelector
+                    value={editKind}
+                    options={KIND_OPTIONS}
+                    onValueChange={setEditKind}
+                    ariaLabel="Ticket kind"
+                  />
                 </div>
               ) : (
-                <TicketSectionsGrid
-                  sections={content?.sections ?? {}}
-                  environmentHead={criteriaHead}
-                  deliveryControl={{
-                    onChange: handleDeliveryPolicyChange,
-                    disabled: isSavingDelivery,
-                    tooLateNote:
-                      ticketPipeline &&
-                      pipelineDeliveryTooLateNote(
-                        ticketPipeline,
-                        content?.sections.delivery?.policy,
-                      ),
-                  }}
-                  empty={
-                    <button
-                      type="button"
-                      className="w-full rounded-md border border-dashed border-border/60 p-3 text-left text-sm text-muted-foreground/60 italic transition-colors hover:border-border"
-                      onClick={handleStartEdit}
-                    >
-                      Click to add a description and acceptance criteria...
-                    </button>
-                  }
-                />
+                <DialogTitle
+                  className="min-w-0 cursor-pointer text-lg break-words"
+                  onClick={handleStartEdit}
+                >
+                  {task.title}
+                </DialogTitle>
               )}
-
-              {/* Images */}
-              {renderImageSection()}
-
-              <Separator />
-
-              {/* Build Actions */}
-              {(() => {
-                const existingPipeline = getPipelineByTaskId(task.id);
-                const hasActiveBuild =
-                  existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
-
-                return (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Button
-                        ref={buildLaunchTriggerRef}
-                        size="sm"
-                        variant="outline"
-                        className="gap-1.5 flex-1"
-                        disabled={isBuildStarting || !!hasActiveBuild}
-                        onClick={() => setBuildDialogOpen(true)}
-                      >
-                        {isBuildStarting ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Hammer className="h-3.5 w-3.5" />
-                        )}
-                        Build…
-                      </Button>
-                      {task.environmentId && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="gap-1.5"
-                          onClick={() => {
-                            navigateToBuild(task);
-                            handleOpenChange(false);
-                          }}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          View Build
-                          {existingPipeline && (
-                            <span className="text-xs text-muted-foreground ml-1">
-                              ({existingPipeline.phase})
-                            </span>
-                          )}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              <Separator />
-
-              {/* Comments */}
-              <div className="flex-1 min-h-0">
-                <h4 className="text-sm font-medium mb-2">Comments ({task.comments.length})</h4>
-                <ScrollArea className="max-h-[200px]">
-                  <div className="space-y-3 pr-3">
-                    {task.comments.length === 0 && (
-                      <p className="text-xs text-muted-foreground italic">No comments yet</p>
-                    )}
-                    {task.comments.map((comment) => (
-                      <div
-                        key={comment.id}
-                        className="group/comment rounded-md bg-muted/50 p-2.5 text-sm"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="whitespace-pre-wrap text-foreground flex-1">
-                            {/* The PR pane sits behind this modal, so a pull
-                                request opened there closes it unless edits are open. */}
-                            <CommentText text={comment.text} />
-                          </p>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-5 w-5 shrink-0 opacity-0 group-hover/comment:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                            onClick={() => void deleteComment(task.id, comment.id)}
-                            aria-label="Delete comment"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                        <span className="text-[10px] text-muted-foreground mt-1 block">
-                          {new Date(comment.createdAt).toLocaleString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </ScrollArea>
+              <div className="flex flex-wrap items-end gap-3">
+                <TabsList
+                  aria-label="Ticket view"
+                  className="h-auto gap-4 rounded-none bg-transparent p-0"
+                >
+                  <TabsTrigger value="ticket" className={TICKET_VIEW_TAB_CLASS}>
+                    <FileText aria-hidden />
+                    Ticket
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="notes"
+                    disabled={!notes.available}
+                    title={notes.available ? undefined : notes.reason}
+                    className={TICKET_VIEW_TAB_CLASS}
+                  >
+                    <StickyNote aria-hidden />
+                    Notes
+                  </TabsTrigger>
+                </TabsList>
+                {!notes.available ? (
+                  <span
+                    data-testid="ticket-notes-unavailable"
+                    className="pb-2 text-xs text-muted-foreground"
+                  >
+                    {notes.reason}
+                  </span>
+                ) : null}
               </div>
-            </div>
-          </ScrollArea>
+            </DialogHeader>
 
-          {/* Add Comment */}
-          <div className={`flex items-center gap-2 ${TASK_DIALOG_FOOTER_CLASS}`}>
-            <Input
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              onKeyDown={handleCommentKeyDown}
-              placeholder="Add a comment..."
-              className="flex-1"
-            />
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={handleAddComment}
-              disabled={!commentText.trim()}
-              aria-label="Add comment"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
+            <TabsContent value="ticket" className="flex min-h-0 flex-1 flex-col">
+              <TicketActionBar label="Ticket actions">
+                <Button
+                  ref={buildLaunchTriggerRef}
+                  size="sm"
+                  className="h-7 gap-1.5 px-2.5"
+                  disabled={isBuildStarting || hasActiveBuild}
+                  title={hasActiveBuild ? "A build of this ticket is still running" : undefined}
+                  onClick={() => setBuildDialogOpen(true)}
+                >
+                  {isBuildStarting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Hammer className="h-3.5 w-3.5" />
+                  )}
+                  Build…
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2.5"
+                  disabled={isEditing}
+                  onClick={handleStartEdit}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit
+                </Button>
+                {task.environmentId ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2.5"
+                    onClick={() => {
+                      navigateToBuild(task);
+                      handleOpenChange(false);
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View Build
+                    {existingPipeline ? (
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        ({existingPipeline.phase})
+                      </span>
+                    ) : null}
+                  </Button>
+                ) : null}
+              </TicketActionBar>
+              <div
+                ref={ticketScrollRef}
+                data-testid="ticket-view-scroll"
+                className="@container min-h-0 flex-1 overflow-y-auto"
+              >
+                <TicketDocument
+                  sections={ticketSections}
+                  scrollRef={ticketScrollRef}
+                  label="Ticket sections"
+                />
+              </div>
+            </TabsContent>
+            {notes.available ? (
+              <TabsContent value="notes" className="flex min-h-0 flex-1 flex-col">
+                <TicketNotesTab pipeline={notes.pipeline} />
+              </TabsContent>
+            ) : null}
+          </Tabs>
         </DialogContent>
 
         <AlertDialog

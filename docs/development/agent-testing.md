@@ -115,9 +115,10 @@ isolated browser run on Linux: it reads `/proc` for the profile's Electron tree 
 display variables, the headless switches on the launcher's child) and loads the app.
 
 Electron specs launch their own Electron rather than the profile's, so the
-profile's headless setting does not apply to them. The design canvas, service
-preview and web annotation Electron specs support
-`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
+profile's headless setting does not apply to them. The specs listed in
+`HEADLESS_CAPABLE_ELECTRON_SPECS` (design canvas, cleanup, web annotation,
+seeded service preview, terminal input resume and local gateway transport)
+support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
 [Electron specs and their display](#electron-specs-and-their-display) and
 [Packaged-app Electron spec](#packaged-app-electron-spec).
 

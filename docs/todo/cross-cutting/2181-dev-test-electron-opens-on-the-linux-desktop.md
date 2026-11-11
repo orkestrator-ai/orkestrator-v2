@@ -368,6 +368,21 @@ on a disposable Docker daemon, and `terminal-input-resume-electron.spec.ts` and
 made headless-capable). Its earlier record is
 `git show 14df96544:docs/todo/cross-cutting/7340-shared-terminal-visible-text-helper.md`.
 
+The review of that change (2026-11-11) noted that its validation ran these two
+specs only under a display. They were then run headless at `13e4dd6ae` on
+beelink2 (load average about 40), with the production bundles built:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  terminal-input-resume-electron.spec.ts local-gateway-transport-electron.spec.ts --workers=1
+```
+
+Two runs through `test:logged` both passed (158.9 s and 162.5 s). The second
+used Playwright's JSON reporter: 3 expected, 0 skipped, 0 unexpected, 0 flaky,
+namely the relay and gateway cases of the local-gateway spec and `Electron
+keeps a lost terminal write fenced until Resume, without restarting the PTY`.
+
 ## Current state
 
 Durable behaviour is in

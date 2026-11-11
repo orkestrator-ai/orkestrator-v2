@@ -173,6 +173,9 @@ export function PipelineSessionTranscript({
     // transcript; coming back from it keeps the reader's place
     // (docs/architecture/transcript-scroll.md, "Activation and persistence").
     visible,
+    // One list serves every stage: returning from the Ticket to a different
+    // stage opens that stage at its newest message, not at the old offset.
+    viewKey: session?.sessionKey,
     persistKey: `build-pipeline:${pipeline.id}`,
     environmentId,
     // A build runs unattended, so returning to the tab should show what the

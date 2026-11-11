@@ -110,7 +110,6 @@
     "apps/web/src/hooks/useArtifactPublications.test.ts": 1,
     "apps/web/src/hooks/useManualSessionRefresh.test.tsx": 3,
     "apps/web/src/hooks/useNativeAgentSession.progressive.test.tsx": 1,
-    "apps/web/src/hooks/useVirtuosoScrollState.return.test.ts": 2,
     "apps/web/src/lib/dialog-focus.test.tsx": 1,
     "apps/web/src/lib/draft-persistence.test.ts": 2,
     "apps/web/src/lib/federation/node-environment-reads.test.tsx": 1,

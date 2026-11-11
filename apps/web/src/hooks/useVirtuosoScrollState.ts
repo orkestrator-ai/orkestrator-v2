@@ -142,6 +142,14 @@ interface UseVirtuosoScrollStateOptions {
    * held rather than being restored to an anchor.
    */
   visible?: boolean;
+  /**
+   * What the view is showing (a session key), for a view whose one mounted
+   * list is reused for different content. A return whose key differs from the
+   * one shown when the view was hidden is not a view return: the list now
+   * shows other content, so no place carries over and it opens at the latest
+   * message under either policy.
+   */
+  viewKey?: string;
   /** Optional persistence key for retaining scroll state across tab switches */
   persistKey?: string;
   activation?: ActivationPolicy;
@@ -246,6 +254,7 @@ export function useVirtuosoScrollState(
   const {
     isActive: hostActive = true,
     visible = true,
+    viewKey,
     persistKey,
     stickToBottomOnActivation = false,
     explicitTargetPending = false,
@@ -441,9 +450,13 @@ export function useVirtuosoScrollState(
 
   const explicitTargetPendingRef = useRef(explicitTargetPending);
   const runPendingActivationRef = useRef(runPendingActivation);
+  const viewKeyRef = useRef(viewKey);
+  /** The `viewKey` shown when the view last deactivated. */
+  const hiddenViewKeyRef = useRef(viewKey);
   useLayoutEffect(() => {
     explicitTargetPendingRef.current = explicitTargetPending;
     runPendingActivationRef.current = runPendingActivation;
+    viewKeyRef.current = viewKey;
   });
 
   useEffect(() => {
@@ -451,15 +464,21 @@ export function useVirtuosoScrollState(
       // Counted here rather than on activation so StrictMode's replayed
       // mount effect still reads as the first activation.
       deactivatedSinceMountRef.current = true;
+      hiddenViewKeyRef.current = viewKeyRef.current;
       pendingActivationRef.current = null;
       cancelActivationFrame();
       return;
     }
     const isFirstActivation = !deactivatedSinceMountRef.current;
-    const viewReturnOnly = !isFirstActivation && !hostLeftSinceActiveRef.current;
+    // Other content in the same list (another pipeline stage): nothing the
+    // reader left behind belongs to it.
+    const viewChanged = !isFirstActivation && viewKeyRef.current !== hiddenViewKeyRef.current;
+    const viewReturnOnly = !isFirstActivation && !hostLeftSinceActiveRef.current && !viewChanged;
     hostLeftSinceActiveRef.current = false;
     let kind: "latest" | "restore" | null;
-    if (activation === "latest" && !viewReturnOnly) {
+    if (viewChanged) {
+      kind = "latest";
+    } else if (activation === "latest" && !viewReturnOnly) {
       kind = "latest";
     } else if (controller.wantsFollow) {
       // First mount: the snapshot and growth pins already land a follower at

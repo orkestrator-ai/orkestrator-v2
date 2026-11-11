@@ -217,14 +217,24 @@ the hidden element kept, under either policy. That offset is used rather than
 the semantic anchor because a reader looking at the review report in the
 footer has no row on screen, so their last captured anchor is an older place.
 The `latest` jump applies once the host itself has been left, even if the view
-was hidden at the time. The build pipeline transcript passes `visible`; the
+was hidden at the time. A view whose one mounted list is reused for other
+content also passes `viewKey` (the pipeline passes the stage's session key):
+when the key it comes back with differs from the one it was hidden with, the
+return is not a view return, and the list opens at the newest message under
+either policy, because no place in the old content belongs to the new one.
+So Ticket and back to the same stage keeps the place, while Ticket and then a
+different stage shows that stage's newest message. The build pipeline transcript passes `visible` and `viewKey`; the
 Graph Run transcript unmounts in its Details view instead. Before 2026-11-11
 the pipeline folded `visible` into `isActive`, so every return to a stage went
 to the newest message although its comments said the place was kept (to-do
 5620, retired 2026-11-11). `useVirtuosoScrollState.return.test.ts` covers
-both kinds of return, and `InspectorTranscriptHide.spec.ts` checks a reader's
-first visible frame and settled offset after Ticket and back, in Chromium and
-WebKit, with and without the review report.
+both kinds of return under both policies, and a changed `viewKey`, with
+animation frames held and drained rather than a wall-clock wait.
+`InspectorTranscriptHide.spec.ts` checks a reader's first visible frame and
+settled offset after Ticket and back, in Chromium and WebKit, with and without
+the review report. Its Ticket-then-another-stage case (`longTranscript=stages`)
+checks that the other stage settles at its newest message; it was added on
+2026-11-11 and run in Chromium.
 
 The two inspector transcripts were measured across a pane hide on 2026-11-05,
 in Playwright WebKit (build 2370) and Chromium, at phone and desktop widths

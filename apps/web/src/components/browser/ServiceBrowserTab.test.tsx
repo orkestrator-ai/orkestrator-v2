@@ -933,7 +933,9 @@ describe("service browser tabs", () => {
           .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
     }
-    await Bun.sleep(5);
+    // Each refresh settled inside act(), so its renders and effects have run;
+    // one more flush settles anything they chained, with no wall-clock wait.
+    await act(async () => {});
     expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
     expect(browserPreview.attach).not.toHaveBeenCalledWith(
       expect.objectContaining({ visible: false }),

@@ -205,3 +205,36 @@ for (const view of VIEWS.filter((candidate) => candidate.url.startsWith("/pipeli
     ).toBeVisible();
   });
 }
+
+// One transcript list serves every stage, so a return to a *different* stage is
+// not a return to the reader's place: it opens that stage at its newest message.
+test("Build Pipeline opens another stage at its newest message after the Ticket", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 700 });
+  await page.goto("/pipeline-flow?scenario=fanout&longTranscript=stages&paneControls");
+  const transcript = page.locator("[data-transcript-scroller]");
+  const graph = page.getByRole("tablist", { name: "Build pipeline" });
+  const bottomGap = () =>
+    transcript.evaluate(
+      (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+    );
+  await expect(transcript.locator('[data-chat-message-key="rev-1-40"]')).toBeVisible();
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+  await transcript.scrollIntoViewIfNeeded();
+  await transcript.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(bottomGap).toBeGreaterThan(100);
+  await settledOffset(transcript);
+
+  await graph.getByRole("tab", { name: /^Ticket,/ }).click();
+  await expect(page.getByTestId("pipeline-ticket")).toBeVisible();
+  await expect(transcript).toBeHidden();
+  await graph.getByRole("tab", { name: /^Build,/ }).click();
+  await expect(transcript.locator('[data-chat-message-key="build-40"]')).toBeVisible();
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  // Held there, rather than settling back to the previous stage's offset.
+  await settledOffset(transcript, 10);
+  expect(await bottomGap()).toBeLessThanOrEqual(1);
+});

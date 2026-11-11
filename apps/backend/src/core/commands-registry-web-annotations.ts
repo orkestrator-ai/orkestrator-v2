@@ -10,7 +10,7 @@
  *
  * Before the arguments are decoded (`beforeDecode`), every call passes the
  * backend rollout switch (`enabled` / `read-only` / `disabled`, see
- * `web-annotation-rollout.ts`) and the payload ceiling, and records a
+ * `web-annotations/rollout.ts`) and the payload ceiling, and records a
  * content-free outcome metric (command name + typed error code), exactly in
  * the order the handlers checked them before the conversion.
  */

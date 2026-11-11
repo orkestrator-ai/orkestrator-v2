@@ -286,7 +286,7 @@ region and page captures have no single element to read.
 
 ### Task 4: `verified` is set before the write, from a real workspace check
 
-`verifySourceHints` (`web-annotation-service-threads.ts`) runs after
+`verifySourceHints` (`web-annotations/service-threads.ts`) runs after
 validation and before the write queue, on `create`, `capture_replace` and
 `result_capture`, through a new shared `WebAnnotationContext.checkWorkspacePaths`
 (moved from the result-report path, which now uses it too). It sets
@@ -444,7 +444,7 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
   (`parseSourceHints`); the renderer sends them only when the backend
   advertises `operations.sourceHints`; the backend sets `verified: true` only
   for paths `checkWebAnnotationWorkspacePaths` finds inside the workspace
-  (`verifySourceHints` in `web-annotation-service-threads.ts`). Since todo
+  (`verifySourceHints` in `web-annotations/service-threads.ts`). Since todo
   0725, a client-declared `verified: true` is refused. See
   [web-page-annotations.md](../../architecture/web-page-annotations.md#development-source-hints).
 - Element targets inside open shadow roots anchor to the element itself with
@@ -460,7 +460,7 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
   hide capture (`canCapture` in `AnnotationPanel.tsx`). The architecture doc's
   client capability matrix records this.
 - A thread summary for a different session is a deterministic excerpt
-  (`web-annotation-thread-summary.ts`, `THREAD_SUMMARY_LIMITS`: 8 entries, up
+  (`web-annotations/thread-summary.ts`, `THREAD_SUMMARY_LIMITS`: 8 entries, up
   to 2,400 characters). It goes inside the untrusted evidence envelope and
   never replaces the latest human instruction.
 - Responsive capture sets already exist

@@ -1308,7 +1308,7 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
 - Keep unverified capabilities disabled where the missing evidence affects
   safety or correctness.
 - The default stays `enabled` (decided 2026-10-15). Dispatch publishes into the
-  same per-tab prompt queue as chat sends (`web-annotation-dispatch.ts`).
+  same per-tab prompt queue as chat sends (`web-annotations/dispatch.ts`).
   Annotation-specific failures show on the request card (`unknown`, Answer in
   chat, a sign-in reason, an empty change) rather than losing data. Settings ›
   Web annotations or `ORKESTRATOR_WEB_ANNOTATIONS_MODE` rolls it back. Holding
@@ -1318,7 +1318,7 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   Claude, Codex, Cursor and OpenCode pass; Grok and Pi had no login and held
   safely in `queued` with the reason; no trigger appeared.
 - Rollback must stop new operations while keeping reads, spool recovery and
-  reconciliation of requests already sent. `web-annotation-rollout.ts` already
+  reconciliation of requests already sent. `web-annotations/rollout.ts` already
   behaves this way; any rollout test must keep it.
 - Initial-release targets from the plan: no duplicate execution under fault
   injection, deterministic recovery at every acknowledged boundary, and

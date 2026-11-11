@@ -7,8 +7,11 @@ import { backendForScope } from "@/lib/backend/scope-backend";
 import { openServiceExternally } from "@/lib/preview-external";
 import { linkUrlSource } from "@/lib/preview-service-entry";
 import { isLoopbackUrl, requestTerminalBrowserTab } from "@/lib/terminal-links";
+import { hasNativeServiceExternalOpen } from "@/lib/native/browser-preview";
+import { shellOpenExternal } from "@/lib/native/shell";
+import { externalLoopbackResolver } from "@/lib/node-scope/external-loopback";
 import { environmentStore } from "@/stores/environmentStore";
-import type { LeafNodeClient } from "@/lib/node-scope/node-clients";
+import type { Environment } from "@/types";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { ensurePreviewServiceSync, previewServiceStore } from "@/stores/previewServiceStore";
@@ -30,28 +33,49 @@ function failureMessage(error: unknown): string {
 }
 
 /**
- * Open a link exactly as written. A loopback link from an environment whose
- * backend runs on this computer already names a port this browser can reach;
- * rewriting it through the command node's gateway would send it to another
- * machine's port, behind a sign-in the external browser does not have.
+ * Open a link exactly as written, in this computer's browser. A loopback link
+ * from a worktree whose backend runs on this computer already names a port
+ * this browser can reach; rewriting it through the command node's gateway
+ * would send it to another machine's port, behind a sign-in the external
+ * browser does not have.
  */
 function openAsWritten(url: string): Promise<void> {
-  const openExternal = window.orkestrator?.shell?.openExternal;
+  const openExternal = shellOpenExternal();
   return openExternal ? openExternal(url) : backend.openInBrowser(url);
 }
 
 /**
  * The fallback: the loopback link through the gateway proxy of the node that
- * runs the environment. A leaf's port is reached through the leaf's own proxy,
- * never the command node's, which would answer with its own port.
+ * runs the environment. The command node's link goes through the plain opener
+ * (which rewrites it onto the window's gateway). A leaf's port is reached only
+ * through the leaf's own proxy, on its current route; when the leaf has none,
+ * the link is not opened at all rather than sent to the command node, which
+ * would answer with its own port.
  */
-function openThroughGatewayProxy(url: string, scope: NodeScope): Promise<void> {
-  const openExternal = window.orkestrator?.shell?.openExternal;
-  const client = scope.client as Partial<LeafNodeClient>;
-  if (scope.role === "leaf" && openExternal && typeof client.resolveLoopbackUrl === "function") {
-    return openExternal(client.resolveLoopbackUrl(url));
+async function openThroughGatewayProxy(url: string, scope: NodeScope): Promise<void> {
+  if (scope.role !== "leaf" || !isLoopbackUrl(url)) return backend.openInBrowser(url);
+  const resolve = externalLoopbackResolver(scope.client);
+  let proxied: string;
+  try {
+    if (!resolve) throw new Error("This machine cannot address its ports from here.");
+    proxied = await resolve(url);
+  } catch (error) {
+    toast.error("Could not open the link", { description: failureMessage(error) });
+    return;
   }
-  return backend.openInBrowser(url);
+  const openExternal = shellOpenExternal();
+  return openExternal ? openExternal(proxied) : backend.openInBrowser(proxied);
+}
+
+/**
+ * Whether a loopback link opens as written: the environment's node is this
+ * computer and the link names one of this computer's own ports. A container's
+ * `localhost` is the container's, published (if at all) on another host port,
+ * so a container link still goes through service resolution.
+ */
+function opensAsWritten(scope: NodeScope, environment: Environment | undefined): boolean {
+  if (environment?.environmentType === "containerized") return false;
+  return isRemoteGatewayConnection(scope) && backendOnThisDevice(scope);
 }
 
 /**
@@ -63,9 +87,10 @@ function openThroughGatewayProxy(url: string, scope: NodeScope): Promise<void> {
  * backend publishes one. Either way the page keeps its own root, so its
  * root-relative assets load, and it never shares a host with the gateway. A
  * port that is not a registered service opens in a preview tab, where it can
- * be registered. A link from an environment on this computer opens as
- * written. Everything else, and every failure, uses the gateway proxy of the
- * environment's node.
+ * be registered. A link from a worktree (or an environment the window does
+ * not know) whose node is this computer opens as written; a container's link
+ * still resolves to its service. Everything else, and every failure, uses the
+ * gateway proxy of the environment's node.
  */
 export async function openLinkExternally({
   environmentId,
@@ -74,15 +99,15 @@ export async function openLinkExternally({
   origin = "terminal",
   scope = appCommandScope(),
 }: ExternalLinkRequest): Promise<void> {
-  if (isLoopbackUrl(url) && isRemoteGatewayConnection() && backendOnThisDevice(scope)) {
-    return openAsWritten(url);
-  }
   const environment = environmentId
     ? scope.store(environmentStore).getState().getEnvironmentById(environmentId)
     : undefined;
+  if (isLoopbackUrl(url) && opensAsWritten(scope, environment)) {
+    return openAsWritten(url);
+  }
   if (
     !environment ||
-    !window.orkestrator?.browserPreview?.openServiceExternally ||
+    !hasNativeServiceExternalOpen() ||
     !isLoopbackUrl(url) ||
     !isRemoteGatewayConnection(scope)
   ) {

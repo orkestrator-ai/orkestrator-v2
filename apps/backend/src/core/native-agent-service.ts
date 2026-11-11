@@ -4502,6 +4502,40 @@ export class NativeAgentService {
   }
 
   /**
+   * Which of these resume-list ids the agent lists as archived (design links
+   * use it to tell an archived conversation from one that can be resumed).
+   *
+   * Observe only: never starts a bridge, and asks only a platform that can
+   * archive. `undefined` when no bridge answers or the list fails, so a
+   * caller never reads "not known" as "not archived" or the reverse.
+   */
+  async archivedResumableSessionIdsIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    resumableSessionIds: readonly string[],
+  ): Promise<ReadonlySet<string> | undefined> {
+    if (resumableSessionIds.length === 0 || !nativeCapabilities(agent).actions?.archive) {
+      return undefined;
+    }
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "design-link-archived",
+    }).catch(() => undefined);
+    if (!provider?.listResumableSessions) return undefined;
+    const entries = await provider
+      .listResumableSessions({ includeArchived: true })
+      .catch(() => undefined);
+    if (!entries) return undefined;
+    const wanted = new Set(resumableSessionIds);
+    return new Set(
+      entries
+        .filter((entry) => entry.archived === true && wanted.has(entry.sessionId))
+        .map((entry) => entry.sessionId),
+    );
+  }
+
+  /**
    * Tab close through the provider, so the provider's own close runs: for
    * OpenCode that settles workflow-turn ownership, restores temporary reviewer
    * permissions and rejects pending requests before forgetting the session.

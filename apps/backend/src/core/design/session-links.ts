@@ -30,6 +30,16 @@ export type DesignNativeSessionLookup = (
   link: DesignSessionLink,
 ) => Promise<{ providerSessionId: string } | null>;
 
+/**
+ * Which of these closed links' recorded conversations the agent lists as
+ * archived, by link id. Implementations ask only a bridge that is already
+ * running and answer an empty set when none is or the read fails: "not
+ * known" must never block the dialog or read as archived.
+ */
+export type DesignArchivedSessionLookup = (
+  links: readonly DesignSessionLink[],
+) => Promise<ReadonlySet<string>>;
+
 export async function linkSession(
   design: DesignService,
   environmentId: string,
@@ -91,25 +101,37 @@ export async function unlinkSession(
 }
 
 /**
- * Report which links' tabs the backend maps to a native session. Read only:
- * a link's session identity is recorded when its tab closes
- * ({@link recordTabSession}), the moment the tab id stops leading to the
- * conversation.
+ * Report which links' tabs the backend maps to a native session, and which
+ * closed links' conversations the agent has archived. Read only: a link's
+ * session identity is recorded when its tab closes ({@link recordTabSession}),
+ * the moment the tab id stops leading to the conversation.
  */
 export async function sessionLinkStates(
   design: DesignService,
   environmentId: string,
   canvasId: string,
   lookup: DesignNativeSessionLookup,
+  archived?: DesignArchivedSessionLookup,
 ): Promise<DesignSessionLinkStates> {
   await design.initialize();
   const { record } = await design.lane(canvasId, () => design.loadFor(canvasId, environmentId));
   const found = await Promise.all(record.sessions.map((link) => lookup(link)));
+  // Only a closed link with a recorded session could be resumed, so only
+  // those are worth asking about.
+  const closed = record.sessions.filter((link, index) => !found[index] && link.sessionId?.trim());
+  const archivedIds =
+    archived && closed.length > 0
+      ? await archived(closed).catch((error: unknown) => {
+          log.warn("session-link.archived-read-failed", { error: formatLogError(error) });
+          return new Set<string>();
+        })
+      : new Set<string>();
   return {
     sessions: record.sessions,
     states: record.sessions.map((link, index) => ({
       linkId: link.id,
       session: found[index] ? "retained" : "missing",
+      ...(!found[index] && archivedIds.has(link.id) ? { archived: true } : {}),
     })),
   };
 }
@@ -119,14 +141,21 @@ export interface DesignSessionResumer {
   /**
    * Resume `link.sessionId` as the native session of `tabId` and return the
    * live provider session now mapped to that tab. Throws when the provider no
-   * longer has the conversation; it never starts a replacement.
+   * longer has the conversation; it never starts a replacement. With
+   * `restoreArchived` the conversation is unarchived first, and a refused
+   * restore does not resume.
    */
-  resume(link: DesignSessionLink, tabId: string): Promise<string>;
+  resume(
+    link: DesignSessionLink,
+    tabId: string,
+    options?: { restoreArchived?: boolean },
+  ): Promise<string>;
   /** The live provider session already mapped to `tabId`, if any. */
   mapped(link: DesignSessionLink, tabId: string): Promise<string | null>;
 }
 
 function resumeFailure(error: unknown): DesignError {
+  if (error instanceof DesignError) return error;
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 200);
   return /not found|missing/i.test(message)
     ? new DesignError("not-found", `The agent no longer has this conversation: ${message}`, {
@@ -146,7 +175,7 @@ export async function resumeSessionLink(
   design: DesignService,
   environmentId: string,
   canvasId: string,
-  input: { linkId: string; expectedTabId: string; tabId: string },
+  input: { linkId: string; expectedTabId: string; tabId: string; restoreArchived?: boolean },
   resumer: DesignSessionResumer,
 ): Promise<DesignSessionResumeResult> {
   await design.initialize();
@@ -175,7 +204,11 @@ export async function resumeSessionLink(
       });
     let providerSessionId: string;
     try {
-      providerSessionId = await resumer.resume(current, input.tabId);
+      providerSessionId = await resumer.resume(
+        current,
+        input.tabId,
+        input.restoreArchived ? { restoreArchived: true } : undefined,
+      );
     } catch (error) {
       throw resumeFailure(error);
     }

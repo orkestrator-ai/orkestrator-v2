@@ -1,6 +1,6 @@
 # Coordinator wake and git-mirror tests time out at 5 s under host load
 
-- **ID:** 9937
+- **ID:** 9978
 - **Status:** open
 - **Date observed:** 2026-11-11
 - **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`.

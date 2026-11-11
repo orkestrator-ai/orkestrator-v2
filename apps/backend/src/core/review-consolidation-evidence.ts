@@ -30,6 +30,7 @@
  * content still does not fit, the caller gets a {@link ConsolidationBudgetError}
  * before anything is dispatched.
  */
+import { createLogger } from "@orkestrator/protocol/logger";
 import { serializeFramedEvidence } from "@orkestrator/protocol/review-evidence-frames";
 import type {
   ReviewCommit,
@@ -38,6 +39,8 @@ import type {
   ReviewTestResults,
   StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+
+const log = createLogger("review");
 
 /** Serialized envelope bytes a single consolidation turn may receive. */
 export const CONSOLIDATION_MAX_EVIDENCE_BYTES = 640 * 1024;
@@ -329,6 +332,18 @@ export function buildConsolidationEvidence(
     stats.reductions += 1;
     stats.compactBytes = encodedBytes(evidence);
   }
-  if (stats.compactBytes > maxBytes) throw new ConsolidationBudgetError(stats);
+  if (stats.compactBytes > maxBytes) {
+    // Counts only, in the essential log whatever the log settings say, so how
+    // often a real panel overflows (to-do 0027 task 5) can be read back. The
+    // error alone reaches the user as a failed consolidation, which reads like
+    // a provider fault.
+    log.warn("consolidation.budget-exceeded", {
+      reviewers: stats.reviewers,
+      sourceFindings: stats.sourceFindings,
+      compactBytes: stats.compactBytes,
+      maxBytes,
+    });
+    throw new ConsolidationBudgetError(stats);
+  }
   return { evidence, stats };
 }

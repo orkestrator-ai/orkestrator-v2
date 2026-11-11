@@ -90,15 +90,30 @@ function boundedId(value: string | undefined): string | undefined {
   return value === undefined ? undefined : value.slice(0, MAX_ID_LENGTH);
 }
 
+/**
+ * Whether this backend may enable an agent-test fixture capability: a source
+ * build (production bundles define the capability off), the `agent-test`
+ * runtime flavor, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`, and a data directory
+ * that is not the default one. Shared by the dispatch hold and the fan-out
+ * stats recorder (`agent-test-fanout-stats.ts`).
+ */
+export function isolatedAgentTestBackend(options: {
+  dataDir: string;
+  runtimeFlavor: AgentTestDispatchHoldOptions["runtimeFlavor"];
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  if (!dispatchHoldBuildEnabled) return false;
+  const env = options.env ?? process.env;
+  if (options.runtimeFlavor !== "agent-test") return false;
+  if (env.ORKESTRATOR_AGENT_TEST_ISOLATED !== "1") return false;
+  return !isDefaultDataDir(options.dataDir, process.platform, env);
+}
+
 /** The hold for this backend, or `undefined` outside an isolated agent-test profile. */
 export function agentTestDispatchHold(
   options: AgentTestDispatchHoldOptions,
 ): AgentTestDispatchHold | undefined {
-  if (!dispatchHoldBuildEnabled) return undefined;
-  const env = options.env ?? process.env;
-  if (options.runtimeFlavor !== "agent-test") return undefined;
-  if (env.ORKESTRATOR_AGENT_TEST_ISOLATED !== "1") return undefined;
-  if (isDefaultDataDir(options.dataDir, process.platform, env)) return undefined;
+  if (!isolatedAgentTestBackend(options)) return undefined;
   const directory = path.join(options.dataDir, DISPATCH_HOLD_FIXTURE_DIR);
   const pollMs = Math.max(10, options.pollMs ?? DEFAULT_POLL_MS);
   const maxHoldMs = Math.max(pollMs, options.maxHoldMs ?? DEFAULT_MAX_HOLD_MS);

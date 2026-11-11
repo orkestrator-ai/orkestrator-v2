@@ -82,6 +82,8 @@ const MAX_PROBLEM_ERRORS = 5;
 const defaultStartWatch: StartGraphProjectWatch = (directory, onEvent, onError) => {
   const watcher = watchDirectory(directory, () => onEvent(), { recursive: false });
   watcher.on("error", onError);
+  // Another watch rebuilt the shared macOS stream and may have dropped one.
+  watcher.onEventsLost?.(onEvent);
   return watcher;
 };
 

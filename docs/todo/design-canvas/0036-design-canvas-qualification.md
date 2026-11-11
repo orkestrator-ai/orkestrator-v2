@@ -61,7 +61,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** The export protocol, including reconciliation by digest after a killed client, is proved only on Docker Desktop for macOS. Linux Engine users run the same helpers on a different daemon, filesystem and stdin-close behaviour. The "killed after every byte" case depends on the daemon closing the helper's stdin.
 
-**Context.** Batched with 0019. The file says "this machine is macOS with Docker Desktop only". That was true of the earlier host; it is not true of every host this work runs on.
+**Context.** Was batched with 0019 (retired 2026-11-11). The file says "this machine is macOS with Docker Desktop only". That was true of the earlier host; it is not true of every host this work runs on.
 
 **Investigation.**
 - `apps/backend/src/core/design/export-container.test.ts` is unchanged in shape: 11 cases, gated on `ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE` (`:40`, `:114`).
@@ -1870,7 +1870,7 @@ Made on 2026-11-06 while working tasks 12, 6 and 5.
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations" and
   "Client"): the operation recovery edges and accessibility fixes, moved there
   when todos 0037 and 0054 were retired on 2026-10-29.
-- [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for container runs, [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)
   for the support window (old-binary runs for design are recorded here), and
   [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md) for flake triage.

@@ -862,8 +862,8 @@ Findings:
   unparseable logins dropped. When nothing usable remains, the launcher warns
   ("Grok is signed out in this profile: …") and seeds nothing. Containers
   now get the same access-only copy (2026-10-21; see "Single-use refresh
-  tokens" in
-  [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  tokens" in to-do 0018, retired 2026-11-11; now described in
+  [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 - **`results.json` kept the gateway cookie (fixed).** Playwright's JSON
   reporter writes after global teardown, so the sanitizer never saw
   `results.json`. A request that failed when the backend went away left
@@ -1411,7 +1411,7 @@ Made on 2026-10-25 without the user, to be validated.
   [0124-web-annotation-commit-cost.md](0124-web-annotation-commit-cost.md).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.
-- [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker fixtures.
 - [web-page-annotations.md](../../architecture/web-page-annotations.md),
   including §"Request states" and §"Anchors and pins".

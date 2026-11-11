@@ -1655,7 +1655,7 @@ describe("MCP configuration evidence", () => {
           state: "evidence",
           evidence,
         });
-        expect(read).toHaveBeenCalledWith("provider-session-1");
+        expect(read).toHaveBeenCalledWith("provider-session-1", {});
         // A bridge older than the report says so, rather than "nothing loaded".
         read.mockImplementationOnce(async () => ({ state: "unsupported" }) as never);
         expect(await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL)).toEqual({
@@ -1664,6 +1664,39 @@ describe("MCP configuration evidence", () => {
         // Observation only: nothing was created, sent or re-attached.
         expect(stub.createSession).not.toHaveBeenCalled();
         expect(stub.send).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("passes the caller's signal to the bridge read, and an aborted one stops before it", async () => {
+    const stub = createProviderStub("claude");
+    const read = mock(async (_sessionId: string, _options?: { signal?: AbortSignal }) => ({
+      state: "none" as const,
+    }));
+    (stub.provider as { mcpConfigEvidence?: unknown }).mcpConfigEvidence = read;
+    await withService(
+      { prefix: "orkestrator-native-mcp-evidence-signal-", provider: async () => stub.provider },
+      async ({ storage, service }) => {
+        await persist(storage);
+        const live = new AbortController();
+        expect(
+          await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL, {
+            signal: live.signal,
+          }),
+        ).toEqual({ state: "none" });
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(read.mock.calls[0]![1]?.signal).toBe(live.signal);
+
+        // The deadline fired while the provider was being resolved: the read
+        // is never issued and the caller sees the abort, not an answer.
+        const aborted = new AbortController();
+        aborted.abort(new Error("deadline passed"));
+        await expect(
+          service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL, {
+            signal: aborted.signal,
+          }),
+        ).rejects.toThrow("deadline passed");
+        expect(read).toHaveBeenCalledTimes(1);
       },
     );
   });
@@ -1718,8 +1751,37 @@ describe("OpenCode MCP listing observation", () => {
       },
       async ({ service }) => {
         expect(await service.openCodeMcpServerNamesIfRunning("env-1")).toEqual(["Documentation"]);
-        expect(inventory).toHaveBeenCalledWith("");
+        expect(inventory).toHaveBeenCalledWith("", {});
         expect(stub.createSession).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("passes the caller's signal to the listing, and an aborted one stops before it", async () => {
+    const inventory = mock(async (_sessionId: string, _options?: { signal?: AbortSignal }) => [
+      { id: "docs", name: "Documentation", status: "connected" as const, actions: [] },
+    ]);
+    const stub = createProviderStub("opencode");
+    await withService(
+      {
+        prefix: "opencode-mcp-observe-signal-",
+        environment: { localOpencodePort: 12345, localOpencodePassword: "test" },
+        provider: async () => ({ ...stub.provider, mcpServers: inventory }),
+      },
+      async ({ service }) => {
+        const live = new AbortController();
+        expect(
+          await service.openCodeMcpServerNamesIfRunning("env-1", { signal: live.signal }),
+        ).toEqual(["Documentation"]);
+        expect(inventory).toHaveBeenCalledTimes(1);
+        expect(inventory.mock.calls[0]![1]?.signal).toBe(live.signal);
+
+        const aborted = new AbortController();
+        aborted.abort(new Error("deadline passed"));
+        await expect(
+          service.openCodeMcpServerNamesIfRunning("env-1", { signal: aborted.signal }),
+        ).rejects.toThrow("deadline passed");
+        expect(inventory).toHaveBeenCalledTimes(1);
       },
     );
   });

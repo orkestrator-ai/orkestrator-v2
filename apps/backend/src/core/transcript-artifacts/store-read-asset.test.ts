@@ -48,6 +48,28 @@ describe("readAsset", () => {
     expect(outcome).toBe(reason);
   });
 
+  test("an abort that lands after the read has started rejects with its reason, not a corrupt store", async () => {
+    // A large asset, so the open, stat and read are all still in flight when
+    // the abort lands; whichever of them observes it, the caller gets the
+    // signal's reason.
+    const large = Buffer.alloc(32 * 1024 * 1024, 7);
+    const largeSha = sha256Hex(large);
+    const target = store.assetPath(ENVIRONMENT, largeSha);
+    writeFileSync(target, large);
+    const controller = new AbortController();
+    const reason = new Error("load deadline");
+    const pending = store
+      .readAsset(ENVIRONMENT, largeSha, large.byteLength, { signal: controller.signal })
+      .catch((error: unknown) => error);
+    controller.abort(reason);
+    expect(await pending).toBe(reason);
+    // The handle was released: the same asset still reads in full afterwards.
+    const again = await store.readAsset(ENVIRONMENT, largeSha, large.byteLength, {
+      signal: new AbortController().signal,
+    });
+    expect(again.equals(large)).toBe(true);
+  });
+
   test("a missing asset is still storage_corrupt", async () => {
     const outcome = await store
       .readAsset(ENVIRONMENT, "0".repeat(64), BYTES.byteLength, {

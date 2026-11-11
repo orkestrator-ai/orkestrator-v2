@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   PromptRejectedError,
   ProviderUnavailableError,
@@ -47,6 +47,7 @@ function fakeLegacy() {
     resolveDefaultModel: mock(async (modelId: string | undefined) => ({ modelId })),
     observationStreamLive: () => true,
     performSessionAction: mock(async () => ({ outcome: "applied" as const })),
+    mcpServers: mock(async (_id: string, _options?: { signal?: AbortSignal }) => []),
     releaseSession: mock((_id: string) => {}),
     dispose: mock(async () => {}),
   };
@@ -191,6 +192,27 @@ describe("OpenCodeRoutingProvider", () => {
     expect(await router.activity("v2-a")).toBe("idle");
     expect(connections.every((start) => start === false)).toBe(true);
     expect(legacy.activityBatch).toHaveBeenCalledWith(["old-a"]);
+  });
+
+  test("an MCP inventory read passes the caller's signal to whichever line owns the session", async () => {
+    const { legacy, router, created } = setup();
+    const legacyId = await router.createSession("build", "a");
+    const v2Id = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+    const v2 = created.at(-1)!;
+    const v2Read = spyOn(v2, "mcpServers").mockImplementation(async () => []);
+    const signal = new AbortController().signal;
+
+    await router.mcpServers(v2Id, { signal });
+    expect(v2Read).toHaveBeenCalledTimes(1);
+    expect(v2Read.mock.calls[0]![0]).toBe(v2Id);
+    expect(v2Read.mock.calls[0]![1]?.signal).toBe(signal);
+    expect(legacy.mcpServers).not.toHaveBeenCalled();
+
+    await router.mcpServers(legacyId, { signal });
+    expect(legacy.mcpServers).toHaveBeenCalledTimes(1);
+    expect(legacy.mcpServers.mock.calls[0]![0]).toBe(legacyId);
+    expect(legacy.mcpServers.mock.calls[0]![1]?.signal).toBe(signal);
+    expect(v2Read).toHaveBeenCalledTimes(1);
   });
 
   test("steering is offered to 2.x sessions only", async () => {

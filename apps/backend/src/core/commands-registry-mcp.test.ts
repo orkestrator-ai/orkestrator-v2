@@ -259,11 +259,13 @@ describe("OpenCode reload probe", () => {
     await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({
       outcome: "reloaded",
     });
-    await expect(probe.openCodeMcpServerNames!("env-1")).resolves.toEqual(["fixture"]);
-    expect(calls).toEqual([
-      ["env-1", "opencode"],
-      ["names", "env-1"],
-    ]);
+    const signal = new AbortController().signal;
+    await expect(probe.openCodeMcpServerNames!("env-1", signal)).resolves.toEqual(["fixture"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(["env-1", "opencode"]);
+    // The caller's deadline signal reaches the service, so it can cancel the read.
+    expect(calls[1]).toEqual(["names", "env-1", { signal }]);
+    expect((calls[1]![2] as { signal: AbortSignal }).signal).toBe(signal);
     // Disposal dropped the runtime-only entry; it is posted again at once.
     expect(forgotten).toEqual(["local:env-1"]);
     expect(statusReads).toEqual(["env-1"]);
@@ -299,7 +301,8 @@ describe("MCP configuration evidence probe", () => {
         },
       },
     } as unknown as CommandContext);
-    expect(await probe.mcpConfigEvidence("env-1", "claude", "env-env-1:tab-1")).toEqual({
+    const signal = new AbortController().signal;
+    expect(await probe.mcpConfigEvidence("env-1", "claude", "env-env-1:tab-1", signal)).toEqual({
       state: "evidence",
       evidence: {
         sources: { user: "absent" },
@@ -308,7 +311,9 @@ describe("MCP configuration evidence probe", () => {
         staleServers: ["removed"],
       },
     });
-    expect(calls).toEqual([["env-1", "claude", "env-env-1:tab-1"]]);
+    expect(calls).toEqual([["env-1", "claude", "env-env-1:tab-1", { signal }]]);
+    // The caller's deadline signal reaches the service, so it can cancel the read.
+    expect((calls[0]![3] as { signal: AbortSignal }).signal).toBe(signal);
   });
 
   test("with no native agent service nothing is running", async () => {

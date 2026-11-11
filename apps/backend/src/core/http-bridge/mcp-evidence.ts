@@ -19,7 +19,7 @@ export async function readBridgeMcpConfigEvidence(options: {
   agent: string;
   sessionId: string;
   /** Aborts the read; it then rejects, which the scheduler counts as no evidence. */
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
 }): Promise<ProviderMcpConfigReport> {
   const response = await bridgeFetch(
     options.connection,

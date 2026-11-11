@@ -24,7 +24,6 @@ import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
-  type ProviderMcpConfigReport,
   type ProviderReadOptions,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
@@ -615,18 +614,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge/mcp-evidence.ts`. */
-  mcpConfigEvidence(
-    sessionId: string,
-    options: ProviderReadOptions = {},
-  ): Promise<ProviderMcpConfigReport> {
+  mcpConfigEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
     const { connection, fetchImpl, agent } = this;
-    return readBridgeMcpConfigEvidence({
-      connection,
-      fetchImpl,
-      agent,
-      sessionId,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId, signal });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {

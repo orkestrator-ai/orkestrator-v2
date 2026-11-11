@@ -25,7 +25,7 @@ credentials, profiles, confirmation and authority for every client.
    machine as Orkestrator, or reach it through a local relay (below).
 
 The voice profile lists sixteen tools, about 9.6 KB of `tools/list` (the budget
-is 10,240 bytes, enforced by `control-mcp-voice.test.ts`). Its default capabilities
+is 10,240 bytes, enforced by `control-mcp/voice.test.ts`). Its default capabilities
 leave out project and settings edits, destructive environment actions and
 `exec`. Create a `custom` credential, or grant `exec` explicitly, for more.
 

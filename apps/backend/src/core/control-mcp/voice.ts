@@ -1,0 +1,980 @@
+import { allPublicPages } from "./pages.js";
+import type { McpServer } from "@modelcontextprotocol/server";
+import {
+  agentMailKind,
+  isPeerMailCarrierContent,
+  readAgentMailCarriers,
+  STRUCTURED_PROMPT_SUFFIX_PREFIX,
+  type MailActor,
+} from "@orkestrator/protocol/agent-mail";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
+import {
+  PUBLIC_ALL_NODES,
+  isPublicErrorCode,
+  publicSuccessEnvelope,
+  type PublicActionName,
+} from "@orkestrator/protocol/public-api";
+import {
+  decodePublicSessionId,
+  encodePublicSessionId,
+  type PublicAgentOptions,
+  type PublicAggregateAttentionPage,
+  type PublicNodeList,
+  type PublicNodeReadResult,
+  type PublicAttentionItem,
+  type PublicAttentionPage,
+  type PublicEnvironmentSummary,
+  type PublicProjectSummary,
+  type PublicSessionSummary,
+  type PublicTranscriptPage,
+} from "@orkestrator/protocol/public-api-resources";
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import { allowed, onNode, dispatchAs, runPublicAction, type ControlMcpCaller } from "./caller.js";
+import { sayForEnvelope } from "./gateway.js";
+import { ControlMcpNodeError, operatorAllNodes, operatorNode } from "./operator-tools.js";
+import { resolveTarget, sessionAliases, type TargetCandidate, type TargetKind } from "./resolve.js";
+import { integer, leanSchema, oneOf, text } from "./lean-schema.js";
+import { adapterError, envelopeToolResult, voiceList, type ControlMcpEnvelope } from "./results.js";
+
+/**
+ * Tier 0: the voice core. A dozen tools shaped for spoken requests. A core
+ * tool may compose several reads, but every mutation is exactly one public
+ * action under the caller's `requestId`, so request keys, fingerprints and
+ * receipts behave exactly as they do for the CLI. Nothing here turns one
+ * intent into another: a busy session is never steered by `prompt_session`.
+ */
+
+/**
+ * Each core tool, the public actions it uses, and when it is listed: when all
+ * of them are allowed, or when any of `listedWith` is (a composed read that
+ * degrades gracefully without the rest).
+ */
+export const VOICE_TOOL_ACTIONS: Readonly<
+  Record<string, { actions: readonly PublicActionName[]; listedWith?: readonly PublicActionName[] }>
+> = Object.freeze({
+  overview: {
+    actions: ["attention.list", "project.list", "environment.list", "session.list"],
+    listedWith: ["attention.list", "project.list", "environment.list"],
+  },
+  resolve_target: {
+    actions: ["project.list", "environment.list", "session.list"],
+    listedWith: ["project.list", "environment.list"],
+  },
+  read_session: { actions: ["session.transcript"] },
+  prompt_session: { actions: ["session.prompt"] },
+  steer_session: { actions: ["session.steer"] },
+  stop_session: { actions: ["session.stop"] },
+  answer_question: { actions: ["session.interaction.resolve"] },
+  start_work: {
+    actions: ["environment.launch", "session.start", "agent.options"],
+    listedWith: ["environment.launch", "session.start"],
+  },
+});
+
+export const VOICE_CORE_TOOL_NAMES = Object.keys(VOICE_TOOL_ACTIONS);
+
+export function voiceToolListed(caller: ControlMcpCaller, tool: string): boolean {
+  const entry = VOICE_TOOL_ACTIONS[tool];
+  if (!entry) return false;
+  return entry.listedWith
+    ? entry.listedWith.some((action) => allowed(caller, action))
+    : entry.actions.every((action) => allowed(caller, action));
+}
+
+const REQUEST_ID = text("New per request; reuse only to retry it.");
+// Self-describing beside the ids resolve_target returns; the voice list is byte-budgeted.
+const NODE_ID = text();
+const SESSION = {
+  sessionId: text("ses_ handle, or pass environmentId and tabId."),
+  environmentId: text(),
+  tabId: text(),
+  nodeId: NODE_ID,
+};
+type SessionArgs = {
+  sessionId?: string;
+  environmentId?: string;
+  tabId?: string;
+  nodeId?: string;
+};
+
+const OVERVIEW_INPUT = leanSchema<{ projectId?: string; nodeId?: string }>({
+  projectId: text(),
+  nodeId: text("all: every machine. Or one machine's nodeId."),
+});
+const RESOLVE_INPUT = leanSchema<{
+  query: string;
+  kind?: TargetKind;
+  projectId?: string;
+  environmentId?: string;
+  nodeId?: string;
+}>(
+  {
+    query: text("The spoken name."),
+    kind: oneOf(["project", "environment", "session"]),
+    projectId: text(),
+    environmentId: text("Narrows sessions; enables first, second."),
+    nodeId: text("all: search every machine. Or one machine's nodeId."),
+  },
+  ["query"],
+);
+const READ_INPUT = leanSchema<SessionArgs & { detail?: "brief" | "full" }>({
+  ...SESSION,
+  detail: oneOf(["brief", "full"]),
+});
+const PROMPT_INPUT = leanSchema<
+  SessionArgs & { prompt: string; mode?: "plan" | "build"; requestId: string }
+>({ ...SESSION, prompt: text(), mode: oneOf(["plan", "build"]), requestId: REQUEST_ID }, [
+  "prompt",
+  "requestId",
+]);
+const STEER_INPUT = leanSchema<
+  SessionArgs & { text: string; expectedOperationId?: string; requestId: string }
+>({ ...SESSION, text: text(), expectedOperationId: text(), requestId: REQUEST_ID }, [
+  "text",
+  "requestId",
+]);
+const STOP_INPUT = leanSchema<SessionArgs & { expectedOperationId?: string; requestId: string }>(
+  { ...SESSION, expectedOperationId: text("Stop only this run."), requestId: REQUEST_ID },
+  ["requestId"],
+);
+const ANSWER_ACTIONS = ["answer", "approve-for-session", "decline", "deny", "cancel"] as const;
+const ANSWER_INPUT = leanSchema<
+  SessionArgs & {
+    interactionId: string;
+    revision: number;
+    action: (typeof ANSWER_ACTIONS)[number];
+    answers?: Array<{ questionId: string; optionIds?: string[]; freeText?: string }>;
+    feedback?: string;
+    requestId: string;
+    confirmToken?: string;
+  }
+>(
+  {
+    ...SESSION,
+    interactionId: text(),
+    revision: integer(0),
+    action: oneOf(ANSWER_ACTIONS),
+    answers: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          questionId: text(),
+          optionIds: { type: "array", items: { type: "string" } },
+          freeText: text(),
+        },
+        required: ["questionId"],
+      },
+    },
+    feedback: text(),
+    requestId: REQUEST_ID,
+    confirmToken: text(),
+  },
+  ["interactionId", "revision", "action", "requestId"],
+);
+const START_INPUT = leanSchema<{
+  prompt: string;
+  projectId?: string;
+  environmentId?: string;
+  agent?: AgentPlatform;
+  name?: string;
+  requestId: string;
+  nodeId?: string;
+}>(
+  {
+    prompt: text(),
+    projectId: text("New environment in this project."),
+    environmentId: text("Or a new session in this ready environment."),
+    agent: oneOf(AGENT_PLATFORMS),
+    name: text("New environment's name."),
+    requestId: REQUEST_ID,
+    nodeId: NODE_ID,
+  },
+  ["prompt", "requestId"],
+);
+
+function sessionHandle(input: {
+  sessionId?: string;
+  environmentId?: string;
+  tabId?: string;
+}): string | null {
+  if (input.sessionId) return decodePublicSessionId(input.sessionId) ? input.sessionId : null;
+  if (input.environmentId && input.tabId) {
+    return encodePublicSessionId(input.environmentId, input.tabId);
+  }
+  return null;
+}
+
+// Only the hints that differ from MCP's defaults (not read-only, destructive,
+// not idempotent, open world), to keep the voice tool list small.
+const mutationAnnotations = { idempotentHint: true } as const;
+const readAnnotations = { readOnlyHint: true, openWorldHint: false } as const;
+
+function success(tool: string, result: unknown): ControlMcpEnvelope {
+  return publicSuccessEnvelope(tool, result) as ControlMcpEnvelope;
+}
+
+function short(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
+/**
+ * A mail sender as a person hears it. A carrier does not hold the sender's
+ * environment name, and a transcript's label falls back to its short id, which
+ * is not worth saying aloud.
+ */
+function spokenMailSender(from: MailActor): string {
+  switch (from.kind) {
+    case "tab":
+      return from.title?.trim() || "another agent";
+    case "coordinator":
+      return from.title?.trim() || "the project coordinator";
+    case "node":
+      return from.role === "agent"
+        ? `${(from.environmentName ?? from.title)?.trim() || "an agent"} on ${from.nodeName}`
+        : `${from.title?.trim() || "the project coordinator"} on ${from.nodeName}`;
+    case "user":
+      return "you";
+    case "external":
+      return "an external client";
+    case "system":
+      return from.source === "self-reminder"
+        ? "a reminder this session set"
+        : "an Orkestrator workflow";
+  }
+}
+
+/**
+ * What a person hears for a stored row that is delivered mail, or null when it
+ * is not. Reads the stored text, because mail is usually longer than the excerpt
+ * `read_session` returns; a batch names its newest message.
+ */
+export function spokenMailRow(text: string, textTruncated = false): string | null {
+  const content = stripSystemInstructions(text);
+  if (!isPeerMailCarrierContent(content, { requirePayloadFrame: true })) return null;
+  // A cut row can hide whole later carriers, so neither its newest sender nor
+  // its total batch size can be inferred from the visible prefix.
+  if (textTruncated)
+    return "Latest message contains delivered mail, but the transcript is cut off. The latest sender and batch size cannot be determined here.";
+  const { entries, rest } = readAgentMailCarriers(content);
+  const trailing =
+    rest && !rest.startsWith(STRUCTURED_PROMPT_SUFFIX_PREFIX)
+      ? ` User message: ${short(rest, 400)}`
+      : "";
+  const newest = entries.at(-1);
+  if (!newest) return `Latest message is delivered mail that could not be read here.${trailing}`;
+  const mail = agentMailKind(newest) === "external" ? "untrusted mail" : "mail";
+  const subject = short(newest.subject ?? "", 200);
+  const heading = `Latest message is ${mail} from ${short(spokenMailSender(newest.from), 120)}${subject ? `, subject: ${subject}` : ""}.`;
+  const others = entries.length - 1;
+  if (others === 0) return heading + trailing;
+  return `${heading} ${others} other ${others === 1 ? "message" : "messages"} came with it.${trailing}`;
+}
+
+export function attentionSentence(item: PublicAttentionItem): string {
+  if (item.kind === "interaction") {
+    return `${item.agent} in ${item.environmentName} is asking: ${short(item.title, 120)}`;
+  }
+  if (item.kind === "setup") {
+    return `${item.environmentName} setup ${item.phase === "ready" ? "finished" : "failed"}`;
+  }
+  return `${item.action} ${item.state}${item.errorCode ? ` (${item.errorCode})` : ""}`;
+}
+
+class VoiceReadError extends Error {
+  constructor(readonly envelope: ControlMcpEnvelope) {
+    super(envelope.ok ? "Read failed" : envelope.error.message);
+  }
+}
+
+function readFailure(error: unknown, profile: ControlMcpCaller["profile"]) {
+  if (!(error instanceof VoiceReadError)) throw error;
+  return envelopeToolResult(error.envelope, profile, sayForEnvelope(error.envelope));
+}
+
+async function readIfAllowed<T>(
+  caller: ControlMcpCaller,
+  action: PublicActionName,
+  input: Record<string, unknown>,
+): Promise<T | null> {
+  if (!allowed(caller, action)) return null;
+  const response = await dispatchAs<T>(caller, action, input);
+  if (!response.ok) throw new VoiceReadError(response);
+  const failed = (response.result as { nodes?: PublicNodeReadResult[] } | null)?.nodes?.find(
+    (node) => !node.ok,
+  );
+  if (failed)
+    throw new VoiceReadError(
+      adapterError(
+        action,
+        isPublicErrorCode(failed.error?.code) ? failed.error.code : "node-unavailable",
+        `${failed.name}: ${failed.error?.message ?? "could not be read"}`,
+      ),
+    );
+  return response.result;
+}
+
+async function allPages<T>(
+  caller: ControlMcpCaller,
+  action: "project.list" | "environment.list",
+  input: Record<string, unknown> = {},
+): Promise<T[] | null> {
+  if (!allowed(caller, action)) return null;
+  const pages = await allPublicPages<T>(caller, action, input);
+  if ("envelope" in pages) throw new VoiceReadError(pages.envelope);
+  // A composed summary or resolver cannot claim completeness after omitting a machine.
+  if (pages.warnings.length) {
+    const code = pages.nodes.find((node) => !node.ok)?.error?.code;
+    throw new VoiceReadError(
+      adapterError(
+        action,
+        isPublicErrorCode(code) ? code : "node-unavailable",
+        pages.warnings.join("; "),
+      ),
+    );
+  }
+  return pages.items;
+}
+
+async function sessionsOf(
+  caller: ControlMcpCaller,
+  environments: readonly PublicEnvironmentSummary[],
+): Promise<Array<{ environment: PublicEnvironmentSummary; sessions: PublicSessionSummary[] }>> {
+  const scanned = environments.filter((environment) => environment.status === "running");
+  const result: Array<{ environment: PublicEnvironmentSummary; sessions: PublicSessionSummary[] }> =
+    [];
+  // Bound concurrent metadata reads without excluding any environment.
+  for (let offset = 0; offset < scanned.length; offset += 20) {
+    result.push(
+      ...(await Promise.all(
+        scanned.slice(offset, offset + 20).map(async (environment) => ({
+          environment,
+          sessions:
+            (
+              await readIfAllowed<{ items: PublicSessionSummary[] }>(
+                // Across machines each environment is read on its own node.
+                caller.nodeId === PUBLIC_ALL_NODES
+                  ? onNode(caller, (environment as Tagged<PublicEnvironmentSummary>).nodeId)
+                  : caller,
+                "session.list",
+                { environmentId: environment.id },
+              )
+            )?.items ?? [],
+        })),
+      )),
+    );
+  }
+  return result;
+}
+
+async function overview(caller: ControlMcpCaller, projectId?: string) {
+  const everywhere = caller.nodeId === PUBLIC_ALL_NODES;
+  if (everywhere && projectId)
+    throw new VoiceReadError(
+      adapterError(
+        "overview",
+        "invalid-input",
+        "A projectId belongs to one node; pass its nodeId instead of all",
+      ),
+    );
+  const [projects, environments, attention, nodes] = await Promise.all([
+    allPages<PublicProjectSummary>(caller, "project.list"),
+    allPages<PublicEnvironmentSummary>(caller, "environment.list", projectId ? { projectId } : {}),
+    readIfAllowed<PublicAttentionPage | PublicAggregateAttentionPage>(caller, "attention.list", {
+      limit: 5,
+    }),
+    everywhere
+      ? readIfAllowed<PublicNodeList>(onNode(caller, undefined), "node.list", {})
+      : Promise.resolve(null),
+  ]);
+  const scoped = environments ?? [];
+  const bySession = await sessionsOf(caller, scoped);
+  const sessions = bySession.flatMap((entry) => entry.sessions);
+  const counts = {
+    projects: projects?.length ?? null,
+    environments: {
+      total: environments ? scoped.length : null,
+      running: scoped.filter((environment) => environment.status === "running").length,
+      ready: scoped.filter((environment) => environment.ready).length,
+      error: scoped.filter((environment) => environment.status === "error").length,
+    },
+    sessions: {
+      scanned: sessions.length,
+      working: sessions.filter((entry) => entry.activity === "working").length,
+      waiting: sessions.filter((entry) => entry.activity === "waiting").length,
+    },
+    attention: attention ? attention.counts : null,
+  };
+  const items = attention?.items ?? [];
+  return {
+    counts,
+    attention: attention
+      ? {
+          items,
+          more: attention.more,
+          ...("cursor" in attention ? { cursor: attention.cursor } : {}),
+        }
+      : null,
+    running: voiceList(
+      scoped
+        .filter((environment) => environment.status === "running")
+        .map((environment) => ({
+          environmentId: environment.id,
+          name: environment.name,
+          ready: environment.ready,
+          activity: environment.activity.state,
+          ...nodeOf(environment),
+        })),
+    ),
+    ...(nodes
+      ? {
+          nodes: nodes.items.map((node) => ({
+            nodeId: node.nodeId,
+            name: node.name,
+            available: node.available && node.publicActions,
+            ...(node.reason ? { reason: node.reason } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+type Tagged<T> = T & { nodeId?: string; nodeName?: string };
+
+/** The machine an aggregate item came from, when it carries one. */
+function nodeOf(item: object): { nodeId?: string; node?: string } {
+  const tagged = item as Tagged<object>;
+  return tagged.nodeId ? { nodeId: tagged.nodeId, node: tagged.nodeName ?? tagged.nodeId } : {};
+}
+
+async function targetCandidates(
+  caller: ControlMcpCaller,
+  kind: TargetKind | undefined,
+  scope: { projectId?: string; environmentId?: string },
+): Promise<TargetCandidate[]> {
+  const candidates: TargetCandidate[] = [];
+  if (!kind || kind === "project") {
+    for (const project of (await allPages<PublicProjectSummary>(caller, "project.list")) ?? []) {
+      candidates.push({
+        kind: "project",
+        id: project.id,
+        name: project.name,
+        aliases: [],
+        ...candidateNode(project),
+      });
+    }
+  }
+  if (!kind || kind === "environment" || kind === "session") {
+    const environments =
+      (await allPages<PublicEnvironmentSummary>(
+        caller,
+        "environment.list",
+        scope.projectId ? { projectId: scope.projectId } : {},
+      )) ?? [];
+    if (!kind || kind === "environment") {
+      for (const environment of environments) {
+        candidates.push({
+          kind: "environment",
+          id: environment.id,
+          name: environment.name,
+          aliases: [environment.branch],
+          projectId: environment.projectId,
+          ...candidateNode(environment),
+        });
+      }
+    }
+    if (!kind || kind === "session") {
+      const inScope = scope.environmentId
+        ? environments.filter((environment) => environment.id === scope.environmentId)
+        : environments;
+      for (const { environment, sessions } of await sessionsOf(caller, inScope)) {
+        sessions.forEach((entry, position) => {
+          candidates.push({
+            kind: "session",
+            id: entry.id,
+            name: entry.title ?? `${entry.agent} tab`,
+            // Position only names a session inside one named environment.
+            aliases: scope.environmentId
+              ? sessionAliases(entry.agent, entry.title, position)
+              : [entry.agent, ...(entry.title ? [entry.title] : [])],
+            environmentId: environment.id,
+            projectId: environment.projectId,
+            ...candidateNode(environment),
+          });
+        });
+      }
+    }
+  }
+  if (
+    (!kind || kind === "session") &&
+    allowed(caller, "session.list") &&
+    // Naming another machine reads node.list first; don't fail a credential without it.
+    (!caller.nodeId || allowed(caller, "node.list"))
+  ) {
+    try {
+      candidates.push(...(await coordinatorCandidates(caller, scope)));
+    } catch (error) {
+      if (error instanceof VoiceReadError) throw error;
+      throw new VoiceReadError(
+        adapterError(
+          "resolve_target",
+          error instanceof ControlMcpNodeError && isPublicErrorCode(error.code)
+            ? error.code
+            : "node-unavailable",
+          "Coordinator discovery is unavailable on the requested node",
+        ),
+      );
+    }
+  }
+  return candidates;
+}
+
+/**
+ * Coordinator conversations, which no environment lists. The main one answers
+ * to "coordinator" and "<project> coordinator"; only the registry names them.
+ */
+async function coordinatorCandidates(
+  caller: ControlMcpCaller,
+  scope: { projectId?: string; environmentId?: string },
+): Promise<TargetCandidate[]> {
+  const nodes =
+    caller.nodeId === PUBLIC_ALL_NODES
+      ? (await operatorAllNodes(caller)).reachable
+      : [await operatorNode(caller, caller.nodeId)];
+  const perNode = await Promise.all(
+    nodes.map(async (node): Promise<TargetCandidate[]> => {
+      const [registry, projects] = await Promise.all([
+        node.invoke<AgentRegistrySnapshot>("get_agent_registry", scope),
+        allPages<PublicProjectSummary>(node.caller, "project.list"),
+      ]);
+      return registry.entries.flatMap((entry) => {
+        if (entry.ownerKind !== "coordinator" || !entry.sessionId) return [];
+        const project = projects?.find((candidate) => candidate.id === entry.projectId)?.name;
+        const names =
+          entry.coordinatorRole === "side"
+            ? [entry.displayName]
+            : ["coordinator", entry.displayName];
+        return [
+          {
+            kind: "session" as const,
+            id: entry.sessionId,
+            name: entry.displayName,
+            aliases: [...names, ...(project ? names.map((name) => `${project} ${name}`) : [])],
+            environmentId: entry.environmentId,
+            projectId: entry.projectId,
+            ...(typeof node.tag.nodeId === "string"
+              ? { nodeId: node.tag.nodeId, nodeName: String(node.tag.node ?? node.tag.nodeId) }
+              : {}),
+          },
+        ];
+      });
+    }),
+  );
+  return perNode.flat();
+}
+
+function candidateNode(item: object): { nodeId?: string; nodeName?: string } {
+  const tagged = item as Tagged<object>;
+  return tagged.nodeId ? { nodeId: tagged.nodeId, nodeName: tagged.nodeName ?? tagged.nodeId } : {};
+}
+
+function candidateView(candidate: TargetCandidate) {
+  return {
+    kind: candidate.kind,
+    id: candidate.id,
+    name: candidate.name,
+    ...(candidate.environmentId ? { environmentId: candidate.environmentId } : {}),
+    ...(candidate.projectId ? { projectId: candidate.projectId } : {}),
+    ...(candidate.nodeId ? { nodeId: candidate.nodeId, node: candidate.nodeName } : {}),
+  };
+}
+
+async function defaultAgent(
+  caller: ControlMcpCaller,
+  scope: { projectId?: string; environmentId?: string },
+): Promise<AgentPlatform | null> {
+  const options = await readIfAllowed<PublicAgentOptions>(
+    caller,
+    "agent.options",
+    scope.environmentId ? { environmentId: scope.environmentId } : { projectId: scope.projectId },
+  );
+  if (!options) return null;
+  const enabled = options.agents.filter((agent) => agent.enabled).map((agent) => agent.agent);
+  return enabled.includes(options.defaultAgent) ? options.defaultAgent : (enabled[0] ?? null);
+}
+
+export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller): void {
+  const profile = caller.profile;
+  const listed = (tool: string) => voiceToolListed(caller, tool);
+  const sessionMissing = (action: string) =>
+    envelopeToolResult(
+      adapterError(action, "invalid-input", "Pass sessionId, or environmentId with tabId"),
+      profile,
+    );
+
+  if (listed("overview")) {
+    server.registerTool(
+      "overview",
+      {
+        description:
+          "Counts of projects, environments and sessions, plus the top 5 things needing attention (questions, approvals, finished or failed runs and setups). nodeId all covers every machine, tagging each item with its nodeId.",
+        inputSchema: OVERVIEW_INPUT,
+        annotations: readAnnotations,
+      },
+      async ({ projectId, nodeId }) => {
+        try {
+          const result = await overview(onNode(caller, nodeId), projectId);
+          const items = result.attention?.items ?? [];
+          const running = result.counts.environments.running;
+          const say = [
+            `${running} environment${running === 1 ? "" : "s"} running, ${result.counts.sessions.working} working.`,
+            items.length
+              ? `Needs attention: ${items.map(attentionSentence).join("; ")}${result.attention?.more ? `; and ${result.attention.more} more` : ""}.`
+              : "Nothing needs attention.",
+          ].join(" ");
+          const first = items[0];
+          return envelopeToolResult(success("overview", result), profile, {
+            say,
+            ...(first && first.kind === "interaction"
+              ? {
+                  ids: {
+                    sessionId: first.sessionId,
+                    interactionId: first.interactionId,
+                    revision: first.revision,
+                    ...("nodeId" in first ? { nodeId: (first as Tagged<object>).nodeId } : {}),
+                  },
+                }
+              : {}),
+          });
+        } catch (error) {
+          return readFailure(error, profile);
+        }
+      },
+    );
+  }
+
+  if (listed("resolve_target")) {
+    server.registerTool(
+      "resolve_target",
+      {
+        description:
+          "Turn a spoken name ('the auth environment', 'the Codex tab') into an ID. Never guesses: anything but one exact match returns ambiguous-target with candidates to ask about.",
+        inputSchema: RESOLVE_INPUT,
+        annotations: readAnnotations,
+      },
+      async ({ query, kind, projectId, environmentId, nodeId }) => {
+        try {
+          if (nodeId === PUBLIC_ALL_NODES && projectId)
+            throw new VoiceReadError(
+              adapterError(
+                "resolve_target",
+                "invalid-input",
+                "A projectId belongs to one node; pass its nodeId instead of all",
+              ),
+            );
+          const resolution = resolveTarget(
+            query,
+            await targetCandidates(onNode(caller, nodeId), kind, { projectId, environmentId }),
+          );
+          if (resolution.status === "resolved") {
+            const target = candidateView(resolution.target);
+            return envelopeToolResult(success("resolve_target", { target }), profile, {
+              say: `That is ${target.kind} ${target.name}${target.node ? ` on ${target.node}` : ""}.`,
+              ids: {
+                [`${target.kind}Id`]: target.id,
+                ...(target.nodeId ? { nodeId: target.nodeId } : {}),
+              },
+            });
+          }
+          if (resolution.status === "ambiguous") {
+            const candidates = resolution.candidates.map(candidateView);
+            return envelopeToolResult(
+              adapterError(
+                "resolve_target",
+                "ambiguous-target",
+                "More than one match, or no exact match",
+                {
+                  candidates,
+                },
+              ),
+              profile,
+              {
+                say: `I'm not sure which you mean: ${candidates.map((candidate) => candidate.name).join(", ")}.`,
+              },
+            );
+          }
+          return envelopeToolResult(
+            adapterError("resolve_target", "not-found", `Nothing is called ${short(query, 80)}`),
+            profile,
+          );
+        } catch (error) {
+          return readFailure(error, profile);
+        }
+      },
+    );
+  }
+
+  if (listed("read_session")) {
+    server.registerTool(
+      "read_session",
+      {
+        description:
+          "The latest messages of an agent session: brief (default) is the last 3, about 600 characters each; full is the last 10.",
+        inputSchema: READ_INPUT,
+        annotations: readAnnotations,
+      },
+      async (input) => {
+        const sessionId = sessionHandle(input);
+        if (!sessionId) return sessionMissing("session.transcript");
+        const brief = (input.detail ?? "brief") === "brief";
+        const envelope = await runPublicAction(
+          onNode(caller, input.nodeId),
+          "session.transcript",
+          { sessionId, limit: brief ? 3 : 10 },
+          undefined,
+          undefined,
+        );
+        if (!envelope.ok) return envelopeToolResult(envelope, profile, sayForEnvelope(envelope));
+        const page = envelope.result as PublicTranscriptPage;
+        const maxChars = brief ? 600 : 2_000;
+        const messages = page.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          createdAt: message.createdAt,
+          text:
+            message.text.length > maxChars
+              ? `${message.text.slice(0, maxChars - 1)}…`
+              : message.text,
+          truncated: message.textTruncated || message.text.length > maxChars,
+        }));
+        const bounded = {
+          ...envelope,
+          result: {
+            sessionId: page.sessionId,
+            messages,
+            complete: page.complete,
+            freshness: page.freshness,
+            ...(page.olderCursor ? { olderCursor: page.olderCursor } : {}),
+          },
+        } as ControlMcpEnvelope;
+        const last = messages.at(-1);
+        const newest = page.messages.at(-1);
+        const spokenMail =
+          newest?.role === "user" ? spokenMailRow(newest.text, newest.textTruncated) : null;
+        return envelopeToolResult(bounded, profile, {
+          say:
+            spokenMail ??
+            (last
+              ? `Latest ${last.role} message: ${short(stripSystemInstructions(newest?.text ?? last.text), brief ? 400 : 1_200)}`
+              : "The session has no messages yet."),
+          ids: { sessionId },
+        });
+      },
+    );
+  }
+
+  if (listed("prompt_session")) {
+    server.registerTool(
+      "prompt_session",
+      {
+        description:
+          "Send a new prompt to an idle agent session. A busy session is refused; use steer_session to add guidance to a running turn.",
+        inputSchema: PROMPT_INPUT,
+        annotations: mutationAnnotations,
+      },
+      async ({ prompt, mode, requestId: key, ...target }) => {
+        const sessionId = sessionHandle(target);
+        if (!sessionId) return sessionMissing("session.prompt");
+        const envelope = await runPublicAction(
+          onNode(caller, target.nodeId),
+          "session.prompt",
+          { sessionId, prompt, ...(mode ? { mode } : {}) },
+          key,
+          undefined,
+        );
+        return envelopeToolResult(envelope, profile, {
+          ...sayForEnvelope(envelope),
+          ...(envelope.ok ? { say: "Sent. I'll report when it finishes." } : {}),
+        });
+      },
+    );
+  }
+
+  if (listed("steer_session")) {
+    server.registerTool(
+      "steer_session",
+      {
+        description: "Add guidance to the turn an agent is running now.",
+        inputSchema: STEER_INPUT,
+        annotations: mutationAnnotations,
+      },
+      async ({ text, expectedOperationId, requestId: key, ...target }) => {
+        const sessionId = sessionHandle(target);
+        if (!sessionId) return sessionMissing("session.steer");
+        const envelope = await runPublicAction(
+          onNode(caller, target.nodeId),
+          "session.steer",
+          { sessionId, text, ...(expectedOperationId ? { expectedOperationId } : {}) },
+          key,
+          undefined,
+        );
+        // A steer that missed its turn is delivered as the next one instead.
+        const deliveredAs = envelope.ok
+          ? (envelope.result as { deliveredAs?: unknown } | undefined)?.deliveredAs
+          : undefined;
+        return envelopeToolResult(envelope, profile, {
+          ...sayForEnvelope(envelope),
+          ...(envelope.ok
+            ? {
+                say:
+                  deliveredAs === "new-turn"
+                    ? "That turn had ended, so I sent it as a new turn."
+                    : deliveredAs === "queued"
+                      ? "That turn had moved on, so I queued it as the next turn."
+                      : "Guidance added to the running turn.",
+              }
+            : {}),
+        });
+      },
+    );
+  }
+
+  if (listed("stop_session")) {
+    server.registerTool(
+      "stop_session",
+      {
+        description:
+          "Stop the turn an agent session is running. Pass expectedOperationId to stop only that run.",
+        inputSchema: STOP_INPUT,
+        annotations: mutationAnnotations,
+      },
+      async ({ expectedOperationId, requestId: key, ...target }) => {
+        const sessionId = sessionHandle(target);
+        if (!sessionId) return sessionMissing("session.stop");
+        const envelope = await runPublicAction(
+          onNode(caller, target.nodeId),
+          "session.stop",
+          { sessionId, ...(expectedOperationId ? { expectedOperationId } : {}) },
+          key,
+          undefined,
+        );
+        return envelopeToolResult(envelope, profile, {
+          ...sayForEnvelope(envelope),
+          ...(envelope.ok ? { say: "Stopping it." } : {}),
+        });
+      },
+    );
+  }
+
+  if (listed("answer_question")) {
+    server.registerTool(
+      "answer_question",
+      {
+        description:
+          "Resolve a pending interaction at its revision. answer approves an approval or answers questions; deny and cancel refuse. Approvals return confirmation-required first: read it aloud, get a yes, repeat with confirmToken.",
+        inputSchema: ANSWER_INPUT,
+        annotations: mutationAnnotations,
+      },
+      async ({
+        interactionId,
+        revision,
+        action,
+        answers,
+        feedback,
+        requestId: key,
+        confirmToken,
+        ...target
+      }) => {
+        const sessionId = sessionHandle(target);
+        if (!sessionId) return sessionMissing("session.interaction.resolve");
+        const envelope = await runPublicAction(
+          onNode(caller, target.nodeId),
+          "session.interaction.resolve",
+          {
+            sessionId,
+            interactionId,
+            expectedRevision: revision,
+            action,
+            ...(answers ? { answers } : {}),
+            ...(feedback ? { feedback } : {}),
+          },
+          key,
+          confirmToken,
+        );
+        return envelopeToolResult(envelope, profile, {
+          ...sayForEnvelope(envelope),
+          ...(envelope.ok
+            ? {
+                say:
+                  action === "answer" || action === "approve-for-session"
+                    ? "Done; the agent continues."
+                    : "Refused; the agent was told.",
+              }
+            : {}),
+        });
+      },
+    );
+  }
+
+  if (listed("start_work")) {
+    server.registerTool(
+      "start_work",
+      {
+        description:
+          "Start an agent on a prompt: in a new environment of projectId, or as a new session in the ready environment environmentId. agent defaults to the configured one.",
+        inputSchema: START_INPUT,
+        annotations: mutationAnnotations,
+      },
+      async ({ prompt, projectId, environmentId, agent, name, requestId: key, nodeId }) => {
+        try {
+          if (Boolean(projectId) === Boolean(environmentId)) {
+            return envelopeToolResult(
+              adapterError("start_work", "invalid-input", "Pass projectId or environmentId"),
+              profile,
+            );
+          }
+          const chosen =
+            agent ?? (await defaultAgent(onNode(caller, nodeId), { projectId, environmentId }));
+          if (!chosen) {
+            return envelopeToolResult(
+              adapterError("start_work", "capability-unavailable", "No agent is enabled"),
+              profile,
+            );
+          }
+          const envelope = environmentId
+            ? await runPublicAction(
+                onNode(caller, nodeId),
+                "session.start",
+                { environmentId, agent: chosen, prompt },
+                key,
+                undefined,
+              )
+            : await runPublicAction(
+                onNode(caller, nodeId),
+                "environment.launch",
+                { projectId, type: "local", agent: chosen, prompt, ...(name ? { name } : {}) },
+                key,
+                undefined,
+              );
+          const result = envelope.ok ? (envelope.result as Record<string, unknown>) : {};
+          return envelopeToolResult(envelope, profile, {
+            ...sayForEnvelope(envelope),
+            ...(envelope.ok
+              ? {
+                  say: `Started ${chosen}${environmentId ? "" : " in a new environment"}. I'll report when it finishes.`,
+                  ids: {
+                    environmentId: (result.environmentId as string | undefined) ?? environmentId,
+                    sessionId: result.sessionId as string | undefined,
+                  },
+                }
+              : {}),
+          });
+        } catch (error) {
+          return readFailure(error, profile);
+        }
+      },
+    );
+  }
+}

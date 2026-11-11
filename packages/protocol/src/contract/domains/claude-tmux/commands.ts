@@ -455,14 +455,35 @@ export const claudeTmuxHoldHookCommand = defineCommand({
 
 // --- Interactive terminal on the pane ---
 
-/** Opens a PTY attached to the tab's tmux pane; answers its session id. */
+/**
+ * How long an interactive terminal created with `leased: true` keeps
+ * capturing after its last renewal (to-do 7745, retired). A page reload, a closed
+ * window, a renderer crash or a cut link never sends a detach, so without a
+ * lease the backend captured the pane for nobody until the environment's
+ * tmux cleanup or a restart.
+ */
+export const CLAUDE_TMUX_INTERACTIVE_LEASE_MS = 45_000;
+/** How often an attached client renews its interactive terminal's lease. */
+export const CLAUDE_TMUX_INTERACTIVE_RENEW_MS = 15_000;
+
+/**
+ * Opens a PTY attached to the tab's tmux pane; answers its session id.
+ * `leased: true` announces that the client renews the terminal with
+ * `claude_tmux_renew_interactive_terminal`; only such a terminal is detached
+ * when its lease lapses, so an older client keeps detach-on-unmount alone.
+ */
 export const claudeTmuxCreateInteractiveTerminalCommand = defineCommand({
   domain: claudeTmuxDomain,
   name: "claude_tmux_create_interactive_terminal",
   since: 1,
   access: "workspace",
   read: false,
-  args: Schema.Struct({ ...tab, cols: optionalUnknown, rows: optionalUnknown }),
+  args: Schema.Struct({
+    ...tab,
+    cols: optionalUnknown,
+    rows: optionalUnknown,
+    leased: Schema.optionalKey(Schema.Boolean),
+  }),
   result: Schema.String,
   critical: [],
 });
@@ -517,6 +538,24 @@ export const claudeTmuxDetachInteractiveTerminalCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * Keeps an interactive terminal's capture loop alive for another
+ * {@link CLAUDE_TMUX_INTERACTIVE_LEASE_MS}. `renewed: false` means the
+ * backend no longer holds the terminal (its lease lapsed while the client was
+ * asleep or throttled, or the environment's tmux was cleaned up), so the
+ * client creates a new one.
+ */
+export const claudeTmuxRenewInteractiveTerminalCommand = defineCommand({
+  domain: claudeTmuxDomain,
+  name: "claude_tmux_renew_interactive_terminal",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: interactiveArgs,
+  result: Schema.Struct({ renewed: Schema.Boolean }),
+  critical: [],
+});
+
 /** Every `claude-tmux` command definition. */
 export const CLAUDE_TMUX_COMMANDS = [
   reconcileClaudeStatePollingCommand,
@@ -547,4 +586,5 @@ export const CLAUDE_TMUX_COMMANDS = [
   claudeTmuxWriteInteractiveTerminalCommand,
   claudeTmuxResizeInteractiveTerminalCommand,
   claudeTmuxDetachInteractiveTerminalCommand,
+  claudeTmuxRenewInteractiveTerminalCommand,
 ] as const;

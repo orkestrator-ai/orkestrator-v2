@@ -101,7 +101,7 @@ import {
   startOpenCodeContainerServer,
   stopOpenCodeContainerServer,
 } from "./opencode2-container-server.js";
-import { OPENCODE2_CONTAINER_LOG } from "./opencode2/container-server.js";
+import { OPENCODE2_CONTAINER_LOG } from "./opencode2/index.js";
 import {
   type ContainerBridgeKind,
   containerBridgeLaunch,

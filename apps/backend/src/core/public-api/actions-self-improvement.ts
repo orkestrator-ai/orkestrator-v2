@@ -1,4 +1,4 @@
-import type { SelfImprovementService } from "../self-improvement/service.js";
+import type { SelfImprovementService } from "../self-improvement/index.js";
 import { PublicActionError } from "./errors.js";
 import { onlyActionKeys } from "./input.js";
 import type {

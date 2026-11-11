@@ -16,7 +16,7 @@ import type {
   ControlMcpSettings,
   CoordinatorControlConnection,
   CoordinatorControlScope,
-} from "./control-mcp-server.js";
+} from "./control-mcp/index.js";
 import type { CoordinatorService } from "./coordinator-service.js";
 import type { ProjectGitService } from "./project-git-service.js";
 
@@ -117,7 +117,7 @@ export type CommandContext = {
     getSettings(): ControlMcpSettings;
     rotateToken(): Promise<ControlMcpSettings>;
     createCredential(
-      input: import("./control-mcp-credentials.js").CreateControlMcpCredentialInput,
+      input: import("./control-mcp/index.js").CreateControlMcpCredentialInput,
     ): Promise<ControlMcpSettings>;
     rotateCredential(credentialId: string): Promise<ControlMcpSettings>;
     revokeCredential(credentialId: string): Promise<ControlMcpSettings>;
@@ -130,7 +130,7 @@ export type CommandContext = {
   /** Durable, backend-timed scheduled jobs (docs/architecture/scheduled-jobs.md). */
   scheduledJobs?: import("./scheduled-jobs/index.js").ScheduledJobService;
   /** Experimental self-improvement runs (docs/architecture/self-improvement.md). */
-  selfImprovement?: import("./self-improvement/service.js").SelfImprovementService;
+  selfImprovement?: import("./self-improvement/index.js").SelfImprovementService;
   /** Every agent tab in the app and what it is doing; see agent-registry.ts. */
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
   /** The graph template library: scopes, trust and per-project ceilings (item 109). */

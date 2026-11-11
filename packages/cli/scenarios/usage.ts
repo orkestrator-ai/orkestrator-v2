@@ -18,14 +18,11 @@ import type { IsolatedBackend } from "./harness.js";
  * is all the report carries. The token never leaves this function.
  *
  * Limits: it counts only what each provider reported and the backend has
- * observed. Usage is recorded only when the backend refreshes a session's
- * projection, which a `session prompt` dispatch (or an open tab) does. The
- * public reads do not: after a `session start` turn, a transcript read,
- * `session get`, `session config get` and `session commands` all left the
- * report at 0 turns, and only the next `session prompt --wait` counted it.
- * So a `session start` turn with no later prompt to the same session is
- * missing from the count (to-do 7815). Codex and Grok report tokens without
- * a price, so their tokens land in `unpricedTokens` and `costUsd` stays 0.
+ * observed. The backend records a turn's usage on every projection and
+ * session-state read and when it first records how the turn ended, so a
+ * `session start --wait` turn with no later prompt is counted too (to-do 7815,
+ * retired). Codex and Grok report tokens without a price, so their tokens land
+ * in `unpricedTokens` and `costUsd` stays 0.
  */
 
 const INVOKE_PATH = "/__orkestrator/invoke";

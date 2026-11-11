@@ -1,8 +1,10 @@
 import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { resolveManagedBinary } from "./commands-agent-support.js";
-import { resolveOpenCode2TerminalCommand } from "./opencode2/terminal-launch.js";
-import { containerOpenCodeTerminalCommand } from "./opencode2/container-terminal-launch.js";
-import { writeOpenCode2HostConfig } from "./opencode2/server.js";
+import {
+  resolveOpenCode2TerminalCommand,
+  containerOpenCodeTerminalCommand,
+  writeOpenCode2HostConfig,
+} from "./opencode2/index.js";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {

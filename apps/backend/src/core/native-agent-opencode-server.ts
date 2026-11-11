@@ -13,8 +13,7 @@ import {
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
 import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
-import type { OpenCodeEnvironmentDependencies } from "./opencode2/environment-provider.js";
-import type { OpenCode2WorkerMailbox } from "./opencode2/turn-connections.js";
+import type { OpenCodeEnvironmentDependencies, OpenCode2WorkerMailbox } from "./opencode2/index.js";
 
 type ConfigReader = {
   loadConfig?: () => Promise<{ global: { openCodeModelProviders?: unknown } }>;

@@ -122,6 +122,7 @@ import {
   resolveNativeAgentApprovalMode,
   nativeAgentCapabilities,
   type NativeAgentCommandIntent,
+  type NativeAgentContextUsage,
 } from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -170,7 +171,7 @@ import {
   NativeAgentTranscriptProjection,
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
-import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/enforcer.js";
+import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/index.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -183,7 +184,7 @@ import {
   openCodeEnvironmentDependencies,
   sessionTakesAgentTools,
 } from "./native-agent-opencode-server.js";
-import type { OpenCodeEnvironmentDependencies } from "./opencode2/environment-provider.js";
+import type { OpenCodeEnvironmentDependencies } from "./opencode2/index.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -223,6 +224,7 @@ import {
   promptWithPendingAgentHandoff,
 } from "./native-agent-handoffs.js";
 import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
+import { SettledTurnUsage } from "./native-agent-settled-turn-usage.js";
 import {
   beginArtifactDispatchTurn,
   settleArtifactDispatchTurn,
@@ -326,10 +328,12 @@ export class NativeAgentService {
     return this.projections.getTranscriptUpdate(input);
   }
 
-  getSessionStateUpdate(
+  async getSessionStateUpdate(
     input: NativeAgentProgressiveInput,
   ): Promise<NativeAgentSessionStateUpdate> {
-    return this.projections.getSessionStateUpdate(input);
+    const update = await this.projections.getSessionStateUpdate(input);
+    void this.retryOwedSettledUsage(input);
+    return update;
   }
 
   getLiveUpdate(input: NativeAgentLiveUpdateInput): Promise<NativeAgentLiveUpdate> {
@@ -372,6 +376,10 @@ export class NativeAgentService {
   private readonly catalogs: NativeAgentCatalogCache;
   /** Renderer views of provider sessions and every cache behind them. */
   private readonly projections: NativeAgentTranscriptProjection;
+  /** Records a turn's usage when its outcome is first recorded. */
+  private readonly settledTurnUsage = new SettledTurnUsage({
+    observe: (session, usage) => this.projections.observeSessionUsage(session, usage),
+  });
   /** Orkestrator's permission rules (todo 0723); absent with a narrow storage double. */
   private readonly permissionRules: PermissionRuleEnforcer | undefined;
   /** Pending approvals and questions: observation records and the monitor sweep. */
@@ -753,8 +761,8 @@ export class NativeAgentService {
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchQueuedAsyncQuestionAnswer: (input, resolved, text, requestId) =>
         this.dispatchQueuedAsyncQuestionAnswer(input, resolved, text, requestId),
-      recordObservedTurnOutcome: (session, status, detail, provider, failureKind) =>
-        this.recordObservedTurnOutcome(session, status, detail, provider, failureKind),
+      recordObservedTurnOutcome: (session, status, detail, provider, failureKind, usage) =>
+        this.recordObservedTurnOutcome(session, status, detail, provider, failureKind, usage),
       usageLimitResendPending: (key) => this.usageLimitResend.isPending(key),
       settleAmbiguousDispatch: (input, key, requestId, provider) =>
         this.settleAmbiguousDispatch(input, key, requestId, provider),
@@ -2008,8 +2016,18 @@ export class NativeAgentService {
       if (session.pendingDispatch || session.pendingSteer) return "unavailable";
       const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
       if (queue?.dispatchError) return "unavailable";
-      const { status } = await readProviderStatus(provider, session.providerSessionId);
-      await this.recordObservedTurnOutcome(session, status, undefined, provider);
+      const { status, contextUsage } = await readProviderStatus(
+        provider,
+        session.providerSessionId,
+      );
+      await this.recordObservedTurnOutcome(
+        session,
+        status,
+        undefined,
+        provider,
+        undefined,
+        contextUsage,
+      );
       if (status === "running" || status === "blocked") return "busy";
       if (status !== "idle") return "unavailable";
       // Sending past a backlog would overtake prompts the user queued first.
@@ -3134,6 +3152,8 @@ export class NativeAgentService {
     if (!session) return { outcome: "unknown" };
     const recorded = session.turnOutcomes?.find((entry) => entry.requestId === input.requestId);
     if (recorded) {
+      // A settled read that failed is retried by the next outcome call.
+      void this.retryOwedSettledUsage(input);
       return {
         outcome: recorded.outcome,
         ...(recorded.error ? { error: recorded.error } : {}),
@@ -3209,6 +3229,8 @@ export class NativeAgentService {
           )
         : undefined;
     this.settleArtifactTurn(session, input.requestId);
+    // A turn awaited only through the CLI may never get a projection read.
+    this.settledTurnUsage.record(session, provider, observation.contextUsage);
     try {
       await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
         requestId: input.requestId,
@@ -3282,6 +3304,27 @@ export class NativeAgentService {
   }
 
   /**
+   * Retries a settled-turn usage read that failed or was pushed out of the
+   * queue, on the session's next outcome or state read. Costs nothing unless
+   * one is owed; never throws.
+   */
+  private async retryOwedSettledUsage(input: NativeAgentProjectionInput): Promise<void> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (!this.settledTurnUsage.owes(key)) return;
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      if (!session) return;
+      this.settledTurnUsage.retryOwed(session, await this.observeProvider(input));
+    } catch {
+      // Still owed; the next read tries again.
+    }
+  }
+
+  /**
    * Record the latest dispatched turn's outcome from a status read the caller
    * already made (the queue drain reads status before sending the next prompt).
    * An `idle` read counts only when the turn is not visibly still running.
@@ -3290,8 +3333,13 @@ export class NativeAgentService {
     session: PersistedNativeAgentSession,
     status: string,
     detail: string | undefined,
-    provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+    provider?: Pick<
+      NativeAgentRuntimeProvider,
+      "turnTerminalError" | "sessionStateSnapshot" | "refreshUsage" | "recentTurnUsage"
+    >,
     reportedFailureKind?: TurnFailureKind,
+    /** Usage from the caller's own status read, so the settle need not read again. */
+    observedUsage?: NativeAgentContextUsage,
   ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
@@ -3320,6 +3368,7 @@ export class NativeAgentService {
     }
     this.settleArtifactTurn(session, requestId);
     this.signInResends.noteTurnEnded(session);
+    this.settledTurnUsage.record(session, provider, observedUsage);
     const failed = status === "error" || failure !== undefined;
     const failureKind = failed
       ? turnOutcomeFailureKind(

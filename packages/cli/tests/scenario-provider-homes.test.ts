@@ -298,6 +298,7 @@ test("backend environment wiring cannot inherit credential authorization or bypa
   for (const key of ["ORKESTRATOR_CREDENTIAL_SOURCE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"])
     expect(env[key]).toBeUndefined();
   for (const key of [
+    "HOME",
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
     "XDG_CONFIG_HOME",
@@ -310,6 +311,68 @@ test("backend environment wiring cannot inherit credential authorization or bypa
   await expect(
     startIsolatedBackend({ root, extraArgs: ["--credential-source", "claude"] }),
   ).rejects.toThrow("credentialSource, not extraArgs");
+});
+
+const PI_BRIDGE_ROOT = path.resolve(import.meta.dir, "../../../bridges/pi-bridge");
+
+/** Lists the skills Pi's own resource loader finds under `env`, in a child process. */
+function piSkillNames(env: NodeJS.ProcessEnv, cwd: string, agentDir: string): string[] {
+  const script = `
+    const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
+    const loader = new DefaultResourceLoader({ cwd: ${JSON.stringify(cwd)}, agentDir: ${JSON.stringify(agentDir)} });
+    await loader.reload();
+    console.log(JSON.stringify(loader.getSkills().skills.map((skill) => skill.name)));
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], {
+    cwd: PI_BRIDGE_ROOT,
+    env,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  expect(result.status).toBe(0);
+  return JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+}
+
+test("a scenario backend's HOME is disposable, so the operator's shared skills stay out", async () => {
+  const { hostHome, root } = await fixture();
+  const skill = path.join(hostHome, ".agents", "skills", "host-only-skill");
+  await mkdir(skill, { recursive: true });
+  await writeFile(
+    path.join(skill, "SKILL.md"),
+    "---\nname: host-only-skill\ndescription: The operator's own skill.\n---\nNever in a scenario.\n",
+  );
+  const workspace = path.join(root, "workspace");
+  await mkdir(workspace, { recursive: true });
+  const hostEnv = { HOME: hostHome, PATH: process.env.PATH };
+  const env = await prepareIsolatedBackendEnvironment({ root, hostHome, hostEnv });
+
+  expect(env.HOME).toBe(path.join(root, "provider-homes"));
+  // Pi reads \`process.env.HOME\` for \`~/.agents/skills\`. The control proves
+  // the probe sees the host's skill when HOME is the host's.
+  expect(piSkillNames(hostEnv, workspace, env.PI_CODING_AGENT_DIR!)).toEqual(["host-only-skill"]);
+  expect(piSkillNames(env, workspace, env.PI_CODING_AGENT_DIR!)).toEqual([]);
+  // The probe created nothing in the disposable home or the host's.
+  expect(await filesUnder(path.join(root, "provider-homes"))).toEqual([]);
+
+  // Host tools that read HOME-relative settings keep the operator's.
+  expect(env.DOCKER_CONFIG).toBe(path.join(hostHome, ".docker"));
+  expect(env.GNUPGHOME).toBe(path.join(hostHome, ".gnupg"));
+  expect(env.XDG_CACHE_HOME).toBe(path.join(hostHome, ".cache"));
+  expect(env.BUN_INSTALL).toBe(path.join(hostHome, ".bun"));
+  expect(env.BUN_INSTALL_CACHE_DIR).toBe(path.join(hostHome, ".bun", "install", "cache"));
+  const explicit = await prepareIsolatedBackendEnvironment({
+    root,
+    hostHome,
+    hostEnv: {
+      ...hostEnv,
+      DOCKER_CONFIG: "/host/docker",
+      GNUPGHOME: "/host/gnupg",
+      BUN_INSTALL: "/host/bun",
+    },
+  });
+  expect(explicit.DOCKER_CONFIG).toBe("/host/docker");
+  expect(explicit.GNUPGHOME).toBe("/host/gnupg");
+  expect(explicit.BUN_INSTALL_CACHE_DIR).toBe("/host/bun/install/cache");
 });
 
 test("preserves XDG-based Git, gh and mise configuration for backend children", async () => {

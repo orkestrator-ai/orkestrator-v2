@@ -26,11 +26,10 @@ import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { readProjectUsageLimits } from "./agent-usage-limits.js";
 import type { CommandContext } from "./commands-context.js";
 import { registerScheduledJobCommands } from "./commands-registry-scheduled-jobs.js";
-import { rpc } from "./control-mcp-test-support.js";
-import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp-server.js";
+import { rpc } from "./control-mcp/test-support.js";
+import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp/server.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { executeAgentAccountSwitch } from "./nodes/node-account-switch.js";
 import {

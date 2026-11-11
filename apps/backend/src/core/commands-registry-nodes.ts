@@ -407,7 +407,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   // A coordinator's account switch under the user's standing permission
-  // (`control-mcp-account-tools.ts`); this machine's permission, never another's.
+  // (`control-mcp/account-tools.ts`); this machine's permission, never another's.
   register(runGrantedAgentAccountSwitchCommand, async (args, context) => {
     return runGrantedAccountSwitch(
       {

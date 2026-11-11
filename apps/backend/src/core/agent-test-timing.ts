@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
 
@@ -25,6 +25,13 @@ import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
  * the next read. A value can only shorten a period, never lengthen it, and
  * anything malformed or out of range is ignored.
  *
+ * Each time it reads a changed file the backend writes what it applied to
+ * `<data dir>/agent-test-fixtures/timing-applied.json` as
+ * `{"revision": ..., "overrides": {...}}`, echoing the file's optional
+ * `revision` string. A spec that sizes a wait from an override waits for its
+ * own revision there and uses the applied value, so an override the backend
+ * ignored cannot make that wait shorter than the real period.
+ *
  * It exists only where the dispatch hold does (`isolatedAgentTestBackend`):
  * an isolated agent-test backend run from source. Anywhere else
  * {@link agentTestTiming} answers `undefined`, nothing reads the file, and
@@ -32,6 +39,15 @@ import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
  */
 
 export const AGENT_TEST_TIMING_FILE = path.join("agent-test-fixtures", "timing.json");
+
+/** Where the backend acknowledges the overrides it applied. */
+export const AGENT_TEST_TIMING_APPLIED_FILE = path.join(
+  "agent-test-fixtures",
+  "timing-applied.json",
+);
+
+/** A spec's revision tag; anything longer is not one and is dropped. */
+const MAX_REVISION_LENGTH = 128;
 
 /** A larger file is not one a spec wrote; ignore it rather than parse it. */
 const MAX_TIMING_FILE_BYTES = 4 * 1024;
@@ -61,11 +77,25 @@ export interface AgentTestTimingOptions {
 /** The overrides for this backend, or `undefined` outside an isolated agent-test profile. */
 export function agentTestTiming(options: AgentTestTimingOptions): AgentTestTiming | undefined {
   if (!isolatedAgentTestBackend(options)) return undefined;
-  return createAgentTestTiming(path.join(options.dataDir, AGENT_TEST_TIMING_FILE));
+  return createAgentTestTiming(path.join(options.dataDir, AGENT_TEST_TIMING_FILE), {
+    appliedFile: path.join(options.dataDir, AGENT_TEST_TIMING_APPLIED_FILE),
+  });
 }
 
-/** Reads `file` on demand, re-parsing only when it changed. Exported for tests. */
-export function createAgentTestTiming(file: string): AgentTestTiming {
+/** The acknowledgement written to `AGENT_TEST_TIMING_APPLIED_FILE`. */
+export interface AgentTestTimingApplied {
+  revision: string | null;
+  overrides: AgentTestTimingOverrides;
+}
+
+/**
+ * Reads `file` on demand, re-parsing only when it changed, and acknowledges
+ * each parse to `appliedFile` when one is given. Exported for tests.
+ */
+export function createAgentTestTiming(
+  file: string,
+  options: { appliedFile?: string } = {},
+): AgentTestTiming {
   let stamp: string | null = null;
   let overrides: AgentTestTimingOverrides = {};
   return {
@@ -80,7 +110,12 @@ export function createAgentTestTiming(file: string): AgentTestTiming {
       }
       if (next === stamp) return overrides;
       stamp = next;
-      overrides = next === null || next === "too-large" ? {} : parseTiming(readOrEmpty(file));
+      const parsed: AgentTestTimingApplied =
+        next === null || next === "too-large"
+          ? { revision: null, overrides: {} }
+          : parseTimingFile(readOrEmpty(file));
+      overrides = parsed.overrides;
+      if (options.appliedFile) acknowledge(options.appliedFile, parsed);
       return overrides;
     },
   };
@@ -94,15 +129,42 @@ function readOrEmpty(file: string): string {
   }
 }
 
+/**
+ * Best effort and test-only: a failed write leaves the spec on its production
+ * fallback, never the backend broken. Replaced atomically so a reader never
+ * sees half a file.
+ */
+function acknowledge(appliedFile: string, applied: AgentTestTimingApplied): void {
+  const temporary = `${appliedFile}.${process.pid}.tmp`;
+  try {
+    mkdirSync(path.dirname(appliedFile), { recursive: true });
+    writeFileSync(temporary, `${JSON.stringify(applied)}\n`, { mode: 0o600 });
+    renameSync(temporary, appliedFile);
+  } catch {
+    // Nothing to do: the acknowledgement is advisory.
+  }
+}
+
 export function parseTiming(text: string): AgentTestTimingOverrides {
+  return parseTimingFile(text).overrides;
+}
+
+/** The overrides in a timing file, and the spec's `revision` tag when it has one. */
+export function parseTimingFile(text: string): AgentTestTimingApplied {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    return {};
+    return { revision: null, overrides: {} };
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { revision: null, overrides: {} };
+  }
   const record = value as Record<string, unknown>;
+  const revision =
+    typeof record.revision === "string" && record.revision.length <= MAX_REVISION_LENGTH
+      ? record.revision
+      : null;
   const overrides: AgentTestTimingOverrides = {};
   for (const key of Object.keys(AGENT_TEST_TIMING_BOUNDS) as AgentTestTimingKey[]) {
     const raw = record[key];
@@ -111,7 +173,7 @@ export function parseTiming(text: string): AgentTestTimingOverrides {
       overrides[key] = raw;
     }
   }
-  return overrides;
+  return { revision, overrides };
 }
 
 /**

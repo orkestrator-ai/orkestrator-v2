@@ -2,7 +2,12 @@ import { expect, test, type Page, type Request } from "./browser-test";
 import { randomUUID } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setBackendTiming, setRendererTiming } from "./agent-test-timing-support";
+import {
+  appliedBackendTiming,
+  PRODUCTION_CONTAINER_TREE_MAX_AGE_MS,
+  setBackendTiming,
+  setRendererTiming,
+} from "./agent-test-timing-support";
 import {
   POLL_BUDGET_MS,
   backendChangedPaths,
@@ -134,7 +139,6 @@ test("Docker fixture container Files panel follows changes across switch, hidden
   await login(page, testInfo);
   const polls = recordFilesPanelPolls(page);
   const backend = setBackendTiming(dataDir, { containerTreeMaxAgeMs: 3_000 });
-  const treeCacheMs = backend.timing.containerTreeMaxAgeMs!;
   try {
     await test.step("the Files panel on a container shows a change made in it", async () => {
       await selectEnvironment(page, containerName);
@@ -200,6 +204,14 @@ test("Docker fixture container Files panel follows changes across switch, hidden
         const { filesPanelPollIntervalMs } = await import(/* @vite-ignore */ modulePath);
         return (filesPanelPollIntervalMs as () => number)();
       });
+      // Likewise the tree cache bound the backend applied, not the one asked
+      // for. The tree read above made it read the timing file; without its
+      // acknowledgement the production bound applies, so the window grows.
+      const applied = await appliedBackendTiming(dataDir, backend.revision, 5_000);
+      const treeCacheMs = Math.min(
+        applied?.containerTreeMaxAgeMs ?? PRODUCTION_CONTAINER_TREE_MAX_AGE_MS,
+        PRODUCTION_CONTAINER_TREE_MAX_AGE_MS,
+      );
       // The visible tab polls the container from the page.
       const visiblePolls = polls.length;
       await expect
@@ -218,7 +230,9 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       const hiddenWindowMs = Math.max(3 * pollMs, treeCacheMs + 2 * pollMs);
       testInfo.annotations.push({
         type: "hidden-window",
-        description: `${hiddenWindowMs} ms (poll ${pollMs} ms, tree cache ${treeCacheMs} ms)`,
+        description: `${hiddenWindowMs} ms (poll ${pollMs} ms, tree cache ${treeCacheMs} ms${
+          applied ? "" : ", backend override not acknowledged"
+        })`,
       });
       await page.waitForTimeout(hiddenWindowMs);
       expect(polls.slice(hiddenPolls)).toEqual([]);

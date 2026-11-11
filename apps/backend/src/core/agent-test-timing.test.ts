@@ -8,10 +8,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  AGENT_TEST_TIMING_APPLIED_FILE,
   AGENT_TEST_TIMING_FILE,
   agentTestTiming,
   createAgentTestTiming,
   parseTiming,
+  parseTimingFile,
   timingValue,
 } from "./agent-test-timing.js";
 
@@ -57,6 +59,39 @@ describe("agentTestTiming", () => {
     expect(timing!.current()).toEqual({});
     await writeTiming(root, JSON.stringify({ webAnnotationGcEveryTicks: 5 }));
     expect(timing!.current()).toEqual({ webAnnotationGcEveryTicks: 5 });
+  });
+
+  test("acknowledges what it applied, with the spec's revision", async () => {
+    const root = await dataDir();
+    const timing = agentTestTiming({ dataDir: root, runtimeFlavor: "agent-test", env: ISOLATED });
+    const applied = path.join(root, AGENT_TEST_TIMING_APPLIED_FILE);
+    const readApplied = async () => JSON.parse(await fs.readFile(applied, "utf8"));
+    const file = await writeTiming(
+      root,
+      JSON.stringify({
+        revision: "r1",
+        containerTreeMaxAgeMs: 3_000,
+        webAnnotationGcEveryTicks: 0,
+      }),
+      new Date(1_000_000),
+    );
+    timing!.current();
+    expect(await readApplied()).toEqual({
+      revision: "r1",
+      overrides: { containerTreeMaxAgeMs: 3_000 },
+    });
+    await fs.rm(file);
+    timing!.current();
+    expect(await readApplied()).toEqual({ revision: null, overrides: {} });
+  });
+
+  test("writes no acknowledgement outside an isolated agent-test backend", async () => {
+    const root = await dataDir();
+    await writeTiming(root, JSON.stringify({ revision: "r1", containerTreeMaxAgeMs: 3_000 }));
+    expect(
+      agentTestTiming({ dataDir: root, runtimeFlavor: "development", env: ISOLATED }),
+    ).toBeUndefined();
+    await expect(fs.stat(path.join(root, AGENT_TEST_TIMING_APPLIED_FILE))).rejects.toThrow();
   });
 });
 
@@ -121,6 +156,23 @@ describe("parseTiming", () => {
     expect(parseTiming(JSON.stringify({ coordinatorRepairIntervalMs: 5_000 }))).toEqual({
       coordinatorRepairIntervalMs: 5_000,
     });
+  });
+});
+
+describe("parseTimingFile", () => {
+  test("keeps a short string revision and drops anything else", () => {
+    expect(
+      parseTimingFile(JSON.stringify({ revision: "abc", containerTreeMaxAgeMs: 600 })),
+    ).toEqual({ revision: "abc", overrides: { containerTreeMaxAgeMs: 600 } });
+    expect(parseTimingFile(JSON.stringify({ revision: 5 }))).toEqual({
+      revision: null,
+      overrides: {},
+    });
+    expect(parseTimingFile(JSON.stringify({ revision: "x".repeat(129) }))).toEqual({
+      revision: null,
+      overrides: {},
+    });
+    expect(parseTimingFile("not json")).toEqual({ revision: null, overrides: {} });
   });
 });
 

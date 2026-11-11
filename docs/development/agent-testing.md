@@ -352,7 +352,13 @@ the spec sets two test-only timings (from to-do 7569, retired 2026-11-11):
   re-read when the file changes, can only shorten a period, and ignores
   anything malformed. Removing the file restores the production values. The
   annotation evidence spec uses the collection period the same way, and the
-  coordinator view test the repair interval.
+  coordinator view test the repair interval. Each time the backend reads a
+  changed file it writes what it applied to `timing-applied.json` beside it,
+  echoing the `revision` that `setBackendTiming` tags the file with. The Files
+  spec sizes its window from that acknowledged tree cache bound
+  (`appliedBackendTiming`), and from the production 10 s bound when the backend
+  has not acknowledged its revision, so an ignored override cannot make the
+  window shorter than the real cache.
 
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:

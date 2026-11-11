@@ -519,8 +519,10 @@ afterwards.
 | This branch, headless on `omarchy-hp`, before the repair | Failed 5 of 5 (no `before-quit` within the bound) |
 | This branch, headless on `omarchy-hp`, after the repair | Passed 10 of 10 |
 
-This branch's own native-menu run is the real-display confirmation of the
-repair; it had not run when this was written.
+This branch's own native-menu run (Linux under Xvfb, and Windows) is the
+real-display confirmation of the repair. It is still pending: the branch had not
+been pushed when this was written, so no such run exists yet. Record its run ID
+and result here once CI has run it on the pull request.
 
 ## Needs verification
 
@@ -531,7 +533,9 @@ repair; it had not run when this was written.
   The design canvas spec is intermittent on beelink (flake
   [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
   with and without this change. CI's native-menu job covers three of them under
-  Xvfb; its run on this branch confirms the `electron-cleanup.spec.ts` repair.
+  Xvfb; its run on this branch's pull request is still to confirm the
+  `electron-cleanup.spec.ts` repair on a real display (see Current state). Until
+  it has run, the repair's evidence is the headless 10-of-10 run on `omarchy-hp`.
 - Task 4 on a Mac, agent part: steps 3 and 4 of
   [Live macOS hidden-profile qualification](../../development/agent-testing.md#live-macos-hidden-profile-qualification)
   (`mise run test:agent:browser` against a hidden profile; the instrumented

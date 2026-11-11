@@ -89,7 +89,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { CODEWORD_REPLY_PREFIX } from "./idle-observation-fake-claude";
-import { idleObservationModel, asyncQuestionPrompt } from "./idle-observation-live-support";
+import {
+  idleObservationModel,
+  asyncQuestionPrompt,
+  detachWaitClosesRenderer,
+  detachWaitMs,
+  idleDetachWindowMs,
+} from "./idle-observation-live-support";
 import {
   installContainerFakeClaude,
   readContainerFile,
@@ -193,8 +199,11 @@ const MODELS = new Map(
     .filter((pair): pair is [string, string] => pair.length === 2 && Boolean(pair[1])),
 );
 const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIMEOUT_MS ?? "240000");
-/** Longer than every bridge's 10 min idle detach. */
-const DETACH_WAIT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS ?? "630000");
+/**
+ * The detach case's idle wait. Unset, each provider waits its own idle window
+ * plus 30 s: 630 s for the 10 min bridges, 35.5 min for Codex (todo 7380).
+ */
+const DETACH_WAIT_OVERRIDE = process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS;
 const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
 const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "container";
 
@@ -480,6 +489,7 @@ test.describe("live idle observation", () => {
     const label = LABELS[platform];
     test(`${label}: idle observation settles every live case`, async ({ browser }, testInfo) => {
       const detachSelected = CASES.includes("detach");
+      const DETACH_WAIT_MS = detachWaitMs(platform, DETACH_WAIT_OVERRIDE);
       test.setTimeout(TURN_TIMEOUT_MS * 9 + (detachSelected ? DETACH_WAIT_MS : 0) + 300_000);
       testInfo.annotations.push({ type: "profile", description: profile });
       /** A content-free progress line; it also keeps the logged runner's watchdog fed. */
@@ -1833,6 +1843,15 @@ test.describe("live idle observation", () => {
             stateAtStart = await runtimeState();
           }
           record.notes.push(`no-touch runtime before the wait: ${stateAtStart ?? "unknown"}`);
+          // Codex's tab reads refresh its thread's idle clock by design, so an
+          // open tab keeps the thread attached: wait with no renderer (7380).
+          const closesRenderer = detachWaitClosesRenderer(platform);
+          if (closesRenderer) {
+            await client.page.close();
+            record.notes.push(
+              "renderer closed for the wait: the provider's tab reads keep it attached",
+            );
+          }
           const sweepsBefore = await sweepCounters();
           const idleStart = Date.now();
           const commandsBefore = { ...client.readCommands };
@@ -1841,12 +1860,20 @@ test.describe("live idle observation", () => {
           const sidebarReadings = new Set<string>();
           while (Date.now() - idleStart < DETACH_WAIT_MS) {
             await sleep(15_000);
+            if (closesRenderer) {
+              // The no-touch read: stop as soon as the thread is released.
+              if ((await runtimeState()) === "detached") {
+                record.timings.detachObservedAfterMs = Date.now() - idleStart;
+                break;
+              }
+              continue;
+            }
             if ((await stopButton().count()) > 0) sawStop = true;
             const sidebar = await sidebarActivity(page(), environmentName);
             sidebarReadings.add(sidebar);
             if (sidebar === "working") sawWorkingSidebar = true;
           }
-          record.notes.push(`idle sidebar readings: ${[...sidebarReadings].join(",")}`);
+          record.notes.push(`idle sidebar readings: ${[...sidebarReadings].join(",") || "none"}`);
           const cadence = readCadence(client.readTimes, idleStart + 30_000, Date.now());
           record.timings.idleReadsPerMinute = cadence.perMinute;
           record.timings.idleMaxGapMs = cadence.maxGapMs;
@@ -1887,7 +1914,7 @@ test.describe("live idle observation", () => {
             .not.toBeUndefined();
           const detachedState = await runtimeState();
           record.notes.push(`no-touch runtime after idle wait: ${detachedState ?? "unknown"}`);
-          const cadenceOnly = DETACH_WAIT_MS < 630_000;
+          const cadenceOnly = DETACH_WAIT_MS < idleDetachWindowMs(platform);
           // OpenCode's server lifetime and Codex's engine health are not a
           // session detach observation. Claude reports whether its CLI is open
           // (attached) or released by the idle window (detached), as Cursor
@@ -1907,19 +1934,40 @@ test.describe("live idle observation", () => {
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
           }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);
-          // A probe that cannot see the row reads `unknown`, which would pass the next check blind.
-          expect(sidebarReadings.has("idle"), "the sidebar was read as idle while idle").toBe(true);
+          if (!closesRenderer) {
+            // A probe that cannot see the row reads `unknown`, which would pass the next check blind.
+            expect(sidebarReadings.has("idle"), "the sidebar was read as idle while idle").toBe(
+              true,
+            );
+          }
           expect(sawWorkingSidebar, "the sidebar never shows working on an idle tab").toBe(false);
           const word = `IDLEQA-REATTACH-${nonce()}`;
           // Reuse the pre-wait IDs: no tab-facing read between observing
           // detachment and dispatching the turn that must reattach it.
           const ids = new Set((before?.messages ?? []).map((message) => message.id));
-          await sendFromComposer(replyPrompt(word));
-          const settled = await watchSettle(ids, word, {
-            uiBoundMs: COMPLETION_BUDGET_MS,
-          });
-          expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
-          expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          if (closesRenderer) {
+            // A turn from outside the view, then a renderer again: a reopened
+            // tab's own reads would re-attach before the turn did.
+            await sendFromBackend(replyPrompt(word));
+            const settled = await watchSettle(ids, word, {
+              uiBoundMs: COMPLETION_BUDGET_MS,
+              pageObserves: false,
+            });
+            record.timings.backendTurnSettledMs = settled.backendIdleAt - idleStart;
+            await client.context.close();
+            client = await openClient(browser, status, logicalSessionKey());
+            await goToEnvironment();
+            await expect(page().getByText(word, { exact: true }).first()).toBeVisible({
+              timeout: 30_000,
+            });
+          } else {
+            await sendFromComposer(replyPrompt(word));
+            const settled = await watchSettle(ids, word, {
+              uiBoundMs: COMPLETION_BUDGET_MS,
+            });
+            expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
+            expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          }
           if (!cadenceOnly && reportsSessionDetach) {
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("attached");
             record.notes.push("observed detached then attached through no-touch runtime discovery");

@@ -17,10 +17,26 @@ import {
   readCadence,
   readGaps,
   selectedCases,
+  detachWaitClosesRenderer,
+  detachWaitMs,
+  idleDetachWindowMs,
   sidebarActivityFromMarkerState,
 } from "./idle-observation-live-support";
 
 describe("idle observation live support", () => {
+  test("the detach wait follows each provider's idle window (todo 7380)", () => {
+    expect(detachWaitMs("claude", undefined)).toBe(630_000);
+    expect(detachWaitMs("pi", "")).toBe(630_000);
+    // Codex: 30 min without a touch, found by a 5 min sweep.
+    expect(idleDetachWindowMs("codex")).toBe(2_100_000);
+    expect(detachWaitMs("codex", undefined)).toBe(2_130_000);
+    expect(detachWaitMs("codex", "300000")).toBe(300_000);
+    expect(detachWaitMs("claude", "not a number")).toBe(630_000);
+    expect(detachWaitClosesRenderer("codex")).toBe(true);
+    expect(detachWaitClosesRenderer("claude")).toBe(false);
+    expect(detachWaitClosesRenderer("pi")).toBe(false);
+  });
+
   test("case selection keeps the canonical order and rejects unknown names", () => {
     expect(selectedCases(undefined)).toEqual([...IDLE_OBSERVATION_CASES]);
     expect(selectedCases(" hidden , approval ")).toEqual(["approval", "hidden"]);

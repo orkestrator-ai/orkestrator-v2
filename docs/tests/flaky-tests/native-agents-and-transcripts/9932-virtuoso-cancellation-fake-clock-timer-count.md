@@ -112,6 +112,13 @@ does not touch this file or the transcript-scroll code.
   `mise run test:logged -- --name virtuoso -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`,
   passed (1.0 s).
 
+A second complete `mise run test` on the same branch (head `5cff101fa`,
+load average 61 to 72) failed nine cases of this file in the web group
+(14,469 passed), and the runner's rerun again reported `FAILED ALONE (1.4s)`
+(two `restored snapshot` cases). Three manual single-file reruns with
+`--parallel=1` at that load gave 8 pass / 6 fail, 14 pass / 0 fail and
+7 pass / 7 fail, so at this load the file fails alone about two runs in three.
+
 This is the first observation where the runner's single-file rerun also
 failed: under heavy host load one rerun is not enough to clear the late
 timer, which still fits the Happy DOM frame hypothesis. Status stays open.

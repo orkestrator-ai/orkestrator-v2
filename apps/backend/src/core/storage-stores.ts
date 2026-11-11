@@ -25,6 +25,7 @@ import {
 } from "./web-annotations/store-layout.js";
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
 import {
+  mapNamespaceDocumentRecord,
   PUBLIC_OPERATION_NAMESPACE_LAYOUT,
   PUBLIC_OPERATION_NAMESPACE_STORE,
   publicOperationRowsMigration,
@@ -581,6 +582,8 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
         : cleanup.kind === "delete-row"
           ? (copy) => {
               if (!isJsonRecord(copy)) throw new Error("Unattributable legacy backup");
+              const document = archivedNamespaceRecord(cleanup, copy, () => undefined);
+              if (document !== undefined) return document;
               const kept = { ...copy };
               delete kept[cleanup.key];
               return kept;
@@ -588,7 +591,12 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
           : cleanup.kind === "prune-row"
             ? (copy) => {
                 if (!isJsonRecord(copy)) throw new Error("Unattributable legacy backup");
-                if (!Object.hasOwn(copy, cleanup.key)) return copy;
+                if (!Object.hasOwn(copy, cleanup.key)) {
+                  const document = archivedNamespaceRecord(cleanup, copy, (record) =>
+                    pruneRemovedContent(record, cleanup.next),
+                  );
+                  return document ?? copy;
+                }
                 return {
                   ...copy,
                   [cleanup.key]: pruneRemovedContent(copy[cleanup.key], cleanup.next),
@@ -601,6 +609,22 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
   }
   database.deleteStoreInTransaction(LEGACY_CLEANUPS_STORE);
   return true;
+}
+
+/**
+ * A public operation namespace archived before it became rows is still one
+ * `{ version, namespace, operations }` document: a row cleanup finds its record
+ * in `operations` by operation id. `undefined` for every other store or shape.
+ */
+function archivedNamespaceRecord(
+  cleanup: { store: string; key: string },
+  copy: Record<string, unknown>,
+  replace: (record: Record<string, unknown>) => unknown,
+): unknown {
+  if (!PUBLIC_OPERATION_NAMESPACE.test(cleanup.store) || Object.hasOwn(copy, cleanup.key)) {
+    return undefined;
+  }
+  return mapNamespaceDocumentRecord(copy, cleanup.key, replace);
 }
 
 /** An array copy without the cleanup's item or field; other items stay as archived. */

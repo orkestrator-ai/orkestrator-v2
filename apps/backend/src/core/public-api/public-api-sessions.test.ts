@@ -456,6 +456,43 @@ describe("session.prompt", () => {
     expect(await records.getPublicOperation(runId)).toEqual(before);
   });
 
+  test("an unsupported run stays unsupported while a later turn runs", async () => {
+    // Providers without qualified completion (Pi, Cursor, Grok) report a
+    // finished turn as `unsupported`; that, too, is a run seen to end.
+    const { harness, service, stub } = await setup("pi");
+    await harness.storage.updateGlobalConfig({
+      ...(await harness.storage.loadConfig()).global,
+      enabledAgentPlatforms: ["claude", "codex", "opencode", "pi"],
+    });
+    const started = await harness.call<{ sessionId: string; tabId: string; runId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "pi", prompt: "task" },
+      { requestId: "pi-ended-0" },
+    );
+    if (!started.ok) throw new Error(`${started.error.code}: ${started.error.message}`);
+    const { tabId, sessionId, runId } = started.result;
+    const providerSession = stub.sends[0]!.sessionId;
+    stub.setStatus(async () => "idle");
+    setActivity(service, "pi", tabId, providerSession, "idle");
+    expect((await receipt(harness, runId)).execution?.state).toBe("unsupported");
+
+    const later = await harness.call<{ runId: string }>(
+      "session.prompt",
+      { sessionId, prompt: "a later turn" },
+      { requestId: "pi-ended-1" },
+    );
+    if (!later.ok) throw new Error(`session.prompt failed: ${later.error.code}`);
+    setActivity(service, "pi", tabId, providerSession, "working");
+    const records = harness.storage.publicOperations;
+    const before = await records.getPublicOperation(runId);
+    const during = await receipt(harness, runId);
+    expect(during.state).toBe("unknown");
+    expect(during.execution?.state).toBe("unsupported");
+    expect(await records.getPublicOperation(runId)).toEqual(before);
+    // The later turn itself is running.
+    expect((await receipt(harness, later.result.runId)).execution?.state).toBe("running");
+  });
+
   test("an unknown dispatch is parked, blocks other prompts, and retries under the same key", async () => {
     const { harness, service, stub } = await setup();
     const started = await startSession(harness, "amb-1");

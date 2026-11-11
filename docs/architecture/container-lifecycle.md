@@ -1100,12 +1100,36 @@ host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
 start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
 dockerd hands out automatic ports in sequence, and short-lived outbound
-sockets held two in a row in a 2026-11-09 run. Docker 29.9 detaches the
+sockets held two in a row in a 2026-11-09 run (and four in a row right after
+a daemon restart on 2026-11-11, which hands ports out again from the bottom
+of the range;
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4). Docker 29.9 detaches the
 container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
 started container still has none. A collision past the retries, or one on
-a fixed port, is the existing `port-conflict`.
+a port the user fixed, is the existing `port-conflict`.
+
+Each failed start moves rootless dockerd on by one port, so no retry count
+gets past a held run longer than itself. On a rootless daemon the backend
+therefore chooses every automatic host port itself when it creates a
+runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
+the host, where the kernel sees every socket and prefers odd ports for
+`bind` (outbound `connect` prefers even ones), publishes the result as a
+fixed port and lists it in the `orkestrator-backend-host-ports` label. A
+stopped container's ports hold no host socket, so the choice also refuses
+the ports the same create fixes, the ports labelled on every container of
+the same owner (`docker ps -a`) and, for the window before a new container
+exists, the ports this backend chose in the last 30 minutes. The
+port then stays the container's own across starts and daemon restarts. A
+collision on a labelled port is retried on the same port after a pause
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+go; one still held after the retries is a `port-conflict` that says to stop
+the holder or rebuild the environment, which chooses new ports. A port the
+user fixed is still never retried. Rootful daemons keep
+Docker's own automatic ports, since they see the host's sockets, and a
+container created before this keeps them until it is rebuilt.
 
 The same rootless daemon refuses every `docker cp` into or out of a
 container with a read-only bind whose source filesystem is mounted
@@ -1121,6 +1145,19 @@ boot record read reports `boot-record-copy-refused` instead of
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
+
+`live-restore` cannot work on a rootless daemon: a rootless restart replaces
+RootlessKit, its user and network namespaces, containerd and the shims, so
+the new daemon reports every container exited while the old containers'
+processes keep running in the old namespaces with no network, on the same
+volumes the restarted containers then mount (observed 2026-11-11,
+[evidence](../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)).
+The backend starts those containers again as it does after any restart with
+`live-restore` off, and cannot find or stop the orphans, so it warns once per
+process when a rootless daemon reports `live-restore` on (`docker`
+`daemon.rootless-live-restore`, from the capacity probe in
+`container-resources.ts`); the remedy is `"live-restore": false` in that
+daemon's `daemon.json`.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,

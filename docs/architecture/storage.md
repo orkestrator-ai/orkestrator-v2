@@ -483,9 +483,36 @@ primitives above serialize their writes.
   corrupt the file). Apple's build also maps `PRAGMA fullfsync = ON` to
   `F_BARRIERFSYNC` (ordering, no cache flush) on APFS and HFS+, not to
   `F_FULLFSYNC`, so that PRAGMA cannot buy full power-loss durability there;
-  it costs about four to six times a plain commit. Evidence and numbers:
-  [to-do 5180](../todo/cross-cutting/5180-sqlite-durability-tiers.md) task 3,
-  `scripts/benchmark-sqlite-sync.ts`.
+  it costs about four to six times a plain commit. Evidence: Apple's library
+  reports `aapl` in `sqlite_source_id()` and is built with
+  `DEFAULT_CKPTFULLFSYNC`, `DEFAULT_SYNCHRONOUS=2` and
+  `DEFAULT_WAL_SYNCHRONOUS=1`; its `_unixSync`
+  (`dyld_info -disassemble /usr/lib/libsqlite3.dylib`) issues `F_BARRIERFSYNC`
+  for a full sync and `F_FULLFSYNC` only on a file system named `lifs`, else
+  `fsync`. Measured on mini's internal APFS SSD on 2026-11-10 (macOS 27.2,
+  Bun 1.4.4), one-row commit, 200 interleaved runs:
+
+  | Series | Median ms | p95 ms |
+  | --- | --- | --- |
+  | FULL, `fullfsync` off (main file) | 0.193 | 0.717 |
+  | FULL, `fullfsync` on | 0.716 | 3.635 |
+  | NORMAL (ledger) | 0.054 | 0.186 |
+  | OFF (floor) | 0.028 | 0.115 |
+  | raw `fsync` | 0.076 | 0.203 |
+  | raw `F_BARRIERFSYNC` | 0.703 | 2.162 |
+  | raw `F_FULLFSYNC` | 4.098 | 8.744 |
+
+  A truncating checkpoint after 50 commits took 1.66 ms median with
+  `checkpoint_fullfsync` on and 0.46 ms off. `scripts/benchmark-sqlite-sync.ts`
+  repeats the timing on another release; the full write-up is
+  `git show 498b68766:docs/todo/cross-cutting/5180-sqlite-durability-tiers.md`
+  (task 3).
+- Whether to tier `synchronous` and `secure_delete` further by data (beyond the
+  ledger's NORMAL) waits on a busy real session's commit counts
+  ([commits and reads](#commits-and-reads)) and the maintainer's sign-off; both
+  are in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (5180, retired, tasks 1 and 2). The maintainer's deferral (to-do 1202 task 2,
+  ST-12: "unchanged, revisited only if fsync cost still shows") stands.
 - Every connection sets `checkpoint_fullfsync = ON`, so a checkpoint, which
   copies WAL frames into the database file and then resets the WAL, syncs
   with a write barrier on macOS. Apple's SQLite already defaults to that
@@ -494,10 +521,18 @@ primitives above serialize their writes.
   `fullfsync` (each commit) stays off.
 - `secure_delete = ON` zeroes the freed pages of deleted content.
   `scrubDeletedDatabaseContent()` (called where the JSON stores used to scrub
-  their backups) returns up to 16 MiB of freed pages to the filesystem
-  (`auto_vacuum = INCREMENTAL`, set when the database is created) and runs a
-  truncating WAL checkpoint so old frames do not keep the content either.
-  `storageFilesContain(dataDir, marker)` checks this in tests. It never throws.
+  their backups) runs a truncating WAL checkpoint so old frames do not keep
+  the content either. `storageFilesContain(dataDir, marker)` checks this in
+  tests. It never throws. It does not return the freed pages to the
+  filesystem (`auto_vacuum = INCREMENTAL`, set when the database is created):
+  they already hold zeros, so that only gives space back. The main file's
+  five-minute upkeep does it in a child process (below) and the ledger's
+  retention pass does it for the ledger. Until 2026-11-11 the scrub also ran
+  a 16 MiB `incremental_vacuum` on the backend's connection; on a 512 MiB
+  database that held the event loop 252–444 ms p50 (up to 510 ms) on a loaded
+  host, against 7–9 ms p50 (up to 16 ms) for the checkpoint alone
+  (`apps/backend/scripts/storage-maintenance-stall.ts --scrub-only`, to-do 7210
+  task 1). A file stays larger for up to five minutes after a deletion.
 - The scrub's checkpoint never waits. A truncating checkpoint calls the busy
   handler until every reader has moved past it, so a reader holding an older
   snapshot (an hourly copy in progress, another backend's long read) used to
@@ -520,10 +555,17 @@ primitives above serialize their writes.
   `analysis_limit = 400` and never waiting for another writer: on the main
   database after every snapshot check, on the ledger after every retention
   pass, and on every connection as it closes. On a generated 666 MB ledger the
-  first run took under a millisecond.
+  first run took under a millisecond. On the main database it stays on the
+  backend's connection, every five minutes: `optimize` analyses the tables
+  that connection's own queries used, so a child's connection would not know
+  which to look at, and it held the event loop 11–13 ms p50 (up to 44 ms) on a
+  512 MiB database (decided 2026-11-11, `git show 498b68766:docs/todo/cross-cutting/7210-storage-work-left-on-the-event-loop.md`
+  task 3).
 - Cache sizes (`cache_size`, `mmap_size`, `temp_store`) are SQLite's defaults.
   They are revisited only with a measured read problem
-  ([5181](../todo/cross-cutting/5181-sqlite-cache-sizes.md)).
+  ([5181](../todo/cross-cutting/5181-sqlite-cache-sizes.md)); the read
+  timings in [commits and reads](#commits-and-reads) are what a busy profile is
+  measured with.
 - Every open sets the database file to 0600, along with any `-wal`, `-shm` or
   `-journal` already beside it, because SQLite only gives the file's mode to
   companions it creates. A new database's file exists at the default mode only
@@ -563,7 +605,12 @@ and its own, daily, best-effort copies (below):
   counted, so the families add up to less than `store_rows`. A separate
   responsive supervisor kills and reaps the copy worker when the backend's pipe
   closes (including SIGKILL), or the independent two-hour deadline expires. The
-  pre-migration snapshot stays in-process, because the open waits for it.
+  pre-migration snapshot stays in-process, because the open waits for it: it
+  runs before anything is served, so the event loop has no other work then,
+  and a failed copy must abort the open rather than migrate unprotected. It
+  took 1.5–1.9 s p50 (up to 2.9 s) for 512 MiB on 2026-11-06, once per schema
+  version (decided 2026-11-11, `git show 498b68766:docs/todo/cross-cutting/7210-storage-work-left-on-the-event-loop.md`
+  task 2).
 - An hourly copy is skipped when the disk has less free space than the
   compact database estimate plus as much again (at least 2 GiB). The estimate
   uses live SQLite pages, including committed WAL content, excluding free pages.
@@ -633,6 +680,50 @@ changes takes no copy.
 holder's last heartbeat: a large one is a dead or stalled holder, and a small one a live
 holder keeping it for longer than the waiter would wait. A transaction that gives up
 with `SQLITE_BUSY` is counted as `transactionsBusy`.
+
+#### Commits and reads
+
+`database.activity` in the same three places counts what this process's connections
+did since its first one opened (`since`), per file (`main`, `ledger`, `other`), in
+fixed-bucket histograms (`bucketsMs`, 0.1 ms to 1 s and an overflow bucket)
+(`storage-activity-metrics.ts`). `instrumentSqliteConnection`
+(`storage-slow-operations.ts`) classifies each completed call, a prepared statement
+once:
+
+- `commits`: a transaction that ran an INSERT, UPDATE or DELETE that changed a row,
+  a schema change or an `incremental_vacuum`, and such a statement outside a
+  transaction. Each appends to the WAL and, under `synchronous = FULL`, syncs it,
+  so this is the commit rate the durability tiers turn on (see
+  [durability and deletion](#durability-and-deletion)). Timed from the
+  end of the transaction's body to its return (its COMMIT and sync), or the whole
+  statement outside a transaction. A write transaction that changed nothing, and
+  one that failed, are not counted.
+- `checkpoints`: explicit `wal_checkpoint` calls (the scrub's, the copies').
+  Automatic checkpoints run inside a commit and are in its time.
+- `reads`: every other transaction that ran a statement, and every SELECT outside
+  one, timed by the time spent in SQLite statements (not the JavaScript that
+  decodes rows), by store family as lease waits name them, or `table:<name>` when
+  no store was named; at most 64 series a file, the rest in `other`
+  (`readsOverflowed`). A read the row cache served still runs the revision check,
+  so the histogram holds both: cache hits in the lowest buckets, whole-store
+  fetches above them.
+
+Counts only grow, so a rate is the difference of two snapshots over the time
+between them. On a `dev:test` profile on 2026-11-11 (mini, credential-free, the
+fixture project), creating and starting one local environment took the main file
+from 48 to 105 commits and stopping and deleting it to 220, 11 of them followed by
+the deletion scrub's checkpoint; the ledger went from 4 to 8. Every commit took
+under 6 ms, nearly all under 1 ms, and the slowest read series
+(`table:stores`, `environments`) stayed under 2 ms. Counting a call costs a
+histogram update and, for the statement's kind, a classification: once per
+prepared statement (`query`, `prepare`), but on every call of `db.run` and
+`db.exec`, which carry their SQL per call, so each of those lowercases and
+matches the first 512 characters of its SQL. Over 200,000 calls the difference
+from no counting was within run-to-run noise (about 2 µs a call either way).
+A rolled-back savepoint inside a transaction that then commits is still a commit:
+SQLite writes the pages it touched to the WAL at COMMIT. An INSERT, UPDATE or
+DELETE read through `get`, `all` or `values` (a `RETURNING` statement) reports no
+change count, so it is counted as a commit whatever it returned. Nothing a statement carries is kept: a series is a family or a table name.
 
 ## Provider secrets at rest
 
@@ -812,7 +903,8 @@ waiting writer is not starved between steps: Bun's SQLite is built with
 as the step commits. On a quiet disk a step takes 5–60 ms and the release runs
 its whole budget. Other work on the host can still stop it early, which moves
 the rest to the next check. `apps/backend/scripts/storage-release-writer-stall.ts`
-measures this (to-do 7210 task 4).
+measures this (to-do 7210 task 4, retired:
+`git show 498b68766:docs/todo/cross-cutting/7210-storage-work-left-on-the-event-loop.md`).
 Each pass writes one `storage` `upkeep.finished` line with how long
 `optimize` held the event loop, the pages released and left, and why the
 release stopped (`slow-step` for the case above); slow SQLite calls on either file write `operation.slow`

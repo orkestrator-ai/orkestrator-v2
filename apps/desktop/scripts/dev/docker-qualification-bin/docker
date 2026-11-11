@@ -4,7 +4,7 @@
 # Every call except `network create` execs the real Docker CLI in this process,
 # so a signal the backend sends to stop a follower (`docker logs -f`,
 # `docker events`) or an exec session reaches Docker itself. Running it as a
-# child of the shim instead orphaned it when the shim was stopped (0019 task 6).
+# child of the shim instead orphaned it when the shim was stopped (to-do 0019 (retired) task 6).
 case $0 in */*) shim_dir=${0%/*} ;; *) shim_dir=. ;; esac
 shim_dir=$(CDPATH= cd -- "$shim_dir" && pwd -P)
 if [ "$1" = network ] && [ "$2" = create ]; then

@@ -62,11 +62,13 @@ export function registerSystemCommands(
   const readProcesses = readEnvironmentProcessUsage ?? defaultReadEnvironmentProcessUsage;
   const rendererErrors = new RendererErrorRecorder();
   /**
-   * A desktop window's new renderer error counts, into the essential log. Only
-   * content-free fields are accepted, and the write is rate-bound. Refused to
-   * workspace clients (`workspace-grant-scope.ts`): this machine's log is its own.
+   * A renderer's new error counts (a desktop window's own, or a browser tab
+   * signed in to this backend), into the essential log. Only content-free
+   * fields are accepted, and the write is rate-bound, per renderer when it
+   * sends its `client` id. Refused to workspace clients
+   * (`workspace-grant-scope.ts`): this machine's log is its own.
    */
-  register(recordRendererErrorsCommand, (args) => rendererErrors.record(args.entries));
+  register(recordRendererErrorsCommand, (args) => rendererErrors.record(args.entries, args.client));
   /**
    * A renderer's new domain client adapter counts (plan item 1009), into the
    * compatibility-path counters: names and numbers only. Refused to workspace

@@ -580,7 +580,8 @@ task 6) on 2026-11-10. When its evidence arrives:
   (`storage-release-vs-writers`, with a script not on `main` at the time) was
   measuring `synchronous = NORMAL` against disk writers at the same time, so
   the two results should be read together. That worktree's result
-  ([7210](7210-storage-work-left-on-the-event-loop.md) task 4) does not
+  (7210 (retired) task 4; its findings are in
+  [storage.md](../../architecture/storage.md#migrations)) does not
   settle this one. For the free-page release child, `NORMAL` changed nothing
   under four fsync writers (worst backend write 3.3 s and 3.4 s, against
   1.5–4.2 s with `FULL`). Its long write-lock holds were cold page reads,

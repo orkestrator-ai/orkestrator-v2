@@ -163,3 +163,11 @@ and the complete inner log at
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iar2kT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 Related earlier observations: readiness case 0230, listener case 1410 and desktop
 startup case 1202. An isolated pass is not an environmental exemption.
+
+## Recurrence 2026-11-11
+
+- **Observing base:** `498b68766` (`main`), with the uncommitted renderer error ring changes of branch `renderer-error-ring-e3a48fce2746-r1` (no backend scan or test-runner code changed). `mise run flaky:recurrence 6150 --base 498b68766` answered open.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:changed` on mini (macOS arm64, Bun 1.4.4), load average about 24 to 32 from other worktrees.
+- **Failure:** `no backend file imports zod` (`apps/backend/src/core/no-zod.test.ts`) timed out after 5000 ms, reported at 22,217.19 ms.
+- **Owning-file rerun:** the runner's isolated rerun passed unchanged in 365 ms.
+- **Evidence:** `orkestrator-test-run.PS6O8Y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. The same run's other failures are under [9936](../backend-services-and-tooling/9936-checkout-template-copy-races-git-maintenance-lock.md) and [9944](../backend-services-and-tooling/9944-cli-bash-completion-aggregate-timeout.md).

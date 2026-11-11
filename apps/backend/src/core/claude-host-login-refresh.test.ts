@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { CLAUDE_HOST_REFRESH_ARGS } from "./claude-host-login-refresh-command.js";
 import { CLAUDE_HOST_REFRESH_MODEL, refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import {
   ContainerClaudeLoginKeeper,
@@ -68,6 +69,9 @@ describe("refreshHostClaudeLogin", () => {
       "",
       "--no-session-persistence",
     ]);
+    // scripts/claude-host-refresh-trigger-probe.ts runs this shared list, so the
+    // offline qualification checks exactly what production runs.
+    expect(call!.args).toEqual([...CLAUDE_HOST_REFRESH_ARGS]);
     expect(call!.env?.CLAUDE_CONFIG_DIR).toBe("/accounts/claude/account");
     expect(call!.env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(call!.cwd).toBe(path.join(root!, "claude-login-refresh"));

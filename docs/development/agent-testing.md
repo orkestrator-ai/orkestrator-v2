@@ -1433,6 +1433,33 @@ live tail for gaps, duplicates and order without reading model prose.
   `OPENAI_API_KEY` (`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-loopback"}`),
   so no real login is copied in:
   `CODEX_HOME=<that dir> mise run dev:test --profile <name> --fixture --headless --credential-source codex --agent-platforms codex`.
+- **In a container environment.** `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`
+  runs the native case in the profile's seeded `fixture-container`
+  environment, so every transcript read crosses the container bridge. Start
+  the profile with `--fixture-environments local,container` (on a host whose
+  user cannot reach the Docker daemon, with `DOCKER_HOST` from
+  `mise run docker:disposable -- env --name <n>`, which then builds the image
+  inside that daemon; see
+  [container-qualification.md](container-qualification.md#disposable-docker-daemon)),
+  and run the spec with the same `DOCKER_HOST`: it copies the trail into the
+  container's `/workspace` with `docker exec`, and restarts the container's
+  bridge (`stop_codex_server`, `start_codex_server`). With the loopback model
+  the model runs inside the container, which the restricted firewall admits
+  because it is the container's own loopback, and the container's Codex home
+  (`$HOME/.codex/config.toml`) is pointed at it and restored afterwards. The
+  fixture container is used, never deleted; the trail is removed from it.
+- **In the Electron window.** `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron`
+  renders the native tab in the profile's own Electron window, so the
+  transcript reads go through the preload and IPC path instead of the
+  gateway. Start the profile with `ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`
+  (agent-test profiles only): its Electron then opens Chromium remote
+  debugging on an OS-chosen loopback port, and the spec attaches over CDP to
+  the endpoint recorded in the profile's `electron.log`, and only disconnects
+  afterwards. A headless profile is enough. Backend checks still go through
+  the gateway, and Playwright's automatic failure screenshot shows the
+  gateway page, not the window. Unlike the browser suite's headless
+  Chromium, which hides scrollbars, the window has classic ones, so
+  layout changes that add or remove a scrollbar happen there.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project

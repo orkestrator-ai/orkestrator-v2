@@ -714,3 +714,29 @@ mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Preparation for the transcript history efficiency branch (`transcript-history-efficiency-60750035e24d-r1`, base `498b68766f5c`, validated at `b0dc43135`) ran `mise run test:logged -- --name browser -- mise run test:browser`, which was killed at its 1,800,000 ms group deadline after 1,696 of 1,844 tests had started; ToolGroupFold line 79 had failed on mobile (9 px, then 141 px on retry). Evidence: `validation-10.stderr.txt` under `.orkestrator/review-artifacts/review-validation-5150afb1-3b56-4856-9919-a454adaddfb6/`. The exact command was rerun once and completed (exit 1, 27.9 min): 11 failed, 152 skipped, 1,681 passed. The failures:
+
+| Project | Spec | Case |
+| --- | --- | --- |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:79` | a live group crossing the fold threshold folds into its line with no-preference motion (1012) |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing above a released reader preserves their place with no-preference motion (0793) |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing below a released reader preserves their place with reduce motion (0793) |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:42` | native: paging before prose holds the original tool position (0483) |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:264` | native: paging folds a visible short group during held-place restoration with no-preference motion |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:450` | native: history pages in without a click, opening with a page and paging near the top (1602) |
+| desktop-chromium | `e2e/MailTiles.spec.ts:92` | find reveals a match below the mail preview and restores the saved expansion choice |
+| desktop-chromium | `e2e/ToolGroupFold.spec.ts:79` | a live group crossing the fold threshold folds into its line with no-preference motion (1012) |
+| desktop-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing above a released reader preserves their place with no-preference motion (0793) |
+| desktop-chromium | `e2e/TranscriptPaging.spec.ts:42` | native: paging before prose in a byte-bounded view holds the original tool position (0483) |
+| desktop-chromium | `e2e/TranscriptPaging.spec.ts:450` | native: history pages in without a click, opening with a page and paging near the top (1602) |
+
+This branch does change code these owners run: `TranscriptScrollController.holdPlaceAcrossReflow` now returns early while a history recovery is pending. The three complete owners then passed together with one worker, with that change in place (exit 0, 337.3 s):
+
+```sh
+mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts e2e/MailTiles.spec.ts --workers=1
+```
+
+Every failing case also failed in earlier branches' browser runs that did not carry the change (see this file and 1012, 0793, 0483, 1602). The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.

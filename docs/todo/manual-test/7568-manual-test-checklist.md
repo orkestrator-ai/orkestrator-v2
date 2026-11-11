@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (288 items): run each check under
+1. **Manual tests and live checks** (289 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -74,12 +74,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 21 | 9 |
 | Coordinator and Multi Review | 77 | 6 |
-| Cross-cutting | 69 | 20 |
+| Cross-cutting | 70 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 288 | 53 |
+| **Total** | 289 | 53 |
 
 ## Outstanding work
 
@@ -475,6 +475,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[4400](../cross-cutting/4400-gateway-502-under-load-live-evidence.md) task 3: the race through real Tailscale Serve (only if tasks 1 and 2 disagree with the lab).** On a spare tailnet node (Serve configuration changes are off limits on beelink), start `apps/backend/scripts/sse-route-probe.ts serve` behind Serve from a build before the keep-alive change and one after (setup in `docs/todo/transcripts-and-observation/0052-remote-client-bandwidth.md`, "Live run through Tailscale Serve"). From a second tailnet device send `POST /__orkestrator/invoke` sequentially, hundreds of requests, with idle gaps of about 6 s (old build) and 88 to 92 s (new), with and without bounded CPU load. Record: client 502s and the node's `http: proxy error` lines per build and load, in 4400's Current state.
 - [ ] **[4400](../cross-cutting/4400-gateway-502-under-load-live-evidence.md) task 5: container workloads against the backend on a rootful Docker host.** On a Linux host whose containers run under `system.slice` (rootful Docker) with the backend as a user service, saturate the CPU with container work and measure gateway round-trip latency (p50/p95/max) against an idle baseline. Recommended outcome: change nothing if the slice split keeps the backend responsive. Record: host, cgroup layout, latencies, and whether a lever (for example a higher `CPUWeight` on the backend's unit) is needed, in 4400's Current state; reply to the coordinator if a lever is needed so an agent can implement it.
 - [ ] **[4400](../cross-cutting/4400-gateway-502-under-load-live-evidence.md) task 6: name the sender of arktech-mini's connection bursts.** Once arktech-mini runs a build with `gateway-traffic-summary.ts`, read its backend log for `traffic.burst` warnings after the next burst (they name the top `X-Forwarded-For` sources, route classes and invoke command names). Record: the burst times, top sources (tailnet address mapped to device) and commands, in 4400 under task 7's Investigation; task 7 (cap the sender's concurrency) is blocked on this.
+- [ ] **[4400](../cross-cutting/4400-gateway-502-under-load-live-evidence.md) task 4: measure nice 10 on macOS.** On an Apple Silicon Mac that is otherwise idle (not the user's working session if it can be avoided), time a fixed CPU job (for example `bun -e` summing to 1e9) at nice 0 and at nice 10, five runs each, while `sudo powermetrics --samplers cpu_power,tasks -i 1000` shows which cluster it runs on. Then, on a `dev:test` profile with its discovered gateway port, measure gateway round trips (`/__orkestrator/status`, 2400 sequential requests, p50/p95/max) with 16 `yes > /dev/null` burners at nice 0 and again at nice 10. Success: nice 10 keeps the job on performance cores when idle and does not lengthen its CPU time; the gateway's p95 under nice-10 burners is close to idle. Record: Mac model, macOS version, the job's CPU and wall time and cluster per nice level, and the gateway latencies, in 4400's Current state; if nice 10 moves idle work to efficiency cores, reply to the coordinator so an agent can lower `WORKLOAD_NICE` (4400, Assumptions and decisions, task 4).
 - [ ] **4260 (retired) Needs verification: the lost-exit reaper's real-world count.** (Background: [backend runtime](../../architecture/backend-runtime.md#one-shot-commands).) On a long-lived macOS backend (the user's install, after several days of normal use), count `child.reaped`, `child.reap-abandoned` and `child.reap-unavailable` lines (area `process`) in its log. Record: the counts and the uptime they cover, in to-do [6900](../cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md) (it shows whether macOS still loses exits on file capture).
 - [ ] **5601 (retired) task 2: device WebKit against a real gateway.** (Background: [renderer security, iOS app](../../architecture/renderer-security.md#ios-app).) On an iPhone with a signed development build, connect over Tailscale Serve to an isolated `dev:test` profile (never a production instance): sign in, open a legacy preview at the top level and call the bridge from it, open a service preview, tap an external link, then forget the server and confirm its session stops working. Can share a run with [0042](../previews-and-annotations/0042-service-preview-rollout.md) task 3. Keep the gateway token out of screenshots and notes. Record: iOS version, build, and each step's result (cookie sent on real requests, bridge refused from the preview, external link in Safari, session revoked over TLS) in a reply to the coordinator.
 - [ ] **5601 (retired) task 3: Keychain behaviour on a device.** On a spare iPhone (a restore is destructive) with a saved server: launch while locked (expect the unread-list message, a refused save, and the list back after unlocking), restart, restore an encrypted backup (the vault must not return), and reinstall (note what remains). Record: each result, iOS version and build, in a reply to the coordinator; any departure from `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`'s promise is a defect for a new to-do.

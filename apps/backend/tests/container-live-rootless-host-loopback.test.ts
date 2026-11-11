@@ -19,6 +19,12 @@
  * and after. The variant also shows what runtime root can do: it can rewrite
  * an in-container firewall, while a gateway runtime's root cannot.
  *
+ * ORKESTRATOR_LIVE_WORKLOAD_FIREWALL_IMAGE=<image> replaces the variant with
+ * an image that was actually built before the egress gateway existed, so its
+ * own (older) firewall scripts and entrypoint run under the current backend.
+ * The suite checks that it declares no `egress-gateway` and leaves it in
+ * place afterwards: the caller built it.
+ *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1, ORKESTRATOR_QUALIFICATION_IMAGE=<image>
  * and ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=enabled, which
  * `mise run docker:disposable -- start --host-loopback` prints. Docker does
@@ -59,6 +65,7 @@ const DECLARED_ENABLED = process.env.ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK ===
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0 && DECLARED_ENABLED;
 const REPORT_PATH = process.env.ORKESTRATOR_LIVE_REPORT?.trim() ?? "";
 const GITHUB_SEED = process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim() ?? "";
+const WORKLOAD_FIREWALL_IMAGE = process.env.ORKESTRATOR_LIVE_WORKLOAD_FIREWALL_IMAGE?.trim() ?? "";
 const RUN = `h${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 const LIVE_TIMEOUT_MS = 900_000;
 const HOST_LOOPBACK = "10.0.2.2";
@@ -242,6 +249,38 @@ async function inContainerFirewallImage(): Promise<string> {
   return variantImage;
 }
 
+/**
+ * The image for the workload-firewall runtime, and what the report says about
+ * it: the caller's pre-gateway image when one is named, else the variant.
+ */
+async function workloadFirewallImage(): Promise<{
+  image: string;
+  kind: "historical" | "variant";
+  id: string;
+  capabilities: string;
+}> {
+  const image = WORKLOAD_FIREWALL_IMAGE || (await inContainerFirewallImage());
+  const [id, capabilities] = (
+    await docker([
+      "image",
+      "inspect",
+      "--format",
+      `{{.Id}}\t{{ index .Config.Labels "${CAPABILITIES_LABEL}" }}`,
+      image,
+    ])
+  ).split("\t");
+  // An image that declares the gateway would not run its firewall in the
+  // workload, so the comparison below would be meaningless.
+  expect(capabilities).not.toMatch(/(^|,)egress-gateway=/);
+  expect(capabilities).toMatch(/(^|,)network-policy=\d/);
+  return {
+    image,
+    kind: WORKLOAD_FIREWALL_IMAGE ? "historical" : "variant",
+    id: id ?? "",
+    capabilities: capabilities ?? "",
+  };
+}
+
 describe("rootless daemon with host loopback enabled", () => {
   live(
     "only the named service port is reachable from restricted runtimes; full runtimes reach every loopback listener as 127.0.0.1",
@@ -279,7 +318,7 @@ describe("rootless daemon with host loopback enabled", () => {
       expect(host.hostAddress).toBe(HOST_LOOPBACK);
       expect(host.remediation ?? null).toBeNull();
 
-      const variant = await inContainerFirewallImage();
+      const workloadFirewall = await workloadFirewallImage();
       const environments: Environment[] = [
         lifecycleEnvironment({ id: `env-${RUN}-gw`, networkAccessMode: "restricted" }),
         lifecycleEnvironment({ id: `env-${RUN}-full`, networkAccessMode: "full" }),
@@ -329,7 +368,7 @@ describe("rootless daemon with host loopback enabled", () => {
       };
       const gatewayRuntime = await create(environments[0]!, IMAGE);
       const fullRuntime = await create(environments[1]!, IMAGE);
-      const inContainerRuntime = await create(environments[2]!, variant);
+      const inContainerRuntime = await create(environments[2]!, workloadFirewall.image);
 
       // Where each runtime's firewall lives.
       const egressGateway = await networkOwnerContainer(gatewayRuntime);
@@ -347,7 +386,11 @@ describe("rootless daemon with host loopback enabled", () => {
         inContainerRuntime,
       ]);
       expect(inContainerCaps).toContain("NET_ADMIN");
-      for (const firewall of [egressGateway, inContainerRuntime]) {
+      const firewallReports: Record<string, unknown> = {};
+      for (const [label, firewall] of [
+        ["restricted-gateway", egressGateway],
+        ["restricted-in-container", inContainerRuntime],
+      ] as const) {
         const report = JSON.parse(
           await docker([
             "exec",
@@ -359,6 +402,8 @@ describe("rootless daemon with host loopback enabled", () => {
           ]),
         );
         expect(report).toMatchObject({ mode: "restricted", state: "applied" });
+        // Which firewall scripts ran: the policy they enforce and their state.
+        firewallReports[label] = { policy: report.policy, state: report.state };
       }
 
       const targets = (address: string) => ({
@@ -397,7 +442,11 @@ describe("rootless daemon with host loopback enabled", () => {
         return results;
       };
 
-      const matrix: Record<string, unknown> = { hostAddress: host.hostAddress };
+      const matrix: Record<string, unknown> = {
+        hostAddress: host.hostAddress,
+        workloadFirewallImage: workloadFirewall,
+        firewalls: firewallReports,
+      };
       for (const [label, runtime, firewall] of [
         ["restricted-gateway", gatewayRuntime, egressGateway],
         ["restricted-in-container", inContainerRuntime, inContainerRuntime],

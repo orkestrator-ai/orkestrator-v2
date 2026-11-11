@@ -2,32 +2,13 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `a0a6d6206`. The lab results below date from 2026-11-04, against `main` at `96ee1eb3e`.
+Analysed 2026-11-05 against `main` at `a0a6d6206`. The lab results below date from 2026-11-04, against `main` at `96ee1eb3e`. Rechecked 2026-11-11 against `main` at `498b68766`: the 120 s keep-alive (`GATEWAY_KEEP_ALIVE_TIMEOUT_MS`), `WORKLOAD_NICE` 10 and the burst summary (`GATEWAY_TRAFFIC_BURST_THRESHOLD`) are all still in place.
 
 ### Tasks
 
-4. **Measure nice 10 on macOS**: the macOS behaviour comes from reading XNU. Status: open.
 7. **Stop one short stall from resetting a whole batch**: macOS resets every connection past a 128-deep accept queue. Status: blocked (waits on 7568: 4400 task 6).
 
-Tasks 1, 2, 3, 5 and 6 (Serve proxy-error counts and logs on the user's nodes, a run through real Tailscale Serve, the container measurement on a rootful Docker host, and naming the burst sender from arktech-mini's log) moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
-
-### 4. Measure nice 10 on macOS
-
-**Problem.** Fix 2's macOS behaviour is inferred from source, not measured.
-
-**Context.** In XNU, nice sets task importance and a thread's base priority becomes 31 minus nice (`resetpriority`, `task_policy.c`). Threads with an explicit QoS class ignore it (`thread_recompute_priority`). `sched_convert_pri_to_bucket` keeps priority 21 in the default bucket; priority 20 and below drop to utility. Nothing in that path sets the throttling that `taskpolicy -b` does.
-
-**Investigation.** Not run. On a Mac, compare a fixed CPU job at nice 0 and nice 10 on an idle machine, then gateway latency with `yes`-style load at nice 0 and nice 10, and record whether the job moves to efficiency cores (`powermetrics`).
-
-**Decisions.**
-
-- **What if nice 10 turns out to slow idle work on Apple Silicon?**
-  - **Lower the value, keeping the same mechanism (recommended).**
-    - Pros: one constant, `WORKLOAD_NICE`.
-    - Cons: weaker protection for the backend under load.
-  - **Skip lowering on macOS.**
-    - Pros: no slowdown at all.
-    - Cons: macOS loses the protection, and macOS is where the highest load was reported.
+Tasks 1, 2, 3, 5 and 6 (Serve proxy-error counts and logs on the user's nodes, a run through real Tailscale Serve, the container measurement on a rootful Docker host, and naming the burst sender from arktech-mini's log) moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10. Task 4 (measuring nice 10 on macOS) followed on 2026-11-11; see Assumptions and decisions.
 
 ### 7. Stop one short stall from resetting a whole batch
 
@@ -60,6 +41,25 @@ A burst ends after five quiet seconds; one closer than 30 s to the previous line
 ### Task 6: `X-Forwarded-For` is believed only from loopback
 
 Serve connects from loopback, so that is the only peer whose header means anything. A direct tailnet client could put any text in the header, so it is ignored for direct peers, and anything that is not an IP literal is logged as `invalid`. Invoke commands are recorded only under the name the gateway's metrics already accept (`normalizeMetricLabel` of a registered command), never the arguments.
+
+### Task 4: moved to the manual-test checklist (2026-11-11)
+
+Measuring nice 10 on macOS needs a Mac, and the question it answers (does
+the job move to efficiency cores?) is read with `powermetrics`, which runs
+only as root. This pipeline ran on beelink2 (Linux, x86_64), and running a
+CPU burner and a root tool on one of the user's Macs is theirs to allow, so
+the measurement is now an item in
+[7568](../manual-test/7568-manual-test-checklist.md) naming this task. What
+the source reading predicts, kept for whoever runs it: in XNU, nice sets task
+importance and a thread's base priority becomes 31 minus nice
+(`resetpriority`, `task_policy.c`); threads with an explicit QoS class ignore
+it (`thread_recompute_priority`); `sched_convert_pri_to_bucket` keeps
+priority 21 in the default bucket, and priority 20 and below drop to utility;
+nothing in that path sets the throttling that `taskpolicy -b` does. If nice
+10 turns out to slow idle work on Apple Silicon, the recommended response is
+to lower `WORKLOAD_NICE` (one constant, weaker protection under load) rather
+than skip lowering on macOS, which would drop the protection where the
+highest load was reported.
 
 ## Current state
 
@@ -110,5 +110,5 @@ Fix 2's cost, measured on a busy machine, so no reading is from a truly idle one
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 2, 3, 5 and 6) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 2, 3, 5 and 6) moved there on 2026-11-10, and task 4 on 2026-11-11.
 - `docs/todo/transcripts-and-observation/0052-remote-client-bandwidth.md`, "Live run through Tailscale Serve".

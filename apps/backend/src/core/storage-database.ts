@@ -699,6 +699,7 @@ export class StorageDatabase {
 
   /** Current committed revision of a store, or `null` when it does not exist. */
   storeRevision(store: string): number | null {
+    this.timing.nameCall(leaseFamily(store));
     const row = this.db.query("SELECT revision FROM stores WHERE name = ?").get(store) as {
       revision: number;
     } | null;
@@ -1857,6 +1858,9 @@ export class StorageDatabase {
     const owner = randomUUID();
     const waitStartedAt = Date.now();
     const deadline = waitStartedAt + acquireTimeoutMs;
+    // Lease statements are counted under the lease's family, apart from the
+    // store it guards (to-do 7562: each claim and release is its own commit).
+    const caller = `lease:${leaseFamily(name)}`;
     const claim = this.db.query(
       `INSERT INTO leases (name, owner, heartbeat_at) VALUES (?1, ?2, ?3)
        ON CONFLICT (name) DO UPDATE SET owner = excluded.owner, heartbeat_at = excluded.heartbeat_at
@@ -1865,6 +1869,7 @@ export class StorageDatabase {
     while (true) {
       if (this.closed) throw new Error(`Storage closed while waiting for ${description} lock`);
       const now = Date.now();
+      this.timing.nameCall(caller);
       const claimed = this.transaction(() => {
         claim.run(name, owner, now, now - staleMs);
         const row = this.db.query("SELECT owner FROM leases WHERE name = ?").get(name) as {
@@ -1885,6 +1890,7 @@ export class StorageDatabase {
     const heartbeat = setInterval(() => {
       if (this.closed) return;
       try {
+        this.timing.nameCall(caller);
         const renewed = this.db
           .query("UPDATE leases SET heartbeat_at = ? WHERE name = ? AND owner = ?")
           .run(Date.now(), name, owner);
@@ -1905,6 +1911,7 @@ export class StorageDatabase {
       released = true;
       clearInterval(heartbeat);
       if (this.closed) return;
+      this.timing.nameCall(caller);
       this.db.query("DELETE FROM leases WHERE name = ? AND owner = ?").run(name, owner);
     };
   }

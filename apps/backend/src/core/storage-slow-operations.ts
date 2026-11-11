@@ -51,6 +51,14 @@ export const MAX_SLOW_STORAGE_SERIES = 64;
 export const STORAGE_CALL_BUCKET_MS = 250;
 /** Buckets kept: 32 s, longer than any stall worth attributing. */
 export const STORAGE_CALL_BUCKETS = 128;
+/**
+ * Caller series one bucket keeps; later ones in the same bucket count as
+ * `other`. A series is a store family, a lease family or a table, never an id.
+ */
+export const MAX_STORAGE_CALL_SERIES_PER_BUCKET = 32;
+/** Callers a stall line lists in `storageCallers`, busiest first. */
+export const STALL_STORAGE_CALLERS = 4;
+const OTHER_CALL_SERIES = "other";
 const STORAGE_DATABASE_NAMES: readonly StorageDatabaseName[] = ["main", "ledger", "other"];
 
 export type StorageDatabaseName = "main" | "ledger" | "other";
@@ -189,6 +197,13 @@ interface RecentOperation extends SlowStorageOperation {
 
 const round = (ms: number | null) => (ms === null ? null : Math.round(ms));
 
+/** One caller's calls in one bucket. */
+interface CallSeries {
+  calls: number;
+  ms: number;
+  writes: number;
+}
+
 export class SlowStorageOperations {
   private readonly series = new Map<string, Series>();
   private overflowed = 0;
@@ -199,6 +214,12 @@ export class SlowStorageOperations {
   private readonly callMs = Object.fromEntries(
     STORAGE_DATABASE_NAMES.map((name) => [name, new Float64Array(STORAGE_CALL_BUCKETS)]),
   ) as Record<StorageDatabaseName, Float64Array>;
+  private readonly callWrites = new Float64Array(STORAGE_CALL_BUCKETS);
+  /** Per bucket, the calls of each caller series (`database:series`). */
+  private readonly callSeries = Array.from(
+    { length: STORAGE_CALL_BUCKETS },
+    () => new Map<string, CallSeries>(),
+  );
 
   constructor(
     readonly thresholdMs = SLOW_STORAGE_OPERATION_MS,
@@ -283,20 +304,48 @@ export class SlowStorageOperations {
   }
 
   /**
-   * Counts one outermost statement or transaction of any length. A slot check
-   * and two additions: this runs for every SQLite call the backend makes.
+   * Counts one outermost statement or transaction of any length, under the
+   * caller `series` that made it (to-do 7562: a stall's calls were many short
+   * ones, so a stall line has to say whose they were). A slot check, two
+   * additions and one map update: this runs for every SQLite call the backend
+   * makes.
    */
-  recordCall(database: StorageDatabaseName, durationMs: number, endedAtMs: number): void {
+  recordCall(
+    database: StorageDatabaseName,
+    durationMs: number,
+    endedAtMs: number,
+    series: string = OTHER_CALL_SERIES,
+    wrote = false,
+  ): void {
     if (!Number.isFinite(durationMs) || !Number.isFinite(endedAtMs)) return;
     const bucket = Math.floor(endedAtMs / STORAGE_CALL_BUCKET_MS);
     const slot = bucket % STORAGE_CALL_BUCKETS;
     if (this.callBucket[slot] !== bucket) {
       this.callBucket[slot] = bucket;
       this.callCount[slot] = 0;
+      this.callWrites[slot] = 0;
       for (const name of STORAGE_DATABASE_NAMES) this.callMs[name][slot] = 0;
+      this.callSeries[slot]!.clear();
     }
+    const ms = Math.max(0, durationMs);
     this.callCount[slot]! += 1;
-    this.callMs[database][slot]! += Math.max(0, durationMs);
+    this.callMs[database][slot]! += ms;
+    if (wrote) this.callWrites[slot]! += 1;
+    const callers = this.callSeries[slot]!;
+    let key = `${database}:${series}`;
+    let entry = callers.get(key);
+    if (!entry) {
+      if (callers.size >= MAX_STORAGE_CALL_SERIES_PER_BUCKET)
+        key = `${database}:${OTHER_CALL_SERIES}`;
+      entry = callers.get(key);
+      if (!entry) {
+        entry = { calls: 0, ms: 0, writes: 0 };
+        callers.set(key, entry);
+      }
+    }
+    entry.calls += 1;
+    entry.ms += ms;
+    if (wrote) entry.writes += 1;
   }
 
   /** Every call that ended in `fromMs`–`toMs`, at bucket resolution. */
@@ -304,19 +353,52 @@ export class SlowStorageOperations {
     const first = Math.floor(fromMs / STORAGE_CALL_BUCKET_MS);
     const last = Math.floor(toMs / STORAGE_CALL_BUCKET_MS);
     let calls = 0;
+    let writes = 0;
     const ms: Record<StorageDatabaseName, number> = { main: 0, ledger: 0, other: 0 };
+    const callers = new Map<string, CallSeries>();
     for (let bucket = Math.max(first, last - STORAGE_CALL_BUCKETS + 1); bucket <= last; bucket++) {
       const slot = bucket % STORAGE_CALL_BUCKETS;
       if (this.callBucket[slot] !== bucket) continue;
       calls += this.callCount[slot]!;
+      writes += this.callWrites[slot]!;
       for (const name of STORAGE_DATABASE_NAMES) ms[name] += this.callMs[name][slot]!;
+      for (const [key, entry] of this.callSeries[slot]!) {
+        const total = callers.get(key);
+        if (total) {
+          total.calls += entry.calls;
+          total.ms += entry.ms;
+          total.writes += entry.writes;
+        } else {
+          callers.set(key, { ...entry });
+        }
+      }
     }
     if (calls === 0) return undefined;
+    const ranked = [...callers].sort(
+      ([, a], [, b]) => b.ms - a.ms || b.calls - a.calls || b.writes - a.writes,
+    );
+    const top = ranked[0];
     return {
       storageCalls: calls,
       storageCallMs: Math.round(ms.main + ms.ledger + ms.other),
       storageMainCallMs: Math.round(ms.main),
       storageLedgerCallMs: Math.round(ms.ledger),
+      storageWrites: writes,
+      ...(top
+        ? {
+            storageTopCaller: top[0],
+            storageTopCallerCalls: top[1].calls,
+            storageTopCallerMs: Math.round(top[1].ms),
+            storageTopCallerWrites: top[1].writes,
+            storageCallers: ranked
+              .slice(0, STALL_STORAGE_CALLERS)
+              .map(
+                ([key, entry]) =>
+                  `${key}=${entry.calls}/${Math.round(entry.ms)}ms/${entry.writes}w`,
+              )
+              .join(" "),
+          }
+        : {}),
     };
   }
 
@@ -386,10 +468,20 @@ const TIMED_STATEMENT_METHODS = ["get", "all", "run", "values"] as const;
  */
 export interface SqliteConnectionTiming {
   store: string | null;
+  /**
+   * Names the caller of the next outermost call for the stall line's caller
+   * counts ({@link SlowStorageOperations.recordCall}), when the store or
+   * table alone would not: a lease (`lease:<family>`) or a store family read
+   * outside a transaction. Ignored inside a transaction, which is counted
+   * under its own name. Content-free labels only: a family, never an id.
+   */
+  nameCall(caller: string): void;
 }
 
 /** The open outermost transaction's measurements; `depth` 0 when none is open. */
 interface TransactionState extends SqliteConnectionTiming {
+  /** The next outermost call's caller ({@link SqliteConnectionTiming.nameCall}). */
+  caller: string | null;
   depth: number;
   sqlMs: number;
   slowestMs: number;
@@ -430,6 +522,10 @@ export function instrumentSqliteConnection(
   const now = options.now ?? (() => performance.now());
   const state: TransactionState = {
     store: null,
+    caller: null,
+    nameCall(caller: string) {
+      if (state.depth === 0) state.caller = caller;
+    },
     depth: 0,
     sqlMs: 0,
     slowestMs: -1,
@@ -447,18 +543,19 @@ export function instrumentSqliteConnection(
     }
   };
 
-  const call = (ms: number, endedAt: number): void => {
+  const call = (ms: number, endedAt: number, series: string, changed: boolean): void => {
     try {
-      recorder.recordCall(database, ms, endedAt);
+      recorder.recordCall(database, ms, endedAt, series, changed);
     } catch {
       // Evidence must never fail the call it describes.
     }
   };
 
-  /** Counts a completed call; never throws into it. */
-  const count = (classified: ClassifiedStatement, result: unknown, ms: number): void => {
+  /** Counts a completed call; never throws into it. Returns whether it wrote. */
+  const count = (classified: ClassifiedStatement, result: unknown, ms: number): boolean => {
+    let changed = false;
     try {
-      const changed = wrote(classified.effect, result);
+      changed = wrote(classified.effect, result);
       if (state.depth > 0) {
         if (changed) state.wrote = true;
       } else if (changed) {
@@ -471,6 +568,7 @@ export function instrumentSqliteConnection(
     } catch {
       // Evidence must never fail the call it describes.
     }
+    return changed;
   };
 
   /** Wraps a call whose SQL is `sqlOf(args)`, classified by `classify(args)`. */
@@ -480,6 +578,9 @@ export function instrumentSqliteConnection(
     classify: (args: unknown[]) => ClassifiedStatement,
   ): AnyFunction =>
     function (this: unknown, ...args: unknown[]) {
+      const outermost = state.depth === 0;
+      const caller = outermost ? state.caller : null;
+      if (outermost) state.caller = null;
       const startedAt = now();
       let busy = false;
       let completed = false;
@@ -494,8 +595,17 @@ export function instrumentSqliteConnection(
       } finally {
         const endedAt = now();
         const ms = endedAt - startedAt;
-        if (completed) count(classify(args), result, ms);
-        if (state.depth === 0) call(ms, endedAt);
+        let classified: ClassifiedStatement | null = null;
+        let changed = false;
+        if (completed) changed = count((classified = classify(args)), result, ms);
+        if (outermost) {
+          call(
+            ms,
+            endedAt,
+            caller ?? readSeriesForTable((classified ?? classify(args)).table),
+            changed,
+          );
+        }
         if (state.depth > 0) {
           state.sqlMs += ms;
           if (ms > state.slowestMs) {
@@ -565,6 +675,8 @@ export function instrumentSqliteConnection(
       const store = state.store;
       state.store = null;
       if (state.depth > 0) return variant.apply(this, args);
+      const caller = state.caller;
+      state.caller = null;
       state.depth = 1;
       state.sqlMs = 0;
       state.slowestMs = -1;
@@ -587,7 +699,15 @@ export function instrumentSqliteConnection(
         const endedAt = now();
         const ms = endedAt - startedAt;
         if (committed) countTransaction(store, endedAt, marks);
-        call(ms, endedAt);
+        call(
+          ms,
+          endedAt,
+          caller ??
+            (store === null
+              ? readSeriesForTable(describeStatement(state.slowestSql).table)
+              : readSeriesForStore(store)),
+          committed && state.wrote,
+        );
         if (ms >= recorder.thresholdMs) {
           const ran = !Number.isNaN(marks.bodyStartedAt);
           const bodyEndedAt = Number.isNaN(marks.bodyEndedAt) ? endedAt : marks.bodyEndedAt;

@@ -312,6 +312,12 @@ async function withService(
   }
 }
 
+/** Tmux mode is experimental and off by default; its tests turn it on. */
+async function enableTmuxMode(storage: StorageService): Promise<void> {
+  const config = await storage.loadConfig();
+  await storage.updateGlobalConfig({ ...config.global, experimentalTmux: true });
+}
+
 async function createStorage(dataDir: string): Promise<StorageService> {
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -3016,6 +3022,7 @@ describe("NativeAgentService", () => {
           },
           async ({ storage, service }) => {
             launchStorage = storage;
+            if ("claudeNativeBackend" in agentConfig) await enableTmuxMode(storage);
             await storage.ensureSetupTab("env-1");
             await service.reconcileInitialLaunch("env-1");
 
@@ -4114,6 +4121,7 @@ describe("NativeAgentService", () => {
           invoke,
         },
         async ({ storage, service }) => {
+          await enableTmuxMode(storage);
           await service.reconcileInitialLaunch("env-1");
 
           expect(send).not.toHaveBeenCalled();
@@ -4122,6 +4130,41 @@ describe("NativeAgentService", () => {
             pendingAgentLaunch: false,
           });
           expect(invokeMock).toHaveBeenCalledTimes(1);
+        },
+      );
+    });
+
+    test("launches a stored tmux backend on the Agent SDK while tmux mode is off", async () => {
+      const { provider, send } = createProviderStub("claude");
+      const invokeMock = mock(async () => {
+        throw new Error("a tmux launch must not reach the terminal coordinator");
+      });
+      const invoke: Invoke = async <T>() => (await invokeMock()) as T;
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-tmux-off-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "claude",
+            claudeMode: "native",
+            claudeNativeBackend: "tmux",
+            initialPrompt: "Inspect this screenshot",
+          },
+          provider: async () => provider,
+          invoke,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(invokeMock).not.toHaveBeenCalled();
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "Inspect this screenshot",
+            expect.anything(),
+          );
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+          });
         },
       );
     });

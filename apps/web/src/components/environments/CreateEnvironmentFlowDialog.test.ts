@@ -34,13 +34,20 @@ describe("usesNativeStartupAgentTab", () => {
     ).toBe(true);
   });
 
-  test("excludes terminal launches and Claude native tmux", () => {
-    expect(usesNativeStartupAgentTab(config, "project-1", settings("claude", "terminal"))).toBe(
+  test("excludes terminal launches and Claude native tmux while tmux mode is on", () => {
+    const tmuxOn = { ...config, global: { ...config.global, experimentalTmux: true } };
+    expect(usesNativeStartupAgentTab(tmuxOn, "project-1", settings("claude", "terminal"))).toBe(
       false,
     );
     expect(
-      usesNativeStartupAgentTab(config, "project-1", settings("claude", "native", "tmux")),
+      usesNativeStartupAgentTab(tmuxOn, "project-1", settings("claude", "native", "tmux")),
     ).toBe(false);
+  });
+
+  test("treats a stored Claude tmux backend as the Agent SDK while tmux mode is off", () => {
+    expect(
+      usesNativeStartupAgentTab(config, "project-1", settings("claude", "native", "tmux")),
+    ).toBe(true);
   });
 });
 

@@ -515,6 +515,18 @@ Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.
 
+Tmux mode is experimental and off by default (`global.experimentalTmux`,
+Settings → Experimental → Tmux mode). While it is off a stored
+`claudeNativeBackend: "tmux"` at any tier is kept but every new launch resolves
+to the Agent SDK (`effectiveClaudeNativeBackend` in
+`packages/protocol/src/agent-settings.ts`): the startup tab, new tabs, the
+create-environment flow and an explicit tmux request alike. The Claude settings
+page hides the Native backend choice, the new-agent-tab menu hides "Claude Tmux
+Tab", and the coordinator `launch_terminal` tool refuses `claude-tmux` on a node
+that has it off (`launchWorkerTerminal`). Tmux tabs that are already open keep
+running, and `launch_terminal_job` itself is not gated, so the live scripts that
+call it directly still work.
+
 Its chat tab reads the session's JSONL through `TmuxTranscriptReader`
 (`tmux-transcript-reader.ts`). A reopen reads one bounded page from the tail, and
 earlier history pages in on request, in one `docker exec` per page in a container.

@@ -57,7 +57,11 @@ import {
   ProviderUnavailableError,
   TURN_STOPPED_BY_USER_MESSAGE,
 } from "./agent-provider-contract.js";
-import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
+import {
+  claudeNativeParameterValues,
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
+} from "@orkestrator/protocol/agent-settings";
 import {
   buildInitialPromptWithAttachmentReferences,
   type SavedInitialPromptAttachment,
@@ -1683,7 +1687,12 @@ export class NativeAgentLaunchActivityReconciler {
     // now travels only down its own platform column.
     const resolved = resolveAgentPlatformSettings(tiers, agent);
     const mode = resolved.mode;
-    const claudeNativeBackend = resolveAgentPlatformSettings(tiers, "claude").claudeNativeBackend;
+    // Tmux mode is experimental: a stored `tmux` launches on the Agent SDK
+    // unless `global.experimentalTmux` is on.
+    const claudeNativeBackend = effectiveClaudeNativeBackend(
+      resolveAgentPlatformSettings(tiers, "claude").claudeNativeBackend,
+      isTmuxModeEnabled(config.global),
+    );
     const selectedModel = environment.initialAgentModel ?? resolved.model;
     // The Claude catalogue exposes Sonnet through its stable alias. Stored
     // release ids remain valid preferences but must be dispatched as that alias.

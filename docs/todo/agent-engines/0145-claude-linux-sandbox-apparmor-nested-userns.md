@@ -322,7 +322,8 @@ a graphical desktop inspection remains in the checklist above.
 
 - Do not weaken the coordinator's sandbox to make it start: a coordinator at
   `enforced` must have containment that works, and one that cannot get it
-  must say so (`provider-configured`), as todo 0026 decided for hosts missing
+  must say so (`provider-configured`), as todo 0026 (retired; D2 in
+  [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)) decided for hosts missing
   `bwrap` or `socat`.
 - The CI change is acceptable on a disposable runner only; it is not advice
   for a shared host.
@@ -466,8 +467,9 @@ a graphical desktop inspection remains in the checklist above.
 
 ## Related
 
-- [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md):
-  the Claude coordinator tier and its Linux item.
+- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+  (to-do 0026, retired 2026-11-11): the Claude coordinator tier; its Linux live
+  run is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 - [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md):
   where this was found, the CI probe runs and the workflow change.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):

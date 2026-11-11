@@ -482,6 +482,36 @@ them breaks a build when it changes, so check them on a bump:
 - **Cursor:** whether the SDK now names a capacity error (task 4 is waiting on
   this).
 
+## Re-check coordinator tier decisions
+
+Some coordinator tiers rest on facts read from one pinned version
+([coordinator-read-only-decisions.md](../architecture/coordinator-read-only-decisions.md)).
+None of them breaks a build when it changes, so check them on a bump:
+
+- **Claude (Assumptions):** the pinned CLI keeps its Windows sandbox behind a
+  vendor feature flag that is off by default (`tengu_nankeen_kestrel` in the
+  2.1.309 binary). Search the new binary for that flag name. If it is gone or
+  on by default, Windows Claude coordinators may now get the sandbox
+  (`unavailable` already asks for it); the tier stays `provider-configured`
+  until the Windows live run on the manual-test checklist passes.
+- **Codex (D9):** if `live-network-lock.test.ts` fails, or a coordinator's
+  first turn is refused by `assertHostedNetworkLock`, fix the lock first, then
+  decide whether a `NativeAgentReadiness` state is now worth adding.
+- **Codex (D4):** when the live coordinator suite runs on the new version,
+  check the `async` and `family` summaries for a Codex coordinator running
+  `sleep`; if one does, add an argv0 deny to the coordinator permission profile.
+- **Cursor (D6):** read `LocalAgentOptions` in the new `@cursor/sdk` typings
+  for an approval or tool-call callback. If one exists, Cursor's
+  `provider-configured` tier can be reconsidered (a conformance test change
+  and a live run).
+- **Grok (D8):** if `grok --help` documents a fetch-only switch, or a way to
+  remove the hosted search's `open_page` actions, run the `no-open-page` and
+  `flag-search` variants of `scripts/coordinator-probes/grok-web-tools-probe.mjs`
+  signed in (billed turns). Only if it shows search without fetch can Grok
+  coordinators get web search. The `data-dir-reads` variant answers whether
+  Grok's own reading tools ask permission
+  ([7401](../todo/coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md)).
+
 ## Claude
 
 ### Where the SDK is used

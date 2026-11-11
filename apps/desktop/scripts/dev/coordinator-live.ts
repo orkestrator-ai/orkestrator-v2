@@ -46,7 +46,8 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
 
 /**
  * The scenarios each platform runs, in run order. `read-only` holds the
- * coordinator's boundary; `async` and `family` drive real workers and mail;
+ * coordinator's boundary; `research` calls a research MCP server under the
+ * default research setting; `async` and `family` drive real workers and mail;
  * `status` drives the status wakes of a Multi Review and of a worker held on
  * an approval; `deliver-now` corrects a busy worker with `deliverNow` (and,
  * on Claude, a tmux worker that cannot take it mid-turn); `goal` gives a worker
@@ -58,6 +59,7 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  */
 export const COORDINATOR_LIVE_SCENARIOS = [
   "read-only",
+  "research",
   "async",
   "family",
   "status",

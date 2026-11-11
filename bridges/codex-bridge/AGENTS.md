@@ -245,6 +245,9 @@ replay shows it as the card, never as a message the user typed. See
   response events cannot either: `experimentalRawEvents` exists only on
   `thread/start`, so a thread resumed in a new app-server never gets them.
   Verified against 0.164.0 by `live-refused-calls.test.ts` (no credits).
+  Why each of those choices was made, and which cells become rows: "Codex
+  refused cells" in
+  [`coordinator-read-only-decisions.md`](../../docs/architecture/coordinator-read-only-decisions.md).
 - Never reload a code-mode MCP call from its `exec` cell when the rollout
   recorded it. Each call is an `event_msg` `item_completed` record with an
   `McpToolCall` item; `history/code-mode-mcp-calls.ts` renders it through the

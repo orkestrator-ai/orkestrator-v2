@@ -1100,8 +1100,8 @@ server as loaded; the address is never contacted.
   (Orkestrator-owned "always allow" rules, applied as allow-once; meets decision 1's
   list-and-revoke constraint without a provider rule).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
-- [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md)
-  (coordinator safety tiers, `coordinator-providers.ts`).
+- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+  (coordinator safety tiers, `coordinator-providers.ts`; to-do 0026, retired 2026-11-11).
 - [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md) (provider
   sign-in and readiness).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md)

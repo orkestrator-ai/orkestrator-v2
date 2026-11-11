@@ -2,8 +2,7 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md)
-and [0038-design-agent-conversation-links.md](../todo/design-canvas/0038-design-agent-conversation-links.md).
+[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
 dialog has three tabs: **New design** (optionally with Claude or Codex, or a
@@ -460,23 +459,40 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   resume holds its canvas lane while waiting for that lock), and recording
   never fails the close.
 - **Link states.** `design_session_link_states` reads each link's tab mapping
-  from storage (no bridge, no liveness route, nothing that defeats idle
-  detachment) and reports `retained` or `missing`; it writes nothing. The
-  dialog asks once when it opens and again on **Retry**, never on a timer, and
-  shows: open (the tab is in this client's pane layout), can be resumed
-  (closed, the link records a session), no conversation to resume (closed and
+  from storage (no liveness route, nothing that defeats idle detachment) and
+  reports `retained` or `missing`; it writes nothing. For closed links with a
+  recorded session on an agent that can archive (of the design agents, Codex),
+  it also asks that agent's bridge for its archived conversations, once per
+  agent and only when the bridge is already running
+  (`NativeAgentService.archivedResumableSessionIdsIfRunning`, observe only:
+  never started for this read), within 3 seconds
+  (`DESIGN_ARCHIVED_READ_DEADLINE_MS`). A link whose session the list shows
+  as archived carries `archived: true`; no bridge, a failed list or a late one
+  leaves the flag off, so "not known" never reads as archived. The dialog asks
+  once when it opens and again on **Retry**, never on a timer, and shows: open
+  (the tab is in this client's pane layout), can be resumed (closed, the link
+  records a session), archived by the agent (closed, and the agent lists the
+  recorded session as archived), no conversation to resume (closed and
   nothing recorded: it never started, or it closed before links kept
   sessions; remove it or start a new conversation), could not check (the
   backend failed or did not answer within 8 seconds: **Retry**, never a
   replacement; a late answer still replaces it) and closed (a backend older
-  than this command, or an agent without resume). Codex conversations can
-  now be archived from the resume list
-  ([agent-engines.md](agent-engines.md#removing-a-conversation-from-the-resume-list));
-  links do not show an archived state yet
-  ([0038](../todo/design-canvas/0038-design-agent-conversation-links.md)).
+  than this command, or an agent without resume). Archive itself is the
+  resume list's **Remove from list**
+  ([agent-engines.md](agent-engines.md#removing-a-conversation-from-the-resume-list)).
+  A Codex thread archived while its bridge was not running reads as can be
+  resumed until a later check finds the bridge up; Resume then fails with the
+  agent's refusal in the dialog, and nothing opens.
 - **Resume conversation.** A closed link that can be resumed is offered ahead
   of a new conversation, alone or as the destination for new context
-  ("Resume and add to composer"). The resume tab id is derived from the link
+  ("Resume and add to composer"). An archived one offers **Unarchive and
+  resume** beside **Remove link**, and can be chosen as the destination
+  ("Unarchive, resume and add to composer"), but is never chosen for the user,
+  because reaching it writes provider state. It sends `restoreArchived: true`
+  (an optional, non-critical argument: an older backend resumes as before and
+  the agent refuses the archived thread): the backend unarchives the recorded
+  session (`setProjectionResumableSessionArchived`, Codex `thread/unarchive`)
+  before resuming it, and a refused restore does not resume or move the link. The resume tab id is derived from the link
   (`design-resume-<linkId>-<hash of its current tab id>`). `design_session_resume`
   then, in the canvas lane, compare-and-sets the link's tab, resumes the
   recorded session for the new tab through the ordinary native-agent resume
@@ -534,5 +550,21 @@ Vite; `design-canvas-packaged-electron.spec.ts`
 Linux app and its `file://` renderer. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
 exports from a running container and interrupts it.
+`e2e/DesignAgentLinks.spec.ts` renders the Ask agent dialog's closed-link
+states, archived included, against fixed backend answers.
 `scripts/benchmark-design.ts` measures transfer, commit and latency fixtures,
 and `e2e/perf/design-canvas-perf.ts` measures the client in a real browser.
+Its leak check compares the cycle halves' maximum for every signal except
+`jsEventListeners`, where it compares their minimum. That CDP counter also
+counts listener objects no event target holds any more until Blink finalizes
+them, and a forced collection does not wait for that, so on Linux a sample
+reads one of two fixed values at random (+25, +55 and +85 listeners at 1, 16
+and 64 frames, measured 2026-11-11 on beelink2). Two readings taken a second
+apart with no page action between them flip between the two values; every
+`addEventListener` registration in the page and every listener on its nodes
+(DOMDebugger, iframes included) stayed constant in every sample; and a heap
+snapshot taken at a high reading held the low number of registered
+listeners. A leak raises the floor and still fails the check.
+`--listener-census` (with `--heap-snapshots <dir>`) repeats that
+investigation; it perturbs the page, so it is never used for measured
+numbers.

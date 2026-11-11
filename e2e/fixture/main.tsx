@@ -45,6 +45,7 @@ import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
 import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture, installDesignCanvasFixture } from "./DesignCanvasFixture";
+import { DesignAgentLinksFixture, installDesignAgentLinksFixture } from "./DesignAgentLinksFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
@@ -2092,6 +2093,10 @@ function fixtureForPath() {
   if (window.location.pathname === "/design-canvas") {
     installDesignCanvasFixture();
     return <DesignCanvasFixture />;
+  }
+  if (window.location.pathname === "/design-agent-links") {
+    installDesignAgentLinksFixture();
+    return <DesignAgentLinksFixture />;
   }
   if (window.location.pathname === "/design-launch") {
     installDesignLaunchFixture();

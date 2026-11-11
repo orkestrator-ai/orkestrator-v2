@@ -356,8 +356,32 @@ computed marker (`$((6*7))` and similar), which an OSC sequence on its own promp
 or `PS0` line cannot split. The visible-text helper exists as eight near-copies that
 have drifted (some do not strip DCS strings or two-character escapes). Merging them
 would change files with no failing assertion, several of which need Docker or a
-real display to run, so it is recorded as [7340](7340-shared-terminal-visible-text-helper.md)
-rather than done here.
+real display to run, so it is recorded as 7340 rather than done here.
+
+To-do 7340 (retired 2026-11-11) merged the copies into
+`e2e/agent-testing/terminal-visible-text.ts` on 2026-11-10, and every owner
+then passed live on beelink2: `terminal-input-resume.spec.ts` (2026-11-10);
+`terminal-mobile-panes.spec.ts`, `browser-gateway.spec.ts`'s project Home case,
+`client-outage.spec.ts`'s backpressure cases, the three container terminal specs
+on a disposable Docker daemon, and `terminal-input-resume-electron.spec.ts` and
+`local-gateway-transport-electron.spec.ts` headless (2026-11-11, after both were
+made headless-capable). Its earlier record is
+`git show 14df96544:docs/todo/cross-cutting/7340-shared-terminal-visible-text-helper.md`.
+
+The review of that change (2026-11-11) noted that its validation ran these two
+specs only under a display. They were then run headless at `13e4dd6ae` on
+beelink2 (load average about 40), with the production bundles built:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  terminal-input-resume-electron.spec.ts local-gateway-transport-electron.spec.ts --workers=1
+```
+
+Two runs through `test:logged` both passed (158.9 s and 162.5 s). The second
+used Playwright's JSON reporter: 3 expected, 0 skipped, 0 unexpected, 0 flaky,
+namely the relay and gateway cases of the local-gateway spec and `Electron
+keeps a lost terminal write fenced until Resume, without restarting the PTY`.
 
 ## Current state
 
@@ -547,5 +571,5 @@ and result here once CI has run it on the pull request.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), and 6303 task 2, the display host task 1 waits on.
 - [6303](6303-window-close-during-request-throws.md), whose task 2 asks for the host with a disposable display.
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
-- [7340](7340-shared-terminal-visible-text-helper.md), found in task 3's audit.
+- 7340 (retired 2026-11-11, see task 3 above), found in task 3's audit.
 - 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

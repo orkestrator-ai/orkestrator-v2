@@ -97,3 +97,29 @@ none of the four owning files imports a web-annotation module directly.
   `coordinator-worker-outcomes` 2.9 s, `project-git-mirror-create` 1.0 s).
 
 Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (terminal visible-text review repairs)
+
+- **Base:** `14df965440e658e09a7b3ce03530bc1781ac2b01`; `mise run flaky:recurrence 9978 --base 14df96544…` answered `open`.
+- **Observed head:** `terminal-event-reproduction-58a6a9a0fc85-r1` at
+  `e4777ac3a`. The branch changes only documentation, two agent-testing
+  Electron specs, the headless Electron spec list and its unit test; it
+  touches none of the owning files or anything they import.
+- **Command:** `env -u NODE_ENV mise run test:logged -- --name review-default-tests-rerun2 -- mise run test`
+  on beelink2 (Linux x86_64, 16 cores), with the browser suite running
+  alongside it and a host load average of 35 to 67.
+- **Failure:** 21 backend cases in the same four files, among them `pull
+  request status wakes > a PR wakes once per state change until merge
+  (hidden: %s)` at 5,007 ms, plus `a queued Resolve remains pending beyond the
+  start grace` and `released outcome owner does not suppress a returned
+  worker's merge notice`. The backend log has the same
+  `updateCoordinatorWorkflowAssociations is not a function` reconcile error.
+- **Suite counts:** backend 18,552 pass and 21 fail; CLI 516 pass and 1 fail
+  ([9982](../backend-services-and-tooling/9982-scenario-provider-homes-mise-warning-under-load.md));
+  web 14,569 pass and 10 fail ([9932](../native-agents-and-transcripts/9932-virtuoso-cancellation-fake-clock-timer-count.md)).
+  The root, bridge, guard and lockfile groups passed.
+- **Isolated rerun:** the runner's own reruns of all four files reported
+  `FAILED ALONE` while the host was still loaded. A later
+  `bun test --preload ../../tests/setup-node.ts` run of the four files from
+  `apps/backend` (`--parallel=2`) passed (7.9 s) at a load average of about 35
+  and falling.

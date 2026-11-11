@@ -72,6 +72,7 @@ import {
 import {
   attachLeaf,
   pointPiAt,
+  repointLeaf,
   sharedProject,
   signIn,
   until,
@@ -887,6 +888,7 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       leaf = await signIn(await newPage(), leafProfile, { fixture: false });
       await startProfile(deskProfile);
       desk = await signIn(await newPage(), deskProfile, { fixture: false });
+      await repointLeaf(desk, leaf, nodeId);
       await waitForLeafLink(desk, leaf, nodeId, 180_000);
       fake = await until(
         "the command node's coordinator to be woken with the queued stop",

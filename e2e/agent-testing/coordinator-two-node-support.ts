@@ -124,32 +124,43 @@ export async function sharedProject(
  * product, never printed. `onAttached` hears the `nodeId` before the wait, so
  * a caller can forget the node even when the link never comes up.
  */
+function leafRoute(leaf: Profile) {
+  return {
+    id: "loopback",
+    kind: "https",
+    enabled: true,
+    origin: new URL(leaf.status.browserUrl!).origin,
+  };
+}
+
+function leafToken(leaf: Profile): string {
+  const token = (JSON.parse(readFileSync(leaf.status.authFile!, "utf8")) as { token?: unknown })
+    .token;
+  expect(typeof token, "the leaf's auth file has no token").toBe("string");
+  return token as string;
+}
+
 export async function attachLeaf(
   desk: Profile,
   leaf: Profile,
   onAttached: (nodeId: string) => void,
 ): Promise<string> {
-  const leafToken = (JSON.parse(readFileSync(leaf.status.authFile!, "utf8")) as { token?: unknown })
-    .token;
-  expect(typeof leafToken, "the leaf's auth file has no token").toBe("string");
   const attached = await desk.invoke<{ nodeId: string; connection: { state: string } }>(
     "add_node",
-    {
-      routes: [
-        {
-          id: "loopback",
-          kind: "https",
-          enabled: true,
-          origin: new URL(leaf.status.browserUrl!).origin,
-        },
-      ],
-      token: leafToken,
-      displayName: "Leaf profile",
-    },
+    { routes: [leafRoute(leaf)], token: leafToken(leaf), displayName: "Leaf profile" },
   );
   onAttached(attached.nodeId);
   await waitForLeafLink(desk, leaf, attached.nodeId);
   return attached.nodeId;
+}
+
+/**
+ * Points the command node's record of the leaf at the leaf's current gateway.
+ * A profile comes back from a restart on new loopback ports, where a real
+ * machine keeps its address, so a spec that restarts the leaf calls this.
+ */
+export async function repointLeaf(desk: Profile, leaf: Profile, nodeId: string): Promise<void> {
+  await desk.invoke("update_node", { nodeId, routes: [leafRoute(leaf)], token: leafToken(leaf) });
 }
 
 /** Until the command node holds the leaf connected and the leaf reports leaf mode. */

@@ -180,3 +180,32 @@ about four times its core count. No assertion, timeout or skip changed.
 - **Isolated rerun:** `mise run test:logged -- --name rerun-virtuoso -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
   passed (0.9 s). The aggregate runner's own rerun was not reached: its 600 s
   budget went to a file queued for host capacity.
+
+## Recurrence — 2026-11-11 (Claude read-only settings connection review repairs)
+
+Observed 2026-11-11 on `sandbox-settings-issue-d5843d587d48-r1`, base commit
+`498b68766f5c9f357a3a86782406d1e9e0977559`, which contains the fix above
+(`mise run flaky:recurrence -- 9932 --base 498b68766` reported the case open
+and asked for the recurrence to be recorded). The branch changes the Claude
+bridge, one protocol log vocabulary entry, an Agent Info test and docs; it
+does not touch this file or the transcript-scroll code.
+
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test` (default suite,
+  web package at its default `bun test src --parallel` worker count; guards
+  skipped because of an unrelated source-guard finding in
+  `ServiceBrowserTab.test.tsx`). Host load average about 12 on 16 cores.
+- **Failure:** seven cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them:
+  - `a function follow prop that answers false is still truthy to the viewport-shrink path` (25.3 ms)
+  - `a literal false follow prop never scrolls on growth` (24.2 ms)
+  - `cancelling before the refresh retires the queued follow: no LAST write` (18.7 ms)
+  - `control: an append while following publishes the queued follow` (29.8 ms)
+  - `literal false: a detached reader is not moved when the viewport shrinks` (40.7 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (22.4 ms, 34.8 ms)
+- **Suite counts:** web 14,463 passed and 7 failed (14,480 run); backend
+  18,369 passed, CLI 517 passed, every other workspace task passed (Turbo: 12
+  of 13 tasks successful), and the root, bridge and lockfile groups passed.
+- **Isolated rerun:** the aggregate runner's automatic rerun reported
+  `PASSED ALONE (1.0s)` for the unchanged owning file.
+
+Status stays open; no assertion, timeout or skip changed.

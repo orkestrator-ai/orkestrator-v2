@@ -7,13 +7,14 @@ Found on 2026-10-26 while doing
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; task 3 re-analysed and
-run 2026-11-10 against `main` at `c98b20e6f`.
+run 2026-11-10 against `main` at `c98b20e6f`, and again 2026-11-11 against
+`main` at `498b68766`.
 
 ### Tasks
 
 1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: done 2026-10-28 (option (b), shown in Agent Info and on the Multi Review reviewer and consolidation step; decisions A1 to A9).
 2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux run, the Linux-only case included, passed 2026-11-10 (A15).
-3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17); the run found and fixed two defects. Open: a read-only turn under AppArmor's `bwrap-userns-restrict`, on an Ubuntu CI runner (the AppArmor-restricted phase 0145 task 2 runs, or the `ubuntu-24.04` job 0145 task 3 adds), and Agent Info's "No sandbox" during a reviewer turn on the real stack (see "Needs verification"). The Windows check moved to 7568 on 2026-11-10.
+3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17; the run found and fixed two defects), and for AppArmor's `bwrap-userns-restrict` on 2026-11-11 from CI's Ubuntu 26.04 runner (A18). Open: Agent Info's "No sandbox" seen during a reviewer turn on the real stack, which needs a host whose containers reach the profile's agent tools server (A19; the display is now pinned by a component test). The Windows check moved to 7568 on 2026-11-10.
 
 ### 1. Choose and implement the behaviour
 
@@ -81,6 +82,11 @@ Separately, catch Agent Info's "No sandbox" while a reviewer turn runs, with
 a fake whose reviewer turns last long enough to read it. The Windows check
 needs a Windows host and is in 7568.
 
+**Left (2026-11-11).** The AppArmor half is done: that phase already ran the
+read-only cases and passed on main (A18). Only the Agent Info sighting is
+left, on a host whose containers reach the profile's agent tools server
+(A19).
+
 **Investigation (2026-11-10).** Run on beelink (Arch Linux, kernel 7.1.8)
 with this branch's dev image (`claude` 2.1.319, no `bwrap` or `socat`) on a
 disposable rootless daemon started with `--host-loopback`, so the
@@ -93,8 +99,9 @@ reviewers and a Claude preparation/consolidation model.
 - Run 1: the reviewers failed "Not logged in": read-only turns load no
   settings files, so the fake's base URL in `~/.claude/settings.json` never
   reached them. A fixture limitation here, and a real gap for users who
-  configure Claude that way: [7565](7565-claude-read-only-turns-ignore-settings-env.md).
-  The fake is now staged as managed settings.
+  configure Claude that way: 7565 (retired 2026-11-11; read-only turns now
+  take the user settings' model connection, A20). The fake is staged as
+  managed settings.
 - Run 2: every reviewer turn ran (the sandbox-off note was on both reviewers),
   but the hook refused the package's `diffCommand`: without the sandbox it
   refuses every Git command, and the reviewer instructions send reviewers to
@@ -114,6 +121,34 @@ reviewers and a Claude preparation/consolidation model.
   passed 19 of 19, none skipped, `read-only-required-refused` included,
   which reproduces the CLI's refusal of a required sandbox on the old block
   (the "before", A15).
+
+**Investigation (2026-11-11).** Run on omarchy-hp (Arch Linux) against
+`main` at `498b68766`.
+- The AppArmor half needed no new run: CI's `Tests (root-bridges)` job
+  already runs `conformance-apparmor-live.test.ts` in a restricted phase
+  before remediation, and that phase includes the read-only cases
+  `read-only-host-reads` and `read-only-host-hook-refuses`. Main's run
+  42938699515 (2026-11-11, Ubuntu 26.04.1, kernel 7.0.0-1019-azure, pinned
+  CLI 2.1.319) passed it. Its uploaded evidence (`restricted.json`): the
+  probe answered `nested-user-namespace` naming `bwrap-userns-restrict`; the
+  bridge's resolver left the sandbox off for the read-only turn with that
+  reason; `cat in.txt` ran with no error (`read-only-host-reads`, two model
+  calls); `uniq in.txt out.txt` was refused by the hook and nothing was
+  written; the required-sandbox control (`apparmor-sandbox-reads`) failed
+  with `apply-seccomp`, which is the "before". The remediated phase then
+  answered `available` and `enforced`.
+- Agent Info on the real stack cannot run here. Local environments keep the
+  sandbox (the probe answers `available` on this host, so a local reviewer
+  turn has no note to show), and container environments cannot reach the
+  profile's agent tools server: ufw drops that traffic from the rootful
+  daemon's ranges ([7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md))
+  and this host has no rootless Docker (`dockerd-rootless.sh` and
+  `rootlesskit` are not installed), so `docker:disposable -- start
+  --host-loopback` is not available. A Multi Review reviewer tab's Agent
+  Info reads the reviewer's projection (`get_multi_review_reviewer_projection`),
+  whose `policy` is the bridge's reported one; a component test now renders
+  that panel from a running reviewer projection with the reported policy and
+  checks "No sandbox, approvals denied" and the reason (A19).
 
 **Investigation (2026-10-27).** The open question is answered by the code: a container environment's reviewers run in the container. `bridgeConnection` starts `start_claude_server` for any non-local environment (`apps/backend/src/core/multi-review-service.ts:4993-5020`). The image ships neither `bwrap` nor `socat` (no match in `docker/Dockerfile`). So today every Claude read-only report turn in a container environment should be refused by the CLI. That is a user-visible failure in normal use, which is why the file rates High. Nothing in the code suggests these turns run on the host instead.
 
@@ -145,9 +180,22 @@ chosen on purpose.
 
 ## Current state
 
-Updated 2026-11-10 (task 3); the rest 2026-10-28 on branch
+Updated 2026-11-11 (task 3 and 7565), 2026-11-10 (task 3); the rest 2026-10-28 on branch
 `todo-0190-claude-read-only-no-sandbox`, based on `main` at `1d1f0a87`.
 
+- **Read-only turns keep the user's model connection (2026-11-11, from
+  7565).** A read-only turn still loads no settings file, but the bridge
+  reads the user settings file (`$CLAUDE_CONFIG_DIR/settings.json`, else
+  `~/.claude/settings.json`) and adds only the `env` entries that choose the
+  model endpoint and its credential (`READ_ONLY_CONNECTION_ENV_NAMES` in
+  `bridges/claude-bridge/src/services/read-only-connection-env.ts`) to that
+  turn's process environment, over the bridge's own values as the CLI does
+  for an ordinary turn. No hook, permission, plugin, `apiKeyHelper` or other
+  variable is taken, and project and local settings stay out. A changed
+  connection is part of the launch profile's credential digest, so a warm
+  read-only CLI on the old endpoint is not joined. Described in
+  [credentials-and-models.md](../../development/credentials-and-models.md).
+- **The AppArmor case is proved in CI (2026-11-11).** See A18.
 - **Reviewers without Git get the diff as a file (2026-11-10).** The hook
   refuses every Git command when the sandbox is off, so the backend seals the
   package's diff as `review-diff-<sha256>.patch` beside it
@@ -247,9 +295,12 @@ Updated 2026-11-10 (task 3); the rest 2026-10-28 on branch
   (`container-multi-review-read-only.spec.ts`, A12). The "before" half is
   the `read-only-required-refused` live case, run on Linux the same day
   (A15).
-- [ ] A read-only turn on an Ubuntu host with AppArmor's
-  `bwrap-userns-restrict`, on a CI runner (see task 3). The read-only turn on
-  Windows moved to 7568 on 2026-11-10.
+- [x] A read-only turn on an Ubuntu host with AppArmor's
+  `bwrap-userns-restrict`, on a CI runner: done 2026-11-11 from main's CI
+  run 42938699515 (A18). The read-only turn on Windows moved to 7568 on
+  2026-11-10.
+- [ ] Agent Info's "No sandbox" while a reviewer turn runs, on the real stack
+  (A19).
 
 ## Constraints and rationale
 
@@ -346,7 +397,9 @@ Made 2026-10-28 while implementing.
   is on by default for every Claude read-only turn on Linux and has not run
   on the real stack. Re-rated Medium on 2026-11-10 once the container case
   and the Linux live suite passed: what is left is a qualification run for
-  two secondary platforms (A17).
+  two secondary platforms (A17). Re-rated Low on 2026-11-11 once CI's
+  AppArmor phase covered Ubuntu (A18): what is left is a real-stack sighting
+  of display copy already pinned by tests (A19).
 
 - **A12. How the container run reached a model (2026-11-10, task 3).**
   Options: a real Claude login in the profile; a scripted fake Messages API
@@ -395,6 +448,91 @@ Made 2026-10-28 while implementing.
   durable description is in
   [coordinator.md](../../architecture/coordinator.md).
 
+- **A18. The AppArmor qualification (2026-11-11, task 3).** Options: add the
+  read-only cases to CI's restricted AppArmor phase; take 0145 task 3's
+  `ubuntu-24.04` job; wait for a stock Ubuntu desktop. **Chosen: neither
+  new job; the restricted phase already ran them.** Why: since #1372 that
+  phase runs `read-only-host-reads` and `read-only-host-hook-refuses` with
+  the bridge's real resolver on a stock AppArmor host, and main's run
+  42938699515 passed it with the evidence task 3 asked for. Pros: no new CI
+  cost; it is checked on every push. Cons: CI runs the scripted endpoint
+  through the SDK, not a full Multi Review; Ubuntu 24.04 is still 0145
+  task 3's.
+- **A19. Agent Info during a reviewer turn (2026-11-11, task 3).** Options:
+  run the container Multi Review here with a slower fake; stage a local
+  environment with `bwrap` hidden from the profile's `PATH`; pin the display
+  with a component test and leave the sighting open. **Chosen: the
+  component test, sighting left open.** Why: this host's containers cannot
+  reach the profile's agent tools server (ufw, no rootless daemon), and a
+  staged local profile would need a hand-built `PATH` for the whole stack
+  plus a fake endpoint, testing staging more than the product. The test
+  (`AgentInfoButton.reviewers.test.tsx`) renders a reviewer tab's Agent Info
+  from a running projection with the policy the bridge reports and checks
+  "No sandbox" and the reason; the bridge side is pinned by
+  `claude-query-config.reported-policy.test.ts` and
+  `session-manager-sandbox-refusal.test.ts`. Cons: the backend-to-panel
+  path is not seen live. To finish: rerun
+  `container-multi-review-read-only.spec.ts` on a host with a rootless daemon
+  (beelink), with the fake's reviewer step held long enough to open the
+  reviewer tab's Agent Info.
+- **A20. Settings-file connections in read-only turns (2026-11-11, 7565).**
+  Options: (a) pass only the connection entries of the user settings `env`;
+  (b) load the user settings source and rely on managed settings to hold the
+  boundary; (c) keep it and say so. **Chosen: (a)**, as 7565 recommended.
+  Why: the review reaches the same model as the session's other turns,
+  while hooks, permission rules, plugins and project or local files stay
+  out; (b) would let user hooks and permission rules into a read-only turn.
+  Sub-choices: `apiKeyHelper` is not run (it is a command, and the read-only
+  boundary must not run one outside the hook; such users keep the managed
+  settings or process-environment routes); the names are an explicit list
+  (endpoint, credential, alias models, Bedrock, Vertex, Foundry, proxy, TLS
+  trust and client certificate), not an `ANTHROPIC_` prefix, because that
+  prefix also holds configuration directories and logging; settings values
+  win over the bridge's own, matching the CLI's order for an ordinary turn.
+  Coordinators read the same way but find nothing (A21). Evidence: unit and query-plan tests, and
+  `conformance-read-only-settings-connection-live.test.ts` on the pinned CLI
+  2.1.319 (before: "Not logged in", 0 model calls; after: 1 model call).
+  Cons: the list must be rechecked on each Claude bump. Containers do not
+  receive the host's settings `env` at all (the entrypoint rewrites
+  `~/.claude/settings.json` and stages only `enabledPlugins`), so this
+  changes host environments and settings edited inside a container.
+- **A21. Review findings on A20 (2026-11-11, 7565).**
+  - *AWS profiles can run a command.* `AWS_PROFILE` selects a profile in
+    `~/.aws/config`, and a profile (directly or through `source_profile`) can
+    name a `credential_process`, which the pinned CLI's AWS credential chain
+    runs outside the hook and the command sandbox; so can the default
+    profile, with no `AWS_PROFILE` at all. Options: (a) drop `AWS_PROFILE`
+    only; (b) drop it, and also withhold a settings Bedrock connection that
+    would reach the credential chain (Bedrock on, and no skip flag, bearer
+    token or static key pair); (c) neutralise the AWS files for read-only
+    turns (`AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` at an empty
+    file). **Chosen: (b).** (a) leaves the default profile's helper reachable;
+    (c) also breaks SSO and static profiles and changes a bridge environment
+    the user launched. With (b) the settings keep their endpoint, region and
+    model entries but lose the Bedrock switch and credentials, and the bridge
+    logs `read-only-connection.bedrock-withheld` (no values). Such a user puts
+    `AWS_BEARER_TOKEN_BEDROCK` or a static key pair in the settings `env`, or
+    sets the connection in managed settings or the bridge's environment. A
+    bridge whose own environment already reaches the chain is left as it is:
+    that is the launch's choice, not something the settings file added.
+    Evidence: `conformance-read-only-settings-connection-live.test.ts` on the
+    pinned CLI 2.1.319 with a sentinel helper in a private HOME: the settings
+    `env` passed whole runs the helper through `source_profile`; the bridge's
+    environment runs none and sends no Bedrock request; a static key pair
+    still reaches the Bedrock endpoint, signed, with no helper run.
+  - *Coordinators do not get the connection.* A coordinator bridge runs with
+    `CLAUDE_CONFIG_DIR` at its private, empty Claude home
+    (`applyCoordinatorClaudeAccount`, `apps/backend/src/core/agent-accounts-active.ts`),
+    so the settings file it would read is absent and nothing is added; A20
+    and the docs had said otherwise. Options: (a) correct the docs and keep
+    coordinators excluded; (b) have the backend pass the host settings path
+    to coordinator bridges in a dedicated variable. **Chosen: (a).** A
+    coordinator connects with the account token the backend hands it, and
+    its home deliberately holds nothing the user authored; (b) widens a
+    coordinator's inputs for a case no report has raised. Pinned by
+    `read-only-connection-env.test.ts` ("which settings file a coordinator
+    bridge reads").
+
 ## Open questions
 
 - Answered by the code (2026-10-27): Multi Review's Claude reviewers and
@@ -403,15 +541,13 @@ Made 2026-10-28 while implementing.
 
 ## Needs verification
 
-- A stock Ubuntu 24.04 or 26.04 host with AppArmor's `bwrap-userns-restrict`:
-  the probe answers `nested-user-namespace`, the read-only turn runs Bash
-  commands (no `apply-seccomp` failure) and shows the note. Beelink is Arch
-  without that profile; CI's Ubuntu runners have it (task 3), and
-  `container-multi-review-read-only.spec.ts`'s fake and a local environment
-  could drive it.
+- Done 2026-11-11: Ubuntu 26.04 with AppArmor's `bwrap-userns-restrict`, on
+  CI's runner (A18). Ubuntu 24.04 stays with 0145 task 3.
 - Agent Info saying "No sandbox" while a reviewer turn runs, on the real
-  stack: the fake's turns finish in a few seconds, so it was not caught; the
-  reported policy is pinned by `claude-query-config.reported-policy.test.ts`.
+  stack: the fake's turns finish in a few seconds, so it was not caught on
+  2026-11-10, and omarchy-hp cannot run the container case (A19). The
+  reported policy is pinned by `claude-query-config.reported-policy.test.ts`
+  and the panel by `AgentInfoButton.reviewers.test.tsx`.
 - Done 2026-11-10: the container case (A12) and the Linux run of the live
   suite (19 of 19, A15).
 
@@ -422,8 +558,9 @@ Made 2026-10-28 while implementing.
 - [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
   (to-do 0026, retired 2026-11-11): the read-only hook and the `unavailable`
   coordinator path.
-- [7565-claude-read-only-turns-ignore-settings-env.md](7565-claude-read-only-turns-ignore-settings-env.md):
-  found by task 3; read-only turns load no settings files.
+- 7565 (retired 2026-11-11): found by task 3, read-only turns ignored the
+  user settings' model connection; fixed here (A20), described in
+  [credentials-and-models.md](../../development/credentials-and-models.md).
 - [7080-linux-host-firewall-blocks-profile-signals.md](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
   why the container run used a disposable rootless daemon.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows read-only turn from task 3) moved there on 2026-11-10.

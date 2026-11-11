@@ -382,7 +382,7 @@ the interrupted handoff. Remaining live checks stay batched with
 ## Constraints and rationale
 
 - The fan-out invariants in
-  [0027](0027-multi-review-scale-and-cost.md) apply: never re-send an
+  [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision) apply: never re-send an
   ambiguous request under a new id, and fail closed when unsure.
 - `absent` must be an assertion, never a default: a provider that cannot tell
   answers `unknown`, exactly as `dispatched` and `lost` are assertions today.

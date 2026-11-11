@@ -124,7 +124,7 @@ for (const modifier of ["Meta", "Control"]) {
     await page.goto("/keyboard-shortcuts");
     const input = page
       .frameLocator('iframe[title="Design preview"]')
-      .getByRole("textbox", { name: "Design input" });
+      .getByRole("textbox", { name: "Design input", exact: true });
     await input.fill("kept");
     await page.keyboard.press(`${modifier}+Shift+Slash`);
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
@@ -134,6 +134,61 @@ for (const modifier of ["Meta", "Control"]) {
     await expect(input).toHaveValue("kept");
   });
 }
+
+test("pointer and Tab entry into a design frame land where the user went, not on the remembered field", async ({
+  page,
+}) => {
+  await page.goto("/keyboard-shortcuts");
+  const frame = page.frameLocator('iframe[title="Design preview"]');
+  const first = frame.getByRole("textbox", { name: "Design input", exact: true });
+  const second = frame.getByRole("textbox", { name: "Second design input" });
+  await expect(second).toBeAttached();
+  // Focus stops either side of the frame, so Tab and Shift+Tab enter it
+  // directly (xterm keeps Tab for itself).
+  await page.locator('iframe[title="Design preview"]').evaluate((element) => {
+    const before = document.createElement("button");
+    before.textContent = "Before design";
+    const after = document.createElement("button");
+    after.textContent = "After design";
+    element.before(before);
+    element.after(after);
+  });
+  const composer = page.getByRole("textbox", { name: "Composer" });
+  // The state the frame's focus restoration answers: a field had focus, then
+  // the frame was left with none focused while the page outside took focus.
+  const rememberThenLeave = async (field: typeof first) => {
+    await field.click();
+    await field.evaluate((element: HTMLElement) => element.blur());
+    await composer.focus();
+  };
+
+  // A click on another field puts focus and typing there.
+  await rememberThenLeave(first);
+  await second.click();
+  await page.keyboard.type("clicked");
+  await expect(second).toBeFocused();
+  await expect(second).toHaveValue("clicked");
+  await expect(first).toHaveValue("");
+
+  // Tab from before the frame lands on its first field, not the remembered second.
+  await rememberThenLeave(second);
+  await page.getByRole("button", { name: "Before design" }).focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("tabbed");
+  await expect(first).toBeFocused();
+  await expect(first).toHaveValue("tabbed");
+  await expect(second).toHaveValue("clicked");
+
+  // Shift+Tab from after the frame lands on its last field, not the remembered first.
+  await rememberThenLeave(first);
+  await page.getByRole("button", { name: "After design" }).focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.type("back");
+  await expect(second).toBeFocused();
+  // Keyboard focus selects a field's text, so typing replaces "clicked".
+  await expect(second).toHaveValue("back");
+  await expect(first).toHaveValue("tabbed");
+});
 
 test("uncooperative cross-origin browser/service frames keep their keyboard events isolated", async ({
   page,
@@ -231,7 +286,7 @@ test.describe("⌘K search works wherever focus is", () => {
       await page.goto("/keyboard-shortcuts");
       const input = page
         .frameLocator('iframe[title="Design preview"]')
-        .getByRole("textbox", { name: "Design input" });
+        .getByRole("textbox", { name: "Design input", exact: true });
       await input.fill("kept");
       await page.keyboard.press(`${modifier}+K`);
       const mac = await page.evaluate(() =>

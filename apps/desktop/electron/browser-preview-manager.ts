@@ -291,6 +291,16 @@ export class BrowserPreviewManager {
   private readonly pendingAttaches = new Map<string, Promise<BrowserPreviewState>>();
   private attachSequence = 0;
   private disposed = false;
+  /**
+   * Hidden previews that took focus while the window was in the background,
+   * waiting for the window's next `focus` event (see
+   * `returnFocusFromHiddenPreview`). At most one listener, on one window.
+   */
+  private windowFocusWait: {
+    window: BrowserWindow;
+    listener: () => void;
+    previews: Map<string, ManagedPreview>;
+  } | null = null;
   private readonly captures: BrowserPreviewCaptureSessions;
   private readonly pins: BrowserPreviewPinSessions;
 
@@ -812,7 +822,43 @@ export class BrowserPreviewManager {
     if (this.canHoldFocus(preview) || !contents.isFocused()) return;
     const window = this.options.getWindow();
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+    // Electron's WebContents.focus() also focuses the owner window on macOS
+    // and Linux, which would raise Orkestrator over the app the user is in.
+    // In the background, wait for the user to return to the window instead.
+    if (!window.isFocused()) {
+      this.returnFocusWhenWindowFocused(window, tabId, preview);
+      return;
+    }
     window.webContents.focus();
+  }
+
+  private returnFocusWhenWindowFocused(
+    window: BrowserWindow,
+    tabId: string,
+    preview: ManagedPreview,
+  ): void {
+    if (this.windowFocusWait?.window !== window) {
+      this.stopWaitingForWindowFocus();
+      const previews = new Map<string, ManagedPreview>();
+      const listener = () => {
+        this.stopWaitingForWindowFocus();
+        // Activation restores focus to the view that had it; move it one
+        // task later, as for the preview's own `focus` event.
+        setImmediate(() => {
+          for (const [id, waiting] of previews) this.returnFocusFromHiddenPreview(id, waiting);
+        });
+      };
+      window.once("focus", listener);
+      this.windowFocusWait = { window, listener, previews };
+    }
+    this.windowFocusWait.previews.set(tabId, preview);
+  }
+
+  private stopWaitingForWindowFocus(): void {
+    const wait = this.windowFocusWait;
+    if (!wait) return;
+    this.windowFocusWait = null;
+    if (!wait.window.isDestroyed()) wait.window.removeListener("focus", wait.listener);
   }
 
   /** A preview can hold keyboard focus only while it is shown with an area. */
@@ -999,6 +1045,7 @@ export class BrowserPreviewManager {
     this.disposed = true;
     const tabIds = new Set([...this.previews.keys(), ...this.attachTokens.keys()]);
     for (const tabId of tabIds) this.destroy(tabId);
+    this.stopWaitingForWindowFocus();
     this.pins.dispose();
   }
 
@@ -1081,11 +1128,11 @@ export class BrowserPreviewManager {
     // hidden or not. On packaged Linux a background tab's preview took focus
     // from the composer on show as it loaded, so typing went to an invisible
     // page. A hidden preview never keeps focus: it goes back to the
-    // window's own renderer, which owns whatever is on show. Only the
-    // renderer's WebContents is focused, never the window, so this cannot
-    // raise or activate it. Focusing from inside the event does nothing (the
-    // move is still in progress), so it happens one task later, if the hidden
-    // preview still has focus then. See docs/architecture/keyboard-shortcuts.md,
+    // window's own renderer, which owns whatever is on show. Focusing the
+    // renderer also focuses the window, so a background window waits until
+    // the user returns to it rather than being raised. Focusing from inside
+    // the event does nothing (the move is still in progress), so it happens
+    // one task later, if the hidden preview still has focus then. See docs/architecture/keyboard-shortcuts.md,
     // "Returning to a native view".
     contents.on("focus", () => {
       if (this.previews.get(tabId) !== preview || this.canHoldFocus(preview)) return;

@@ -51,7 +51,11 @@ import { openDesignWindow } from "./design-canvas-electron-journey";
 import { recordElectronDiagnostics } from "./electron-diagnostics";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { nativeMenuAlt, nativeMenuFocus, nativeMenuWindows } from "./native-menu-input";
-import { packagedAppExecutable, packagedLaunchEnvironment } from "./packaged-electron-app";
+import {
+  designChromiumEnvironment,
+  packagedAppExecutable,
+  packagedLaunchEnvironment,
+} from "./packaged-electron-app";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const templateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project");
@@ -173,6 +177,9 @@ test("packaged Linux on X11: Ctrl+Shift+/ and Ctrl+K from the composer, a browse
       cwd: temporaryRoot,
       env: {
         ...packagedLaunchEnvironment(process.env, { home, profilePath }),
+        // The design-frame row needs design Chromium; the docs offer this
+        // override for a host whose Chromium is not at a default location.
+        ...designChromiumEnvironment(process.env),
         DISPLAY: process.env.DISPLAY!,
         GDK_BACKEND: "x11",
         XDG_SESSION_TYPE: "x11",

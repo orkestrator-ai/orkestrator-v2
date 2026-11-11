@@ -98,15 +98,17 @@ function createHarness(
   let windowAvailable = true;
   let windowDestroyed = false;
   let hostZoomFactor = 1;
-  const window = {
+  let windowFocused = true;
+  const window = Object.assign(new EventEmitter(), {
     isDestroyed: () => windowDestroyed,
+    isFocused: () => windowFocused,
     contentView,
     webContents: {
       getZoomFactor: () => hostZoomFactor,
       focus: mock(() => undefined),
       isDestroyed: () => false,
     },
-  };
+  });
   const emitState = mock(() => undefined);
   const emitOpenLink = mock(() => undefined);
   const openExternal = mock(() => undefined);
@@ -152,6 +154,9 @@ function createHarness(
     },
     setWindowDestroyed(value: boolean) {
       windowDestroyed = value;
+    },
+    setWindowFocused(value: boolean) {
+      windowFocused = value;
     },
     setHostZoomFactor(value: number) {
       hostZoomFactor = value;
@@ -602,6 +607,65 @@ describe("BrowserPreviewManager", () => {
     harness.manager.destroy(input.tabId);
     await nextTask();
     expect(harness.window.webContents.focus).toHaveBeenCalledTimes(2);
+  });
+
+  test("a hidden preview that takes focus in a background window waits for the user to return", async () => {
+    const harness = createHarness();
+    const nextTask = () => new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.manager.attach({ ...input, visible: false });
+    const contents = harness.views[0]!.webContents;
+    const takeFocus = () => {
+      contents.focused = true;
+      contents.emit("focus");
+    };
+
+    // Focusing the renderer would also focus (raise) the window, so nothing
+    // is focused while the user is in another app.
+    harness.setWindowFocused(false);
+    takeFocus();
+    await nextTask();
+    takeFocus();
+    await nextTask();
+    expect(harness.window.webContents.focus).not.toHaveBeenCalled();
+    expect(harness.window.listenerCount("focus")).toBe(1);
+
+    // Returning to the window hands focus back, one task later.
+    harness.setWindowFocused(true);
+    harness.window.emit("focus");
+    expect(harness.window.listenerCount("focus")).toBe(0);
+    expect(harness.window.webContents.focus).not.toHaveBeenCalled();
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(1);
+
+    // Focus that moved on before the user returned is left where it went.
+    harness.setWindowFocused(false);
+    takeFocus();
+    await nextTask();
+    contents.focused = false;
+    harness.setWindowFocused(true);
+    harness.window.emit("focus");
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(1);
+
+    // A preview shown by the time the user returns keeps its focus.
+    harness.setWindowFocused(false);
+    takeFocus();
+    await nextTask();
+    harness.manager.setVisible(input.tabId, true);
+    harness.manager.setBounds(input.tabId, { x: 0, y: 0, width: 100, height: 100 });
+    harness.setWindowFocused(true);
+    harness.window.emit("focus");
+    await nextTask();
+    expect(harness.window.webContents.focus).toHaveBeenCalledTimes(1);
+
+    // Closing the manager stops waiting on the window.
+    harness.manager.setVisible(input.tabId, false);
+    harness.setWindowFocused(false);
+    takeFocus();
+    await nextTask();
+    expect(harness.window.listenerCount("focus")).toBe(1);
+    harness.manager.destroyAll();
+    expect(harness.window.listenerCount("focus")).toBe(0);
   });
 
   test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {

@@ -76,6 +76,18 @@ export function packagedLaunchEnvironment(
 }
 
 /**
+ * The design-preview Chromium override (`ORKESTRATOR_DESIGN_CHROMIUM_PATH`,
+ * read by the backend's `resolveDesignChromiumPath`) when the caller set a
+ * non-empty one. `packagedLaunchEnvironment` drops it with every other
+ * `ORKESTRATOR_*` variable; a spec that opens a design canvas on a host whose
+ * Chromium is not at a default location forwards it explicitly with this.
+ */
+export function designChromiumEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  const value = env.ORKESTRATOR_DESIGN_CHROMIUM_PATH?.trim();
+  return value ? { ORKESTRATOR_DESIGN_CHROMIUM_PATH: value } : {};
+}
+
+/**
  * Chromium switches for the packaged app: on Linux always headless
  * (`HEADLESS_ELECTRON_SWITCHES`), so no window reaches the signed-in desktop
  * and `safeStorage` stays off any keyring. The environment above already has

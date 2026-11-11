@@ -10,6 +10,7 @@ import {
   withoutDisplay,
 } from "./electron-launch-switches";
 import {
+  designChromiumEnvironment,
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
@@ -90,6 +91,21 @@ describe("packaged Electron app launch", () => {
     });
   });
 
+  test("forwards only a non-empty design Chromium override", () => {
+    expect(
+      designChromiumEnvironment({ ORKESTRATOR_DESIGN_CHROMIUM_PATH: "/opt/chromium/chrome" }),
+    ).toEqual({ ORKESTRATOR_DESIGN_CHROMIUM_PATH: "/opt/chromium/chrome" });
+    expect(designChromiumEnvironment({ ORKESTRATOR_DESIGN_CHROMIUM_PATH: "  " })).toEqual({});
+    expect(designChromiumEnvironment({ PATH: "/usr/bin" })).toEqual({});
+    // The general allowlist still drops it, with every other ORKESTRATOR_* value.
+    expect(
+      packagedLaunchEnvironment(
+        { ORKESTRATOR_DESIGN_CHROMIUM_PATH: "/opt/chromium/chrome" },
+        { home: "/tmp/run/home", profilePath: "/tmp/run/profile.json" },
+      ),
+    ).not.toHaveProperty("ORKESTRATOR_DESIGN_CHROMIUM_PATH");
+  });
+
   test("always runs headless on Linux", () => {
     expect(packagedLaunchSwitches("linux")).toEqual(HEADLESS_ELECTRON_SWITCHES);
     expect(HEADLESS_ELECTRON_SWITCHES).toContain("--ozone-platform=headless");
@@ -101,6 +117,7 @@ describe("packaged Electron app launch", () => {
     expect(packaged.testMatch).toEqual([
       "design-canvas-packaged-electron.spec.ts",
       "log-controls-packaged-electron.spec.ts",
+      "packaged-native-shortcuts-electron.spec.ts",
       "packaged-security-electron.spec.ts",
       "watcher-packaged-electron.spec.ts",
     ]);
@@ -108,6 +125,7 @@ describe("packaged Electron app launch", () => {
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("watcher-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("packaged-native-shortcuts-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });
 });

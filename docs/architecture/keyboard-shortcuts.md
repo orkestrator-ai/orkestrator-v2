@@ -266,9 +266,12 @@ invisible page: the composer on show kept its caret, but typing went nowhere
 (found by the packaged Linux run, 2026-11-11). `BrowserPreviewManager` now
 answers a hidden or zero-sized preview's `focus` event by focusing the
 window's own renderer one task later (focusing inside the event has no
-effect), if the hidden preview still has focus then. Only the renderer's
-WebContents is focused, never the window, so nothing is raised or activated.
-A shown preview keeps the focus it is given.
+effect), if the hidden preview still has focus then. Electron's
+`WebContents.focus()` also focuses the owner window on macOS and Linux, so
+while the window is in the background the manager does not focus anything: it
+waits for the window's next `focus` event and checks again then, so a page
+loading in a background tab never raises Orkestrator over another app. A
+shown preview keeps the focus it is given.
 
 **A design frame returns focus to its field.** While the dialog has focus,
 Chromium leaves a design frame with no focused element, and the dialog's

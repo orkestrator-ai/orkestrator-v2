@@ -152,8 +152,10 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
     await page.setViewportSize({ width: 1400, height: 900 });
     await login(page, testInfo);
     await test.step("the PR monitor reads the container's PR and offers the merge", async () => {
-      // Mergeability unknown, as a freshly recorded PR is: only the monitor's
-      // read through the container's `gh` can enable the merge button.
+      // Mergeability unknown, as a freshly recorded PR is. Since the single
+      // Merge PR button (#2159) the toolbar button is enabled while it shows
+      // `merge-pr-checking`; only the monitor's read through the container's
+      // `gh` settles mergeability and clears that indicator.
       await invoke("set_environment_pr", {
         environmentId: container.id,
         prUrl,
@@ -162,6 +164,9 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
       });
       await selectEnvironment(page, containerName);
       await expect(toolbarButton(page, "Merge PR")).toBeEnabled({
+        timeout: PR_MONITOR_BUDGET_MS,
+      });
+      await expect(page.getByTestId("merge-pr-checking")).toHaveCount(0, {
         timeout: PR_MONITOR_BUDGET_MS,
       });
       expect(inContainer(containerId, `cat ${FAKE_GH_DIR}/calls`)).toContain(
@@ -467,7 +472,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
   expect(container.environmentType).toBe("containerized");
   // A stopped worker's delegation closes on the coordinator repair pass,
   // every 60 s in production; this test shortens it to 5 s (to-do 7569,
-  // task 5). The pass already scheduled when the file is written keeps its
+  // task 4). The pass already scheduled when the file is written keeps its
   // delay, so the sweep budget below still allows one full production period.
   const dataDir = profileStatus().dataDir;
   if (!dataDir) throw new Error("dev:status reported no data directory");
@@ -588,7 +593,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await expect(page.locator("#project-panel-coordinator")).toHaveCount(0);
       expect((await delegate(container.id, "container")).opened).toBe(true);
       // The backend's record has it while the coordinator view is not shown
-      // (to-do 7569, task 5: was a fixed 3 s sleep).
+      // (to-do 7569, task 4: was a fixed 3 s sleep).
       await awaiting(baseline + 1);
       panel = await openCoordinator(page);
       await awaiting(baseline + 1);

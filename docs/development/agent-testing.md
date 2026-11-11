@@ -79,9 +79,11 @@ shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
 fixture networks. Docker refuses overlaps atomically; other errors propagate.
 Every other Docker call is `exec`ed straight to the real CLI, so a follower or
 exec session the backend stops is stopped itself rather than orphaned.
-The Docker scheduler profile allows ten minutes between reporter lines because
-the annotation cleanup case intentionally waits for a 100-tick, three-second
-backend garbage-collection pass (its own test deadline is nine minutes).
+The Docker scheduler profile allows ten minutes between reporter lines so a
+hung test still reaches its own deadline and reports its failure: the longest
+are eight minutes (the coordinator view, the Cursor fake-engine cell and the
+rebuild cycle). The annotation cleanup case no longer waits out a 100-tick
+garbage-collection period, so its deadline dropped from nine minutes to four.
 It changes no daemon settings and deletes no foreign resources. Without `ip`
 for the route check, automatic-pool exhaustion remains a hard failure. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.

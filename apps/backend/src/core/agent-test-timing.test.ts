@@ -1,5 +1,5 @@
 /**
- * The test-only timing overrides (to-do 7569, tasks 2, 3 and 5): off outside an
+ * The test-only timing overrides (to-do 7569, tasks 2 to 4): off outside an
  * isolated agent-test backend; inside one they can only shorten a period,
  * and a running backend picks up a changed or removed file.
  */

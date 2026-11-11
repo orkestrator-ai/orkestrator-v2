@@ -1,12 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   MULTI_REVIEW_REPORTS_FRAME_CLOSE,
   MULTI_REVIEW_REPORTS_FRAME_OPEN,
 } from "../packages/protocol/src/review-evidence-frames";
 import {
-  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
   type StructuredReviewReport,
 } from "../packages/protocol/src/structured-review";
@@ -17,6 +15,13 @@ import {
   scoreConsolidation,
   summarizePanelValue,
 } from "../apps/backend/src/core/multi-review-evaluation";
+import {
+  DEFAULT_EVALUATION_MODEL,
+  EVALUATION_EXECUTABLE_ENV,
+  executableVersion,
+  isEvaluationProvider,
+  runConsolidation,
+} from "./multi-review-evaluation-drivers";
 
 /**
  * Multi Review panel-value evaluation.
@@ -37,17 +42,24 @@ import {
  *     per file, and prints each panel's overlap counts and
  *     per-reviewer cache reads.
  *
- *   bun scripts/multi-review-evaluation.ts live [--cases a,b] [--variants full,compact]
- *       [--samples <n>] [--model <alias>] [--out <dir>] [--cwd <empty-dir>]
- *     Sends each selected case's prompts to the Claude CLI already signed in
- *     on this host (`claude -p`, no tools, no session persistence, run from an
- *     empty directory, report schema enforced with `--json-schema`), saves
- *     each answer under `<out>/live/`, and prints one content-free row per
- *     answer: the score, schema validity, and the provider's token and
- *     cache-read usage. It spends provider quota; keep the selection small.
+ *   bun scripts/multi-review-evaluation.ts live [--provider claude|codex] [--cases a,b]
+ *       [--variants full,compact] [--samples <n>] [--model <alias>] [--bin <path>]
+ *       [--out <dir>] [--cwd <empty-dir>]
+ *     Sends each selected case's prompts to a CLI already signed in on this
+ *     host, one tool-free, non-persistent turn per prompt with the report
+ *     schema enforced (`multi-review-evaluation-drivers.ts` has each
+ *     provider's flags): Claude (`claude -p`, default model `sonnet`) or Codex
+ *     (`codex exec`, the CLI's default model unless `--model`). The executable
+ *     is `--bin`, else `CLAUDE_CLI_PATH` / `CODEX_CLI_PATH`, else the name on
+ *     PATH. Saves each answer, `run.json` (provider, model, CLI version) and
+ *     `scores.json` under `<out>/live/<provider>/`, and prints one
+ *     content-free row per answer: the score, schema validity, and the
+ *     provider's token and cache-read usage (Codex reports no cost or cache
+ *     writes). It spends provider quota; keep the selection small.
  *     Each call runs in a fresh temporary directory unless `--cwd` names one
- *     shared directory. The CLI's context names its working directory, so
- *     sharing one is what lets identical prompts share a cache prefix.
+ *     shared directory. Claude's context names its working directory, so
+ *     sharing one is what lets identical prompts share a cache prefix; the
+ *     Codex driver leaves the environment context out of the prompt.
  *
  * The corpus is synthetic, so its prompts are safe to write. Keep model
  * answers and exported records out of the repository and CI logs; the
@@ -121,54 +133,6 @@ function option(args: string[], name: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
-interface ClaudeResult {
-  is_error?: boolean;
-  subtype?: string;
-  structured_output?: unknown;
-  total_cost_usd?: number;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
-  };
-}
-
-/** One bounded, tool-less, non-persistent Claude CLI turn from an empty directory. */
-async function claudeConsolidation(
-  prompt: string,
-  model: string,
-  fixedCwd: string | undefined,
-): Promise<ClaudeResult> {
-  const cwd = fixedCwd ?? (await mkdtemp(path.join(tmpdir(), "mre-live-")));
-  try {
-    const child = Bun.spawn(
-      [
-        "claude",
-        "-p",
-        "--model",
-        model,
-        "--output-format",
-        "json",
-        "--json-schema",
-        JSON.stringify(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA),
-        "--tools",
-        "",
-        "--no-session-persistence",
-        "--strict-mcp-config",
-      ],
-      { cwd, stdin: new Blob([prompt]), stdout: "pipe", stderr: "pipe" },
-    );
-    const timer = setTimeout(() => child.kill(), 15 * 60_000);
-    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-    clearTimeout(timer);
-    if (exitCode !== 0) return { is_error: true, subtype: `exit ${exitCode}` };
-    return JSON.parse(stdout) as ClaudeResult;
-  } finally {
-    if (!fixedCwd) await rm(cwd, { recursive: true, force: true });
-  }
-}
-
 async function live(args: string[]): Promise<void> {
   const corpus = evaluationCorpus();
   const caseIds = option(args, "--cases")?.split(",") ?? corpus.map((entry) => entry.id);
@@ -176,27 +140,41 @@ async function live(args: string[]): Promise<void> {
     "full" | "compact"
   >;
   const samples = Number(option(args, "--samples") ?? "1");
-  const model = option(args, "--model") ?? "sonnet";
-  const out = path.resolve(option(args, "--out") ?? DEFAULT_OUT, "live");
+  const provider = option(args, "--provider") ?? "claude";
+  if (!isEvaluationProvider(provider)) fail("--provider is claude or codex.");
+  const model = option(args, "--model") ?? DEFAULT_EVALUATION_MODEL[provider];
+  const executable =
+    option(args, "--bin") ?? process.env[EVALUATION_EXECUTABLE_ENV[provider]] ?? provider;
+  const out = path.resolve(option(args, "--out") ?? DEFAULT_OUT, "live", provider);
   const cwdOption = option(args, "--cwd");
   const fixedCwd = cwdOption === undefined ? undefined : path.resolve(cwdOption);
   if (!Number.isSafeInteger(samples) || samples < 1 || samples > 5) fail("--samples is 1 to 5.");
   if (variants.some((variant) => variant !== "full" && variant !== "compact")) {
     fail("--variants takes full and/or compact.");
   }
-  await mkdir(out, { recursive: true });
-  const rows = [];
-  for (const caseId of caseIds) {
+  // Check every case before the first (billed) call.
+  const entries = caseIds.map((caseId) => {
     const entry = corpus.find((candidate) => candidate.id === caseId);
     if (!entry) fail(`Unknown case ${JSON.stringify(caseId)}.`);
+    return entry;
+  });
+  await mkdir(out, { recursive: true });
+  const cliVersion = await executableVersion(executable);
+  const run = { provider, model: model ?? "(CLI default)", cliVersion, startedAt: new Date() };
+  await writeFile(path.join(out, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
+  console.log(JSON.stringify(run));
+  const rows = [];
+  for (const entry of entries) {
     for (let sample = 1; sample <= samples; sample++) {
       for (const variant of variants) {
-        const result = await claudeConsolidation(
-          evaluationConsolidationPrompt(entry, variant),
+        const result = await runConsolidation({
+          provider,
+          executable,
+          prompt: evaluationConsolidationPrompt(entry, variant),
           model,
-          fixedCwd,
-        );
-        const answer = result.structured_output;
+          ...(fixedCwd ? { fixedCwd } : {}),
+        });
+        const answer = result.answer;
         await writeFile(
           path.join(out, `${entry.id}.${variant}.${sample}.answer.json`),
           `${JSON.stringify(answer ?? null, null, 2)}\n`,
@@ -204,10 +182,12 @@ async function live(args: string[]): Promise<void> {
         const parsed = answer === undefined ? undefined : safeParseStructuredReviewReport(answer);
         const scored = parsed?.success ? scoreConsolidation(entry, parsed.data) : undefined;
         rows.push({
+          provider,
           case: entry.id,
           variant,
           sample,
-          ok: result.is_error !== true && result.subtype === "success",
+          ok: result.ok,
+          ...(result.failure ? { failure: result.failure } : {}),
           schemaValid: parsed?.success === true,
           ...(scored
             ? {
@@ -224,11 +204,11 @@ async function live(args: string[]): Promise<void> {
                 verdict: scored.verdictMatches,
               }
             : {}),
-          inputTokens: result.usage?.input_tokens,
-          cacheRead: result.usage?.cache_read_input_tokens,
-          cacheWrite: result.usage?.cache_creation_input_tokens,
-          outputTokens: result.usage?.output_tokens,
-          costUsd: result.total_cost_usd,
+          inputTokens: result.inputTokens,
+          cacheRead: result.cacheReadTokens,
+          cacheWrite: result.cacheWriteTokens,
+          outputTokens: result.outputTokens,
+          costUsd: result.costUsd,
         });
         console.log(JSON.stringify(rows.at(-1)));
       }

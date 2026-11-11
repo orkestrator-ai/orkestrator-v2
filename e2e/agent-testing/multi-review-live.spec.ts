@@ -23,14 +23,23 @@
  * records each reviewer's outcome as an annotation.
  *
  * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case:
- * an n-reviewer panel alternating Claude and Codex, started through
- * `start_multi_review`, sampled once a second for the backend's RSS and for
- * how many reviewers are setting up and running at once. It records tail
- * latency and peak RSS in `scale.json` beside the case's output.
+ * an n-reviewer panel started through `start_multi_review`, round-robin over
+ * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS` (comma separated,
+ * default `claude,codex`; each must be enabled and signed in on the profile).
+ * It arms the backend's agent-test fan-out stats recorder
+ * (`apps/backend/src/core/agent-test-fanout-stats.ts`) and asserts the
+ * scheduler's own per-pass peaks against the admission and per-provider caps.
+ * Once a second it samples the backend's RSS, the RSS of the backend's whole
+ * process tree (bridges and agent CLIs included), and how many reviewers are
+ * setting up and running. It records the platforms, models, tail latency,
+ * peak RSS and peak concurrency in `scale.json` beside the case's output.
  *
  * Models default to the cheapest each platform offers; override the picker
  * labels with `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL` and
- * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL`. Nothing at module scope or
+ * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL`. The scale case reads
+ * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_<PLATFORM>_MODEL` for every platform
+ * and, for a platform with no label, takes its catalogue's first model.
+ * Nothing at module scope or
  * in a hook spawns `mise` or reads profile state, so the file stays inert
  * without the opt-in. Prompts and transcripts never reach test output.
  */
@@ -43,6 +52,18 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
+import {
+  DEFAULT_SCALE_MODEL_LABELS,
+  FANOUT_STATS_DIR,
+  FANOUT_STATS_FILE_NAME,
+  FANOUT_STATS_MARKER_NAME,
+  type FanoutStats,
+  parseScalePlatforms,
+  pickScaleModel,
+  profileRssMiB,
+  scaleModelVariable,
+  scalePanelPlatforms,
+} from "./multi-review-scale-support";
 import { devTestRestartArgs } from "./profile-restart-args";
 
 type Status = {
@@ -75,6 +96,9 @@ const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW === "1"
 const CLAUDE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL ?? "Haiku 4.5";
 const CODEX_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL ?? "GPT-6-Luna";
 const SCALE_REVIEWERS = Number(process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE ?? "0");
+/** `DEFAULT_REVIEW_ADMISSION_CONCURRENCY` and `DEFAULT_REVIEW_PROVIDER_CONCURRENCY`. */
+const SCALE_ADMISSION_CAP = 4;
+const SCALE_PROVIDER_CAP = 4;
 /** A real review on small models settles in a few minutes; allow for host load. */
 const SETTLE_TIMEOUT_MS = 8 * 60_000;
 const SETTLED_PHASES = new Set(["ready", "interactive", "completed", "failed", "cancelled"]);
@@ -920,26 +944,42 @@ test.describe("live Multi Review inactive-environment cycle", () => {
     );
     test.setTimeout(45 * 60_000);
     page.setDefaultTimeout(15_000);
+    const platforms = parseScalePlatforms(
+      process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS,
+    );
     const cycle = new MultiReviewCycle(page, `scale${SCALE_REVIEWERS}`);
+    const status = readyStatus();
+    expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
+    const statsDirectory = path.join(status.dataDir!, FANOUT_STATS_DIR);
+    const statsMarker = path.join(statsDirectory, FANOUT_STATS_MARKER_NAME);
     try {
       await cycle.open();
       const environmentId = cycle.environments[0]!.id;
       const catalog = await cycle.invoke<AgentModel[]>("get_native_agent_model_catalog", {
         environmentId,
       });
-      const pick = (platform: "claude" | "codex", label: string) => {
-        const model = catalog.find(
-          (entry) => entry.platform === platform && entry.label.startsWith(label),
-        );
-        expect(model, `no ${platform} model labelled ${label}`).toBeTruthy();
-        return model!.id;
-      };
-      const claude = { agent: "claude" as const, model: pick("claude", CLAUDE_MODEL) };
-      const codex = {
-        agent: "codex" as const,
-        model: pick("codex", CODEX_MODEL),
-        reasoningEffort: "low",
-      };
+      const selections = new Map(
+        platforms.map((platform) => {
+          const label =
+            process.env[scaleModelVariable(platform)] ?? DEFAULT_SCALE_MODEL_LABELS[platform];
+          const model = pickScaleModel(catalog, platform, label);
+          expect(
+            model,
+            `no ${platform} model${label ? ` labelled ${label}` : ""}; is ${platform} enabled in the profile?`,
+          ).toBeTruthy();
+          return [
+            platform,
+            {
+              agent: platform,
+              model: model!.id,
+              ...(platform === "codex" ? { reasoningEffort: "low" } : {}),
+            },
+          ] as const;
+        }),
+      );
+      // Preparation, consolidation and Fix stay on Codex when it is in the
+      // panel, as in the two-platform runs; otherwise on the first platform.
+      const stepModel = selections.get("codex") ?? selections.get(platforms[0]!)!;
       const targetBranch = spawnSync("git", ["symbolic-ref", "--short", "HEAD"], {
         cwd: cycle.fixture.localPath!,
         encoding: "utf8",
@@ -947,45 +987,53 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       expect(targetBranch, "the fixture project has no branch").toBeTruthy();
       const backend = (profileStatus() as Status & { pids?: { backend?: number } }).pids?.backend;
       expect(backend, "dev:status reported no backend pid").toBeTruthy();
-      const rssMiB = () => {
-        const kib = Number(
-          spawnSync("ps", ["-o", "rss=", "-p", String(backend)], { encoding: "utf8" }).stdout,
-        );
-        return Number.isFinite(kib) ? kib / 1024 : 0;
-      };
-      const baselineRssMiB = rssMiB();
+      // Read-only `ps` samples of the backend's own tree: the bridges and
+      // agent CLIs it started grow with the panel, the backend alone does not.
+      const baseline = profileRssMiB(backend!);
+      // Arm the backend's fan-out stats recorder for this run only.
+      const runId = `scale-${SCALE_REVIEWERS}-${Date.now()}`;
+      await fs.mkdir(statsDirectory, { recursive: true });
+      await fs.rm(path.join(statsDirectory, FANOUT_STATS_FILE_NAME), { force: true });
+      await fs.writeFile(statsMarker, `${runId}\n`, { mode: 0o600 });
+      const panel = scalePanelPlatforms(platforms, SCALE_REVIEWERS);
       const started = await cycle.invoke<MultiReviewWorkflow>("start_multi_review", {
         environmentId,
         projectId: cycle.fixture.id,
         targetBranch,
-        reviewers: Array.from({ length: SCALE_REVIEWERS }, (_, index) =>
-          index % 2 === 0 ? claude : codex,
-        ),
-        reviewModel: codex,
-        fixModel: codex,
+        reviewers: panel.map((platform) => selections.get(platform)!),
+        reviewModel: stepModel,
+        fixModel: stepModel,
       });
       cycle.workflowId = started.id;
       const launchedAt = Date.now();
-      let peakRssMiB = baselineRssMiB;
+      let peakBackendRssMiB = baseline.backend;
+      let peakTreeRssMiB = baseline.tree;
       let maxSettingUp = 0;
       const maxRunning: Record<string, number> = {};
       let workflow = started;
       while (!SETTLED_PHASES.has(workflow.phase) && Date.now() - launchedAt < 40 * 60_000) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
         workflow = await cycle.read();
-        peakRssMiB = Math.max(peakRssMiB, rssMiB());
+        const sample = profileRssMiB(backend!);
+        peakBackendRssMiB = Math.max(peakBackendRssMiB, sample.backend);
+        peakTreeRssMiB = Math.max(peakTreeRssMiB, sample.tree);
         // A reviewer between admission and its sent prompt is setting up.
         const settingUp = workflow.reviewers.filter(
           (reviewer) => reviewer.status === "running" && reviewer.dispatchState !== "sent",
         ).length;
         maxSettingUp = Math.max(maxSettingUp, settingUp);
-        for (const agent of ["claude", "codex"]) {
+        // Reviewers whose turn is running: a load figure, not the cap, which
+        // bounds concurrent operations within a pass (see the stats below).
+        for (const platform of platforms) {
           const running = workflow.reviewers.filter(
-            (reviewer) => reviewer.agent === agent && reviewer.status === "running",
+            (reviewer) => reviewer.agent === platform && reviewer.status === "running",
           ).length;
-          maxRunning[agent] = Math.max(maxRunning[agent] ?? 0, running);
+          maxRunning[platform] = Math.max(maxRunning[platform] ?? 0, running);
         }
       }
+      const stats = JSON.parse(
+        await fs.readFile(path.join(statsDirectory, FANOUT_STATS_FILE_NAME), "utf8"),
+      ) as FanoutStats;
       const latencies = workflow.reviewers
         .filter((reviewer) => reviewer.startedAt && reviewer.completedAt)
         .map((reviewer) => Date.parse(reviewer.completedAt!) - Date.parse(reviewer.startedAt!))
@@ -994,33 +1042,72 @@ test.describe("live Multi Review inactive-environment cycle", () => {
         latencies.length
           ? latencies[Math.min(latencies.length - 1, Math.floor(q * latencies.length))]!
           : null;
+      const latencyByPlatform = Object.fromEntries(
+        platforms.map((platform) => {
+          const own = workflow.reviewers
+            .filter(
+              (reviewer) =>
+                reviewer.agent === platform && reviewer.startedAt && reviewer.completedAt,
+            )
+            .map((reviewer) => Date.parse(reviewer.completedAt!) - Date.parse(reviewer.startedAt!));
+          return [platform, own.length ? Math.max(...own) : null];
+        }),
+      );
       const result = {
         reviewers: SCALE_REVIEWERS,
+        platforms,
+        models: Object.fromEntries(
+          Array.from(selections, ([platform, selection]) => [platform, selection.model]),
+        ),
         phase: workflow.phase,
         completed: workflow.reviewers.filter((reviewer) => reviewer.status === "completed").length,
         failed: workflow.reviewers.filter((reviewer) => reviewer.status === "failed").length,
+        failedByPlatform: Object.fromEntries(
+          platforms.map((platform) => [
+            platform,
+            workflow.reviewers.filter(
+              (reviewer) => reviewer.agent === platform && reviewer.status === "failed",
+            ).length,
+          ]),
+        ),
         wallMs: Date.now() - launchedAt,
         reviewerLatencyMs: {
           p50: quantile(0.5),
           p95: quantile(0.95),
           max: latencies.at(-1) ?? null,
+          maxByPlatform: latencyByPlatform,
         },
-        baselineRssMiB: Math.round(baselineRssMiB),
-        peakRssMiB: Math.round(peakRssMiB),
+        baselineRssMiB: Math.round(baseline.backend),
+        peakRssMiB: Math.round(peakBackendRssMiB),
+        baselineTreeRssMiB: Math.round(baseline.tree),
+        peakTreeRssMiB: Math.round(peakTreeRssMiB),
         maxSettingUpObserved: maxSettingUp,
         maxRunningObserved: maxRunning,
+        fanoutPasses: stats.passes,
+        maxAdmissionConcurrency: stats.maxAdmission,
+        maxProviderConcurrency: stats.maxByPlatform,
       };
       await fs.writeFile(testInfo.outputPath("scale.json"), `${JSON.stringify(result, null, 2)}\n`);
       test.info().annotations.push({ type: "scale", description: JSON.stringify(result) });
       expect(SETTLED_PHASES.has(workflow.phase), describeWorkflow(workflow)).toBe(true);
-      // Sampled once a second, so these can only catch a cap being exceeded.
-      expect(maxSettingUp).toBeLessThanOrEqual(4);
+      expect(stats.runId, "the fan-out stats belong to another run").toBe(runId);
+      expect(stats.passes, "the backend recorded no fan-out pass").toBeGreaterThan(0);
+      // The scheduler's own peaks, recorded inside every pass: exact, not sampled.
+      expect(stats.maxAdmission).toBeLessThanOrEqual(SCALE_ADMISSION_CAP);
+      for (const platform of platforms) {
+        expect(stats.maxByPlatform[platform] ?? 0, `${platform} provider cap`).toBeLessThanOrEqual(
+          SCALE_PROVIDER_CAP,
+        );
+      }
+      // Sampled once a second, so this can only catch a cap being exceeded.
+      expect(maxSettingUp).toBeLessThanOrEqual(SCALE_ADMISSION_CAP);
       for (const reviewer of workflow.reviewers) {
         if (reviewer.status === "failed")
           expect(reviewer.error, describeWorkflow(workflow)).toBeTruthy();
         else expect(reviewer.status, describeWorkflow(workflow)).toBe("completed");
       }
     } finally {
+      await fs.rm(statsMarker, { force: true });
       await cycle.cleanup();
     }
   });

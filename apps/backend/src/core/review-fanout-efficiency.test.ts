@@ -584,6 +584,19 @@ describe("bounded concurrent admission", () => {
     await pass;
     expect(providers.claude.maxActiveCreates).toBe(2);
     expect(providers.codex.maxActiveCreates).toBe(2);
+    // The pass reports the peaks the caps bounded, per platform and for
+    // admission, so a recording observer can show the caps held live.
+    for (const platform of ["claude", "codex"] as const) {
+      expect(
+        h.efficiency.events.filter(
+          (event) =>
+            event.operation === "reviewer.provider_concurrency" && event.platform === platform,
+        ),
+      ).toEqual([expect.objectContaining({ count: 2, reviewers: 8 })]);
+    }
+    expect(
+      h.efficiency.events.filter((event) => event.operation === "reviewer.admission_concurrency"),
+    ).toEqual([expect.objectContaining({ count: 4, reviewers: 8 })]);
   });
 
   test("32 reviewers stay within the default bounds and all dispatch once", async () => {

@@ -30,10 +30,6 @@ export function bumpFontGeneration(): void {
   for (const listener of Array.from(listeners)) listener();
 }
 
-export function fontGeneration(): number {
-  return generation;
-}
-
 function subscribe(listener: () => void): () => void {
   attach();
   listeners.add(listener);

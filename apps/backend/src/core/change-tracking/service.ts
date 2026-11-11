@@ -32,7 +32,7 @@ import type { NativeAgentChangeTrackingHooks } from "../native-agent-service-sha
 import type { StorageDatabase } from "../storage-database.js";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { encodePath } from "./capture.js";
-import { ChangeLedger } from "./change-ledger.js";
+import { ChangeLedger, TERMINAL_TURN_LIFECYCLES } from "./change-ledger.js";
 import { DiffBodyService } from "./diff-bodies.js";
 import { EnvironmentChangeProjector } from "./environment-projector.js";
 import { EvidenceBodyStore } from "./evidence-body-store.js";
@@ -66,6 +66,7 @@ import {
   type TurnStartResult,
 } from "./turn-boundaries.js";
 import { RemoteSlots, WorktreeRegistry, type WorktreeTarget } from "./worktree-owner.js";
+import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 import type { DatabaseRetentionSummary } from "@orkestrator/protocol/backend-diagnostics";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -149,6 +150,14 @@ export class ChangeTrackingService {
   /** Last evidence source seen per environment and provider, for turn-end pulls. */
   private readonly sources = new Map<string, EvidenceSource>();
   private readonly unsupported = new Map<string, number>();
+  /**
+   * Per source, the last `epoch\0upTo` the producer accepted an
+   * acknowledgment for in this process. An acknowledgment releases every
+   * entry at or below `upTo`, and the spool only issues sequence numbers
+   * above its cursor, so repeating an accepted one releases nothing (todo
+   * 7567 task 3: it was a third bridge request on every activity sweep read).
+   */
+  private readonly acknowledged = new Map<string, string>();
   private readonly turnFinalizations = new Map<string, Promise<string[]>>();
   private retentionTimer: ReturnType<typeof setInterval> | null = null;
   private retentionOutcome: { at: number; report: RetentionReport | null } | null = null;
@@ -639,7 +648,7 @@ export class ChangeTrackingService {
    * terminal (acceptance H13). The settlement appends a superseding
    * `later-recovery` measurement; the interrupted one stays retrievable. A
    * turn whose end capture timed out while writers were unresolved is offered
-   * for a background end recovery instead (todo 7310).
+   * for a background end recovery instead (#2047).
    */
   private async settleInterruptedTurns(operationIds: Iterable<string>): Promise<void> {
     const turnIds = new Set<string>();
@@ -690,7 +699,15 @@ export class ChangeTrackingService {
     ) {
       return Promise.resolve(0);
     }
-    const run = this.pullNow(source)
+    // Its own recurring kind, so the evidence read and acknowledgment are not
+    // charged to the activity sweep that starts most pulls (todo 7567 task 3).
+    const run = recurringWorkMetrics
+      .observe("change-evidence-pull", async (span) => {
+        const ingested = await this.pullNow(source);
+        if (ingested > 0) span.changed();
+        else span.unchanged();
+        return ingested;
+      })
       .catch((error) => {
         log.warn("evidence.pull-failed", { error: formatLogError(error) });
         return 0;
@@ -698,6 +715,15 @@ export class ChangeTrackingService {
       .finally(() => this.pulls.delete(source.sourceKey));
     this.pulls.set(source.sourceKey, run);
     return run;
+  }
+
+  private noteAcknowledged(sourceKey: string, runtimeEpoch: string, upTo: number): void {
+    this.acknowledged.delete(sourceKey);
+    this.acknowledged.set(sourceKey, `${runtimeEpoch}\0${upTo}`);
+    if (this.acknowledged.size > 1_024) {
+      const oldest = this.acknowledged.keys().next().value;
+      if (oldest !== undefined) this.acknowledged.delete(oldest);
+    }
   }
 
   private async pullNow(source: EvidenceSource): Promise<number> {
@@ -712,6 +738,7 @@ export class ChangeTrackingService {
           const retainedBodyIds = request.retainedBodyIds.slice(0, 10_000);
           const unavailableBodyIds = request.unavailableBodyIds.slice(0, 10_000);
           await source.ack({ ...request, retainedBodyIds, unavailableBodyIds });
+          this.noteAcknowledged(source.sourceKey, request.runtimeEpoch, request.upTo);
           request.retainedBodyIds = request.retainedBodyIds.slice(retainedBodyIds.length);
           request.unavailableBodyIds = request.unavailableBodyIds.slice(unavailableBodyIds.length);
           this.ledger.transaction(() =>
@@ -741,15 +768,25 @@ export class ChangeTrackingService {
         cursor && cursor.runtimeEpoch === response.runtimeEpoch ? cursor.cursor : 0;
       const fresh = response.entries.filter((entry) => entry.seq > startCursor);
       if (fresh.length === 0) {
-        if (cursor?.runtimeEpoch === response.runtimeEpoch)
-          await source
+        // Releases what a cursor adopted without an acknowledgment (a new
+        // epoch) left on the producer; once accepted, a repeat is a no-op.
+        if (
+          cursor?.runtimeEpoch === response.runtimeEpoch &&
+          this.acknowledged.get(source.sourceKey) !== `${cursor.runtimeEpoch}\0${cursor.cursor}`
+        ) {
+          const accepted = await source
             .ack({
               runtimeEpoch: cursor.runtimeEpoch,
               upTo: cursor.cursor,
               retainedBodyIds: [],
               unavailableBodyIds: [],
             })
-            .catch(() => undefined);
+            .then(
+              () => true,
+              () => false,
+            );
+          if (accepted) this.noteAcknowledged(source.sourceKey, cursor.runtimeEpoch, cursor.cursor);
+        }
         if (!cursor || cursor.runtimeEpoch !== response.runtimeEpoch) {
           this.ledger.transaction(() =>
             this.ledger.setCursor(source.sourceKey, response.runtimeEpoch, response.nextCursor),
@@ -1127,12 +1164,27 @@ export class ChangeTrackingService {
         startedAt: turn.started_at,
         finishedAt: turn.finished_at,
         turnResourceKey: keys.turnNet,
-        measurementId: this.ledger.selection(keys.turnNet)?.measurement_id ?? null,
+        measurementId: this.historyMeasurementId(turn.lifecycle, keys.turnNet),
         presentation,
       };
     });
     const next = rows.length > limit ? String(rows[limit - 1]!.ordinal) : null;
     return { kind: "page", entries, nextCursor: next };
+  }
+
+  /**
+   * The turn-net measurement a history entry names. A terminal turn commits
+   * its lifecycle before its end measurement is compared and selected, so for
+   * that window the selection still points at the provisional measurement.
+   * Naming it would pair `finalized` with a measurement restore refuses
+   * (`no-retained-endpoints`), so a terminal turn names nothing until its
+   * selection has left the provisional one; a client re-reads, as it already
+   * must while the turn runs. A running turn keeps its provisional id.
+   */
+  private historyMeasurementId(lifecycle: string, turnNetKey: string): string | null {
+    const measurementId = this.ledger.selection(turnNetKey)?.measurement_id ?? null;
+    if (!measurementId || !TERMINAL_TURN_LIFECYCLES.has(lifecycle)) return measurementId;
+    return this.ledger.measurementFinality(measurementId) === "provisional" ? null : measurementId;
   }
 
   /**

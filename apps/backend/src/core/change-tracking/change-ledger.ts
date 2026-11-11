@@ -1264,6 +1264,16 @@ export class ChangeLedger {
     return row ? (JSON.parse(row.measurement_json) as ChangeMeasurement) : null;
   }
 
+  /** One measurement's finality, without parsing the whole record. */
+  measurementFinality(id: string): string | null {
+    const row = this.db
+      .query(
+        "SELECT json_extract(measurement_json, '$.finality') AS finality FROM change_measurements WHERE id = ?",
+      )
+      .get(id) as { finality: string | null } | null;
+    return row?.finality ?? null;
+  }
+
   measurementOwner(id: string): { owner_kind: string; owner_id: string } | null {
     return this.db
       .query("SELECT owner_kind, owner_id FROM change_measurements WHERE id = ?")
@@ -1345,6 +1355,52 @@ export class ChangeLedger {
         .map((row) => ({ kind: row.kind, id: row.id, scope: row.scope })),
       next:
         rows.length < limit || !last ? null : { kind: last.kind, id: last.id, scope: last.scope },
+    };
+  }
+
+  /**
+   * One page of finished turns (kind `turn`, by owner id and scope) holding
+   * more than one measurement, whose turn ended before `finishedBefore`. A
+   * finished turn's history reads only its selected measurement, so the
+   * provisional one its end superseded is kept only for a reader paging it
+   * as it was superseded; the hourly pass then prunes it to the selection
+   * (todo 4960). A turn whose end recovery is still pending is skipped: a
+   * later recovery capture can still publish for it. Reads the owner index
+   * for `owner_kind = 'turn'` and each turn's boundary row by key.
+   */
+  finishedTurnOwnersPage(
+    after: MeasurementOwnerCursor | null,
+    finishedBefore: string,
+    limit: number,
+  ): { owners: MeasurementOwnerCursor[]; next: MeasurementOwnerCursor | null } {
+    const [id, scope] = after ? [after.id, after.scope] : ["", ""];
+    const rows = this.db
+      .query(
+        `SELECT m.owner_id AS id, m.scope AS scope, COUNT(*) AS n,
+                MAX(t.lifecycle IN (${turnLifecycleSqlList("terminal")})
+                    AND t.finished_at IS NOT NULL AND t.finished_at < ?3
+                    AND NOT EXISTS (SELECT 1 FROM change_references r
+                                    WHERE r.owner_kind = 'turn' AND r.owner_id = m.owner_id
+                                      AND r.reason = 'turn-recovery-pending')) AS finished
+         FROM change_measurements m
+         LEFT JOIN change_turn_boundaries t ON t.turn_id = m.owner_id
+         WHERE m.owner_kind = 'turn' AND (m.owner_id, m.scope) > (?1, ?2)
+         GROUP BY m.owner_id, m.scope
+         ORDER BY m.owner_id, m.scope
+         LIMIT ?4`,
+      )
+      .all(id, scope, finishedBefore, limit) as Array<{
+      id: string;
+      scope: string;
+      n: number;
+      finished: number | null;
+    }>;
+    const last = rows.at(-1);
+    return {
+      owners: rows
+        .filter((row) => row.n > 1 && row.finished === 1)
+        .map((row) => ({ kind: "turn", id: row.id, scope: row.scope })),
+      next: rows.length < limit || !last ? null : { kind: "turn", id: last.id, scope: last.scope },
     };
   }
 

@@ -11,28 +11,30 @@ The Claude bridge reports restart interruptions since 2026-10-18; see
 Every code item and the killed-Claude-CLI qualification were finished on
 2026-10-25 on top of `ba7cc8d4`, with a first 8-reviewer scale run; see
 [Gates, fallback, pipeline reminders and measurement](#gates-fallback-pipeline-reminders-and-measurement-2026-10-25).
-Only the scale qualification is left.
+The scale harness was extended to any platform mix, with a credential-free
+mode that passed at 8, 16 and 32 reviewers, on 2026-11-11; see
+[Scale harness on a loopback model](#scale-harness-on-a-loopback-model-2026-11-11).
+Only the signed-in mixed run (7568) and three deferred designs are left.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-11 against `main` at `498b68766`.
 
 ### Tasks
 
-1. **Mixed real-provider scale run**: an 8 to 32 reviewer panel across more platforms than Claude and Codex, recording caps, tail latency and peak RSS. Status: open (blocked on Cursor, Grok, OpenCode and Pi credentials in a test profile, and on the harness only knowing Claude and Codex).
-2. **Live step reminder and step continuation**: preparation, consolidation and Fix follow-ups are covered only by deterministic tests. Status: deferred (cannot be forced on a real provider).
-3. **Content-addressed evidence store**: a backend-owned, read-only evidence store. Status: deferred (until measured).
-4. **Provider batch status observation**: one bridge call for many reviewers' settlement and usage. Status: deferred (no bridge exposes it).
-5. **Hierarchical consolidation**: map/reduce merges when evidence exceeds `CONSOLIDATION_MAX_EVIDENCE_BYTES`. Status: deferred (no overflow has been observed, and nothing counts one).
-6. **`queuedAt` reviewer field**: a queue timestamp for the flow graph. Status: deferred (nothing would read it).
-7. **Skip identical renderer refetches**: avoid refetching an unchanged workflow on every `multi-review` announcement. Status: deferred (premise partly out of date, see below).
-8. **File hygiene**: stale wording about 0112, and what happens to this file after task 1. Status: open.
+1. **Mixed real-provider scale run: the harness**: the scale case takes any platform mix, asserts the scheduler's own per-pass peaks against the caps and records process-tree RSS; a credential-free Pi mode passed at 8, 16 and 32 reviewers (2026-11-11). The signed-in mixed run is on the manual-test checklist (7568). Status: done.
+3. **Content-addressed evidence store**: a backend-owned, read-only evidence store. Status: open (deferred until a container verification measurement, which needs a host with Docker running; rkmbp's daemon was down on 2026-11-11).
+4. **Provider batch status observation**: one bridge call for many reviewers' settlement and usage. Status: open (depends on 7568, 0027 task 1: deferred until the signed-in 32-reviewer run times its passes).
+5. **Hierarchical consolidation**: map/reduce merges when evidence exceeds `CONSOLIDATION_MAX_EVIDENCE_BYTES`. Overflows are now counted in the essential log (2026-11-11). Status: open (deferred until that log records an overflow).
+6. **`queuedAt` reviewer field**: a queue timestamp for the flow graph. Status: done (retired 2026-11-11, as recommended).
+7. **Skip identical renderer refetches**: avoid refetching an unchanged workflow on every `multi-review` announcement. Status: done (shipped in #1964 on 2026-11-06; found 2026-11-11).
+8. **File hygiene**: stale wording about 0112, and what happens to this file after task 1. Status: done (2026-11-11: wording corrected, the design rules moved to `review-preparation.md`; the file is deleted once tasks 3 to 5 are settled).
 
 ### 1. Mixed real-provider scale run
 
 **Problem.** The fan-out caps, reviewer tail latency and backend memory have one real measurement: 8 reviewers, Claude and Codex only (2026-10-25). Panels can be up to 32 reviewers on any of the six platforms, so a user running a large mixed panel is on behaviour nobody has measured under real rate limits.
 
-**Context.** The only item left in this file. The harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`), and the run is batched with the "Several providers at once (mixed panels)" row of [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) alongside [0025](0025-multi-review-panel-value.md). The folder index rates the file Low because the remaining work is a measurement blocked on credentials.
+**Context.** The harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`). The signed-in mixed-panel run is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (0027 task 1), batched with the "Several providers at once (mixed panels)" row of [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) alongside [0025](0025-multi-review-panel-value.md). What is left here is the harness work below, so that run is worth its cost.
 
 **Investigation.**
 - The scale case is `e2e/agent-testing/multi-review-live.spec.ts:921` onward. It is Claude and Codex only by type, not just by data: `pick` takes `"claude" | "codex"` (`:935`), reviewers alternate `claude`/`codex` (`:966`), and the per-platform sampling loop names only those two (`:987`). Only `CLAUDE_MODEL` and `CODEX_MODEL` overrides exist (`:73`-`:74`). Extending it is more than "adding their model picks", as the file says: the type, the alternation and the sampling loop all need to change.
@@ -40,6 +42,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 - **The harness cannot observe the per-provider cap.** `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` bounds concurrent *operations* within one runner pass (`review-fanout-scheduler.ts:22`, tasks built at `review-fanout.ts:857`), not reviewers whose turn is running on the provider. The spec counts reviewers with `status === "running"` per platform (`multi-review-live.spec.ts:987`) and never asserts it. Only the admission figure is asserted (`:1022`). The 2026-10-25 "at most 4 per platform were running" follows from 8 reviewers alternating over two platforms (4 each), not from the cap. A 32-reviewer panel can have 16 Claude turns running at once without breaking any cap. The scheduler's real figures (`BoundedTaskStats.maxActiveByGroup`, `review-fanout-scheduler.ts:58`) only go to `this.record` (`review-fanout.ts:891`), which is `NOOP_EFFICIENCY_OBSERVER` in production (`multi-review-efficiency.ts:118`).
 - RSS is sampled for the backend pid only (`multi-review-live.spec.ts:955`). Bridges and agent CLIs are separate processes, so peak RSS excludes the processes that grow with panel size.
 - `dev:test` accepts `--credential-source` for all six platforms (`apps/desktop/scripts/dev/arguments.ts:28`, `:98`; `AGENT_PLATFORMS` in `packages/protocol/src/agent-platforms.ts:2`). The blocker is which credentials a given host holds, not the tooling. The pinned versions are Grok 1.0.67, Pi 1.4.0 and OpenCode 1.19.4 (`docker/Dockerfile:195`-`:197`). The earlier runs were on macOS; this Linux host was not checked for credentials (research only).
+
+**Done 2026-11-11.** Built with the recommended option of each decision below:
+- The scale case takes `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS` (any of the six, round-robin; default `claude,codex`) and `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_<PLATFORM>_MODEL`, in `e2e/agent-testing/multi-review-scale-support.ts`.
+- Each fan-out pass records its admission peak and its per-platform peak as `reviewer.admission_concurrency` and `reviewer.provider_concurrency` efficiency events (`review-fanout.ts`). An isolated agent-test backend records their maxima to a file when the spec arms it (`agent-test-fanout-stats.ts`, gated like the dispatch hold), and the case asserts them against the caps.
+- The case samples the RSS of the profile backend's whole process tree as well as the backend's own (read-only `ps`, from the backend pid `dev:status` reports).
+- `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1` runs the case with no login, every slot on the profile's real Pi bridge against the scripted loopback model `auto-pipeline-fake-model.ts`. It passed at 8, 16 and 32 reviewers; see [Scale harness on a loopback model](#scale-harness-on-a-loopback-model-2026-11-11).
+
+Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-stats.test.ts` (4), `review-fanout-efficiency.test.ts` (the new events) and the three fake-model runs. The signed-in mixed run at 8 to 32 reviewers stays on the manual-test checklist (7568, 0027 task 1); its command there now names the platform variable.
 
 **Decisions.**
 
@@ -70,31 +80,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Backend only, as today.**
     - Pros: simple and already recorded.
     - Cons: misses most of the memory a large panel uses.
-- **Where and when to run it?**
-  - **With the 0031 mixed-panel batch, after the harness changes above (recommended).**
-    - Pros: one credential set-up serves 0025 and 0027; the harness is fixed first, so the run is worth its cost.
-    - Cons: waits on 0031's scheduling.
-  - **Now, on whichever host has the most credentials.**
-    - Pros: earlier evidence.
-    - Cons: without the cap fix it repeats the current gap; it may cover only three platforms.
-
-### 2. Live step reminder and step continuation
-
-**Problem.** The reminder and restart continuation for preparation, consolidation and Fix have never run on a real provider mid-step. A regression there would fail the whole review rather than one reviewer.
-
-**Context.** Recorded as "Not qualified live" in the 2026-10-17 and 2026-10-18 results. A model forgetting its result tool cannot be forced (1 in 15 preparations on 2026-10-17), and no live restart happened to land mid-step.
-
-**Investigation.** The step paths remain `MultiReviewService.prepareStepFollowUp` and `advanceFixModel` in `apps/backend/src/core/multi-review-service.ts`. `apps/backend/tests/multi-review-claude-bridge-restart.test.ts` drives a real Claude bridge process with a fake CLI through `HttpBridgeProvider` for a step. That is the closest thing to live, and it covers the continuation and the reconnect. The spec's restart case restarts the backend while *reviewers* run. Nothing in it targets preparation or consolidation.
-
-**Decisions.**
-
-- **Is deterministic coverage enough?**
-  - **Yes, keep this out of the outstanding list (recommended).** The real-bridge restart test already crosses the process boundary, and the reminder cannot be triggered honestly.
-    - Pros: no flaky live case built on timing; the contract is already pinned.
-    - Cons: a provider-specific difference in mid-step restarts (for example Codex app-server) is untested live.
-  - **Add a live disruption timed to the preparation or consolidation phase.** The spec already polls `phase`.
-    - Pros: real evidence for the step continuation.
-    - Cons: timing-dependent; another long live case; still cannot cover the reminder.
 
 ### 3. Content-addressed evidence store
 
@@ -138,7 +123,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Deferred until real workflows exceed the budget. Merges must keep every source ID.
 
-**Investigation.** `CONSOLIDATION_MAX_EVIDENCE_BYTES` is unchanged (`apps/backend/src/core/review-consolidation-evidence.ts:38`, error class at `:119`). Nothing counts how often the error fires: no metric or counter references it outside that module and the prompt builder (`multi-review-prompts.ts:109`). So the trigger the item waits for cannot be observed.
+**Investigation.** `CONSOLIDATION_MAX_EVIDENCE_BYTES` is unchanged (`apps/backend/src/core/review-consolidation-evidence.ts:38`, error class at `:119`). Nothing counted how often the error fires: no metric or counter referenced it outside that module and the prompt builder (`multi-review-prompts.ts:109`). So the trigger the item waits for could not be observed.
+
+**Counted since 2026-11-11.** Every `ConsolidationBudgetError` now first writes one essential log entry, `review` `consolidation.budget-exceeded`, with counts only: `reviewers`, `sourceFindings`, `compactBytes` and `maxBytes` (`buildConsolidationEvidence`; vocabulary in `packages/protocol/src/log-vocabulary/review.ts`, listed in [logging.md](../../architecture/logging.md)). Evidence: "an overflow is logged as counts only…" in `review-consolidation-evidence.test.ts`. This item reopens when that entry appears in a real essential log. The recommended "recurring metrics" counter became a log entry instead; see [Assumptions and decisions](#assumptions-and-decisions), item 15.
 
 **Decisions.**
 
@@ -154,9 +141,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** None today. The flow graph shows queue position only.
 
-**Context.** Deferred until queue time becomes user-visible. `admissionState` and `queuePosition` shipped for [0029](0029-multi-review-flow-graph.md).
+**Context.** Deferred until queue time becomes user-visible. `admissionState` and `queuePosition` shipped for to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)).
 
 **Investigation.** Both fields exist (`packages/protocol/src/review-fanout.ts:112`, `:117`), and `queuedAt` does not.
+
+**Retired 2026-11-11**, as recommended: no field was added, and the "Deferred until measured" entry is gone. A queue-time display would add the field with the feature that reads it.
 
 **Decisions.**
 
@@ -173,6 +162,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Problem.** Every `multi-review` resource announcement makes the renderer fetch the whole workflow, even when it has not changed since the last fetch.
 
 **Context.** The file says a real skip needs a per-workflow revision in resource-change events, because the current revision is a global counter.
+
+**Done before this file was updated.** #1964 (`f7d345f65`, 2026-11-06) built the recommended option: `get_multi_review_workflow` accepts `knownRevision` and answers `unchanged` (`commands-registry-reviews.ts`), and `hydrateMultiReviewWorkflowOnce` (`apps/web/src/lib/multi-review-persistence.ts`) reads a held workflow through `getMultiReviewWorkflowConditional`, with one read in flight and one shared follow-up per workflow. Evidence: "reads a held workflow conditionally and keeps it when unchanged" in `multi-review-persistence.test.ts`. Found while checking this file on 2026-11-11; the Investigation below is the 2026-10-27 reading.
 
 **Investigation.** The refetch is `onResourceChanged("multi-review", …)` calling `hydrateMultiReviewWorkflow` (`apps/web/src/lib/store-resource-sync.ts:631`, `apps/web/src/lib/multi-review-persistence.ts:20`). `ResourceChange.revision` is indeed the global sequence (`packages/protocol/src/resource-events.ts:186`). But the premise is partly out of date. Each stored workflow row already carries its own `revision`, incremented on every save (`apps/backend/src/core/storage-reviews.ts:601`), and the renderer receives it (`PersistedLoopedReviewWorkflow.revision`, `apps/web/src/types/index.ts:296`). Build Pipeline already uses that pattern: `get_build_pipeline` takes `knownRevision` and answers unchanged (`apps/backend/src/core/commands-registry-build.ts:137`, `apps/web/src/lib/backend/workflows.ts:1078`).
 
@@ -195,7 +186,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Under the README rules, items may be corrected in place, and a file is deleted once its last item is done.
 
-**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review-fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to [0223](0223-provider-non-delivery-proof.md). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) is still present, with `stableJitterMs` moved out to `multi-review-scheduling.ts:157` as stated, so its removal still belongs to 0048.
+**Done 2026-11-11.** Assumption 13 no longer says the recovery bugs ship. Following the first decision, the ten invariants, the load-bearing guarantees, the commit, fence and evidence rules, at-most-once dispatch and the error-scope table moved to [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision); 0223's pointer to them follows. The file itself stays while tasks 3 to 5 are deferred: deleting it would lose their reopen conditions.
+
+**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review-fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to [0223](0223-provider-non-delivery-proof.md). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) was still present then, with `stableJitterMs` moved out to `multi-review-scheduling.ts:157` as stated; 0048 task 13 removed it on 2026-11-10.
 
 **Decisions.**
 
@@ -253,19 +246,20 @@ platforms than Claude and Codex.
   the provider's `transcriptSnapshot`; a provider without it fails the read
   (the count-bounded compatibility read was retired on 2026-10-25).
 - **Scheduling.** `KeyedWorkflowSupervisor` (`workflow-supervisor.ts`) is the
-  default. `wakeWorkflows` in `index.ts` delivers provider-transition wakeups
-  to `MultiReviewService.wakeEnvironment`. `WorkflowDueScheduler`
-  (`multi-review-scheduler.ts`) runs only when
-  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` names `multi-review` or `all`, and
-  goes with that switch
-  ([0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)).
-  Both drivers share one relative due-time policy (`nextDelayMs`) and take
-  the `schedulerClock` test seam. The legacy 1 s tick
+  only driver. `wakeWorkflows` in `index.ts` delivers provider-transition
+  wakeups to `MultiReviewService.wakeEnvironment`. Its rollback,
+  `WorkflowDueScheduler` (`multi-review-scheduler.ts`), was removed on
+  2026-11-10
+  ([0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
+  task 13), so `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` no longer names
+  `multi-review`. The due-time policy is `nextDelayMs`, with the
+  `schedulerClock` test seam. The legacy 1 s tick
   (`adaptiveScheduling: false`) and the `evidencePermits` gate are gone.
 - **Payload budgets.** `packages/protocol/src/structured-review/budgets.ts`
   (`STRUCTURED_REVIEW_MAX_*`) bounds each report. `CONSOLIDATION_MAX_EVIDENCE_BYTES`
   (640 KiB, `review-consolidation-evidence.ts`) bounds consolidation input, and
-  overflow throws `ConsolidationBudgetError` before dispatch.
+  overflow throws `ConsolidationBudgetError` before dispatch, after one
+  counts-only essential log entry (`consolidation.budget-exceeded`).
 - **Measurement.** `multi-review-efficiency.bench.test.ts` with
   `multi-review-efficiency-fixtures.ts` covers 1, 2, 4, 8, 16 and 32 reviewers,
   an 8-reviewer panel over 50 retained workflows, a mixed-provider panel and a
@@ -311,7 +305,9 @@ platforms than Claude and Codex.
   cycle on the real stack: unmount, renderer reload, backend restart, a
   killed reviewer bridge and a killed Claude Code process under a live bridge.
   `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` adds an n-reviewer scale
-  case. Each case is a real two-reviewer review launched
+  case over any platform mix, which
+  `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1` runs on a loopback
+  Pi model with no login. Each other case is a real two-reviewer review launched
   through the launcher. How to run it is in
   [agent-testing.md](../../development/agent-testing.md#automated-checks).
 - **Storage.** `multi-reviews` is a SQLite `record` store (`STORE_LAYOUTS` in
@@ -337,7 +333,8 @@ All done on 2026-10-25; evidence in
    - ~~`adaptiveScheduling` and the legacy `setInterval` / `requestTick`
      tick~~: removed; `DEFAULT_POLL_MS` stays. The B16 comment in
      `packages/protocol/src/recurring-work.ts` is updated.
-   - `WorkflowDueScheduler`, `multi-review-scheduler.ts` and its test stay,
+   - (Removed 2026-11-10 by 0048 task 13; kept below as written then.)
+     `WorkflowDueScheduler`, `multi-review-scheduler.ts` and its test stay,
      as the `multi-review` domain's rollback under
      `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`. Their removal is owned by
      [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
@@ -371,17 +368,14 @@ All done on 2026-10-25; evidence in
   change (see below).
 - ~~**A killed Claude Code process, live.**~~ Done on 2026-10-25: "continues
   a reviewer whose Claude Code process was killed under a live bridge".
-- **Scale.** Run a mixed real-provider panel at 8 to 32 reviewers. Record that
-  the caps hold under real rate limits, plus tail latency and peak RSS. The
-  harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` in
-  `multi-review-live.spec.ts`, which writes `scale.json`), and an
-  8-reviewer Claude and Codex panel passed on 2026-10-25 (see below), but the
-  panel it runs is Claude and Codex only. A mixed panel needs Cursor, Grok, OpenCode
-  and Pi credentials that this host's test profiles do not carry; batch it
-  with the runs in
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-  Extending the case to those platforms means adding their model picks to
-  its reviewer list.
+- **Scale.** The harness (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`
+  in `multi-review-live.spec.ts`, which writes `scale.json`) takes any
+  platform mix since 2026-11-11 (task 1). An 8-reviewer Claude and Codex
+  panel passed on 2026-10-25 (see below), and the credential-free Pi mode
+  passed at 8, 16 and 32 reviewers on 2026-11-11 (see
+  [Scale harness on a loopback model](#scale-harness-on-a-loopback-model-2026-11-11)).
+  The signed-in mixed run at 8 to 32 reviewers is on the
+  [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### Deferred until measured
 
@@ -393,17 +387,14 @@ All done on 2026-10-25; evidence in
   `activityBatch` and `HttpBridgeActivityBatchReader` report activity only, not
   the settlement, usage and request reconciliation the runner needs.
 - **Hierarchical (map/reduce) consolidation**, only if real workflows exceed
-  `CONSOLIDATION_MAX_EVIDENCE_BYTES`. Intermediate merges must keep every
+  `CONSOLIDATION_MAX_EVIDENCE_BYTES`, which the essential log now records as
+  `review` `consolidation.budget-exceeded` (task 5). Intermediate merges must keep every
   source ID, and final provenance validation must still reject missing or
   invented IDs.
-- **A `queuedAt` reviewer field**, only if queue time becomes user-visible.
-  `admissionState` and `queuePosition` shipped for the flow graph's queue
-  position ([0029-multi-review-flow-graph.md](0029-multi-review-flow-graph.md)); the
-  graph shows the position only, so nothing would read a queue timestamp yet.
-- **Skip identical renderer refetches.** `store-resource-sync.ts` refetches the
-  whole workflow on every `multi-review` announcement. `resource-sync.ts`
-  already coalesces per key. A real skip needs a per-workflow revision in
-  resource-change events; the current revision is a global counter.
+- ~~**A `queuedAt` reviewer field.**~~ Retired on 2026-11-11 (task 6):
+  nothing reads a queue timestamp.
+- ~~**Skip identical renderer refetches.**~~ Done in #1964 (task 7): held
+  workflows are read conditionally on their stored revision.
 
 ## Qualification results (2026-10-17)
 
@@ -417,7 +408,7 @@ Codex GPT-6-Luna (low) prepared and consolidated.
 | Suite or scenario | Command | Result |
 | --- | --- | --- |
 | Multi Review component specs | `ORKESTRATOR_E2E_PORT=14731 bunx playwright test --config e2e/playwright.config.ts e2e/MultiReviewLaunchDialog.spec.ts e2e/MultiReviewOverview.spec.ts e2e/MultiReviewFlow.spec.ts e2e/ReviewLaunchDialog.spec.ts` | Pass |
-| Full component browser suite | `mise run test:browser` (on port 14732) | 326 passed, 69 skipped, 1 failed. All 73 Multi Review cases passed. The failure was `CoordinatorPaneTree` "drops in the mobile switcher…", which failed 2 of 3 times on its own on unchanged `main`; the test clicked inside dnd-kit's 50 ms post-drop click suppression, fixed in the spec ([0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md#constraints-and-rationale)). |
+| Full component browser suite | `mise run test:browser` (on port 14732) | 326 passed, 69 skipped, 1 failed. All 73 Multi Review cases passed. The failure was `CoordinatorPaneTree` "drops in the mobile switcher…", which failed 2 of 3 times on its own on unchanged `main`; the test clicked inside dnd-kit's 50 ms post-drop click suppression, fixed in the spec ([narrow-layout.md](../../architecture/narrow-layout.md#design-choices), from the retired to-do 0035). |
 | Agent-browser suite | `mise run test:agent:browser:isolated` | 25 passed, 18 skipped (opt-in live cases), 1 failed: known flake [0224](../../tests/flaky-tests/previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md), which passed 4 of 4 alone. The suite has no credential-free Multi Review case; the launcher and reviewer tab are covered by the live cycle below. |
 | Coordinator Multi Review action (opt-in) | `ORKESTRATOR_AGENT_TEST_REVIEW=1 … --grep "coordinator Multi Review action"` | Failed on a stale assertion: the exact text "Cancelled" is gone since the flow graph. It now matches the status line "Multi Review cancelled", and passes. |
 | Live cycle: unmount | `multi-review-live.spec.ts` "settles while unmounted…" | Pass (2 full runs; an earlier run passed every snapshot check and failed on a spec selector). Settled to `ready` while unmounted. No cancellation, one prompt per reviewer, same sessions, `unchanged` conditional reads, no fallback. The graph, inspector, Fix control and the reviewer's read-only tab are right on return and after reloads. |
@@ -852,9 +843,52 @@ load. Browser, Docker, Electron and iOS suites were not run: no renderer,
 container or desktop code changed, and the live real-stack Multi Review file
 covers the reviewer tab.
 
+## Scale harness on a loopback model (2026-11-11)
+
+Built on `498b68766` plus this branch, on rkmbp (macOS arm64), with other
+live environments on the host. Disposable profile `mr-scale-0027`
+(`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; managed Pi 1.5.0). Every slot ran
+on the profile's real backend, Pi bridge and Pi SDK sessions against
+`auto-pipeline-fake-model.ts` on loopback, named in the profile's isolated Pi
+`models.json`: no login, nothing billed. The three runs went one after another
+on the same profile, each with
+`ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n> ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1 mise run test:logged -- --name mr-scale-fake-<n> -- mise run test:agent:browser -- e2e/agent-testing/multi-review-live.spec.ts -g scale`.
+
+| Reviewers | Phase | Completed | Review wall time | Reviewer latency p50 / p95 / max | Fan-out passes | Peak admission / Pi | Backend RSS (MiB) | Process-tree RSS (MiB) | Fake model calls |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 | `ready` | 8 | 6.2 s | 153 / 309 / 309 ms | 2 | 4 / 4 | 491 → 519 | 517 → 761 | 21 |
+| 16 | `ready` | 16 | 6.2 s | 164 / 550 / 550 ms | 2 | 4 / 4 | 599 → 605 | 624 → 895 | 37 |
+| 32 | `ready` | 32 | 7.2 s | 154 / 906 / 1,070 ms | 2 | 4 / 4 | 708 → 757 | 736 → 1,151 | 69 |
+
+- Each run submitted one validation plan, one report per reviewer and one
+  consolidation; no reviewer failed, needed a reminder or a repair.
+- The admission and per-provider caps held exactly: every pass peaked at 4
+  in both pools, as recorded by the scheduler itself, not sampled. Sampling
+  once a second saw at most 1 reviewer setting up and 8 Pi reviewers
+  "running" at 32 (a load figure: a reviewer counts as running from admission
+  to its result, while the cap bounds operations within a pass).
+- The process tree grew with panel size (about 245 MiB at 8 reviewers to
+  about 415 MiB at 32; not broken down by process, so attributing it to the
+  Pi bridge's per-reviewer sessions is an inference),
+  the backend alone much less. The backend's baseline rose between runs on
+  the same profile (491, 599, 708 MiB); whether that is retained workflow
+  state or uncollected garbage was not investigated.
+- What this does not show: real provider latency and rate limits, more
+  than one platform at once, or long turns overlapping across passes. A fake
+  turn settles in milliseconds, so a whole panel ran in two passes. That is
+  the signed-in run on the manual-test checklist (7568, 0027 task 1).
+- The first attempt failed before launch: the case refreshed the host Pi
+  catalogue, which an agent-test profile without a Pi credential source
+  leaves empty by design (`pi-model-catalog-seeding.ts`). The fake mode now
+  names the model by its ref, as the Auto-pipeline spec does.
+- The profile was stopped and reset. Content-free outcomes, with `scale.json`
+  per run, are under `output/agent-testing/mr-scale-0027-{8,16,32}/browser/`.
+
 ## Assumptions and decisions
 
-Taken on 2026-10-25 without stopping to ask, as the delegation required.
+Items 1 to 14 were taken on 2026-10-25, and items 15 to 18 on 2026-11-11,
+without stopping to ask, as the delegation required.
 
 1. **`WorkflowDueScheduler`: keep it until the switch goes, or remove it now.**
    Chosen: keep it, and let 0048 remove it with
@@ -953,7 +987,9 @@ Taken on 2026-10-25 without stopping to ask, as the delegation required.
     dispatch-status answer and a change to which interruption a continuation
     honours, which is design work with its own risk. Pros: this change stays
     reviewable and CI stays green with the bugs pinned. Cons: two known
-    recovery bugs ship until 0112 is done.
+    recovery bugs shipped until 0112 fixed them in #1288 (`71abfcfb`); 0112
+    is retired and its residual work is in
+    [0223](0223-provider-non-delivery-proof.md).
 14. **Codex `<environment_context>` rows: fix in this change or file it.**
     Chosen: fix it here, in `isSyntheticPersistedUserText`. Why: the live
     restart case required by this file failed on it with Codex 0.164.0, the
@@ -961,87 +997,41 @@ Taken on 2026-10-25 without stopping to ask, as the delegation required.
     fix is one tightly matched condition (only a message that is exactly the
     block). Pros: rehydrated Codex transcripts stop showing an injected user
     turn. Cons: touches a bridge in a fan-out change.
+15. **Task 5: how overflows are counted.** Options: a counter in the
+    recurring metrics (the recommendation); an essential log entry; a
+    production efficiency sink. Chosen: one essential `review`
+    `consolidation.budget-exceeded` entry per overflow, counts only. Why: the
+    recurring metrics count the supervisor's recurring work, and an overflow
+    is a rare one-off failure rather than recurring work; the essential log
+    is always on, bounded, and its fields are declared in the log vocabulary. Pros: no new metrics path or
+    retention; the entry names panel size and bytes, which the reopen decision
+    needs. Cons: counted per host from its log, not aggregated; a repeated
+    restart of one failed step logs once per attempt.
+16. **Task 1: a credential-free mode in the same case, or a separate spec.**
+    Chosen: an opt-in mode of the existing scale case, on Pi against the
+    Auto-pipeline loopback model. Why: the assertions and `scale.json` are the
+    case's own, so a second spec would copy them; Pi is the platform with a
+    scripted fake that answers every Multi Review result tool. Pros: the
+    harness change was run end to end before anyone spends a signed-in run on
+    it. Cons: one platform only, and turns too fast to overlap across passes.
+17. **Task 3: left deferred.** The recommended reopen measurement is
+    container-side verification at 256 MiB to 1 GiB, and the Docker daemon on
+    this host was not running. Starting Docker Desktop is a host change
+    outside this work, and a benchmark written without a run would be
+    unverified.
+18. **Task 8: move the design rules now, keep the file.** The decision tied
+    the move to finishing task 1, which is done; tasks 3 to 5 still need
+    their reopen conditions, so the file stays and holds only open work,
+    results and history.
 
 ## Constraints and rationale
 
-- **The ten invariants.** Every change must keep all of these.
-  1. The backend owns workflow state. Closing a tab, switching environment or
-     unmounting React never pauses or cancels a review.
-  2. Provider events are wake hints. Status, transcript, interactions and
-     results are recovered from snapshots.
-  3. Per reviewer: persist `dispatching`, make the send the next
-     reviewer-local fallible operation, then persist `sent`. Never retry an
-     ambiguous send under a new request ID.
-  4. Controller fencing is authoritative. A controller that lost its lease
-     cannot commit reviewer or workflow state.
-  5. Cancellation, provider disconnect, approval timeout, malformed structured
-     output and generation death fail closed.
-  6. A package snapshot or integrity failure is workflow-fatal. A reviewer's
-     provider failure is isolated to that reviewer.
-  7. Every queue, transcript response, report, consolidation payload, metric
-     label and log has an explicit byte and count bound.
-  8. Metrics and logs carry no prompt, transcript, report, command, file,
-     artifact, credential, token or attachment content.
-  9. Standalone Multi Review and Build Pipeline stages use the one runner and
-     behave the same.
-  10. Default two-reviewer quality must not regress to gain speed.
-- **Load-bearing guarantees.** Validation runs once and reviewers share its
-  sealed artifacts instead of rerunning suites. The package pins one evidence
-  state for every reviewer. Provider instances are shared per environment and
-  platform. Preparation and consolidation reuse one session where the model
-  allows. The reviewer tab polls its transcript only while it is active.
-  Optimisations work around these, never replace them.
-- **Safety commits versus observational checkpoints.** A transition that
-  changes what may safely happen after a crash commits immediately, fenced:
-  controller acquisition, release and cancellation ownership; reviewer session
-  identity; request IDs and dispatch journal states; accepted results and
-  terminal errors; phase transitions and consolidation or fix dispatch;
-  snapshot identity, stale evidence and integrity failures; and user commands
-  whose acknowledgement promises durable state. Token deltas, progress
-  digests, `stalledSince` and non-authorising status refreshes are staged and
-  flushed once per pass, and before any safety commit, shutdown or lease
-  handoff. A failed observational flush is logged, never turned into a retry.
-  A lost fence still propagates.
-- **Lease and state stay together.** Do not split the controller lease from
-  workflow state unless both commit in one transaction. A per-row
-  `updateStoreRow` keeps the atomic fence-and-state commit.
-- **Fence reads take no lease.** A fence check is only true at the instant it
-  reads, and a lease held for it would be released before the caller acts, so
-  it never protected the provider I/O that follows. Invariant 4 rests on the
-  commit: the only commit path (`saveNow` → `saveMultiReviewWorkflow`) re-checks
-  the fence and the expected revision inside its transaction. A SQLite read
-  sees only committed state, and a takeover needs an expired lease, which the
-  check already rejects, so a read racing a takeover answers as a serialized
-  one would. Writers must stay serialized: a save carries the stored lease
-  forward, so an unserialized claim racing it could lose a renewal.
-- **Evidence verification is a safety boundary, not a cache.** It must still
-  catch a changed package or artifact, a worktree or snapshot mismatch,
-  evidence regenerated under a new validation run, a restart that lost trust
-  state, paths swapped through links or mounts, and consolidation against
-  different evidence from the reviewers'. Never cache a verification on path,
-  mtime or size, and never persist a "verified" flag: files can change while
-  the backend is down. Permits are scoped to workflow, phase, generation and
-  controller token. They are dropped on failure, release, retry, reviewer
-  restart and step restart. A watcher may invalidate early, but a missing
-  watcher event is never proof of immutability.
-- **At-most-once dispatch under concurrency.** Concurrency is across reviewers
-  only. Nothing fallible runs on a reviewer between committing `dispatching`
-  and its single send. A timeout, disconnect or unknown response parks the
-  same request ID for explicit reconciliation. Never hold the commit queue or
-  a storage lock across provider I/O. Cancellation beats queued admission.
-- **Error scopes.**
-
-  | Event | Scope | Result |
-  | --- | --- | --- |
-  | Package or snapshot verification failure | Workflow or stage | Stop admission, abandon live work, fail the owner |
-  | Retryable provider create or prepare error | Reviewer | Stay pending or retrying; peers continue |
-  | Ambiguous prompt send | Reviewer | Park the same request ID; peers continue |
-  | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
-  | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. Codex and Claude report one |
-  | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
-  | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
-  | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
-
+- **Fan-out invariants, commits and error scopes.** The ten invariants, the
+  load-bearing guarantees, safety commits versus observational checkpoints,
+  fence reads, evidence verification, at-most-once dispatch and the error-scope
+  table moved on 2026-11-11 (task 8) to
+  [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision),
+  their living home.
 - **Restart continuation and step reminders (2026-10-17).**
   - *Detection is a structured bridge field, not text.* The Codex bridge
     already keeps a durable `restartFailure` notice for a turn its app-server
@@ -1120,9 +1110,10 @@ Taken on 2026-10-25 without stopping to ask, as the delegation required.
   resolved on 2026-10-15: the slow-reviewer benchmark now asserts dispatch
   ordering instead of a wall-clock bound.
 - [`review-preparation.md`](../../architecture/review-preparation.md) covers
-  preparation, sealing, the fan-out budgets and dispatch recovery (the two
-  bugs the interleaving tests found). No living doc covers fan-out
-  supervision or consolidation; the rationale above is its only home.
+  preparation, sealing, fan-out supervision (the invariants, commit rules and
+  error scopes moved there on 2026-11-11), the fan-out budgets and dispatch
+  recovery (the two bugs the interleaving tests found).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do moved there on 2026-11-10: the signed-in mixed-panel run of task 1, and task 2 (seeing the step reminder and the restart continuation for preparation, consolidation and Fix on a real provider; deterministic coverage, including the real-bridge restart test, stays the recommended proof).
 
 ## Replaces
 

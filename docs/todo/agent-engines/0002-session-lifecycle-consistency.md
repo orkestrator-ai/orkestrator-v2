@@ -9,8 +9,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Retire the legacy close fallback**: remove the `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from `closeBridgeSessionRetaining`. Status: done (2026-10-31).
-2. **Live Cursor close retention**: rerun `close-retention-live.spec.ts` for Cursor and fix the missing first prompt after resume. Status: open (failed 2026-10-23).
-3. **Cursor resume row titles**: check what a real Cursor resume row shows; title rows from the summary if every row reads "Orkestrator". Status: open (needs the task 2 run).
+2. **Live Cursor close retention**: fix the missing first prompt after a Cursor resume (failed 2026-10-23), once the signed-in rerun of `close-retention-live.spec.ts` with the run record captured shows whether the SDK omits it or the bridge misreads it. Status: blocked (waits on 7568: 0002 task 2).
+3. **Cursor resume row titles**: title rows from the summary if every real Cursor resume row reads "Orkestrator", as read from the same run's "resume rows" annotation. Status: blocked (waits on 7568: 0002 task 2).
 
 ### 1. Retire the legacy close fallback
 
@@ -49,7 +49,7 @@ Done 2026-10-31 on `main` at `931e5541`; see "Assumptions and decisions". The an
 
 **Decisions.**
 
-- **How to rerun?**
+- **How to rerun?** The rerun needs a Cursor login and is in 7568 (0002 task 2) since 2026-11-10; it follows the recommended option.
   - **Rerun on 1.0.40 with the environment kept, and capture `run.conversation()` for the resumed agent before teardown (recommended).**
     - Pros: the file's own next step; settles whether the SDK omits the prompt or the bridge misreads it.
     - Cons: the kept environment and its workspace must be cleaned up by hand afterwards.
@@ -118,8 +118,11 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     `TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER`, and no `DELETE` is sent. The
     renderer then shows the restart notice
     (`apps/web/src/lib/tab-teardown-notice.ts`).
-  - OpenCode closes through `apps/backend/src/core/opencode-session-close.ts`
-    and `OpenCodeProvider.closeSession`, never `session.delete`.
+  - OpenCode closes through `OpenCode2Provider.closeSession`
+    (`apps/backend/src/core/opencode2/provider.ts`), which interrupts and
+    forgets the session and never deletes the conversation. The 1.x close
+    (`opencode-session-close.ts`) was removed with OpenCode 1.x on 2026-11-11
+    (`git show 5f4e27b1c:apps/backend/src/core/opencode-session-close.ts`).
   - Since #964 the ACP bridge sends `session/close` when the agent advertises
     it (`bridges/acp-bridge/src/acp-session-close.ts`). Grok CLI 1.0.52 keeps
     the conversation afterwards (verified 2026-10-13, see the `session/close`
@@ -247,12 +250,17 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     name, instead of `Session acp-sess` or the start of a path
     (`shortResumeSessionId`, `NativeResumeSessionDialog.tsx`). The row's
     detail (Pi's first message, a message count) stays beside it.
-  - **OpenCode servers start one at a time.** `opencode-host-start.ts` holds
-    every host OpenCode start (environment servers, catalogue and sign-in
+  - **OpenCode servers start one at a time.** `opencode-host-start.ts` held
+    every host OpenCode 1.x start (environment servers, catalogue and sign-in
     servers) from spawn until healthy or exited. A local start whose server
-    exits saying `database is locked` is retried twice (0.5 s, 2 s) and then
-    refused with that reason (`opencode-host-start.test.ts`, which also proves
-    two environments starting together launch one server at a time). The
+    exits saying `database is locked` was retried twice (0.5 s, 2 s) and then
+    refused with that reason (`opencode-host-start.test.ts`, which also proved
+    two environments starting together launch one server at a time). Both
+    were removed with OpenCode 1.x on 2026-11-11
+    (`git show 5f4e27b1c:apps/backend/src/core/opencode-host-start.ts`); host
+    OpenCode 2 starts are serialised host-wide by
+    `OpenCode2HostServerState.startGate`
+    (`apps/backend/src/core/opencode2/host-server-state.ts`). The
     2026-10-21 "silent wait" was the live spec, not the product: the dispatch
     had been refused with the startup error, and
     `paused-interactions-live.spec.ts` ignored the outcome and polled for five
@@ -336,8 +344,9 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
 
 ### Qualification
 
-Live items need provider credentials; batch them with
-[0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+Live items need provider credentials. The Cursor rerun moved to the
+manual-test checklist (7568, 0002 task 2) on 2026-11-10; the record below is
+the history it starts from.
 
 1. **Live close retention for Cursor** (Pi done 2026-10-23). Run
    `e2e/agent-testing/close-retention-live.spec.ts`
@@ -509,9 +518,9 @@ bounded-state occupancy in `/runtime-health`) are decided below.
 - What a real Cursor resume row shows. The bridge creates every SDK agent as
   `name: "Orkestrator"` and has no rename, so each row is probably titled
   "Orkestrator", with the SDK's `summary` as its detail. The browser spec's
-  fake assumes the summary describes the conversation. Check on the live run
-  in Qualification item 1. If every row reads "Orkestrator", title untitled
-  Cursor rows from the summary rather than the agent name.
+  fake assumes the summary describes the conversation. The live run that
+  reads it is in 7568 (0002 task 2); if every row reads "Orkestrator", task 3
+  titles untitled Cursor rows from the summary rather than the agent name.
 
 ## Assumptions and decisions
 
@@ -697,6 +706,7 @@ bounded-state occupancy in `/runtime-health`) are decided below.
   how a Pi tab with no model picks its default, which the live run in
   Qualification item 1 needed (todo 0054, retired on 2026-10-29; Pi's case
   passed on 2026-10-23).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in Cursor rerun of task 2, which also reads task 3's resume rows) moved there on 2026-11-10.
 
 ## Replaces
 

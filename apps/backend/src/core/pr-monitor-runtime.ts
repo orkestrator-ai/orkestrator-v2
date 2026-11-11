@@ -559,6 +559,9 @@ export class PrMonitorRuntime {
             { taskId, prUrl },
           ]);
         },
+        returnTaskForClosedPr: async (taskId, prUrl) => {
+          await this.requireStorage().kanban.returnKanbanTaskForClosedPullRequest(taskId, prUrl);
+        },
         addTaskComment: async (taskId, text) => {
           await this.requireStorage().kanban.addKanbanComment(taskId, text);
         },

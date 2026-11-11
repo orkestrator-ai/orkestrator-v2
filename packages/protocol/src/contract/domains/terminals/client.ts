@@ -31,6 +31,10 @@ const legacyTerminalsApi = (_call: CommandCall, context: DomainAdapterContext): 
   legacyCommandApi(context, TERMINALS_COMMANDS);
 
 export const terminalsClient = domainClient(terminalsDomain, {
+  2: terminalsApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: terminalsApi,
   0: legacyTerminalsApi,
 });

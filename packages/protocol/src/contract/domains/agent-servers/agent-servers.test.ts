@@ -37,11 +37,11 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("agent-servers definitions", () => {
-  it("defines the domain's 77 commands once each, at version 1", () => {
+  it("defines the domain's 74 commands once each, since version 1", () => {
     const names = AGENT_SERVERS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(77);
-    expect(new Set(names).size).toBe(77);
-    expect(agentServersDomain).toMatchObject({ name: "agent-servers", version: 1, min: 1 });
+    expect(names).toHaveLength(74);
+    expect(new Set(names).size).toBe(74);
+    expect(agentServersDomain).toMatchObject({ name: "agent-servers", version: 2, min: 1 });
     for (const def of AGENT_SERVERS_COMMANDS) {
       expect(def.domain).toBe(agentServersDomain);
       expect(def.since).toBe(1);
@@ -162,9 +162,9 @@ describe("agent-servers definitions", () => {
     );
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapters 2, 1 and 0", () => {
     expect(DOMAIN_CLIENTS).toContain(agentServersClient);
-    expect(agentServersClient.versions).toEqual([1, 0]);
+    expect(agentServersClient.versions).toEqual([2, 1, 0]);
   });
 });
 
@@ -188,12 +188,12 @@ function fakeNode(domains: NegotiatedDomains | undefined, answer: (command: stri
 }
 
 describe("agent-servers client", () => {
-  it("version 1: typed calls carry the envelope and its critical keys, results decode", async () => {
-    const node = fakeNode({ "agent-servers": { min: 1, max: 1 } }, (command) =>
+  it("version 2: typed calls carry the envelope and its critical keys, results decode", async () => {
+    const node = fakeNode({ "agent-servers": { min: 1, max: 2 } }, (command) =>
       command === "get_claude_server_log" ? "tail" : { running: true, hostPort: 4000, extra: 1 },
     );
     const client = createDomainClient(agentServersClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     const api = client.api();
     await expect(api.get_claude_server_log({ containerId: "c1", previous: true })).resolves.toBe(
       "tail",
@@ -201,7 +201,7 @@ describe("agent-servers client", () => {
     expect(node.sent[0]).toEqual({
       command: "get_claude_server_log",
       args: { containerId: "c1", previous: true },
-      envelope: { domain: "agent-servers", version: 1, critical: ["previous"] },
+      envelope: { domain: "agent-servers", version: 2, critical: ["previous"] },
     });
     await expect(api.get_codex_server_status({ containerId: "c1" })).resolves.toEqual<unknown>({
       running: true,

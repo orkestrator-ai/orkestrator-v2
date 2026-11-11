@@ -6,30 +6,8 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `
 
 ### Tasks
 
-1. **Find a real host's agent mail store size and write rate**: the number that decides tasks 2 and 3. Status: open.
-2. **Pending injects as their own collection**: stop keeping them in the store's envelope. Status: open (depends on 1).
-3. **Mailbox list without message bodies**: serve the list, and keep the read model, without bodies. Status: open (depends on 1).
-
-### 1. Find a real host's agent mail store size and write rate
-
-**Problem.** Tasks 2 and 3 are stored-format changes whose cost grows with the store, and the only real size on record is one host on one day.
-
-**Context.** On 2026-10-28 arktech-mini's `agent-mail` store had 600 rows totalling 1,224 KiB ([0741](0741-backend-responsiveness-under-load.md) task 3). The store's bound is 32 MiB (`AGENT_MAIL_MAX_STORE_BYTES`, `packages/protocol/src/agent-mail.ts:11`). A mailbox keeps at most 200 messages (`:7`), and retention is 14 days by default (`:12`).
-
-**Investigation.** The recurring-work metrics cannot show the store's size. `storage-read` bytes are charged only for content fetched from SQLite (`RECURRING_STORAGE_OBSERVERS`, `apps/backend/src/core/storage-stores.ts:656-661`), and a write in the same process refreshes the row cache with the rows it wrote. Measured below: a `mail-presence` pass is charged 0 bytes after an in-process send, and the whole store (1.96 MB at a 1.85 MB store, 29.0 MB at 28.9 MB) after another connection's write. On a real host, where the backend is the only mail writer, the metric reads near zero whatever the store's size. A per-store size from the backup child ([6144](6144-per-store-sizes.md)) or a read-only size query like 0741's gives the size; the event-loop stall log from 0741 gives whether a write stalls.
-
-**Decisions.**
-
-- **Where to get the size?**
-  - **The per-store sizes 6144 adds, read from a real host's diagnostics over a week (recommended).**
-    - Pros: no new code here; content-free; covers every host that exports diagnostics.
-    - Cons: waits for 6144.
-  - **A one-off read-only `SUM(length(value))` over the `agent-mail` rows of a real database.**
-    - Pros: available today.
-    - Cons: one host, one moment; needs someone with access to that host.
-  - **Charge `storage-read` bytes on every read, cached or not.**
-    - Pros: the metric would then show list cost.
-    - Cons: changes what the metric means for every store, and a cache-served read costs no I/O.
+2. **Pending injects as their own collection**: stop keeping them in the store's envelope. Status: blocked (waits on 7568: 6760 task 1).
+3. **Mailbox list without message bodies**: serve the list, and keep the read model, without bodies. Status: blocked (waits on 7568: 6760 task 1).
 
 ### 2. Pending injects as their own collection
 
@@ -116,16 +94,16 @@ Stored-format changes follow the migration rules in `AGENTS.md` ("Storage rules"
 
 ## Needs verification
 
-- A real host's agent mail store size, over time (task 1).
 - Mail writes per minute in a busy coordinator session; the inject path writes three times per delivered message.
 
 ## Related
 
 - [0741 backend responsiveness under load](0741-backend-responsiveness-under-load.md): tasks 3 (the first real size) and 5 (the read model).
-- [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 2.
+- to-do 1202 efficiency follow-ups, task 2 (retired 2026-11-10).
 - 5100 prompt queue row writes (done 2026-11-05, deleted 2026-11-06; see git history): the row-write pattern task 2 recommends.
-- [6144 per-store sizes](6144-per-store-sizes.md).
+- 6144 per-store sizes (retired on 2026-11-10; see [storage.md](../../architecture/storage.md)).
 - Efficiency report, E (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), ST-9.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, a real host's agent mail store size and write rate) moved there on 2026-11-10.
 
 ## Replaces
 

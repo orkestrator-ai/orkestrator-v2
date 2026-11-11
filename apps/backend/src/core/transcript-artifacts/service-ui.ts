@@ -364,6 +364,17 @@ export class ArtifactUiReads {
         if (!asset || asset.byteLength < 0) throw storageCorrupt();
         return assetText(asset.sha256, asset.byteLength, "text/html; charset=utf-8", "html", true);
       }
+      case "search-text": {
+        // Only text read from the document this publication's receipt verified.
+        if (payload.kind !== "html-static") throw unsupported();
+        const entry = located.records
+          .get("derived", `${revision.artifactId}/${revision.revision}`)
+          ?.searchTexts?.find(
+            (candidate) => candidate.effectiveSourceHash === receipt.identity.effectiveSourceHash,
+          );
+        if (!entry) throw unsupported();
+        return assetText(entry.sha256, entry.byteLength, "text/plain; charset=utf-8", "txt", false);
+      }
       case "prepared-html": {
         if (payload.kind !== "html-interactive") throw unsupported();
         const asset = this.effectiveAsset(located);
@@ -490,8 +501,10 @@ export class ArtifactUiReads {
       revision: revision.revision,
       preparedSha256: prepared.documentSha256,
       contentSecurityPolicy: prepared.contentSecurityPolicy,
-      load: async () =>
-        this.ctx.store.readAsset(environmentId, prepared.documentSha256, prepared.byteLength),
+      load: async (signal) =>
+        this.ctx.store.readAsset(environmentId, prepared.documentSha256, prepared.byteLength, {
+          signal,
+        }),
       // Re-checked on every request the content origin serves: the owner,
       // publication and exact prepared bytes must still be current, the
       // environment not deleted, live viewing still enabled, and this live

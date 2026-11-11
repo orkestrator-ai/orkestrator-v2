@@ -82,6 +82,9 @@ const RIGHT_PANE_CONTENT_CLASS =
 const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
 const COMPACT_TAB_TRIGGER_CLASS = "px-2 text-xs data-[state=active]:!bg-zinc-800";
 
+/** How long feature chat drafts settle before the project's draft record is written. */
+export const FEATURE_CHAT_DRAFT_SAVE_DELAY_MS = 400;
+
 function featureChatDraftId(featureId: string): string {
   return `feature:${featureId}`;
 }
@@ -272,7 +275,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       timer = setTimeout(() => {
         timer = undefined;
         persistCurrentDrafts();
-      }, 400);
+      }, FEATURE_CHAT_DRAFT_SAVE_DELAY_MS);
     };
 
     const unsubscribe = featurePlans.subscribe((state, previous) => {

@@ -159,9 +159,9 @@ async function main(root: string, resultFile: string): Promise<void> {
 
   const commands = createCommandRegistry();
   // What a client holds after loading settings, sent back the way a settings
-  // save does. Both reads are redacted, and are themselves swept below.
+  // save does. The read is redacted, and is itself swept below.
   const clientConfig = await commands.get("get_config")!({}, context);
-  const clientGlobal = await commands.get("get_global_config")!({}, context);
+  const clientGlobal = (clientConfig as { global: unknown }).global;
   const seeded = { projectId: project.id, environmentId: environment.id, tabId: "sweep-tab" };
   const variants: Array<[SweepVariant, Record<string, unknown>]> = [
     ["empty", {}],

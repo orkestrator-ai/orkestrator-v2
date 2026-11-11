@@ -332,7 +332,7 @@ function heartbeatClock() {
   };
 }
 
-describe("terminal WebSocket heartbeat while the page stays visible (to-do 7200 task 4)", () => {
+describe("terminal WebSocket heartbeat while the page stays visible (#2052)", () => {
   const INTERVAL_MS = 25;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitFor = async (condition: () => boolean) => {

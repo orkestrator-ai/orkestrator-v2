@@ -2,8 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { probeClaudeLinuxSandbox } from "@orkestrator/protocol/node/claude-linux-sandbox";
 import { PINNED_TOOLCHAIN_VERSIONS } from "../../../../packages/toolchain/src/manifest.js";
 import {
+  PLATFORM_SANDBOX_EXPECTATIONS,
+  providerSandboxLiveGate,
   RESULT_SENTINEL,
   type SandboxObservation,
   type SandboxReport,
@@ -12,10 +15,14 @@ import {
 // Runs the real bridge and the pinned Claude CLI (no credentials, a scripted
 // loopback model) and proves the provider sandbox holds: a command cannot
 // write outside the workspace or reach an unlisted host, and neither raises an
-// approval card (to-do 0001 task 9). macOS only: the Linux (bubblewrap) half
-// is still open there. Run it with `mise run verify:claude:sandbox-live`;
-// also runs in the slow tier (`mise run test:slow`).
+// approval card (to-do 0001 task 9). macOS (Seatbelt) and Linux (bubblewrap,
+// where the host can nest the CLI's user namespace; the uncached probe
+// decides, since the test preload pins the cached answer). Run it with
+// `mise run verify:claude:sandbox-live`; also runs in the slow tier
+// (`mise run test:slow`).
 const PROBE_TIMEOUT_MS = 600_000;
+const GATE = providerSandboxLiveGate(process.platform, () => probeClaudeLinuxSandbox());
+const EXPECT = PLATFORM_SANDBOX_EXPECTATIONS[process.platform];
 
 async function runProbe(): Promise<SandboxReport> {
   // sandbox-exec matches canonical paths; macOS /var is a symlink.
@@ -84,10 +91,14 @@ function observation(report: SandboxReport, name: string): SandboxObservation {
   return found;
 }
 
-(process.platform === "darwin" ? test : test.skip)(
-  "the pinned Claude CLI enforces the provider sandbox the bridge asks for (macOS Seatbelt)",
+(GATE.run && EXPECT ? test : test.skip)(
+  `the pinned Claude CLI enforces the provider sandbox the bridge asks for (${
+    GATE.run ? (process.platform === "darwin" ? "macOS Seatbelt" : "Linux bubblewrap") : GATE.reason
+  })`,
   async () => {
+    const expected = EXPECT!;
     const report = await runProbe();
+    expect(report.platform).toBe(process.platform);
     // The SDK's bundled CLI is the pinned toolchain version; a drift fails here.
     expect(report.cliVersion).toBe(PINNED_TOOLCHAIN_VERSIONS.claude);
 
@@ -101,11 +112,15 @@ function observation(report: SandboxReport, name: string): SandboxObservation {
     expect(inside.wrote).toBe(true);
     expect(inside.toolResult!.isError).toBe(false);
     expect(inside.approvals).toEqual([]);
-    for (const name of ["control-direct-full", "control-proxy-full"]) {
-      const reached = observation(report, name);
-      expect(reached.unlistedHits, name).toBe(1);
-      expect(reached.approvals, name).toEqual([]);
-    }
+    const proxied = observation(report, "control-proxy-full");
+    expect(proxied.unlistedHits).toBe(1);
+    expect(proxied.approvals).toEqual([]);
+    // `allowLocalBinding` is macOS-only. On Linux each command has its own
+    // network namespace, so loopback is reached only through the proxy.
+    const direct = observation(report, "control-direct-full");
+    expect(direct.unlistedHits).toBe(expected.directLoopbackWithFullNetwork ? 1 : 0);
+    expect(direct.toolResult!.isError).toBe(!expected.directLoopbackWithFullNetwork);
+    expect(direct.approvals).toEqual([]);
     // Without `strictAllowlist` an asking turn gets a card for the host.
     const fullAsk = observation(report, "control-proxy-full-ask");
     expect(fullAsk.unlistedHits).toBe(1);
@@ -120,7 +135,11 @@ function observation(report: SandboxReport, name: string): SandboxObservation {
       const write = observation(report, name);
       expect(write.wrote, name).toBe(false);
       expect(write.toolResult!.isError, name).toBe(true);
-      expect(write.toolResult!.excerpt, name).toContain("operation not permitted");
+      // The wording comes from the shell the CLI runs, and its case varies:
+      // bash prints "Read-only file system", zsh "read-only file system".
+      expect(write.toolResult!.excerpt.toLowerCase(), name).toContain(
+        expected.outsideWriteRefusal.toLowerCase(),
+      );
       expect(write.approvals, name).toEqual([]);
     }
 
@@ -138,7 +157,8 @@ function observation(report: SandboxReport, name: string): SandboxObservation {
     }
 
     // A request to an unlisted host never arrives, whether it connects
-    // directly (Seatbelt's network rule) or through the sandbox proxy
+    // directly (Seatbelt's network rule, or bubblewrap's empty network
+    // namespace) or through the sandbox proxy
     // (`strictAllowlist`), and no approval card is raised for it.
     for (const name of [
       "network-direct",

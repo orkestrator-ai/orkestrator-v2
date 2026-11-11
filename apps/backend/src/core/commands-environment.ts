@@ -3,7 +3,6 @@ import {
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { isRootlessKitHostLoopbackAddress } from "@orkestrator/protocol/container-host-reachability";
-import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
   assertWorktreePathUnlinked,
@@ -112,15 +111,17 @@ import {
   reconcileProjectHomeEnvironment,
 } from "./project-home-environment.js";
 import type { Environment, EnvironmentStatus } from "./models.js";
-import type { PtyProcess } from "./pty.js";
+import type { PtyExitEvent, PtyProcess } from "./pty.js";
+import type { TerminalRuntime } from "./terminal-runtime.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
   CONTAINER_ROOT_USER_ARGS,
+  CONTAINER_TERMINAL_PID_RECORD_COMMAND,
+  CONTAINER_TERMINAL_SESSION_ENV,
   CONTAINER_WORKSPACE_SETUP_COMMAND,
-  SETUP_DONE_OSC_SEQUENCE,
-  SETUP_FAILED_OSC_SEQUENCE,
   SETUP_DONE_PRINTF_CMD,
   SETUP_FAILED_PRINTF_CMD,
+  type SetupFailureReason,
 } from "./container-scripts.js";
 import {
   quoteShell,
@@ -170,6 +171,7 @@ import {
   environmentLifecycleErrorMessage,
   isGitRemoteLifecycleMessage,
   logEnvironmentLifecycleFailure,
+  setupScriptFailedError,
 } from "./commands-error-text.js";
 import { startFailureRemedy } from "./environment-start-remedy.js";
 import type { EnvironmentSetupStartResult } from "./environment-operations.js";
@@ -178,6 +180,13 @@ import {
   startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
 } from "./agent-accounts-containers.js";
+import {
+  createSetupCompletionTracker,
+  isRetiredSetupTerminal,
+  retireFinishedSetupTerminal,
+  SetupTerminalStillRunningError,
+} from "./setup-terminal-attempt.js";
+import { newContainerTerminalToken } from "./container-terminal-shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -232,20 +241,43 @@ export function spawnTerminalProcess(
     terminals.emitOutput(id, data, context.emit);
     hooks.onData?.(data);
   });
-  terminalProcess.onExit(({ exitCode, signal }) => {
-    if (isSetupTerminalSessionId(id)) {
-      logSetupTerminal("setup.pty-exited", {
-        sessionId: id,
-        exitCode,
-        signal,
-        bufferChars: terminals.outputLength(id),
-      });
-    }
-    hooks.onExit?.();
-    void terminals.history.complete(id).catch(() => undefined);
-    terminals.cleanupSession(id);
-  });
+  terminalProcess.onExit((event) =>
+    settleTerminalProcessExit(id, terminalProcess, event, terminals, hooks),
+  );
   return terminalProcess;
+}
+
+/**
+ * What a terminal PTY's exit does to its session: completes its history and
+ * unregisters it, unless the session is no longer this PTY's.
+ */
+export function settleTerminalProcessExit(
+  id: string,
+  terminalProcess: PtyProcess,
+  { exitCode, signal }: PtyExitEvent,
+  terminals: Pick<TerminalRuntime, "process" | "outputLength" | "history" | "cleanupSession">,
+  hooks: { onExit?: () => void } = {},
+): void {
+  // A setup retry ends the previous run's terminal and takes over its
+  // teardown; the replacement may already be registered, or still in its
+  // preflight with nothing registered, when this exit arrives. Either way the
+  // session's history and registration are no longer ours.
+  const current = terminals.process(id);
+  if (isRetiredSetupTerminal(terminalProcess) || (current && current !== terminalProcess)) {
+    hooks.onExit?.();
+    return;
+  }
+  if (isSetupTerminalSessionId(id)) {
+    logSetupTerminal("setup.pty-exited", {
+      sessionId: id,
+      exitCode,
+      signal,
+      bufferChars: terminals.outputLength(id),
+    });
+  }
+  hooks.onExit?.();
+  void terminals.history.complete(id).catch(() => undefined);
+  terminals.cleanupSession(id);
 }
 
 export async function inspectDockerContainerIdentity(containerId: string): Promise<{
@@ -508,6 +540,17 @@ export function buildSetupTerminalCommand(commands: string[], finalShellCommand:
   return `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}; exec ${finalShellCommand}`;
 }
 
+/**
+ * The `bash -c` script a container setup terminal runs: record the shell under
+ * its token (`CONTAINER_TERMINAL_PID_RECORD_COMMAND`), then exec a login zsh
+ * running the setup in the same process.
+ */
+export function containerSetupShellCommand(setupCommand: string): string {
+  return [CONTAINER_TERMINAL_PID_RECORD_COMMAND, `exec zsh -lc ${quoteShell(setupCommand)}`].join(
+    "\n",
+  );
+}
+
 export function formatSetupTerminalIntro(
   environment: Environment,
   commands: string[],
@@ -595,58 +638,16 @@ export function beginSetupPreparationSession(
   return sessionId;
 }
 
-export function createSetupCompletionTracker(): {
-  completion: Promise<boolean>;
-  onData: (data: string) => void;
-  onExit: () => void;
-} {
-  let settled = false;
-  let resolveCompletion!: (success: boolean) => void;
-  let rejectCompletion!: (error: Error) => void;
-  const completion = new Promise<boolean>((resolve, reject) => {
-    resolveCompletion = resolve;
-    rejectCompletion = reject;
-  });
-
-  const finish = (success: boolean) => {
-    if (settled) return;
-    settled = true;
-    resolveCompletion(success);
-  };
-
-  // PTY reads are not guaranteed to align to write boundaries, so the OSC
-  // completion marker can arrive split across two `onData` chunks. Keep a small
-  // rolling tail of the previous chunk (one byte short of the longest marker)
-  // and prepend it before matching so a split marker is still detected.
-  const markerTailLength =
-    Math.max(SETUP_DONE_OSC_SEQUENCE.length, SETUP_FAILED_OSC_SEQUENCE.length) - 1;
-  let pending = "";
-
-  return {
-    completion,
-    onData: (data) => {
-      const combined = `${pending}${data}`;
-      if (combined.includes(SETUP_DONE_OSC_SEQUENCE)) {
-        finish(true);
-      } else if (combined.includes(SETUP_FAILED_OSC_SEQUENCE)) {
-        finish(false);
-      }
-      pending = markerTailLength > 0 ? combined.slice(-markerTailLength) : "";
-    },
-    onExit: () => {
-      if (settled) return;
-      settled = true;
-      rejectCompletion(new Error("Setup terminal exited before reporting completion"));
-    },
-  };
-}
-
 export async function spawnSetupTerminal(
   environment: Environment,
   commands: string[],
   context: CommandContext,
   options: { continuesPreparationSession?: boolean } = {},
-): Promise<{ sessionId: string; completion: Promise<boolean> }> {
+): Promise<{
+  sessionId: string;
+  completion: Promise<boolean>;
+  failureReason: () => SetupFailureReason | undefined;
+}> {
   const sessionId = setupTerminalSessionId(environment.id);
   const tracker = createSetupCompletionTracker();
   logSetupTerminal("setup.session-creating", {
@@ -659,6 +660,18 @@ export async function spawnSetupTerminal(
   });
 
   const terminals = context.runtime.terminals;
+  // A failed run leaves its terminal open at a shell prompt. A retry must start
+  // a new one: the old terminal would run nothing and never report completion.
+  try {
+    if (await retireFinishedSetupTerminal(sessionId, terminals)) {
+      logSetupTerminal("setup.pty-retired", { sessionId });
+    }
+  } catch (error) {
+    if (error instanceof SetupTerminalStillRunningError) {
+      logSetupTerminal("setup.pty-retire-failed", { sessionId });
+    }
+    throw error;
+  }
   const existingSession = options.continuesPreparationSession
     ? context.runtime.environments.setupSession(environment.id)
     : undefined;
@@ -694,7 +707,6 @@ export async function spawnSetupTerminal(
     const setupEnvironment = envWithManagedBinaries(context);
     terminals.rememberSession(sessionId, {
       kind: "local",
-      openCodeDatabase: hostOpenCodeDatabaseEnvironment(setupEnvironment).OPENCODE_DB,
       environmentId: environment.id,
       cols: 80,
       rows: 24,
@@ -730,15 +742,32 @@ export async function spawnSetupTerminal(
     introNotices.push(
       ...formatProjectSeedRefusals(await readProjectSeedRefusals(environment.containerId)),
     );
+    // Docker keeps an exec running after its client is gone, so the shell is
+    // marked with a per-PTY token and records its PID the way a container
+    // terminal's does (`container-terminal-shell.ts`): a retry or a close then
+    // ends the shell and its setup processes in the container as well. bash
+    // records `$$` and execs zsh in place, so the recorded PID is the shell
+    // that runs the setup and then stays at the prompt.
+    const token = newContainerTerminalToken();
     const setupCommand = buildSetupTerminalCommand(commands, "zsh -l");
     spawnTerminalProcess(
       sessionId,
       "docker",
-      ["exec", "-it", environment.containerId, "zsh", "-lc", setupCommand],
+      [
+        "exec",
+        "-it",
+        "--env",
+        `${CONTAINER_TERMINAL_SESSION_ENV}=${token}`,
+        environment.containerId,
+        "bash",
+        "-c",
+        containerSetupShellCommand(setupCommand),
+      ],
       { cols: 80, rows: 24 },
       context,
       { onData: tracker.onData, onExit: tracker.onExit },
     );
+    terminals.recordContainerShell(sessionId, { containerId: environment.containerId, token });
   }
 
   terminals.emitOutput(
@@ -758,7 +787,7 @@ export async function spawnSetupTerminal(
     environment: toClientEnvironment(environment),
   });
 
-  return { sessionId, completion: tracker.completion };
+  return { sessionId, completion: tracker.completion, failureReason: tracker.failureReason };
 }
 
 export async function completeEnvironmentSetup(
@@ -1068,15 +1097,20 @@ export async function startEnvironmentSetupAfterPreparation(
   }
 
   await publishSetupTab(current.id, context);
-  const { sessionId, completion } = await spawnSetupTerminal(current, commands, context, {
-    continuesPreparationSession: preparationSessionId !== undefined,
-  });
+  const { sessionId, completion, failureReason } = await spawnSetupTerminal(
+    current,
+    commands,
+    context,
+    {
+      continuesPreparationSession: preparationSessionId !== undefined,
+    },
+  );
   const task = context.runtime.environments.trackSetupTask(
     current.id,
     completion
       .then(async (success) => {
         if (!success) {
-          throw new Error("Setup script failed");
+          throw setupScriptFailedError(failureReason());
         }
         return completeEnvironmentSetup(current, context);
       })
@@ -2040,7 +2074,6 @@ async function recreateEnvironmentOnceUnfenced(
       throw error;
     }
     invalidateDiscovery(environment.id);
-    context.runtime.localServers.openCodeAgentTools.cancel(`container:${environment.containerId}`);
     // Per-runtime watchers of the replaced container are retired; everything
     // keyed by environment (sessions, parked dispatches, queued prompts)
     // resolves the new runtime on its next use.
@@ -2094,7 +2127,6 @@ async function recreateEnvironmentOnceUnfenced(
     invalidateDiscovery(environment.id);
     context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
     shutdownClaudeStatePolling(context, containerId);
-    context.runtime.localServers.openCodeAgentTools.cancel(`container:${containerId}`);
     await advanceContainerOperation(context, environment.id, operationId, { phase: "removing" });
   } catch (error) {
     await completeContainerOperation(context, environment.id, operationId, "failed", {
@@ -2199,9 +2231,6 @@ export function restoreRecoveryCopyTask(
     invalidateDiscovery(environment.id);
     if (environment.containerId) {
       context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
-      context.runtime.localServers.openCodeAgentTools.cancel(
-        `container:${environment.containerId}`,
-      );
     }
     cleanupEnvironmentSetupState(context, environment.id);
     const { createdFromCommit: _kept, ...setupReset } = discardedRuntimeSetupUpdates();

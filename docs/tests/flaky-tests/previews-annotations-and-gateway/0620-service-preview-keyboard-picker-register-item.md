@@ -158,7 +158,7 @@ passed 10 of 10 before the 0622 fix, 10 of 10 on the committed fix
 (`03cbf0191`), and 10 of 10 with every process pinned to two cores beside four
 busy loops. It also passed in 3 complete-owner runs and 2 runs of the owner
 without the legacy URL tab case
-([7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)).
+([to-do 7061, retired 2026-11-10](../../../architecture/browser-previews.md#desktop-tunnel)).
 Without the private namespace, 3 of 10 runs failed at startup with
 `net::ERR_NETWORK_CHANGED`
 ([2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)),
@@ -175,5 +175,5 @@ connect" after Chromium aborted its Vite modules with
 The launcher now reloads a window only for that startup failure (`9ef37bfd1`,
 to-do 0042 D24). Afterwards, headless and without a private network namespace,
 this test passed 10 of 10 (`--repeat-each=10`) and the owner without the
-[7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)
+[to-do 7061, retired 2026-11-10](../../../architecture/browser-previews.md#desktop-tunnel)
 case 21 of 21.

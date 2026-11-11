@@ -40,8 +40,8 @@ interface SubagentRecord {
 }
 
 export interface SubagentTranscriptReader {
-  listSubagents?: (sessionId: string, options?: { dir?: string }) => Promise<string[]>;
-  getSubagentMessages?: (
+  listSubagents: (sessionId: string, options?: { dir?: string }) => Promise<string[]>;
+  getSubagentMessages: (
     sessionId: string,
     agentId: string,
     options?: { dir?: string },
@@ -109,9 +109,6 @@ export async function rehydrateSubagentParts(
   dir: string,
   messages: readonly NormalizedMessage[],
 ): Promise<void> {
-  if (typeof sdk.listSubagents !== "function" || typeof sdk.getSubagentMessages !== "function") {
-    return;
-  }
   const agentIds = (await sdk.listSubagents(sdkSessionId, { dir }).catch(() => [])).slice(
     0,
     MAX_REHYDRATED_SUBAGENTS,

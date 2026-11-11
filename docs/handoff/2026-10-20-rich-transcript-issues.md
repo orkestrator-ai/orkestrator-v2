@@ -6,8 +6,9 @@ transcript artifacts (`docs/temp/rich-transcripts.md`) on branch
 blocks the specification's definition of done. Each entry says what was
 observed, how sure we are, where to look and a suggested next step.
 
-The remaining tracked work items are in
-[todo/transcripts-and-observation/0053-rich-transcripts.md](../todo/transcripts-and-observation/0053-rich-transcripts.md). Artifact cards in
+The remaining tracked work items were in to-do 0053 (retired 2026-11-10); its
+live-cycle evidence is in
+[transcript-artifacts-runtime.md](../architecture/transcript-artifacts-runtime.md#provider-live-cycle-2026-10-20). Artifact cards in
 Multi Review, build-pipeline and feature-planning transcripts are covered in
 [rich-transcripts.md](../architecture/rich-transcripts.md#workflow-transcripts).
 
@@ -106,7 +107,9 @@ Multi Review, build-pipeline and feature-planning transcripts are covered in
 - Under a 4× CPU throttle the composer median regresses 13–20% against the
   base while a highlighted code fence streams (p95 and scroll frames stay
   within 10%; the unthrottled gate passes). Tracked as a Medium item in
-  [todo/transcripts-and-observation/0053-rich-transcripts.md](../todo/transcripts-and-observation/0053-rich-transcripts.md); evidence in
+  to-do 0053 (retired 2026-11-10), closed when the throttled gate passed
+  ([review-fix evidence](2026-10-20-rich-transcript-review-fixes.md#throttled-performance-gate));
+  evidence in
   [rich-transcripts.md](../architecture/rich-transcripts.md#performance-gate).
 
 ### 8. Publication placement

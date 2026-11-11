@@ -7,7 +7,6 @@ import type {
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { LogDetail } from "@orkestrator/protocol/log-policy";
 import type { MultiReviewEngine } from "@orkestrator/protocol/multi-review";
-import type { OpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import {
   isShippedReviewLensPresetList,
   type ReviewLensPreset,
@@ -30,7 +29,6 @@ import type { GlobalConfig, PreferredEditor, TerminalAppearance } from "@/types"
  * config is what stops a save that changes nothing from re-arming the debounce.
  */
 export interface CoreFieldsSnapshot {
-  containerResources: { cpuCores: number; memoryGb: number };
   envFilePatterns: string[];
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
@@ -47,8 +45,6 @@ export interface CoreFieldsSnapshot {
   coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
   agentSettings: AgentSettingsTier;
   openCodeModelProviders: string[];
-  /** Which OpenCode line new interactive host sessions use; `legacy` is 1.x. */
-  openCodeProtocol: OpenCodeProtocol;
   codexMaxConcurrentThreads: number;
   claudeBackgroundCommandLimitHours: number;
   sessionTitleGeneration: SessionTitleGenerationPolicy;
@@ -62,6 +58,8 @@ export interface CoreFieldsSnapshot {
   experimentalScheduling: boolean;
   localWindowGatewayTransport: boolean;
   experimentalGraphs: boolean;
+  experimentalSelfImprovement: boolean;
+  experimentalTmux: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
   logDetail: LogDetail;
@@ -77,7 +75,6 @@ export interface CoreFieldsSnapshot {
 
 /** Fields stored exactly as the form snapshot holds them. */
 const STORED_AS_IS = [
-  "containerResources",
   "envFilePatterns",
   "allowedDomains",
   "useHostGitHubCredentials",
@@ -91,7 +88,6 @@ const STORED_AS_IS = [
   "coordinatorResearchMcpServers",
   "agentSettings",
   "openCodeModelProviders",
-  "openCodeProtocol",
   "codexMaxConcurrentThreads",
   "terminalAppearance",
   "terminalScrollback",
@@ -102,6 +98,8 @@ const STORED_AS_IS = [
   "experimentalScheduling",
   "localWindowGatewayTransport",
   "experimentalGraphs",
+  "experimentalSelfImprovement",
+  "experimentalTmux",
   "debugLogging",
   "debugLogRetentionDays",
   "logDetail",

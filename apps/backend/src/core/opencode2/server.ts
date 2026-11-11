@@ -24,12 +24,22 @@
  *   Scheduled tasks stay off, because they wake sessions with prompts
  *   Orkestrator never sent. A flag added by a later pin is off in releases
  *   unless named here.
+ * - **No file watchers.** `OPENCODE_DISABLE_FILEWATCHER` turns off the
+ *   watchers each location boots: one per ancestor directory of the worktree
+ *   up to `/`, the config directory and `.git/HEAD`. On macOS each one took
+ *   0.2 to 5 s to start under Bun's `fs.watch`, so the first request in a
+ *   worktree (`/api/model`, a session) waited 6 to 8 s, and as long again on
+ *   shutdown while they closed (measured on 2.2.6; see
+ *   {@link OPENCODE2_DISABLE_FILEWATCHER}). They only live-reload
+ *   configuration, skills and `AGENTS.md`, which Orkestrator writes before
+ *   the server starts.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import { OPENCODE_LAUNCH_ENVIRONMENT_SOURCE } from "../agent-credential-files.js";
 import type { OpenCode2Client } from "./client.js";
 import type { OpenCode2Info } from "./types.js";
 import { mirrorOpenCodeUserConfig } from "./user-config.js";
@@ -39,6 +49,13 @@ const log = createLogger("native-agent.opencode2");
 export const OPENCODE2_CREDENTIAL_PLUGIN_ID = "orkestrator-credential";
 /** Every 2.2.6 feature flag, on or off by name (`packages/schema/src/config/flag.ts`). */
 export const OPENCODE2_FLAGS = "todo,-schedules,-background_compaction,-artifacts,-media_blob";
+/**
+ * Set on every 2.x process Orkestrator starts (servers and terminal TUIs).
+ * Measured on 2.2.6 in a worktree on macOS: location boot 6,183 ms with the
+ * watchers and 39 ms without, the first `/api/model` 7.25 s against 0.24 s,
+ * and shutdown 7.4 s against 0.07 s.
+ */
+export const OPENCODE2_DISABLE_FILEWATCHER = { OPENCODE_DISABLE_FILEWATCHER: "1" } as const;
 
 /**
  * A 2.x plugin needs only `{ id, setup }`; `Plugin.define` from
@@ -48,13 +65,12 @@ export const OPENCODE2_FLAGS = "todo,-schedules,-background_compaction,-artifact
  * `hardened: "refuse-tools"` is the container form. Deleting the variable
  * does not change `/proc/<pid>/environ`, which any process of the same uid
  * can read on Linux, so the plugin also marks the server non-dumpable, as the
- * 1.x plugin does (`buildOpenCodeCredentialPluginSource`), and refuses every
- * tool when it cannot. The host form only removes the variable: a host
+ * retired 1.x plugin did, and refuses every tool when it cannot. The host form only removes the variable: a host
  * promises no boundary between the agent and the user's own processes
  * (docs/architecture/agent-approvals.md).
  */
 export function buildOpenCode2CredentialPluginSource(
-  options: { hardened?: "refuse-tools" } = {},
+  options: { hardened?: "refuse-tools"; applyLaunchEnvironment?: boolean } = {},
 ): string {
   if (!options.hardened) {
     return `// Written by Orkestrator. Keeps the server password from this server's tools.
@@ -71,7 +87,11 @@ export default {
 };
 `;
   }
-  return `// Written by Orkestrator. Keeps the server password from this server's tools.
+  // A server `orkestrator-bridge-launch opencode2` started runs under
+  // `env -i`; the plugin applies the start script's environment for its
+  // tools, as the 1.x plugin does (`agent-credential-files.ts`).
+  const launch = options.applyLaunchEnvironment ? OPENCODE_LAUNCH_ENVIRONMENT_SOURCE : "";
+  return `${launch}// Written by Orkestrator. Keeps the server password from this server's tools.
 const NAMES = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"];
 const PR_SET_DUMPABLE = 4;
 
@@ -104,7 +124,7 @@ export default {
       await ctx.tool.hook("execute.before", () => {
         throw new Error("Refusing to run tools: Orkestrator could not protect this OpenCode server's password from them.");
       });
-    }
+    }${options.applyLaunchEnvironment ? "\n    applyLaunchEnvironment();" : ""}
     await ctx.shell.hook("create.before", (event) => {
       for (const name of NAMES) delete event.env[name];
     });
@@ -186,6 +206,7 @@ export function openCode2HostLaunch(input: {
     OPENCODE_CONFIG_DIR: input.configDir,
     OPENCODE_DISABLE_AUTOUPDATE: "1",
     OPENCODE_FLAGS: OPENCODE2_FLAGS,
+    ...OPENCODE2_DISABLE_FILEWATCHER,
   });
   // The user's own file reaches 2.x only as its mirror, without plugins.
   if (env.OPENCODE_CONFIG?.trim()) {

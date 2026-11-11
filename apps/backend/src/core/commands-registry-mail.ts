@@ -17,7 +17,6 @@ import {
   getAgentMessagingSettingsCommand,
   getAgentRegistryCommand,
   listAgentMailConversationsCommand,
-  listAgentMailInboxCommand,
   listAgentMailSentCommand,
   listAgentMailboxesCommand,
   markAgentMailConversationSeenCommand,
@@ -26,7 +25,6 @@ import {
   retryAgentMailInjectCommand,
   sendAgentMailCommand,
   sendExternalAgentMailCommand,
-  setAgentMessagingPausedCommand,
   updateAgentMessagingSettingsCommand,
 } from "@orkestrator/protocol/contract/domains/agent-mail";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
@@ -161,21 +159,6 @@ export function registerAgentMailCommands(registrar: CommandRegistrar): void {
       }),
     );
   });
-  register(
-    listAgentMailInboxCommand,
-    async ({ environmentId, tabId, unreadOnly, offset, limit }, { storage }) => {
-      await requireMessagingEnabled(storage);
-      return storage.getAgentMailMailbox(
-        required(environmentId, "environmentId"),
-        required(tabId, "tabId"),
-        {
-          unreadOnly: unreadOnly === true,
-          ...(typeof offset === "number" ? { offset } : {}),
-          ...(typeof limit === "number" ? { limit } : {}),
-        },
-      );
-    },
-  );
   register(getAgentMailMessageCommand, async ({ environmentId, tabId, messageId }, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailMessage(
@@ -318,12 +301,5 @@ export function registerAgentMailCommands(registrar: CommandRegistrar): void {
     // credentials, and no client needs more than what it just saved.
     const updated = await storage.patchGlobalConfig({ agentMessaging: normalized });
     return normalizeAgentMessagingSettings(updated.global.agentMessaging);
-  });
-  register(setAgentMessagingPausedCommand, async ({ paused }, { storage }) => {
-    if (typeof paused !== "boolean") throw new Error("paused must be a boolean");
-    const current = await storage.loadConfig();
-    const settings = normalizeAgentMessagingSettings(current.global.agentMessaging);
-    await storage.patchGlobalConfig({ agentMessaging: { ...settings, paused } });
-    return { paused };
   });
 }

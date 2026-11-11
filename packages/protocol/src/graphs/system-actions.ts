@@ -381,10 +381,6 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
     },
   } satisfies Record<GraphSystemAction, GraphSystemActionSpec>);
 
-export function graphSystemActionSpec(action: GraphSystemAction): GraphSystemActionSpec {
-  return GRAPH_SYSTEM_ACTION_SPECS[action];
-}
-
 // ------------------------------------------------------------------ params
 
 export const GRAPH_SYSTEM_PARAM_ISSUE_CODES = [

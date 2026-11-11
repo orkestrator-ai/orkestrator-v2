@@ -25,6 +25,7 @@ import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastWarning } from "../../mocks/sonner";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+import { installControlledTimeout } from "../../helpers/controlled-timeout";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realNativeComposeDockSnapshot = { ...realNativeComposeDock };
@@ -238,7 +239,8 @@ mock.module("@/lib/backend", () => ({
   deleteComposeDraft: deleteComposeDraftMock,
 }));
 
-const { FeaturesView, NativeStyleChatPanel } = await import("@/components/kanban/FeaturesView");
+const { FEATURE_CHAT_DRAFT_SAVE_DELAY_MS, FeaturesView, NativeStyleChatPanel } =
+  await import("@/components/kanban/FeaturesView");
 
 afterAll(() => {
   mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
@@ -548,6 +550,13 @@ async function drainReconcileMonitors(): Promise<void> {
   }
 }
 
+/** Lets the mocked draft read and feature load chain finish: they settle on microtasks. */
+async function settleDraftRestore() {
+  await act(async () => {
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+  });
+}
+
 afterEach(async () => {
   await drainReconcileMonitors();
 });
@@ -694,13 +703,22 @@ describe("FeaturesView message drafts", () => {
       updatedAt: NOW,
     });
     seedStores([]);
+    const draftSave = installControlledTimeout(FEATURE_CHAT_DRAFT_SAVE_DELAY_MS, {
+      label: "feature chat draft save",
+    });
+    try {
+      renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    expect(deleteComposeDraftMock).not.toHaveBeenCalled();
-    expect(saveComposeDraftMock).not.toHaveBeenCalled();
+      await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
+      await settleDraftRestore();
+      // The failed load left the drafts unhydrated, so no save can ever arm.
+      expect(draftSave.pendingCount()).toBe(0);
+      expect(deleteComposeDraftMock).not.toHaveBeenCalled();
+      expect(saveComposeDraftMock).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      draftSave.restore();
+    }
   });
 
   test("waits for feature loading before restoring and persisting backend drafts", async () => {
@@ -715,22 +733,33 @@ describe("FeaturesView message drafts", () => {
       updatedAt: NOW,
     });
     seedStores(chatFeature());
+    const draftSave = installControlledTimeout(FEATURE_CHAT_DRAFT_SAVE_DELAY_MS, {
+      label: "feature chat draft save",
+    });
+    try {
+      renderInAppCommandScope(<FeaturesView projectId="project-1" />);
+      await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
+      await settleDraftRestore();
+      // Hydration waits for the feature load, so no save is armed before it.
+      expect(draftSave.pendingCount()).toBe(0);
+      expect(deleteComposeDraftMock).not.toHaveBeenCalled();
 
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-    await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    expect(deleteComposeDraftMock).not.toHaveBeenCalled();
-
-    featureLoad.resolve(true);
-    await waitFor(() =>
-      expect(
-        (
-          screen.getByPlaceholderText(
-            "Describe the feature or answer Codex...",
-          ) as HTMLTextAreaElement
-        ).value,
-      ).toBe("Wait for features"),
-    );
+      featureLoad.resolve(true);
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByPlaceholderText(
+              "Describe the feature or answer Codex...",
+            ) as HTMLTextAreaElement
+          ).value,
+        ).toBe("Wait for features"),
+      );
+      // Once the features load, the restored drafts hydrate and a save arms.
+      await waitFor(() => expect(draftSave.pendingCount()).toBe(1));
+    } finally {
+      cleanup();
+      draftSave.restore();
+    }
   });
 
   test("restores feature chat drafts from backend persistence", async () => {

@@ -28,6 +28,11 @@ export const EFFICIENCY_OPERATIONS = [
   "reviewer.interactions",
   "reviewer.result",
   "reviewer.task",
+  // One fan-out pass's peak concurrent tasks: in the admission pool, and
+  // against one provider platform (what `DEFAULT_REVIEW_PROVIDER_CONCURRENCY`
+  // bounds). Recorded once per pass, the latter once per platform.
+  "reviewer.admission_concurrency",
+  "reviewer.provider_concurrency",
   "fence.check",
   // Transcript reads (progress, usage, host mirror, and the UI tab).
   "transcript.probe_due",
@@ -56,7 +61,6 @@ export const EFFICIENCY_OPERATIONS = [
   "consolidation.oversize",
   "report.oversize",
   // Scheduling.
-  "scheduler.pass",
   "scheduler.wake",
   // Launch value.
   "launch.duplicate_reviewers",

@@ -2,17 +2,12 @@ import { Clock3, GitMerge, GitPullRequest, Wrench, type LucideIcon } from "lucid
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   FlowGraph,
-  FlowStateIcon,
   type FlowGraphEdge,
   type FlowNodeModel,
   type FlowStackStage,
 } from "@/components/flow-graph/FlowGraph";
 import { flowNodeHeight, summarizeFlowEdges } from "@/components/flow-graph/flow-graph-model";
-import {
-  multiReviewFlowLayout,
-  type MultiReviewFlowEdges,
-  type MultiReviewFlowState,
-} from "./multi-review-flow";
+import { multiReviewFlowLayout, type MultiReviewFlowEdges } from "./multi-review-flow";
 
 export type MultiReviewFlowNodeKind = "package" | "reviewer" | "consolidation" | "fix" | "pr";
 
@@ -27,27 +22,6 @@ const IDLE_ICON: Partial<Record<MultiReviewFlowNodeKind, LucideIcon>> = {
   fix: Wrench,
   pr: GitPullRequest,
 };
-
-export function MultiReviewFlowStateIcon({
-  kind,
-  state,
-  stalled,
-  className,
-}: {
-  kind: MultiReviewFlowNodeKind;
-  state: MultiReviewFlowState;
-  stalled: boolean;
-  className?: string;
-}) {
-  return (
-    <FlowStateIcon
-      state={state}
-      stalled={stalled}
-      idleIcon={IDLE_ICON[kind]}
-      className={className}
-    />
-  );
-}
 
 export interface MultiReviewFlowGraphProps {
   packageNode: MultiReviewFlowNodeModel;

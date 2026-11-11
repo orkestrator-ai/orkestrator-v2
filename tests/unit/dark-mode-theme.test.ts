@@ -153,7 +153,7 @@ describe("forced dark mode theming", () => {
       /&:focus-visible\s*\{[^}]*outline-color: var\(--focus-hairline-color, var\(--color-ring\)\)/s,
     );
     expect(css).toContain("outline-offset: var(--focus-hairline-offset, -2px)");
-    for (const file of ["agents/AgentRadioGroup.tsx", "build/BuildLaunchDialog.tsx"]) {
+    for (const file of ["build/BuildLaunchDialog.tsx"]) {
       const source = read(`apps/web/src/components/${file}`);
       expect(source).toContain("focus-hairline-peer");
       expect(source).not.toContain("peer-focus-visible:border-ring");

@@ -8,6 +8,9 @@ import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneNode, TabInfo } from "@/types/paneLayout";
 import { startBuildPipelineCompletionNotes } from "./build-pipeline-completion-notes";
 import { appCommandStore } from "@/test/app-command-store";
+import { clearCompletionNotesHandled } from "./pane-layout-authoritative";
+import { appCommandScope } from "./node-scope-slots";
+import { mockToastError } from "../../../../tests/mocks/sonner";
 
 const ENVIRONMENT_ID = "env-1";
 
@@ -58,6 +61,8 @@ function paneOf(tabId: string) {
 let stop: (() => void) | undefined;
 
 beforeEach(() => {
+  clearCompletionNotesHandled("pipeline-1", appCommandScope());
+  mockToastError.mockClear();
   appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
@@ -117,6 +122,39 @@ describe("startBuildPipelineCompletionNotes", () => {
 
     expect(notesTabs().map((tab) => tab.id)).toEqual(["notes-open"]);
     expect(paneOf("notes-open").activeTabId).toBe("notes-open");
+  });
+
+  test("a retained completion marker does not suppress a later run of the same pipeline", () => {
+    install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+    install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+    const store = appCommandStore(paneLayoutStore);
+    const published = structuredClone(store.getState().environments.get(ENVIRONMENT_ID)!);
+    const notes = getAllLeaves(published.root)
+      .flatMap((leaf) => leaf.tabs)
+      .find((tab) => tab.keyInformationTabData?.view === "notes")!;
+    notes.keyInformationTabData!.completionPublished = true;
+    store.getState().applyAuthoritativeLayout(ENVIRONMENT_ID, published);
+    install(buildPipelineFixture({ phase: "verifying", backendRevision: 3 }));
+    appCommandStore(paneLayoutStore).getState().setActivePane("pane-chat", ENVIRONMENT_ID);
+    install(buildPipelineFixture({ phase: "complete", backendRevision: 4 }));
+    expect(appCommandStore(paneLayoutStore).getState().getActivePaneId(ENVIRONMENT_ID)).toBe(
+      "pane-build",
+    );
+    expect(notesTabs()).toHaveLength(1);
+  });
+
+  test("a completed snapshot with a new completion revision opens Notes once after a missed rerun", () => {
+    install(buildPipelineFixture({ phase: "complete", backendRevision: 3, completionRevision: 2 }));
+    install(
+      buildPipelineFixture({ phase: "complete", backendRevision: 10, completionRevision: 8 }),
+    );
+    expect(notesTabs()).toHaveLength(1);
+    expect(paneOf(notesTabs()[0]!.id).activeTabId).toBe(notesTabs()[0]!.id);
+    appCommandStore(paneLayoutStore).getState().setActiveTab("pane-build", "build", ENVIRONMENT_ID);
+    install(
+      buildPipelineFixture({ phase: "complete", backendRevision: 11, completionRevision: 8 }),
+    );
+    expect(paneOf("build").activeTabId).toBe("build");
   });
 
   test("waits for the environment's layout before opening the notes", () => {
@@ -224,6 +262,11 @@ describe("startBuildPipelineCompletionNotes", () => {
     install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
     install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
     expect(notesTabs()).toHaveLength(0);
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+      description: `You can have up to ${MAX_TABS_PER_ENVIRONMENT} tabs open. Close a tab and try again.`,
+      id: "tab-limit-reached",
+    });
     expect(appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)).toEqual(
       before,
     );

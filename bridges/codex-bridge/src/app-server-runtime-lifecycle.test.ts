@@ -15,11 +15,7 @@ import {
   setHydrateMessagesFromPersistedSessionGateForTesting,
 } from "./history/rollout.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
-import {
-  BRIDGE_SESSION_REGISTRY_VERSION,
-  BridgeSessionStore,
-  hashCwd,
-} from "./sessions/persistence.js";
+import { BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -2138,20 +2134,7 @@ describe("session lifecycle", () => {
       "orkestrator-bridge",
       `bridge-sessions-${hashCwd("/tmp/ws")}`,
     );
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/tmp/ws")}.json`,
-    );
-    const durableBeforeFailure = await store.load();
-    writeFileSync(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: durableBeforeFailure,
-      }),
-      "utf8",
-    );
+    expect((await store.load())[0]?.config.mode).toBe("build");
     rmSync(recordsDir, { recursive: true, force: true });
     writeFileSync(recordsDir, "blocks the per-session registry directory", "utf8");
 
@@ -2159,7 +2142,8 @@ describe("session lifecycle", () => {
     // be a lie: after a restart the stale plan/build mode is re-hydrated into
     // thread/resume, silently restoring the old sandbox.
     expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("memory-only");
-    expect((await store.load())[0]?.config.mode).toBe("build");
+    rmSync(recordsDir, { force: true });
+    expect((await store.load()).some((record) => record.config.mode === "plan")).toBe(false);
     // Memory still matches the engine, which did accept the change.
     expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
   });
@@ -4997,6 +4981,55 @@ describe("runtime health", () => {
     expect(
       h.child().requests.find((request) => request.method === "mcpServerStatus/list")?.params,
     ).toMatchObject({ threadId: "thread-1" });
+  });
+
+  /**
+   * Todo 7380: the no-touch runtime read reports whether the session's thread
+   * is loaded, so a full idle wait can observe `detached` and then `attached`
+   * without the read itself re-attaching or refreshing the idle clock.
+   */
+  test("reports session attachment across an idle detach without re-attaching", async () => {
+    let clock = 1_000_000;
+    const h = await harness(
+      {
+        "mcpServerStatus/list": () => ({ data: [] }),
+        "skills/list": () => ({ data: [] }),
+        "hooks/list": () => ({ data: [] }),
+        "account/rateLimits/read": () => ({ rateLimits: {} }),
+      },
+      { now: () => clock, threadIdleMs: 1_000, sweepIntervalMs: 0 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const unmaterialized = (await h.runtime.getRuntimeHealth(sessionId)) as {
+      session: { state: string };
+    };
+    expect(unmaterialized.session).toEqual({ state: "detached" });
+
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    const attached = (await h.runtime.getRuntimeHealth(sessionId)) as {
+      engine: { state: string };
+      session: { state: string };
+    };
+    expect(attached.session).toEqual({ state: "attached" });
+    expect(attached.engine.state).toBe("ready");
+
+    // Reading health past the idle window neither touches nor re-attaches.
+    clock += 60_000;
+    await h.runtime.getRuntimeHealth(sessionId);
+    expect(await h.runtime.sweepIdle()).toMatchObject({ detached: 1 });
+    const resumes = () => h.child().requests.filter((r) => r.method === "thread/resume").length;
+    const resumesBefore = resumes();
+    const detached = (await h.runtime.getRuntimeHealth(sessionId)) as {
+      session: { state: string };
+    };
+    expect(detached.session).toEqual({ state: "detached" });
+    expect(resumes()).toBe(resumesBefore);
+    expect(h.runtime.getRegistry().listThreads()).toHaveLength(0);
   });
 
   test("an unmaterialized session sees global notices but not another thread's notices", async () => {

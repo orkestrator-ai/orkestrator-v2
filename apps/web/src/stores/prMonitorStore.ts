@@ -19,9 +19,9 @@ export interface PrMonitorStoreState {
   /** Monitor state keyed by environment ID. */
   states: Map<string, PrMonitorEnvironmentState>;
   /**
-   * Freshness of this mirror (see `@/lib/bounded-hydration`). `stale`,
-   * `degraded` and `unsupported` mean the map may lag the backend; it still
-   * shows the newest state this client received.
+   * Freshness of this mirror (see `@/lib/bounded-hydration`). `stale` and
+   * `degraded` mean the map may lag the backend; it still shows the newest
+   * state this client received.
    */
   syncStatus: HydrationStatus;
   setSyncStatus: (status: HydrationStatus) => void;

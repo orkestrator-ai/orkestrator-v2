@@ -25,16 +25,11 @@ Checked against `main` at `2459b05c` (2026-10-15).
 5. **Open shadow roots and same-origin iframes**: code item 4. Status: open
    (open shadow roots done on 2026-11-02 on branch
    `shadow-root-annotations-583af4c65646-r1`; same-origin iframes not
-   started; follow-ups in
-   [2580](2580-shadow-root-annotation-follow-ups.md)).
+   started; the follow-ups in 2580 (retired 2026-11-11) are done).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
-   open (depends on [0042](0042-service-preview-rollout.md) task 3 passing,
-   per the embedding deferral recorded by
-   [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
+   blocked (waits on 7568: 0042 task 3, per the embedding deferral recorded
+   by [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
    embedded host remains unimplemented).
-7. **Product extensions**: code item 6 (grouping, issue export, multi-user,
-   generated summaries). Status: open (not started; split out per item when
-   wanted).
 
 The Qualification bullet applies to each extension as it lands and is covered
 inside tasks 2 to 6.
@@ -141,9 +136,9 @@ framework internals.
 `packages/protocol/src/web-annotations-validation.ts:252-263` (at most four).
 Nothing in `apps/` produces hints. Newly found: validation accepts any boolean
 `verified`, the capture write stores `input.evidence` unchanged
-(`apps/backend/src/core/web-annotation-service-threads.ts:415`), and the brief
+(`apps/backend/src/core/web-annotations/service-threads.ts:415`), and the brief
 spreads each hint (`...hint`) into the agent's evidence
-(`apps/backend/src/core/web-annotation-brief.ts:365-370`). So a client can
+(`apps/backend/src/core/web-annotations/brief.ts:365-370`). So a client can
 submit `verified: true` and the agent sees it, albeit with the "candidate
 location only" note. The file's claim "the backend never sets `verified: true`"
 holds, but the backend does not reset a client's `true` either.
@@ -242,36 +237,12 @@ unimplemented, so no embedded host for a bridge exists.
     - Cons: a separate session without the user's login state, which must be
       disclosed and is often useless for authenticated apps.
 
-### 7. Product extensions
-
-**Problem.** Grouping, issue export, multi-user discussion and generated
-summaries are wanted but undesigned.
-
-**Context.** Each needs its own design; multi-user needs identity first;
-summaries must never replace the latest human instruction.
-
-**Investigation.** Thread summaries for another session are deterministic
-excerpts (`THREAD_SUMMARY_LIMITS`,
-`apps/backend/src/core/web-annotation-thread-summary.ts:13`). Nothing else
-exists.
-
-**Decisions.**
-
-- **Keep these here or split them out?**
-  - **Move each to its own todo file when someone wants it, and drop it from
-    this list then (recommended).**
-    - Pros: each needs separate design and rating; keeps this file about
-      capture and evidence.
-    - Cons: the list here stays as a placeholder until then.
-  - **Keep them bundled here.**
-    - Pros: one place to look.
-    - Cons: an undesigned grab-bag that keeps the file permanently unfinished.
-
 These are optional annotation capabilities that the proposal and plan put off
 until the core loop was reliable: controlled pixel diffs, automatic
 after-capture, development source hints, DOM targets inside shadow roots and
-iframes, capture outside the desktop app, and a few product extensions. None
-of them blocks the shipped workflow. Each should arrive behind its own
+iframes, capture outside the desktop app, and a few product extensions
+(whether any is wanted is in the manual-test checklist). None of them blocks
+the shipped workflow. Each should arrive behind its own
 capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 `.resultTools` gate the existing surfaces. Qualify the core loop first
 ([0044-web-annotation-qualification.md](0044-web-annotation-qualification.md)).
@@ -315,7 +286,7 @@ region and page captures have no single element to read.
 
 ### Task 4: `verified` is set before the write, from a real workspace check
 
-`verifySourceHints` (`web-annotation-service-threads.ts`) runs after
+`verifySourceHints` (`web-annotations/service-threads.ts`) runs after
 validation and before the write queue, on `create`, `capture_replace` and
 `result_capture`, through a new shared `WebAnnotationContext.checkWorkspacePaths`
 (moved from the result-report path, which now uses it too). It sets
@@ -451,10 +422,11 @@ A document observer never sees inside a shadow root, so the pin layer also
 observes each open root a pass resolved into (at most 64; the kit reports
 them through `shadowRootsSeen`). A host that attaches its root only after
 pins were shown was a known gap, recorded in
-[2580](2580-shadow-root-annotation-follow-ups.md) task 3, with sensitive-field
-masks inside roots (task 1, which predates this work), text selections inside
-roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
-2026-11-03, and task 2 on 2026-11-05.
+2580 (retired) task 3, with sensitive-field masks inside roots (task 1, which
+predates this work), text selections inside roots (task 2) and a live desktop
+run (task 4). Tasks 1 and 3 were done on 2026-11-03, task 2 on 2026-11-05 and
+task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
+[0044](0044-web-annotation-qualification.md)), and 2580 was retired.
 
 ## Current state
 
@@ -472,7 +444,7 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
   (`parseSourceHints`); the renderer sends them only when the backend
   advertises `operations.sourceHints`; the backend sets `verified: true` only
   for paths `checkWebAnnotationWorkspacePaths` finds inside the workspace
-  (`verifySourceHints` in `web-annotation-service-threads.ts`). Since todo
+  (`verifySourceHints` in `web-annotations/service-threads.ts`). Since todo
   0725, a client-declared `verified: true` is refused. See
   [web-page-annotations.md](../../architecture/web-page-annotations.md#development-source-hints).
 - Element targets inside open shadow roots anchor to the element itself with
@@ -488,7 +460,7 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
   hide capture (`canCapture` in `AnnotationPanel.tsx`). The architecture doc's
   client capability matrix records this.
 - A thread summary for a different session is a deterministic excerpt
-  (`web-annotation-thread-summary.ts`, `THREAD_SUMMARY_LIMITS`: 8 entries, up
+  (`web-annotations/thread-summary.ts`, `THREAD_SUMMARY_LIMITS`: 8 entries, up
   to 2,400 characters). It goes inside the untrusted evidence envelope and
   never replaces the latest human instruction.
 - Responsive capture sets already exist
@@ -514,9 +486,8 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
    view list and the live captures are done in
    0950.
 4. Open shadow roots and same-origin iframes. Open shadow roots are done
-   (task 5); the follow-ups are in
-   [2580](2580-shadow-root-annotation-follow-ups.md). Same-origin iframes
-   remain.
+   (task 5), and so are its follow-ups (2580, retired 2026-11-11).
+   Same-origin iframes remain.
    - Requires explicit root paths, a navigation generation per frame, and
      coordinate transforms through each frame.
    - Bound depth, frame count, traversal time and transformed geometry.
@@ -542,12 +513,6 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
      into arbitrary application pages.
    - Until then, web and iOS keep capture unavailable, as they do today.
      Record that in the capability matrix as a deferral, not as parity.
-6. Product extensions, each needing its own design:
-   - shared-component grouping of notes;
-   - issue-tracker export;
-   - multi-user discussion, which needs identity and permissions first;
-   - generated, attributed thread summaries, which must never replace the
-     latest human instruction.
 
 ### Qualification
 
@@ -586,6 +551,7 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
   iOS `WKWebView` surfaces).
 - [web-page-annotations.md](../../architecture/web-page-annotations.md)
   §"Client capability matrix" and §"Known limitations".
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 7, choosing which product extensions are wanted) moved there on 2026-11-10.
 - The design canvas renderer is a precedent for a bounded worker only. Its
   isolated authored HTML is not the user's authenticated application session
   ([design-canvas.md](../../architecture/design-canvas.md)).

@@ -1,9 +1,9 @@
+import { applyAgentTestAnthropicOrigin } from "./agent-test-fixtures.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
-  coordinatorResearchMcpServersFromEnv,
   coordinatorWebResearchEnv,
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
@@ -13,20 +13,9 @@ import {
   CLAUDE_BASH_MAX_TIMEOUT_ENV,
   claudeBashMaxTimeoutEnvValue,
 } from "@orkestrator/protocol/claude-background-commands";
-import {
-  OPENCODE_STARTUP_STDERR_TAIL_BYTES,
-  OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS,
-  isOpenCodeDatabaseLockedError,
-  openCodeDatabaseLockedError,
-  openCodeStderrReportsLockedDatabase,
-} from "./opencode-host-start.js";
-import {
-  CLAUDE_PINNED_RUNTIME_ENV,
-  OPENCODE_PINNED_RUNTIME_ENV,
-} from "@orkestrator/protocol/terminal-agent-launch";
+import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import { existsSync } from "node:fs";
 import { deleteEnvironmentTask } from "./environment-delete.js";
-import { abortableSleep } from "./abortable-timing.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -37,7 +26,7 @@ import {
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
   PI_BRIDGE_PORT,
-  OPENCODE_SERVER_PORT,
+  OPENCODE2_SERVER_PORT,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
@@ -50,11 +39,11 @@ import {
 import {
   checkHttpHealth,
   confirmRunningServerHealth,
+  localServerHealthPath,
   waitForLocalServerHealth,
   openCodeHealthHeaders,
   bearerBridgeHeaders,
 } from "./commands-server-health.js";
-import type { OpenCodeAgentToolsState } from "./opencode-agent-tools.js";
 import type { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
@@ -63,7 +52,6 @@ import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/nat
 import { retryableBridgeStartupError, LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
 import {
   resolveCodexBinary,
-  resolveOpenCodeBinary,
   resolveClaudeBinary,
   resolveManagedAcpBinary,
   resolveBunBinary,
@@ -109,7 +97,6 @@ import {
 import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
 
 const environmentLog = createLogger("environment");
-const nativeAgentOpencodeLog = createLogger("native-agent.opencode");
 
 /** Provider-neutral process authority every coordinator bridge honours. */
 export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
@@ -126,8 +113,11 @@ export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECU
 export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
 import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { writeHostOpenCodeCredentialPlugin } from "./opencode-host-credential.js";
-import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
+import {
+  prepareOpenCodeHostLaunch,
+  recordOpenCodeHostServer,
+  type PreparedOpenCodeHostLaunch,
+} from "./opencode2/host-launch.js";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -295,28 +285,15 @@ export async function waitForLocalServerStartup(
   port: number,
   kind: LocalServerKind,
   headers?: Record<string, string>,
-  options: {
-    health?: Parameters<typeof waitForLocalServerHealth>[3];
-    stdioCloseBoundMs?: number;
-  } = {},
+  options: { health?: Parameters<typeof waitForLocalServerHealth>[3] } = {},
 ): Promise<void> {
   let settled = false;
-  // Only OpenCode's is read: its servers share one database on the host, and
-  // the one failure worth retrying names itself only on stderr.
-  let stderrTail = "";
-  const onStderr = (data: Buffer | string) => {
-    stderrTail = (stderrTail + data.toString()).slice(-OPENCODE_STARTUP_STDERR_TAIL_BYTES);
-  };
-  let exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  let closeBound: ReturnType<typeof setTimeout> | undefined;
+  let exited = false;
 
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       child.off("error", onError);
       child.off("exit", onExit);
-      child.off("close", onClose);
-      if (closeBound) clearTimeout(closeBound);
-      if (kind === "opencode") child.stderr.off("data", onStderr);
     };
     const complete = (error?: Error) => {
       if (settled) return;
@@ -326,46 +303,24 @@ export async function waitForLocalServerStartup(
       else resolve();
     };
     const onError = (error: Error) => complete(error);
-    const exitedError = (code: number | null, signal: NodeJS.Signals | null) => {
-      const message = `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`;
-      return kind === "opencode" && openCodeStderrReportsLockedDatabase(stderrTail)
-        ? openCodeDatabaseLockedError(
-            `${message}: another OpenCode process held its database (database is locked)`,
-          )
-        : new Error(message);
-    };
-    // OpenCode's failure is decided once its stdio has closed, so stderr that
-    // is still in flight at `exit` is read first; the bound stops a pipe held
-    // open by a grandchild from delaying the failure past it.
-    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
-      const status = exitStatus ?? { code, signal };
-      complete(exitedError(status.code, status.signal));
-    };
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      if (kind !== "opencode") {
-        complete(exitedError(code, signal));
-        return;
-      }
-      exitStatus = { code, signal };
-      closeBound = setTimeout(
-        () => complete(exitedError(code, signal)),
-        options.stdioCloseBoundMs ?? OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS,
+      exited = true;
+      complete(
+        new Error(
+          `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
+        ),
       );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
-    if (kind === "opencode") {
-      child.once("close", onClose);
-      child.stderr.on("data", onStderr);
-    }
     waitForLocalServerHealth(port, kind, headers, options.health).then(
       () => {
         // A server that has already exited is not healthy, whatever answers.
-        if (!exitStatus) complete();
+        if (!exited) complete();
       },
       (error: unknown) => {
-        if (!exitStatus) complete(error instanceof Error ? error : new Error(String(error)));
+        if (!exited) complete(error instanceof Error ? error : new Error(String(error)));
       },
     );
   });
@@ -449,7 +404,7 @@ export const CONTAINER_BRIDGE_PORTS: Record<LocalServerKind, number> = {
   cursor: CURSOR_BRIDGE_PORT,
   grok: GROK_ACP_BRIDGE_PORT,
   pi: PI_BRIDGE_PORT,
-  opencode: OPENCODE_SERVER_PORT,
+  opencode: OPENCODE2_SERVER_PORT,
 };
 
 /**
@@ -496,7 +451,7 @@ export async function peekLocalAgentBridgeState(
   if (!port) return { status: "absent" };
   const healthy = await checkHttpHealth(
     port,
-    "/global/health",
+    localServerHealthPath(kind),
     kind === "opencode"
       ? openCodeHealthHeaders(authToken)
       : kind === "cursor" || kind === "grok" || kind === "pi"
@@ -527,11 +482,15 @@ export async function peekContainerAgentBridge(
 ): Promise<{ hostPort: number; authToken: string } | null> {
   const hostPort = await getHostPort(containerId, CONTAINER_BRIDGE_PORTS[kind]);
   if (!hostPort) return null;
-  const authToken = await readContainerBridgeToken(containerId, kind);
+  // OpenCode's password is kept under its own credential kind.
+  const authToken = await readContainerBridgeToken(
+    containerId,
+    kind === "opencode" ? "opencode2" : kind,
+  );
   if (!authToken) return null;
   const healthy = await checkHttpHealth(
     hostPort,
-    "/global/health",
+    localServerHealthPath(kind),
     kind === "opencode"
       ? openCodeHealthHeaders(authToken)
       : kind === "cursor" || kind === "grok" || kind === "pi"
@@ -689,29 +648,6 @@ export async function fetchAcpNormalizedModelsAtResult(
   }
 }
 
-/**
- * The connection a live local OpenCode server's Orkestrator MCP entry is kept
- * on: the one it was launched with. Only an ordinary environment launched
- * before that was recorded falls back to its Agent Tools connection. A
- * coordinator runtime never does: its entry is the scoped Control MCP
- * credential, and swapping in a tab credential would leave it with mail and
- * ticket tools but none of its delegation tools.
- */
-function openCodeReconcileConnection(
-  environmentId: string,
-  env: Pick<Environment, "id" | "projectId">,
-  context: CommandContext,
-): AgentToolConnection | undefined {
-  const launched = context.runtime.localServers.openCodeAgentTools.launchConnection(
-    `local:${environmentId}`,
-  );
-  if (launched) return launched;
-  if (coordinatorIdFromRuntimeId(environmentId) || bugReportIdFromRuntimeId(environmentId)) {
-    return undefined;
-  }
-  return context.agentTools?.connection(env.id, env.projectId, "host");
-}
-
 // Child-scoped launch authority; weak keys release exited process records.
 const coordinatorResearchLaunches = new WeakMap<ChildProcessWithoutNullStreams, string>();
 
@@ -720,30 +656,16 @@ export async function startLocalServerUnlocked(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      const started = await startLocalServerAttempt(environmentId, context, kind);
-      if (kind !== "opencode" && started.authToken) {
-        context.runtime.logPolicy?.bridgeStarted({
-          agent: kind,
-          baseUrl: `http://127.0.0.1:${started.port}`,
-          authToken: started.authToken,
-        });
-      }
-      return started;
-    } catch (error) {
-      // A failed attempt has already stopped its server and cleared its
-      // fields, so the next one starts clean.
-      const delayMs = isOpenCodeDatabaseLockedError(error)
-        ? context.runtime.localServers.openCodeHostStart.lockedStartRetryDelayMs(attempt)
-        : undefined;
-      const localServers = context.runtime.localServers;
-      if (delayMs === undefined || localServers.isShuttingDown()) throw error;
-      log.warn("opencode.database-lost-retrying", { environmentId, delayMs });
-      // Shutdown ends the wait early; the next attempt then refuses to start.
-      await abortableSleep(delayMs, localServers.shutdownSignal);
-    }
+  const started = await startLocalServerAttempt(environmentId, context, kind);
+  // OpenCode's server is not one of our bridges and takes no log policy.
+  if (kind !== "opencode" && started.authToken) {
+    context.runtime.logPolicy?.bridgeStarted({
+      agent: kind,
+      baseUrl: `http://127.0.0.1:${started.port}`,
+      authToken: started.authToken,
+    });
   }
+  return started;
 }
 
 async function startLocalServerAttempt(
@@ -791,6 +713,10 @@ async function startLocalServerAttempt(
     const workingDirectoryMatches =
       Boolean(env?.worktreePath) && localServers.workingDirectory(key) === env?.worktreePath;
     const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);
+    // OpenCode's server is reused only with the record that names its password
+    // and directory; a backend that lost it cannot hand out a connection.
+    const recordMatches =
+      kind !== "opencode" || localServers.openCode2.get(environmentId)?.child === existing;
     let replaceReason: string;
     if (coordinatorId && coordinatorResearchLaunches.get(existing) !== researchSignature) {
       // Launch authority cannot change on a running agent. Keep its work alive
@@ -805,8 +731,9 @@ async function startLocalServerAttempt(
     } else if (!credentialMatches) {
       replaceReason = "Cursor credentials changed";
     } else if (!accountMatches) {
-      replaceReason =
-        kind === "opencode" ? "a provider login changed" : "the active agent account changed";
+      replaceReason = "the active agent account changed";
+    } else if (!recordMatches) {
+      replaceReason = "this backend does not hold the OpenCode server's record";
     } else if (!workingDirectoryMatches) {
       replaceReason = "worktree path changed";
     } else if (!port) {
@@ -818,23 +745,19 @@ async function startLocalServerAttempt(
         localServers.process(key) === existing &&
         existing.exitCode === null &&
         existing.signalCode === null;
-      const health = await confirmRunningServerHealth(port, healthHeaders, isAlive);
+      // A reused answer is not renewed: only a real probe restarts the window.
+      const reused = isAlive() && localServers.recentlyHealthy(key, existing, port, authToken);
+      const health = reused
+        ? { healthy: true, failedProbes: 0 }
+        : await confirmRunningServerHealth(port, healthHeaders, isAlive, {
+            path: localServerHealthPath(kind),
+          });
       if (health.healthy) {
+        if (!reused) {
+          localServers.recordHealthy(key, { child: existing, port, authToken, at: Date.now() });
+        }
         localServers.clearUnresponsive(key);
         log.recovered("bridge.not-answering", key);
-        const reconcileConnection =
-          kind === "opencode" && env?.worktreePath
-            ? openCodeReconcileConnection(environmentId, env, context)
-            : undefined;
-        if (reconcileConnection && env?.worktreePath) {
-          void localServers.openCodeAgentTools.schedule(
-            `local:${environmentId}`,
-            port,
-            authToken,
-            reconcileConnection,
-            env.worktreePath,
-          );
-        }
         return {
           port,
           pid: existing.pid,
@@ -920,8 +843,9 @@ async function startLocalServerAttempt(
     coordinator?.status === "ready" ? coordinator.conversationId : null;
   let agentToolConnection: AgentToolConnection | undefined;
   // A bug report gets no project tools: it belongs to no project, and its
-  // agent has no business with tickets or mail.
-  if (!coordinatorId && !bugReportId) {
+  // agent has no business with tickets or mail. OpenCode takes the
+  // connection per session instead (`opencode2/mcp.ts`).
+  if (!coordinatorId && !bugReportId && kind !== "opencode") {
     agentToolConnection = context.agentTools?.connection(
       environment.id,
       environment.projectId,
@@ -956,9 +880,9 @@ async function startLocalServerAttempt(
       : {}),
   };
   // Only our bridges consume this launch flag. OpenCode can pass its environment
-  // to agent commands, so it must not inherit a relay request from the backend.
-  if (kind === "opencode") delete env[BRIDGE_LOG_RELAY_ENV];
-  else env[BRIDGE_LOG_RELAY_ENV] = "1";
+  // to agent commands, so it must not inherit a relay request from the backend
+  // (`prepareOpenCodeHostLaunch` removes it).
+  env[BRIDGE_LOG_RELAY_ENV] = "1";
   // A widened attachment boundary is inherited, not requested: a backend
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.
@@ -1011,20 +935,7 @@ async function startLocalServerAttempt(
   }
 
   if (kind === "opencode") {
-    command = resolveOpenCodeBinary(context);
-    // `serve` does not check for updates in 1.19, but this is the pinned
-    // binary every native session depends on; never let it offer to replace
-    // itself with OpenCode 2.
-    Object.assign(env, OPENCODE_PINNED_RUNTIME_ENV);
-    // Keeps the password from this server's tools. A directory the user named
-    // stays theirs: this would replace it, so that server goes without.
-    if (env.OPENCODE_CONFIG_DIR?.trim()) {
-      nativeAgentOpencodeLog.warn("credential-plugin.skipped", { reason: "config-dir-set" });
-    } else {
-      env.OPENCODE_CONFIG_DIR = await writeHostOpenCodeCredentialPlugin(
-        context.storage.getDataDir(),
-      );
-    }
+    // Built from the finished environment below, once the password is minted.
   } else if (kind === "claude") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
@@ -1062,6 +973,11 @@ async function startLocalServerAttempt(
     } else {
       launchedAccountId = await applyActiveAgentAccountEnvironment(context, "claude", env);
     }
+    // An isolated agent-test profile's scripted model, for coordinators too.
+    applyAgentTestAnthropicOrigin(env, {
+      runtimeFlavor: context.runtimeFlavor,
+      dataDir: () => context.storage.getDataDir(),
+    });
   } else if (kind === "codex") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
@@ -1235,9 +1151,21 @@ async function startLocalServerAttempt(
   }
 
   const bridgeToken = mintBridgeToken();
+  let openCodeLaunch: PreparedOpenCodeHostLaunch | undefined;
   if (kind === "opencode") {
-    env.OPENCODE_SERVER_PASSWORD = bridgeToken;
-    env.OPENCODE_SERVER_USERNAME = "opencode";
+    // OpenCode compares the plain password (`OPENCODE_PASSWORD`), so it has no
+    // verifier; the credential plugin keeps it from the server's tools. The
+    // coordinator's Control MCP credential stays in this process: OpenCode
+    // attaches it per session (`opencode2/coordinator.ts`), never through its
+    // environment.
+    openCodeLaunch = await prepareOpenCodeHostLaunch({
+      context,
+      environmentId,
+      port,
+      password: bridgeToken,
+      supervisorEnv: env,
+    });
+    command = openCodeLaunch.command;
   } else {
     // A local bridge is this backend's own child and build, so it always takes
     // a verifier and an authority key; the token and the key's private half
@@ -1259,23 +1187,19 @@ async function startLocalServerAttempt(
   }
   localServers.recordBridgeToken(kind, environmentId, bridgeToken);
 
-  // Decided from the finished environment, so an account's XDG directories
-  // count; see `opencode-host-database.ts`.
-  if (kind === "opencode") Object.assign(env, hostOpenCodeDatabaseEnvironment(env));
-  const args =
-    kind === "opencode"
-      ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
-      : [bridgeEntrypoint];
-  // Held from spawn until healthy or failed; see `opencode-host-start.ts`.
+  const args = openCodeLaunch ? openCodeLaunch.args : [bridgeEntrypoint];
+  const childEnv = openCodeLaunch ? openCodeLaunch.env : env;
+  // Every host OpenCode server shares one database, which a start migrates:
+  // held from spawn until healthy or failed (`opencode2/host-server-state.ts`).
   const releaseOpenCodeHostStart =
-    kind === "opencode" ? await localServers.openCodeHostStart.acquire() : () => undefined;
+    kind === "opencode" ? await localServers.openCode2.startGate.acquire() : () => undefined;
   let child: ChildProcessWithoutNullStreams;
   try {
     // Shutdown may have begun while this start waited for the host's turn.
     assertLocalServerStartAllowed(context, environmentId);
     child = localServers.spawn(command, args, {
       cwd,
-      env,
+      env: childEnv,
       // A dedicated group lets shutdown reach ordinary descendants immediately.
       // Explicit descendant signalling also covers children that create new groups.
       detached: process.platform !== "win32",
@@ -1306,6 +1230,7 @@ async function startLocalServerAttempt(
   child.once("exit", (code, signal) => {
     localServers.reportBridgeExit(key, child, code, signal);
     void localServers.reapAfterUnrequestedExit(key, child);
+    if (kind === "opencode") localServers.openCode2.forget(environmentId, child);
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
     if (!localServers.releaseOwnership(key, child)) return;
@@ -1350,47 +1275,19 @@ async function startLocalServerAttempt(
       releaseOpenCodeHostStart();
     }
     log.recovered("bridge.not-answering", key);
-    if (kind === "opencode" && authToken && agentToolConnection) {
-      localServers.openCodeAgentTools.recordLaunchConnection(
-        `local:${environmentId}`,
-        agentToolConnection,
-      );
-      const configured = localServers.openCodeAgentTools.schedule(
-        `local:${environmentId}`,
+    if (openCodeLaunch && authToken) {
+      await recordOpenCodeHostServer(context, environmentId, {
+        child,
         port,
-        authToken,
-        agentToolConnection,
-        environment.worktreePath,
-      );
-      // Ticket tools are optional for an ordinary chat, which must not wait on
-      // them. Every coordinator action is a Control MCP tool, so its server is
-      // not ready until they are connected; a first turn sent sooner told the
-      // user its delegation tools did not exist.
-      if (coordinatorId && (await configured) !== "connected") {
-        throw retryableBridgeStartupError(
-          "The OpenCode coordinator could not connect its Orkestrator tools",
-        );
-      }
-      // Research servers before the first turn too, so the permission rules
-      // a new session is created with already allow their tools. Optional:
-      // a server that does not connect leaves the coordinator without it.
-      if (coordinatorId) {
-        await context.runtime.localServers.openCodeAgentTools.research
-          .configure({
-            serverKey: `local:${environmentId}`,
-            port,
-            password: authToken,
-            directory: environment.worktreePath,
-            servers: coordinatorResearchMcpServersFromEnv(env),
-            signal: AbortSignal.timeout(15_000),
-          })
-          .catch((error: unknown) => {
-            nativeAgentOpencodeLog.warn("coordinator-servers.unavailable", {
-              environmentId,
-              error: formatLogError(error),
-            });
-          });
-      }
+        password: authToken,
+        directory: environment.worktreePath,
+        ...(openCodeLaunch.coordinator ? { coordinator: openCodeLaunch.coordinator } : {}),
+        // The coordinator's scoped Control MCP credential, issued above and
+        // revoked when this child exits.
+        ...(coordinatorId && agentToolConnection
+          ? { control: { url: agentToolConnection.url, token: agentToolConnection.token } }
+          : {}),
+      });
     }
     if (coordinatorId) {
       await context.storage.coordinators.mutateCoordinatorWorkspace(
@@ -1590,7 +1487,6 @@ export async function readLocalServerStatus(
   port: number | null;
   pid: number | null;
   authToken?: string;
-  agentTools?: OpenCodeAgentToolsState;
 }> {
   const key = `${kind}:${environmentId}`;
   const env = await localRuntimeEnvironment(environmentId, context);
@@ -1604,30 +1500,12 @@ export async function readLocalServerStatus(
   const persistedPid = env?.[pidField];
   const pid = typeof persistedPid === "number" ? persistedPid : undefined;
   const authToken = localServers.bridgeToken(kind, environmentId);
-  const reconcileConnection =
-    kind === "opencode" && child && !child.killed && port && authToken && env?.worktreePath
-      ? openCodeReconcileConnection(environmentId, env, context)
-      : undefined;
-  if (reconcileConnection && port && authToken && env?.worktreePath) {
-    void localServers.openCodeAgentTools.schedule(
-      `local:${environmentId}`,
-      port,
-      authToken,
-      reconcileConnection,
-      env.worktreePath,
-    );
-  }
   const running = !!child && !child.killed;
   return {
     running,
     port: port ?? null,
     pid: child?.pid ?? pid ?? null,
     ...(authToken ? { authToken } : {}),
-    // Only meaningful for a live server: a stopped one has no MCP state to
-    // report, and a crashed one's last verdict describes a process that is gone.
-    ...(running && kind === "opencode" && context.agentTools
-      ? { agentTools: localServers.openCodeAgentTools.state(`local:${environmentId}`) }
-      : {}),
   };
 }
 
@@ -1640,7 +1518,6 @@ export function getLocalServerStatus(
   port: number | null;
   pid: number | null;
   authToken?: string;
-  agentTools?: OpenCodeAgentToolsState;
 }> {
   // Status is a readiness snapshot, not merely a process-exists snapshot.
   // Serialize it behind any in-flight start/stop so callers never observe the

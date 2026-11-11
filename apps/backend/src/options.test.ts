@@ -124,10 +124,12 @@ describe("standalone backend options", () => {
     });
   });
 
-  test("accepts the deprecated --unsafe-allow-non-tailscale-bind spelling", () => {
+  test("does not take the pre-rename --unsafe-allow-non-tailscale-bind spelling", () => {
+    // Only source builds from before 2026-07-14 used it; no service unit did.
     expect(parseOptions([], {}).allowNonTailscaleBind).toBe(false);
+    expect(parseOptions(["--allow-non-tailscale-bind"], {}).allowNonTailscaleBind).toBe(true);
     expect(parseOptions(["--unsafe-allow-non-tailscale-bind"], {}).allowNonTailscaleBind).toBe(
-      true,
+      false,
     );
   });
 

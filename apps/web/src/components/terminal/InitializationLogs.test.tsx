@@ -20,9 +20,11 @@ mock.module("@/lib/backend", () => ({
 const { InitializationLogs } = await import("./InitializationLogs");
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+const originalScrollTo = HTMLElement.prototype.scrollTo;
 
 afterAll(() => {
   HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  HTMLElement.prototype.scrollTo = originalScrollTo;
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
@@ -39,6 +41,9 @@ function deferred<T>() {
 describe("InitializationLogs", () => {
   let reads: FakeReadEnvironment;
   let scrollIntoView: ReturnType<typeof mock>;
+  /** The log box's own scroll; `this` is the element scrolled. */
+  let scrollTo: ReturnType<typeof mock>;
+  let scrolled: Element[];
 
   async function advance(ms: number) {
     await act(async () => {
@@ -51,6 +56,11 @@ describe("InitializationLogs", () => {
     reads = installFakeReadCoordinator();
     scrollIntoView = mock(() => {});
     HTMLElement.prototype.scrollIntoView = scrollIntoView as never;
+    scrolled = [];
+    scrollTo = mock(function (this: Element) {
+      scrolled.push(this);
+    });
+    HTMLElement.prototype.scrollTo = scrollTo as never;
     getContainerLogsMock.mockReset();
     getContainerLogsMock.mockResolvedValue("");
   });
@@ -148,16 +158,32 @@ describe("InitializationLogs", () => {
      */
     await advance(0);
     const shown = screen.getByText("same line");
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
     await advance(5_000);
     expect(getContainerLogsMock).toHaveBeenCalledTimes(6);
     expect(screen.getByText("same line")).toBe(shown);
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
 
     getContainerLogsMock.mockResolvedValue("same line\nnew line");
     await advance(1_000);
     expect(screen.getByText("new line")).toBeTruthy();
-    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+  });
+
+  test("follows the tail by scrolling only its own log box, never its ancestors", async () => {
+    getContainerLogsMock.mockResolvedValue("first\nsecond");
+    render(<InitializationLogs containerId="container-1" />);
+    await advance(0);
+    expect(screen.getByText("second")).toBeTruthy();
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    const box = scrolled[0]!;
+    expect(box.contains(screen.getByText("second"))).toBe(true);
+    expect(box.className).toContain("overflow-auto");
+    expect(scrollTo.mock.calls[0]?.[0]).toEqual({ top: box.scrollHeight, behavior: "smooth" });
+    // `scrollIntoView` scrolls every scrollable ancestor too, the window's
+    // `overflow: hidden` layout roots included.
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   test("two views of the same container share one read", async () => {

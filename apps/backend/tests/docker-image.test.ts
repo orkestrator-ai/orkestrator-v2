@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -145,6 +146,17 @@ describe("image manifest contract", () => {
           `# ORKESTRATOR_CAPABILITY workspace-prepare=${IMAGE_CAPABILITIES["workspace-prepare"] + 1}\n`,
       ),
     ).toThrow("newer than the contract");
+    // A name with a digit is read, not skipped.
+    expect(probeCapabilities(() => "# ORKESTRATOR_CAPABILITY opencode2-launch=1\n")).toEqual({
+      "opencode2-launch": 1,
+    });
+    // Every marker in the repository's own contract scripts is picked up.
+    const repository = new URL("../../../", import.meta.url).pathname;
+    const declared = probeCapabilities((file) => {
+      const source = `${repository}${file.source}`;
+      return existsSync(source) ? readFileSync(source, "utf8") : null;
+    });
+    expect(declared["opencode2-launch"]).toBe(1);
     // Every contract source path exists in the repository or is reserved for
     // a later step; none point outside docker/.
     for (const file of CONTRACT_FILES) expect(file.source.startsWith("docker/")).toBe(true);
@@ -769,7 +781,10 @@ esac
         expect(gateway).toContain("-e NETWORK_MODE=restricted");
         expect(gateway).toContain("-e ALLOWED_DOMAINS=one.example");
         expect(gateway).toContain("-e ORKESTRATOR_NETWORK_POLICY=3");
-        expect(gateway).toMatch(/-e ORKESTRATOR_INGRESS_PORTS=3000,4096,4097/);
+        expect(gateway).toMatch(/-e ORKESTRATOR_INGRESS_PORTS=3000,4097,/);
+        // OpenCode 1.x's retired port is no longer published; 2.x's is.
+        expect(gateway).not.toContain("::4096/tcp");
+        expect(gateway).toContain("-p 127.0.0.1::4102/tcp");
         // The workload joins it by id and holds nothing of the namespace.
         expect(workload).toContain(`--network container:${gatewayId}`);
         expect(workload).toMatch(

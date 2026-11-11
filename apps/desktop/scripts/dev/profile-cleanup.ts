@@ -4,6 +4,10 @@ import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { tryLockProfile } from "./profile-lock.js";
+import {
+  developmentRootOfProfile,
+  releaseAgentToolsPortClaims,
+} from "./agent-tools-port-claims.js";
 
 import {
   defaultRuntimeProfileRoots,
@@ -311,6 +315,7 @@ export async function removeProfile(
   recheckWorktrees();
   recheckProfile();
   await removeProfileState(profile, options.keepToolchains);
+  await releaseAgentToolsPortClaims(developmentRootOfProfile(profile.profileRoot), profile.id);
   // Only once the state it encrypts is gone: a failed reset keeps both.
   const keychain = removeProfileKeychainItem(
     profile,

@@ -26,6 +26,11 @@ const desktopLog = createLogger("desktop");
  *
  * Hidden agent-test profiles cancel every dialog before resolving a parent: a
  * sheet would surface even a hidden window. No host is created in that mode.
+ * An Electron on Chromium's headless Ozone platform (a headless `dev:test`
+ * profile on Linux) has no display at all: Electron's GTK message box fails a
+ * `CHECK` there and the process dies with SIGTRAP and a core dump (to-do 7554),
+ * so its dialogs are cancelled too, unless a test has replaced
+ * `dialog.showMessageBox` to answer them.
  *
  * Log lines name the dialog's source and never its text, which can carry paths
  * and errors.
@@ -79,6 +84,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
   platform: NodeJS.Platform;
   /** Cancel without opening native UI in a hidden agent-test profile. */
   hiddenWindows?: boolean;
+  /**
+   * No display to open a dialog on (headless Ozone): cancel instead of calling
+   * Electron's own box, which would crash the process.
+   */
+  noDisplay?: boolean;
   currentWindow(): Window | null;
   createHostWindow(): Promise<Window>;
   /** Tells someone away from the app that a dialog is waiting for them. */
@@ -167,6 +177,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
     if (options.hiddenWindows) {
       const response = dialogOptions.cancelId ?? 0;
       log.info("hidden-cancelled", { source, response });
+      return { response, checkboxChecked: false };
+    }
+    if (options.noDisplay && nativeBox() === original) {
+      const response = dialogOptions.cancelId ?? 0;
+      log.info("no-display-cancelled", { source, response });
       return { response, checkboxChecked: false };
     }
     const requested = usable(window);

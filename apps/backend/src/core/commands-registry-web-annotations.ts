@@ -10,7 +10,7 @@
  *
  * Before the arguments are decoded (`beforeDecode`), every call passes the
  * backend rollout switch (`enabled` / `read-only` / `disabled`, see
- * `web-annotation-rollout.ts`) and the payload ceiling, and records a
+ * `web-annotations/rollout.ts`) and the payload ceiling, and records a
  * content-free outcome metric (command name + typed error code), exactly in
  * the order the handlers checked them before the conversion.
  */
@@ -32,7 +32,6 @@ import {
   type WebAnnotationRolloutSnapshot,
 } from "@orkestrator/protocol/web-annotations";
 import type * as SchemaIssue from "effect/SchemaIssue";
-import { maxBase64Chars } from "./web-annotation-assets.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type {
   CommandRegistrar,
@@ -40,13 +39,15 @@ import type {
   DefinedCommandHandler,
 } from "./commands-registry-types.js";
 import { commandTargetName } from "./commands-registry-contracts.js";
-import { WebAnnotationMetrics } from "./web-annotation-metrics.js";
 import {
+  errorOutcome,
+  maxBase64Chars,
+  rolloutError,
   webAnnotationAccessAllowed,
   webAnnotationCommandAccess,
-} from "./web-annotation-rollout.js";
-import { errorOutcome, rolloutError } from "./web-annotation-service-errors.js";
-import type { WebAnnotationService } from "./web-annotation-service.js";
+  WebAnnotationMetrics,
+  type WebAnnotationService,
+} from "./web-annotations/index.js";
 
 /** Default ceiling for one command's JSON arguments. */
 const MAX_ARGS_BYTES = 256 * 1024;

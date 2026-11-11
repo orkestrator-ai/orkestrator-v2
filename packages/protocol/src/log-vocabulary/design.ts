@@ -15,6 +15,8 @@ export const DESIGN_LOG_AREAS = defineLogAreas({
       "profiles.swept": "Design startup removed stale browser profiles.",
       "session-link.record-failed":
         "A closing conversation could not be recorded on a design link.",
+      "session-link.archived-read-failed":
+        "Whether design links' conversations are archived could not be read; they read as not archived.",
     },
   },
 });

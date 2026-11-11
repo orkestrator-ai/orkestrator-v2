@@ -7,6 +7,8 @@ import * as containerAccounts from "../src/core/agent-accounts-containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
 import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
 import { CONTAINER_INTERACTIVE_SHELL_COMMAND } from "../src/core/container-scripts";
+import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import { OPENCODE2_CONTAINER_CLI_PATH } from "../src/core/opencode2/container-server";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -71,46 +73,6 @@ afterEach(() => {
 });
 
 describe("Electron backend command registry", () => {
-  test("exclusive checkout ownership refuses a legacy container-only terminal attach", async () => {
-    const environment = createEnvironment({
-      id: "env-promoting",
-      environmentType: "containerized",
-      containerId: "container-promoting",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    let admitted!: () => void;
-    let resume!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      admitted = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      resume = resolve;
-    });
-    const reservation = context.runtime.environments.fence.withExclusiveMutation(
-      environment.id,
-      [],
-      async () => {
-        admitted();
-        await gate;
-      },
-    );
-    await ready;
-    try {
-      await expect(
-        commands.get("attach_terminal")!(
-          { containerId: environment.containerId, cols: 80, rows: 24 },
-          context,
-        ),
-      ).rejects.toThrow("being moved");
-      expect(context.runtime.terminals.processCount()).toBe(0);
-    } finally {
-      resume();
-      await reservation;
-    }
-  });
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -2755,12 +2717,6 @@ printf '["exists","missing"]'
       expect(
         await context.runtime.terminals.history.stateSnapshot(containerCreated.sessionId),
       ).toBeNull();
-      const attached = await commands.get("attach_terminal")?.(
-        { containerId: "container-without-history", cols: 80, rows: 24 },
-        context,
-      );
-      expect(attached).toBeString();
-      expect(await context.runtime.terminals.history.stateSnapshot(String(attached))).toBeNull();
     });
     const setupSessionId = beginSetupPreparationSession(environment, context);
     expect(setupSessionId).toBe(`${environment.id}:setup`);
@@ -3710,6 +3666,52 @@ printf '["exists","missing"]'
       rows: 32,
     });
   });
+
+  test.each(["node", "orkroot"] as const)(
+    "a container OpenCode tab of %s runs the image's 2.x TUI only for the agent's own user",
+    async (user) => {
+      const environment = createEnvironment({
+        id: `env-container-opencode-${user}`,
+        environmentType: "containerized",
+        containerId: "container-1",
+        worktreePath: undefined,
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const { sessionId } = terminalSessionResult(
+        await commands.get("create_terminal_session")?.(
+          {
+            containerId: "container-1",
+            environmentId: environment.id,
+            terminalKey: `opencode-${user}`,
+            cols: 80,
+            rows: 24,
+            user,
+          },
+          context,
+        ),
+      );
+      await commands.get("start_terminal_session")?.({ sessionId }, context);
+      const data = `${buildTerminalAgentLaunchCommand({
+        tabType: "opencode",
+        model: "opencode/big-pickle",
+        initialPrompt: "Hi",
+      })}\n`;
+      expect(
+        await commands.get("bootstrap_terminal_session")?.({ sessionId, data }, context),
+      ).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+      const written = ptyProcesses.at(-1)!.write.mock.calls[0]?.[0] as string;
+      if (user === "node") {
+        expect(written).toContain(`'${OPENCODE2_CONTAINER_CLI_PATH}' --standalone --prompt 'Hi'`);
+        expect(written).toEndWith(" fi )\n");
+        expect(written).toContain('model: "opencode/big-pickle"');
+        expect(written).not.toContain("--model");
+      } else {
+        // Root never runs a binary through the agent's own path.
+        expect(written).toBe(data);
+      }
+    },
+  );
 
   test("starts root container terminals with the fixed root PATH", async () => {
     const environment = createEnvironment({

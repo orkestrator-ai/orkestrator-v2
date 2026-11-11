@@ -88,10 +88,11 @@ temp/
 # Context directory (workspace-specific)
 .context/
 
-# Agent configuration directories (workspace-specific, not shared), except the
-# project's shared Claude Code settings, which carry repository safety hooks.
-.claude/*
-!.claude/settings.json
+# Claude Code configuration is shared through the repository (settings and
+# their safety hooks, skills), except the local release skill.
+.claude/skills/release/
+
+# Agent configuration directories (workspace-specific, not shared).
 .codex/
 .orkestrator/
 .orkestrator-linux-home/

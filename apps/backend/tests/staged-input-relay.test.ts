@@ -105,7 +105,14 @@ async function tempRoot(): Promise<string> {
 function relay(
   sourceRoot: string,
   relayDir: string,
-  options: { unreadable: boolean; maxEntries?: number; maxBytes?: number },
+  options: {
+    unreadable: boolean;
+    maxEntries?: number;
+    maxBytes?: number;
+    stateDir?: string;
+    /** node cannot remove anything below the relay (stands in for an immutable file). */
+    nodeCannotRemove?: boolean;
+  },
   tools: RelayTools,
 ) {
   const script = [
@@ -127,9 +134,15 @@ function relay(
       command install "\${args[@]}"
     }`,
     // node's view: the probe reports an unreadable entry, or none.
-    `as_input_user() { if [ "$1" = find ]; then ${options.unreadable ? 'echo "$2"' : "true"}; return 0; fi; "$@"; }`,
+    `as_input_user() {
+      if [ "$1" = find ]; then ${options.unreadable ? 'echo "$2"' : "true"}; return 0; fi
+      ${options.nodeCannotRemove ? 'case "$1" in rm|chmod) return 1 ;; esac' : ""}
+      "$@"
+    }`,
+    shellFunction(rootEntrypoint, "staged_input_digest"),
+    shellFunction(rootEntrypoint, "remove_relay_copies"),
     shellFunction(rootEntrypoint, "relay_staged_inputs"),
-    `relay_staged_inputs "$SOURCE_ROOT" "$RELAY_DIR" "$(id -un)" || echo "Staged inputs were not relayed" >&2`,
+    `relay_staged_inputs "$SOURCE_ROOT" "$RELAY_DIR" "$(id -un)" "$STATE_DIR" || echo "Staged inputs were not relayed" >&2`,
   ].join("\n");
   const result = Bun.spawnSync({
     cmd: ["bash", "-c", script],
@@ -139,6 +152,8 @@ function relay(
       PATH: tools === "BSD" ? "/usr/bin:/bin:/usr/sbin:/sbin" : gnuToolPath,
       SOURCE_ROOT: sourceRoot,
       RELAY_DIR: relayDir,
+      // Root's digests of what it relayed, beside the relay as under /run.
+      STATE_DIR: options.stateDir ?? path.join(path.dirname(relayDir), "orkestrator-relay-state"),
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -269,6 +284,226 @@ for (const tools of (process.platform === "darwin" ? ["GNU", "BSD"] : ["GNU"]) a
       expect(bounded.stderr).toContain("Staged input /codex-home is over the relay bounds");
       await expect(fs.stat(path.join(relayDir, "codex-home"))).rejects.toThrow();
     });
+    if (tools === "GNU") {
+      // The skip needs GNU find's -printf; elsewhere every mount is relayed in
+      // full, which the cases above already cover.
+      describe("an unchanged mount is not relayed again", () => {
+        // A relay removes the old copy before it writes the new one, and ext4
+        // (the CI runners' /tmp) hands the freed inode number straight to the
+        // next file, so a replaced copy could read as kept. Each inode read
+        // also takes a hard link outside the relay directory, which keeps that
+        // inode allocated until the test's roots are removed.
+        let held = 0;
+        const inode = async (file: string) => {
+          const holdDir = await tempRoot();
+          await fs.link(file, path.join(holdDir, `held-${held++}`));
+          return (await fs.stat(file)).ino;
+        };
+        const ok = { exitCode: 0, stderr: "" };
+
+        test("a second boot keeps the copy, and a changed mount alone is relayed", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "run", "orkestrator-inputs");
+          const stateDir = path.join(root, "run", "orkestrator-relay-state");
+          await fs.mkdir(path.dirname(relayDir), { recursive: true });
+          const options = { unreadable: true, stateDir };
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
+          expect((await fs.readdir(stateDir)).sort()).toEqual(["codex-home", "tmp%2Fgitconfig"]);
+          const config = path.join(relayDir, "codex-home", "config.toml");
+          const gitconfig = path.join(relayDir, "tmp", "gitconfig");
+          const before = { config: await inode(config), gitconfig: await inode(gitconfig) };
+
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect(await inode(config)).toBe(before.config);
+          expect(await inode(gitconfig)).toBe(before.gitconfig);
+
+          // The backend rewrites a login in place before a start.
+          await fs.writeFile(
+            path.join(container, "codex-home", "auth.json"),
+            '{"OPENAI_API_KEY":"sk-two"}',
+          );
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect(await inode(config)).not.toBe(before.config);
+          expect(
+            await fs.readFile(path.join(relayDir, "codex-home", "auth.json"), "utf8"),
+          ).toContain("sk-two");
+          expect(await inode(gitconfig)).toBe(before.gitconfig);
+        });
+
+        test("a mode, a name or a link target counts as a change", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const options = { unreadable: true };
+          const codex = path.join(container, "codex-home");
+          const relayed = path.join(relayDir, "codex-home", "config.toml");
+          await fs.symlink("rules", path.join(codex, "linked"));
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          for (const change of [
+            () => fs.chmod(path.join(codex, "rules", "default.rules"), 0o640),
+            () => fs.rename(path.join(codex, "rules"), path.join(codex, "rules2")),
+            async () => {
+              await fs.unlink(path.join(codex, "linked"));
+              await fs.symlink("rules2", path.join(codex, "linked"));
+            },
+          ]) {
+            const before = await inode(relayed);
+            await change();
+            expect(runRelay(container, relayDir, options)).toEqual(ok);
+            expect(await inode(relayed)).not.toBe(before);
+          }
+          expect(await fs.readlink(path.join(relayDir, "codex-home", "linked"))).toBe("rules2");
+        });
+
+        test("a copy that is gone, or a digest that is, is relayed again", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const stateDir = path.join(root, "orkestrator-relay-state");
+          const options = { unreadable: true, stateDir };
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          // Revocation removes a running container's relayed copy.
+          await fs.rm(path.join(relayDir, "codex-home"), { recursive: true });
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          const relayed = path.join(relayDir, "codex-home", "config.toml");
+          expect(await fs.readFile(relayed, "utf8")).toBe("model = 'x'\n");
+
+          const before = await inode(relayed);
+          await fs.rm(path.join(stateDir, "codex-home"));
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect(await inode(relayed)).not.toBe(before);
+
+          // A digest that does not match is not taken for one that does.
+          const again = await inode(relayed);
+          await fs.writeFile(path.join(stateDir, "codex-home"), "0".repeat(64) + "\n");
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect(await inode(relayed)).not.toBe(again);
+        });
+
+        test("a kept copy does not keep a removed or now-readable mount's copy", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const stateDir = path.join(root, "orkestrator-relay-state");
+          const options = { unreadable: true, stateDir };
+          await fs.writeFile(path.join(container, "claude-config.json"), "{}");
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect((await fs.readdir(relayDir)).sort()).toEqual([
+            "claude-config.json",
+            "codex-home",
+            "tmp",
+          ]);
+          const config = path.join(relayDir, "codex-home", "config.toml");
+          const before = await inode(config);
+
+          await fs.rm(path.join(container, "tmp", "gitconfig"));
+          await fs.rm(path.join(container, "claude-config.json"));
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          expect(await inode(config)).toBe(before);
+          await expect(fs.lstat(path.join(relayDir, "tmp", "gitconfig"))).rejects.toThrow();
+          await expect(fs.lstat(path.join(relayDir, "claude-config.json"))).rejects.toThrow();
+          expect((await fs.readdir(stateDir)).sort()).toEqual(["codex-home"]);
+
+          // Nothing left to keep: the relay and its digests go, as before.
+          expect(runRelay(container, relayDir, { unreadable: false, stateDir })).toEqual(ok);
+          await expect(fs.stat(relayDir)).rejects.toThrow();
+          await expect(fs.stat(stateDir)).rejects.toThrow();
+        });
+
+        test("a copy node made unwritable is still replaced while another is kept", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const stateDir = path.join(root, "orkestrator-relay-state");
+          const options = { unreadable: true, stateDir };
+          expect(runRelay(container, relayDir, options)).toEqual(ok);
+          const gitconfig = path.join(relayDir, "tmp", "gitconfig");
+          const kept = await inode(gitconfig);
+          // A workload leaves a populated directory of its copy read-only.
+          const rules = path.join(relayDir, "codex-home", "rules");
+          await fs.chmod(rules, 0o500);
+          try {
+            await fs.rm(path.join(container, "codex-home", "rules", "default.rules"));
+            expect(runRelay(container, relayDir, options)).toEqual(ok);
+            await expect(fs.lstat(path.join(rules, "default.rules"))).rejects.toThrow();
+            expect(await fs.readdir(rules)).toEqual([]);
+            expect(await inode(gitconfig)).toBe(kept);
+
+            // The whole mount removed from the source: its copy goes too.
+            await fs.chmod(rules, 0o500);
+            await fs.rm(path.join(container, "codex-home"), { recursive: true });
+            expect(runRelay(container, relayDir, options)).toEqual(ok);
+            await expect(fs.lstat(path.join(relayDir, "codex-home"))).rejects.toThrow();
+            expect(await inode(gitconfig)).toBe(kept);
+          } finally {
+            await fs.chmod(rules, 0o700).catch(() => undefined);
+          }
+        });
+
+        test("a copy node cannot remove makes root rebuild the whole relay", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const stateDir = path.join(root, "orkestrator-relay-state");
+          expect(runRelay(container, relayDir, { unreadable: true, stateDir })).toEqual(ok);
+          const gitconfig = path.join(relayDir, "tmp", "gitconfig");
+          const kept = await inode(gitconfig);
+          await fs.rm(path.join(container, "codex-home", "rules", "default.rules"));
+          const result = runRelay(container, relayDir, {
+            unreadable: true,
+            stateDir,
+            nodeCannotRemove: true,
+          });
+          expect(result).toEqual({
+            exitCode: 0,
+            stderr:
+              "Stale staged input copies could not be removed; relaying every staged input again\n",
+          });
+          // The stale file is gone, and the copy that would have been kept is
+          // a fresh relay matching the source.
+          await expect(
+            fs.lstat(path.join(relayDir, "codex-home", "rules", "default.rules")),
+          ).rejects.toThrow();
+          expect(await fs.readFile(path.join(relayDir, "codex-home", "config.toml"), "utf8")).toBe(
+            "model = 'x'\n",
+          );
+          expect(await inode(gitconfig)).not.toBe(kept);
+          expect(await fs.readFile(gitconfig, "utf8")).toContain("Test");
+          expect((await fs.readdir(stateDir)).sort()).toEqual(["codex-home", "tmp%2Fgitconfig"]);
+        });
+
+        test("an over-bound mount loses its kept copy and digest", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const stateDir = path.join(root, "orkestrator-relay-state");
+          expect(runRelay(container, relayDir, { unreadable: true, stateDir })).toEqual(ok);
+          const bounded = runRelay(container, relayDir, {
+            unreadable: true,
+            stateDir,
+            maxEntries: 3,
+          });
+          expect(bounded.stderr).toContain("Staged input /codex-home is over the relay bounds");
+          await expect(fs.lstat(path.join(relayDir, "codex-home"))).rejects.toThrow();
+          expect(await fs.readdir(stateDir)).toEqual(["tmp%2Fgitconfig"]);
+        });
+
+        test("a linked state directory is replaced, never followed", async () => {
+          const root = await tempRoot();
+          const { container } = await mountedRevision(root);
+          const relayDir = path.join(root, "orkestrator-inputs");
+          const stateDir = path.join(root, "orkestrator-relay-state");
+          const elsewhere = path.join(root, "elsewhere");
+          await fs.mkdir(elsewhere);
+          await fs.symlink(elsewhere, stateDir);
+          expect(runRelay(container, relayDir, { unreadable: true, stateDir })).toEqual(ok);
+          expect((await fs.lstat(stateDir)).isDirectory()).toBe(true);
+          expect(await fs.readdir(elsewhere)).toEqual([]);
+        });
+      });
+    }
     test("apparent bytes bound sparse files without following symlinks", async () => {
       const root = await tempRoot();
       const container = path.join(root, "container");

@@ -12,6 +12,7 @@ import {
 } from "./CoordinatorActionsFixture";
 import { SchedulerStatusFixture } from "./SchedulerStatusFixture";
 import { FocusVisibilityFixture } from "./FocusVisibilityFixture";
+import { PinnedScrollFixture } from "./PinnedScrollFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { SuborkGroupFixture } from "./SuborkGroupFixture";
@@ -44,6 +45,7 @@ import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
 import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture, installDesignCanvasFixture } from "./DesignCanvasFixture";
+import { DesignAgentLinksFixture, installDesignAgentLinksFixture } from "./DesignAgentLinksFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
@@ -59,6 +61,7 @@ import { GraphRunFlowFixture } from "./GraphRunFlowFixture";
 import { KeyInformationTabFixture } from "./KeyInformationTabFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
 import { DeliveryPolicyFixture } from "./DeliveryPolicyFixture";
+import { TicketViewFixture } from "./TicketViewFixture";
 import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
@@ -325,7 +328,6 @@ function installDesignLaunchFixture() {
     invoke: async <T,>(command: string, args?: unknown) => {
       if (command === "write_local_file")
         return `/tmp/design-fixture/${(args as { filePath: string }).filePath}` as T;
-      if (command === "design_status") return { ready: true } as T;
       if (command === "design_action") return [] as T;
       if (command === "design_capabilities") return ok<T>(capabilities);
       if (command === "design_readiness")
@@ -2092,6 +2094,10 @@ function fixtureForPath() {
     installDesignCanvasFixture();
     return <DesignCanvasFixture />;
   }
+  if (window.location.pathname === "/design-agent-links") {
+    installDesignAgentLinksFixture();
+    return <DesignAgentLinksFixture />;
+  }
   if (window.location.pathname === "/design-launch") {
     installDesignLaunchFixture();
     return <DesignLaunchFixture />;
@@ -2122,6 +2128,10 @@ function fixtureForPath() {
   if (window.location.pathname === "/mobile-shell") {
     installMobileAppShellFixture();
     return <MobileAppShellFixture />;
+  }
+  if (window.location.pathname === "/pinned-scroll") {
+    installMobileAppShellFixture();
+    return <PinnedScrollFixture />;
   }
   if (window.location.pathname === "/sidebar-activity-probe") {
     return (
@@ -2186,6 +2196,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
   if (window.location.pathname === "/pipeline-flow") return <PipelineFlowFixture />;
   if (window.location.pathname === "/delivery-policy") return <DeliveryPolicyFixture />;
+  if (window.location.pathname === "/ticket-view") return <TicketViewFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {

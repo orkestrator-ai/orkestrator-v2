@@ -207,8 +207,8 @@ describe("Electron StorageService", () => {
   });
 
   test("preserves write-only credentials through a whole-config renderer write", async () => {
-    // `save_config` hands the entire config back, and the renderer holds neither
-    // secret. Only the merge inside saveConfig keeps them, so exercise the real
+    // A whole-config write hands the entire config back, and the renderer holds
+    // neither secret. Only the merge inside saveConfig keeps them, so exercise the real
     // implementation: the command-layer coverage for this path runs against a
     // hand-written mock storage and cannot catch a divergence here.
     const dataDir = await createTempDir("ork-storage-save-config-credentials-");

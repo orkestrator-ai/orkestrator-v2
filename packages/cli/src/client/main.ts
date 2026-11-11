@@ -11,6 +11,7 @@ import { buildCommands } from "./commands/build.js";
 import { graphCommands } from "./commands/graphs.js";
 import { changesCommands } from "./commands/changes.js";
 import { diagnosticsCommands } from "./commands/diagnostics.js";
+import { selfImprovementCommands } from "./commands/self-improvement.js";
 import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
@@ -60,6 +61,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...toolchainCommands,
   ...hostCommands,
   ...diagnosticsCommands,
+  ...selfImprovementCommands,
   ...serviceCommands,
   ...completionCommands(() => CLIENT_COMMANDS),
 ];

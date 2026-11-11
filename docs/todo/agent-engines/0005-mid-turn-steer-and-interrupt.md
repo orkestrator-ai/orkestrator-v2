@@ -1,13 +1,15 @@
 # Mid-turn steer and interrupt
 
-Checked against `main` at `0658de646` (2026-11-01) for tasks 1, 2, 3 and 9; the
-other tasks were last checked at `863b5782` (2026-10-27).
+Checked against `main` at `0658de646` (2026-11-01) for tasks 1, 2, 3 and 9, and
+at `c98b20e6f` (2026-11-10) for task 8; the other tasks were last checked at
+`863b5782` (2026-10-27).
 
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
 2026-11-01 against `0658de646` at Agent SDK and CLI `0.3.314` / `2.1.314`;
-task 10 added and built 2026-11-08 against `02f55ea9b`.
+task 10 added and built 2026-11-08 against `02f55ea9b`; task 8 built and run
+2026-11-10 against `c98b20e6f` at Agent SDK and CLI `0.3.319` / `2.1.319`.
 
 ### Tasks
 
@@ -15,11 +17,10 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
 2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: done (live read landed in #1331; the probe cache and its bound added 2026-11-01).
 3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: closed, not adopted (measured 2026-11-01; see "`prewarm()` not adopted").
 4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
-5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by [0008](0008-opencode-v2.md) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x sessions cannot steer and will not. Live qualification of 2.x steer belongs to 0008 task 7. Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
+5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by [0008](0008-opencode-v2.md) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x never could steer, and was retired on 2026-11-11, so every OpenCode session is a 2.x session and can steer (see 0008 "OpenCode 1.x retired (2026-11-11)"). Live qualification of 2.x steer belongs to 0008 task 7, done for host environments on 2026-11-11 (a composer steer through the app on a scripted model, and the live provider and steer tests on Linux). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
-7. **Inactive-path steer qualification on Claude and Cursor**: steer, switch away, return, reload. Status: open.
-8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: open.
-9. **Re-measure the first turn**: after task 3. Status: open (task 3 changed nothing to re-measure; what is left is the split with a real login, which needs a billed turn).
+7. **Inactive-path steer qualification on Claude and Cursor**: parameterise the Codex inactive-path steer spec by platform for Claude and Cursor (steer, switch away, return, reload). Status: open (the runs with real Claude and Cursor logins moved to 7568).
+8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: done (2026-11-10, loopback model; see "One warm CLI through the app"). The same reads with a real login moved to 7568 (2026-11-10).
 10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: done (built 2026-11-08 against `main` at `02f55ea9b`; see "A missed steer becomes the next turn"). Live qualification on a real bridge is still open (see "Needs verification").
 
 ### 1. Collapse Claude task-to-process maps
@@ -129,9 +130,9 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
 
 **Investigation.** Still blocked: the SDK and CLI are pinned at `1.19.4` (`packages/toolchain/src/manifest.ts:10`, `@opencode-ai/sdk`). OpenCode's actions remain `{ compact, undo, redo }` (`packages/protocol/src/native-agent.ts`, OpenCode branch).
 
-**Recheck, 2026-11-10** (against `main` at `04639b12b`). The paragraph above is history. 0008 built an `opencode2` provider behind an opt-in preview (#2009). The OpenCode platform table now offers `steer` (`packages/protocol/src/native-agent.ts`, the comment above OpenCode's actions), and each session answers through `steerSupported()`: true for a 2.x session (`apps/backend/src/core/opencode2/provider.ts`, routed by `opencode2/routing-provider.ts`), false for every 1.x session (`apps/backend/src/core/opencode-provider.ts`). The steer guard 0008 task 10 proved on 2.2.6 is `opencode2/steer.ts`, with `opencode2-steer.live.test.ts` against the real binary.
+**Recheck, 2026-11-10** (against `main` at `04639b12b`). The paragraph above is history. 0008 built an `opencode2` provider behind an opt-in preview (#2009). The OpenCode platform table now offers `steer` (`packages/protocol/src/native-agent.ts`, the comment above OpenCode's actions), and each session answers through `steerSupported()`: true for a 2.x session (`apps/backend/src/core/opencode2/provider.ts`, routed by `opencode2/routing-provider.ts`), false for every 1.x session (`apps/backend/src/core/opencode-provider.ts`). Both of those 1.x-era files were retired with OpenCode 1.x on 2026-11-11 (`git show 5f4e27b1c:<path>`; the router is now `opencode2/environment-provider.ts`), and every OpenCode session now answers true. The steer guard 0008 task 10 proved on 2.2.6 is `opencode2/steer.ts`, with `opencode2-steer.live.test.ts` against the real binary.
 
-**Decisions.** None: built in 0008 for 2.x sessions; 1.x has no steer to adopt. The file already rules out a coordinator-only workaround.
+**Decisions.** None: built in 0008 for 2.x sessions; 1.x had no steer to adopt and is retired. The file already rules out a coordinator-only workaround.
 
 ### 6. Grok steer
 
@@ -147,7 +148,10 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
 
 **Problem.** Steer recovery after switching away and reloading is unproven for Claude and Cursor.
 
-**Context.** Batched in 0031 (Claude and Cursor rows).
+**Context.** Batched in 0031 (Claude and Cursor rows). This task is the spec
+work; running it with real Claude and Cursor logins is in the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md)
+(2026-11-10).
 
 **Investigation.** A real-stack spec exists for Codex only: "queued native steering survives a lost gateway response, inactive environment and reload" (`e2e/agent-testing/browser-gateway.spec.ts:967`, opt-in, `agent: "codex"`).
 
@@ -169,6 +173,8 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
 
 **Investigation.** Bridge tests cover join, window, cap, replacement and reclaim (`session-manager-runtime-idle.test.ts`). No browser or CLI scenario asserts the process id stays the same.
 
+**Done, 2026-11-10.** Built as the recommended option and run through the app on a loopback model; see "One warm CLI through the app" under "Assumptions and decisions". Every step kept generation 1, and the launch-only switch to bypass mode moved it to 2.
+
 **Decisions.**
 
 - **How to prove "same process"?**
@@ -179,16 +185,6 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
     - Pros: no code.
     - Cons: fragile; PID checks conflict with the shared-host rules.
 
-### 9. Re-measure the first turn
-
-**Problem.** The benefit of task 3 needs evidence.
-
-**Context.** The table in "Warm Claude runtime" is the baseline.
-
-**Investigation.** Task 3 landed nothing, so there is no after to measure. `mise run measure:claude:first-turn` repeats the no-login timings on any build. The open question is the split of a real first turn; see "Needs verification".
-
-**Decisions.** None: a real-login run keeps the same method (haiku, prompt to first assistant text, bridge level), and it is billed.
-
 Users should be able to redirect or stop a running turn without losing work, on
 every provider whose vendor surface allows it. Steer and the graceful abort
 ladder are live on Claude, Codex, Cursor and Pi. Claude's CLI now stays warm
@@ -196,8 +192,8 @@ between turns and releases itself after an idle window, so a follow-up is
 written into the running process. Background-task ownership is that
 process's own state, and bridge-wide reads (models, account, plan usage) ask a
 running CLI before spawning a probe. What is left is live qualification
-through the app and the browser. OpenCode steer exists for OpenCode 2.x
-sessions (0008's opt-in preview); 1.x sessions cannot steer. Grok steer is
+through the app and the browser. OpenCode steer works on every OpenCode
+session (OpenCode 2, the only line since 1.x was retired on 2026-11-11). Grok steer is
 blocked upstream and is recorded here; the Cursor `force` send is deferred
 until a wedged agent is seen.
 
@@ -317,11 +313,9 @@ at-most-once dispatch.
     owned through `releaseClaudeRuntimeTasks`. Nothing about task ownership is
     kept on the session any more.
   - The model catalogue (`getAvailableModelCatalog` in
-    `claude-model-catalog.ts`), the account (`probeAccount` in
-    `claude-sign-in.ts`) and the plan-usage windows (`readClaudePlanUsage` in
-    `session-manager-catalog.ts`) ask an open runtime first
-    (`live-claude-control.ts`): models and account from its held initialize
-    answer, plan usage over its control channel. A control-only probe runs only
+    `claude-model-catalog.ts`) and the account (`probeAccount` in
+    `claude-sign-in.ts`) ask an open runtime first
+    (`live-claude-control.ts`), from its held initialize answer. A control-only probe runs only
     when no running CLI answers. For models it is shared, bounded and reused
     until the CLI file or the account changes; the static catalogue answers
     only when the probe fails. MCP actions already used the session's live
@@ -329,6 +323,10 @@ at-most-once dispatch.
   - `startup()`, `WarmQuery` and `prewarm()` are not used: measured, what they
     save is small against a first turn, and a spare cannot resume or take a
     launch decided by the prompt (see "Assumptions and decisions").
+  - Each CLI the bridge launches takes the next number from a bridge-wide
+    counter. `/session/:id/runtime-health` serves it as
+    `summary.runtimeGeneration` beside `attached`/`detached`, and Agent Info
+    shows it as "process N" (task 8).
   - Bridge tests cover an idle steer reading back as `absent` and the
     interrupt receipt (`session-manager-catalog-steer.test.ts`,
     `routes/session.test.ts`), the warm runtime's join, window, cap,
@@ -348,8 +346,8 @@ at-most-once dispatch.
   (`bridges/acp-bridge/src/grok-interjection.ts`) runs only with
   `GROK_UNSAFE_EXPERIMENTAL_INTERJECTION=1` (`applyVendorUpdate` in
   `acp-session.ts`).
-- OpenCode: `steer` for OpenCode 2.x sessions only (0008, opt-in preview); a
-  1.x session answers `steerSupported()` false.
+- OpenCode: `steer` on every session (OpenCode 2.x, the only line since
+  2026-11-11; 0008).
 
 ## Outstanding work
 
@@ -368,8 +366,10 @@ at-most-once dispatch.
   `/steer` must not be advertised until one exists.~~ No longer blocked
   (2026-11-10): 0008 built it for OpenCode 2.x sessions behind the opt-in
   preview (#2009), with the backend-held guard of its task 10 in place of an
-  upstream precondition. 1.x sessions cannot steer. Its live qualification is
-  [0008-opencode-v2.md](0008-opencode-v2.md) task 7.
+  upstream precondition. 1.x sessions could not steer; 1.x was retired on
+  2026-11-11, so every OpenCode session can. Its live qualification is
+  [0008-opencode-v2.md](0008-opencode-v2.md) task 7 (host environments done
+  2026-11-11; containers open there).
 - **Grok steer** stays off. ACP v1 has no mid-turn input, and the Grok
   interjection extension stays behind its unsafe flag until an ACP equivalent
   exists.
@@ -380,18 +380,19 @@ at-most-once dispatch.
 
 ### Qualification
 
-- Browser, inactive path, on Claude and Cursor: start a long turn, steer it,
-  switch environment, return and reload. The steered message and its outcome
-  must come back from the snapshot.
-- Through the app, on one warm Claude CLI: a follow-up, a plan-mode toggle, a
+- Browser, inactive path, on Claude and Cursor (task 7): start a long turn,
+  steer it, switch environment, return and reload. The steered message and its
+  outcome must come back from the snapshot. The spec work is task 7; the runs
+  with real logins are in the manual-test checklist.
+- ~~Through the app, on one warm Claude CLI: a follow-up, a plan-mode toggle, a
   permission-mode change, a parked approval answered after a pause, and an MCP
-  server added and removed between turns. Confirm the process id stays the
-  same and the composer changes take effect. The bridge-level runs are below;
-  the app path is not yet qualified.
-- With a real login on a throwaway profile, through one warm CLI: the model
-  picker, the account card and the plan-usage panel answer without a probe
-  process appearing, and stopping a background task started two turns earlier
-  reaches it (see "Needs verification").
+  server added and removed between turns.~~ Done 2026-11-10 on a loopback model
+  (task 8, `claude-warm-runtime-live.spec.ts`): one CLI took every step, and
+  each change was seen where it acts.
+- Through one warm CLI: stopping a background task started two turns earlier
+  reaches it (see "Needs verification"). The real-login reads (model picker,
+  account card, plan-usage panel) moved to the manual-test checklist on
+  2026-11-10.
 
 ## Constraints and rationale
 
@@ -770,6 +771,74 @@ build had to make inside them.
   turn is still answered locally (`idleSteerPromptReply`): that steer never
   had a turn to miss. Bridges are unchanged.
 
+### One warm CLI through the app (2026-11-10, task 8)
+
+Built as the recommended option: the bridge reports a runtime generation, and
+an opt-in spec drives one Claude tab through the app and asserts it.
+
+- **Where the number comes from.** `createClaudeRuntime`
+  (`session-manager-runtime.ts`) takes the next value of a counter shared by
+  the whole bridge process and keeps it on the runtime and on the session
+  (`claudeRuntimeGeneration`), so a released CLI is still named. Options:
+  (a) a per-session counter; (b) a bridge-wide counter. Chose (b): a session
+  record dropped and rebuilt in the same process (close, then resume) can never
+  show a number an earlier CLI had. The cost is that a session's first CLI may
+  be "process 7". Either way the counter restarts with the bridge, which also
+  ends every CLI (decision 5), so no two live processes share a number.
+- **How it travels.** `summary.runtimeGeneration` in `/session/:id/runtime-health`,
+  only once a CLI has launched; the backend copies a positive safe integer into
+  `NativeAgentRuntimeSummary.runtimeGeneration`, unclamped because it is
+  compared for equality. A new optional field, so no contract or domain bump.
+  Agent Info shows it beside the state ("attached · process 1"). It is a bare
+  counter: no PID, nothing about the host.
+- **The app-path run.** `e2e/agent-testing/claude-warm-runtime-live.spec.ts`
+  (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_WARM_CLAUDE=1`) on a credential-free
+  `dev:test` profile (`--no-agent-credentials --agent-platforms claude`), the
+  real Claude CLI 2.1.319, bridge and backend, with only the model replaced by
+  the scripted loopback endpoint (`mcp-fake-model.ts`). It drives the tab
+  through the backend commands the composer and cards use
+  (`update_native_agent_controls`, `dispatch_native_agent_intent`,
+  `resolve_native_agent_interaction`, `mutate_mcp_definition`) and reads the
+  generation from the session projection after waiting out the backend's
+  30-second runtime-metadata cache. Passed on beelink2 (Linux) on 2026-11-10,
+  profile `wrm8`:
+
+  | Step | Generation | What showed the change took effect |
+  | --- | --- | --- |
+  | First turn, then a follow-up | 1, 1 | Both replies |
+  | Plan mode on, then off (composer mode) | 1, 1 | The CLI sent the model its plan-mode notice, then stopped |
+  | Bash approval parked 56 s, then approved | 1 (also 1 while parked) | One command approval; the command ran |
+  | Approval mode to accept edits | 1 | A file write ran with no approval |
+  | MCP server added (save and apply) | 1 | The probe server logged the call (accept edits asked once; approved) |
+  | MCP server removed | 1 | No call logged |
+  | Approval mode to bypass | 2 | Launch-only, so the idle CLI was replaced, as decision 3 says |
+
+- **What the runs found.**
+  - A session starts in bypass mode, and leaving bypass is launch-only
+    (`allowDangerouslySkipPermissions` is fixed at launch). So switching a warm
+    tab from Bypass to Default or Accept edits in the composer starts a new
+    CLI; the first run did exactly that. The spec therefore picks the asking
+    mode before the first prompt and checks the bypass switch separately.
+    This is decision 3 working as designed, recorded here because it is the
+    one composer change a user makes often that is not live.
+  - The backend serves runtime health from a 30-second cache and refreshes it
+    in the background, so a read just after a relaunch can show the previous
+    number (the first run read 1 while generation 2 was running). The spec
+    reads twice past the expiry; `agent-engines.md` says so.
+  - CLI 2.1.319 sends its plan-mode notice as a `system`-role message after the
+    prompt, not as a reminder inside it; the fake model reads it there.
+- **Tests.** Bridge: `session-manager-runtime-idle.test.ts` (the number holds
+  across a follow-up, a plan-mode and model change and a parked approval,
+  survives release, and advances on release and on a launch-only replacement;
+  two sessions never share one) and `routes/runtime-health-body.test.ts`.
+  Backend: `http-bridge/runtime-health.test.ts`. Renderer:
+  `AgentInfoButton.steer-rejection.test.tsx`. Fake model:
+  `mcp-fake-model.test.ts`.
+- **Not covered.** A real login and model (billed), a container environment
+  (the fake-model wiring is local only), and a model change through the app
+  (the loopback model answers any model name, so it would prove only that the
+  turn ran; the bridge test covers `setModel` on the warm CLI).
+
 ### Task 5: OpenCode steer recorded as built for 2.x (2026-11-10 housekeeping)
 
 Checked against `main` at `04639b12b`. Task 5 still said it was blocked on
@@ -789,23 +858,10 @@ to-do rules forbid. Grok steer stays blocked.
   new turn or one queued row, with the session's model and mode, and that a
   reload shows the same.
 
-- **Live reads with a real login.** The live-first model, account and plan
-  usage reads are proven against the SDK source (the cached initialize promise)
-  and mocked controls only. On a throwaway profile with a real login, confirm
-  that with one warm CLI the model picker, the account card and the plan-usage
-  panel answer without a new `claude` process, and that a probe still runs once
-  the CLI is released.
 - **Stop after several turns on a real CLI.** Start a background agent,
   send two follow-ups into the same warm CLI, then stop the agent: it must stop
   (`ok`) and its snapshot settle; after the CLI is released, a stop for a task
   it owned must answer `no_control_channel`.
-- **First-turn cost split.** With no login and a scripted model, the bridge
-  reaches the model about 0.2 s after a prompt (1.3 s on a saturated host), and a slow MCP
-  server adds its whole start-up. How much of a 4–5 s first turn with a real
-  login is sign-in reads, real MCP servers, plugins, a new TLS connection, and the
-  first model call on an uncached prompt is not measured, because it takes a
-  billed turn. Run through the bridge with a real login on a throwaway profile,
-  and read `prewarm()`'s decision again against the result.
 
 ## Related
 
@@ -818,6 +874,7 @@ to-do rules forbid. Grok steer stays blocked.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Claude and Cursor runs.
 - [platform-inconsistencies.md](../../architecture/platform-inconsistencies.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-login part of task 7, the real-login reads of task 8, task 9) moved there on 2026-11-10.
 
 ## Replaces
 

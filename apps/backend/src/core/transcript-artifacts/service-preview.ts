@@ -28,12 +28,10 @@ import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-pol
 import { validatePreviewProfile } from "@orkestrator/protocol/transcript-artifacts-validation";
 import {
   ArtifactFailure,
-  REQUIRED_ARTIFACT_GATES,
   artifactError,
   isTerminalArtifactOperationStatus,
   type ArtifactError,
   type ArtifactPreviewProfile,
-  type ArtifactVerificationGate,
 } from "@orkestrator/protocol/transcript-artifacts";
 import { diagnosticsHash } from "./hashing.js";
 import { logArtifactEvent } from "./metrics.js";
@@ -64,6 +62,7 @@ import {
 import type { EnvironmentRecords } from "./store.js";
 import type {
   PreparedDocumentRef,
+  StaticSearchTextRef,
   StoredOperation,
   StoredReceipt,
   StoredRevision,
@@ -625,6 +624,13 @@ export class ArtifactPreviews {
           semantics: outcome.semantics,
         };
         records.put("receipt", receipt.receiptId, receipt);
+        if (outcome.searchText && this.tryRegister(records, [outcome.searchText], now) === null) {
+          this.recordSearchText(records, revision, {
+            effectiveSourceHash: identity.effectiveSourceHash,
+            sha256: outcome.searchText.sha256,
+            byteLength: outcome.searchText.byteLength,
+          });
+        }
         // A successful verification ends the artifact's repair sequence.
         for (const key of records.keys("repair")) {
           if (key.startsWith(`${operation.artifactId}/`)) records.delete("repair", key);
@@ -709,6 +715,25 @@ export class ArtifactPreviews {
     });
   }
 
+  /** Keeps the newest text per effective document, a few per revision like `prepared`. */
+  private recordSearchText(
+    records: EnvironmentRecords,
+    revision: StoredRevision,
+    text: StaticSearchTextRef,
+  ): void {
+    const key = `${revision.artifactId}/${revision.revision}`;
+    const existing = records.get("derived", key) ?? {
+      schemaVersion: 1 as const,
+      artifactId: revision.artifactId,
+      revision: revision.revision,
+      prepared: [],
+    };
+    const kept = (existing.searchTexts ?? []).filter(
+      (entry) => entry.effectiveSourceHash !== text.effectiveSourceHash,
+    );
+    records.put("derived", key, { ...existing, searchTexts: [...kept, text].slice(-4) });
+  }
+
   // ---------------------------------------------------------------------------
   // Recovery
 
@@ -776,9 +801,4 @@ function cancelView(operation: StoredOperation): Record<string, unknown> {
       ? { alreadyCompleted: true, receiptId: operation.receiptId }
       : {}),
   };
-}
-
-/** Required gates for a kind, for tests and publication checks. */
-export function requiredGates(kind: StoredOperation["kind"]): readonly ArtifactVerificationGate[] {
-  return REQUIRED_ARTIFACT_GATES[kind];
 }

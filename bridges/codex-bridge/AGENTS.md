@@ -245,6 +245,9 @@ replay shows it as the card, never as a message the user typed. See
   response events cannot either: `experimentalRawEvents` exists only on
   `thread/start`, so a thread resumed in a new app-server never gets them.
   Verified against 0.164.0 by `live-refused-calls.test.ts` (no credits).
+  Why each of those choices was made, and which cells become rows: "Codex
+  refused cells" in
+  [`coordinator-read-only-decisions.md`](../../docs/architecture/coordinator-read-only-decisions.md).
 - Never reload a code-mode MCP call from its `exec` cell when the rollout
   recorded it. Each call is an `event_msg` `item_completed` record with an
   `McpToolCall` item; `history/code-mode-mcp-calls.ts` renders it through the
@@ -372,6 +375,8 @@ replay shows it as the card, never as a message the user typed. See
 ## Goals stay off
 
 `features.goals=false` stays in `codexAppServerConfigOverrides`. Orkestrator's
-goal loop runs in the backend on every provider (`plans/goals.md`, D1 and D2).
+goal loop runs in the backend on every provider
+([goals.md](../../docs/architecture/goals.md); decisions D1 and D2 of the retired
+goal plan, `git show 2b876486b:plans/goals.md`).
 Codex's own loop starts turns with no `turn/start`, which the runtime drops
 because it handles only the turn it dispatched.

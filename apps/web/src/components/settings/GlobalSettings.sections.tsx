@@ -6,8 +6,6 @@ import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
-import { OpenCodeProtocolSetting } from "./OpenCodeProtocolSetting";
-import type { OpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { PreviewSettings } from "./PreviewSettings";
 import { TerminalLinkTargetSetting } from "./TerminalLinkTargetSetting";
@@ -222,8 +220,6 @@ export type GlobalSettingsSectionSettings = Record<string, any> & {
   setAgentSettings: Dispatch<SetStateAction<AgentSettingsTier>>;
   openCodeModelProviders: string[];
   setOpenCodeModelProviders: Dispatch<SetStateAction<string[]>>;
-  openCodeProtocol: OpenCodeProtocol;
-  setOpenCodeProtocol: Dispatch<SetStateAction<OpenCodeProtocol>>;
   /** Bumped after a credential save so the plan-usage card refetches at once. */
   planUsageRefreshToken: number;
   setPlanUsageRefreshToken: Dispatch<SetStateAction<number>>;
@@ -327,8 +323,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setCoordinatorResearchMcpServers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
-    openCodeProtocol,
-    setOpenCodeProtocol,
     planUsageRefreshToken,
     setPlanUsageRefreshToken,
     openCodeProviderDraft,
@@ -362,6 +356,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
+    experimentalSelfImprovement,
+    setExperimentalSelfImprovement,
+    experimentalTmux,
+    setExperimentalTmux,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,
@@ -711,6 +709,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         canInherit={false}
         catalog={catalog}
         disabled={isSaving}
+        tmuxModeEnabled={experimentalTmux}
         onRefreshModels={() => void refreshModelCatalog(platform)}
         refreshingModels={refreshingModelCatalog === platform}
         refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
@@ -1595,10 +1594,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Reset to defaults
             </Button>
           )}
-        </div>
-
-        <div className="border-t border-border/60 pt-5">
-          <OpenCodeProtocolSetting value={openCodeProtocol} onChange={setOpenCodeProtocol} />
         </div>
       </>,
     );
@@ -2520,11 +2515,49 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               aria-label="Enable scheduling"
             />
           </SettingsRow>
+          <SettingsRow
+            label="Self-improvement"
+            htmlFor="experimental-self-improvement"
+            description={
+              <>
+                Reads this machine&apos;s own diagnostics and, if you allow it, your conversations
+                with agents, then files what it finds as tickets on a project&apos;s board and
+                checks each fix on later app versions. Turning this on adds Settings →
+                Self-improvement. Nothing runs until you start a run or turn on the daily run there.
+              </>
+            }
+          >
+            <Switch
+              id="experimental-self-improvement"
+              checked={experimentalSelfImprovement}
+              onCheckedChange={setExperimentalSelfImprovement}
+              aria-label="Enable self-improvement"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Tmux mode"
+            htmlFor="experimental-tmux"
+            description={
+              <>
+                Runs Claude&apos;s native chat by driving the Claude CLI under tmux instead of the
+                Agent SDK. Turning this on adds the Native backend choice to Settings → Claude and
+                Claude Tmux Tab to the new-agent-tab menu. While it is off every new Claude session
+                uses the Agent SDK; tmux tabs that are already open keep running.
+              </>
+            }
+          >
+            <Switch
+              id="experimental-tmux"
+              checked={experimentalTmux}
+              onCheckedChange={setExperimentalTmux}
+              aria-label="Enable tmux mode"
+            />
+          </SettingsRow>
           {isLocalDesktopWindow && (
             <SettingsRow
               label="Direct transport for new windows"
               htmlFor="local-window-gateway-transport"
-              description="A window opened after you turn this on sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one."
+              description="On by default. A new window sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one, which then goes through the main process."
             >
               <Switch
                 id="local-window-gateway-transport"

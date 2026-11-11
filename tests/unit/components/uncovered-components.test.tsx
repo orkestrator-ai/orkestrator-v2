@@ -3,7 +3,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MessageMarkdown } from "../../../apps/web/src/components/chat/MessageMarkdown";
 import { CodexPlanModeCard } from "../../../apps/web/src/components/codex/CodexPlanModeCard";
 import { ErrorDetailsDialog } from "../../../apps/web/src/components/errors/ErrorDetailsDialog";
-import { ProjectItem } from "../../../apps/web/src/components/projects/ProjectItem";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 
 afterEach(() => {
@@ -92,31 +91,5 @@ describe("previously indirect component contracts", () => {
     expect(screen.getByText("retry prompt")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(useErrorDialogStore.getState().error).toBeNull();
-  });
-
-  test("ProjectItem selects and confirms deletion", () => {
-    const onSelect = mock(() => undefined);
-    const onDelete = mock(() => undefined);
-    render(
-      <ProjectItem
-        project={
-          {
-            id: "project-1",
-            name: "Project",
-            gitUrl: "https://github.com/acme/project",
-            localPath: null,
-          } as never
-        }
-        isSelected
-        onSelect={onSelect}
-        onDelete={onDelete}
-      />,
-    );
-    const buttons = screen.getAllByRole("button");
-    fireEvent.click(buttons[0]!);
-    expect(onSelect).toHaveBeenCalledWith("project-1");
-    fireEvent.click(buttons[1]!);
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(onDelete).toHaveBeenCalledWith("project-1");
   });
 });

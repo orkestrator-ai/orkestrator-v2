@@ -253,12 +253,11 @@ A service for a second data directory on a computer that already runs
 Orkestrator gets its own unit, but it still shares the user's HOME. It leaves
 the fixed gateway port (34121) and Control MCP port (34122) to the default data
 directory's backend and takes free ports unless told otherwise; see
-[Default gateway port](remote-gateway.md#default-gateway-port),
-[0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md)
-and
-[7370-tailscale-serve-second-backend-live.md](../todo/cross-cutting/7370-tailscale-serve-second-backend-live.md).
+[Default gateway port](remote-gateway.md#default-gateway-port) and the
+[Control MCP port rule](control-mcp.md).
 Both rules were qualified with two services in a disposable systemd container
-on 2026-11-06 (the records are in those files).
+on 2026-11-06 (to-dos 0244 and 7370, retired 2026-11-10; the records are in
+their Git history).
 
 `service status` reports:
 - the unit, and whether it is running

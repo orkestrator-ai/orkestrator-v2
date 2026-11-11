@@ -104,7 +104,7 @@ function WindowFixture() {
           void designBridge.current
             .ask({
               op: "render",
-              html: '<input aria-label="Design input">',
+              html: '<input aria-label="Design input"><input aria-label="Second design input">',
             })
             .catch(() => undefined);
         }}

@@ -67,4 +67,6 @@ and [Windows artifact](https://github.com/orkestrator-ai/orkestrator-v2/actions/
 retain `results.json`, resolved menu defaults, native About screenshots and the
 per-repetition assertion summaries for seven days. The final local Linux/Xvfb
 command also passed all ten cases (16.9 s). Focus/type checks passed; packaged
-surface qualification remains tracked separately in todo 0325.
+surface qualification was tracked separately in to-do 0325 (retired
+2026-11-11, results in
+[keyboard-shortcuts.md](../../../architecture/keyboard-shortcuts.md#packaged-native-qualification)).

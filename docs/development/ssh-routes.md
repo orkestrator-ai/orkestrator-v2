@@ -206,7 +206,7 @@ has only SSH routes, the client says it needs the desktop app.
 
 Typed codes appear as the machine's status detail, or as the dialog's error.
 These come from the tunnel adapter
-(`apps/desktop/electron/ssh/tunnel-failures.ts`):
+(`packages/protocol/src/node/ssh/tunnel-failures.ts`):
 
 | Code | Retried automatically | Meaning and fix |
 | --- | --- | --- |

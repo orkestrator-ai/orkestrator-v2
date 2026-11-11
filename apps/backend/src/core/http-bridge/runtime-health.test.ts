@@ -60,6 +60,25 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]).toMatchObject({ severity: "warning", source: "provider" });
   });
 
+  test("reports a Codex session's attachment while its engine is ready (todo 7380)", () => {
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "attached" } })?.state,
+    ).toBe("attached");
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "detached" } })?.state,
+    ).toBe("detached");
+    // An engine that is not ready is the more useful fact to show.
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "restarting" }, session: { state: "detached" } })
+        ?.state,
+    ).toBe("restarting");
+    // An older bridge sends no session field, and an unknown value is ignored.
+    expect(bridgeRuntimeSummary({ engine: { state: "ready" } })?.state).toBe("ready");
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "weird" } })?.state,
+    ).toBe("ready");
+  });
+
   test("groups repeated Codex notices, which arrive one occurrence at a time", () => {
     const summary = bridgeRuntimeSummary({
       engine: {},
@@ -404,10 +423,73 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
     expect(snapshotNotices({ transcriptTruncated: false, runtime: health.summary })).toEqual([]);
   });
 
+  // 0005 task 8: the warm Claude CLI's generation reaches the projection as-is.
+  test("carries the runtime generation as a positive integer, and nothing else", () => {
+    expect(bridgeRuntimeSummary({ summary: { state: "attached", runtimeGeneration: 3 } })).toEqual({
+      state: "attached",
+      runtimeGeneration: 3,
+    });
+    // Large but exact: compared for equality, so never clamped.
+    expect(
+      bridgeRuntimeSummary({ summary: { state: "attached", runtimeGeneration: 2 ** 40 } }),
+    ).toEqual({ state: "attached", runtimeGeneration: 2 ** 40 });
+    for (const runtimeGeneration of [0, -1, 1.5, "3", Number.MAX_SAFE_INTEGER + 1, null]) {
+      expect(bridgeRuntimeSummary({ summary: { state: "detached", runtimeGeneration } })).toEqual({
+        state: "detached",
+      });
+    }
+  });
+
   test("drops a malformed steer summary whole", () => {
     expect(
       bridgeRuntimeSummary({ summary: { state: "attached", steer: { ...STEER, bytes: -1 } } }),
     ).toEqual({ state: "attached" });
+  });
+
+  test("cached generations are replaced and retired by authoritative refreshes", async () => {
+    let generation: number | undefined = 3;
+    let unavailable = false;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/runtime-health")) {
+        if (unavailable) return new Response("unavailable", { status: 503 });
+        return Response.json({
+          summary: {
+            state: generation === undefined ? "detached" : "attached",
+            ...(generation === undefined ? {} : { runtimeGeneration: generation }),
+          },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "running" });
+    });
+    expect((await provider.interactiveSnapshot!("s-1")).runtime?.runtimeGeneration).toBe(3);
+    const metadata = (
+      provider as unknown as {
+        interactiveMetadata: Map<
+          string,
+          { expiresAt: number; runtimeHealthAuthoritative?: boolean }
+        >;
+      }
+    ).interactiveMetadata;
+    for (const next of [4, undefined]) {
+      generation = next;
+      metadata.get("s-1")!.expiresAt = 0;
+      await provider.interactiveSnapshot!("s-1");
+      await waitUntil(() => metadata.get("s-1")!.expiresAt > 0);
+      const fresh = await provider.interactiveSnapshot!("s-1");
+      expect(fresh.runtime?.runtimeGeneration).toBe(next);
+      if (next === undefined) expect(fresh.runtime).not.toHaveProperty("runtimeGeneration");
+    }
+    generation = 5;
+    metadata.get("s-1")!.expiresAt = 0;
+    await provider.interactiveSnapshot!("s-1");
+    await waitUntil(() => metadata.get("s-1")!.expiresAt > 0);
+    unavailable = true;
+    metadata.get("s-1")!.expiresAt = 0;
+    await provider.interactiveSnapshot!("s-1");
+    await waitUntil(() => metadata.get("s-1")!.runtimeHealthAuthoritative === false);
+    expect((await provider.interactiveSnapshot!("s-1")).runtime?.runtimeGeneration).toBe(5);
   });
 
   test("an authoritative refresh without steer retires a cached saturated value", async () => {

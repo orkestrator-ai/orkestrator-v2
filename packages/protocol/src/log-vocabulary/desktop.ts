@@ -30,10 +30,11 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
         "A packaged app was launched with ELECTRON_DEV=1 and ignored it; it loads its bundled renderer.",
       "instance.already-running": "Another instance holds this data directory; this one will quit.",
       "main-thread.stalled": {
-        description: "A timer fired late, so windows, IPC and the stdout reader waited.",
+        description:
+          "A timer fired late, so windows, IPC and the stdout reader waited. `cpuMs` is the CPU time the process used in the window: near `lagMs` the main thread was busy, far below it the thread waited.",
         essential: true,
         minLevel: "error",
-        fields: { lagMs: "number", intervalMs: "number" },
+        fields: { lagMs: "number", intervalMs: "number", cpuMs: "number" },
       },
       "process-memory":
         "Development only: working set per Electron process type, sampled on an interval.",
@@ -109,6 +110,8 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "attention-failed": "A dialog could not ask for the user's attention.",
       closed: "A native dialog closed.",
       "hidden-cancelled": "A hidden profile cancelled a dialog without opening native UI.",
+      "no-display-cancelled":
+        "A headless Electron with no display cancelled a dialog instead of opening native UI.",
       "open-failed": "A dialog could not open; it was answered as cancelled.",
       opening: "A native dialog is opening.",
       "preview-beforeunload-ignored": "A browser preview's beforeunload handler was ignored.",

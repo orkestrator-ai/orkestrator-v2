@@ -1,0 +1,432 @@
+{
+  "schemaVersion": 1,
+  "domain": "system",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "assign_bug_report_agent": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:377797b539abc986d658652e842ccfab17c8721c4d61779588dbc42ab72f2768",
+      "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
+    },
+    "cancel_host_update": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["jobId"],
+      "argsDigest": "sha256:23dd7eeb8da8a4150a15ccb1226e95c382d02dbf7247b2dab64c92a9d78e4861",
+      "resultDigest": "sha256:57d14b058dc52e14c838019603fc226fcf134b3fc2ccec7c2f44a38b6084635b"
+    },
+    "create_bug_report": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:42c10ed8f2ea35b983459b4a449dfd82ea1b517f277c6746178a4d7cfc16c350",
+      "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
+    },
+    "create_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:95c4d6b0035a3490987ab056d77aa831206fdbdc30f5dd322b9a4bce118b9e1a",
+      "resultDigest": "sha256:182ee6087d69d806e370e4a84e56582708eefd978e07dfbcb848c6b99a1d3751"
+    },
+    "delete_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6da5c2c9cee78dd9f933bf52b44c9df689e72e61001b6e61e52db8da3ddd67fe",
+      "resultDigest": "sha256:bb70075829fdcd9471db3daa98f709cfbcc88bad81320d3cdbe6d9bdf726d5e2"
+    },
+    "discard_bug_report": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:909c302f0f3576e9768b78be80a677044118a3f6914e671b28fd1f6d459e2be4",
+      "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
+    },
+    "file_bug_report": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["via"],
+      "argsDigest": "sha256:0fbba158e221c776f58722730688768b7a7bb60cef3128aaf34fd9b07f104796",
+      "resultDigest": "sha256:8bb7cb6121f0d1c7908193f7390f63a9b4657086a38bf11130471643323f89da"
+    },
+    "get_app_version": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "get_artifact_metrics": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:1d608a81bcc694402232eca06c50b3a491a3e26bad1940ab3ac73879fe4a8c37"
+    },
+    "get_bug_report": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
+    },
+    "get_compatibility_path_usage": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:241bc112b385079746778e6c010007a86514263b3e9a6acb2937df8a68626bb4"
+    },
+    "get_database_stats": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:b40d4961ecae11cd81fa555ebce5148b3feaec3e8d5f70f39afa4346fb9eb36f"
+    },
+    "get_environment_disk_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:3e64d00aedb82129d3e7fdf2240874636ab137d11d8b4ca7f551a05f43d8e60b",
+      "resultDigest": "sha256:5bf6e6a90c4bb45c675ceadde69d836abf360cf0fceef0d431c5230017a5151a"
+    },
+    "get_environment_process_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:30b7aa9b3534af4bb6eb29eed173d8f6c7ad89ebc5b8e3e7c015fece48443aaa"
+    },
+    "get_fleet_update_policy": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:5bce1d81d302c0c45cf4480373c1541672ac0d40059ce2a942ec800aae208c42"
+    },
+    "get_host_maintenance": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:970afb9bf08a7c1ca3ed9586215d5e22404d1ac98a57d26ea57d140d63139346",
+      "resultDigest": "sha256:df66df8bec205ae124c7659988d3fe246d103aa8e7bb4dc0a7be38270d82d248"
+    },
+    "get_host_restart_impact": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:911fbe378495a827da1445dbe659214225b5ab4122326b986dc1c6b1efdb9357"
+    },
+    "get_machine_load": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7fdbe300526aec7b8b062d82df70034a5e37b2ffc331f8aa5564650226512a87"
+    },
+    "get_progressive_read_metrics": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:48eccfa0e87bff75770c5dc886b85b2911ae097a7b10458a20cc50897e71aece"
+    },
+    "get_recurring_work_diagnostics": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:00904360f9683b7c455f7c470587dc0018ae4bc434e1aa0b2855f3c880d4b288"
+    },
+    "get_resource_revision_manifest": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:5490e09f5ef54bcd0950c1b160b5adc723296c0fba3ee121727053c2929bebe0",
+      "resultDigest": "sha256:8fdf74b39fdd37082df9aab8b563bdfc30666d6f85b8e81f41d0687e0006d619"
+    },
+    "get_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:6da5c2c9cee78dd9f933bf52b44c9df689e72e61001b6e61e52db8da3ddd67fe",
+      "resultDigest": "sha256:e7d8e1c5c39942c6075d0afe23cad5c6389695b26d70884ab04e9e78f68b770c"
+    },
+    "get_scoped_resource_revision_manifest": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:95a936dddf057cfe55cd0712399c0e65f58758c43b8a9c5776e06a85b0303aea",
+      "resultDigest": "sha256:30fa8b0391ccf8b9977c288239ade5d36166f94c2e312578da50d0552b95a807"
+    },
+    "get_scoped_resource_snapshots": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:623a625a62f7acdb227b721ecbb2d6f9be7a33f6243e903224ce1a9b2211acb8",
+      "resultDigest": "sha256:fedc2241efdf95a02214ca95065d67ad88d68fba565baba19ff07008b51fcbbd"
+    },
+    "get_self_improvement_status": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
+    },
+    "get_system_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:fed83529848415182d0c56195cf9278652e356cdb8bcb7eb3c99ec37978e3382"
+    },
+    "get_worktree_locations": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:bf1a87706eebf86e5f1f804501855a2aa52562a3f381e8ad1ac8c7c8fde67e02"
+    },
+    "greet": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:70053cb8e3a835a451c91f0f806831e57e1874125baf41fa6a25cb77ee32d344",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "list_disk_usage_environments": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:6d6526158d1cf9b9a7a949c3cd9556c2c12f8509722f36aa20c67544180b81de"
+    },
+    "list_project_git_mirror_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:55149d9cc86b4439098dbd6577b002c9e8b622662b257abd0cc931810a2061ae"
+    },
+    "list_scheduled_jobs": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:72810e732c5dca4652c3af1b980e163477ba787d0855d34415b0b69a398fe81f",
+      "resultDigest": "sha256:0b6f378ae3df37a35e6ec2c01904a9807143c26696198baeaa250006ee823ab3"
+    },
+    "mark_bug_report_filed": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:83315c2244564c94b3c6069fa93f391d82ac4fdc1e5badf29dcd8cd258173256",
+      "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
+    },
+    "pause_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6da5c2c9cee78dd9f933bf52b44c9df689e72e61001b6e61e52db8da3ddd67fe",
+      "resultDigest": "sha256:e7d8e1c5c39942c6075d0afe23cad5c6389695b26d70884ab04e9e78f68b770c"
+    },
+    "plan_diagnostics_bundle": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:cbea6aab68cf5c6f5fab92c851f47985c9e3584c094fe30a31bf169b5444013b"
+    },
+    "plan_diagnostics_bundle_with_container_logs": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bd5dcbd6f92800592339ed4b0e1987f12cc3abe36615c06f5c6425410ff99011",
+      "resultDigest": "sha256:cbea6aab68cf5c6f5fab92c851f47985c9e3584c094fe30a31bf169b5444013b"
+    },
+    "read_diagnostics_bundle": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:86467cb3814f70d7c3e91c7e242dca0a1e71ee213fd7e1cdac2aaa23bfcde75f",
+      "resultDigest": "sha256:8fa5ab8e4cbb8bd94342b6cee25576af4b73e22f7fcac6a8a65b275674397c58"
+    },
+    "reconcile_workflow_scheduling": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:ebb92f1bad35a783ac36b081e3800ba08ef45e64ec069c22be12a1990bd396cd"
+    },
+    "record_domain_adapter_usage": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:90259bfdb2d04aa50aa139388fb0f2de9823eb69b0348b4432396f91dcb703b2",
+      "resultDigest": "sha256:0483030ff2fee7aadc4fd986a61ac1d0a98bfb0f01435283acc4d9bd3074f415"
+    },
+    "record_renderer_errors": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a4c37688a38b9796cd1afbeb9cced6dbd7bf85f31f808d196bd0dc6567e7dd49",
+      "resultDigest": "sha256:080b58b49b6d5ac803d77139aac4ca0c0ca86d73f259ec88003357ae1ac9ad3a"
+    },
+    "request_host_update": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["drain", "version"],
+      "argsDigest": "sha256:08e5be0cd843348b30a8d345a4675faf71134079969a7beea249ce2cc33e6b2a",
+      "resultDigest": "sha256:57d14b058dc52e14c838019603fc226fcf134b3fc2ccec7c2f44a38b6084635b"
+    },
+    "request_host_update_check": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:df66df8bec205ae124c7659988d3fe246d103aa8e7bb4dc0a7be38270d82d248"
+    },
+    "resume_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6da5c2c9cee78dd9f933bf52b44c9df689e72e61001b6e61e52db8da3ddd67fe",
+      "resultDigest": "sha256:e7d8e1c5c39942c6075d0afe23cad5c6389695b26d70884ab04e9e78f68b770c"
+    },
+    "run_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6da5c2c9cee78dd9f933bf52b44c9df689e72e61001b6e61e52db8da3ddd67fe",
+      "resultDigest": "sha256:c571141f99cb06e00d347f32530bda262a4c04e23e2a2773cd7672e333e97fe4"
+    },
+    "run_self_improvement": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["dryRun"],
+      "argsDigest": "sha256:de4afe9b393d47e6e9847ed98b663b641ebaaf2dd7a7fe5eddcc911f87d8bd88",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
+    },
+    "save_bug_report_screenshot": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:394cc84b7ba5f818ebf59e0abfc71fe8123e7241e1f5e22146d4ed339cff6ae1",
+      "resultDigest": "sha256:8148ab7657aacd237c433189d05dee4e3f5fd39ff55f01058130990e40dab4a5"
+    },
+    "set_fleet_update_policy": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:32e5c0d200affadf3c4caa7760b535af201b7c984c2a7779cb81d88a1542c804",
+      "resultDigest": "sha256:5bce1d81d302c0c45cf4480373c1541672ac0d40059ce2a942ec800aae208c42"
+    },
+    "set_host_gh_channel": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:42d3b46027cef9b0ba3ae200c86b35a42b89f1cd1516b5c7e8a8f7ae4f8d45e3",
+      "resultDigest": "sha256:7b5d1c1365f43a61a2bee31972e95e7aee5cd49e829fc35a073d1b89c40904b8"
+    },
+    "set_host_update_channel": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:42d3b46027cef9b0ba3ae200c86b35a42b89f1cd1516b5c7e8a8f7ae4f8d45e3",
+      "resultDigest": "sha256:df66df8bec205ae124c7659988d3fe246d103aa8e7bb4dc0a7be38270d82d248"
+    },
+    "start_host_image_update": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7b5d1c1365f43a61a2bee31972e95e7aee5cd49e829fc35a073d1b89c40904b8"
+    },
+    "start_host_toolchain_repair": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7b5d1c1365f43a61a2bee31972e95e7aee5cd49e829fc35a073d1b89c40904b8"
+    },
+    "update_scheduled_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:5508c8572d2b602014d93c21cd5465d08e90320ef497386bbe7384822ed3d330",
+      "resultDigest": "sha256:e7d8e1c5c39942c6075d0afe23cad5c6389695b26d70884ab04e9e78f68b770c"
+    },
+    "update_worktree_locations": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b1800f13c449470f6184bde8bb2d28420adfcc39cbf8a57ed25d6d62b25a567b",
+      "resultDigest": "sha256:bf1a87706eebf86e5f1f804501855a2aa52562a3f381e8ad1ac8c7c8fde67e02"
+    },
+    "write_bug_report_attachment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4afb2cbc7797e1011badadc4f41ceb1b63d7501ffc72c243ff1847855962d651",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    }
+  }
+}

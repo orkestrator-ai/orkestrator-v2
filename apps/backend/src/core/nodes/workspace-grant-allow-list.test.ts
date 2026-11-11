@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createCommandRegistry } from "../commands-registry.js";
-import { LEGACY_ONLY_ADMITTED, legacyWorkspaceAdmitted } from "./workspace-grant-legacy-check.js";
 import { workspaceAllowList } from "./workspace-grant-scope.js";
 
 /**
@@ -11,9 +10,9 @@ import { workspaceAllowList } from "./workspace-grant-scope.js";
  * deny-lists' effective scope (every registered command minus
  * `isWorkspaceExcludedCommand`) except for the commands below (commit
  * 17577083d); each difference is justified, command by command, in
- * `plans/unified/7012-allow-listed-grants.md` (Notes). The deny-lists are
- * gone; their verdict survives, for one release, as the debug cross-check
- * (`workspace-grant-legacy-check.ts`), which this test keeps in step.
+ * `plans/unified/7012-allow-listed-grants.md` (Notes). The deny-lists and
+ * their one-release debug cross-check are gone; this list keeps the
+ * justification for each narrowed command's declared access.
  */
 
 interface ManifestEntry {
@@ -82,15 +81,6 @@ describe("the manifest's workspace set and the grant allow-list", () => {
   test("the runtime allow-list is the manifest's workspace set", () => {
     const runtime = workspaceAllowList(createCommandRegistry().contracts);
     expect([...runtime].sort()).toEqual([...allowList].sort());
-  });
-
-  test("the old deny-lists' verdict differs only by the justified commands", () => {
-    const legacy = commands
-      .map(([name]) => name)
-      .filter((name) => legacyWorkspaceAdmitted(name, allowList.has(name), true));
-    const narrowed = legacy.filter((name) => !allowList.has(name)).sort();
-    expect(narrowed).toEqual(Object.keys(NARROWED).sort());
-    expect([...LEGACY_ONLY_ADMITTED].sort()).toEqual(Object.keys(NARROWED).sort());
   });
 
   test("each narrowed command declares the access its justification names", () => {

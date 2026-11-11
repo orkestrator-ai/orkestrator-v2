@@ -28,7 +28,6 @@ import {
   designCancelCommand,
   designCapabilitiesCommand,
   designCaptureCommand,
-  designChangesCommand,
   designCheckpointCommand,
   designExecuteCommand,
   designExportPreviewCommand,
@@ -50,13 +49,11 @@ import {
   designPrepareCommand,
   designPurgeCommand,
   designReadinessCommand,
-  designSaveCommand,
   designSessionLinkCommand,
   designSessionLinkStatesCommand,
   designSessionResumeCommand,
   designSessionUnlinkCommand,
   designSnapshotCommand,
-  designStatusCommand,
   designSyncCommand,
   designValidateCommand,
 } from "@orkestrator/protocol/contract/domains/design";
@@ -95,7 +92,7 @@ import {
 } from "./intents.js";
 import { purge } from "./service-lifecycle.js";
 import type { DesignService } from "./service.js";
-import type { DesignSessionResumer } from "./session-links.js";
+import type { DesignArchivedSessionLookup, DesignSessionResumer } from "./session-links.js";
 import { runDesignAction } from "./tools.js";
 import { validate as validateFrame } from "./validation.js";
 
@@ -146,6 +143,23 @@ export interface DesignCommandContext {
       logicalSessionKey: string;
       providerSessionId: string;
     }): Promise<unknown>;
+    /** Unarchive before a resume the user asked to restore; absent from narrow harnesses. */
+    setProjectionResumableSessionArchived?(input: {
+      environmentId: string;
+      agent: BuildPipelineAgent;
+      logicalSessionKey: string;
+      resumableSessionId: string;
+      archived: boolean;
+    }): Promise<void>;
+    /**
+     * Which of these conversations the agent lists as archived, asked only of a
+     * running bridge; `undefined` when none answers. Absent from narrow harnesses.
+     */
+    archivedResumableSessionIdsIfRunning?(
+      environmentId: string,
+      agent: BuildPipelineAgent,
+      resumableSessionIds: readonly string[],
+    ): Promise<ReadonlySet<string> | undefined>;
   };
   storage: {
     getEnvironment(environmentId: string): Promise<unknown>;
@@ -166,6 +180,8 @@ export interface DesignCommandOptions {
     agent: BuildPipelineAgent,
     logicalSessionKey: string,
   ) => string;
+  /** Tests: {@link DESIGN_ARCHIVED_READ_DEADLINE_MS}. */
+  archivedReadDeadlineMs?: number;
 }
 
 function linkAgent(link: DesignSessionLink): BuildPipelineAgent | null {
@@ -213,6 +229,56 @@ function nativeSessionReader(
 }
 
 /**
+ * How long the link-state read waits for the agents' archived lists. The
+ * dialog gives the whole read eight seconds; past this the archived state is
+ * simply not known, and the links read as they did before archive existed.
+ */
+export const DESIGN_ARCHIVED_READ_DEADLINE_MS = 3_000;
+
+/**
+ * Which closed links' conversations their agent lists as archived. Observe
+ * only: one list per agent, from a bridge that is already running (never
+ * started for this), within {@link DESIGN_ARCHIVED_READ_DEADLINE_MS}.
+ */
+function archivedReader(
+  context: DesignCommandContext,
+  environmentId: string,
+  deadlineMs: number,
+): DesignArchivedSessionLookup | undefined {
+  const read = context.nativeAgents?.archivedResumableSessionIdsIfRunning?.bind(
+    context.nativeAgents,
+  );
+  if (!read) return undefined;
+  return async (links) => {
+    const byAgent = new Map<BuildPipelineAgent, DesignSessionLink[]>();
+    for (const link of links) {
+      const agent = linkAgent(link);
+      if (agent && link.sessionId?.trim())
+        byAgent.set(agent, [...(byAgent.get(agent) ?? []), link]);
+    }
+    const archived = new Set<string>();
+    await Promise.all(
+      [...byAgent].map(async ([agent, agentLinks]) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), deadlineMs);
+        });
+        const ids = await Promise.race([
+          read(
+            environmentId,
+            agent,
+            agentLinks.map((link) => link.sessionId!.trim()),
+          ).catch(() => undefined),
+          deadline,
+        ]).finally(() => clearTimeout(timer));
+        for (const link of agentLinks) if (ids?.has(link.sessionId!.trim())) archived.add(link.id);
+      }),
+    );
+    return archived;
+  };
+}
+
+/**
  * Resume through the ordinary native-agent API: it checks the environment
  * owns the session and that the provider still has it, and it never creates
  * an empty replacement.
@@ -230,16 +296,41 @@ function nativeResumer(
     });
   return {
     mapped,
-    async resume(link, tabId) {
+    async resume(link, tabId, resumeOptions) {
       const agent = linkAgent(link);
       if (!agent || !link.sessionId)
         throw new DesignError("invalid-input", "This conversation cannot be resumed", {
           retry: "never",
         });
+      const logicalSessionKey = tabSessionKey(environmentId, tabId);
+      if (resumeOptions?.restoreArchived) {
+        // The agent refuses to continue an archived conversation, so restore
+        // it first; a refused restore does not resume.
+        if (!nativeAgents.setProjectionResumableSessionArchived)
+          throw new DesignError("unsupported", "This backend cannot unarchive conversations", {
+            retry: "never",
+          });
+        try {
+          await nativeAgents.setProjectionResumableSessionArchived({
+            environmentId,
+            agent,
+            logicalSessionKey,
+            resumableSessionId: link.sessionId,
+            archived: false,
+          });
+        } catch (error) {
+          const message = (error instanceof Error ? error.message : String(error)).slice(0, 200);
+          throw new DesignError(
+            "disconnected",
+            `Could not unarchive the conversation: ${message}`,
+            { retry: "after-delay" },
+          );
+        }
+      }
       await nativeAgents.resumeProjectionSession({
         environmentId,
         agent,
-        logicalSessionKey: tabSessionKey(environmentId, tabId),
+        logicalSessionKey,
         providerSessionId: link.sessionId,
       });
       const providerSessionId = await mapped(link, tabId);
@@ -294,14 +385,6 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
         resolveDestination: () => resolveDesignDestination(context.storage, environmentId),
       })) as ResultOf<typeof designActionCommand>;
     }),
-    entry(designStatusCommand, async (_args, context) => {
-      if (!context.design) return { ready: false as const, error: "Design service unavailable" };
-      return context.design.renderer.status();
-    }),
-    entry(designChangesCommand, async (args, context) => {
-      if (!context.design) throw new Error("Design service unavailable");
-      return context.design.changes(args.canvasId, args.environmentId, args.generation, args.after);
-    }),
     entry(designImportCommand, async (args, context) => {
       const { design, environmentId } = await authorized(args, context);
       return design.create(environmentId, "Imported design", args.document, "user");
@@ -316,44 +399,6 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
         throw new DesignError("invalid-input", "Choose an .orkdes design file.");
       const document = await readDesignHostFile(filePath);
       return design.create(environmentId, "Imported design", document, "user");
-    }),
-    entry(designSaveCommand, async (args, context) => {
-      const { design, environmentId } = await authorized(args, context);
-      const canvasId = args.canvasId;
-      const destination = await resolveDesignDestination(context.storage, environmentId);
-      const filePath = args.filePath;
-      // Legacy save never overwrites: a collision is reported, not resolved.
-      const receipt = await exportSave(
-        design,
-        environmentId,
-        canvasId,
-        { destination },
-        { relativePath: filePath, revision: args.expectedRevision, expected: { state: "absent" } },
-      ).catch(async (error) => {
-        const failure = toDesignFailure(error);
-        if (failure.code !== "export-collision") throw error;
-        const preview = await exportPreview(
-          design,
-          environmentId,
-          canvasId,
-          { destination },
-          filePath,
-        );
-        if (!preview.target.needsReplaceConfirmation && preview.target.fingerprint)
-          return exportSave(
-            design,
-            environmentId,
-            canvasId,
-            { destination },
-            {
-              relativePath: filePath,
-              revision: args.expectedRevision,
-              expected: { state: "present", digest: preview.target.fingerprint },
-            },
-          );
-        throw error;
-      });
-      return { filePath: receipt.relativePath, revision: receipt.revision };
     }),
 
     // Protocol v2 surface: typed envelopes, capability negotiated.
@@ -660,6 +705,11 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
             const providerSessionId = await read(link, link.tabId);
             return providerSessionId ? { providerSessionId } : null;
           },
+          archivedReader(
+            context,
+            environmentId,
+            options.archivedReadDeadlineMs ?? DESIGN_ARCHIVED_READ_DEADLINE_MS,
+          ),
         );
       }),
     ),
@@ -673,6 +723,8 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
             linkId: arg(DesignLinkIdSchema, args.linkId, "linkId"),
             expectedTabId: arg(DesignTabIdSchema, args.expectedTabId, "expectedTabId"),
             tabId: arg(DesignTabIdSchema, args.tabId, "tabId"),
+            restoreArchived:
+              optionalArg(Schema.Boolean, args.restoreArchived, "restoreArchived") ?? false,
           },
           nativeResumer(context, options, environmentId),
         );

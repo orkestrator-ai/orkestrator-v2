@@ -6,14 +6,6 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 const log = createLogger("web.environment");
 
 /**
- * Kept exported for backwards compatibility; the periodic safety net now runs
- * through `resource-sync`'s manifest timer and the global store binding, so
- * this hook no longer runs its own interval — doing both refreshed every
- * project twice per tick.
- */
-export const ENVIRONMENT_LIST_RESYNC_INTERVAL_MS = 5 * 60_000;
-
-/**
  * Keeps every project's environment snapshot converged across clients.
  *
  * Refreshes on the backend `environment` change feed and on an explicit

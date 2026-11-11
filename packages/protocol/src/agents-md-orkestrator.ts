@@ -31,9 +31,33 @@ export const AGENTS_MD_FILE = "AGENTS.md";
 export const ORKESTRATOR_SECTION_TITLE = "Orkestrator";
 export const ORKESTRATOR_SECTION_HEADING = `## ${ORKESTRATOR_SECTION_TITLE}`;
 
-/** Written at the top of the section when the backend creates it. */
+/**
+ * Written at the top of the section when the backend creates it, and put in
+ * place of an earlier wording (`PREVIOUS_ORKESTRATOR_SECTION_NOTES`) when the
+ * backend next changes an existing section.
+ *
+ * The exception for references exists because the bare rule read as a ban:
+ * workers that deleted a to-do left the section naming it, and tickets were
+ * marked incomplete for it (root `AGENTS.md`, "Keep references current"). It
+ * covers a description the change makes untrue as well as a path, because an
+ * outdated status rule was left in place the same way.
+ */
 export const ORKESTRATOR_SECTION_NOTE =
-  "Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.";
+  "Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request, except to update what their own change makes stale: a reference to a file it deletes, moves, renames or retires, or a description it makes untrue.";
+
+/**
+ * Notes the backend wrote before `ORKESTRATOR_SECTION_NOTE`. A section whose
+ * preamble is exactly one of them (ignoring surrounding whitespace) gets the
+ * current note when a proposal next changes the section, so a repository that
+ * already had the section also gains the reference-update exception. Any
+ * other preamble is the user's text and is left alone.
+ */
+export const PREVIOUS_ORKESTRATOR_SECTION_NOTES: readonly string[] = [
+  "Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.",
+  "Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request, except to update a reference to a file their change deletes, moves or renames.",
+];
+
+const PREVIOUS_NOTES = new Set(PREVIOUS_ORKESTRATOR_SECTION_NOTES);
 
 export const MAX_AGENTS_MD_CHANGES = 20;
 export const MAX_AGENTS_MD_ENTRY_CHARS = 500;
@@ -460,7 +484,10 @@ export function mergeOrkestratorSection(
   let afterLastEntry = -1;
   for (const block of blocks) {
     if (block.kind === "text") {
-      bodyOut.push(...block.lines);
+      for (const line of block.lines)
+        bodyOut.push(
+          PREVIOUS_NOTES.has(line.text.trim()) ? { ...line, text: ORKESTRATOR_SECTION_NOTE } : line,
+        );
       continue;
     }
     if (removed.has(block.key)) continue;

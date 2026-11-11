@@ -19,3 +19,60 @@
 Temporary probes showed a fresh message array arriving during the unrelated-write measurement, although the environment changes retained the selected settings. The fixture answered every metadata read with a full snapshot, including requests carrying its current token. It now answers those reads `unchanged` for transcript, session state and discovery, matching the progressive-read protocol and the browser fixture. The zero-commit assertion and its timeout are unchanged.
 
 Fix: the token-aware mocks in `apps/web/src/components/native-agent/AgentNativeTab.render-count.test.tsx`. After the fix, the exact isolated owner command passed all 34 cases (30.4 s), and the original two-worker four-file command passed all 108 cases (30.3 s). The previously observed worktree-path timeout is recorded separately as 6623; its cause is unestablished.
+
+## Recurrence (2026-11-10)
+
+Observed on base `60afa4b715bd465d441d28a4cb9a513928d2ccb8`, which contains
+fix `e1b83430d7` (`mise run flaky:recurrence -- 6622 --base 60afa4b715bd465d441d28a4cb9a513928d2ccb8`
+confirms this is a recurrence). The recorded command was
+`mise run test:logged -- --name review-default-tests -- mise run test` (default
+aggregate worker plan). The same assertion at line 406 received 1 instead of 0
+(462.79 ms); captured totals: 32,008 passed, 1 failed, 161 not run.
+Evidence is retained in
+`.orkestrator/review-artifacts/review-validation-da793d72-6b7e-4681-bb5d-425de17c0d17/validation-04.stderr.txt`.
+The branch changes the imported protocol pane-layout module, so failure triage
+labels the failure related (`imports-changed-file`); this alone does not establish
+a cause for the render. The unchanged owning file passed when rerun:
+`mise run test:logged -- --name findings-render-count-alone -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures`
+(logged runner 4.7 s). No production or assertion change was made for this
+failure. The recurrence's cause remains unestablished; token-aware mocks are
+already present, so the prior fix does not explain this observation.
+
+The exact recorded default-suite command was rerun after the Notes repair.
+Its web group passed (14,330 passed, 0 failed, 10 skipped; 984 files, 485.34 s),
+clearing this round's render-count failure. The aggregate still exited 1 because
+of the separate voice-chat fixture readiness failure recorded in case
+[9927](9927-voice-chat-reply-start-readiness.md). This pass does not establish a
+fix for case 6622's intermittent cause; the case remains open.
+
+## Resolution of the recurrence (2026-11-10)
+
+**Root cause.** Since #2015 (`3f51fb8d7`), `NativeChatShell` renders once
+more `CHAT_COLUMN_SHIFT_SETTLE_MS` (400 ms) after it mounts, when
+`useChatColumnShiftStyle` turns its column slide on. The test's `settle()`
+stopped after the first quiet 40 ms interval. When the transcript rendered
+quickly, that interval ended before the 400 ms timer, and the timer's commit
+landed inside the measured unrelated write. Waiting 4 s inside one `act` after
+`renderTab` reproduced it deterministically: one commit arrived with no write
+at all. It came from the timer, not from the environment write or the Notes
+diff. The Notes branch's change to `packages/protocol/src/pane-layout.ts`
+(an added `keyInformationTabId` export) is not involved.
+
+**Fix.** `settle()` now also waits while any mounted shell still carries a
+zero `--chat-column-shift-duration`, so measurements start after the shell's
+one settle render. The zero-commit assertion and its timeout are unchanged.
+
+Waiting for the shell to settle exposed a second, deterministic failure in the
+same file: `anchor resize does not render the native controller` also failed
+3 of 3 when selected alone on the unchanged file. The shell's compose-dock
+`ResizeObserver` called `setComposeDockHeight` with an unchanged height.
+React skips an identical update without rendering only while the fiber has no
+leftover update lanes. After the settle update it had some, so every pane
+resize rendered the shell once. `NativeChatShell` now ignores an unchanged
+measurement before it reaches React.
+
+**Verification.** With the fix, the 4 s idle probe recorded 0 commits in
+3 of 3 runs (1 before the fix). The owning file passed 3 of 3 through
+`mise run test:logged -- --name render-count-owner-N -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures`.
+`bun test --cwd apps/web ./src/components/chat ./src/components/native-agent ./src/components/ui/floating-notice.test.tsx ./src/components/terminal/TerminalContainer.render-count.test.tsx --parallel=4 --only-failures`
+passed under the logged runner.

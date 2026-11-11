@@ -39,6 +39,11 @@ export interface ResumableSession {
   detail?: string;
   /** Out of the list until "Show archived"; has to be restored to continue. */
   archived?: boolean;
+  /**
+   * `false` hides this row's remove/restore control even where the dialog has
+   * `onArchive`: a row its provider cannot archive.
+   */
+  archivable?: boolean;
 }
 
 interface NativeResumeSessionDialogProps {
@@ -325,7 +330,7 @@ export function NativeResumeSessionDialog({
                         </div>
                       </div>
                     </button>
-                    {onArchive && (
+                    {onArchive && session.archivable !== false && (
                       <button
                         type="button"
                         aria-label={session.archived ? "Restore to list" : "Remove from list"}

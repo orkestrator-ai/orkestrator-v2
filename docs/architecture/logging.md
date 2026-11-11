@@ -267,7 +267,7 @@ and no site logs a stderr tail.
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
 | `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
-| `process` | `child.reaped`, `child.reap-abandoned`, `child.reap-unavailable` | `info`, `warn`, `warn` | macOS under Bun: a child whose exit Bun lost was reaped after its command settled, with `pid` and `waitedMs`; or was left a zombie, with `reason` (`not-a-zombie`, `capacity`, `waitpid-failed`); or `waitpid` could not be loaded. See [to-do 4260](../todo/cross-cutting/4260-bun-loses-child-process-events.md#6-reap-children-whose-exit-bun-lost). |
+| `process` | `child.reaped`, `child.reap-abandoned`, `child.reap-unavailable` | `info`, `warn`, `warn` | macOS under Bun: a child whose exit Bun lost was reaped after its command settled, with `pid` and `waitedMs`; or was left a zombie, with `reason` (`not-a-zombie`, `capacity`, `waitpid-failed`); or `waitpid` could not be loaded. See [backend runtime](backend-runtime.md#one-shot-commands). |
 | `docker` | `writer-lease.not-acquired` | `info` | A backend starts without the lease, with `reason` (`busy`, `schema-incompatible`). A second backend on one directory is normal. |
 | `local-server` | `bridge.exited` | `warn`, or `info` if the backend asked | Every exit of a local bridge, with `code`, `signal` and `requested`. A clean exit 0 nothing asked for warns. Read it with `server.stopping`. |
 | `local-server` | `bridge.orphans-reaped` | `warn`, or `error` if one survived | A bridge that exited on its own left processes in its group (its agent CLI, mid-turn), and the backend stopped them. `result` is `stopped` or `survived`. |
@@ -309,7 +309,7 @@ migration commit on a loaded Mac wrote during this work's tests):
 [storage] operation.slow database=main op=transaction table=stores store=environments mode=immediate durationMs=9811 beginMs=9811 sqlMs=0 busy=true
 [storage] operation.slow database=ledger op=transaction table=change_ledger_meta mode=exclusive durationMs=374 beginMs=0 sqlMs=1 commitMs=372 busy=false
 [backend] command.slow command=get_projects durationMs=9902 syncMs=0 outcome=ok
-[event-loop] stalled lagMs=9800 endedAt=2026-11-06T09:14:03.120Z intervalMs=500 storageMs=9811 storageDatabase=main storageOp=transaction storageTable=stores storageStore=environments storageLongestMs=9811 storageBusy=true commandsInFlight=3 commands=get_projects,get_environments,create_client_grant
+[event-loop] stalled lagMs=9800 endedAt=2026-11-06T09:14:03.120Z intervalMs=500 cpuMs=240 storageMs=9811 storageDatabase=main storageOp=transaction storageTable=stores storageStore=environments storageLongestMs=9811 storageBusy=true commandsInFlight=3 commands=get_projects,get_environments,create_client_grant jobsInWindow=2 jobs=diff-scan,file-tree-read
 [storage] upkeep.finished durationMs=1840 optimizeMs=12 releasable=5120 released=4096 left=1024 releaseMs=1828 stop=budget
 ```
 
@@ -335,9 +335,11 @@ into `folded` and `foldedMaxMs`; a call of 5 s or more is always written. The
 same records, without the spacing, are in `get_database_stats` and
 `database.json` as `slowOperations`: counts, total and longest per series (64
 series at most, then `overflowed`) and the last 32 operations. Below the
-threshold a call costs two `performance.now()` reads:
-`apps/backend/scripts/storage-timing-overhead.ts` measured about 55–80 ns per
-statement and 250–290 ns per transaction on an in-memory database.
+threshold a call costs two `performance.now()` reads and its addition to the
+call buckets below: `apps/backend/scripts/storage-timing-overhead.ts` measured
+about 55–80 ns per statement and 250–290 ns per transaction on an in-memory
+database, and 58–94 ns per statement and 170 ns per transaction with the call
+buckets on 2026-11-11 (a busy Linux host).
 
 **`command.slow`.** The command registry wraps every registered command
 (`createCommandRegistry`'s `register`), so it covers every caller: the
@@ -349,16 +351,45 @@ event loop. One line per command per minute; the rest are folded in. Per-command
 counts and summed durations of gateway invokes were already in
 `/__orkestrator/metrics`.
 
-**The stall line.** The backend registers two stall context sources
+**The stall line.** The backend registers three stall context sources
 (`addEventLoopStallContext`, in `main.ts`). A source is asked only for a stall
 that is reported, with the window from the last on-time tick to the late one.
 The storage source adds the slow SQLite operations overlapping the window:
 `storageMs` in total and the longest one's `storageDatabase`, `storageOp`,
-`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. The command
+`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. It also
+adds every call that ended in the window, slow or not: `storageCalls`, their
+time `storageCallMs`, and the parts of it on the main database
+(`storageMainCallMs`) and the change-tracking ledger (`storageLedgerCallMs`).
+Those come from 250 ms buckets by end time, kept for 32 s, so they are exact
+to one bucket at either edge. A call is an outermost statement or a whole
+transaction. The command
 source adds `commandsInFlight`, the names of up to three of the most recently
 started (`commands`), and `blockingCommand` with `blockingCommandMs` when a
-command's synchronous part of 250 ms or more overlapped the window. A stall with
-no storage fields was not SQLite holding the loop for 250 ms at a time.
+command's synchronous part of 250 ms or more overlapped the window. The
+recurring-work source (`recurringWorkMetrics.stallContext`) adds `jobsInWindow`,
+the attempts of recurring jobs (diff scans, file-tree reads, sweeps; the kinds in
+`@orkestrator/protocol/recurring-work`) that were running during the window or
+settled inside it, and `jobs`, up to three of their kinds, newest first. Each
+attempt counts once; one started while the tracked table was full counts while
+it is in flight and, once settled, only for windows it overlapped, but its kind
+is not named. An
+attempt's span includes its awaits, so a named job ran around the stall rather
+than necessarily causing it; a kind that keeps coming back is the lead. A stall
+with no `storageMs` was not SQLite holding the loop for 250 ms at a time; its
+`storageCallMs` says whether many shorter calls did (to-do 7562 found stalls
+that were mostly the thread waiting on disk with no single call reaching
+250 ms).
+
+The backend and the desktop also pass the monitor a CPU reader
+(`process.cpuUsage()`, one `getrusage` per tick), so both stall lines carry
+`cpuMs`: the CPU time the whole process used in the window. Close to `lagMs`
+means its own thread was busy (JavaScript or a synchronous call that computes);
+far below it means the thread waited (a synchronous call blocked on disk or a
+lock, or the host did not schedule the process). Self-improvement's conversation
+scan was a busy one: it read every recent Claude and Codex history file in one
+synchronous loop, about 7 s on a Mac with nine thousand of them, and now yields
+between files (`event-loop-slice.ts`;
+`apps/backend/scripts/self-improvement-scan-stall.ts` measures it).
 
 **`upkeep.finished`.** `stop` is `done` (no free pages left), `budget` (1 GiB
 per pass), `busy` (another connection held the database), `no-progress`,
@@ -491,13 +522,14 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `snapshot.failed` | `retryAt`, error | The hourly database snapshot failed. |
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
 | `storage` | `operation.slow` | `database`, `op`, `table`, `mode`, `durationMs`, `beginMs`, `sqlMs`, `commitMs`, `busy`, `folded`, `foldedMaxMs` | A synchronous SQLite call held the event loop for 250 ms or more; see [what ran during a stall](#what-ran-during-a-stall). |
-| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). |
-| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
+| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `cpuMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs`, `jobsInWindow` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). |
+| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs`, `cpuMs` | The same, for the main process. |
 | `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
 | `renderer-errors` | `error.recorded` | `errorClass`, `boundary`, `route`, `fingerprint`, `count` | A desktop window reported new occurrences of a renderer failure; see [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). |
+| `review` | `consolidation.budget-exceeded` | `reviewers`, `sourceFindings`, `compactBytes`, `maxBytes` | A review panel's reports did not fit one consolidation turn (`CONSOLIDATION_MAX_EVIDENCE_BYTES`) after optional prose was removed, so consolidation failed before dispatch. It counts how often real panels need [hierarchical consolidation](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md). |
 
 A lease is **regained** by the next backend, not by the one that lost it: a lost lease
 is final until that process restarts, so `writer-lease.regained` is written by whichever
@@ -630,8 +662,9 @@ ring below do.
 
 A renderer failure used to leave nothing behind: its console stays in the browser
 (see [What stays out of the persistent log](#what-stays-out-of-the-persistent-log)).
-Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`), and a
-desktop window sends its new counts to the backend it drives, which writes them here as
+Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`). A
+desktop window sends its new counts to the backend it drives, and a browser tab (the iOS
+app's web view included) to the backend it is signed in to, which writes them here as
 `renderer-errors` `error.recorded`.
 
 An entry is five fields and nothing else, defined in
@@ -641,7 +674,7 @@ An entry is five fields and nothing else, defined in
 | --- | --- |
 | `errorClass` | A built-in error class, `ChunkLoadError`, or `NonErrorThrow`. A custom class name is application text, so it becomes `Error`. |
 | `boundary` | Where it was caught: `lazy-view`, `message-row` or `rich-block` (the boundaries that name themselves), `boundary` (any other), `root` (no boundary caught it), `recoverable` (React recovered), `window` or `rejection` (the window's own error and unhandled-rejection events). |
-| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
+| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client, in a browser tab or the iOS app). A page with no desktop API, served over HTTP to something other than Electron, counts as `browser` even before its gateway is installed. The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
 | `fingerprint` | Eight hex digits of FNV-1a over the class, stack and component stack, the same one the boundaries already log. It tells failures apart without keeping what it was computed from. |
 | `count` | Occurrences since the last report, capped at 1,000,000. |
 
@@ -652,8 +685,8 @@ stack** is kept, in the ring or anywhere after it.
 flowchart LR
   B["React root onCaughtError / onUncaughtError / onRecoverableError"] --> R[(ring, 100 entries)]
   W["window error / unhandledrejection"] --> R
-  R -->|"new counts, ≤ 20 per write, every 10 s"| C["record_renderer_errors"]
-  C -->|"parsed again, 30 entries a minute"| E[(logs/essential)]
+  R -->|"new counts, ≤ 20 per write, every 10 s, with client id"| C["record_renderer_errors"]
+  C -->|"parsed again, 30 entries a minute, 10 to 20 per client"| E[(logs/essential)]
 ```
 
 Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
@@ -666,21 +699,44 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   static `diagnosticBoundary`. Nothing is added to each boundary's `componentDidCatch`.
 - **Bounded in the renderer.** At most 100 distinct entries, the least recently seen
   dropped first. A repeat only raises a count.
-- **Sent by a desktop window only.** Its own renderer starts the upload
-  (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
-  entries a write. A failed send puts the counts back and waits twice as long, up to five
-  minutes. A backend that predates the command answers "Unknown backend command", which
-  stops the upload for that load. Errors in another node's workspace shown in the
-  window are the window renderer's, so they go to the window's own backend. A browser
-  tab keeps its ring in memory: whose log its entries belong in is open
-  ([6300](../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md)).
+- **Sent by every renderer, to its own backend.** A desktop window's renderer and a
+  browser tab both start the upload (`renderer-error-upload.ts`, started by
+  `renderer-diagnostics.ts`): promptly for the first failure, then every 10 seconds, up
+  to 20 entries a write. A failed send puts the counts back and waits twice as long, up
+  to five minutes. A backend that predates the command answers "Unknown backend
+  command", which stops the upload for that load. Errors in another node's workspace
+  shown in the window are the window renderer's, so they go to the window's own
+  backend. A browser tab sends to the backend it is signed in to (its command node).
+  Its gateway is installed only once the application modules load, so a failure before
+  then is retried on the next send, and one the tab never recovers from (its own
+  application chunk failing to load) is kept in session storage for the tab's next
+  load. A tab that is closed first loses it.
+- **Each renderer names itself.** Every write carries `client`, a random id the
+  renderer keeps in its session storage (`renderer-error-client.ts`), so a reload keeps
+  the same share. The stored id is reused only when the document is a reload
+  (Navigation Timing's `type`): a tab opened from another (`window.open`, "Duplicate
+  tab") starts with a copy of its opener's session storage, and takes a fresh id
+  instead of sharing the opener's allowance. It identifies no user, device or session
+  and is never logged. A
+  backend from v2.36.5-beta or v2.36.6-beta, whose handler refused any argument but
+  `entries`, gets the batch again without it.
 - **Validated and rate-bound in the backend.** `record_renderer_errors`
   (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
   other key (a `message`, a `stack`) or any value outside its list refuses the whole
-  write. Across every client it writes at most 30 entries a minute and counts the rest
-  in one `report.rate-limited` line per minute. The essential log's own per-event budget
-  applies after that. A workspace client may not call it
-  (`workspace-grant-scope.ts`): this machine's log is its own.
+  write, as does a `client` that is not 8 to 64 letters, digits, `-` or `_`. Across
+  every client it writes at most 30 entries a minute. Each `client` is sure of 10 of
+  them, and may take up to 20 (one full batch) while 10 more stay free for another
+  renderer, so a lone window's full batch is logged and one noisy tab cannot use the
+  minute a desktop window needs. A lone renderer therefore writes at most 20 a minute
+  where an older one (no `client`) could write 30; what is dropped is counted, not
+  resent. The first 64 client ids in a minute are tracked; later ones share one more
+  slot, which bounds the backend's memory, not fairness. The id is self-declared, so a
+  sender that mints ids, or omits `client`, can still use the whole total: the share
+  protects other renderers from a noisy one, not from a hostile client, which already
+  holds admin access. A write without `client` (an older renderer) is bounded by the
+  total alone. The rest are counted in one `report.rate-limited` line per minute. The
+  essential log's own per-event budget applies after that. A workspace client may not
+  call it (`workspace-grant-scope.ts`): this machine's log is its own.
 - **Not the startup markers.** The ring never writes to the console and never uses the
   `desktop.startup` area, so the [exact-marker rule](#what-stays-out-of-the-persistent-log)
   is unchanged. It is also separate from `recentRendererErrors`, the bug report's
@@ -1440,7 +1496,15 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
   shows what the renderer holds in memory, tokens included, which is why it is opt-in
   and the switch says so. The artifact host and browser previews keep their own rules
   (`artifact-host-session.ts`, `browser-preview-manager.ts`); the menu never targets
-  them.
+  them. `native-application-menu.yml` qualifies the item on real Electron on Linux,
+  macOS and Windows and in the packaged app on Linux and macOS.
+- **Safari's Web Inspector in the iOS app.** The app's web view is inspectable from a
+  connected Mac only while this switch is on in the page: the renderer reports its state
+  at start (`reportWebInspectable`, `debug-log.ts`) through the shell's bridge
+  (`orkestratorNativeShell.setWebInspectable`, the `set-inspectable` action in
+  `RemoteWebView.swift`), and the shell sets `isInspectable` back to false on every new
+  document. The shell has no native log of its own; its renderer's failures reach the
+  backend through the error ring above.
 - **What a line now looks like.** One text line, not a console object: `error.name`,
   `error.message` and up to 8 relative frames, with no expandable object or
   source-mapped links in DevTools. Where a site logged an entity or a name, it now
@@ -1522,7 +1586,7 @@ record what was observed at the time and are left as they are.
 | `[container-host-reachability]` | `[docker.reachability] <event>` |
 | `[graphs]`, `[graph-runs]`, `[graph-system]`, `[graph-describe]` | `[graph] launch.*`, `run.*`, `rewind.*`, `system.*`, `describe.*` |
 | `[goals]`, `[goal-verifier]` | `[native-agent.goal] <event>` |
-| `[opencode-provider]` | `[native-agent.opencode] <event>` |
+| `[opencode-provider]` | `[native-agent.opencode] <event>` (provider sign-in); the OpenCode provider itself logs as `[native-agent.opencode2] <event>` since OpenCode 1.x was retired (2026-11-11) |
 | `[native-agent-job]`, `[NativeAgentService]`, `[human-prompts]`, `[agent-handoffs]` | `[native-agent] <event>` |
 | `[ElectronBackend]` model catalogue lines | `[models] <event>` |
 | `[ElectronBackend] Installing ... support` | `[local-server] bridge-runtime.*` |

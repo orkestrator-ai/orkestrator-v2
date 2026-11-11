@@ -223,8 +223,6 @@ describe("every registered command, with canary secrets planted", () => {
     );
     for (const command of [
       "get_config",
-      "get_global_config",
-      "save_config",
       "update_global_config",
       "patch_global_config",
       "patch_repository_settings",

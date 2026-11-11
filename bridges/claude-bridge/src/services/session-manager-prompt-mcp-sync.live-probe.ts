@@ -21,6 +21,7 @@ import {
   getMcpRuntimeConfig,
   type SdkMcpServersConfig,
 } from "./mcp-config.js";
+import { refuseRealDataDirClaudeCli } from "./live-cli-guard.js";
 import { claudeExecutableOptions } from "./session-manager-core.js";
 import {
   createClaudeRuntimeMcp,
@@ -337,6 +338,7 @@ if (import.meta.main) {
     });
   }
   try {
+    refuseRealDataDirClaudeCli();
     console.log(
       `${RESULT_SENTINEL}${JSON.stringify({ ...(await runMcpSyncProbe()), calls: await runMcpCallProbe(open) })}`,
     );

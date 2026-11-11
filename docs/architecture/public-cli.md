@@ -4,8 +4,9 @@ Status: Living — operator and architecture guide for the client command
 surface of the published `orkestrator` package.
 
 Testing workflow and coverage by layer: [cli-testing.md](../development/cli-testing.md).
-Outstanding work: [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md) and
-[0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
+Outstanding work: [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
+What is deliberately not built, and what would reopen it, is under
+[Not built](#not-built) (from to-do 0017, retired on 2026-11-11).
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
 Public agent summary: [orkestrator.dev/skill.md](https://orkestrator.dev/skill.md)
@@ -304,6 +305,8 @@ not advertise at its version before sending it.
 | `run receipts` | local | private local receipts | none |
 | `diagnostics plan` | `diagnostics.plan` | builds the bundle in the backend's memory ([logging.md](logging.md#the-diagnostics-bundle)); the manifest is the bundle's own | read |
 | `diagnostics export [--plan PLAN_ID] [--file PATH]` | `diagnostics.read` | reads a plan piece by piece and writes it **on this machine**, owner-only, never overwriting. Nothing is uploaded | read |
+| `self-improvement status` | `self-improvement.status` | settings, the run in progress, the last run, tracked tickets and conversation themes ([self-improvement.md](self-improvement.md)) | read |
+| `self-improvement run [--dry-run] [--wait]` | `self-improvement.run` | starts a run in the background (refused while the experimental switch is off, without a project, or while one runs); `--wait` follows it to the end and prints its summary | mutation |
 | `host status` | `host.status` | `HostMaintenanceService` detailed snapshot (impact, tools, image) | read |
 | `host update channel stable/beta/unstable` | `host.update.channel` | persisted channel and a fresh check; refused while updating | metadata |
 | `host update check [--wait]` | `host.update.check` | check request answered by the host's updater | metadata |
@@ -702,7 +705,7 @@ read, so a question that was just answered does not report 6.
 
 `session goal` gives one agent tab a durable objective; the backend sends turns
 until a check proves it, the agent needs a person, or a limit stops it. The
-rules are the composer's `/goal` (`plans/goals.md`), and `docs/architecture/goals.md`
+rules are the composer's `/goal`, and [goals.md](goals.md)
 describes the loop. An agent in a session has only `report_goal`, so it can report
 on a goal and never set one. A Control MCP credential granted `sessions.control`
 reaches these actions like any other session control, and the voice profile
@@ -989,10 +992,26 @@ are absent and reports Docker failures in `cleanupErrors`. `live-session`
 records the model each session reports in force (`session config get`) on
 its `session start`
 manifest entry, beside the pinned model or `null` for the provider default.
+Before cleanup, the runner reads a live scenario's recorded token usage from
+its backend's `get_usage_history` report (`scenarios/usage.ts`) into that
+scenario's `results[].usage` (counts, priced spend and per-model totals only;
+`readError` when the read fails, never a failed run).
 `live-session` also lists the session's
 commands, checks that an unknown and a changed command are refused, runs a
 selected command (Claude's built-in `/context`), and sends `--literal`,
-`--attach` and an `--enqueue` prompt behind a running turn. Options: `--scenario NAME` (repeat),
+`--attach` and an `--enqueue` prompt behind a running turn. The selected
+command runs on Claude only, by decision: other providers run the refusal,
+`--literal`, `--attach` and `--enqueue` stages. After
+`dispatch_native_agent_intent` the CLI path is provider-neutral, and each
+provider's executor is proved live through the composer
+([0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md)),
+so a planted command per provider would add fixtures and live tokens without
+proving another path. The cost is that the CLI's name-to-ID resolution and
+`bindingRevision` echo are proved live on one catalogue shape; unit tests
+(`public-api-command-surface.test.ts`, `command-surface.test.ts`) cover the
+rest. Queued and selected-command results get no browser check either: they
+appear in the tab's existing queue and transcript, whose rendering this
+surface did not change. Options: `--scenario NAME` (repeat),
 `--list`, `--keep-on-failure`, `--environment-type container
 --docker-image TAG` (a worktree-owned image from `mise run docker:build:dev`;
 the shared `latest` tag is refused), and `--provider NAME` for the
@@ -1045,6 +1064,100 @@ are not yet live-qualified (see
 Which test proves each scenario class is listed in
 [cli-testing.md](../development/cli-testing.md#coverage-by-layer).
 
+## Not built
+
+These were left out on purpose. Each keeps the rules below; reopen one as a
+new to-do (with its own design and review where noted) when its trigger is
+met. Recorded from to-do 0017 (retired on 2026-11-11; its last version is
+`git show 14df96544:docs/todo/cli-and-slash-commands/0017-cli-command-surface.md`).
+
+### Following without an event stream
+
+`session transcript --follow` and `attention --follow` poll on the shared
+observation backoff (`nextPublicWaitDelay`: 250 ms doubling to 2 s), and
+`transcriptFollow` stays `poll`. The trigger measurement is the
+`a busy-session follow stays within the polling budget` case in
+`packages/cli/tests/client-waits.test.ts`: a scripted session writes one
+1 KiB message every 400 ms for 30 s and is then idle for 30 s, followed for
+60 s on a virtual clock against a backend that answers `unchanged` to a held
+`knownToken`. Measured (2026-11-11; the poll times are fixed by the backoff,
+so the counts and latencies are exact):
+
+| Measure | Result | Budget the test pins |
+| --- | --- | --- |
+| Reads in the minute | 34 (18 while busy, 15 idle) | at most 35 |
+| Time from a message being written to its first read | 1,750 ms at most, 937 ms mean | at most 2 s |
+| Downloaded while busy | 658 KB in 18 reads: each changed read carries the whole window (here up to 75 messages) | under one window per read |
+| Downloaded while idle | 1.9 KB in 15 reads, every one `unchanged` (126 B each) | no page |
+
+On the backend each read is still one `get_native_agent_transcript_update`
+with `forceSnapshot` (the conditional read saves the wire, not the window
+read). An open native tab polls the same read about twice a second while a
+turn streams (39 to 40 answers in 20 s in
+to-do 6680 (retired;
+`git show 1fd391e3a:docs/todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md`)),
+so one follower costs about a quarter of one open tab. `attention --follow`
+has the same schedule; its page sizes are in
+[control-mcp-voice.md](control-mcp-voice.md#hearing-about-work-without-asking).
+
+Polling is within that budget, so no push follow is built. Reopen it when a
+client needs new messages faster than 2 s, or when a real follower is
+measured outside the budget (for example a changed window read on every poll
+of a remote gateway). Such a follow must reuse the gateway SSE
+(`GatewayEventReplay` and `parseGatewayCursor` in
+`apps/backend/src/gateway-event-replay.ts`), subscribe before replaying, echo
+the client's cursor in `connected`, detect gaps and generation changes and
+reset from a snapshot, bound every frame and buffer, disconnect a slow
+consumer explicitly, report auth expiry and shutdown as observation outcomes,
+serve both followers, and route through `--node` to the leaf that owns the
+session. It is advertised as a new `transcriptFollow` value.
+
+### Worker-scoped CLI credentials
+
+A worker that wants the CLI has no scoped credential of its own, and must
+never discover the operator token. Scoped automation from a worker uses a
+Control MCP credential ([control-mcp.md](control-mcp.md)) meanwhile. The
+proposed shape: the gateway accepts a Control MCP credential bearer only on
+`public_action`, applies `controlMcpActionAllowed` and the confirmation rules,
+and dispatches under `control-mcp:<id>` authority (already threaded through
+the operation ledger, node targets and schedule actions, and relayed to leaf
+nodes); the CLI reads it from a private file, as
+`connection add --url … --credential-file` already does for a remote
+gateway token, never from argv or the environment, which child processes
+inherit and `/proc` shows. The gateway accepts no Control MCP bearer today. It is a new authentication path
+into the gateway, reachable from a worker, so it needs its own to-do with a
+security design and isolation review before any code; start one when someone
+asks for it.
+
+### Declarative `apply` and backend auto-start
+
+Not planned: nobody has asked for either. Auto-start needs process ownership,
+readiness detection and data-directory exclusivity first; starting a second
+backend over the desktop's data directory is never a valid fallback, and
+client commands keep never starting a backend
+([Invocation modes](#invocation-modes)).
+
+### Rules for new client features
+
+- The CLI is a thin client of the authenticated gateway. A second
+  implementation of worktree, Docker, provider or settings persistence in the
+  client would duplicate the most delicate code in the application, so new
+  features reuse backend services through public actions.
+- The gateway was chosen over an MCP client (MCP lacked tools for several
+  operations and would tie basic shell use to MCP session handling) and over a
+  new HTTP server (it already authenticates callers and reaches the same
+  command registry, so a server for the CLI alone adds a listener and no
+  capability). Do not add either, and never expose raw registry dispatch.
+  Control MCP keeps this: it dispatches only `PUBLIC_ACTIONS` through
+  `public_action`, in process.
+- Sessions in one environment share its worktree: `session start` gives
+  independent conversations, not filesystem isolation.
+- A completed turn does not prove the requested change. Scripts and scenarios
+  check files or tests separately (for example with `environment exec`).
+- Plain text, typed commands, selected commands, steering and queued
+  follow-ups keep their distinct intent end to end; never change the caller's
+  intent automatically, for example by turning a busy prompt into a steer.
+
 ## Limitations and rollout
 
 - `capabilities.features` reports `projectCascadeRemove`, `localProjectInit`,
@@ -1063,7 +1176,7 @@ Which test proves each scenario class is listed in
   `project update --remote`).
 - Not provided: event-stream following (`--follow` polls snapshots),
   worker-scoped CLI credentials, declarative `apply`, and backend auto-start;
-  see [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md).
+  see [Not built](#not-built).
 - Container lifecycle and exec are qualified on Linux Docker and macOS Docker
   Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
   live Claude, Codex and OpenCode container passes. The 2026-10-25 evidence

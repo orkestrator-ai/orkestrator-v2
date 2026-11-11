@@ -618,37 +618,40 @@ describe("BrowserPreviewManager pins", () => {
     const harness = createHarness();
     const contents = await harness.attach("http://localhost:5173/settings?tab=profile");
     contents.pinsResponse = () =>
-      JSON.stringify([
-        {
-          annotationId: "annotation-1",
-          state: "matched",
-          rule: "stable-id",
-          candidateCount: 1,
-          rect: { x: 1, y: 2, width: 3, height: 4 },
-        },
-        {
-          annotationId: "annotation-2",
-          state: "missing",
-          rule: "route-mismatch",
-          candidateCount: 0,
-          rect: null,
-        },
-        {
-          annotationId: "annotation-3",
-          state: "matched",
-          rule: "semantic-context",
-          candidateCount: 1,
-          // Null geometry is a valid hidden match; malformed geometry is not.
-          rect: { x: 1, y: 2, width: -3, height: 4 },
-        },
-        {
-          annotationId: "annotation-99",
-          state: "matched",
-          rule: "stable-id",
-          candidateCount: 1,
-          rect: { x: 0, y: 0, width: 1, height: 1 },
-        },
-      ]);
+      JSON.stringify({
+        revision: 1,
+        results: [
+          {
+            annotationId: "annotation-1",
+            state: "matched",
+            rule: "stable-id",
+            candidateCount: 1,
+            rect: { x: 1, y: 2, width: 3, height: 4 },
+          },
+          {
+            annotationId: "annotation-2",
+            state: "missing",
+            rule: "route-mismatch",
+            candidateCount: 0,
+            rect: null,
+          },
+          {
+            annotationId: "annotation-3",
+            state: "matched",
+            rule: "semantic-context",
+            candidateCount: 1,
+            // Null geometry is a valid hidden match; malformed geometry is not.
+            rect: { x: 1, y: 2, width: -3, height: 4 },
+          },
+          {
+            annotationId: "annotation-99",
+            state: "matched",
+            rule: "stable-id",
+            candidateCount: 1,
+            rect: { x: 0, y: 0, width: 1, height: 1 },
+          },
+        ],
+      });
 
     const results = await harness.manager.showPins({
       tabId: "browser-1",

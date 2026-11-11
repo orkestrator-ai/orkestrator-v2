@@ -2,6 +2,18 @@
 
 ## Task analysis
 
+Analysed 2026-11-11 against main at 498b68766 (task 12: the client-only and
+validation candidates measured on Linux and decided, decisions C1 to C7, see
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux);
+tasks 8 and 18 rechecked and still need a macOS node and a headed browser).
+
+Tasks 6 and 13 rechecked 2026-11-11 against main at 498b68766: 0049, which
+task 6 delegated to and task 13's observation-sharing removal waited on,
+finished that day and was retired.
+
+Analysed 2026-11-10 against main at c98b20e6f (task 13: the `multi-review`
+rollback driver removed, decision W6).
+
 Analysed 2026-11-10 against main at 04639b12b (tasks 2 and 13; live
 evidence from Linux that day, see
 [Workflow client visibility](#workflow-client-visibility-2026-11-10-linux)).
@@ -30,25 +42,21 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 ### Tasks
 
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in [7202](7202-busy-profile-follow-ups.md)).
-2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, [7557](7557-multi-review-progress-tail.md); the four PR rows need live GitHub and moved to task 5, decision W3) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux); the four PR rows need live GitHub and moved to task 5, decision W3, now in 7568) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, 7201; turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
-4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
-5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown, and the four PR rows of the latency budgets as a client sees them (moved from task 2 on 2026-11-10). Status: open (needs GitHub credentials and a disposable repository, which the 2026-11-06 Linux run was not allowed to use; it no longer waits on anything else).
-6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
+4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 (now in 7568) and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
+6. **Live providers**: delegated to 0049. Status: done (2026-11-11: 0049 finished and was retired; what it qualified is summarised in [agent-testing.md](../../development/agent-testing.md), and its Grok and Cursor runs are on the manual-test checklist, 7568).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
-8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open (needs macOS with Xcode and an iOS device or simulator; the 2026-11-06 run was on Linux).
-9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open (needs a real suspend of a host whose other work can stop; the 2026-11-06 host runs production Orkestrator and other builds, so it was not suspended).
+8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 and 2026-11-11 runs were on Linux; the physical-device run moved to 7568 on 2026-11-10).
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
-12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (depends on 5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5; the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
-13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (`feature-planning` and `build-pipeline` depend on 5; observation sharing on 0049; `multi-review` has its fresh timing but is not removed) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; task 2's two busy runs are the fresh keyed Multi Review timing the review repair asked for, every review reaching `ready`, with the tail in [7557](7557-multi-review-progress-tail.md); its removal with `WorkflowDueScheduler` is a separate change).
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (only the two PR candidates are left, blocked (waits on 7568: 0048 task 5)) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to [7745](7745-tmux-interactive-capture-orphans.md), decision C5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open for `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, whose wait on 0049 ended on 2026-11-11 (0049 finished and was retired); the `feature-planning` and `build-pipeline` rollback drivers and the switch itself still wait for task 5's live GitHub run (7568: 0048 task 5) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
-16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines and a scoped firewall rule; the 2026-11-06 run could change neither the host's firewall nor its network).
-17. **View PR stale marker with a real PR**: a failed PR read shows the stale marker and last-check tooltip, which clear on the next good read. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs GitHub credentials and a real PR; run it with task 5).
-18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 host runs browsers headless only, and the busy profile's hidden client is emulated, so its timers are not throttled).
+18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 and 2026-11-11 hosts run browsers headless only, with no virtual display, and the busy profile's hidden client is emulated, so its timers are not throttled).
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
-20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in [7200](7200-event-stream-reader-gaps.md), two fixed with tests).
+20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in 7200, two fixed with tests).
 21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: done (2026-11-06).
 
 ### 1. Busy live profile
@@ -141,7 +149,7 @@ entry, and after an explicit Refresh. Container probes start at random
 offsets in the 15 s scan interval. On macOS every row it covers was within
 budget except the container Changes refresh, whose p95 is pulled over 1 s by
 refreshes that follow a scan already running (decision M6,
-[7201](7201-explicit-refresh-behind-running-scan.md)). See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos). The other
+7201). See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos). The other
 budget rows need a live turn, approvals, mail, PRs or workflows; task 11
 already measured turn completion, the activity indicator and queued prompts
 on two clients, and the rest belong with tasks 1 and 5.
@@ -185,7 +193,7 @@ backend's: the backend row's p95 was 3.71 and 4.08 s for the same results,
 and the client showed each phase 30 to 250 ms after the backend observed
 it. It is always the consolidated result's move to `ready`, three times in
 twelve reviews, and matches the 3 s observation interval plus jitter
-([7557](7557-multi-review-progress-tail.md)). See
+(7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)). See
 [Workflow client visibility](#workflow-client-visibility-2026-11-10-linux).
 The first run also showed that the repaired harness expected a
 `submit_review_preparation` result Multi Review never sends; fixed (decision
@@ -264,48 +272,11 @@ window. It found that a Build tab the backend selects in a build-only layout
 lost the selection to a seeded terminal; fixed (decision 23). See
 [Container app wiring, follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 
-### 5. Live GitHub
-
-**Problem.** PR monitoring's terminal cadence (5 min plus 30 s jitter, the one accepted slowdown), replacement and reopen discovery, admission under real `gh` latency and rate-limit cooldown are unproved live.
-
-**Context.** Batched in 0031 under "Live GitHub". The rollback is setting `terminalDiscoveryIntervalMs` to 20 s and the jitter to 0.
-
-**Investigation.** `DEFAULT_PR_MONITOR_POLICY` at `apps/backend/src/core/pr-monitor-policy.ts:68` still holds 5 min, 30 s jitter and a 2 min rate-limit cooldown. `external-pr` admission is 2 total and 1 per target (`apps/backend/src/core/work-admission.ts:85`).
-
-**Decisions.**
-
-- **What repository to use?**
-  - **A disposable test repository under the user's account, driven by `gh`, with PRs opened, closed, replaced and reopened by script (recommended).**
-    - Pros: controllable transitions; no risk to real PRs.
-    - Cons: the rate-limit cooldown is hard to trigger without real volume.
-  - **Observe this repository's real PR traffic.**
-    - Pros: realistic latency and volume.
-    - Cons: transitions are not controllable, and timing depends on maintainers.
-- **How to test the rate-limit cooldown?**
-  - **Inject a rate-limit answer at the `gh` boundary in a focused test, and record only the live cadence (recommended).**
-    - Pros: deterministic, no abuse of the API.
-    - Cons: not a live proof of the cooldown.
-  - **Exhaust a real token's limit.**
-    - Pros: genuine evidence.
-    - Cons: disrupts other work on the account.
-
-**Scope (2026-11-10).** Task 2's four PR rows moved here (decision W3): PR
-merge confirmation after merge-pending (≤ 3 s), PR created after
-create-pending (≤ 10 s), open PR state change (≤ 30 s) and terminal PR
-replacement or reopen (≤ 5 min), each timed to what a client shows.
-
-**Outcome (2026-11-06, not done).** Rechecked on `ee2cc8423`:
-`DEFAULT_PR_MONITOR_POLICY` still holds 5 min, 30 s jitter and a 2 min
-cooldown. Not run: the busy-profile run was not allowed to use GitHub
-credentials or a repository. Task 1 no longer blocks it; it is now the
-evidence tasks 2 (the PR rows), 12 (the PR candidates) and 13 (the build
-pipeline domain) wait for.
-
 ### 6. Live providers
 
 **Problem.** Provider-side observation (idle backoff, background output) is unproved for several providers.
 
-**Context.** This file defers it entirely to [0049](0049-native-agent-idle-observation.md).
+**Context.** This file defers it entirely to 0049 (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`, summarised in [agent-testing.md](../../development/agent-testing.md)).
 
 **Investigation.** `NATIVE_QUIET_BACKOFF_TRIAL_MS` is still `[3_000, 5_000, 10_000, 15_000]` at `apps/web/src/lib/native-session-read-policy.ts:24`; 0049 owns its evidence.
 
@@ -377,32 +348,20 @@ assumptions of the probes rather than the product (decisions M1 and M2).
     - Pros: scriptable and easy to repeat.
     - Cons: lifecycle differs from a device, so a pass proves less.
 
+**Scope (2026-11-10).** This task is now the simulator run: background the
+wrapper and lock the simulated device while a `dev:test` profile changes
+state, then check reads pause while hidden and resume with exact state. The
+real-device run, which the recommended option puts first, needs a provisioned
+device and moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+
 **Outcome (2026-11-06, not done).** Not run: it needs macOS with Xcode and a
 device or simulator, and this run was on Linux. The busy profile's hidden
 client (one client, `visibilityState` emulated) resumed in p95 123 ms, which
 says nothing about iOS suspension.
 
-### 9. Real host suspend and resume
-
-**Problem.** `HostSuspendDetector` re-times every scheduler after a sleep so overdue keys run once; that is proved only with a manual clock.
-
-**Context.** Constraint: missed ticks are never replayed.
-
-**Investigation.** `HostSuspendDetector` is at `apps/backend/src/core/host-suspend-detector.ts:42` with its own test file. No live record.
-
-**Decisions.**
-
-- **How to suspend?**
-  - **A real lid-close or `pmset sleepnow` on macOS, with diagnostics read before and after (recommended).**
-    - Pros: genuine monotonic-clock behaviour.
-    - Cons: suspends the host's other work (production Orkestrator shares it).
-  - **`systemctl suspend` on a spare Linux host.**
-    - Pros: scriptable, isolated from the main host.
-    - Cons: different clock semantics from macOS.
-
-**Outcome (2026-11-06, not done).** Not run: the only host available runs
-production Orkestrator and other builds, and suspending it would stop their
-work. It needs a host that can sleep, on either option above.
+**Outcome (2026-11-11, not done).** Not run: the host was Linux again
+(beelink2), with no Xcode or simulator.
 
 ### 10. Long soak and cache gauges
 
@@ -523,6 +482,36 @@ the busy profile has run (decision B7):
   poll, B19 and B20 (the busy profile ran nine validation runs a run, 1.1 s
   each, but measured neither the reader nor crash recovery).
 
+**Outcome (2026-11-11, Linux).** Rechecked on `498b68766`: every value above
+still holds (`DOCKER_AVAILABILITY_POLL_INTERVAL_MS` is at `App.tsx:99`,
+`DESIGN_CANVAS_CURSOR_CHECK_MS` at `design-controller.ts:46`). The six
+candidates that never needed task 1 were measured on this host, each at the
+cost it actually pays; numbers in
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux):
+
+- Docker availability sharing (C09): one probe is a `docker info`, about
+  60 ms of CPU, once a minute per visible client. Kept (decision C1).
+- The design canvas cursor check (C12): an unchanged check costs the design
+  service under 0.1 ms. Kept at 3 s; missed-final-hint recovery is still
+  qualified only by its unit test, which a longer interval would need first
+  (decision C2).
+- A shared display clock: a real browser saves at most a few milliseconds of
+  main-thread time a second even with 200 clocks. Kept as is (decision C3).
+- The validation reader's `bun` spawn per poll (C06): about 10 ms a poll
+  locally, plus a `docker exec` in a container, only while a person has the
+  output open on a running result. Kept (decision C4).
+- B19: an attached terminal's capture is about 2 ms locally but one
+  `docker exec` (about 50 ms wall, 60 to 70 ms CPU) in a container. Demand
+  gating is needed for terminals nobody detached, not for attached views: a
+  reload or a closed window leaves the loop running until the environment's
+  tmux cleanup. Moved to [7745](7745-tmux-interactive-capture-orphans.md)
+  (decision C5).
+- B20: the 500 ms tick costs under 0.1 ms; splitting the liveness write would
+  save about half of that. Kept (decision C6).
+
+Left here: the two PR candidates, which wait for task 5 (now 7568: 0048
+task 5).
+
 ### 13. Remove the rollback drivers
 
 **Problem.** Every keyed domain keeps a second whole-store driver, and Multi Review keeps `WorkflowDueScheduler`. That doubles upkeep and test surface.
@@ -594,9 +583,45 @@ because the switch still serves the other domains. For `multi-review`, task
 2's two busy runs on 2026-11-10 are the fresh keyed timing the review repair
 asked for: twelve reviews reached `ready` with every obligation kept, and
 progress after a result was within budget except a 3.7 to 4.1 s tail on one
-review in four ([7557](7557-multi-review-progress-tail.md)). The runs had no
+review in four (7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)). The runs had no
 rollback arm, so they do not compare the two drivers; removing it is the
 next domain in decision B8's order, in its own change.
+
+**Outcome (2026-11-10, later).** Rechecked on `c98b20e6f`. The `multi-review`
+rollback driver is removed (decision W6):
+
+- `WorkflowDueScheduler` (`multi-review-scheduler.ts`) and its test are
+  deleted. `MultiReviewService` always starts its keyed supervisor when
+  `autoAdvance` is on; the due scheduler's own lease-renewal timer, its
+  metered pass and discovery wrappers (`runScheduled`,
+  `discoverSupervisedWorkflows`, `renewLeases`) and the 15 s reconciliation
+  default are gone. Lease renewal is only the supervisor's critical job.
+- `MultiReviewServiceOptions` no longer accepts `keyedScheduling`
+  (`Omit<KeyedWorkflowServiceOptions, "keyedScheduling">`), so a caller that
+  still asks for the old driver fails the typecheck. `reconcileIntervalMs`
+  stays as the keyed safety discovery's fallback period.
+- `REVERTIBLE_KEYED_SCHEDULING_DOMAINS` drops `multi-review`; a value naming
+  it, or `all`, leaves Multi Review keyed. The efficiency vocabulary drops
+  `scheduler.pass`, which only the due scheduler recorded.
+- Tests: the three Multi Review tests that ran under both drivers (interactive
+  Address Findings settlement, background auto-PR, a running review kept
+  scheduled to `ready`) run on the keyed driver only; a new test checks that
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review` or `all` still runs a
+  review to `ready` on the keyed supervisor; the due scheduler's lease-renewal
+  test is replaced by one that drives the keyed critical job on a manual clock
+  (one renewal per interval, none overlapping a slow one, one job after a
+  repeated `init`, none after shutdown); `workflow-supervisor.test.ts` pins the
+  smaller revertible list.
+- The recurring baseline harness keeps a rollback mode for feature planning
+  and build pipelines only, and `recurring-baseline.test.ts` checks Multi
+  Review's keyed counts on their own.
+- The catalogue comment (`RECURRING_JOB_CATALOGUE`, B16), `recurring-work.md`,
+  `testing-guide.md`, the `recurring-live-ab.ts` header and 0027's
+  current state describe the change.
+
+Not done here: the `feature-planning` and `build-pipeline` rollback drivers,
+and with them the switch and its desktop allowlist entry, still wait for
+task 5 (decision W7); observation sharing waits for 0049.
 
 ### 14. Metrics switch decision
 
@@ -638,88 +663,6 @@ switch for the recorder itself, not a scheduling rollback".
     - Pros: clean, and many sit in code that removal deletes anyway.
     - Cons: collides with parallel work.
 
-### 16. Client reconnect over a real two-machine link drop
-
-**Problem.** Reconnect and freshness were qualified on 2026-10-31 through a
-proxy inside the test, which resets connections or goes silent. A real tailnet
-may behave differently, for example in how soon the OS gives up on a socket or
-fails a connect.
-
-**Context.** Moved from to-do 0051 (deleted 2026-11-06); its recorded run is
-summarised in
-[`agent-testing.md`](../../development/agent-testing.md#live-client-outage). The
-client backoff is `packages/protocol/src/reconnect-backoff.ts`; the gateway
-client drops a silent stream after missed keepalives (`dropSilentStreams` in
-`web-gateway.ts`), and the banner is `ConnectionStatusBanner.tsx`. Batch it with
-task 11 and the two-machine runs of 0052 (0031).
-
-**Investigation.** Steps:
-
-1. Run a `dev:test` profile on host A and serve it to host B through
-   Tailscale Serve.
-2. On B, open 3 tabs with terminals, once over HTTP/SSE and once over the
-   terminal WebSocket.
-3. Silently drop only the test connection's packets with a scoped firewall
-   rule. Keep the drop active until the banner and at least two retry attempts
-   per tab are observed. Allow up to 180 s: the silence watchdog takes 60 s
-   and the banner adds about 4 s, so restoring at 45 s cannot qualify this path.
-   If the observations are absent at 180 s, remove the rule for cleanup and
-   record a failed qualification; do not count an early restoration as a pass.
-4. Before restoring, confirm reads pause and retry times differ across tabs.
-   Then restore connectivity and check terminals recover exactly with the main
-   stream. Separately repeat with an immediate socket/interface error, such as
-   `tailscale down` on B; record its detection/retry timing independently.
-
-**Decisions.**
-
-- **How to drop the link?**
-  - **A scoped firewall rule that drops test packets (recommended).**
-    - Pros: exercises silence through the watchdog and retry observations.
-    - Cons: requires host access and guaranteed removal on failure.
-  - **`tailscale down` on the client machine.**
-    - Pros: the real interface goes away, as when a laptop leaves the network.
-    - Cons: an error rather than silence on some OSes, so it may not test the
-      silent case.
-
-**Outcome (2026-11-06, not done).** Not run: it needs a second machine and a
-firewall rule, and this run could change neither the host's firewall nor its
-network. The busy profile's cut client (the in-process outage link in `reset`
-mode, one host) converged 4.4 to 12.5 s after its link returned, the
-reconnect ladder [7120](7120-multi-client-restart-follow-ups.md) task 2
-describes; that is not the silent-drop path this task needs.
-
-### 17. View PR stale marker with a real PR
-
-**Problem.** The credential-free outage profile recorded a PR URL and the View
-PR action rendered, but no PR state ever arrived from GitHub, so only the
-absence of flicker on quiet `unchanged` reads was shown, not the stale marker
-appearing and clearing.
-
-**Context.** Moved from to-do 0051 (deleted 2026-11-06). Task 5 is the other
-live GitHub run.
-
-**Investigation.** Steps:
-
-1. Use a profile with GitHub credentials and an environment with a real open PR.
-2. Force a failed PR read, for example by blocking `api.github.com` for the
-   profile or briefly revoking the token.
-3. Check that the stale marker and last-check tooltip appear on the View PR
-   action, then clear on the next successful read, with no flicker on quiet
-   `unchanged` reads.
-
-**Decisions.**
-
-- **Run it with task 5?**
-  - **Yes, on task 5's live GitHub profile (recommended).**
-    - Pros: the same credentials and PR.
-    - Cons: blocking GitHub mid-run interrupts task 5's own cadence readings.
-  - **Alone.**
-    - Pros: independent.
-    - Cons: a second credentialed setup.
-
-**Outcome (2026-11-06, not done).** Not run: it needs GitHub credentials and
-a real PR, which this run could not use. It stays with task 5.
-
 ### 18. Reconnect timing in a real background tab
 
 **Problem.** Headless Chromium keeps a page `visible`, so the 2026-10-31 runs
@@ -754,6 +697,11 @@ other workflows.
 headless only, and a headless page is never really backgrounded. The busy
 profile's one-client rounds emulate a hidden document (decision B5), which
 covers the read coordinator's pause and resume but not timer throttling.
+
+**Outcome (2026-11-11, not done).** Not run: the host (beelink2) allows
+headless browsers only and no virtual display (Xvfb), so a page can still not
+be put in a real background tab. The next run needs a host with a display or a
+disposable one.
 
 ### 19. Changes-tab remote freshness
 
@@ -814,7 +762,7 @@ Applying the same patch everywhere is quicker but may duplicate existing logic.
 **Outcome (2026-11-06).** Done. Every long-lived reader outside the browser
 gateway and Electron clients was traced and given a disposition; see
 [Event-stream reader inventory](#event-stream-reader-inventory-2026-11-06).
-Three gaps and one possible gap went to [7200](7200-event-stream-reader-gaps.md).
+Three gaps and one possible gap went to 7200.
 Two were fixed with tests in the same change: the desktop connection
 manager's reconnect ladder now spreads its retries (7200 task 2), and a v2
 preview tunnel session that answers no pings for about 30 s is destroyed
@@ -843,7 +791,9 @@ retired paths and run the checks required for the files changed:
    replacement.
 3. `apps/backend/src/core/preview-verification-window.test.ts:11`: deleted
    `3230-restart-inside-verification-window.md` →
-   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3.
+   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3
+   (0045 retired 2026-11-11; the comment now points at
+   `docs/architecture/browser-previews.md` and 0042's evidence log).
 4. `apps/desktop/electron/native-dialogs.ts:19`: deleted
    `0880-desktop-main-thread-held-by-modal-dialog.md` →
    `docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md` task 7.
@@ -871,9 +821,13 @@ supervision. It was qualified on Linux with deterministic call counts and one
 credential-free idle A/B run. The instrumentation fixes are done and a
 credential-free macOS idle A/B with freshness probes has run. Since then the
 long soak (task 10) and, on 2026-11-06, the busy live profile (task 1) have
-run. What remains is the GitHub, provider, iOS and suspend runs, the
-measured-candidate decisions those runs feed, and then removing the rest of
-the rollback drivers. On 2026-10-25 the feature-planning keyed row read landed (the one
+run. What remains here is the provider runs (0049), an iOS simulator run, a
+real background tab, and then the two PR candidates and the rest of the
+rollback drivers once live GitHub has run; the client-only and validation
+candidates were decided on 2026-11-11. The live GitHub,
+iOS device, host suspend and two-machine runs moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+2026-11-10. On 2026-10-25 the feature-planning keyed row read landed (the one
 candidate the deterministic harness could decide), keyed row reads began
 reusing a warm row cache, `stableJitterMs` moved out of the rollback-only
 file, the live A/B script gained a lifecycle soak, flake 0177 was resolved,
@@ -908,7 +862,10 @@ and the decisions below were recorded.
   (`http-bridge-transport.ts`): the provider's default client
   (`createOpenCodeSdkClient`, `opencode-sdk-client.ts`), the host catalogue
   refresh and provider sign-in. Each SDK request, event-stream connects and
-  reconnects included, is a `provider-request` like a `bridgeFetch`.
+  reconnects included, is a `provider-request` like a `bridgeFetch`. The SDK
+  and `opencode-sdk-client.ts` were removed with OpenCode 1.x on 2026-11-11;
+  OpenCode 2 is reached through Orkestrator's own HTTP client
+  (`opencode2/client.ts`), which nothing now passes `openCodeSdkFetch`.
 - The activity jobs `coordinator-repair`, `claude-state-reconcile` and
   `pending-rename-reconcile` register as `recovery`, as catalogued (they were
   `maintenance`, `progress` and `progress`). In `BackendActivityJobs` the
@@ -926,8 +883,9 @@ and the decisions below were recorded.
   [recurring-work.md](../../architecture/recurring-work.md#latency-budgets).
   No reference artifact is committed; generate one before any comparison.
   The workflows block drives feature planning, build pipelines and multi
-  review (its rollback is the real `WorkflowDueScheduler`, on the
-  harness's manual clock since 2026-10-25). It reports `storageReads`
+  review on the keyed drivers, and the first two also on their rollback
+  drivers (Multi Review's rollback, `WorkflowDueScheduler`, was removed on
+  2026-11-10). It reports `storageReads`
   beside `storageStats` and `storageBytes` (what those reads fetched from
   SQLite, since 2026-10-25), and the test holds each attempt to a per-domain
   storage budget (`STORAGE_PER_ATTEMPT`). The harness now closes each
@@ -968,17 +926,17 @@ and the decisions below were recorded.
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
     `workflow-supervisor.ts`): a comma list of `feature-planning`,
-    `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, or
-    `all`. A named domain runs its old whole-store
-    driver instead of the keyed one; `multi-review` falls back to
-    `WorkflowDueScheduler`.
+    `build-pipeline`, `graph-run`, or `all`. A named domain runs its old
+    whole-store driver instead of the keyed one (`graph-run` is turned off).
+    `multi-review`, `native-queues` and `backend-activity` are no longer
+    revertible (2026-11-10, task 13).
   - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` (read in `core/index.ts`).
   - `ORKESTRATOR_RECURRING_METRICS=0` turns the recorder off.
 - Multi review's own rollback gates (`adaptiveScheduling: false`, the legacy
   1 s tick, and `evidencePermits`) were removed on 2026-10-25 by
   [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
-  Only the `multi-review` domain of the switch above and its
-  `WorkflowDueScheduler` remain.
+  The `multi-review` domain of the switch above and its
+  `WorkflowDueScheduler` were removed on 2026-11-10 (task 13, decision W6).
 - Trial constants: `DEFAULT_PR_MONITOR_POLICY` (terminal discovery 5 min plus
   30 s jitter), `CONTAINER_FETCH_COOLDOWN_MS` (5 min) and
   `CONTAINER_FETCH_FAILURE_COOLDOWN_MAX_MS` (30 min),
@@ -988,8 +946,8 @@ and the decisions below were recorded.
 - `HostSuspendDetector` re-times every live scheduler after a host sleep so
   overdue keys run once.
 - `stableJitterMs` lives in `multi-review-scheduling.ts` (moved 2026-10-25),
-  which the keyed driver and the `WorkflowDueScheduler` rollback share, so
-  removing `multi-review-scheduler.ts` no longer touches the keyed path.
+  which is why removing `multi-review-scheduler.ts` on 2026-11-10 did not
+  touch the keyed path.
 - Container fetch reach (found 2026-10-25): every new container records its
   creation commit before setup (`establishCreatedFromCommit`,
   `commands-local-server-lifecycle.ts`), and `resolveComparisonRef`
@@ -1187,7 +1145,7 @@ container, so every fetch was a real `git fetch`.
   `fixtures/test-project`. The first start's container kept a bind to the
   deleted origin (empty inside, `does not appear to be a git repository`),
   and its local worktree's `.git` pointed at a deleted repository. Recorded as
-  2180 (deleted 2026-11-06; its live check is task 7 of [0019](../containers-and-environments/0019-container-platform-qualification.md));
+  2180 (deleted 2026-11-06; its live check was task 7 of 0019, retired 2026-11-11, done 2026-11-06);
   the run above used the second start's container.
 
 Real-browser QA, on a fresh profile after `dev:reset` (headless Chromium, run
@@ -1431,7 +1389,7 @@ The container rows are far inside their budgets because the container's own
 change signal announces a write; the 15 s poll is only a backstop. The one
 miss is the Changes refresh: 14 of the second run's 15 refreshes took 317 to
 635 ms and one 1.30 s, a refresh that followed a scan already running
-(decision M6, [7201](7201-explicit-refresh-behind-running-scan.md)).
+(decision M6, 7201).
 
 - **Bursts at the badge.** 2,000 files (exactly the untracked line-count
   cap): `+2,000` in 714 ms. 5,000 and 20,000 files: the badge turned
@@ -1496,8 +1454,8 @@ owners: the child's exit is the signal.
 | Desktop relayed stream (`backend-process.ts`) | SSE | 60 s (`GATEWAY_STREAM_SILENCE_LIMIT_MS`) | `ReconnectBackoff` | Covered (part of the Electron client) |
 | Web filtered streams, shared terminal and relayed (`web-gateway.ts`) | EventSource or SSE | none of their own | `createStreamBackoff`, jittered | Another layer: the main stream's watchdog drops them (`dropSilentStreams`) |
 | `FetchEventSource` polyfill (`gateway-auth-transport.ts`) | SSE | none; reports an error and closes | none | Another layer: `web-gateway.ts` owns reconnects |
-| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was [7200](7200-event-stream-reader-gaps.md) task 4, fixed |
-| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream has none: [7559](7559-opencode2-event-stream-silence.md) |
+| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was 7200 task 4, fixed |
+| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`; removed with OpenCode 1.x on 2026-11-11) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream (`opencode2/provider.ts`, `/api/event`) got the same watchdog on 2026-11-11, armed by its `: heartbeat` comment (every 15 s on 2.2.6) with a 50 s deadline: 7559 (retired; see [recurring-work.md](../../architecture/recurring-work.md) B22) |
 | Desktop `ReconnectScheduler` (`connection-scheduling.ts`) | route and handover attempts, not a stream | n/a | 1, 2, 5, 10, 30, 60 s, **no jitter** | Gap, fixed: 7200 task 2 |
 | Desktop preview tunnel, v1 stream and v2 session (`preview-tunnel-client.ts`, `preview-tunnel-session.ts`) | WebSocket | pinged every 15 s, **pong ignored**; a stream-open timeout retires only that stream | opened per request | Gap, fixed for v2: 7200 task 3 (v1 deliberately left, decision T3 there) |
 | Codex app-server JSONL (`jsonl-rpc-client.ts`) | stdio child | stream end; 60 s request timeouts | supervisor 250 ms to 10 s with jitter and a circuit breaker | Not applicable (child exit) |
@@ -1672,13 +1630,104 @@ Latency, p50 / p95 / max (samples):
   nine reviews of twelve, and 3.7 to 4.3 s in three (run 1: one; run 2:
   two), backend and client alike. The client view lagged the backend by 30
   to 250 ms throughout, so the budget miss is the backend's tail, recorded in
-  [7557](7557-multi-review-progress-tail.md).
+  7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux).
 - **Validation.** Each run took 1.13 to 1.19 s; one of run 1's queued 14.9 s
   in the host-wide test scheduler behind other builds, hence its 18.3 s row.
   The row is bimodal (about 2.4 s or 6 s) like the `ready` tail.
 - **Other rows.** Unchanged from task 1's run and within budget; the drivers
   for native queues and backend activity are the keyed ones in both (the
   rollback drivers are removed, decision W2).
+
+### Workflow progress after the 7557 fix (2026-11-10, Linux)
+
+Task 2's tail was found and fixed by to-do 7557 (now retired; the behaviour
+is in [recurring-work.md](../../architecture/recurring-work.md#latency-budgets)).
+The lost wake was not a dropped hint: a result is accepted inside the model's
+tool call, before its turn can end, and workflow sessions are not native
+agent sessions, so nothing announces the turn's end. A pass that read the
+turn still running left the result for the next observation pass. Multi
+Review now polls an accepted, unconsumed result on a 250 ms cadence for one
+observation interval from its acceptance
+(`multi-review-result-settle.test.ts`, which fails without the fix).
+
+Same host (beelink2, Linux, 16 cores, load average 54 to 57 at the start),
+same command as above with `--settle-ms 120000`, `--keep-profiles` and
+`--profile-prefix q7557wake2`, on this branch at `89452cec3`. One fresh
+profile, loopback fake model only, reachability check off; the profiles
+were stopped and reset afterwards. A first attempt stopped before its busy
+phase because this worktree's `orkestrator` CLI was not built (`mise run
+build:cli`); the driver reports that as "The busy phase needs the fixture's
+ready local environment".
+
+| Row (budget, p95) | Side | Before (run 2 above) | After |
+| --- | --- | --- | --- |
+| Workflow progress visible after a result, review view (≤ 3 s) | client | 224 ms / 4.27 s (12) | 247 / 648 ms (12) |
+| Backend phase observed after the same results (≤ 3 s, upper bound) | backend | 146 ms / 4.08 s (12) | 162 / 362 ms (12) |
+| Validation plan result to `reviewing` (runs the plan) | backend | 5.83 / 6.32 s (6) | 2.64 / 5.07 s (6) |
+| Multi Review launch to `ready` | backend | 8.83 / 13.4 s (6) | 5.95 / 9.18 s (6) |
+
+- **Per result.** Report to `consolidating`: 162 to 219 ms. Consolidated
+  review to `ready`: 108 to 362 ms in all six reviews (before: 3.7 to 4.3 s
+  in a quarter of them). Client views 152 to 648 ms.
+- **Obligations.** 6 rounds (1 and 2 clients), no failures: 6 held turns,
+  queued prompts, approvals, mails and reviews to `ready`, 0 duplicated
+  dispatches; every other row within budget.
+- **Validation.** Still bimodal, 2312 to 2671 ms in four reviews and 5060
+  and 5069 ms in two, with runs of 1132 to 1180 ms: the validation run's
+  completion raises no wake and is read on the observation cadence. The row
+  has no budget; it was task 3 of 7564 (retired 2026-11-11), with graph
+  runs, which read their turns the way Multi Review did. Both now follow
+  the step on a short cadence
+  ([recurring-work.md](../../architecture/recurring-work.md#latency-budgets)).
+
+### Client-only and validation candidates (2026-11-11, Linux)
+
+Task 12's six candidates that never needed task 1, measured on beelink2
+(Linux 7.2, 16 cores, x86_64) at `498b68766`. No backend, profile, provider
+or login was used: each cost was measured where it is paid, with the real
+code where the code is in this repository. Docker ran only on a disposable
+rootless daemon (`mise run docker:disposable -- start`) through
+`apps/desktop/scripts/dev/docker-qualification-bin`, with one `busybox:1.37`
+container; the container, the image and the daemon were removed afterwards.
+The scratch benchmarks lived under the git-ignored `output/benchmarks/` and
+were deleted. CPU is user plus system time; a child's comes from
+`Bun.spawnSync`'s resource usage, a daemon's from `/proc/<pid>/stat`
+(including its waited-for children, so runc counts under the shim).
+
+| What | How | Result |
+| --- | --- | --- |
+| C09: one Docker availability probe (`docker info`, `checkDockerAvailability`) | 3 runs of 40 against the empty disposable daemon | wall p50 41.4 to 43.0 ms, p95 44.0 to 48.1 ms; CLI CPU p50 60.9 to 62.4 ms (the CLI loads its plugins to list them); dockerd and RootlessKit 2.5 to 2.75 ms a probe |
+| `docker exec` floor (B19 container capture, C06 container reader) | 3 runs of 30 `docker exec <busybox> sh -c 'cat /proc/uptime'` | wall p50 47.9 to 57.2 ms; CLI CPU p50 25.7 to 28.7 ms; dockerd, RootlessKit, containerd and the shim with runc 33.7 to 41.0 ms an exec |
+| B19: one local capture (`tmux capture-pane -p -e`) | 2 runs of 100 on a private tmux server (`-L`), 120×30 pane full of text | wall p50 2.08 to 2.39 ms, p95 2.92 to 3.16 ms; client CPU p50 1.58 to 1.80 ms (the tmux server's own CPU was not read) |
+| C12: one unchanged design canvas cursor check | `DesignService.sync` at the current revision, in process (`createDesignHarness`), 3 runs of 2,000 | 2 frames 33 to 52 µs wall, 58 to 70 µs CPU; 20 frames of 2 KB HTML 40 to 80 µs wall, 72 to 96 µs CPU; a 123-byte `unchanged` answer. The gateway hop was not measured |
+| C06: one validation output poll, local | the real `readReviewValidationOutput` with its spawned `bun` reader, append mode on a 200 KB stdout that grew a line per poll, 2 runs of 40 | wall p50 10.4 to 10.8 ms, p95 11.3 to 15.0 ms; the backend's own CPU 0.80 to 0.85 ms a poll; a bare `bun -e` child, the reader's floor, 9.0 to 9.1 ms CPU p50 |
+| B20: one 500 ms heartbeat tick | the worker's tick (cancel checks, `persist`: stringify, `wx` write, rename) on a running run, 3,000 ticks, in the worktree's filesystem (btrfs), 2 runs | 6 commands (4.4 KB state) 63 to 76 µs CPU, 79 to 126 µs wall; 20 commands (14 KB) 84 µs CPU, 116 to 128 µs wall. A heartbeat-only write of the same tick: 29 to 31 µs and 45 to 48 µs CPU |
+| Display clocks | headless Chromium (Playwright 1.65), a production React bundle of the real `useElapsedTimer` and `usePromptDeadline`, half turn clocks and half prompt deadlines, against one reference-counted shared clock; Performance metrics over 30 s after a 3 s settle, one run | script time a second: 1 clock 0.24 / 0.24 ms (each / shared), 10 clocks 2.24 / 0.34 ms, 50 clocks 1.26 / 0.74 ms, 200 clocks 4.77 / 0.70 ms; all main-thread task time: 1.42 / 1.31, 4.94 / 1.51, 4.12 / 4.65, 9.64 / 4.03 ms; layouts a second 1 to 2.2 / 1 |
+
+What each pays at its cadence, from the rows above:
+
+- C09: about 64 ms of CPU a minute per visible client (about 0.1 % of one
+  core); a hidden client does not poll (`startCoordinatedPoll`). Sharing
+  across clients would save that much per visible client after the first.
+- C12: 20 checks a minute per visible canvas, about 1.2 to 1.9 ms of design
+  service CPU a minute, plus the unmeasured gateway round trip.
+- Display clocks: at 10 running clocks the per-component intervals cost about
+  2 ms of script a second more than a shared clock (0.2 % of the main
+  thread); at 200, about 4 ms. The 50-clock row shows the run-to-run noise.
+- C06: locally about 10 ms of CPU every 2 s (0.5 % of one core) while the
+  output modal is open on a queued or running result; a container adds one
+  `docker exec`, about 60 to 70 ms, so about 4 % of one core while open.
+- B19: locally about 1.7 ms a second for an idle attached pane (0.2 % of a
+  core). A container capture is one `docker exec` (about 62 to 70 ms of CPU
+  with the capture), so an idle attached container pane costs about 6 to 7 %
+  of one core and a changing one (4 captures a second) about 25 %. The loop
+  stops only on an explicit detach, the environment's tmux cleanup or backend
+  shutdown; the client detaches on unmount, which a reload, a closed window
+  or a lost connection never runs (read from `tmux-interactive.ts`,
+  `tmux-commands.ts` and `ClaudeTmuxInteractiveTerminal.tsx`; not observed
+  live, 7745 task 2).
+- B20: two ticks a second, about 0.15 ms of CPU a second for a 20-command
+  run; the split would save about 0.07 ms a second.
 
 ## Outstanding work
 
@@ -1705,12 +1754,12 @@ credentials or a platform CI lacks are batched in
     macOS for the diff badge and Files panel rows (see
     [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos));
     the container Changes refresh tail is accepted as one scan longer
-    ([7201](7201-explicit-refresh-behind-running-scan.md), 2026-11-10); the turn,
+    (7201, 2026-11-10); the turn,
     approval and mail rows were done 2026-11-06 by the busy
     profile; workflow visibility was done 2026-11-10 (a review view per
     client, over budget at p95 from a backend tail,
-    [7557](7557-multi-review-progress-tail.md)); the PR rows go with live
-    GitHub (task 5);
+    7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)); the PR rows go with live
+    GitHub (task 5, now in 7568);
   - ~~the container fetch policy live~~. Done 2026-11-01 on Linux: a
     missing-baseline recovery fetch, an explicit refresh and the routine policy
     on a legacy record, all on a real container (see
@@ -1718,19 +1767,17 @@ credentials or a platform CI lacks are batched in
     the routine policy stays (decision 11);
   - ~~container app wiring~~. Done 2026-11-01 on Linux, including a merge
     from the UI against a stand-in `gh` (decision 20). The same merge against
-    real GitHub belongs with live GitHub below.
-- Live GitHub: terminal discovery cadence, replacement and reopen discovery,
-  admission queue delay under real `gh` latency, and rate-limit cooldown.
-- Live providers: see [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md).
+    real GitHub belongs with live GitHub (task 5, now in 7568).
+- Live providers: 0049, retired 2026-11-11 (summary in [agent-testing.md](../../development/agent-testing.md)).
 - ~~macOS: recursive `fs.watch` (`worktree-watcher.ts`) detects a save in a
   watched worktree in under 1 s (Live evidence), with Electron under
   `dev:test` and Docker Desktop. Still owed: a packaged Electron app, and the
   watcher's burst-overflow and failure-to-polling paths on macOS.~~ Done
   2026-11-06 (task 7; see
   [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos)).
-- iOS: the `apps/ios` wrapper running the web client, checking the read
-  coordinator's hidden pause and resume across backgrounding and screen lock.
-- A real host suspend and resume against `HostSuspendDetector`.
+- iOS: the `apps/ios` wrapper running the web client on the simulator,
+  checking the read coordinator's hidden pause and resume across backgrounding
+  and screen lock (task 8; the device run is in 7568).
 - Soak: repeated add, remove, stop and restart cycles. Timer, subscriber and
   cache counts return to baseline, and profile logs hold zero
   `Unhandled promise rejection (continuing)` guard lines. The ten idle
@@ -1759,7 +1806,10 @@ credentials or a platform CI lacks are batched in
 ### Measured candidates
 
 Decide each from the live data; change nothing without evidence. The
-2026-10-22 idle A/B decides none of them. It has no PRs, no GitHub, no
+2026-10-22 idle A/B decides none of them (the six client-only and
+validation candidates were measured on their own on 2026-11-11, see
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux)).
+It has no PRs, no GitHub, no
 fetching container, a single client, no design canvas, no validation output
 and no interactive terminal, so every candidate below except the
 feature-planning row read (decided from the deterministic harness on
@@ -1767,7 +1817,8 @@ feature-planning row read (decided from the deterministic harness on
 routine policy to run first, which new containers never do (see "Container
 fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 
-- Settled check-rollup backoff (`pr-check-rollup`, 60 s).
+- Settled check-rollup backoff (`pr-check-rollup`, 60 s). Waits on live
+  GitHub (7568: 0048 task 5), as does the next one.
 - A container-scoped PR cooldown. It is per entry today because container
   credential scope cannot be proven from the backend.
 - ~~The container fetch failure ladder (5 to 30 min), tuned from
@@ -1779,18 +1830,25 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 - Raising the priority of a queued discovery scan when an interactive read
   joins it; `WorkAdmissionPool` has no re-prioritisation.
 - A coarser `mail-retention` deadline (60 s today).
-- Sharing Docker availability across clients
-  (`DOCKER_AVAILABILITY_POLL_INTERVAL_MS`, 60 s, `apps/web/src/App.tsx`).
-- A longer quiet interval for the design canvas cursor check
+- ~~Sharing Docker availability across clients
+  (`DOCKER_AVAILABILITY_POLL_INTERVAL_MS`, 60 s, `apps/web/src/App.tsx`).~~
+  Decided 2026-11-11: kept (decision C1).
+- ~~A longer quiet interval for the design canvas cursor check
   (`DESIGN_CANVAS_CURSOR_CHECK_MS`, 3 s, `design-controller.ts`), after
-  missed-final-hint recovery is qualified.
-- One shared visible display clock for `useElapsedTimer` and
-  `usePromptDeadline` (not profiled).
-- The validation reader's in-environment `bun` spawn per poll.
-- Demand gating for interactive tmux capture (B19, `tmux-interactive.ts`).
-- Splitting the validation worker's 500 ms liveness write from changed-result
+  missed-final-hint recovery is qualified.~~ Decided 2026-11-11: kept at 3 s
+  (decision C2).
+- ~~One shared visible display clock for `useElapsedTimer` and
+  `usePromptDeadline` (not profiled).~~ Profiled and decided 2026-11-11: not
+  built (decision C3).
+- ~~The validation reader's in-environment `bun` spawn per poll.~~ Decided
+  2026-11-11: kept (decision C4).
+- ~~Demand gating for interactive tmux capture (B19, `tmux-interactive.ts`).~~
+  Decided 2026-11-11: needed only for terminals no client detached, in
+  [7745](7745-tmux-interactive-capture-orphans.md) (decision C5).
+- ~~Splitting the validation worker's 500 ms liveness write from changed-result
   writes (B20, `review-validation-worker.ts`), only with cross-process
-  crash-recovery and cancellation proof.
+  crash-recovery and cancellation proof.~~ Decided 2026-11-11: kept (decision
+  C6).
 - ~~A keyed row read for feature planning's per-record pass.~~ Done
   2026-10-25: `getFeaturePlan` reads one row, and a warm keyed read is served
   from the row cache. Evidence: harness counts unchanged, bytes in "Harness
@@ -1800,8 +1858,8 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 
 ### Code: after soak
 
-Removal started 2026-11-10: the `backend-activity` and `native-queues`
-rollback drivers are gone (task 13, decision W2). Its preparation was done
+Removal started 2026-11-10: the `backend-activity`, `native-queues` and
+`multi-review` rollback drivers are gone (task 13, decisions W2 and W6). Its preparation was done
 on 2026-10-25 (`stableJitterMs` moved, the metrics switch decided). The idle A/B on macOS shows the keyed
 drivers starting no more often than the rollback drivers, with the same
 freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
@@ -1814,16 +1872,15 @@ observation sharing stay.
 
 - ~~Remove the `backend-activity` and `native-queues` rollback drivers.~~
   Done 2026-11-10 (task 13, decision W2).
-- Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
-  domain by domain, with the desktop allowlist entry. Remove the
-  `multi-review` domain together with `WorkflowDueScheduler`
-  (`multi-review-scheduler.ts` and its test). Since 2026-10-25 nothing else in
-  Multi Review depends on it, and `stableJitterMs` has moved to
-  `multi-review-scheduling.ts` (done 2026-10-25; its test moved with it), so
-  deleting the file is now self-contained. The busy live profile has run
-  (decision B8): remove `backend-activity`, then `native-queues`, then
-  `multi-review`; `feature-planning` and `build-pipeline` wait for task 5
-  and 0049.
+- ~~Remove the `multi-review` domain together with `WorkflowDueScheduler`
+  (`multi-review-scheduler.ts` and its test).~~ Done 2026-11-10 (task 13,
+  decision W6).
+- Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the remaining
+  whole-store drivers (`feature-planning`, `build-pipeline`), then the switch
+  with its desktop allowlist entry (`graph-run`'s rollback only turns graph
+  runs off and goes with the switch). Both drivers wait for task 5 (now in
+  7568) and 0049
+  (decision W7).
 - Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
 - ~~Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
   switch.~~ Decided 2026-10-25: it stays, as a permanent diagnostic kill
@@ -1964,6 +2021,23 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
   (identical counts on both fixtures, 1284 to 1347 ms → 785 to 881 ms per
   run) and the case has an explicit 30 s timeout. Evidence in
   [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md#resolution--2026-10-25).
+- Whether the counters now match Docker for an open claude-tmux tab, and
+  what one native Claude session costs the activity sweep, live. From
+  to-do 7567 (retired 2026-11-11), which added the `tmux-tab-loop` kind
+  (B30), stopped the change-evidence pull repeating an acknowledgment the
+  bridge had already accepted, and observed `change-evidence-pull` as its
+  own kind; each is proven by a deterministic test
+  (`tmux-exec-count.test.ts`, `service-evidence.test.ts`), not live. Rerun
+  `scripts/container-tmux-tab-live.ts` and `scripts/human-prompt-reads-live.ts`
+  ([testing guide](../../development/testing-guide.md#a-claude-tmux-tab-in-a-container-and-per-item-counts-on-a-busy-profile)):
+  `tmux-tab-loop` plus `tmux-poll` should account for Docker's
+  `docker exec` count within the tab cleanup's share (7531), and
+  `native-activity-sweep` should make about one provider request per read
+  pass (36 a minute idle and 89 to 90 working before), with
+  `change-evidence-pull` carrying about one more. Not run on 2026-11-11:
+  the build host's session could not reach the Docker socket (its user is
+  not in the `docker` group). This needs a host where the agent can reach
+  Docker, not the user.
 
 ## Assumptions and decisions
 
@@ -2462,7 +2536,7 @@ not collide with other tasks' decisions.
   scan already running and then needs its own, so about one refresh in
   fifteen took 1.3 to 2.2 s against a 1 s budget. This is deliberate (a
   running scan may predate the click), so it is a budget decision, not a
-  defect fixed here: [7201](7201-explicit-refresh-behind-running-scan.md)
+  defect fixed here: 7201
   holds the options, recommending a budget amendment. Accepted 2026-11-10:
   the budget row reads "≤ 1 s, or one scan longer when a scan is already
   running", and the spec marks scan-wait qualification unverified on
@@ -2473,7 +2547,7 @@ not collide with other tasks' decisions.
   clients. That is a harness of its own, larger than this run; nothing in it
   needs a real provider, so it stays open rather than blocked.
 - **M8 Which reader gaps to fix now (task 20).** The inventory found four
-  ([7200](7200-event-stream-reader-gaps.md)). Fixed with tests: the desktop
+  (7200). Fixed with tests: the desktop
   reconnect ladder's lock-step retries (each delay now drawn from the upper
   half of its rung) and the v2 preview tunnel's ignored pongs (two unanswered
   pings destroy the session). Left: OpenCode's silent stream, which needs a
@@ -2612,22 +2686,26 @@ collide with other tasks' decisions.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 5, 9, 16 and 17, and the device run of task 8) moved there on 2026-11-10.
+- [7745-tmux-interactive-capture-orphans.md](7745-tmux-interactive-capture-orphans.md):
+  an interactive tmux terminal no client detached keeps capturing (task 12,
+  decision C5).
 - [7202-busy-profile-follow-ups.md](7202-busy-profile-follow-ups.md): what
   task 1's busy profile found (approving from the CLI, one unexplained
   review stall).
-- [7200-event-stream-reader-gaps.md](7200-event-stream-reader-gaps.md): the
+- to-do 7200 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)): the
   reader gaps task 20 found, two fixed.
-- [7201-explicit-refresh-behind-running-scan.md](7201-explicit-refresh-behind-running-scan.md):
+- to-do 7201 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)):
   the container Changes refresh tail task 2 measured.
 - [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
   long soak left (containers, a browser reader, three projection maps
   without eviction).
 - [7120-multi-client-restart-follow-ups.md](7120-multi-client-restart-follow-ups.md):
   what task 11's run left for a decision.
-- [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
+- 0049 (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
-  remaining checks are tasks 16–20 here) and
-  [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
+  remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and
+  0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the
   container Files panel status exec and `containerRevertFileCommand`'s inline
@@ -2747,9 +2825,106 @@ collide with other tasks' decisions.
   in-memory test harness mirrored the same wrong flow, so its tests passed.
   Fixed in both; the live row now has two progress results per review, which
   is also what the withdrawn 2026-11-06 figures counted (18 for 9 reviews).
+- **W6 Remove the `multi-review` rollback driver now? (task 13)** Decision B8
+  ordered it after the other two, and the review repair asked for fresh keyed
+  timing first. Task 2's two busy runs on 2026-11-10 are that timing (twelve
+  reviews to `ready`, every obligation kept, tail in 7557). B8's remaining
+  con, that Address Findings and auto-PR never ran live, does not separate the
+  drivers: both ran the same locked pass (`runLocked`) with the same due-time
+  policy (`nextDelayMs`), and differed only in which timer called it, which
+  is W1's argument for the first two domains. The keyed driver's Address
+  Findings settlement and background auto-PR are covered by tests on that
+  driver. Options: keep it until a live run with findings; or remove it now.
+  Chosen: remove it. Pros: one Multi Review scheduler to maintain and test;
+  the lease is renewed by one job. Cons: no rollback remains; a regression in
+  the keyed driver needs a revert. The 7557 tail is on the keyed driver; the
+  rollback's own figure was 3.51 / 4.05 s, so keeping it would not help.
+  How: `MultiReviewServiceOptions` omits `keyedScheduling` so a stale caller
+  fails the typecheck, and the switch ignores the value as for W2. The
+  ticket's wording, "move Multi Review onto `WorkflowDueScheduler`", is read
+  as moving it off: `WorkflowDueScheduler` is the rollback driver this task
+  removes, and the keyed supervisor already ran by default.
+- **W7 Are `feature-planning` and `build-pipeline` ready too? (task 13)**
+  Rechecked 2026-11-10. Decision 1 asks for the busy profile, live GitHub and
+  the long soak. Neither domain was in the busy profile (they need Codex or a
+  ticket-driven pipeline; task 1, "Not covered"), and build pipelines own PR
+  terminal effects that only task 5's live GitHub run can qualify. Task 5 is
+  still open and cannot run on this host without GitHub credentials. Options:
+  remove them on the deterministic harness alone; or keep them. Chosen: keep
+  them, and the switch with them. Pros: decision 1 stays the bar for every
+  domain. Cons: the switch and two whole-store drivers stay in the code.
 
 ### Review repair: task 1 backend workflow timing and recovery
 
 The harness now associates each result submission identity with its tool's expected consuming phase. It requires exactly one submission for each of the four scripted slots and rejects missing, ambiguous or reversed observations. Submission precedes acceptance, so the new row is explicitly an upper bound from submission to backend phase observation, not acceptance latency. Delayed or absent model callbacks cannot silently erase samples. These revised timings have unit coverage but have not been qualified live.
 
 Failed rounds release fake-model waiters and stop both owned sessions. A stop that cannot confirm completion aborts the phase, avoiding reuse of an uncertain session. This adds recovery overhead only to failed rounds; continuing with unresolved approvals could cascade failures. Tests cover a hidden approval in round one followed by a successful second round.
+
+### Task 12: client-only and validation candidates (2026-11-11, Linux)
+
+Numbered Cn so they do not collide with other tasks' decisions. Numbers are in
+[Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux).
+
+- **C1 Share Docker availability across clients?** One `docker info` probe
+  costs about 60 ms of CPU, once a minute per visible client; hidden clients
+  do not poll. Options: let `check_docker` answer a poll from the backend's
+  `DockerAvailabilityCache` while it is under 30 s old, keeping explicit
+  retries and startup probes fresh; or keep one probe per client. Chosen:
+  keep. Pros: no change to the onboarding and recovery paths that read a
+  fresh answer; the saving is about 0.1 % of one core per extra visible
+  client. Cons: two visible clients probe twice; reopen if a node routinely
+  serves many visible clients.
+- **C2 A longer quiet interval for the design canvas cursor check?** An
+  unchanged check costs the design service 58 to 96 µs and answers 123 bytes,
+  so 20 a minute cost under 2 ms a minute per visible canvas before the
+  gateway hop (not measured). Options: lengthen it once missed-final-hint
+  recovery is qualified live; or keep 3 s. Chosen: keep 3 s. Pros: the check
+  is the recovery path for a missed final hint, and lengthening it would
+  slow that recovery for a saving of well under 0.01 % of a core. Cons: the
+  gateway's share of each check is unmeasured; it would have to be two
+  orders of magnitude larger to change this.
+- **C3 One shared visible display clock?** In headless Chromium the real
+  hooks cost 2.2 ms of script a second at 10 running clocks against 0.3 ms
+  for a shared clock, and 4.8 ms against 0.7 ms at 200. Options: build a
+  reference-counted shared clock; or keep one interval per running clock.
+  Chosen: keep. Pros: each clock stays local to the small component that
+  shows it (the reason `LiveElapsed` exists), and the saving is about 0.2 %
+  of the main thread at a realistic count. Cons: one run, headless, on Linux;
+  a page showing hundreds of live clocks would reopen it.
+- **C4 Stop spawning `bun` for each validation output poll?** A local poll is
+  about 10 ms of CPU, a container poll adds a `docker exec` (60 to 70 ms), at
+  2 s, and only while the output modal is open on a running result. Options:
+  read local output in the backend process and keep the in-environment reader
+  for containers; or keep one reader for both. Chosen: keep. Pros: one reader
+  whose confinement and offset rules are the same for both kinds of
+  environment; the cost is paid only while a person watches the output.
+  Cons: about 4 % of one core for a watched container run; reopen if the
+  modal is shown by default.
+- **C5 Demand gating for interactive tmux capture (B19)?** An attached pane
+  is captured at 250 ms to 1 s; locally that is about 0.2 % of a core, but a
+  container capture is one `docker exec`, so an idle attached container pane
+  costs about 6 to 7 % of a core. An attached pane is demand, but the loop
+  also keeps running for a terminal no client detached (a reload, a closed
+  window, a lost connection), found by reading the code. Options: slow the
+  idle cadence for containers; gate the loop on a client lease or the owning
+  connection; or keep it. Chosen: keep the cadence for attached views and
+  stop orphaned loops, in [7745](7745-tmux-interactive-capture-orphans.md)
+  (task 1 there). Pros: the user watching a pane keeps its 1 s freshness, and
+  the unbounded part of the cost is removed. Cons: the fix needs a client
+  signal the backend does not have today (a contract change), so it is its
+  own change; the orphan has not been observed live (7745 task 2).
+- **C6 Split B20's liveness write from result writes?** In the worktree's
+  filesystem a tick costs 63 to 84 µs of CPU; a heartbeat-only write would
+  cost 29 to 48 µs, saving under 0.01 % of a core. Options: split it, with the
+  cross-process crash-recovery and cancellation proof the inventory asks
+  for; or keep it. Chosen: keep. Pros: no change to the state file the
+  control process, the reader and recovery all read. Cons: none measurable.
+- **C7 How to measure these candidates.** Options: a busy `dev:test` profile
+  with clients, as task 1 did; or each cost where it is paid, with the real
+  code (the design service, the output reader, the worker's tick, the hooks
+  in a real browser) and the real commands (`docker info`, `docker exec`,
+  `tmux capture-pane`). Chosen: the second. Pros: each figure belongs to one
+  candidate, and none of them depends on load the busy profile adds. Cons:
+  the gateway hop of a design check and a validation poll is not included,
+  Docker ran on a rootless daemon rather than the host's, and the B19 orphan
+  is inferred from the code rather than seen.

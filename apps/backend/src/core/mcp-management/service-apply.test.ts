@@ -4,7 +4,9 @@ import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
-import { openCodeFake, openCodeProvider, waitUntil } from "../agent-provider-test-support.js";
+import { createNativeAgentProvider } from "../native-agent-provider.js";
+import { FakeOpenCode2Server } from "../opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "../opencode2/provider.js";
 import { createMcpRuntimeProbe } from "../commands-registry-mcp.js";
 import type { CommandContext } from "../commands-context.js";
 import { CONTAINER_DEFAULTS_REASON } from "./apply.js";
@@ -174,31 +176,40 @@ describe("runtime application", () => {
   for (const cancel of [true, false]) {
     test(`busy OpenCode apply followed by ${cancel ? "cancellation" : "supersession"} leaves no idle disposal`, async () => {
       session("opencode", "env-env-1:tab-o");
-      const fake = openCodeFake();
-      const provider = openCodeProvider(fake);
+      const server = new FakeOpenCode2Server();
       let restores = 0;
+      const provider = createNativeAgentProvider(
+        { agent: "opencode", baseUrl: server.baseUrl, authToken: "pw", directory: "/work" },
+        {
+          openCode: {
+            connection: async () => ({
+              baseUrl: server.baseUrl,
+              password: "pw",
+              directory: "/work",
+              generation: "g1",
+              // The mirror of the user's configuration, rewritten before a reload.
+              refreshConfiguration: async () => {
+                restores += 1;
+              },
+            }),
+            createProvider: () => new OpenCode2Provider(server.client(), { monitorEvents: false }),
+          },
+        },
+      );
+      const reloads = () =>
+        server.calls.filter((call) => call.path === "/api/location/reload").length;
       const probe = createMcpRuntimeProbe({
         nativeAgents: {
           reloadMcpConfigurationIfRunning: () => provider.reloadMcpConfiguration!(),
           openCodeMcpServerNamesIfRunning: async () => ["fixture"],
         },
-        runtime: {
-          localServers: {
-            openCodeAgentTools: {
-              forget: () => {
-                restores += 1;
-              },
-            },
-            enqueueEnvironmentOperation: async () => ({ running: false, port: null, pid: null }),
-          },
-        },
       } as unknown as CommandContext);
       fixture.probe.reloadOpenCode = probe.reloadOpenCode;
       fixture.probe.openCodeMcpServerNames = probe.openCodeMcpServerNames;
       try {
-        await provider.createSession("build", "test");
-        await waitUntil(() => fake.subscriptions.length === 1);
-        fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+        const sessionId = await provider.createSession("build", "test");
+        // A running turn: OpenCode is busy, so the reload must wait.
+        await provider.send(sessionId, "keep working", { requestId: "busy-1" });
         const first = await saveAndApply(
           "opencode",
           "opencode:project-opencode.json",
@@ -228,27 +239,22 @@ describe("runtime application", () => {
           );
         }
         pauseScheduler(fixture);
-        fake.setStatusResponse({ data: { "owned-session": { type: "idle" } } });
-        fake.subscriptions[0]!.push({
-          type: "session.idle",
-          properties: { sessionID: "owned-session" },
-        });
-        // Drain the provider's stream before the scheduler is allowed another attempt.
-        await provider.status("owned-session");
+        server.finishRun(sessionId);
         await Promise.resolve();
-        expect(fake.instanceDisposeCalls).toHaveLength(0);
+        expect(reloads()).toBe(0);
         expect(restores).toBe(0);
         await fixture.service.tick();
-        expect(fake.instanceDisposeCalls).toHaveLength(cancel ? 0 : 1);
+        expect(reloads()).toBe(cancel ? 0 : 1);
         expect(restores).toBe(cancel ? 0 : 1);
         await fixture.service.tick();
-        expect(fake.instanceDisposeCalls).toHaveLength(cancel ? 0 : 1);
+        expect(reloads()).toBe(cancel ? 0 : 1);
         expect(
           (await fixture.service.getOperation({ operationId: first.operation.operationId })).apply
             .state,
         ).toBe("cancelled");
       } finally {
         await provider.dispose?.();
+        server.stop();
       }
     });
   }
@@ -262,9 +268,11 @@ describe("runtime application", () => {
       listingStarted = resolve;
     });
     let listing = false;
-    fixture.probe.openCodeMcpServerNames = () => {
+    let listingSignal: AbortSignal | undefined;
+    fixture.probe.openCodeMcpServerNames = (_environmentId, signal) => {
       listing = true;
-      // withTimeout registers synchronously after this method returns.
+      listingSignal = signal;
+      // The deadline's timer is armed as the listing starts.
       queueMicrotask(listingStarted);
       return new Promise(() => {});
     };
@@ -288,6 +296,8 @@ describe("runtime application", () => {
       expect(expire).toBeDefined();
       expire();
       await ticking;
+      // The deadline ends the listing request, not only the wait for it.
+      expect(listingSignal?.aborted).toBe(true);
       expect(fixture.openCodeReloads).toEqual(["env-1"]);
       expect(
         (await fixture.service.getOperation({ operationId: result.operation.operationId })).apply

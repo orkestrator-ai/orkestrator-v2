@@ -46,6 +46,8 @@ import {
   AutoPipelineTicketSchema,
   AutoPipelineDraftSchema,
   AutoPipelineSourcesSchema,
+  AutoPipelineStateSchema,
+  AutoPipelineEditsSchema,
 } from "../../../auto-pipeline.js";
 
 export const autoPipelineSourcesCommand = defineCommand({
@@ -87,6 +89,29 @@ export const confirmAutoPipelineCommand = defineCommand({
   read: false,
   args: Schema.Struct({ draftId: Schema.String, ticket: AutoPipelineTicketSchema }),
   result: GetBuildPipelineResultSchema,
+});
+
+/** Where an environment tab's draft stands; the `auto-pipeline` tab reads it on mount. */
+export const getAutoPipelineStateCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "get_auto_pipeline_state",
+  critical: [],
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({ environmentId: Schema.String, tabId: Schema.String }),
+  result: AutoPipelineStateSchema,
+});
+/** Keeps the user's in-progress ticket edits with the draft, so leaving the tab keeps them. */
+export const saveAutoPipelineEditsCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "save_auto_pipeline_edits",
+  critical: [],
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ draftId: Schema.String, edits: AutoPipelineEditsSchema }),
+  result: Schema.Void,
 });
 
 const checked = Schema.optionalKey(Schema.Unknown);
@@ -496,6 +521,8 @@ export const PIPELINES_COMMANDS = [
   draftAutoPipelineCommand,
   cancelAutoPipelineDraftCommand,
   confirmAutoPipelineCommand,
+  getAutoPipelineStateCommand,
+  saveAutoPipelineEditsCommand,
   startBuildPipelineCommand,
   createFeatureBuildCommand,
   launchBuildPipelineCommand,

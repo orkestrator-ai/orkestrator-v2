@@ -14,6 +14,7 @@ import {
 
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
+import { clearKanbanLifecycleOwnership } from "./kanban-merge-closure.js";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
 import {
   acceptsFieldChange,
@@ -248,6 +249,14 @@ export class KanbanSyncRepository {
           if (updated.status !== item.status) {
             updated.status = item.status;
             updated.order = orderIn(item.status, row.id);
+            // Moved on the command node: no longer the build lifecycle's column.
+            clearKanbanLifecycleOwnership(updated);
+          } else if ((item.revs.status ?? 0) > (row.sync?.replica?.revs.status ?? 0)) {
+            // The same column with a newer revision: this leaf's own lifecycle
+            // move coming back, or someone moving the ticket away and back
+            // between two pulls, which is a hand move all the same.
+            if (updated.lifecycleEcho) delete updated.lifecycleEcho;
+            else clearKanbanLifecycleOwnership(updated);
           }
           // Older peers omit the marker; they must not erase one already known.
           if (item.prMergeDoneUrl) updated.prMergeDoneUrl = item.prMergeDoneUrl;
@@ -572,7 +581,11 @@ export class KanbanSyncRepository {
             track(row);
             if (op.kind === "set-title") row.title = op.value;
             if (op.kind === "set-status") {
-              if (row.status !== op.value) row.order = orderIn(row.projectId, op.value, row.id);
+              if (row.status !== op.value) {
+                row.order = orderIn(row.projectId, op.value, row.id);
+                // A leaf's move, whatever made it, is not this node's lifecycle.
+                clearKanbanLifecycleOwnership(row);
+              }
               row.status = op.value;
               if (op.prMergeDoneUrl) row.prMergeDoneUrl = op.prMergeDoneUrl;
             }

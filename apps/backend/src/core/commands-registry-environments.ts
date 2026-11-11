@@ -1,6 +1,5 @@
 import {
   acknowledgeStartupAgentSessionCommand,
-  addEnvironmentDomainsCommand,
   applyEnvironmentAllowedDomainsCommand,
   approveEnvironmentSetupCommand,
   approveProjectSetupCommandsCommand,
@@ -47,8 +46,6 @@ import {
   revokeProviderCredentialsCommand,
   runEnvironmentSetupCommand,
   setContainerResourceLimitsCommand,
-  setEnvironmentInitialPromptCommand,
-  setEnvironmentPendingAgentLaunchCommand,
   setEnvironmentPrCommand,
   startEnvironmentBackgroundCommand,
   startEnvironmentCommand,
@@ -103,7 +100,6 @@ import type { Environment } from "./models.js";
 import {
   asString,
   asOptionalString,
-  asRequiredBoolean,
   asNumber,
   asStringArray,
   asNonBlankString,
@@ -122,7 +118,6 @@ import {
   isMissingDockerObjectError,
   getOrkestratorContainerStates,
   syncStoredEnvironmentStatus,
-  clearPendingAgentLaunchUpdates,
   startEnvironmentSetup,
   admitEnvironmentStartTask,
   stopEnvironmentTask,
@@ -1080,14 +1075,6 @@ export function registerEnvironmentCommands(
       return toClientEnvironment(await storage.updateEnvironment(id, updates));
     },
   );
-  register(setEnvironmentPendingAgentLaunchCommand, ({ environmentId, pending }, { storage }) => {
-    const nextPending = asRequiredBoolean(pending, "pending");
-    return storage
-      .updateEnvironment(asString(environmentId, "environmentId"), {
-        ...(nextPending ? { pendingAgentLaunch: true } : clearPendingAgentLaunchUpdates()),
-      })
-      .then(toClientEnvironment);
-  });
   register(
     acknowledgeStartupAgentSessionCommand,
     ({ environmentId, providerSessionId, startedAt }, { storage }) =>
@@ -1099,20 +1086,6 @@ export function registerEnvironmentCommands(
             : asNonBlankString(providerSessionId, "providerSessionId"),
           startedAt === undefined ? undefined : asNonBlankString(startedAt, "startedAt"),
         )
-        .then(toClientEnvironment),
-  );
-  // The renderer rewrites the initial prompt once it has uploaded the create
-  // dialog's attachments and knows their in-workspace paths. Persisting that
-  // rewritten text is what lets a post-eviction launch recover a prompt whose
-  // attachment references still resolve.
-  register(
-    setEnvironmentInitialPromptCommand,
-    ({ environmentId, initialPrompt, initialPromptAttachments }, { storage }) =>
-      storage
-        .updateEnvironment(asString(environmentId, "environmentId"), {
-          initialPrompt: asString(initialPrompt, "initialPrompt"),
-          ...(Array.isArray(initialPromptAttachments) ? { initialPromptAttachments } : {}),
-        })
         .then(toClientEnvironment),
   );
   register(getEnvironmentExtensionsCommand, async ({ environmentId, refresh }, context) => {
@@ -1139,18 +1112,6 @@ export function registerEnvironmentCommands(
     });
     await applySaved(id, context);
     return toClientEnvironment(environment);
-  });
-  register(addEnvironmentDomainsCommand, async ({ environmentId, domains }, context) => {
-    const environment = await context.storage.getEnvironment(
-      asString(environmentId, "environmentId"),
-    );
-    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    const updated = Array.from(
-      new Set([...(environment.allowedDomains ?? []), ...asStringArray(domains)]),
-    );
-    await context.storage.updateEnvironment(environment.id, { allowedDomains: updated });
-    await applySaved(environment.id, context);
-    return updated.join(",");
   });
   register(removeEnvironmentDomainsCommand, async ({ environmentId, domains }, context) => {
     const environment = await context.storage.getEnvironment(

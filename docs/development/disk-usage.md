@@ -202,6 +202,7 @@ What it costs, on the two repositories measured:
 | Test processes' private `TMPDIR`, `ork-test-tmp-<pid>-*` in the system temp dir, or `/private/tmp` on macOS (holds the browser profiles and anything else a test leaves) | The process itself when its preload's `afterAll` (Bun) or `exit` (Playwright runner) runs; otherwise the next test process | Once the owner has exited, the directory is over an hour old, and no live process names it on its command line |
 | Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
 | `<data dir>/git-mirrors/<project id>` | The project's removal; the backend's orphan sweep; its own refresh when it passes 2 GiB | With the project; hourly for one whose project is gone, once over an hour old. See [Project Git mirrors](#project-git-mirrors) |
+| Self-improvement state, `<data dir>/self-improvement/` | The self-improvement service | After each run: the newest 120 digests and 60 observations per tracked problem are kept; under `insights/`, conversation notes for 90 days (at most 3,000) and read positions for conversations touched in the last 90 days. See [self-improvement.md](../architecture/self-improvement.md) |
 
 ## What you clean yourself
 
@@ -230,6 +231,16 @@ These belong to other tools. Orkestrator reports them and never deletes them.
   `~/.claude/settings.json`; lower it to keep less. Codex keeps sessions under
   `~/.codex/sessions/<year>/<month>`.
 - **Superseded tool versions installed by mise:** `mise prune`.
+- **Disposable Docker daemons** for the live container suites, under
+  `${XDG_STATE_HOME:-~/.local/state}/orkestrator-disposable-docker/`, one
+  directory per checkout (instances started before 2026-11-11 are under the
+  checkout's `output/disposable-docker/`). A run that does not reach `stop`
+  leaves a full container runtime there, often over 10 GB. The report's row
+  counts the roots whose checkout is gone. Their files belong to RootlessKit's
+  mapped users, so remove an instance with
+  `bun scripts/disposable-docker-daemon.ts stop --name <n> --root <dir>`
+  rather than `rm`; see
+  [container qualification](container-qualification.md#disposable-docker-daemon).
 - **Legacy Turbo artifacts** at the top of `.turbo/` from an older layout:
   `mise run disk:report -- --fix legacy-turbo`.
 - **Leaked host-reachability probe networks**, `ork-<owner>-reach-probe-net`.
@@ -249,6 +260,16 @@ These belong to other tools. Orkestrator reports them and never deletes them.
   who can reach the daemon can read it. Electron specs and the CLI harnesses
   run their backends with the boot probe off, so a new `…/temporary` leak
   points at a harness that does not.
+
+  The sweep also requires the `host-reachability-probe` role label and a name
+  of the exact form `ork-<16 hex>-reach-probe-net`, and keeps any network
+  Docker cannot answer about. On a shared daemon it removes networks other
+  runs created, so running it is the host owner's decision: an agent or
+  harness removes only what it created itself (by its owner label) or what its
+  own owner's reaper finds, and runs the sweep only with the owner's explicit
+  go-ahead. While the pools are full, the shim for manual container profiles
+  in [container qualification](container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06)
+  gives a profile's own networks explicit subnets.
 
 ## Commands
 

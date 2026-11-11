@@ -1,4 +1,3 @@
-import * as serverHealth from "../src/core/commands-server-health.js";
 import * as credentialModes from "../src/core/container-credential-mode.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
@@ -7,6 +6,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { bridgeRestarts } from "../src/core/bridge-restarts.js";
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
+import { buildRestrictContainerClaudeCredentialCommand } from "../src/core/agent-accounts-containers.js";
 
 import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";
@@ -151,7 +151,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"||q.url==="/global/auth-check"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url.split("?")[0]==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -258,7 +258,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -389,7 +389,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -603,7 +603,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -868,7 +868,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1035,7 +1035,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1148,7 +1148,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1288,7 +1288,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1445,7 +1445,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1479,7 +1479,8 @@ exit 0
         const log = await fs.readFile(logs.exec, "utf8");
         const reconcile = log.indexOf("rm -f /home/node/.claude/.credentials.json");
         const stamp = log.indexOf(`printf '%s' '${accountId}'`);
-        const restrict = log.indexOf("let changed = false");
+        // The whole restrict command (refresh tokens stripped in place), as piped.
+        const restrict = log.indexOf(buildRestrictContainerClaudeCredentialCommand());
         const launch = log.indexOf(
           boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log"),
         );
@@ -1487,6 +1488,9 @@ exit 0
         expect(stamp).toBeGreaterThan(reconcile);
         expect(restrict).toBeGreaterThan(stamp);
         expect(launch).toBeGreaterThan(restrict);
+        // The start strips in place; the sign-out drop, which embeds the same
+        // command behind its flock, did not run (#2150).
+        expect(log).not.toContain(".orkestrator-lock");
         expect(log).not.toContain("NEVER-DELIVER");
         expect(log).not.toContain("exec -i container-claude-login-start bash");
       });
@@ -1529,7 +1533,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     # Only the bridge launch starts a server; credential syncs run first.
@@ -1595,246 +1599,6 @@ exit 0
     },
   );
 
-  test("starts, replaces, and reuses an authenticated container OpenCode server", async () => {
-    const hostPort = await reserveFreePort();
-    const stateDir = await createTempDir("ork-opencode-container-auth-");
-    const tokenFile = path.join(stateDir, "persisted-password");
-    const liveTokenFile = path.join(stateDir, "live-password");
-    const healthyFile = path.join(stateDir, "healthy");
-    const pluginFingerprintFile = path.join(stateDir, "plugin-fingerprint");
-    const environment = createEnvironment({
-      id: "env-container-opencode-auth",
-      environmentType: "containerized",
-      containerId: "container-opencode-auth",
-      status: "running",
-    });
-    const { context } = createContext(environment, {
-      globalConfig: { enabledAgentPlatforms: ["opencode"] },
-    });
-    context.runtimeFlavor = "agent-test";
-    context.credentialSources = new Set(["opencode"]);
-    const importedAuth = path.join(stateDir, "imported-auth.jsonl");
-    const hostAuth = path.join(stateDir, "xdg-data", "opencode", "auth.json");
-    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
-    await fs.writeFile(
-      hostAuth,
-      JSON.stringify({
-        "opencode-go": { type: "api", key: "go-key" },
-        openai: {
-          type: "oauth",
-          access: "oc-access",
-          refresh: "SENTINEL-HOST-REFRESH",
-          expires: Date.now() + 3600_000,
-        },
-      }),
-    );
-    const commands = createCommandRegistry();
-    const previous = {
-      xdgDataHome: process.env.XDG_DATA_HOME,
-      importedAuth: process.env.FAKE_OPENCODE_IMPORTED_AUTH,
-      hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
-      tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
-      liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
-      healthyFile: process.env.FAKE_BRIDGE_HEALTHY_FILE,
-      pluginFingerprintFile: process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE,
-      pluginFingerprint: process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT,
-    };
-    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
-    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
-    process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE = liveTokenFile;
-    process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
-    process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE = pluginFingerprintFile;
-    process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT =
-      commandTesting.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
-    process.env.XDG_DATA_HOME = path.join(stateDir, "xdg-data");
-    process.env.FAKE_OPENCODE_IMPORTED_AUTH = importedAuth;
-
-    const statusReads: Array<{ url: string; authorized: boolean }> = [];
-    const bridge = await startAuthenticatedContainerServer(hostPort, {
-      isHealthy: () => existsSync(healthyFile),
-      isAuthorized: (request) =>
-        request.headers.authorization ===
-        `Basic ${Buffer.from(`opencode:${readTestCredential(liveTokenFile)}`).toString("base64")}`,
-      statusReads,
-    });
-    const dockerScript = `#!/bin/sh
-case "$1" in
-  inspect) printf 'running\\n'; exit 0 ;;
-  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
-  exec)
-    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
-    case "$*" in
-      *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
-      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
-    esac
-    case "$*" in
-      *"/home/node/.local/share/opencode/auth.json"*)
-        cat >> "$FAKE_OPENCODE_IMPORTED_AUTH"
-        printf '\n' >> "$FAKE_OPENCODE_IMPORTED_AUTH"
-        exit 0 ;;
-      *"cat /tmp/opencode-server-password"*)
-        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
-        exit 0 ;;
-      *"cat /tmp/orkestrator-ai/opencode-github-env-plugin-fingerprint"*)
-        cat "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE" 2>/dev/null || true
-        exit 0 ;;
-      *"pkill -f '[o]pencode serve'"*)
-        rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE" "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE"
-        exit 0 ;;
-    esac
-    token=$(sed -n "s/.*OPENCODE_SERVER_PASSWORD='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
-    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
-    printf '%s' "$FAKE_OPENCODE_PLUGIN_FINGERPRINT" > "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE"
-    : > "$FAKE_BRIDGE_HEALTHY_FILE"
-    exit 0 ;;
-esac
-exit 0
-`;
-
-    try {
-      await withFakeDocker(dockerScript, async (logs) => {
-        const captured = captureLogs();
-        try {
-          const first = (await commands.get("start_opencode_server")?.(
-            { containerId: "container-opencode-auth" },
-            context,
-          )) as { hostPort: number; wasRunning: boolean; authToken: string };
-          expect(first).toMatchObject({ hostPort, wasRunning: false });
-          expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
-
-          // An authenticated server from a build before the GitHub environment
-          // hook existed must also restart instead of being reused indefinitely.
-          await fs.rm(pluginFingerprintFile);
-          const capabilityReplacement = (await commands.get("start_opencode_server")?.(
-            { containerId: "container-opencode-auth" },
-            context,
-          )) as { hostPort: number; wasRunning: boolean; authToken: string };
-          expect(capabilityReplacement).toMatchObject({ hostPort, wasRunning: false });
-          expect(capabilityReplacement.authToken).not.toBe(first.authToken);
-
-          // A reachable legacy process without a readable password is replaced,
-          // rather than being handed to the renderer unauthenticated.
-          await fs.rm(tokenFile);
-          const legacyReplacement = (await commands.get("start_opencode_server")?.(
-            { containerId: "container-opencode-auth" },
-            context,
-          )) as { hostPort: number; wasRunning: boolean; authToken: string };
-          expect(legacyReplacement).toMatchObject({ hostPort, wasRunning: false });
-          expect(legacyReplacement.authToken).not.toBe(first.authToken);
-
-          const stalePassword = "S".repeat(43);
-          await fs.writeFile(tokenFile, stalePassword);
-          await fs.writeFile(liveTokenFile, "L".repeat(43));
-          const replacement = (await commands.get("start_opencode_server")?.(
-            { containerId: "container-opencode-auth" },
-            context,
-          )) as { hostPort: number; wasRunning: boolean; authToken: string };
-          expect(replacement).toMatchObject({ hostPort, wasRunning: false });
-          expect(replacement.authToken).not.toBe(stalePassword);
-
-          await expect(
-            commands.get("start_opencode_server")?.(
-              { containerId: "container-opencode-auth" },
-              context,
-            ),
-          ).resolves.toEqual({
-            hostPort,
-            wasRunning: true,
-            authToken: replacement.authToken,
-          });
-
-          // Each fresh server loads /workspace with its own credential before
-          // the start returns, so a prompt's first status read does not pay for
-          // OpenCode's plugin install in a new container layer. The reused
-          // server is not warmed again.
-          expect(statusReads).toEqual(
-            Array.from({ length: 4 }, () => ({
-              url: "/session/status?directory=%2Fworkspace",
-              authorized: true,
-            })),
-          );
-
-          const execLog = await fs.readFile(logs.exec, "utf8");
-          expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);
-          expect(execLog).toContain("pkill -f '[o]pencode serve'");
-          // A container connection names no directory, so the server's own cwd,
-          // the container's workspace, scopes `command.list`.
-          expect(execLog).toMatch(/cd \/workspace\n[\s\S]*opencode serve --port/);
-          expectKeepsPreviousLog(
-            execLog,
-            "/tmp/opencode-serve.log",
-            "/tmp/opencode-serve.prev.log",
-          );
-          expect(execLog).toContain(
-            "/home/node/.config/opencode/plugins/orkestrator-github-env.js",
-          );
-          expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
-          expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
-          // Every start, the reused one too, hands over the host login access-only.
-          const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
-          expect(pushes).toHaveLength(5);
-          expect(JSON.parse(pushes[4]!)).toEqual({
-            logins: {
-              "opencode-go": { type: "api", key: "go-key" },
-              openai: expect.objectContaining({ access: "oc-access", refresh: "" }),
-            },
-            accessOnly: ["openai"],
-          });
-          expect(execLog).not.toContain("SENTINEL");
-          expect(
-            captured
-              .records()
-              .filter((record) => record.event === "bridge.launched")
-              .map((record) => record.fields),
-          ).toEqual(
-            Array.from({ length: 4 }, () => ({
-              provider: "opencode",
-              containerPort: 4096,
-            })),
-          );
-          // Failed warming is deliberately best-effort, including verifier
-          // mode. It is not evidence that the credential plugin loaded.
-          await fs.rm(tokenFile);
-          modeSpy.mockResolvedValue("verifier");
-          const warm = spyOn(serverHealth, "warmOpenCodeInstance").mockResolvedValue(false);
-          try {
-            const result = await commands.get("start_opencode_server")!(
-              { containerId: "container-opencode-auth" },
-              context,
-            );
-            expect(result).toMatchObject({ hostPort, wasRunning: false });
-            expect(warm).toHaveBeenCalled();
-            expect(
-              captured.records().some((record) => record.event === "opencode.warm-incomplete"),
-            ).toBe(true);
-          } finally {
-            warm.mockRestore();
-          }
-        } finally {
-          captured.restore();
-        }
-      });
-    } finally {
-      await bridge.close();
-      for (const [key, value] of Object.entries(previous)) {
-        const envName = {
-          xdgDataHome: "XDG_DATA_HOME",
-          importedAuth: "FAKE_OPENCODE_IMPORTED_AUTH",
-          hostPort: "FAKE_BRIDGE_HOST_PORT",
-          tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
-          liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",
-          healthyFile: "FAKE_BRIDGE_HEALTHY_FILE",
-          pluginFingerprintFile: "FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE",
-          pluginFingerprint: "FAKE_OPENCODE_PLUGIN_FINGERPRINT",
-        }[key]!;
-        if (value === undefined) delete process.env[envName];
-        else process.env[envName] = value;
-      }
-    }
-  });
-
   test.each([24, 2])(
     "reuses an authenticated Claude bridge after changing its limit to %s hours until a fresh start",
     async (updatedLimitHours) => {
@@ -1873,7 +1637,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1992,7 +1756,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2080,7 +1844,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2146,7 +1910,7 @@ case "$1" in
     case "$*" in
       *refresh_token*) exit 0 ;;
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -2223,7 +1987,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2316,7 +2080,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2380,7 +2144,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2475,7 +2239,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
-      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (#2030): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in

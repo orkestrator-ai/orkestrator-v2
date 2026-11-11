@@ -21,8 +21,8 @@ export const DEBUG_LOG_STORAGE_KEY = "orkestrator:debug";
  * Whether the stored preference enables debug logging.
  *
  * Exported so the parsing is testable without reloading the module. Any value
- * except the conventional "off" spellings enables it, matching the bridge's
- * `CLAUDE_BRIDGE_DEBUG` handling.
+ * except the conventional "off" spellings enables it. (The bridges are
+ * stricter: `ORKESTRATOR_BRIDGE_DEBUG` is enabled only by `1`.)
  */
 export function readDebugPreference(raw: string | null | undefined): boolean {
   const value = raw?.trim().toLowerCase();
@@ -108,5 +108,33 @@ export function reportRendererDebugLogging(
     void api!.setRendererDebugLogging!(activeAtStart).catch(() => undefined);
   } catch {
     // The menu item is a convenience; the renderer must start regardless.
+  }
+}
+
+interface NativeShellApi {
+  setWebInspectable?(enabled: boolean): Promise<unknown>;
+}
+
+/** Whether this page runs in the iOS app, whose shell can open it to Safari's Web Inspector. */
+export function canOfferWebInspector(
+  shell: NativeShellApi | undefined = globalThis.window?.orkestratorNativeShell,
+): boolean {
+  return typeof shell?.setWebInspectable === "function";
+}
+
+/**
+ * The iOS counterpart of `reportRendererDebugLogging`: tells the app's shell
+ * what this renderer started with, so its web view is inspectable from a
+ * Mac's Safari only while debug logging is on in this page. Off is reported
+ * too. Anywhere else, and in an older app, this is a no-op.
+ */
+export function reportWebInspectable(
+  shell: NativeShellApi | undefined = globalThis.window?.orkestratorNativeShell,
+): void {
+  if (!canOfferWebInspector(shell)) return;
+  try {
+    void shell!.setWebInspectable!(activeAtStart).catch(() => undefined);
+  } catch {
+    // Inspection is a convenience; the renderer must start regardless.
   }
 }

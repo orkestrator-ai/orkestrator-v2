@@ -1,12 +1,13 @@
 import type { CommandContext } from "./commands-context.js";
-import { AutoPipelineService } from "./auto-pipeline.js";
-import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
-import { createPipelineEnvironmentGit } from "./commands-review.js";
+import type { AutoPipelineService } from "./auto-pipeline.js";
+import { createAutoPipelineService } from "./auto-pipeline-wiring.js";
 import {
   autoPipelineSourcesCommand,
   draftAutoPipelineCommand,
   cancelAutoPipelineDraftCommand,
   confirmAutoPipelineCommand,
+  getAutoPipelineStateCommand,
+  saveAutoPipelineEditsCommand,
 } from "@orkestrator/protocol/contract/domains/pipelines";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -74,24 +75,10 @@ export function registerBuildPipelineCommands(
   const auto = (context: CommandContext) => {
     let service = autoServices.get(context);
     if (!service) {
-      service = new AutoPipelineService(context, () => {
-        const providers = new GraphAgentProviders({
-          connection: (environment, agent) =>
-            graphAgentBridgeConnection(
-              async (name, args) => {
-                const command = dependencies.commands.get(name);
-                if (!command) throw new Error("Bridge command unavailable");
-                return (await command(args ?? {}, context)) as never;
-              },
-              agent,
-              environment,
-            ),
-        });
-        return {
-          provider: (environment, agent) => providers.get(environment, agent, "auto-pipeline"),
-          release: () => providers.shutdown(),
-          git: createPipelineEnvironmentGit(context.storage, context.runtime.environments.fence),
-        };
+      service = createAutoPipelineService(context, async (name, args) => {
+        const command = dependencies.commands.get(name);
+        if (!command) throw new Error("Bridge command unavailable");
+        return (await command(args ?? {}, context)) as never;
       });
       autoServices.set(context, service);
     }
@@ -105,6 +92,12 @@ export function registerBuildPipelineCommands(
   );
   register(cancelAutoPipelineDraftCommand, ({ environmentId, tabId }, context) =>
     auto(context).cancelDraft(environmentId, tabId),
+  );
+  register(getAutoPipelineStateCommand, ({ environmentId, tabId }, context) =>
+    auto(context).state(environmentId, tabId),
+  );
+  register(saveAutoPipelineEditsCommand, ({ draftId, edits }, context) =>
+    auto(context).saveEdits(draftId, edits),
   );
   register(
     confirmAutoPipelineCommand,

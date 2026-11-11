@@ -8,11 +8,11 @@
  * keep using it. The bridges' signatures (`bridge-authority.ts`) need a
  * verifier inside the server, which OpenCode does not have.
  *
- * So on an `opencode-launch=1` image, once the server the backend launched has
+ * So on an `opencode2-launch=1` image, once the server the backend launched has
  * answered the fresh password only it was given and loaded the plugin that
  * makes it non-dumpable, a root exec records the inode of the socket listening
- * on the port in root-only `/run/orkestrator-bridge`
- * ({@link recordOpenCodeListenerScript}). Every later read of the password
+ * on the port in root-only `/run/orkestrator-bridge` (`opencode2-listener`,
+ * {@link recordOpenCodeListenerScript}). Every later read of the password
  * (`readContainerBridgeToken`) lists the port's listening sockets in the same
  * root exec, and the password is withheld unless that one socket is still the
  * only one ({@link judgeOpenCodeListener}). Anything else listening there had
@@ -24,14 +24,29 @@
  * holds a socket. `/proc/net/tcp` is readable by anyone and lists each socket's
  * inode. A start replaces whatever listens with a new server and a new password,
  * which the old listener never sees. What remains is the race between the
- * check and the requests that follow it; see docs/architecture/agent-approvals.md.
+ * check and the requests that follow it, narrowed by a re-check after a
+ * refused connection or an unexpected answer (`opencode-listener-recheck.ts`);
+ * see docs/architecture/agent-approvals.md.
+ *
+ * The OpenCode 1.x server's record (`opencode-listener`, port 4096) was
+ * retired with 1.x.
  */
 
-/** The root-owned binary `orkestrator-bridge-launch opencode` runs. */
-export const OPENCODE_CONTAINER_BINARY = "/opt/opencode/bin/opencode";
+/** The root-owned 2.x binary `orkestrator-bridge-launch opencode2` runs. */
+export const OPENCODE2_CONTAINER_BINARY = "/opt/opencode/bin/opencode2";
 
 /** The record of the socket the backend's server listens on; root-only, beside the password. */
-export const OPENCODE_LISTENER_RECORD = "/run/orkestrator-bridge/opencode-listener";
+export const OPENCODE2_LISTENER_RECORD = "/run/orkestrator-bridge/opencode2-listener";
+
+/**
+ * The container's OpenCode server, whose record, port and password these
+ * are: OpenCode 2.x, the credential kind `opencode2`.
+ */
+export type OpenCodeServerKind = "opencode2";
+
+export function openCodeListenerRecord(_kind: OpenCodeServerKind): string {
+  return OPENCODE2_LISTENER_RECORD;
+}
 
 export interface OpenCodeListenerSnapshot {
   /** The recorded socket inode, or null when nothing was recorded. */
@@ -43,7 +58,9 @@ export interface OpenCodeListenerSnapshot {
 export type OpenCodeListenerJudgement =
   /** The recorded socket is the only one listening. */
   | "ours"
-  /** Another socket listens, nothing does, or the recorded one is gone. */
+  /** No socket currently listens on the recorded port. */
+  | "stopped"
+  /** Another socket listens, or more than one shares the port. */
   | "replaced"
   /** No record: an older image, or a server an older backend started. */
   | "unrecorded";
@@ -83,6 +100,7 @@ export function judgeOpenCodeListener(
   snapshot: OpenCodeListenerSnapshot,
 ): OpenCodeListenerJudgement {
   if (!snapshot.record) return "unrecorded";
+  if (snapshot.sockets.length === 0) return "stopped";
   return snapshot.sockets.length === 1 && snapshot.sockets[0] === snapshot.record
     ? "ours"
     : "replaced";
@@ -93,17 +111,20 @@ export function judgeOpenCodeListener(
  * `recorded`. No socket, or more than one, prints `refused` and leaves no
  * record, so the start fails rather than trust it.
  */
-export function recordOpenCodeListenerScript(port: number): string {
+export function recordOpenCodeListenerScript(
+  port: number,
+  record: string = OPENCODE2_LISTENER_RECORD,
+): string {
   return [
     "set -eu",
     "umask 077",
-    `rm -f ${OPENCODE_LISTENER_RECORD}`,
+    `rm -f ${record}`,
     listeningInodesScript(port),
     "set -- $inodes",
     `if [ "$#" -ne 1 ]; then echo refused; exit 0; fi`,
-    `tmp=$(mktemp ${OPENCODE_LISTENER_RECORD}.XXXXXX)`,
+    `tmp=$(mktemp ${record}.XXXXXX)`,
     `printf '%s\\n' "$1" > "$tmp"`,
-    `mv "$tmp" ${OPENCODE_LISTENER_RECORD}`,
+    `mv "$tmp" ${record}`,
     "echo recorded",
   ].join("\n");
 }

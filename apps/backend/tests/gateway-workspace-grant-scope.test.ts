@@ -61,7 +61,6 @@ const changingWrites: Array<[string, Record<string, unknown>]> = [
     },
   ],
   ["patch_global_config", { patch: { defaultNetworkMode: "full" } }],
-  ["save_config", { config: leafConfig }],
   ["set_workflow_result_tools_rollout", { mode: "enabled" }],
   ["web_annotations_rollout_set", { mode: "enabled" }],
   ["set_container_resource_limits", { memoryMb: 1024 }],
@@ -141,7 +140,9 @@ describe("a client grant at the leaf's gateway", () => {
       input: { requestId: "stop-1", environmentId: "env-1", tabId: "tab-1", stoppedBy: "user" },
     };
     expect((await call("stop_coordinator_worker_turn", args)).status).toBe(200);
-    expect(invoke).toHaveBeenCalledWith("stop_coordinator_worker_turn", args);
+    expect(invoke).toHaveBeenCalledWith("stop_coordinator_worker_turn", args, {
+      signal: expect.any(AbortSignal),
+    });
     expect((await call("stop_controller_worker_turn", args)).status).toBe(403);
     expect(invoke).toHaveBeenCalledTimes(1);
   });

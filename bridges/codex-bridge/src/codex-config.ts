@@ -1,6 +1,7 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
@@ -626,8 +627,8 @@ export function codexAppServerConfigOverrides(
     "features.incremental_tools": "false",
     // Goals are stable and on by default (0.164.0 through 0.167.0), which
     // offers the model `create_goal`, `get_goal` and `update_goal`. Orkestrator's
-    // goal loop runs in the backend on every provider (`plans/goals.md`, D1 and
-    // D2) and ignores `thread/goal/*`: a goal Codex continued on its own would
+    // goal loop runs in the backend on every provider
+    // (`docs/architecture/goals.md`) and ignores `thread/goal/*`: a goal Codex continued on its own would
     // run turns the bridge never dispatched (`live-network-lock.test.ts`).
     "features.goals": "false",
     // Every session's commands lose the bridge-control credentials. A
@@ -828,6 +829,7 @@ export function codexAppServerConfigOverrides(
             ...ARTIFACT_TOOL_NAMES,
             ...AGENT_GOAL_TOOL_NAMES,
             ...AGENT_SUBORK_TOOL_NAMES,
+            ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
             ...KEY_INFORMATION_TOOL_NAMES,
           ]) {
             overrides[`mcp_servers.orkestrator.tools.${name}.approval_mode`] =

@@ -13,6 +13,7 @@ import {
   type ProjectGitStatus,
 } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import * as clipboard from "@/lib/native/clipboard";
@@ -191,6 +192,8 @@ const ensureSession = mock(
   },
 );
 
+// The conversation's session as the fake backend holds it.
+const sessionBackend = createNativeAgentSessionBackend({ readProjection: () => agentProjection });
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -198,7 +201,6 @@ mock.module("@/lib/backend", () => ({
     { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
   ]),
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: ensure,
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
@@ -225,9 +227,8 @@ mock.module("@/lib/backend", () => ({
   closeCoordinatorConversation: closeConversation,
   retryCoordinatorConversation: retryConversation,
   assignCoordinatorConversationAgent: assignAgent,
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: ensureSession,
-  getNativeAgentProjection: mock(async () => agentProjection),
+  ...sessionBackend.api,
   dispatchNativeAgentIntent: dispatchIntent,
 }));
 

@@ -22,7 +22,7 @@ classifies each failing test from evidence that already exists
 it edits and fixes the recorded failures that relate to the ticket or the
 branch; for one it believes unrelated it cites the triage, and it never runs a
 check against the target branch. It ends by submitting a typed fix result
-([below](#the-address--verify-handoff)). Verify is a quick acceptance review of
+([below](#the-address-findings--verify-handoff)). Verify is a quick acceptance review of
 the diff, read alongside the recorded package and that result. It runs no
 suite, typecheck, lint or build, never builds or tests the target branch, and
 creates no worktrees. It judges each failing test rather than each command: a
@@ -530,7 +530,8 @@ What differs on the graph engine:
   the bespoke engine never shows.
 
 Parity evidence for each Phase 3 checklist item, with the test names, is
-recorded in `plans/graphs/301-multi-review-on-graph-runtime.md`.
+recorded in the retired graphs plan item 301
+(`git show 2b876486b:plans/graphs/301-multi-review-on-graph-runtime.md`).
 
 ## Performance boundary and verification
 
@@ -548,6 +549,94 @@ cover manual and pipeline handoff and controller replacement. Service tests
 exercise the backend command path, sealing, integrity, and environment cleanup.
 The browser gateway suite includes a real-worker test that switches environments,
 lets validation finish, reloads, and reads the same completed snapshot.
+
+## Fan-out supervision
+
+One runner, `ReviewFanoutRunner` (`apps/backend/src/core/review-fanout.ts`),
+drives the reviewers of standalone Multi Review and of Build Pipeline review
+stages. Its control plane (admission, observation, persistence, evidence
+verification and consolidation input) must stay bounded, and independent of
+retained review history, as a panel grows to the 32-reviewer maximum. These
+rules hold for every change to it. Open scale and cost work is in
+[0027](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+
+- **The ten invariants.** Every change must keep all of these.
+  1. The backend owns workflow state. Closing a tab, switching environment or
+     unmounting React never pauses or cancels a review.
+  2. Provider events are wake hints. Status, transcript, interactions and
+     results are recovered from snapshots.
+  3. Per reviewer: persist `dispatching`, make the send the next
+     reviewer-local fallible operation, then persist `sent`. Never retry an
+     ambiguous send under a new request ID.
+  4. Controller fencing is authoritative. A controller that lost its lease
+     cannot commit reviewer or workflow state.
+  5. Cancellation, provider disconnect, approval timeout, malformed structured
+     output and generation death fail closed.
+  6. A package snapshot or integrity failure is workflow-fatal. A reviewer's
+     provider failure is isolated to that reviewer.
+  7. Every queue, transcript response, report, consolidation payload, metric
+     label and log has an explicit byte and count bound.
+  8. Metrics and logs carry no prompt, transcript, report, command, file,
+     artifact, credential, token or attachment content.
+  9. Standalone Multi Review and Build Pipeline stages use the one runner and
+     behave the same.
+  10. Default two-reviewer quality must not regress to gain speed.
+- **Load-bearing guarantees.** Validation runs once and reviewers share its
+  sealed artifacts instead of rerunning suites. The package pins one evidence
+  state for every reviewer. Provider instances are shared per environment and
+  platform. Preparation and consolidation reuse one session where the model
+  allows. The reviewer tab polls its transcript only while it is active.
+  Optimisations work around these, never replace them.
+- **Safety commits versus observational checkpoints.** A transition that
+  changes what may safely happen after a crash commits immediately, fenced:
+  controller acquisition, release and cancellation ownership; reviewer session
+  identity; request IDs and dispatch journal states; accepted results and
+  terminal errors; phase transitions and consolidation or fix dispatch;
+  snapshot identity, stale evidence and integrity failures; and user commands
+  whose acknowledgement promises durable state. Token deltas, progress
+  digests, `stalledSince` and non-authorising status refreshes are staged and
+  flushed once per pass, and before any safety commit, shutdown or lease
+  handoff. A failed observational flush is logged, never turned into a retry.
+  A lost fence still propagates.
+- **Lease and state stay together.** Do not split the controller lease from
+  workflow state unless both commit in one transaction. A per-row
+  `updateStoreRow` keeps the atomic fence-and-state commit.
+- **Fence reads take no lease.** A fence check is only true at the instant it
+  reads, and a lease held for it would be released before the caller acts, so
+  it never protected the provider I/O that follows. Invariant 4 rests on the
+  commit: the only commit path (`saveNow` → `saveMultiReviewWorkflow`) re-checks
+  the fence and the expected revision inside its transaction. A SQLite read
+  sees only committed state, and a takeover needs an expired lease, which the
+  check already rejects, so a read racing a takeover answers as a serialized
+  one would. Writers must stay serialized: a save carries the stored lease
+  forward, so an unserialized claim racing it could lose a renewal.
+- **Evidence verification is a safety boundary, not a cache.** It must still
+  catch a changed package or artifact, a worktree or snapshot mismatch,
+  evidence regenerated under a new validation run, a restart that lost trust
+  state, paths swapped through links or mounts, and consolidation against
+  different evidence from the reviewers'. Never cache a verification on path,
+  mtime or size, and never persist a "verified" flag: files can change while
+  the backend is down. Permits are scoped to workflow, phase, generation and
+  controller token. They are dropped on failure, release, retry, reviewer
+  restart and step restart. A watcher may invalidate early, but a missing
+  watcher event is never proof of immutability.
+- **At-most-once dispatch under concurrency.** Concurrency is across reviewers
+  only. Nothing fallible runs on a reviewer between committing `dispatching`
+  and its single send. A timeout, disconnect or unknown response parks the
+  same request ID for explicit reconciliation. Never hold the commit queue or
+  a storage lock across provider I/O. Cancellation beats queued admission.
+- **Error scopes.**
+
+  | Event | Scope | Result |
+  | --- | --- | --- |
+  | Package or snapshot verification failure | Workflow or stage | Stop admission, abandon live work, fail the owner |
+  | Retryable provider create or prepare error | Reviewer | Stay pending or retrying; peers continue |
+  | Ambiguous prompt send | Reviewer | Park the same request ID; peers continue |
+  | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
+  | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. Codex and Claude report one |
+  | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
+  | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
+  | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
 
 ## Fan-out budgets and benchmark
 
@@ -830,8 +919,11 @@ reviewer IDs.
   cannot make its workflow unreadable.
 - **Cache reads.** Reviewer records keep `cacheReadTokens` beside
   `tokenCount`, and Build Pipeline reviewer sessions mirror it once the
-  reviewer settles. Claude, Codex and OpenCode report a session total. Pi and
-  Cursor report their latest turn, so the record keeps the largest value seen.
+  reviewer settles. Claude, Codex and OpenCode report a session total. Pi,
+  Cursor and Grok report their latest turn, so the record keeps the largest
+  value seen. (Grok's is the ACP bridge's merge of the up to three carriers
+  Grok announces per turn, summed over a turn's continued attempts:
+  `recordTurnUsage` in `bridges/acp-bridge/src/acp-session.ts`.)
   Each reviewer's tool loop rereads its own context from the cache on every
   model call, so cache reads are mostly that context, not the prefix shared
   across the panel. Compare reviewers 2..N against reviewer 1 on the same
@@ -839,7 +931,12 @@ reviewer IDs.
   Measured through the Claude CLI (2026-10-23), a separate session reads a
   prompt from cache only when it is byte-identical up to a message boundary
   and runs in the same working directory. A prompt that shares only its
-  opening instructions got no cache hit. See
+  opening instructions got no cache hit. The reviewers of one review do share
+  a working directory: they run on the review environment's bridge for their
+  platform (`MultiReviewService.providerInstance`; the Build Pipeline fan-out's
+  `provider(pipeline, agent)`), every bridge runs its sessions in that one
+  process-wide workspace (for example `claudeWorkspaceCwd` in the Claude
+  bridge), and no reviewer session is given a directory of its own. See
   [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification).
 - **Evaluation corpus.**
   [`multi-review-evaluation-corpus.ts`](../../apps/backend/src/core/multi-review-evaluation-corpus.ts)
@@ -864,9 +961,13 @@ sizes. `score <case> <answer.json>` scores one model answer. `panel
 panel's overlap and cache-read shares. A Multi Review stored before
 `consolidationOverlap` existed is summarised from its report's model labels
 (`overlapFromModelLabels`), but only when every reviewer label is distinct.
-`live` sends selected cases to the Claude CLI already signed in on the host,
-with no tools and the report schema enforced. It saves the answers under
-`output/multi-review-evaluation/live/` and prints scores and token usage. Keep
+`live` sends selected cases to a CLI already signed in on the host, with no
+tools and the report schema enforced: `--provider claude` (the default,
+`claude -p --json-schema`) or `--provider codex` (`codex exec --output-schema`,
+ephemeral, read-only, with the session-title runner's tool-free feature
+profile; drivers in `scripts/multi-review-evaluation-drivers.ts`). It saves
+the answers under `output/multi-review-evaluation/live/<provider>/` and prints
+scores and token usage. Keep
 model answers and exported records out of the repository and CI logs.
 
 On the corpus, the compact evidence is 81–93% of the full evidence for two to
@@ -892,7 +993,8 @@ perform these checks before drafting and again before confirmation.
 ### Auto-pipeline Build handoff
 
 Manual Auto-pipeline drafting returns the ticket and Build key-information patch
-in one read-only session through `submit_auto_pipeline_draft`. The patch records
+from the source tab's own agent through its `convert_to_pipeline` tool
+([build-pipeline-view.md](build-pipeline-view.md#manual-auto-pipeline-promotion)). The patch records
 observed work and files, decisions, checks with their results, and unfinished
 work. Confirmation keeps the generated handoff authoritative while accepting the
 user's edited ticket and criteria. It enters the completed-Build admission path
@@ -905,7 +1007,42 @@ Confirmation reserves the existing environment's exclusive mutation fence before
 resolving its worktree path or revalidating the draft. It holds that reservation
 through staging, commit, ticket publication and completed-Build admission. New
 agent submissions, file writes, terminal starts, checkout moves and other pipeline
-admissions are refused while it is held. Already active agents, workflows and
-live terminal shells must finish or close before promotion; an idle source tab
-alone is insufficient. Both failure and success release the reservation, and a
-retry of a completed admission may repair publication while its pipeline runs.
+admissions are refused while it is held. Already active agents and workflows
+must finish before promotion; an idle source tab alone is insufficient.
+Promotion closes the environment's terminal shells itself, inside the
+reservation and after the draft revalidates, and waits for each process tree to
+exit (`terminateSessionsForEnvironment`, as moving an environment does). That
+includes the setup terminal, which ends in an interactive shell with no tab the
+user could close. A shell that survives refuses the promotion. Both failure and
+success release the reservation, and a retry of a completed admission may
+repair publication while its pipeline runs.
+
+The draft is reviewed in an `auto-pipeline` environment tab (one per source
+tab), not a modal: Draft, Details, Acceptance criteria and Confirm are steps of
+that tab. Drafting and promotion run in the backend and are not cancelled when
+the tab unmounts; only Cancel drafting stops a draft. The tab reads
+`get_auto_pipeline_state` whenever it is shown (drafting, failed, ready with
+the user's saved edits and any confirmation refusal, promoting, promoted), and
+`save_auto_pipeline_edits` keeps unconfirmed ticket edits with the draft
+record. Drafting failures, confirmation refusals and in-progress promotions are
+process-local; after a restart the tab shows the persisted draft.
+
+- **Drafting refusals reach the tab.** A request refused before any session
+  exists (the drafting cap) is recorded as the tab's failure like any other.
+  A refusal the backend could not record (a lost connection, a rejected
+  request) is shown by the tab, and by the launcher as a toast. The launcher
+  opens or focuses the tab first and starts drafting only when it opened, so a
+  draft never runs without a tab to show or cancel it.
+- **Promotion is tracked per draft.** "Promoting" is reported only for the
+  draft being confirmed; a newer draft of the same tab stays editable. Once any
+  draft of a tab has started a pipeline, the tab reports that promotion.
+- **A part-way failed promotion locks the ticket.** Promotion stores the
+  confirmed ticket (`reviewed`) before committing and admitting. If a later
+  step fails, the state's `reviewed` field carries that ticket; the tab shows it
+  read-only and offers confirming it again or drafting again, because the
+  backend refuses edits to it.
+- **Unsaved edits are never dropped.** A failed save keeps the newest edits
+  pending, warns that they are unsaved, retries (a bounded number of times, or
+  on demand) and saves them again when the tab unmounts. Edits whose save still
+  fails stay in the renderer by draft id, so a remounted tab shows and saves
+  them. Saves run one at a time so an older save never lands after a newer one.

@@ -1,15 +1,13 @@
 import { connectionDefaultsFor } from "./build-pipeline-service-helpers.js";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import {
-  workflowResultInstruction,
-  workflowResultToolName,
-} from "@orkestrator/protocol/workflow-results";
-/** Manual-only promotion. Drafting never dispatches to the source session. */
+/** Manual-only promotion. The tab's own agent drafts; the user confirms. */
 import { randomUUID, createHash } from "node:crypto";
 import {
+  autoPipelineDraftPrompt,
   parseAutoPipelineTicket,
   parseAutoPipelineResult,
   type AutoPipelineDraft,
+  type AutoPipelineEdits,
+  type AutoPipelineState,
   type AutoPipelineTicket,
   type AutoPipelineSources,
 } from "@orkestrator/protocol/build-pipeline";
@@ -25,7 +23,7 @@ import { multiReviewWorkspaceUse } from "./workspace-writers.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { buildPipelineStartWithSavedDefaults } from "./build-pipeline-launch.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { boundAdoptedTranscript } from "./auto-pipeline-transcript.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 
@@ -45,31 +43,24 @@ export interface AutoPipelineDraftRecord {
   attempt: CompletedBuildAttempt;
   draft: AutoPipelineDraft;
   fingerprint: string;
+  /** The user's unconfirmed changes to the generated ticket fields. */
+  edits?: AutoPipelineEdits;
   reviewed?: AutoPipelineTicket;
   pipelineId?: string;
+  /**
+   * The source tab's newest dispatched request when the agent submitted this
+   * draft. Confirming refuses once the tab has taken another message, so the
+   * draft always describes the conversation the user is looking at. Absent on
+   * a draft an earlier version wrote, which therefore expires.
+   */
+  sourceMark?: string;
+}
+/** The newest request the tab has dispatched; what a draft is checked against. */
+function sourceMarkOf(session: PersistedNativeAgentSession | undefined): string {
+  return session?.dispatchedRequestIds?.at(-1) ?? "";
 }
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Auto-pipeline drafting timed out")),
-          Math.max(0, deadline - Date.now()),
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-function bounded(value: unknown, max: number): void {
-  if (Buffer.byteLength(JSON.stringify(value)) > max)
-    throw new Error("Auto-pipeline input exceeds its size limit");
 }
 export { parseAutoPipelineResult } from "@orkestrator/protocol/build-pipeline";
 
@@ -78,14 +69,106 @@ const draftingByStorage = new WeakMap<
   Map<string, { operation: Promise<AutoPipelineDraft>; controller: AbortController }>
 >();
 
+/**
+ * Process-local outcomes the tab's state read reports. Drafting and promotion
+ * run in this process, so a restart ends them; the persisted draft records
+ * remain and are what the tab then shows. Each map is bounded by the drafting
+ * cap or by the number of drafts, and an entry is replaced on the next attempt.
+ */
+interface AutoPipelineOutcomes {
+  /** `environmentId:tabId` → why its last drafting attempt failed. */
+  failures: Map<string, string>;
+  /**
+   * Draft id → confirmations in progress for it. Keyed by draft rather than
+   * tab, so a newer draft of the same tab is never reported as promoting.
+   */
+  promoting: Map<string, number>;
+  /** Draft id → why its last confirmation was refused. */
+  confirmErrors: Map<string, string>;
+}
+const outcomesByStorage = new WeakMap<CommandContext["storage"], AutoPipelineOutcomes>();
+const MAX_OUTCOMES = 256;
+/** Drafting sessions one backend runs at once, across every environment. */
+export const MAX_ACTIVE_DRAFTS = 32;
+function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_OUTCOMES) map.delete(map.keys().next().value as K);
+}
+function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message.trim() || "Auto-pipeline failed").slice(0, 2000);
+}
+
 /** Drafts and promotion receipts survive restarts; clients cannot replace generated notes. */
 export class AutoPipelineService {
   constructor(
     private readonly context: CommandContext,
     private readonly ports: () => AutoPipelinePorts,
-    private readonly draftTimeoutMs = 120_000,
+    /** How long a request waits for the agent's draft; the turn ending ends it sooner. */
+    private readonly draftTimeoutMs = 30 * 60_000,
+    /** How often a request looks for the draft and for the end of the agent's turn. */
+    private readonly pollMs = 1_000,
   ) {}
 
+  private outcomes(): AutoPipelineOutcomes {
+    let outcomes = outcomesByStorage.get(this.context.storage);
+    if (!outcomes) {
+      outcomes = { failures: new Map(), promoting: new Map(), confirmErrors: new Map() };
+      outcomesByStorage.set(this.context.storage, outcomes);
+    }
+    return outcomes;
+  }
+  /**
+   * Where a tab's draft stands. Reads only: it never starts, resumes or
+   * revalidates drafting, so polling it from a mounted tab is cheap and safe.
+   */
+  state(environmentId: string, tabId: string): AutoPipelineState {
+    const key = `${environmentId}:${tabId}`;
+    const outcomes = this.outcomes();
+    // Once any draft of the tab is promoted the environment belongs to that
+    // pipeline, so a newer draft can never be confirmed: report the promotion.
+    const promoted = this.context.storage.latestAutoPipelineDraft(environmentId, tabId, {
+      includeReviewed: true,
+      promotedOnly: true,
+    });
+    if (promoted?.pipelineId) return { phase: "promoted", pipelineId: promoted.pipelineId };
+    const record = this.context.storage.latestAutoPipelineDraft(environmentId, tabId, {
+      includeReviewed: true,
+    });
+    const edits = record?.edits ? { edits: record.edits } : {};
+    // A draft whose confirmation began keeps the ticket it was confirmed with.
+    const reviewed = record?.reviewed ? { reviewed: record.reviewed } : {};
+    if (record && outcomes.promoting.has(record.draft.id))
+      return { phase: "promoting", draft: record.draft, ...edits, ...reviewed };
+    if (draftingByStorage.get(this.context.storage)?.has(key)) return { phase: "drafting" };
+    const failure = outcomes.failures.get(key);
+    if (failure) return { phase: "failed", error: failure };
+    if (!record) return { phase: "idle" };
+    const confirmError = outcomes.confirmErrors.get(record.draft.id);
+    return {
+      phase: "ready",
+      draft: record.draft,
+      ...edits,
+      ...reviewed,
+      ...(confirmError ? { confirmError } : {}),
+    };
+  }
+  /** Keeps unconfirmed ticket edits with the draft; refused once confirmation has begun. */
+  saveEdits(draftId: string, edits: AutoPipelineEdits): void {
+    const record = this.context.storage.getAutoPipelineDraft(draftId);
+    if (!record) throw new Error("Auto-pipeline draft expired. Draft again before editing");
+    if (record.reviewed || record.pipelineId)
+      throw new Error("This draft was already confirmed; its ticket can no longer change");
+    if (this.outcomes().promoting.has(draftId))
+      throw new Error("This draft is being confirmed; its ticket can no longer change");
+    record.edits = {
+      title: edits.title,
+      description: edits.description,
+      acceptanceCriteria: [...edits.acceptanceCriteria],
+    };
+    this.context.storage.putAutoPipelineDraft(record);
+  }
   private async environment(id: string): Promise<Environment> {
     const environment = await this.context.storage.getEnvironment(id);
     if (!environment || environment.projectHome || environment.deletionRequestedAt)
@@ -102,6 +185,8 @@ export class AutoPipelineService {
    */
   private async sessions(
     id: string,
+    /** Read the shared frozen snapshot, for a caller that only reads. */
+    snapshot = false,
   ): Promise<{ tabId: string; session: PersistedNativeAgentSession }[]> {
     const layout = await this.context.storage.getPaneLayout(id);
     const leaves = paneLayoutLeaves(layout?.root);
@@ -111,7 +196,9 @@ export class AutoPipelineService {
       if (typeof tab.id === "string")
         tabIdByKey.set(nativeTabLogicalSessionKey(id, tab.id), tab.id);
     }
-    const sessions = await this.context.storage.listNativeAgentSessions();
+    const sessions = snapshot
+      ? await this.context.storage.readNativeAgentSessionsSnapshot()
+      : await this.context.storage.listNativeAgentSessions();
     return sessions
       .flatMap((session) => {
         const tabId = tabIdByKey.get(session.logicalSessionKey);
@@ -124,40 +211,39 @@ export class AutoPipelineService {
   private async session(environmentId: string, tabId: string) {
     return (await this.sessions(environmentId)).find((entry) => entry.tabId === tabId)?.session;
   }
+  /**
+   * The tabs that may be drafted from, for the toolbar button that polls it.
+   * Cheap on purpose: it reads the shared session snapshot, the persisted
+   * dispatch flags and the backend's last observed turn activity, and never
+   * starts, contacts or holds a bridge or provider, so an idle environment
+   * left on screen causes no bridge traffic. Drafting reads the provider's
+   * status itself and refuses a busy or unreachable tab, recording why.
+   */
   async sources(id: string): Promise<AutoPipelineSources> {
-    let environment: Environment;
     try {
-      environment = await this.environment(id);
+      await this.environment(id);
     } catch {
       return { available: false, sources: [] };
     }
-    const ports = this.ports();
-    try {
-      const sources = [];
-      for (const { tabId, session } of await this.sessions(id)) {
-        try {
-          const provider = await ports.provider(environment, session.agent);
-          const idle =
-            !session.pendingDispatch &&
-            !session.pendingSteer &&
-            (await provider.status(session.providerSessionId)) === "idle";
-          sources.push({
-            tabId,
-            label: session.backendTitle?.title ?? session.agent,
-            ...(!idle ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
-          });
-        } catch {
-          sources.push({
-            tabId,
-            label: session.backendTitle?.title ?? session.agent,
-            disabledReason: "This tab is unavailable. Retry when its provider reconnects",
-          });
-        }
-      }
-      return { available: true, sources };
-    } finally {
-      ports.release();
-    }
+    const nativeAgents = this.context.nativeAgents;
+    const sources = (await this.sessions(id, true)).map(({ tabId, session }) => {
+      const activity = nativeAgents?.sessionTurnActivitySnapshot(
+        id,
+        session.agent,
+        session.logicalSessionKey,
+      );
+      const busy =
+        !!session.pendingDispatch ||
+        !!session.pendingSteer ||
+        activity === "working" ||
+        activity === "waiting";
+      return {
+        tabId,
+        label: session.backendTitle?.title ?? session.agent,
+        ...(busy ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
+      };
+    });
+    return { available: true, sources };
   }
   private async fingerprint(ports: AutoPipelinePorts, environment: Environment) {
     const id = environment.id;
@@ -176,7 +262,6 @@ export class AutoPipelineService {
       .filter(Boolean);
     if (untracked.length > 1000) throw new Error("Too many pending files to promote");
     const hashes = untracked.length ? await ports.git(id, ["hash-object", "--", ...untracked]) : "";
-    bounded({ status, diff, untracked, hashes }, 2 * 1024 * 1024);
     return {
       head,
       status,
@@ -184,6 +269,17 @@ export class AutoPipelineService {
       fingerprint: digest({ head, branch, status, diff, untracked, hashes }),
     };
   }
+  /**
+   * Asks the source tab's own agent to draft, and resolves with the draft it
+   * submits through `convert_to_pipeline`. The agent works from its own record
+   * of the session and from the repository, so no transcript or diff is copied
+   * into a prompt and nothing here can outgrow one. The request is an ordinary
+   * message in the tab, sent at most once under its own request id.
+   *
+   * Outcomes are recorded for the tab's state read; a restart ends the wait,
+   * but an agent that still calls the tool afterwards leaves a draft the tab
+   * then shows.
+   */
   draft(environmentId: string, tabId: string): Promise<AutoPipelineDraft> {
     let active = draftingByStorage.get(this.context.storage);
     if (!active) {
@@ -193,11 +289,21 @@ export class AutoPipelineService {
     const key = `${environmentId}:${tabId}`;
     const pending = active.get(key);
     if (pending) return pending.operation;
-    if (active.size >= 32)
-      return Promise.reject(new Error("Too many drafting sessions are running"));
+    const outcomes = this.outcomes();
+    if (active.size >= MAX_ACTIVE_DRAFTS) {
+      // Refused before the tab is asked anything; record it so the tab can say why.
+      const error = new Error("Too many drafting requests are running. Retry when one finishes");
+      remember(outcomes.failures, key, error.message);
+      return Promise.reject(error);
+    }
     const controller = new AbortController();
-    const operation = this.createDraft(environmentId, tabId, controller.signal);
+    outcomes.failures.delete(key);
+    const operation = this.requestDraft(environmentId, tabId, controller.signal);
     active.set(key, { operation, controller });
+    operation.catch((error: unknown) => {
+      // A cancelled draft is a deliberate stop, not a failure to show.
+      if (!controller.signal.aborted) remember(outcomes.failures, key, errorText(error));
+    });
     return operation.finally(() => {
       if (active.get(key)?.operation === operation) active.delete(key);
     });
@@ -208,42 +314,134 @@ export class AutoPipelineService {
       ?.get(`${environmentId}:${tabId}`)
       ?.controller.abort(new Error("Auto-pipeline drafting cancelled"));
   }
-  private async createDraft(
+  private async requestDraft(
     environmentId: string,
     tabId: string,
     signal: AbortSignal,
   ): Promise<AutoPipelineDraft> {
+    const nativeAgents = this.context.nativeAgents;
+    if (!nativeAgents) throw new Error("Native agent service is unavailable");
     const environment = await this.environment(environmentId);
     const source = await this.session(environmentId, tabId);
     if (!source) throw new Error("Choose an open interactive agent tab");
     const ports = this.ports();
-    let drafting: { provider: BuildPipelineProvider; id: string } | undefined;
-    let resultKey: string | undefined;
-    let onAbort: (() => void) | undefined;
-    const cancelled = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(signal.reason);
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    // Cancellation may arrive during preparation, before the send race is installed.
-    void cancelled.catch(() => undefined);
+    const identity = {
+      environmentId,
+      agent: source.agent,
+      logicalSessionKey: source.logicalSessionKey,
+    };
+    /** Set once the tab accepted the drafting message; only that turn may be stopped. */
+    let accepted: string | undefined;
     try {
       signal.throwIfAborted();
-      const original = await ports.provider(environment, source.agent);
+      const provider = await ports.provider(environment, source.agent);
       if (
         source.pendingDispatch ||
         source.pendingSteer ||
-        (await original.status(source.providerSessionId)) !== "idle"
+        (await provider.status(source.providerSessionId)) !== "idle"
       )
         throw new Error("Wait for this tab's turn to finish");
-      const messages = await original.messages(source.providerSessionId);
-      bounded(messages, 2 * 1024 * 1024);
+      // Refuse a checkout that could never be promoted before asking the agent to describe it.
       const state = await this.fingerprint(ports, environment);
+      // Nothing changed since the last draft: it still describes the tab.
       const existing = this.context.storage.latestAutoPipelineDraft(environmentId, tabId);
       if (
-        existing?.fingerprint === state.fingerprint &&
-        digest(existing.attempt.messages) === digest(messages)
+        existing?.sourceMark !== undefined &&
+        existing.sourceMark === sourceMarkOf(source) &&
+        existing.fingerprint === state.fingerprint
       )
         return existing.draft;
+      signal.throwIfAborted();
+      const startedAt = Date.now();
+      const deadline = startedAt + this.draftTimeoutMs;
+      const requestId = `auto-pipeline:${randomUUID()}`;
+      const outcome = await nativeAgents.dispatchIntent({
+        ...identity,
+        origin: "interactive-native",
+        prompt: autoPipelineDraftPrompt(),
+        requestId,
+      });
+      if (outcome.outcome !== "accepted")
+        throw new Error(
+          ("error" in outcome && outcome.error) || "The tab did not accept the drafting request",
+        );
+      accepted = requestId;
+      const submitted = () => {
+        const record = this.context.storage.latestAutoPipelineDraft(environmentId, tabId);
+        return record && Date.parse(record.attempt.completedAt) >= startedAt ? record.draft : null;
+      };
+      while (Date.now() < deadline) {
+        signal.throwIfAborted();
+        const found = submitted();
+        if (found) return found;
+        const turn = await nativeAgents.sessionTurnOutcome({ ...identity, requestId });
+        if (turn.outcome !== "pending") {
+          // The call is made inside the turn, so a draft stored before the turn
+          // settled is visible now.
+          const late = submitted();
+          if (late) return late;
+          if (turn.outcome === "failed")
+            throw new Error(turn.error?.trim() || "The agent's turn failed before it drafted");
+          throw new Error(
+            turn.outcome === "completed"
+              ? "The agent finished without submitting a draft. Retry drafting"
+              : "Could not confirm the agent's turn finished. Retry drafting",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.pollMs));
+      }
+      throw new Error("Drafting timed out waiting for the agent");
+    } catch (error) {
+      // Stopping the wait stops the agent's drafting turn: it would otherwise
+      // carry on drafting something nobody is waiting for. The tab is the
+      // user's own, so only that turn is stopped, and only while it is still
+      // the one running. A cancel before the tab accepted the message only
+      // stops the preparation: whatever the tab runs then is the user's.
+      if (signal.aborted && accepted)
+        await nativeAgents.stopRequest({ ...identity, requestId: accepted }).catch(() => undefined);
+      throw error;
+    } finally {
+      ports.release();
+    }
+  }
+  /**
+   * Whether this tab may be offered `convert_to_pipeline`: an open interactive
+   * agent tab of a prompt environment that does not belong to a pipeline.
+   * Read-only and bounded to one environment's tabs (the sessions come from the
+   * shared frozen snapshot), because the tool list asks on every MCP request.
+   */
+  async offered(environmentId: string, tabId: string): Promise<boolean> {
+    try {
+      await this.environment(environmentId);
+      return (await this.sessions(environmentId, true)).some((entry) => entry.tabId === tabId);
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Stores the draft an interactive tab's agent submitted. Called by
+   * `convert_to_pipeline`, whether the user pressed the toolbar button or asked
+   * in plain chat. It only records a draft: nothing is created or started
+   * until the user reviews it and confirms.
+   *
+   * The agent supplies the ticket and notes; the checkout's state and the tab's
+   * newest message are read here, so a draft cannot claim a different state
+   * than the one it was written against. A later call replaces an unconfirmed
+   * draft of the same tab. Once a draft has started a pipeline the environment
+   * belongs to it, so `environment()` refuses any further submission.
+   */
+  async submitDraft(
+    environmentId: string,
+    tabId: string,
+    value: unknown,
+  ): Promise<{ draftId: string }> {
+    const environment = await this.environment(environmentId);
+    const source = await this.session(environmentId, tabId);
+    if (!source) throw new Error("This tab is not an open interactive agent tab");
+    const parsed = parseAutoPipelineResult(value);
+    const ports = this.ports();
+    try {
+      const state = await this.fingerprint(ports, environment);
       const input = await buildPipelineStartWithSavedDefaults(
         {
           projectId: environment.projectId,
@@ -267,101 +465,21 @@ export class AutoPipelineService {
         await this.context.storage.getRepositoryConfig(environment.projectId),
       );
       const configured = input.steps?.build;
-      const selection = {
-        agent: input.agentType,
-        model: configured?.model ?? defaults.model,
-        reasoningEffort: configured?.reasoningEffort ?? defaults.effort,
-        fastMode: configured?.fastMode ?? defaults.fastMode,
-      };
-      input.steps = { ...input.steps, build: selection };
-      const provider = await ports.provider(environment, input.agentType);
-      const policy = resolveEnvironmentExecutionPolicy(environment, "coordinator");
-      const id = await provider.createSession("build", "Auto-pipeline draft", {
-        readOnly: true,
-        interaction: {
-          origin: "automated-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      input.steps = {
+        ...input.steps,
+        build: {
+          agent: input.agentType,
+          model: configured?.model ?? defaults.model,
+          reasoningEffort: configured?.reasoningEffort ?? defaults.effort,
+          fastMode: configured?.fastMode ?? defaults.fastMode,
         },
-        mode: "plan",
-        model: selection?.model,
-        effort: selection.reasoningEffort,
-        fastMode: selection.fastMode,
-        policy,
-      });
-      drafting = { provider, id };
-      signal.throwIfAborted();
-      const requestId = randomUUID();
-      const results = this.context.workflowResults;
-      if (!results || !this.context.agentTools?.workflowResultConnection)
-        throw new Error("Structured Auto-pipeline result tools are unavailable");
-      resultKey = requestId;
-      await results.prepare({
-        resultKey: requestId,
-        kind: "auto-pipeline-draft",
-        environmentId,
-        projectId: environment.projectId,
-        provider: input.agentType,
-      });
-      const agentMcp = this.context.agentTools.workflowResultConnection(
-        environmentId,
-        environment.projectId,
-        environment.environmentType === "local" ? "host" : "container",
-        requestId,
-        input.agentType,
-      );
-      const instruction = workflowResultInstruction("auto-pipeline-draft", requestId, {
-        capability: agentMcp.workflowResultCapability,
-      });
-      const deadline = Date.now() + this.draftTimeoutMs;
-      signal.throwIfAborted();
-      await beforeDeadline(
-        Promise.race([
-          cancelled,
-          provider.send(
-            id,
-            `Draft a ticket and finished Build handoff from this completed interactive work. Do not edit files, commit, or send messages. Return the schema-constrained result. Description must contain Summary, Problem and Context. Each acceptance criterion must be independently checkable. Notes must record only observed decisions, files touched, checks and results, and unfinished work.\nTranscript:\n${JSON.stringify(messages)}\nBranch diff:\n${state.diff}\nPending paths:\n${state.status}\n${instruction}`,
-            {
-              requestId,
-              agentMcp,
-              workflowResultTool: workflowResultToolName("auto-pipeline-draft"),
-              workflowResultKey: requestId,
-              readOnly: true,
-              mode: "plan",
-              model: selection?.model,
-              effort: selection.reasoningEffort,
-              fastMode: selection.fastMode,
-            },
-          ),
-        ]),
-        deadline,
-      );
-      let result;
-      while (Date.now() < deadline) {
-        const status = await beforeDeadline(
-          Promise.race([cancelled, provider.status(id)]),
-          deadline,
-        );
-        if (status === "error") throw new Error("Auto-pipeline drafting session failed");
-        result = await beforeDeadline(
-          Promise.race([cancelled, results.structured(requestId)]),
-          deadline,
-        );
-        if (result) break;
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      if (!result?.ok)
-        throw new Error("Auto-pipeline drafting did not return a valid structured result");
-      signal.throwIfAborted();
-      const parsed = parseAutoPipelineResult(result.value);
-      if ((await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint)
-        throw new Error("Work changed during drafting. Retry to review the current work");
-      signal.throwIfAborted();
+      };
       const draft: AutoPipelineDraft = {
         ...parsed,
         id: randomUUID(),
         uncommittedFiles: state.status.split("\n").filter(Boolean),
       };
-      const now = new Date().toISOString();
+      const key = `${environmentId}:${tabId}`;
       this.context.storage.putAutoPipelineDraft({
         environmentId,
         environment,
@@ -369,29 +487,25 @@ export class AutoPipelineService {
         input,
         draft,
         fingerprint: state.fingerprint,
+        sourceMark: source.dispatchedRequestIds?.at(-1) ?? "",
         attempt: {
           tabId,
           sessionId: source.providerSessionId,
           agent: source.agent,
           startedAt: source.createdAt,
-          completedAt: now,
+          completedAt: new Date().toISOString(),
           commit: state.head,
           model: source.controls?.modelId,
           reasoningEffort: source.controls?.reasoningId,
-          messages,
+          // Read from the provider at confirmation, when the tab is idle.
+          messages: [],
           notes: parsed.notes,
         },
       });
-      await results.consume(requestId);
-      return draft;
+      // A draft now exists, so an earlier failure or timeout no longer describes the tab.
+      this.outcomes().failures.delete(key);
+      return { draftId: draft.id };
     } finally {
-      if (onAbort) signal.removeEventListener("abort", onAbort);
-      if (drafting) {
-        await drafting.provider.abort(drafting.id).catch(() => undefined);
-        await drafting.provider.closeSession?.(drafting.id).catch(() => undefined);
-      }
-      if (resultKey)
-        await this.context.workflowResults?.close(resultKey, "cancelled").catch(() => undefined);
       ports.release();
     }
   }
@@ -401,28 +515,47 @@ export class AutoPipelineService {
       return Promise.reject(
         new Error("Auto-pipeline draft expired. Draft again before confirming"),
       );
-    return this.context.storage.withAutoPipelinePromotion(record.environment.id, async () => {
-      const ports = this.ports();
-      try {
-        // Local bridge startup rejects moving checkouts, even for the owner.
-        // Acquire before reserving; promote revalidates all state inside the fence.
-        const admitted = (
-          await this.context.storage.listBuildPipelines(record.environment.projectId)
-        ).some((item) => item.environmentId === record.environmentId);
-        const provider = admitted
-          ? undefined
-          : await ports.provider(record.environment, record.source.agent);
-        return await withWorkspaceCodeRewindReservation({
-          fence: this.context.runtime.environments.fence,
-          storage: this.context.storage,
-          environmentId: record.environmentId,
-          assertQuiet: async () => {},
-          run: () => this.promote(id, ticket, ports, provider),
-        });
-      } finally {
-        ports.release();
-      }
-    });
+    const outcomes = this.outcomes();
+    outcomes.promoting.set(id, (outcomes.promoting.get(id) ?? 0) + 1);
+    outcomes.confirmErrors.delete(id);
+    return this.context.storage
+      .withAutoPipelinePromotion(record.environment.id, () =>
+        this.confirmSerialized(record, ticket),
+      )
+      .catch((error: unknown) => {
+        remember(outcomes.confirmErrors, id, errorText(error));
+        throw error;
+      })
+      .finally(() => {
+        const remaining = (outcomes.promoting.get(id) ?? 1) - 1;
+        if (remaining > 0) outcomes.promoting.set(id, remaining);
+        else outcomes.promoting.delete(id);
+      });
+  }
+  private async confirmSerialized(
+    record: AutoPipelineDraftRecord,
+    ticket: AutoPipelineTicket,
+  ): Promise<unknown> {
+    const ports = this.ports();
+    try {
+      // Local bridge startup rejects moving checkouts, even for the owner.
+      // Acquire before reserving; promote revalidates all state inside the fence.
+      const admitted = (
+        await this.context.storage.listBuildPipelines(record.environment.projectId)
+      ).some((item) => item.environmentId === record.environmentId);
+      const provider = admitted
+        ? undefined
+        : await ports.provider(record.environment, record.source.agent);
+      return await withWorkspaceCodeRewindReservation({
+        fence: this.context.runtime.environments.fence,
+        storage: this.context.storage,
+        environmentId: record.environmentId,
+        assertQuiet: async () => {},
+        run: () => this.promote(record.draft.id, ticket, ports, provider),
+      });
+    } finally {
+      ports.release();
+    }
   }
 
   private async assertCheckoutQuiet(environmentId: string): Promise<void> {
@@ -436,15 +569,6 @@ export class AutoPipelineService {
       (await this.context.nativeAgents?.hasActiveCheckoutWork(environmentId))
     )
       throw new Error("An agent may still write to this checkout. Stop it before promotion.");
-    const environment = await this.context.storage.getEnvironment(environmentId);
-    if (
-      this.context.runtime.terminals.hasLiveSessionsForEnvironment(environmentId) ||
-      (environment?.containerId &&
-        this.context.runtime.terminals.hasContainerTerminal(environment.containerId))
-    )
-      throw new Error(
-        "Close this environment's terminals before promotion; a shell may still write.",
-      );
     const sessions = await this.context.storage.listNativeAgentSessions();
     if (
       sessions.some(
@@ -454,6 +578,25 @@ export class AutoPipelineService {
       )
     )
       throw new Error("An agent submission is unresolved; settle it before promotion.");
+  }
+  /**
+   * Closes every terminal shell of the environment and waits for each process
+   * tree to exit, the way moving an environment does. A shell that outlives the
+   * close could still write while the work is committed, so promotion refuses.
+   * The setup terminal counts: it ends in an interactive shell that stays open
+   * after setup and has no tab the user could close it from.
+   */
+  private async closeTerminals(environment: Environment): Promise<void> {
+    const terminals = this.context.runtime.terminals;
+    const survivors = await terminals.terminateSessionsForEnvironment(environment.id);
+    if (
+      survivors.length > 0 ||
+      terminals.hasLiveSessionsForEnvironment(environment.id) ||
+      (environment.containerId && terminals.hasContainerTerminal(environment.containerId))
+    )
+      throw new Error(
+        "A terminal in this environment did not close. Stop the command running in it and confirm again.",
+      );
   }
   private async promote(
     id: string,
@@ -503,12 +646,15 @@ export class AutoPipelineService {
     if (!provider) throw new Error("Source provider is unavailable");
     if ((await provider.status(record.source.providerSessionId)) !== "idle")
       throw new Error("Wait for this tab's turn to finish");
+    // An agent that submitted this draft recorded the tab's newest message; a
+    // draft without one predates that and cannot be trusted to match the tab.
+    if (record.sourceMark === undefined)
+      throw new Error("Auto-pipeline draft expired. Draft again before confirming");
     const state = await this.fingerprint(ports, environment);
-    if (
-      digest(await provider.messages(record.source.providerSessionId)) !==
-      digest(record.attempt.messages)
-    )
-      throw new Error("The source transcript changed. Draft again before confirming");
+    if (sourceMarkOf(source) !== record.sourceMark)
+      throw new Error(
+        "The tab received a new message since drafting. Draft again before confirming",
+      );
     if (state.fingerprint !== record.fingerprint) {
       const lastMessage = record.reviewed
         ? await ports.git(environment.id, ["log", "-1", "--format=%B"])
@@ -526,12 +672,15 @@ export class AutoPipelineService {
       )
         throw new Error("Work changed since drafting. Draft again before confirming");
     }
+    // Inside the fence no new terminal can start, so the shells closed here
+    // stay closed; the fingerprint read below sees anything they wrote first.
+    await this.closeTerminals(environment);
     record.reviewed = ticket;
     this.context.storage.putAutoPipelineDraft(record);
     if (
       (await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint ||
       (await provider.status(source.providerSessionId)) !== "idle" ||
-      digest(await provider.messages(source.providerSessionId)) !== digest(record.attempt.messages)
+      sourceMarkOf(await this.session(environment.id, record.attempt.tabId)) !== record.sourceMark
     )
       throw new Error("Work changed during confirmation. Draft again before confirming");
     if ((await ports.git(environment.id, ["status", "--porcelain"])).trim()) {
@@ -542,6 +691,11 @@ export class AutoPipelineService {
         `${ticket.title}\n\nOrkestrator-Auto-Pipeline: ${id}`,
       ]);
     }
+    // The adopted Build keeps the conversation, cut to what adoption accepts, so
+    // a long session cannot make confirming fail on its size.
+    record.attempt.messages = boundAdoptedTranscript(
+      await provider.messages(source.providerSessionId),
+    );
     record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
     record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
     this.context.storage.putAutoPipelineDraft(record);

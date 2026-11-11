@@ -205,7 +205,7 @@ describe("restored closes", () => {
       runs.push(fresh);
       await finishRestoredTombstones();
       await harness.call("/session/closing-1/close", { method: "POST" });
-      await harness.call("/session/closing-1", { method: "DELETE" });
+      await harness.call("/session/closing-1/close", { method: "POST" });
       expect(fresh.cancels).toBe(0);
     } finally {
       restoreRuns();
@@ -223,7 +223,7 @@ describe("restored closes", () => {
     });
     const hold = holdPublication();
     try {
-      const first = harness.call("/session/closing-1", { method: "DELETE" });
+      const first = harness.call("/session/closing-1/close", { method: "POST" });
       await waitFor(() => lists === 1);
       const second = harness.call("/session/closing-1/close", { method: "POST" });
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -242,7 +242,7 @@ describe("restored closes", () => {
 
       hold.failWith(undefined);
       const [c, d] = await Promise.all([
-        harness.call("/session/closing-1", { method: "DELETE" }),
+        harness.call("/session/closing-1/close", { method: "POST" }),
         harness.call("/session/closing-1/close", { method: "POST" }),
       ]);
       expect(c.status).toBe(200);

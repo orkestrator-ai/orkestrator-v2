@@ -142,16 +142,20 @@ function harness(limits: Partial<BoundedHydrationLimits> = {}) {
 }
 
 function snapshot(
-  revision: number | null,
+  revision: number,
   entries: Record<string, string>,
   generation = A,
 ): HydrationFetchResult<string | null> {
   return {
     kind: "snapshot",
-    stamp: revision === null ? null : { generation, revision },
+    stamp: { generation, revision },
     entries: Object.entries(entries).map(([key, value]) => ({ key, value })),
   };
 }
+
+const isEntriesBody = (value: unknown): value is { entries: string[] } =>
+  typeof value === "object" && value !== null && Array.isArray((value as never)["entries"]);
+const entriesOf = (body: { entries: string[] }) => body.entries.map((key) => ({ key, value: key }));
 
 /** Hydrates to a current revisioned baseline. */
 async function hydrated(
@@ -487,37 +491,25 @@ describe("bounded hydration fault matrix", () => {
     expect(view.hydration.getStatus()).toBe("current");
   });
 
-  test("unsupported capability stops timed reads until a reconnect", async () => {
-    const view = harness();
-    view.hydration.request("initial");
-    await view.resolve(0, { kind: "unsupported" });
-    expect(view.hydration.getStatus()).toBe("unsupported");
-
-    view.legacyEvent("a", "live");
-    view.hydration.safetyCheck();
-    view.hydration.request("gap");
-    expect(view.state()).toEqual({ a: "live" });
-    expect(view.fetches).toHaveLength(1);
-    expect(view.time.pending()).toBe(0);
-
-    view.hydration.onReconnect();
+  test("an unstamped update over a baseline is shown and forces a rehydration", async () => {
+    const view = await hydrated(7, { a: "a7" });
+    view.legacyEvent("a", "unstamped");
+    expect(view.state()).toEqual({ a: "unstamped" });
+    expect(view.diagnostics().applied).toBeNull();
     expect(view.fetches).toHaveLength(2);
+    expect(view.fetches[1]?.reason).toBe("generation");
+    expect(view.fetches[1]?.known).toBeNull();
+    await view.resolve(1, snapshot(8, { a: "a8" }));
+    expect(view.state()).toEqual({ a: "a8" });
+    expect(view.diagnostics()).toMatchObject({ applied: { generation: A, revision: 8 } });
   });
 
-  test("a legacy peer replays buffered updates over its snapshot and skips safety reads", async () => {
+  test("an unstamped snapshot is invalid and retried", async () => {
     const view = harness();
     view.hydration.request("initial");
-    view.legacyEvent("a", "newer");
-    view.legacyEvent("b", null);
-    await view.resolve(0, snapshot(null, { a: "older", b: "present" }));
-
-    expect(view.state()).toEqual({ a: "newer" });
-    expect(view.diagnostics().capability).toBe("legacy");
-    view.hydration.safetyCheck();
-    expect(view.fetches).toHaveLength(1);
-    // Reconnect remains the conservative recovery path.
-    view.hydration.onReconnect();
-    expect(view.fetches[1]?.known).toBeNull();
+    await view.resolve(0, toHydrationFetchResult({ entries: ["a"] }, isEntriesBody, entriesOf));
+    expect(view.hydration.getStatus()).toBe("stale");
+    expect(view.replaceAllCalls()).toBe(0);
   });
 
   test("transport switch to a new owner resets through the reconnect read", async () => {
@@ -529,16 +521,6 @@ describe("bounded hydration fault matrix", () => {
 
     expect(view.state()).toEqual({ a: "b2", c: "b3" });
     expect(view.diagnostics()).toMatchObject({ applied: { generation: B, revision: 3 } });
-  });
-
-  test("transport switch to a legacy peer falls back to conservative hydration", async () => {
-    const view = await hydrated(7, { a: "a7" });
-    view.legacyEvent("a", "legacy-live");
-    expect(view.state()).toEqual({ a: "legacy-live" });
-    expect(view.diagnostics().capability).toBe("legacy");
-    expect(view.fetches).toHaveLength(2);
-    await view.resolve(1, snapshot(null, { a: "legacy-live", b: "legacy" }));
-    expect(view.state()).toEqual({ a: "legacy-live", b: "legacy" });
   });
 
   test("one read in flight and at most one queued rerun", async () => {
@@ -618,10 +600,9 @@ describe("bounded hydration primitives", () => {
     const toEntries = (body: { entries: string[] }) =>
       body.entries.map((key) => ({ key, value: key }));
 
+    // An unstamped body: no backend in the support window sends one.
     expect(toHydrationFetchResult({ entries: ["a"] }, isBody, toEntries)).toEqual({
-      kind: "snapshot",
-      stamp: null,
-      entries: [{ key: "a", value: "a" }],
+      kind: "invalid",
     });
     expect(
       toHydrationFetchResult(

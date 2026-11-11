@@ -7,7 +7,8 @@
 // bound): session create with an execution policy, prompt, interactions,
 // close. Each turn's model is a scripted loopback endpoint that asks for one
 // Bash call, so the bridge's own option building, the real CLI and the
-// host's sandbox (Seatbelt on macOS) decide what the command can do. The
+// host's sandbox (Seatbelt on macOS, bubblewrap on Linux) decide what the
+// command can do. The
 // command's targets are a scratch directory beside the workspace and a
 // loopback server this probe starts, never a real user path or a public host.
 //
@@ -57,6 +58,53 @@ export interface SandboxReport {
   observations: SandboxObservation[];
 }
 
+/**
+ * What each OS's sandbox does where the two implementations differ, as
+ * observed on the pinned CLI (macOS 2026-11-06, Linux 2026-11-10).
+ */
+export interface PlatformSandboxExpectations {
+  /**
+   * The shell's error for a write outside the writable paths, compared
+   * case-insensitively: bash and zsh word the same errno differently.
+   */
+  outsideWriteRefusal: string;
+  /**
+   * Whether a direct loopback request reaches the host with full network.
+   * `allowLocalBinding` is macOS-only: bubblewrap gives each command its own
+   * network namespace, so on Linux only the proxy leads out of it.
+   */
+  directLoopbackWithFullNetwork: boolean;
+}
+
+export const PLATFORM_SANDBOX_EXPECTATIONS: Partial<
+  Record<NodeJS.Platform, PlatformSandboxExpectations>
+> = {
+  // Seatbelt denies the open() itself.
+  darwin: { outsideWriteRefusal: "operation not permitted", directLoopbackWithFullNetwork: true },
+  // bubblewrap binds everything outside the writable paths read-only.
+  linux: { outsideWriteRefusal: "Read-only file system", directLoopbackWithFullNetwork: false },
+};
+
+/**
+ * Whether the live check can run here, and why not. macOS's Seatbelt always
+ * starts; Linux needs bubblewrap that can nest the CLI's user namespace,
+ * which the bridge itself checks (it would refuse every turn with 422);
+ * anything else has no sandbox the check covers.
+ */
+export function providerSandboxLiveGate(
+  platform: NodeJS.Platform,
+  linuxSandbox: () => { available: boolean; reason?: string },
+): { run: true } | { run: false; reason: string } {
+  if (platform === "darwin") return { run: true };
+  if (platform !== "linux") {
+    return { run: false, reason: `no Claude command sandbox is qualified on ${platform}` };
+  }
+  const status = linuxSandbox();
+  return status.available
+    ? { run: true }
+    : { run: false, reason: status.reason ?? "the Linux sandbox probe failed" };
+}
+
 const TURN_TIMEOUT_MS = 90_000;
 const POLL_MS = 100;
 // The tool result's head: enough for the shell's or the proxy's refusal.
@@ -79,8 +127,9 @@ const providerSandbox = (
 /**
  * A request to the unlisted loopback server. The sandbox's `NO_PROXY` names
  * loopback and the private ranges, so a plain request connects directly and
- * meets Seatbelt's network rule; `--noproxy ''` sends it through the sandbox
- * proxy instead, which is where `strictAllowlist` is decided.
+ * meets Seatbelt's network rule (macOS) or the command's own empty network
+ * namespace (Linux); `--noproxy ''` sends it through the sandbox proxy
+ * instead, which is where `strictAllowlist` is decided.
  */
 const curl = (url: string, route: "direct" | "proxy") =>
   `curl ${route === "proxy" ? "--noproxy '' " : ""}--silent --show-error --fail --max-time 5 '${url}'`;
@@ -114,7 +163,9 @@ export const SCENARIOS: SandboxScenario[] = [
     writes: { in: "workspace", name: "control-workspace-write" },
   },
   {
-    // `allowLocalBinding` with full network: loopback is reachable directly.
+    // `allowLocalBinding` with full network: loopback is reachable directly
+    // on macOS. On Linux (where that option does not apply) it is not, which
+    // the test asserts as the platform's documented difference.
     name: "control-direct-full",
     policy: providerSandbox("auto-approve", "full"),
     command: ({ url }) => curl(url, "direct"),

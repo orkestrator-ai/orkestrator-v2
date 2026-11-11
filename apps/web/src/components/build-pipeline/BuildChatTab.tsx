@@ -314,7 +314,6 @@ export function BuildChatTab({
           )}
           <PipelineKeyInformationButton
             keyInformation={pipeline.keyInformation}
-            environmentId={pipeline.environmentId}
             onOpenTab={
               createTab
                 ? () =>

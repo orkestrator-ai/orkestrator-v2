@@ -111,3 +111,8 @@ The second aggregate's complete CLI package passed (510 passed, eight skipped,
 passed unchanged (exit 0, 6.6 s); passing output was deleted, so no isolated
 total is claimed. No CLI implementation, assertion or deadline changed. This
 establishes intermittence, not a cause or environmental exemption.
+
+
+## Packaged-backend cases moved (2026-11-10)
+
+The packaged-backend boot cases left `packages/cli/tests/cli.test.ts` for `packages/cli/tests/cli-packaged-backend.test.ts`, which is in the slow tier (`scripts/test-tiers.ts`). The two boots became one, under `NODE_ENV=development`; the static package checks stay in `cli.test.ts` in the default tier.

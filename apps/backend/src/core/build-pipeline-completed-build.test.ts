@@ -1,10 +1,16 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   isBuildPipeline,
   REVIEW_PACKAGE_SESSION_LABEL,
 } from "@orkestrator/protocol/build-pipeline";
+import { keyInformationTabId } from "@orkestrator/protocol/pane-layout";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
-import { pipeline, startInput, withService } from "./build-pipeline-service-test-support.js";
+import {
+  pipeline,
+  startBuilding,
+  startInput,
+  withService,
+} from "./build-pipeline-service-test-support.js";
 
 function completedBuild(): CompletedBuildAttempt {
   return {
@@ -70,6 +76,8 @@ test("continues through the normal Review and PR path without a second Build or 
     for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
     const finished = await pipeline(storage, started.id);
     expect(finished.phase).toBe("complete");
+    expect(finished.completionRevision).toBeGreaterThan(0);
+    expect(finished.completionRevision!).toBeLessThanOrEqual(finished.backendRevision);
     expect(finished.sessions.filter((session) => session.phase === "build")).toHaveLength(1);
     expect(finished.sessions[0]?.sdkSessionId).toBe("original-session");
     expect(finished.sessions.some((session) => session.phase === "review")).toBe(true);
@@ -81,13 +89,169 @@ test("continues through the normal Review and PR path without a second Build or 
     expect(provider.sent.every((turn) => turn.sessionId !== "original-session")).toBe(true);
     expect(provider.created.every((session) => session.phase !== "build")).toBe(true);
     expect(invocations.some((entry) => entry.command === "run_environment_setup")).toBe(false);
+    // The finished run lands on its notes in the authoritative layout, beside
+    // and in place of the pipeline tab's selection.
+    const layout = await storage.getPaneLayout("env-1");
+    const leaf = layout?.root as { tabs: Array<Record<string, unknown>>; activeTabId: string };
+    const notesId = keyInformationTabId("env-1", started.id, "notes");
+    expect(leaf.activeTabId).toBe(notesId);
+    expect(leaf.tabs.map((tab) => tab.type)).toEqual(["claude-build", "key-information"]);
+    expect(leaf.tabs[1]).toMatchObject({
+      id: notesId,
+      keyInformationTabData: {
+        environmentId: "env-1",
+        pipelineId: started.id,
+        view: "notes",
+        completionRevision: (await pipeline(storage, started.id)).completionRevision,
+      },
+    });
   });
 });
+
+for (const source of ["kanban", "github"] as const) {
+  test(`Notes publication failure preserves completion and ${source} reconciliation`, async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      const warning = spyOn(console, "warn").mockImplementation(() => {});
+      const publication = spyOn(storage, "ensureBuildPipelineNotesTab").mockImplementation(
+        async () => {
+          // Make the terminal transition observable even if Ship already moved
+          // the ticket to review, then fail before completion reconciliation.
+          const task = controls.kanbanTasks.get("task-1");
+          if (task) task.status = "in-progress";
+          throw new Error("fixture layout publication failure");
+        },
+      );
+      try {
+        const started = await service.startFromCompletedBuild(
+          startInput({
+            source:
+              source === "kanban"
+                ? { type: "kanban", taskId: "task-1" }
+                : {
+                    type: "github",
+                    repositoryOwner: "acme",
+                    repositoryName: "repo",
+                    issueNumber: 1,
+                    issueUrl: "https://github.com/acme/repo/issues/1",
+                    status: "open",
+                  },
+          }),
+          completedBuild(),
+        );
+        for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
+        const finished = await pipeline(storage, started.id);
+        expect(publication).toHaveBeenCalledWith({
+          pipelineId: started.id,
+          environmentId: "env-1",
+          completionRevision: finished.completionRevision,
+        });
+        expect(finished.phase).toBe("complete");
+        expect(finished.error).toBeUndefined();
+        expect(finished.completionCommentStatus).toBe("posted");
+        if (source === "kanban") {
+          expect(controls.kanbanTasks.get("task-1")?.status).toBe("review");
+          expect(
+            invocations.some(
+              ({ command, args }) =>
+                command === "update_kanban_task" &&
+                args.status === "review" &&
+                args.preserveDoneStatus === true,
+            ),
+          ).toBe(true);
+        } else {
+          expect(finished.completionCommentId).toBe("comment-1");
+          expect(
+            invocations.some(
+              ({ command, args }) =>
+                command === "post_github_completion_comment" && args.pipelineId === started.id,
+            ),
+          ).toBe(true);
+        }
+        expect(
+          warning.mock.calls.some(
+            ([line]) =>
+              String(line).includes("completion-notes.publish-failed") &&
+              String(line).includes(started.id),
+          ),
+        ).toBe(true);
+      } finally {
+        publication.mockRestore();
+        warning.mockRestore();
+      }
+    });
+  });
+}
+
+// Failed runs retain their failure inspector; automatic Notes publication is
+// reserved for successful completion. Terminal ticket updates still follow the
+// durable failure save.
+for (const source of ["kanban", "github"] as const) {
+  test(`a failed pipeline saves before ${source} reconciliation and does not publish Notes`, async () => {
+    await withService(async (service, storage, provider, invocations) => {
+      const { started } = await startBuilding(service, storage, {
+        source:
+          source === "kanban"
+            ? { type: "kanban", taskId: "task-1" }
+            : {
+                type: "github",
+                repositoryOwner: "acme",
+                repositoryName: "repo",
+                issueNumber: 1,
+                issueUrl: "https://github.com/acme/repo/issues/1",
+                status: "open",
+              },
+      });
+      const before = await storage.getPaneLayout("env-1");
+      const events: string[] = [];
+      const save = storage.saveBuildPipeline.bind(storage);
+      const saved = spyOn(storage, "saveBuildPipeline").mockImplementation(async (...args) => {
+        const result = await save(...args);
+        if (isBuildPipeline(args[4]) && args[4].phase === "failed") events.push("saved-failure");
+        return result;
+      });
+      const push = invocations.push.bind(invocations);
+      const invoked = spyOn(invocations, "push").mockImplementation((...entries) => {
+        for (const entry of entries) {
+          if (
+            entry.command === "update_kanban_task" ||
+            entry.command === "post_github_completion_comment"
+          )
+            events.push("reconciled");
+        }
+        return push(...entries);
+      });
+      const publication = spyOn(storage, "ensureBuildPipelineNotesTab");
+      provider.status = async () => {
+        throw new Error("fixture build failed");
+      };
+      try {
+        await service.advanceNow(started.id);
+        const failed = await pipeline(storage, started.id);
+        expect(failed).toMatchObject({
+          phase: "failed",
+          error: "fixture build failed",
+          completionCommentStatus: "posted",
+        });
+        expect(events[0]).toBe("saved-failure");
+        expect(events).toContain("reconciled");
+        expect(publication).not.toHaveBeenCalled();
+        expect(await storage.getPaneLayout("env-1")).toEqual(before);
+        if (source === "github") expect(failed.completionCommentId).toBe("comment-1");
+      } finally {
+        publication.mockRestore();
+        invoked.mockRestore();
+        saved.mockRestore();
+      }
+    });
+  });
+}
 
 test("restarting Build opens a normal attempt and retains the original transcript", async () => {
   await withService(async (service, storage, provider) => {
     const started = await service.startFromCompletedBuild(startInput(), completedBuild());
     for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
+    const firstCompletion = (await pipeline(storage, started.id)).completionRevision!;
+    expect(firstCompletion).toBeGreaterThan(0);
     const restarted = await service.restartStep(started.id, "original-session");
     expect(restarted.phase).toBe("building");
     expect(restarted.sessions[0]).toMatchObject({
@@ -103,6 +267,16 @@ test("restarting Build opens a normal attempt and retains the original transcrip
     expect(transcript.status).toBe("found");
     if (transcript.status === "found") expect(transcript.messages).toHaveLength(1);
     expect(provider.sent.every((turn) => turn.sessionId !== "original-session")).toBe(true);
+    for (let pass = 0; pass < 18; pass += 1) await service.advanceNow(started.id);
+    const finished = await pipeline(storage, started.id);
+    expect(finished.phase).toBe("complete");
+    expect(finished.completionRevision!).toBeGreaterThan(firstCompletion);
+    const notes = (
+      (await storage.getPaneLayout("env-1"))!.root as {
+        tabs: Array<{ keyInformationTabData?: { completionRevision?: number } }>;
+      }
+    ).tabs.find((tab) => tab.keyInformationTabData);
+    expect(notes?.keyInformationTabData?.completionRevision).toBe(finished.completionRevision);
   });
 });
 

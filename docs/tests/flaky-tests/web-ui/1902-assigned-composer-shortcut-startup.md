@@ -118,3 +118,25 @@ Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run
 Passing output was deleted by the logged runner; individual passing counts
 were not retained. This establishes intermittence, not a cause or an overall
 browser pass. No assertion, timeout, skip or implementation was changed.
+
+## Keyboard-shortcut review fixes — 2026-11-11
+
+Base commit `498b68766f5c9f357a3a86782406d1e9e0977559`
+(`mise run flaky:recurrence -- 1902 --base 498b68766` answered open). The
+mobile assigned-agent case again found no editable composer at the 5 s
+assertion during a full owner run with Playwright's default workers on a
+macOS host (63 passed, 1 failed; the run added a design-frame entry case to
+this spec and a second field to the fixture's design frame, neither of which
+the failing case uses). Command:
+
+```sh
+ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name keyboard-shortcuts-browser -- bunx playwright test --config e2e/playwright.config.ts KeyboardShortcuts.spec.ts
+```
+
+The unchanged case passed alone, exit 0, in 6.8 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name kbd-1902-alone -- bunx playwright test --config e2e/playwright.config.ts KeyboardShortcuts.spec.ts --project mobile-chromium -g "Meta\+I focuses the assigned" --workers 1
+```
+
+No assertion, timeout, skip or implementation was changed.

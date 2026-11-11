@@ -3,16 +3,10 @@ import { Hono } from "hono";
 import { configureLogger, resetLogger, type LogRecord } from "@orkestrator/protocol/logger";
 import { setLiveBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
-import {
-  createRequestLogger,
-  debugLog,
-  flushDebugLogs,
-  isDebugLoggingEnabled,
-  readDebugFlag,
-} from "./logger.js";
+import { createRequestLogger, debugLog, flushDebugLogs, isDebugLoggingEnabled } from "./logger.js";
 
 describe("debug event policy", () => {
-  const envKeys = ["ORKESTRATOR_LOG_LEVEL", "ORKESTRATOR_BRIDGE_DEBUG", "CLAUDE_BRIDGE_DEBUG"];
+  const envKeys = ["ORKESTRATOR_LOG_LEVEL", "ORKESTRATOR_BRIDGE_DEBUG"];
   let savedEnv: (string | undefined)[];
   let records: LogRecord[];
 
@@ -78,28 +72,6 @@ describe("debug event policy", () => {
     setLiveBridgeDiagnostics(false);
     recordAndFlush();
     expect(records).toHaveLength(2);
-  });
-});
-
-describe("readDebugFlag", () => {
-  test("is off when the variable is unset or blank", () => {
-    expect(readDebugFlag(undefined)).toBe(false);
-    expect(readDebugFlag("")).toBe(false);
-    expect(readDebugFlag("   ")).toBe(false);
-  });
-
-  test("is off for the conventional negative spellings, in any case or padding", () => {
-    // A profile that exports CLAUDE_BRIDGE_DEBUG=0 must not silently enable
-    // per-token logging on every bridge the user starts.
-    for (const value of ["0", "false", "off", "no", "FALSE", " Off ", "No"]) {
-      expect(readDebugFlag(value)).toBe(false);
-    }
-  });
-
-  test("requires the same explicit opt-in as every other bridge", () => {
-    for (const value of ["1", " 1 "]) {
-      expect(readDebugFlag(value)).toBe(true);
-    }
   });
 });
 

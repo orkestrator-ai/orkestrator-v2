@@ -35,3 +35,23 @@ changes set aside (that is, on `c1724ab74`'s backend code). So `-t` is not a
 valid isolated rerun for this case; rerun the whole owner. This suggests
 the case relies on state an earlier case in the file sets up, which is a
 lead, not an established cause.
+
+## Recurrence (2026-11-10, macOS)
+
+On branch `container-env-debug-b785ed0a2251-r1` (base `6c3aa9b6d`), during
+review fixes to setup-terminal retirement, the case failed twice with the same
+symptom: one `git status --porcelain=v1 -z --untracked-files=all` in the Git
+subcommand log. First in a 15-file focused run (`--parallel=4`, 271 pass,
+1 fail), then with the whole owner run alone:
+
+```sh
+mise run test:logged -- --name commands-integration-alone -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/commands-integration.test.ts --only-failures
+```
+
+58 tests, 1 fail at 1023 ms. That branch's changes do not touch diff
+statistics or Git scans. `-t` alone with `main`'s backend code (`main` was
+ahead of the branch base) also failed, as the previous entry predicts. No
+`mise run flaky:recurrence` was run for this entry, so it is not yet counted
+as a recurrence.

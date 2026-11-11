@@ -17,46 +17,35 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Two-machine tailnet run**: the runbook run with a decoy, real-latency
-   baselines, a throttled link, network loss and publication from the second
-   machine. Status: blocked (on a second machine): one host cannot be two
-   machines on a tailnet, and no second machine was available on 2026-11-06.
-2. **Real private DNS and certificates**: one support row per deployment type,
-   with and without Tailscale Serve (`publicPort`). Status: blocked (on a real
-   private zone and wildcard certificate, with a second machine to reach it
-   from): a throwaway CA and a browser-local proxy cannot show renewal, expiry
-   or real resolution.
-3. **Shipping Safari and iOS, top-level**: Safari with real certificate trust,
-   the hostile-worker case there, and the iOS handoff on a device or
-   simulator. Status: blocked (on macOS Safari and iOS hardware): WebKit in
-   Playwright is not shipping Safari, and no device or simulator session has
-   been available to these runs.
 4. **Docker Desktop on Windows**: binding inspection, Auto ports, recreation
    and the exec relay. Status: not needed (2026-11-04): the maintainer put
    Windows out of scope, so no default waits on it (D18).
-5. **Remaining compatibility cases**: a streaming or router framework fixture
-   and real-provider OAuth. Status: partly done (2026-11-03): the Next.js
-   16.4.3 app-router fixture and its spec pass in Chromium and Firefox (WebKit
-   not run on beelink, 2680). Real-provider OAuth is still deferred (D13): it
-   needs a real sign-in with a provider account, which isolated runs must not
-   make.
-6. **Performance thresholds and missing metrics**: set thresholds from task
-   1's baseline; add HMR, reconnect and desktop-ingress measurements. Status:
-   blocked (thresholds on task 1, whose two-machine baseline they are set
-   from); metric additions done (2026-11-03:
+5. **Remaining compatibility cases**: a streaming or router framework
+   fixture. Status: done (2026-11-03): the Next.js 16.4.3 app-router fixture
+   and its spec pass in Chromium and Firefox (WebKit not run on beelink,
+   2680). The real-provider OAuth run (deferred, D13) needs a real provider
+   sign-in and moved to the manual-test checklist (7568).
+6. **Performance thresholds and missing metrics**: set thresholds from the
+   two-machine baseline under the pass rule the maintainer approves; add HMR,
+   reconnect and desktop-ingress measurements. Status: blocked (waits on
+   7568: 0042 task 1, the baseline, and 0042 task 6, the pass rule); metric
+   additions done (2026-11-03:
    desktop reconnect counts and ingress connect and first-byte series; HMR
    delivery stays with the latency script).
 7. **Flip defaults and cohort sign-off**: tunnel and relay defaults, the
-   observation window and who signs off. Status: partly done (2026-11-04): both
+   observation window and who signs off. Status: done (2026-11-04): both
    default on, on the maintainer's sign-off with no observation window (D19).
-   Tasks 1 and 6 did not run first and stay open as evidence for that flip.
-8. **Retire the legacy route and compatibility mode**: code item 6 and the
-   support-window and legacy-tab annotation questions. Status: blocked (on the
-   support-window decision, a maintainer call in Open questions). Stored tabs
+   The evidence the flip went ahead of is task 6 and the two-machine run
+   (7568: 0042 task 1).
+8. **Retire the legacy route and compatibility mode**: code item 6, once the
+   maintainer has made the fallback and legacy-tab annotation calls and the
+   floor has reached the first Stable release with the default. Status:
+   blocked (waits on 7568: 0042 task 8, then on that release). Stored tabs
    that match one service now migrate (D21).
 9. **Shared legacy partition retention**: the remaining half of code item 4.
-   Status: blocked (on task 8, so on the same support-window decision): the
-   shared partitions serve legacy URL tabs until that route is retired.
+   Status: blocked (on task 8, and waits on 7568: 0042 task 12, the
+   long-lived profile reading the window is set from): the shared partitions
+   serve legacy URL tabs until that route is retired.
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
     a window (item 11). Status: done (2026-11-06): two Electron spec cases
@@ -69,104 +58,10 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     CPU load and fixed (D22, D23); both flakes are resolved. The owning specs'
     launcher now recovers a startup that lost its modules to
     `ERR_NETWORK_CHANGED`, which failed them at review validation (D24).
-12. **Partition disk use on a long-lived profile**: the "Needs verification"
-    item. Status: partly done (`disk:report` measures it; no long-lived data).
-    The rest needs a long-lived real profile with many services over months;
-    a disposable test profile cannot stand in for one, and runs must not read
-    the user's data directory.
 
 Done and on `main` (`f47398fd`, #1280, 2026-10-25): code items 1 to 3, 5, 7,
 8 and 10, node-partition retention, the real-window retention pass, Reset site
 data with a hostile worker, tunnel liveness (D2) and gated runs (D3).
-
-### 1. Two-machine tailnet run
-
-**Problem.** Every preview run so far is single-machine, so remote-backend
-users have no evidence that the tunnel or private origins behave over a real
-network. It gates the tunnel default and the thresholds.
-
-**Context.** Runbook `docs/development/preview-two-machine-runbook.md` and
-`scripts/preview-latency-baseline.ts` (loopback self-test only). Batched with
-[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md); 0044's
-remote-backend run needs the same two hosts.
-
-**Investigation.** Both files exist. Tunnel liveness now pings every 15 s
-(`PREVIEW_TUNNEL_CLIENT_PING_MS`, `packages/protocol/src/preview-access.ts:149`),
-which the network-loss case should observe. Nothing in the repository can run
-this from one host.
-
-**Decisions.**
-
-- **How to schedule it?**
-  - **One session with 0044's remote-backend run and 0054's DNS probes
-    (recommended).**
-    - Pros: the same two machines and tailnet serve three files; one set of
-      baselines.
-    - Cons: a long session; one failure can stall all three.
-  - **Run it alone first.**
-    - Pros: smaller, easier to debug.
-    - Cons: a second hardware session for the others.
-- **What counts as a pass for latency?**
-  - **D8's proposal: p95 first byte and connect within 1.5x the direct route
-    over the same link, no unbounded queue growth, zero cross-service reach
-    (recommended).**
-    - Pros: relative, so independent of the link's absolute speed.
-    - Cons: an arbitrary factor until the first baseline shows the spread.
-  - **Record numbers only, decide thresholds afterwards.**
-    - Pros: no premature target.
-    - Cons: the run cannot pass or fail, so task 7 still has nothing to use.
-
-### 2. Real private DNS and certificates
-
-**Problem.** Publication has run only with a throwaway CA and a
-browser-local proxy; renewal, expiry, hostname mismatch and unknown Host (421)
-are unproved on real DNS.
-
-**Context.** Publication is never a default (operator domain, certificate,
-key, listen address); each deployment type needs its own support row. 0054's
-remaining probes ride on this run.
-
-**Investigation.** Publication defaults off
-(`apps/backend/src/core/storage-preview-services.ts:127-133`). The harness is
-`apps/backend/src/preview-browser-harness.ts`; the live Serve metadata test is
-`apps/backend/src/tailscale-serve-metadata.test.ts`.
-
-**Decisions.**
-
-- **Which deployment first?**
-  - **Tailscale Serve with a wildcard certificate (`publicPort`)
-    (recommended).**
-    - Pros: the documented path for most users; header transport already
-      proved live.
-    - Cons: depends on Tailscale's certificate and DNS behaviour.
-  - **Split DNS with an operator certificate, no forwarder.**
-    - Pros: fewer moving parts.
-    - Cons: harder for most users to reproduce; less representative.
-
-### 3. Shipping Safari and iOS, top-level
-
-**Problem.** Playwright WebKit is engine signal only; shipping Safari, its
-privacy settings and the iOS handoff have never run.
-
-**Context.** Hostile-worker and compatibility items both end with "Still
-open: shipping Safari". iOS handoff is contract-tested only
-(`tests/unit/ios-mobile-contracts.test.ts:262`). Embedded surfaces are in
-[0046](0046-embedded-service-previews.md).
-
-**Investigation.** `create_preview_handoff_url` and `RemoteWebView`'s
-external-open path are unchanged. No harness drives shipping Safari.
-
-**Decisions.**
-
-- **Manual or automated?**
-  - **Manual checklist in one macOS and iOS session with 0044's wrapper run
-    and 0054's Safari probes (recommended).**
-    - Pros: one setup of real certificate trust; a person can enter the
-      gateway token, which agents must not.
-    - Cons: one-off evidence.
-  - **A `safaridriver` harness for macOS Safari.**
-    - Pros: repeatable.
-    - Cons: new WebDriver harness; still no iOS coverage.
 
 ### 4. Docker Desktop on Windows
 
@@ -174,7 +69,7 @@ external-open path are unchanged. No harness drives shipping Safari.
 Desktop for macOS, not Windows. It gates the relay default.
 
 **Context.** Also tracked in
-[0019](../containers-and-environments/0019-container-platform-qualification.md).
+0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md)).
 
 **Investigation.** The suite is `mise run test:preview:docker`; nothing in it
 is Windows-specific. On 2026-11-04 the maintainer said Windows support is not
@@ -195,8 +90,9 @@ scheduled.
 
 **Problem.** Only Vite 7.3.6 (and the repository's Vite 8) and a plain fixture
 were covered; a streaming or router framework and real OAuth had not run.
-Since 2026-11-03 the framework half is covered; real-provider OAuth has
-still not run and stays deferred.
+Since 2026-11-03 the framework half is covered. Real-provider OAuth has
+still not run and stays deferred (D13); it needs a real provider sign-in, so
+it moved to the manual-test checklist (7568).
 
 **Context.** Synthetic external redirects are covered since 2026-10-23.
 
@@ -225,13 +121,6 @@ under the public scheme on the same port (D12).
     - Pros: no dependencies; exact control of chunking.
     - Cons: does not catch real framework assumptions (absolute URLs,
       `Host` handling).
-- **Real OAuth?** Still deferred (2026-11-03, D13).
-  - **Defer and rely on the synthetic redirect cases (recommended).**
-    - Pros: no real provider credentials in a test.
-    - Cons: provider-specific redirect URI checks stay untested.
-  - **One run against a real provider's test tenant.**
-    - Pros: true evidence.
-    - Cons: a credential to manage and a provider dependency.
 
 ### 6. Performance thresholds and missing metrics
 
@@ -252,7 +141,10 @@ windows report `desktop.connect_ms`, `desktop.first_byte_ms`,
 `desktop.reconnect{category}` and `desktop.reconnect_failed{category}` to
 their backend, where they appear in `get_preview_diagnostics`. HMR delivery
 is measured by `scripts/preview-latency-baseline.ts`, not the product.
-Thresholds remain blocked on task 1's two-machine baseline. Adding the
+Thresholds remain blocked on the two-machine baseline (7568: 0042 task 1)
+and on the maintainer's approval of the pass rule (7568: 0042 task 6; D8
+proposes p95 first byte and connect within 1.5x the direct route over the
+same link, no unbounded queue growth and zero cross-service reach). Adding the
 counters exposed a reattach race, filed as
 3270 and fixed on 2026-11-03.
 
@@ -273,7 +165,7 @@ counters exposed a reattach race, filed as
 **Problem.** Tunnel and relay stay off by default; users get the legacy route
 and its shared origin, cookie rewriting and missing WebSockets.
 
-**Context.** "Enabling defaults" and open question 3. "An absence of
+**Context.** "Enabling defaults" and D8. "An absence of
 complaints is not a metric." Every flip keeps the rollback drill passing
 (`apps/backend/tests/gateway-preview.test.ts:209`).
 Security finding M1 (`docs/reports/2-26-10-27-security.md`) also asks for
@@ -315,7 +207,7 @@ right after, not after a cohort, and sign-off by the maintainer.
 has no WebSocket support and shares one origin across apps. It must stay until
 old clients and stored legacy tabs are past the support window.
 
-**Context.** Open questions 1 and 2 and D8. The register row in
+**Context.** D8. The register row in
 `docs/architecture/version-compatibility.md:117` sets the removal condition:
 the default has flipped, the floor is at or above the first Stable with that
 default, and stored legacy tabs have a migration.
@@ -331,18 +223,14 @@ service** (`legacyUrlServiceMatch`,
 `apps/web/src/lib/preview-service-entry.ts:116`) decides every conversion. Since
 2026-11-04 a desktop with the tunnel available converts a matching tab when it
 becomes active (D21), so only the `localhost` tabs have no migration, and the
-register's condition now turns on them and the support window.
+register's condition now turns on them and the support window. Whether
+compatibility mode stays as a labelled fallback after the flip and whether
+annotations on legacy URL tabs retire with the route are the maintainer's
+calls (D8 records the recommendation); they moved to the manual-test
+checklist (7568).
 
 **Decisions.**
 
-- **Keep compatibility mode as a fallback after the flip?**
-  - **Keep it, labelled, for one Stable release, then remove it with the
-    route (recommended, D8).**
-    - Pros: a safety net while the new default settles.
-    - Cons: two code paths for one more release.
-  - **Remove it at the flip.**
-    - Pros: less code sooner.
-    - Cons: no fallback if the tunnel fails for a user.
 - **How do stored legacy URL tabs migrate?** Chose automatic (2026-11-04, D21);
   plain URL tabs opening externally waits for the route's removal.
   - **Convert automatically where `legacyUrlServiceMatch` finds exactly one
@@ -354,14 +242,6 @@ register's condition now turns on them and the support window.
     - Pros: no surprise changes.
     - Cons: the register's "stored legacy tabs have a migration" is never
       met.
-- **Annotations on legacy URL tabs?**
-  - **Retire with the route, after offering Open as service (recommended,
-    D8).**
-    - Pros: one annotation path.
-    - Cons: notes on those tabs become read-only history.
-  - **Keep a minimal legacy path for annotations.**
-    - Pros: no loss.
-    - Cons: keeps the route alive for one feature.
 
 ### 9. Shared legacy partition retention
 
@@ -374,7 +254,12 @@ tabs are retired, and clean only partitions this install created.
 **Investigation.** `PreviewPartitionRetention`
 (`apps/desktop/electron/preview-partition-retention.ts`, node methods at
 `:228`, `:257`, `:315`) handles service and node partitions only.
-`browserPreviewPartitionForWindow` is unchanged.
+`browserPreviewPartitionForWindow` is unchanged. Readings so far
+(`mise run disk:report` since D7, or a read-only `du`): 16 shared legacy
+partitions, 93 MB, on the maintainer's macOS profile (2026-10-22), and one
+shared partition, 172 kB, on another production profile. A reading from a
+long-lived profile with many services is in the manual-test checklist
+(7568: 0042 task 12).
 
 **Decisions.**
 
@@ -506,33 +391,10 @@ other builds' Docker work; the spec's own reachability probe was already off).
 The launcher now reloads such a window, at most three times, only for that
 failure (D24, `9ef37bfd1`). Afterwards, headless without a private network
 namespace: the two owning tests 10 of 10 each, the owner without the
-[7061](7061-legacy-url-tab-back-fails-headless.md) case 21 of 21, the seeded
+[to-do 7061, retired 2026-11-10](../../architecture/browser-previews.md#desktop-tunnel) case 21 of 21, the seeded
 spec 6 of 6, and 10 separate cold launches 10 of 10. The other Electron specs'
 first-title waits are
 [7062](../cross-cutting/7062-electron-specs-recover-network-changed-startup.md).
-
-### 12. Partition disk use on a long-lived profile
-
-**Problem.** Only two snapshots of partition size exist; growth over months is
-unknown.
-
-**Context.** D7 added partition rows to `mise run disk:report`.
-
-**Investigation.** The task exists in `mise.toml`. Two read-only data points
-are recorded (93 MB of shared partitions on one profile, 172 kB on another).
-
-**Decisions.**
-
-- **Keep this as a separate item?**
-  - **Fold it into task 9: take one `disk:report` reading from a long-lived
-    profile when deciding the shared-partition window, then drop it
-    (recommended).**
-    - Pros: the number only matters for that decision; avoids an open-ended
-      measurement.
-    - Cons: no trend data.
-  - **Collect a monthly reading.**
-    - Pros: a real trend.
-    - Cons: a recurring chore with no consumer until task 9.
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
@@ -662,9 +524,9 @@ partitions, and the evidence log where run results are now recorded.
    prompt (legacy URL tabs never had a "Choose service" flow; that exists only
    for terminal links). Tests: `preview-service-entry.test.ts` (new) and
    `BrowserTab.test.tsx`.
-6. After the support window (see Open questions), remove compatibility mode
-   from `ServiceBrowserTab` and retire the legacy route and its rewrite
-   helpers, as a separate reviewed change.
+6. After the support window and the maintainer's fallback call (task 8),
+   remove compatibility mode from `ServiceBrowserTab` and retire the legacy
+   route and its rewrite helpers, as a separate reviewed change.
 7. Done 2026-10-22: comments citing deleted plan steps reworded (the listed
    files and `apps/web/src/vite-env.d.ts`).
 8. Done 2026-10-25: the bug reproduced in the real window. Back during a
@@ -764,31 +626,15 @@ log below.
   windows on different backends and connection switches (use, connect, and
   window close), clipboard, overlays, HMR reattach, and keyboard and narrow
   viewport use of the picker, service dialog and diagnostics. Single machine
-  only; the two-machine run below is still needed for remote backends over a
-  real network.
-- Two-machine tailnet. Gates remote desktop previews by default. The runbook
-  is [preview-two-machine-runbook.md](../../development/preview-two-machine-runbook.md)
-  and the latency tool `scripts/preview-latency-baseline.ts` (2026-10-22,
-  self-tested on loopback only). Not run. Cover:
-  - a decoy on the client machine that no request ever reaches;
-  - real-latency baselines for the direct, legacy, tunnel and private-origin
-    routes;
-  - a throttled link (queues stay bounded);
-  - network loss and reconnect;
-  - publication reached from the second machine.
-- Real private DNS and certificates. Gates publication, one support row per
-  deployment type. Use split DNS or a private zone with a wildcard
-  certificate, with and without a Tailscale Serve forwarder (`publicPort`).
-  Cover renewal, expiry, hostname mismatch and unknown Host (421).
+  only; the two-machine run (manual-test checklist, 7568: 0042 task 1) is
+  still needed for remote backends over a real network.
 - Firefox, Safari and iOS, top-level. Firefox passed bootstrap, sibling
   isolation, the `fixture.v1` subprotocol, revocation and hostile-worker
   checks on 2026-10-23 (throwaway certificate bypass; deployment trust remains
-  open). WebKit passed the same engine checks. Shipping Safari remains open;
-  cover those cases there with real certificate trust. Run the iOS
-  handoff (`create_preview_handoff_url`, contract-tested only in
-  `tests/unit/ios-mobile-contracts.test.ts`) on a device or simulator:
-  opening in Safari, background and foreground, and private browsing.
-  Embedded surfaces are in [0046-embedded-service-previews.md](0046-embedded-service-previews.md).
+  open). WebKit passed the same engine checks. Shipping Safari with real
+  certificate trust and the iOS handoff (`create_preview_handoff_url`,
+  contract-tested only in `tests/unit/ios-mobile-contracts.test.ts`) are in
+  the manual-test checklist (7568: 0042 task 3). Embedded surfaces are in [0046-embedded-service-previews.md](0046-embedded-service-previews.md).
 - Docker Desktop on macOS and Windows: resolver binding inspection, Auto host
   ports, recreation onto a reused port, and the `docker exec` relay. On
   2026-10-17 the opt-in Docker suite passed on Docker Desktop 4.93.0 for macOS
@@ -805,11 +651,13 @@ log below.
   sibling service with a credentialed read, which contradicted "no other
   service is ever reached"; since 2026-10-23 the backend refuses that read
   and the spec asserts nothing reaches the sibling
-  ([0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
+  (to-do 0054, retired 2026-11-10; the read policy is in
+  [browser-previews.md](../../architecture/browser-previews.md#private-https-origins)).
   The same worker checks passed in Firefox and Playwright WebKit on
   2026-10-23. Electron's **Reset site data** with the hostile and benign
   workers installed on a desktop-tunnel service passed on 2026-10-25 (see the
-  evidence log). Still open: shipping Safari.
+  evidence log). Shipping Safari is in the manual-test checklist (7568:
+  0042 task 3).
 - Compatibility cases. Passed in Playwright Chromium, Firefox and WebKit on
   2026-10-25 (see the evidence log): SPA deep links and history, the `srcset`
   route, source maps, IndexedDB, BroadcastChannel, service-worker and Cache
@@ -817,10 +665,10 @@ log below.
   pages and the web client's no-opener popup, and an IPv6-only (`::1`)
   target. The Next.js 16.4.3 app-router fixture passed in Chromium and
   Firefox on 2026-11-03 (see the evidence log; WebKit not run on beelink,
-  2680). Still not run in a real browser:
-  - real-provider OAuth compatibility, deferred (D13; synthetic external
-    redirects into a same-service frame and top-level return are covered
-    since 2026-10-23).
+  2680). Real-provider OAuth compatibility is deferred (D13; synthetic
+  external redirects into a same-service frame and top-level return are
+  covered since 2026-10-23) and in the manual-test checklist (7568: 0042
+  task 5).
 - Performance thresholds. Set them from the two-machine baseline (first byte,
   connect time, HMR delivery, peak queue and decode bytes, socket counts)
   before any cohort counts as passing. Not set: no two-machine baseline
@@ -1328,8 +1176,7 @@ evidence.
   - Sibling service: the credentialed POST and the CORS bearer request were
     refused before forwarding, but a credentialed `no-cors` `GET /echo`
     reached the sibling application (same-site hosts, `SameSite=Lax` cookie,
-    reads not checked). Recorded as
-    [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md);
+    reads not checked). Recorded as to-do 0054 (retired 2026-11-10);
     the spec asserts the observed read.
   - After `Storage.clearDataForOrigin` for the app origin only: no worker,
     no app cookies, the sibling's cookie intact, and a fresh bootstrap signs
@@ -1442,8 +1289,8 @@ Chromium only.
 
 - Private origins now refuse cookie-authenticated reads from other sites and
   services unless they are top-level document navigations (details and
-  decisions in
-  [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
+  decisions in to-do 0054, retired 2026-11-10; the policy is in
+  [browser-previews.md](../../architecture/browser-previews.md#private-https-origins)).
 - `mise run test:preview:browser`: 7 passed, 1 skipped (Vite fixture unset).
   The hostile worker's credentialed `no-cors` `GET` no longer reaches the
   sibling application. A new case shows a fetch, an image and a frame from
@@ -1484,7 +1331,7 @@ Tailscale Serve 1.102.4. Single machine.
   [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md).
   All other workspace tasks and aggregate groups passed.
 - This closes the Firefox engine and live header-preservation gaps in
-  [0054](0054-preview-cross-service-reads.md). Shipping Safari/iOS, private
+  to-do 0054 (retired 2026-11-10). Shipping Safari/iOS, private
   browsing and real wildcard-DNS browser publication through `publicPort`
   remain open. No system DNS, trust-store or production-profile edits.
 
@@ -1740,7 +1587,7 @@ name:
 | Run | Command (after `bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/service-preview-electron.spec.ts`) | Passed | Failed | Not run |
 | --- | --- | --- | --- | --- |
 | `svc0042-task10-new` | `--grep "519 px pane\|another client's layout save"` | 2 | 0 | 0 |
-| `svc0042-task10-owner` | none (complete owner) | 16 | 1 (legacy URL tab Back, [7061](7061-legacy-url-tab-back-fails-headless.md)) | 7 (serial, after the failure) |
+| `svc0042-task10-owner` | none (complete owner) | 16 | 1 (legacy URL tab Back, [to-do 7061, retired 2026-11-10](../../architecture/browser-previews.md#desktop-tunnel)) | 7 (serial, after the failure) |
 | `svc0042-task10-without` | `--grep-invert` the two new cases | 15 | 1 (the same case and message) | 6 |
 | `svc0042-task10-owner2` | `--grep-invert "keeps a link and Back through routine"` | 23 | 0 | 0 |
 
@@ -1781,7 +1628,7 @@ name:
 - Fixed the recorded legacy Back failure as well: its synthetic re-attach now
   carries the renderer's environment identity. Omitting it replaced the view
   and discarded its history. All original navigation assertions remain;
-  [7061](7061-legacy-url-tab-back-fails-headless.md) records the diagnosis.
+  [to-do 7061, retired 2026-11-10](../../architecture/browser-previews.md#desktop-tunnel) records the diagnosis.
 - Targeted Electron command, through `test:logged`, run ID
   `svc0042-review-fixed`: `bunx playwright test --config
   e2e/agent-testing/playwright.electron.config.ts
@@ -1821,6 +1668,46 @@ name:
   The original review package and its output artifacts were not changed.
   The rerun JSON has no errors outside test cases. No live service-preview
   worker or temporary service-preview profile root remained after cleanup.
+
+2026-11-11, seeded entry-port services on Linux through `ss` and `lsof`
+(to-do 0045 task 3, from 3230; 0045 retired in the same change), at `498b6876`
+plus the change that admits the spec to the headless config.
+
+| Item | Version |
+| --- | --- |
+| Host | beelink2, Omarchy Linux 7.2.15 (x86_64), no `lsof` installed, Wayland session not used |
+| Bun / Electron / Playwright | 1.4.4 / 45.2.3 / 1.65.0 |
+| `ss` | iproute2 7.3.0 |
+| `lsof` (second lookup path only) | 4.99.7 from Arch `extra`, SHA-256 checked against the host's pacman sync database, extracted into a private temporary directory and put first on `PATH`; never installed |
+
+- Change: `service-preview-seeded-electron.spec.ts` joins
+  `HEADLESS_CAPABLE_ELECTRON_SPECS` (it launches through
+  `service-preview-electron-launch.ts`, which already honoured the opt-in), so
+  the headless config admits it.
+- Command, each through `test:logged` with `DISPLAY` and `WAYLAND_DISPLAY`
+  unset, `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` and
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`: `bunx playwright test --config
+  e2e/agent-testing/playwright.electron-headless.config.ts
+  service-preview-seeded-electron.spec.ts`.
+- `ss` path, no `lsof` on `PATH`: run IDs `seeded-preview-linux-1`,
+  `seeded-preview-linux-2` and `seeded-preview-linux-ss`, **6 passed** each
+  (about 11.5 s per run including startup). In the third run a logging
+  wrapper in front of `/usr/bin/ss` recorded 38 lookups, all
+  `ss -H -ltnp "sport = :<entry port>"` or `:<entry port + 1>`, so the
+  ownership answers came from `ss`. Check 1 resolving to `managed-process`
+  is itself proof that a lookup tool answered: with none the service stays
+  `unchecked` and waits.
+- `lsof` path: run ID `seeded-preview-linux-lsof`, **6 passed**; a logging
+  wrapper recorded 32 `lsof -nP -a -iTCP:<port> -sTCP:LISTEN -Fpftn` calls.
+- Checks 3 and 6 passed on every run. Check 3: the open tab's client rendered
+  the new process, and renewal at the old generation was refused with
+  `access-expired`. Check 6 restarted A's server inside the 5 s verification
+  window and required a newer endpoint generation, so the listener-pid
+  recheck works through both tools.
+- Cleanup: each spec run removed its own temporary profile root, Vite and dev
+  servers (no `seeded-entry-dev-server` process was left); the `lsof` download
+  and both wrapper directories were deleted afterwards. No Docker, provider
+  turn, login or real data directory was used.
 
 ## Constraints and rationale
 
@@ -1995,7 +1882,7 @@ as below.
   (`--grep-invert`), the other 21 passed twice in a row (42 of 42), the
   multi-backend case included (released 389 and 165 ms after the window was
   gone). The headless failure is now
-  [7061](7061-legacy-url-tab-back-fails-headless.md).
+  [to-do 7061, retired 2026-11-10](../../architecture/browser-previews.md#desktop-tunnel).
 - `apps/desktop` tests: `connection-manager.test.ts`,
   `remote-gateway-request-auth.test.ts`, `window-workspace-target.test.ts` and
   `connection-manager-federation.test.ts` passed (103); the two new 0622 cases
@@ -2039,20 +1926,6 @@ Commands were `mise run test:logged -- --name <name> -- bunx playwright test
 
 ## Open questions
 
-- How long is the support window for the legacy route and the pre-preview
-  layout schema? Should compatibility mode remain as an explicit fallback
-  after the desktop default flips? (Partly answered 2026-10-24: the window is
-  published releases from the floor, the newest Stable at least 60 days old;
-  see [`version-compatibility.md`](../../architecture/version-compatibility.md).
-  The legacy route can go once the floor is at or above the first Stable
-  release with service previews as the desktop default, and stored legacy
-  URL tabs have a migration. `preview.legacy-loopback-route` counts its
-  requests. The fallback question stays open; recommendation in D8.)
-- Is it acceptable that annotations on legacy URL tabs keep needing the legacy
-  route? (Recommendation in D8.)
-- What thresholds should the flipped default be held to? (Proposed starting
-  point in D8; needs the two-machine baseline. The window and sign-off are
-  answered by D19.)
 - Answered 2026-10-25 (decision D3): the preview browser and Docker suites
   join change-gated validation, not CI. The testing guide's "Verification by
   change type" table and `AGENTS.md` now name `mise run test:preview:browser`
@@ -2363,42 +2236,31 @@ Moving this case before the legacy Back case preserves its serial-suite signal
 without skipping any case. The mutation probes above demonstrate that each
 adoption now rejects a renderer write-back.
 
-## Needs verification
-
-- How much disk the `orkestrator-preview-svc-*` partitions take on a
-  long-lived profile. One data point (2026-10-22, the maintainer's macOS
-  production profile, read-only `du`): 2 service partitions, 5.8 and 9.4 MB,
-  mostly Chromium caches (GPU and Dawn caches, Code Cache, Cache) created even
-  after light use; 16 shared legacy partitions, 93 MB in total. Retention of
-  service partitions now exists; the shared legacy ones (code item 4) are the
-  larger share. A profile with many services over months is still unmeasured.
-  Since 2026-10-25 `mise run disk:report` reports both partition kinds
-  (decision D7). A second data point, this host's production profile
-  (macOS 27, read-only): no service partitions and one shared partition,
-  172 kB.
-
 ## Related
 
 - [browser-previews.md](../../architecture/browser-previews.md) (operator guide),
   [remote-gateway.md](../../architecture/remote-gateway.md) §"Service previews".
-- [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)
-  (found by the hostile service-worker run),
+- To-do 0054 (retired 2026-11-10; found by the hostile service-worker run,
+  its read policy is in
+  [browser-previews.md](../../architecture/browser-previews.md#private-https-origins)),
   [0046-embedded-service-previews.md](0046-embedded-service-previews.md),
-  [0045-preview-service-discovery.md](0045-preview-service-discovery.md),
+  to-do 0045 (retired 2026-11-11; local discovery and ownership are in
+  [browser-previews.md](../../architecture/browser-previews.md#local-environments)),
   [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md) (same
   Electron harness; annotations run inside service tabs),
-  [5500-shipping-safari-gateway-security-checks.md](5500-shipping-safari-gateway-security-checks.md)
+  to-do 5500 (retired 2026-11-10; [gateway security notes](../../architecture/remote-gateway.md#security-notes))
   (the gateway security spec's cases, run in the same Safari pass as task 3).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for batching the macOS, Electron, two-machine and Safari runs;
-  [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+  0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker Desktop.
-- [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md):
+- [Environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2) (to-do 0018, retired 2026-11-11):
   egress policy must keep published loopback ports and relay stdio working.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) (support
   window), [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md)
   (deletion-time cleanup), [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md)
   (gated runs).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 2, 3 and 12, the real-provider OAuth part of task 5, the pass-rule approval of task 6, the maintainer's fallback and legacy-annotation calls of task 8) moved there on 2026-11-10.
 
 ## Replaces
 

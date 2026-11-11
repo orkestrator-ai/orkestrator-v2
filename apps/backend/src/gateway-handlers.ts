@@ -48,7 +48,10 @@ import type {
   GatewayEventClient,
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
-import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-projection-encoding.js";
+import {
+  isSpliceableResult,
+  spliceEncodedJsonBytes,
+} from "./core/native-agent-projection-encoding.js";
 import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 import type { CommandInvocation } from "./core/commands-context.js";
 import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
@@ -168,23 +171,35 @@ export class GatewayHandlers {
       ),
     );
 
+    // The call's own cancellation: a client that goes away before the answer
+    // (a node link whose caller stopped waiting aborts its request) aborts it.
+    // Handlers may honour it; the answer is still written to a closed socket
+    // harmlessly when they do not.
+    const cancel = new AbortController();
+    const onClose = () => {
+      if (!response.writableFinished) cancel.abort(new Error("The client went away."));
+    };
+    response.once("close", onClose);
     try {
       const invokeArgs =
         command === "public_action" && options.controllerId
           ? withRelayController(safeArgs, options.controllerId)
           : safeArgs;
-      const result = await (invocation === undefined
-        ? this.ctx.backend.invoke(command, invokeArgs)
-        : this.ctx.backend.invoke(command, invokeArgs, invocation));
+      const result = await this.ctx.backend.invoke(command, invokeArgs, {
+        ...invocation,
+        signal: cancel.signal,
+      });
       // A transcript answer's rows were each encoded already to size and hash
       // them; splice those encodings in rather than serializing them again.
-      const responseBody = isSpliceableResult(result)
-        ? `{"result":${spliceEncodedJson(result)}}`
-        : JSON.stringify({ result });
+      // Either way the body is encoded to bytes once, here, and its length
+      // read from the buffer rather than by scanning the string again.
+      const responseBody =
+        (isSpliceableResult(result) ? spliceEncodedJsonBytes({ result }) : undefined) ??
+        Buffer.from(JSON.stringify({ result }));
       this.ctx.metrics.recordInvoke(
         command,
         requestBytes,
-        Buffer.byteLength(responseBody),
+        responseBody.byteLength,
         Math.max(0, Date.now() - startedAt),
         true,
       );
@@ -217,6 +232,8 @@ export class GatewayHandlers {
         false,
       );
       serializedJsonResponse(response, 500, responseBody);
+    } finally {
+      response.off("close", onClose);
     }
   }
 

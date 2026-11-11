@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { BridgeRestartCounter } from "./bridge-restarts.js";
-import { LocalServerRuntime } from "./local-server-runtime.js";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import { LOCAL_SERVER_HEALTHY_REUSE_MS, LocalServerRuntime } from "./local-server-runtime.js";
 
 const KEY = "codex:env-1";
 const fakeChild = (pid: number) => ({ pid }) as unknown as ChildProcessWithoutNullStreams;
@@ -158,5 +159,55 @@ describe("reapAfterUnrequestedExit", () => {
       },
     });
     await expect(servers.reapAfterUnrequestedExit(KEY, fakeChild(205))).resolves.toBeUndefined();
+  });
+});
+
+describe("reused health answers", () => {
+  const healthyChild = () => fakeChild(fakePid(1)) as ChildProcessWithoutNullStreams;
+
+  test("stand for the same process, port and token inside the window only", () => {
+    const servers = runtime();
+    const child = healthyChild();
+    servers.adoptProcess(KEY, child);
+    servers.recordHealthy(KEY, { child, port: 4100, authToken: "token", at: 1_000 });
+
+    expect(servers.recentlyHealthy(KEY, child, 4100, "token", 1_000)).toBe(true);
+    expect(
+      servers.recentlyHealthy(KEY, child, 4100, "token", 1_000 + LOCAL_SERVER_HEALTHY_REUSE_MS - 1),
+    ).toBe(true);
+    expect(servers.recentlyHealthy(KEY, child, 4101, "token", 1_001)).toBe(false);
+    // A mismatch drops the answer, so the original coordinates probe again too.
+    expect(servers.recentlyHealthy(KEY, child, 4100, "token", 1_001)).toBe(false);
+
+    servers.recordHealthy(KEY, { child, port: 4100, authToken: "token", at: 1_000 });
+    expect(servers.recentlyHealthy(KEY, child, 4100, "other", 1_001)).toBe(false);
+    servers.recordHealthy(KEY, { child, port: 4100, authToken: "token", at: 1_000 });
+    expect(
+      servers.recentlyHealthy(KEY, child, 4100, "token", 1_000 + LOCAL_SERVER_HEALTHY_REUSE_MS),
+    ).toBe(false);
+  });
+
+  test("are not recorded for a process that does not own the key", () => {
+    const servers = runtime();
+    const owner = healthyChild();
+    const stranger = fakeChild(fakePid(2)) as ChildProcessWithoutNullStreams;
+    servers.adoptProcess(KEY, owner);
+    servers.recordHealthy(KEY, { child: stranger, port: 4100, authToken: "token", at: 1_000 });
+
+    expect(servers.recentlyHealthy(KEY, stranger, 4100, "token", 1_000)).toBe(false);
+  });
+
+  test("end when the process is marked unresponsive or released", () => {
+    const servers = runtime();
+    const child = healthyChild();
+    servers.adoptProcess(KEY, child);
+    servers.recordHealthy(KEY, { child, port: 4100, authToken: "token", at: 1_000 });
+    servers.markUnresponsive(KEY, { child, since: 1_000, lastFailureAt: 1_000 });
+    expect(servers.recentlyHealthy(KEY, child, 4100, "token", 1_001)).toBe(false);
+
+    servers.clearUnresponsive(KEY);
+    servers.recordHealthy(KEY, { child, port: 4100, authToken: "token", at: 1_000 });
+    servers.releaseOwnership(KEY, child);
+    expect(servers.recentlyHealthy(KEY, child, 4100, "token", 1_001)).toBe(false);
   });
 });

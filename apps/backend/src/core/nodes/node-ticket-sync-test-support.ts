@@ -44,11 +44,18 @@ export async function storageIn(name: string): Promise<StorageService> {
 
 export type Fleet = Awaited<ReturnType<typeof fleet>>;
 
+/** The hello `domains` a current leaf advertises. */
+export const CURRENT_TICKET_SYNC_DOMAINS = { "ticket-sync": { min: 1, max: 1 } } as const;
+
 export async function fleet(
   options: {
     capability?: boolean;
-    /** The leaf's hello `domains` (plan item 1010); absent is a pre-contract leaf. */
-    domains?: Record<string, { min: number; max: number }>;
+    /**
+     * The leaf's hello `domains` (plan item 1010). Absent is a current leaf
+     * (`CURRENT_TICKET_SYNC_DOMAINS`); `null` is a pre-contract leaf whose
+     * hello has no `domains`, which the command node calls at version 0.
+     */
+    domains?: Record<string, { min: number; max: number }> | null;
     /** How long the leaf waits for an image it asked for. */
     imageTimeoutMs?: number;
     /** While true, the command node has not read the leaf's projects yet. */
@@ -76,12 +83,15 @@ export async function fleet(
   } as unknown as CommandContext;
   const received: string[] = [];
   const envelopes: Array<{ command: string; envelope: ContractEnvelope | undefined }> = [];
+  /** Every request's arguments as the leaf received them. */
+  const requests: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const domains = options.domains === undefined ? CURRENT_TICKET_SYNC_DOMAINS : options.domains;
   const failNext = new Set<string>();
   const link: TicketSyncLink & { connected: boolean } = {
     connected: true,
     hello: {
       capabilities: options.capability === false ? {} : { "ticket-sync": 1 },
-      ...(options.domains ? { domains: options.domains } : {}),
+      ...(domains ? { domains } : {}),
     },
     async invoke<T>(
       name: string,
@@ -91,6 +101,7 @@ export async function fleet(
       if (!link.connected) throw new Error("fetch failed");
       received.push(name);
       envelopes.push({ command: name, envelope: invokeOptions?.envelope });
+      requests.push({ command: name, args: structuredClone(args) });
       const handler = handlers.get(name);
       if (!handler) throw new Error(`Unknown command: ${name}`);
       // The leaf's registry gets the envelope as the gateway passes it.
@@ -147,6 +158,7 @@ export async function fleet(
     leafImages,
     received,
     envelopes,
+    requests,
     failNext,
     events,
     leafTicket,

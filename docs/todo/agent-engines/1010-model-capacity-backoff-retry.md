@@ -7,11 +7,10 @@ Analysed 2026-10-30 against `main` at `361dc0a6e`.
 ### Tasks
 
 1. **Codex: continue a turn the model refused for capacity**: the bridge retries `serverOverloaded` and `policyCapacityUnavailable` with backoff and jitter, keeps the session `running`, and continues the same turn under the same request id. Status: done (2026-10-30; `policyCapacityUnavailable` added 2026-10-31).
-2. **Codex: live evidence of a real refusal**: watch a real `serverOverloaded` turn retry and recover. Status: open; needs a real capacity refusal, which cannot be provoked without billed turns.
-3. **Claude: unattended sessions and Claude Code's own 529 retry**: Multi Review, build and graph sessions run with a longer Claude Code overload backoff. Status: done (2026-10-31); a real overload has not been observed through it.
-4. **Cursor: classify capacity refusals from `@cursor/sdk`**: the SDK bridge has no retry for transient provider errors. Status: open (needs evidence of the error shape; the 1.2.0 SDK reading in 1020 does not give it).
-5. **Grok (ACP bridge): bring the existing retry in line**: the ACP retry uses the shared backoff with jitter and a per-wait cap, shows its wait, and ends at once on Stop. Status: done (2026-10-31); how a real Grok overload reaches the bridge is unobserved.
-6. **OpenCode: unattended sessions skip turn recovery**: unattended turns ended by an overload are continued inside the provider, keeping their request and grant. Status: done (2026-10-31); a real overload has not been observed through it.
+3. **Claude: unattended sessions and Claude Code's own 529 retry**: Multi Review, build and graph sessions run with a longer Claude Code overload backoff. Status: done (2026-10-31); seeing a real overload through it moved to 7568 on 2026-11-10.
+4. **Cursor: classify capacity refusals from `@cursor/sdk`**: the SDK bridge has no retry for transient provider errors; classify a capacity refusal on its structured field and retry it like Codex. Status: blocked (waits on 7568: 1010 task 4, a real Cursor capacity refusal's error shape; the 1.2.0 SDK reading in 1020 does not give it).
+5. **Grok (ACP bridge): bring the existing retry in line**: the ACP retry uses the shared backoff with jitter and a per-wait cap, shows its wait, and ends at once on Stop. Status: done (2026-10-31); how a real Grok overload reaches the bridge moved to 7568 on 2026-11-10.
+6. **OpenCode: unattended sessions skip turn recovery**: unattended turns ended by an overload are continued inside the provider, keeping their request and grant. Status: done (2026-10-31) for OpenCode 1.x; seeing a real overload through it moved to 7568 on 2026-11-10. The continuation was removed with OpenCode 1.x on 2026-11-11 (see [0008](0008-opencode-v2.md) "OpenCode 1.x retired (2026-11-11)"): OpenCode 2 schedules its own retries (a `retry` part, `opencode2/transcript.ts`), and nothing in Orkestrator continues a 2.x turn after it gives up.
 7. **Pi: rely on the SDK's own retry**: Pi's `auto_retry_start`/`auto_retry_end` already covers overloads. Status: done (no change needed).
 
 ### 1. Codex: continue a turn the model refused for capacity
@@ -32,23 +31,6 @@ Analysed 2026-10-30 against `main` at `361dc0a6e`.
 - **Other providers.** Covered in tasks 3–7.
 
 **Decisions.** See [Assumptions and decisions](#assumptions-and-decisions) for each choice, its options, and the one taken.
-
-### 2. Codex: live evidence of a real refusal
-
-**Problem.** Every test drives a scripted app-server. Nobody has seen a real `serverOverloaded` refusal go through the retry.
-
-**Context.** A capacity refusal cannot be provoked on demand, and the task forbids billed turns and real logins.
-
-**Investigation.** The rollout fixture in `history/rollout-rows.test.ts` assumes the rollout records `task_complete.error.codex_error_info` as `server_overloaded`. That matches the existing refusal fixture's `codex_error_info: "other"`, but the exact spelling for this variant has not been observed. Replay relies only on the continuation marker, never on that field.
-
-**Decisions.**
-- **How to get the evidence?**
-  - **Watch the next real refusal (recommended).** Find a `[Orkestrator automatic retry]` user message in a real rollout under `CODEX_HOME/sessions`, and the retry card in the tab.
-    - Pros: free; the refusals recur often on GPT-6.1-Sol.
-    - Cons: depends on timing.
-  - **Point a throwaway `CODEX_HOME` at a fake Responses endpoint** that answers `server_is_overloaded` (a custom `model_providers` entry).
-    - Pros: deterministic, and exercises the real binary's error mapping.
-    - Cons: needs a fake Responses API server and a throwaway profile; more work than the payoff.
 
 ### 3. Claude: unattended sessions and Claude Code's own 529 retry
 
@@ -90,7 +72,7 @@ Read from the 2.1.314 bundle, not run:
 
 **Decisions.**
 - **How to proceed?**
-  - **Record one real refusal first (recommended),** then classify on its structured field, as Codex does.
+  - **Record one real refusal first (recommended),** then classify on its structured field, as Codex does. Recording it needs a Cursor login and a real refusal, so that part is in 7568 (1010 task 4).
     - Pros: no guessing at text.
     - Cons: waits on a real refusal.
   - **Match `resource_exhausted` text, as the ACP bridge does.**
@@ -300,7 +282,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
   - **Inside `OpenCodeProvider`, driven by the workflow's status poll (chosen).**
     - Pros: the request, grant, tools, schema and result key all stay put, as in Codex; no workflow state machine changes; nothing runs once nobody polls.
     - Cons: a second OpenCode retry path beside the interactive one; idle rather than `running` during the wait.
-- **Chosen:** `opencode-capacity-retry.ts`, called from `settleCompleted` under the dispatch lock. The skip in `appliesTo` stays, so interactive sessions are unchanged.
+- **Chosen:** `opencode-capacity-retry.ts` (removed with OpenCode 1.x on 2026-11-11: `git show 5f4e27b1c:apps/backend/src/core/opencode-capacity-retry.ts`), called from `settleCompleted` under the dispatch lock. The skip in `appliesTo` stays, so interactive sessions are unchanged.
 - **Idle and `turnSettled: false`:** the session reads idle during the wait, because OpenCode itself is idle, and the request reads unsettled. `turnTerminalError` answers unavailable meanwhile, so no outcome is recorded. Activity views may show the session idle for up to a minute.
 - **What counts:** an `APIError` with status 503 or 529, or 429 with an overload body, unless the message or body names a limit or login. A 429 without an overload body is a rate limit.
 - **The continuation:** the existing `OPENCODE_PROVIDER_ERROR_CONTINUATION` text, with the turn's model, agent, variant, tools, system instruction and schema wrapper. Its message id carries the request's marker (`nextOpenCodeMessageIdForRequest`), so settlement, the terminal error and the structured result read the newest attempt.
@@ -324,7 +306,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
 - Codex turns started by prompt dispatch retry `serverOverloaded` and `policyCapacityUnavailable` up to five attempts. This covers interactive tabs, Multi Review steps and build stages alike.
 - Claude `pipeline` sessions run with a 4 s base and 64 s maximum overload backoff inside Claude Code.
 - Grok turns retry on the shared backoff, with a card, and stop at once on Stop.
-- Unattended OpenCode turns ended by an overload are continued by the provider on the shared backoff.
+- OpenCode 2 retries an overload inside its own server; the 1.x provider's continuation of unattended turns (task 6) was removed with OpenCode 1.x on 2026-11-11.
 - Cursor has no retry (task 4). Pi relies on its SDK (task 7).
 - Tests:
   - `app-server-runtime-capacity-retry.test.ts` covers:
@@ -339,7 +321,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
   - `sessions/capacity-retry.test.ts` covers the policy.
   - `history/rollout-rows.test.ts` covers the replay.
   - `multi-review-service.test.ts` ("an unattended Fix survives a Codex capacity retry", "an unattended Fix waits out an OpenCode capacity retry") covers the backend side of the contract.
-  - `opencode-capacity-retry.test.ts` covers classification, the continuation, backoff, exhaustion, Stop, and rejected and ambiguous sends.
+  - `opencode-capacity-retry.test.ts` covered the 1.x classification, continuation, backoff, exhaustion, Stop, and rejected and ambiguous sends (removed with OpenCode 1.x on 2026-11-11: `git show 5f4e27b1c:apps/backend/src/core/opencode-capacity-retry.test.ts`).
   - `acp-prompt.test.ts` and `acp-reconciliation.test.ts` cover the ACP retry, its card, Stop during a long wait, and errors that name a limit.
   - `runtime-env.test.ts` and `session-manager-prompt.test.ts` cover which Claude sessions get the longer backoff.
   - `packages/protocol/src/capacity-retry.test.ts` covers the shared policy.
@@ -352,14 +334,13 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
 
 ## Needs verification
 
-- Task 2: a real refusal retried end to end, for either Codex code.
-- The rollout spelling of `codex_error_info` for these variants. Replay does not depend on it.
-- Task 3: a real 529 waiting on the longer backoff. The CLI behaviour above is read from the bundle, not run.
-- Task 5: how a real Grok overload reaches the bridge, and that the retry fires for it.
-- Task 6: a real OpenCode overload ending a workflow turn and the continuation recovering it, against a real `opencode serve`.
+The live checks of real refusals (Codex, Claude, Grok and OpenCode) moved to
+7568 on 2026-11-10. The CLI behaviour in task 3 is read from the bundle, not
+run.
 
 ## Related
 
 - [1020-provider-upgrade-2026-10-30.md](1020-provider-upgrade-2026-10-30.md): the error shapes at the current pins (task 7).
-- [0235-codex-refused-login-turn-invisible.md](0235-codex-refused-login-turn-invisible.md): the refusal line a failed turn shows.
+- To-do 0235 (retired 2026-11-10): the refusal line a failed turn shows, now in [native-transcripts.md](../../architecture/native-transcripts.md#terminal-rows).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the real-refusal checks for tasks 3, 5 and 6, and the user part of task 4: capturing a real Cursor refusal) moved there on 2026-11-10.

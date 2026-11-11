@@ -6,7 +6,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 ### Tasks
 
-1. **Find out whether pre-status-wake associations remain, then remove the backfill rule** (report part 0090, its Needs verification): read real stores for associations older than status wakes and retire the rule when none are left. Status: open.
+1. **Find out whether pre-status-wake associations remain, then remove the backfill rule** (report part 0090, its Needs verification): retire the rule once the user's count of such associations in their real stores (moved to the manual-test checklist) shows none are left. Status: blocked (waits on 7568: 4860 task 1 real-store count).
 2. **Prove the remote goal hold live** (report part 0270): a worker on another node, between goal iterations, does not wake its coordinator. Status: open.
 
 ### 1. Find out whether pre-status-wake associations remain, then remove the backfill rule
@@ -15,7 +15,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Context.** Status wakes shipped on 2026-10-16 (`bcce21c11`, #1031). The rule is `isStatusBackfill` in `apps/backend/src/core/coordinator-status-backfill.ts`, called from `observeAssociation` in `coordinator-status-wakes.ts`. It applies to a non-terminal status with no earlier notice, unchanged for over 24 hours, on an association over `STATUS_BACKFILL_ASSOCIATION_AGE_MS` (14 days) old. Retention removes old finished records (`coordinator-workflow-retention.ts`), so few should remain. 14 days was chosen because it is under the 19 days between the feature and this work, so every pre-feature association counted as old when the limit shipped.
 
-**Investigation.** Not read: the build worker runs beside the user's production instance and must not touch its data directory. Nothing in the repository says what a real store holds. The query is simple: on each machine, the coordinator store's `workflows` of kind `multi-review`, `build-pipeline`, `graph-run`, `pull-request` or `feature-plan` with `createdAt` before 2026-10-16, no `statusNotice` and no `terminalNotifiedAt`.
+**Investigation.** Not read: the build worker runs beside the user's production instance and must not touch its data directory. Nothing in the repository says what a real store holds. The query is simple: on each machine, the coordinator store's `workflows` of kind `multi-review`, `build-pipeline`, `graph-run`, `pull-request` or `feature-plan` with `createdAt` before 2026-10-16, no `statusNotice` and no `terminalNotifiedAt`. Running it on the user's machines is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); when it reports none, delete the rule and its module.
 
 **Decisions.**
 
@@ -51,9 +51,10 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 ## Related
 
 - C1 outcome record (`git show 413bd6219:docs/reports/2026-11-04-coordinator-c1-wake-reliability-outcome.md`): every task in the report and where it went
-- [2900-coordinator-node-mail-live-qualification.md](2900-coordinator-node-mail-live-qualification.md): the same two-node setup
+- to-do 2900 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#coordinators-on-two-nodes)): the same two-node setup
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#status-wakes)
 - [`docs/architecture/goals.md`](../../architecture/goals.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: counting old associations in the real coordinator stores) moved there on 2026-11-10.
 
 ## Replaces
 

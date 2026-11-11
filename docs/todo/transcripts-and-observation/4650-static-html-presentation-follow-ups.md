@@ -6,10 +6,10 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 ### Tasks
 
-1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews. Status: open.
-2. **Include document text in Find**: text inside a static frame is not indexed. Status: done (2026-11-05); see Assumptions and decisions. What it leaves is in [5780](5780-find-inside-static-documents.md).
+1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews, by emitting the frame document in the hosted build with its own header rule. Status: blocked (waits on 7568: 4650 task 1, approval of the hosted policy change and the check on a real Vercel deployment).
+2. **Include document text in Find**: text inside a static frame is not indexed. Status: done (2026-11-05); see Assumptions and decisions. What it left went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`).
 3. **Share one sanitizer with the design runtime**: remove the pinned copy. Status: open (do with the next intentional design-runtime change).
-4. **Consider a thin visual publishing tool**: only if provider tests show the lifecycle is cumbersome. Status: open.
+4. **Consider a thin visual publishing tool**: only if real provider sessions show the lifecycle is cumbersome. Status: blocked (waits on 7568: 4650 task 4, evidence from real provider sessions).
 
 ### 1. Run static documents in the hosted client
 
@@ -17,7 +17,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 **Context.** `apps/web-public/vercel.json` sets `script-src 'self'` and `frame-ancestors 'none'` on `/(.*)`, and its Vite build does not use `rendererSecurityPlugin`, so there is no emitted frame document. A `srcdoc` frame inherits the parent policy, so the bootstrap cannot run. The build declares `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`.
 
-**Investigation.** Not attempted live. Whether a more specific Vercel header rule replaces the `/(.*)` policy for one path needs checking on a real deployment, which is outward-facing.
+**Investigation.** Not attempted live. Whether a more specific Vercel header rule replaces the `/(.*)` policy for one path, and approval to relax the hosted policy for that path, are on the manual-test checklist (7568); the build change here waits on both.
 
 **Decisions.**
 
@@ -71,7 +71,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 **Context.** The existing `create_artifact`, `preview_artifact`, `get_artifact_operation` and `publish_artifact` lifecycle is sufficient, and shared instructions now describe it.
 
-**Investigation.** No evidence yet that the lifecycle stops agents; only limited real-provider runs have been made.
+**Investigation.** No evidence yet that the lifecycle stops agents; only limited real-provider runs have been made. Gathering that evidence from real provider sessions is on the manual-test checklist (7568); the decision below waits on it.
 
 **Decisions.**
 
@@ -121,4 +121,8 @@ This fixes a gap outside the file's wording, because document text would otherwi
 - Reports that were never shown stay unindexed, the cost this option accepts.
 - An open Find bar does not refresh when text arrives; it updates on its next query or transcript change, as other artifact bodies do.
 
-All three are in [5780](5780-find-inside-static-documents.md).
+All three went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`); the architecture is in [`rich-transcripts.md`](../../architecture/rich-transcripts.md#static-document-presentation).
+
+## Related
+
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: approving the hosted policy change and checking it on a real Vercel deployment; the user part of task 4: evidence from real provider sessions) moved there on 2026-11-10.

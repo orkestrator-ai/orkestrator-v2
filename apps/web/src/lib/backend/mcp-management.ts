@@ -77,13 +77,6 @@ export function createMcpManagementApi(client: BackendClient) {
     return mcp(machine).apply_mcp_configuration({ operationId });
   }
 
-  function getMcpOperation(
-    operationId: string,
-    machine?: AccountMachine,
-  ): Promise<McpOperationSnapshot> {
-    return mcp(machine).get_mcp_operation({ operationId });
-  }
-
   /** Cancel queued application; the saved configuration is kept. */
   function cancelMcpApply(
     operationId: string,
@@ -128,7 +121,6 @@ export function createMcpManagementApi(client: BackendClient) {
     validateMcpMutation,
     mutateMcpDefinition,
     applyMcpConfiguration,
-    getMcpOperation,
     cancelMcpApply,
     resolveMcpEnvironmentOverlay,
     previewMcpEnvironmentDefaults,
@@ -146,7 +138,6 @@ export const {
   validateMcpMutation,
   mutateMcpDefinition,
   applyMcpConfiguration,
-  getMcpOperation,
   cancelMcpApply,
   resolveMcpEnvironmentOverlay,
   previewMcpEnvironmentDefaults,

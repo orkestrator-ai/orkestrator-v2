@@ -26,6 +26,8 @@ export type DesignLinkStatus =
   | "retained"
   /** The tab is closed and its native session can be reopened. */
   | "resumable"
+  /** The tab is closed and the agent has archived its session: it is restored before it is resumed. */
+  | "archived"
   /** The tab is closed and no session is known for it: it never started, or closed before links kept sessions. */
   | "missing"
   /** The tab is closed and the backend could not be asked. */
@@ -35,7 +37,12 @@ export type DesignLinkStatus =
 
 export type DesignLinkCheck =
   | { kind: "pending" }
-  | { kind: "ready"; states: ReadonlyMap<string, DesignSessionLinkState["session"]> }
+  | {
+      kind: "ready";
+      states: ReadonlyMap<string, DesignSessionLinkState["session"]>;
+      /** Links whose recorded conversation the agent lists as archived. */
+      archived: ReadonlySet<string>;
+    }
   /** A backend older than session-link states. */
   | { kind: "unsupported" }
   | { kind: "failed"; message: string };
@@ -52,6 +59,9 @@ export function designLinkCheckFrom(result: DesignSessionLinkStates): DesignLink
   return {
     kind: "ready",
     states: new Map(result.states.map((state) => [state.linkId, state.session])),
+    archived: new Set(
+      result.states.filter((state) => state.archived === true).map((state) => state.linkId),
+    ),
   };
 }
 
@@ -75,7 +85,8 @@ export function designLinkStatus(
   const state = check.states.get(link.id);
   if (state === "retained") return "retained";
   if (state !== "missing") return "unavailable";
-  return link.sessionId?.trim() ? "resumable" : "missing";
+  if (!link.sessionId?.trim()) return "missing";
+  return check.archived.has(link.id) ? "archived" : "resumable";
 }
 
 /** 32-bit FNV-1a, enough to keep successive resume tab ids distinct. */
@@ -110,9 +121,12 @@ export interface ResumeDesignLinkInput {
     linkId: string;
     expectedTabId: string;
     tabId: string;
+    restoreArchived?: boolean;
   }) => Promise<DesignSessionResumeResult>;
   /** Adopt the retained mapping in its current tab. */
   retainTab?: boolean;
+  /** The link reads "archived": the backend unarchives the conversation before resuming it. */
+  restoreArchived?: boolean;
   /** Preserve the claimed tab for recovery even when local tab creation fails. */
   onClaimed?: (link: DesignSessionLink) => void;
   hasTab: (tabId: string) => boolean;
@@ -166,6 +180,7 @@ async function runResume(input: ResumeDesignLinkInput): Promise<ResumedDesignLin
     linkId: link.id,
     expectedTabId: link.tabId,
     tabId,
+    ...(input.restoreArchived && !input.retainTab ? { restoreArchived: true } : {}),
   });
   if (claimed.tabId !== tabId)
     throw new Error("This conversation was reopened elsewhere. Close the dialog and try again.");

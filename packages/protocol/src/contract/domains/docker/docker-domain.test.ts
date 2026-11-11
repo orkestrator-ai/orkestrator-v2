@@ -8,18 +8,17 @@ import { describe, expect, it } from "bun:test";
 import * as Schema from "effect/Schema";
 import { isNodeReadCommand } from "../../../command-nodes.js";
 import { initialContainerHostReachability } from "../../../container-host-reachability.js";
+import { isImageCapability, RETIRED_IMAGE_CAPABILITIES } from "../../../image-manifest.js";
 import type { NegotiatedDomains } from "../../../node-client.js";
 import { createDomainClient, type ContractEnvelopeFields } from "../../client.js";
 import { DOMAIN_CLIENTS } from "../../client-adapters.js";
 import { decodeCommandArgs, decodeCommandResult } from "../../command.js";
 import { DOCKER_COMMANDS, dockerClient } from "./index.js";
 
-/** The 29 commands `contract-domain-map.ts` listed under `docker` (2026-11-07). */
+/** The 29 commands `contract-domain-map.ts` listed under `docker` (2026-11-07), less the seven nothing called (removed 2026-11-10). */
 const DOCKER_COMMAND_NAMES = [
-  "check_base_image",
   "check_container_host_reachability",
   "check_docker",
-  "cleanup_orphaned_containers",
   "close_container_logs",
   "docker_cleanup_execute",
   "docker_cleanup_preview",
@@ -27,9 +26,6 @@ const DOCKER_COMMAND_NAMES = [
   "docker_remove_container",
   "docker_start_container",
   "docker_stop_container",
-  "docker_system_prune",
-  "docker_version",
-  "get_container_host_port",
   "get_container_host_reachability",
   "get_container_logs",
   "get_container_usage",
@@ -38,13 +34,11 @@ const DOCKER_COMMAND_NAMES = [
   "get_docker_system_stats",
   "get_docker_topology",
   "get_orkestrator_containers",
-  "list_docker_containers",
   "open_container_logs",
   "propagate_github_token_to_containers",
   "provision_environment",
   "read_container_logs",
   "reattach_container",
-  "stream_container_logs",
 ];
 
 const WORKSPACE_EXCLUDED = new Set(["docker_cleanup_execute", "docker_cleanup_preview"]);
@@ -70,7 +64,7 @@ function fakeNode(domains: NegotiatedDomains | null, answers: Record<string, unk
 }
 
 describe("docker commands", () => {
-  it("defines every docker command once, at version 1", () => {
+  it("defines every docker command once, since version 1", () => {
     expect(DOCKER_COMMANDS.map((def) => def.name as string).sort()).toEqual(DOCKER_COMMAND_NAMES);
     for (const def of DOCKER_COMMANDS) {
       expect(def.domain.name).toBe("docker");
@@ -147,12 +141,38 @@ describe("docker commands", () => {
     expect(decodeCommandResult(close, null)._tag).toBe("Success");
     expect(decodeCommandResult(close, undefined)._tag).toBe("Success");
   });
+
+  it("decodes an image status naming a retired capability from an older backend", () => {
+    const status = DOCKER_COMMANDS.find((def) => def.name === "get_docker_image_status")!;
+    const answer = (missingCapabilities: string[]) => ({
+      state: "incompatible",
+      imageRef: "orkestrator-v2:latest",
+      imageId: null,
+      registryDigest: null,
+      architecture: null,
+      manifest: null,
+      missingCapabilities,
+      remediation: null,
+    });
+    // A backend from before OpenCode 1.x was retired still requires and
+    // reports `opencode-launch`; it is in the Docker domain's support window.
+    for (const retired of RETIRED_IMAGE_CAPABILITIES) {
+      expect(decodeCommandResult(status, answer([retired, "opencode2-launch"]))._tag).toBe(
+        "Success",
+      );
+    }
+    expect(decodeCommandResult(status, answer(["not-a-capability"]))._tag).toBe("Failure");
+    // Retired names stay out of what images are checked for.
+    for (const retired of RETIRED_IMAGE_CAPABILITIES) {
+      expect(isImageCapability(retired)).toBe(false);
+    }
+  });
 });
 
 describe("docker client", () => {
-  it("is listed with adapters 1 and 0", () => {
+  it("is listed with adapters 2, 1 and 0", () => {
     expect(DOMAIN_CLIENTS).toContain(dockerClient);
-    expect(dockerClient.versions).toEqual([1, 0]);
+    expect(dockerClient.versions).toEqual([2, 1, 0]);
   });
 
   it("sends the envelope to a node with the domain, critical keys included", async () => {

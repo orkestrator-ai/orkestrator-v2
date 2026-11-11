@@ -20,35 +20,8 @@ four switching gaps are on `main` and are not repeated as tasks.
 
 ### Tasks
 
-1. **Approve a real Codex sign-in from the tab**: finish a browser or device-code ChatGPT sign-in and confirm the composer unlocks. Status: open (needs a person).
-2. **Claude usage windows after an account switch**: repeat the Codex switch check for Claude. Status: blocked (on a Claude turn that reports rate-limit windows).
-3. **Close out the file**: what to do with this file once tasks 1 and 2 are settled. Status: open.
-4. **Cursor status with Cursor's API unreachable**: a signed-in Cursor bridge answers status in about 3 s with the stored email or "Cursor account" while `Cursor.me` hangs. Moved from to-do 1173 (deleted 2026-11-06). Status: open (needs a real Cursor login).
-
-### 1. Approve a real Codex sign-in from the tab
-
-**Problem.** Every step of the Codex in-app sign-in has passed live except the approval itself, so the final "composer unlocks after a real login" step is unproven.
-
-**Context.** It needs a person to complete OpenAI's sign-in page or device code. The procedure is in "What is left" item 1 and uses an isolated profile with `--no-agent-credentials`, so no host login is touched.
-
-**Investigation.** The pieces the run depends on are on `main`: the cancel route and `cancel_native_agent_sign_in`, the 10-second re-read for a locked Codex tab (`AgentNativeTab.controller.tsx`, from #1295), and the `account.signedIn` clear of `needs-auth` notices. Codex is now pinned at `0.164.0` (`packages/toolchain/src/manifest.ts:8`), which is what the profiles already ran on 2026-10-26, so the procedure still applies.
-
-**Decisions.**
-
-- **Browser or device-code approval?**
-  - **Browser flow on a local profile, then device code only if a remote browser is at hand (recommended).**
-    - Pros: one person, one machine; the browser path is what desktop users hit.
-    - Cons: the device-code path (what remote and container tabs send) stays unapproved.
-  - **Both flows in one session.**
-    - Pros: closes both paths.
-    - Cons: two real logins to create and sign out of; more exposure of a real account in a test profile.
-- **What counts as a pass?**
-  - **Composer unlocks without a send, one turn answers, then sign-out leaves the profile's `auth.json` gone and the host's untouched (recommended).**
-    - Pros: proves the unlock and that the run left no real login behind.
-    - Cons: one billed turn on the person's account.
-  - **Composer unlocks only.**
-    - Pros: no billed turn.
-    - Cons: does not prove the login actually serves a turn.
+2. **Claude usage windows after an account switch**: prove the Codex switch gate for Claude. Status: open (recommended: a deterministic Claude case in `agent-accounts.test.ts`, retiring the live run).
+3. **Close out the file**: what to do with this file once task 2 is settled. Status: blocked (waits on task 2).
 
 ### 2. Claude usage windows after an account switch
 
@@ -82,46 +55,12 @@ four switching gaps are on `main` and are not repeated as tasks.
 **Decisions.**
 
 - **When to close it?**
-  - **Close it as soon as tasks 1 and 2 are settled (with task 2 settled by the unit test), moving the qualification evidence summary into `agent-accounts.md` (recommended).**
+  - **Close it as soon as task 2 is settled (by the unit test), moving the qualification evidence summary into `agent-accounts.md` (recommended).**
     - Pros: removes a nearly finished file from the ranked list; evidence stays findable.
-    - Cons: the one person-dependent approval decides the timing.
+    - Cons: none now that the person-dependent approval (old task 1) lives in the manual-test checklist.
   - **Move task 1 into 0031's batch now and delete this file.**
     - Pros: closes the file immediately; 0031 already batches person-dependent live runs.
     - Cons: the README says never add new todos to an existing file, so 0031 cannot take it; it would need a new numbered file instead.
-
-### 4. Cursor status with Cursor's API unreachable
-
-**Problem.** Cursor session status no longer waits on `Cursor.me` for the
-account label. The lookup is bounded at 3 s, falls back to the stored email or
-"Cursor account" without caching the fallback, and concurrent reads share one
-lookup. This has only been proved against a stubbed lookup that never answers.
-
-**Context.** Moved from to-do 1173 (deleted 2026-11-06). The bound is
-`ACCOUNT_LOOKUP_TIMEOUT_MS` in `bridges/cursor-bridge/src/config.ts`, used by
-`credentials.ts`. The tests are in `credentials.test.ts` and `http.test.ts`. The
-behaviour is described under sign-in readiness in
-[`agent-accounts.md`](../../architecture/agent-accounts.md).
-
-**Investigation.** Steps:
-
-1. Open a `dev:test` profile with a real signed-in Cursor bridge.
-2. Block `api2.cursor.sh` (a firewall rule or a hosts entry on a disposable
-   host), then wait past the 15 s auth cache.
-3. Open a Cursor tab. Check that status answers in about 3 s and that the
-   composer is not locked.
-4. Check that Settings › Cursor shows the stored email or "Cursor account".
-5. Unblock the host. Check that the real label comes back on a read after the
-   15 s window.
-
-**Decisions.**
-
-- **How to make the API unreachable?**
-  - **Block the host on a disposable machine or VM (recommended).**
-    - Pros: the real SDK call hangs or fails as it would on a bad network.
-    - Cons: a hosts entry or firewall rule must be undone afterwards.
-  - **Stub the lookup again.**
-    - Pros: no host change.
-    - Cons: already done in unit tests; it is not live evidence.
 
 Each platform should report a normalized sign-in state. Sign-in should happen
 in the app wherever the vendor has an API for it, and losing auth mid-turn
@@ -130,9 +69,8 @@ more than one login, switched globally per platform. All of that is now in the
 tree: the status type, the bridge routes, the per-session and settings account
 cards, the turn-time `auth` notice, Codex sign-in cancel, the bridge-output
 scrub and the four switching gaps, each checked on the real stack. What is left
-needs a person to approve a Codex sign-in, a Claude turn that reports
-rate-limit windows (see [What is left](#what-is-left)), and a Cursor status
-check with Cursor's API blocked (task 4). How accounts work is in
+is proving the usage-window gate for Claude (task 2; see
+[What is left](#what-is-left)). How accounts work is in
 [agent-accounts.md](../../architecture/agent-accounts.md).
 
 ## Current state
@@ -142,7 +80,9 @@ check with Cursor's API blocked (task 4). How accounts work is in
   `authStatus?`, `beginSignIn?`, `cancelSignIn?` and `signOut?` are on the
   provider contract (`agent-provider-contract.ts`). They are wired through
   `http-bridge-catalog.ts` and `native-agent-service.ts`, and OpenCode answers
-  through `OpenCodeCapabilities.authStatus` (`opencode-capabilities.ts`).
+  through `OpenCode2SessionFeatures.authStatus` (`opencode2/features.ts`,
+  since OpenCode 1.x and `opencode-capabilities.ts` were retired on
+  2026-11-11).
 - Bridge routes `GET /global/auth`, `POST /global/auth/login` and
   `POST /global/auth/logout` exist on Claude, Codex, Cursor, ACP and Pi, each
   with route tests. Codex also serves `POST /global/auth/login/cancel`.
@@ -342,8 +282,9 @@ probe created was deleted.
     unlocked the tab within one 10-second read (three runs; one earlier run
     right after a page reload did not re-read, and did not reproduce). That
     needed a fix, below.
-  - Still open: approving a real browser or device-code sign-in, which needs a
-    person (see [What is left](#what-is-left)).
+  - Approving a real browser or device-code sign-in needs a person; it moved
+    to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
+    on 2026-11-10.
 - **An expired Claude login mid-turn shows the `auth` notice and the sign-in
   card, not a spawn failure.** Done (2026-10-26, profile `qa-0003-auth`): the
   profile's `CLAUDE_CONFIG_DIR` held a made-up OAuth login with a future
@@ -443,24 +384,18 @@ Defects the runs found, all fixed in this branch with tests:
 A gap the runs found and left for its own file: a Codex turn refused for its
 login (an invalid API key) shows its 401 only while running, and the tab then
 renders neither the error row the projection holds nor a sign-in prompt
-([0235](0235-codex-refused-login-turn-invisible.md)).
+(to-do 0235, retired 2026-11-10; the fix is in
+[agent-accounts.md](../../architecture/agent-accounts.md#turn-time-auth-notice)).
 
 ### What is left
 
-1. **Approve a real Codex sign-in from the tab.** Needs a person. Start
-   `mise run dev:test --profile codex-auth-qa --fixture --no-agent-credentials --agent-platforms codex`,
-   store a made-up key in the profile's Codex home
-   (`CODEX_HOME=<dataDir>/agent-credentials/codex codex login --with-api-key`),
-   open a Codex tab, sign out from Agent Info, then press **Sign in to Codex**
-   and finish the ChatGPT sign-in in the browser (or a device code, through a
-   remote browser). Confirm the composer unlocks without a send, then sign out
-   again so the profile holds no real login, and reset the profile. Everything
-   before the approval passed on 2026-10-26.
 2. **Usage windows after a switch, for Claude.** Repeat the Codex run above
    with Claude once a Claude turn reports rate-limit windows (Claude sends
    them only sparsely, near a limit): a long turn on account A, a switch to B
    mid-turn, and B's card must not show A's windows. The gate is the same
-   function for both platforms (`contextUsageWithPlanUsage`).
+   function for both platforms (`contextUsageWithPlanUsage`); task 2
+   recommends a deterministic Claude case in `agent-accounts.test.ts` instead
+   of waiting for such a turn.
 
 ## Assumptions and decisions
 
@@ -663,7 +598,8 @@ Decisions from the 2026-10-26 qualification:
       notice until the bridge restarts or a turn completes.
 20. **The refused-login turn on Codex.**
     - Options: fix it here; record it.
-    - Chosen: record it in [0235](0235-codex-refused-login-turn-invisible.md).
+    - Chosen: record it in to-do 0235 (retired 2026-11-10; see
+      [agent-accounts.md](../../architecture/agent-accounts.md#turn-time-auth-notice)).
     - Why: the missing error row is in the transcript update path and may
       affect every provider; the notice for a 401 needs that row visible and
       a careful rule so the composer lock follows only a refused login.
@@ -680,6 +616,9 @@ Assumptions:
   human-readable `message`, as the generated protocol types say.
 - Pi's and OpenCode's `auth.json` keep one entry per provider id with a
   `type` field, as their bridges and `opencode-provider-login.ts` read them.
+  Since OpenCode 1.x was retired (2026-11-11), OpenCode's sign-ins live in its
+  2.x database (`/api/credential`), and the host `auth.json` is only the copy
+  `opencode2/credentials.ts` exports for containers.
 
 ## Constraints and rationale
 
@@ -759,9 +698,10 @@ Assumptions:
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Codex round trip and agent-test credential isolation.
 - [agent-engines.md](../../architecture/agent-engines.md).
-- [0235-codex-refused-login-turn-invisible.md](0235-codex-refused-login-turn-invisible.md)
+- [agent-accounts.md](../../architecture/agent-accounts.md#turn-time-auth-notice), to-do 0235 (retired 2026-11-10)
   (a Codex turn refused for its login shows no error or sign-in prompt; found
   by this file's qualification).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 4) moved there on 2026-11-10.
 
 ## Replaces
 

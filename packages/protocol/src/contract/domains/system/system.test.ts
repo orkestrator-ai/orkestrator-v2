@@ -30,6 +30,8 @@ import {
  */
 const ADMIN = new Set([
   "record_domain_adapter_usage",
+  "get_self_improvement_status",
+  "run_self_improvement",
   "get_fleet_update_policy",
   "set_fleet_update_policy",
   "record_renderer_errors",
@@ -59,14 +61,15 @@ const CRITICAL: Record<string, readonly string[]> = {
   file_bug_report: ["via"],
   create_scheduled_job: ["requestId"],
   update_scheduled_job: ["expectedRevision"],
+  run_self_improvement: ["dryRun"],
 };
 
 describe("system definitions", () => {
-  it("defines the domain's 51 commands once each, at version 1", () => {
+  it("defines the domain's 52 commands once each, since version 1", () => {
     const names = SYSTEM_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(51);
-    expect(new Set(names).size).toBe(51);
-    expect(systemDomain).toMatchObject({ name: "system", version: 1, min: 1 });
+    expect(names).toHaveLength(52);
+    expect(new Set(names).size).toBe(52);
+    expect(systemDomain).toMatchObject({ name: "system", version: 2, min: 1 });
     for (const def of SYSTEM_COMMANDS) {
       expect(def.domain).toBe(systemDomain);
       expect(def.since).toBe(1);
@@ -149,9 +152,9 @@ describe("system definitions", () => {
     expect(wrong._tag).toBe("Failure");
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapters 2, 1 and 0", () => {
     expect(DOMAIN_CLIENTS).toContain(systemClient);
-    expect(systemClient.versions).toEqual([1, 0]);
+    expect(systemClient.versions).toEqual([2, 1, 0]);
   });
 });
 
@@ -181,6 +184,7 @@ function fakeNode(domains: NegotiatedDomains | undefined, answer: (command: stri
 }
 
 const SYSTEM_V1 = { system: { min: 1, max: 1 } };
+const SYSTEM_CURRENT = { system: { min: 1, max: 2 } };
 const created = {
   schedule: {
     id: "s1",
@@ -200,7 +204,23 @@ const created = {
 const createArgs = { requestId: "r1", cron: "0 3 * * *", action: { kind: "action" } };
 
 describe("system client", () => {
-  it("version 1: typed calls carry the envelope and its critical keys, results decode", async () => {
+  it("version 2: typed calls carry the envelope and its critical keys, results decode", async () => {
+    const node = fakeNode(SYSTEM_CURRENT, () => created);
+    const client = createDomainClient(systemClient, node.options);
+    expect(client.version()).toBe(2);
+    await expect<unknown>(client.api().create_scheduled_job(createArgs)).resolves.toEqual(created);
+    expect(node.sent).toEqual([
+      {
+        command: createScheduledJobCommand.name,
+        args: createArgs,
+        envelope: { domain: "system", version: 2, critical: ["requestId"] },
+      },
+    ]);
+    expect(node.invoked).toEqual([]);
+    expect(node.usage).toEqual([]);
+  });
+
+  it("version 1: the same typed calls, counted as the version-1 adapter", async () => {
     const node = fakeNode(SYSTEM_V1, () => created);
     const client = createDomainClient(systemClient, node.options);
     expect(client.version()).toBe(1);
@@ -212,12 +232,11 @@ describe("system client", () => {
         envelope: { domain: "system", version: 1, critical: ["requestId"] },
       },
     ]);
-    expect(node.invoked).toEqual([]);
-    expect(node.usage).toEqual([]);
+    expect(node.usage).toEqual([["system", 1]]);
   });
 
-  it("version 1: a result that does not match its schema is refused", async () => {
-    const node = fakeNode(SYSTEM_V1, () => ({ schedule: { id: 1 }, replayed: false }));
+  it("version 2: a result that does not match its schema is refused", async () => {
+    const node = fakeNode(SYSTEM_CURRENT, () => ({ schedule: { id: 1 }, replayed: false }));
     await expect(
       createDomainClient(systemClient, node.options).api().create_scheduled_job(createArgs),
     ).rejects.toThrow("Invalid result from create_scheduled_job");

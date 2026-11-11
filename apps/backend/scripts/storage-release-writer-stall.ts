@@ -7,7 +7,8 @@ import { StorageDatabase } from "../src/core/storage-database.js";
 
 /**
  * Whether the background free-page release holds the backend's own writers,
- * and with them the event loop, behind the SQLite write lock (to-do 7210 task 4):
+ * and with them the event loop, behind the SQLite write lock (to-do 7210 task 4, retired; its
+ * findings are in docs/architecture/storage.md, "Migrations"):
  *
  *   mise exec -- bun apps/backend/scripts/storage-release-writer-stall.ts \
  *     [--free-mb 1024] [--live-mb 256] [--disk-load 0,4] \

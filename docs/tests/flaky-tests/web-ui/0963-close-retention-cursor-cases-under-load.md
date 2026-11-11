@@ -1,7 +1,7 @@
 # Cursor close-retention cases fail under browser-suite load
 
 - **ID:** 0963
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Owning file:** `e2e/CloseRetention.spec.ts`.
 - **Change under test:** todo 0035 on branch
@@ -161,3 +161,78 @@ with `The Cursor session has no running turn to steer`; its trace held no
 `ERR_NETWORK_CHANGED`. It passed in the next two runs in a private network
 namespace (Cursor-only, then the whole file). Cause still not established;
 status stays open.
+
+
+## Remaining fixture causes reproduced and repaired — 2026-11-10
+
+**Base and observed head.** Base
+`c98b20e6f6332895320b84b8edfd1f3cc9542ba0`, observed head
+`895a58dc220b5d610980f9ea52eae80b5d48685f`.
+`mise run flaky:recurrence -- 0963 --base c98b20e6f6332895320b84b8edfd1f3cc9542ba0`
+reported this case open before counting this recurrence.
+
+**Original evidence.** The nine-worker
+`mise run test:logged -- --name recorded-browser -- mise run test:browser`
+failed the desktop saturation case at line 729: expected no `filled.error`,
+received `The Cursor session has no running turn to steer`. Totals: 1,665
+passed, 152 skipped, one failed, 1,288.6 s. Log:
+`orkestrator-test-run.9ILxTG/recorded-browser.log.gz` under the host temporary
+directory; trace/context under
+`output/agent-testing/recorded-validation/cursor-steer-original/`.
+
+The complete unchanged one-worker owner then passed the steering case but
+failed the shed-transcript case at line 837: first-turn answer count expected
+zero, received one for 5,000 ms. It reported 19 passed, 20 skipped, one failed
+in 153.4 s. Log: `orkestrator-test-run.hmnmec/recorded-close-owner.log.gz`.
+
+### Request recorded before bridge acceptance
+
+**Reproduced: yes.** `recordingFetch` appends the outgoing prompt path before
+calling `fetch`; the test treated that record as proof that the bridge had a
+running SDK turn. A new fixture gate holds forwarding at precisely that
+boundary. With the original assumption, the focused desktop case reproduced
+the same no-running-turn error in 12.9 s, at local reproduction head
+`c3aef03e3111c932a357e13be12cb87895dd98e5`:
+
+```sh
+ORKESTRATOR_E2E_PORT=<isolated-port> mise run test:logged -- --name cursor-steer-before -- bunx playwright test --config output/review-cursor-ready-worktree/e2e/playwright.config.ts output/review-cursor-ready-worktree/e2e/CloseRetention.spec.ts --grep 'steering a Cursor turn whose steer history' --project=desktop-chromium --workers=1 --output output/agent-testing/cursor-steer-before
+```
+
+The repaired case first proves that the recorded request has no accepted run
+while forwarding is held. It releases the gate in `finally`, then polls the
+bridge's authoritative running-turn status before the single saturation
+mutation. Readiness is retried; the mutation is not. The fixture also releases
+the gate on shutdown. Existing steering-capacity, draft, cancellation and
+runtime-health assertions and deadlines remain intact.
+
+### Shared budget did not guarantee the target transcript was shed
+
+**Reproduced: yes.** After the acceptance repair, the complete owner still
+failed only the shed-transcript case (19 passed, 20 skipped, one failed,
+150.2 s), at local head `0bb5d80c7d5bda522bd93eacc38162f73764e00c`.
+Evidence: `orkestrator-test-run.lZQDGr/cursor-ready-fixed-owner.log.gz` and
+`output/agent-testing/cursor-ready-fixed-owner/`.
+
+The production allocator correctly prioritizes newer-touched sessions. The
+fixture's aggregate allowance included every session's newest message plus
+96 bytes per session, so the newest target could borrow other sessions'
+allowances and retain its entire transcript. A positive global shed count
+proved that some session was shortened, not the target the test inspected.
+This explains why the case passed alone and failed after other cases.
+
+The fixture now applies the production budget pass separately to each
+session, verifies that exactly its newest message remains, then writes the
+combined stopped-bridge state. Truncation counts and flags still come from the
+production serializer. Vendor conversation history and provider identity are
+untouched, and the existing next-turn assertion still verifies continuation.
+
+**Complete verification.** With both repairs, the complete one-worker owner
+passed, exit 0, in 144.2 s at local head
+`454ebd6da52670f608e9d65fcba2a3bb58dac4c7` (passing per-case counts were not
+retained). E2E typechecking passed. The temporary checkout's code changes are
+applied to the feature branch; local reproduction/diagnostic commits are not
+part of its history. No timeout, retry or skip was increased.
+
+```sh
+ORKESTRATOR_E2E_PORT=<isolated-port> mise run test:logged -- --name cursor-fixtures-fixed-owner -- bunx playwright test --config output/review-cursor-ready-worktree/e2e/playwright.config.ts output/review-cursor-ready-worktree/e2e/CloseRetention.spec.ts --workers=1 --output output/agent-testing/cursor-fixtures-fixed-owner
+```

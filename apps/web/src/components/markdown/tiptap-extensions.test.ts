@@ -69,10 +69,11 @@ describe("Markdown Tiptap extensions", () => {
 
   test("accepts the repository Markdown files that previously failed", () => {
     // Each file failed on inline code nested in another mark: bold in AGENTS.md,
-    // link text in README.md. The README is rewritten often, so match the
-    // construct rather than one sentence; every occurrence must survive.
+    // link text in README.md. Both are rewritten often (the AGENTS.md sentence
+    // that first failed went with OpenCode 1.x), so match the construct rather
+    // than one sentence; every occurrence must survive.
     const nestedCodePatterns = new Map([
-      ["AGENTS.md", /\*\*Always use v2 of the `@opencode-ai\/sdk` package\.\*\*/g],
+      ["AGENTS.md", /\*\*[^*`\n]*`[^`\n]+`[^*\n]*\*\*/g],
       ["README.md", /\[`[^`\n]+`\]\([^)\s]+\)/g],
     ]);
 

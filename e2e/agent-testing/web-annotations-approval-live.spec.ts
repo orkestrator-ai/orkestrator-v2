@@ -49,6 +49,7 @@ import {
   startFixtureServer,
 } from "./web-annotations-support";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
+import { devTestRestartArgs } from "./profile-restart-args";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -130,24 +131,12 @@ async function restartProfile(mode: "graceful" | "crash"): Promise<Status> {
   const stop = await runAsync("mise", ["run", "dev:stop", "--profile", profile], 90_000);
   expect(stop.code, `dev:stop failed: ${stop.stderr}`).toBe(0);
   const output = openSync(test.info().outputPath(`dev-test-restart-${Date.now()}.log`), "a");
-  const launcher = spawn(
-    "bun",
-    [
-      "apps/desktop/scripts/dev-test.ts",
-      "--profile",
-      profile,
-      ...(stored.credentialSources ?? []).flatMap((source) => ["--credential-source", source]),
-      ...(stored.agentPlatforms?.length
-        ? ["--agent-platforms", stored.agentPlatforms.join(",")]
-        : []),
-    ],
-    {
-      cwd: repositoryRoot,
-      detached: true,
-      env: outlivingProcessEnv(),
-      stdio: ["ignore", output, output],
-    },
-  );
+  const launcher = spawn("bun", devTestRestartArgs(profile, stored), {
+    cwd: repositoryRoot,
+    detached: true,
+    env: outlivingProcessEnv(),
+    stdio: ["ignore", output, output],
+  });
   launcher.unref();
   let status: Status | undefined;
   await expect

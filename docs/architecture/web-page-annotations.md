@@ -34,8 +34,8 @@ until a new host note refers to them.
 | Contract | `packages/protocol/src/web-annotations.ts`, `web-annotations-validation.ts`, `testing/web-annotations-fixtures.ts`; capture transport at the end of `browser-preview.ts` |
 | Page runtime | `apps/desktop/electron/browser-preview-annotation-script.ts`, `browser-preview-anchor-script.ts`, `browser-preview-pins-script.ts`; host side in `browser-preview-capture-pins.ts` |
 | Native capture and spool | `apps/desktop/electron/browser-preview-capture.ts`, `browser-preview-capture-store.ts`, `browser-preview-capture-validation.ts` |
-| Backend storage and service | `apps/backend/src/core/web-annotation-storage.ts`, `web-annotation-store-layout.ts`, `web-annotation-store-rows.ts`, `web-annotation-legacy-import.ts`, `web-annotation-assets.ts`, `web-annotation-sync.ts`, `web-annotation-service*.ts`, `web-annotation-migration.ts` |
-| Execution adapters | `web-annotation-brief.ts`, `web-annotation-dispatch.ts`, `web-annotation-tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
+| Backend storage and service | `apps/backend/src/core/web-annotations/storage.ts`, `web-annotations/store-layout.ts`, `web-annotations/store-rows.ts`, `web-annotations/legacy-import.ts`, `web-annotations/assets.ts`, `web-annotations/sync.ts`, `web-annotations/service*.ts`, `web-annotations/migration.ts` |
+| Execution adapters | `web-annotations/brief.ts`, `web-annotations/dispatch.ts`, `web-annotations/tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
 | Commands | `commands-registry-web-annotations.ts` (every name in `WEB_ANNOTATION_COMMANDS`) |
 | Renderer | `apps/web/src/lib/web-annotations/`, `stores/webAnnotationStore.ts`, `hooks/useWebAnnotations.ts`, `components/browser/annotations/`, `components/chat/WebAnnotationRequestChip.tsx` |
 
@@ -165,7 +165,7 @@ Losing the record costs only the automatic retry; the capture stays pending.
 Metadata lives in the backend database (`orkestrator.sqlite`, see
 [storage](storage.md)): one envelope store per environment,
 `web-annotations/<environment-id>`, whose collections are listed in
-`web-annotation-store-layout.ts`. Each annotation, capture index, entry
+`web-annotations/store-layout.ts`. Each annotation, capture index, entry
 index, request (with its instruction and response excerpt), result, asset
 record, receipt and draft is one row; `records` holds the immutable bodies
 (captures, entries, request briefs, results, draft text) keyed
@@ -229,7 +229,7 @@ small batches from the reconciler loop.
 A commit costs CPU in proportion to the rows it changes, not to the size of
 the environment. The committed manifest and every row in it are deep-frozen,
 so an unchanged object is an unchanged row. A transaction works on a
-copy-on-write manifest (`web-annotation-working-manifest.ts`): a collection is
+copy-on-write manifest (`web-annotations/working-manifest.ts`): a collection is
 shallow-copied the first time the transaction touches it, and that copy
 records which keys are written. A change replaces a row
 (`tx.manifest.requests[id] = { ...request, state }`) or edits the private clone
@@ -247,15 +247,31 @@ shallow freeze of the copied containers. Copying keeps an older manifest
 intact for readers that hold it across an `await`, and for a commit that rolls
 back. Each commit reports `storage_commit_rows_serialized` and
 `storage_commit_collections_copied` (gauges, per scope);
-`web-annotation-payloads.bench.test.ts` asserts that a create at 1,900 notes
+`web-annotations/payloads.bench.test.ts` asserts that a create at 1,900 notes
 serializes and copies exactly as much as one at 1 note.
 `bun scripts/web-annotation-commit-profile.ts` measures median CPU per create
-as the environment fills. On 2026-10-26 (18 cores at load 10 to 31, shared
-with other work, so read the proportions) a create at 0 / 500 / 1,000 / 1,900
-notes took 1.3–2.6 / 1.5–2.4 / 1.8–3.2 / 2.6–3.8 ms of CPU, against
-1.7–2.8 / 7.9–9.3 / 13.8–14.8 / 18.1–28.3 ms before this change, and
-serialized 6 rows at every size. At 1,900 notes the largest remaining share
-is the SQLite writes themselves.
+as the environment fills. Two before/after runs, each the same script on a
+checkout of `93018933` (before) and of the change or later `main` (after),
+both on shared agent hosts, so read the proportions rather than the absolute
+figures:
+
+| Notes | 2026-10-26, 18 cores, load 10–31: before | after | 2026-11-11, 16 cores, load 7–10: before | after |
+| --- | --- | --- | --- | --- |
+| 0 | 1.7–2.8 ms | 1.3–2.6 ms | 2.0–2.5 ms | 2.1–3.1 ms |
+| 500 | 7.9–9.3 ms | 1.5–2.4 ms | 9.6–10.1 ms | 2.4–3.5 ms |
+| 1,000 | 13.8–14.8 ms | 1.8–3.2 ms | 15.9–18.3 ms | 2.9–5.0 ms |
+| 1,900 | 18.1–28.3 ms | 2.6–3.8 ms | 26.3–32.8 ms | 3.8–4.1 ms |
+
+The 2026-11-11 ranges are four interleaved runs per side (25 creates per
+level, `main` at `498b68766`). Every after run serialized 6 rows and copied 5
+collections at every size. The payload bench's growth case
+(`web-annotations/payloads.bench.test.ts`, three batches of 60 creates) took
+29 / 71 / 110 ms before and 20 / 21 / 25 ms after on 2026-11-11 (47 / 73 /
+111 and 26 / 28 / 30 ms on 2026-10-26), with 9 rows and 4,174–4,496 bytes
+written per create on both sides. At 1,900 notes the largest remaining share
+is the SQLite writes themselves. No run on an idle machine was made: the
+row-count assertion above is the regression guard, and timing is diagnostic
+only.
 
 ## Synchronization
 
@@ -531,7 +547,7 @@ reservations are taken.
 
 The last five are terminal. `WEB_ANNOTATION_REQUEST_TRANSITIONS`
 (`web-annotations.ts`) lists the allowed moves, and `applyStateInTx`
-(`web-annotation-service-requests.ts`) applies them: an identity update is
+(`web-annotations/service-requests.ts`) applies them: an identity update is
 accepted, so duplicate and out-of-order updates are idempotent; any other
 disallowed move is ignored rather than regressing the request; a terminal
 request never changes. Settling releases reservations and clears pending
@@ -665,8 +681,9 @@ What has actually been exercised on a real stack (details and dates in
 
 | Area | Exercised | Not exercised |
 | --- | --- | --- |
-| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux headless (Electron 45, 2026-11-06, every local case of the Electron spec) | Windows; a physical Retina display; OS-level focus on a shared desktop; a Linux Wayland or X11 window |
+| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux headless (Electron 45, 2026-11-06 and again 2026-11-11, every local case of the Electron spec) | Windows; a physical Retina display; OS-level focus on a shared desktop; a Linux Wayland or X11 window |
 | Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS; Linux headless) | — |
+| Open shadow roots | An element note and a quote inside an open root captured in the desktop's preview view (isolated world, main-side parse), stored, then pinned and shown on page again after a reload (Linux headless, 2026-11-11) | Closed roots (unsupported); a Linux Wayland or X11 window; macOS |
 | Development source hints | Fixture HTML and a real Vite 8 dev server with the documented emitter, captured from the desktop in a local worktree and in a container (Linux, 2026-11-06); fixture HTML in a container (macOS desktop); the container path check through the gateway (Linux) | webpack, Next.js and other Babel setups (unqualified) |
 | Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented) |
 | Live implement | Claude, Codex, Cursor, Grok, OpenCode, Pi (local worktree); Claude in a Docker container | Other providers in a container |

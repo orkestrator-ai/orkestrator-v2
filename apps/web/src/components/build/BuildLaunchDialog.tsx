@@ -11,11 +11,13 @@ import {
   Container,
   FolderGit2,
   GitMerge,
+  Globe,
   GitPullRequest,
   Hammer,
   ListChecks,
   MessageSquare,
   ScanSearch,
+  Shield,
   ShieldCheck,
 } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
@@ -50,7 +52,7 @@ import {
   type LaunchAgent,
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
-import type { EnvironmentType } from "@/types";
+import type { EnvironmentType, NetworkAccessMode } from "@/types";
 import type { BuildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import {
   BuildStepInstructionsField,
@@ -78,6 +80,11 @@ export interface BuildLaunchStepSelection {
 export interface BuildLaunchSelection {
   /** Environment type is a property of the workspace, so it is chosen once. */
   environmentType: EnvironmentType;
+  /**
+   * The container's network access. Present only for a container: a local
+   * worktree has no firewall to apply one to.
+   */
+  networkAccessMode?: NetworkAccessMode;
   steps: Record<BuildStepKey, BuildLaunchStepSelection>;
   /** Multi-review fan-out chosen for this launch. */
   reviewers?: BuildLaunchStepSelection[];
@@ -214,7 +221,7 @@ const ENVIRONMENT_OPTIONS: Array<{
   {
     value: "containerized",
     label: "Container",
-    description: "Docker workspace with a restricted network",
+    description: "Isolated Docker workspace",
     icon: <Container className="size-4" />,
   },
   {
@@ -222,6 +229,27 @@ const ENVIRONMENT_OPTIONS: Array<{
     label: "Local",
     description: "Git worktree on this machine, full network",
     icon: <FolderGit2 className="size-4" />,
+  },
+];
+
+const NETWORK_OPTIONS: Array<{
+  value: NetworkAccessMode;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+}> = [
+  {
+    value: "restricted",
+    label: "Restricted",
+    description:
+      "Only GitHub, npm, agent APIs and your allowlist. Root setup steps in orkestrator-ai.json can't run.",
+    icon: <Shield className="size-4" />,
+  },
+  {
+    value: "full",
+    label: "Full access",
+    description: "Unrestricted internet access. Needed when setup has root steps.",
+    icon: <Globe className="size-4" />,
   },
 ];
 
@@ -714,6 +742,9 @@ export function BuildLaunchDialog({
     [favorites, pickerFavorites, reorderFavorites],
   );
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
+  // Pipelines have always created restricted containers; the launcher now
+  // shows that choice instead of making it silently.
+  const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("restricted");
   const [steps, setSteps] = useState(() =>
     initialSteps(
       defaultAgent,
@@ -756,6 +787,7 @@ export function BuildLaunchDialog({
   const wasOpenRef = useRef(false);
   const touchedRef = useRef(new Set<string>());
   const environmentGroupId = useId();
+  const networkGroupId = useId();
   const commentContextId = useId();
 
   const resetLaunchState = useCallback(() => {
@@ -814,6 +846,7 @@ export function BuildLaunchDialog({
         }
         return defaultEnvironmentType;
       });
+      setNetworkAccessMode("restricted");
       setIncludeComments(commentContext?.defaultIncluded ?? true);
       setDeliveryChoice(effectiveDeliveryPolicy(deliveryPolicy));
       setInstructions({});
@@ -1015,6 +1048,7 @@ export function BuildLaunchDialog({
                 : undefined;
             onConfirm({
               environmentType,
+              ...(environmentType === "containerized" ? { networkAccessMode } : {}),
               ...(commentContext ? { includeComments } : {}),
               deliveryPolicy: deliveryChoice,
               steps: selectedSteps,
@@ -1084,6 +1118,53 @@ export function BuildLaunchDialog({
                   );
                 })}
               </div>
+
+              {environmentType === "containerized" && (
+                <div className="mt-4">
+                  <h4 id={`${networkGroupId}-label`} className="text-xs font-medium text-zinc-300">
+                    Network access
+                  </h4>
+                  <div
+                    className="mt-2 grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-labelledby={`${networkGroupId}-label`}
+                  >
+                    {NETWORK_OPTIONS.map((option) => {
+                      const selected = networkAccessMode === option.value;
+                      const id = `${networkGroupId}-${option.value}`;
+                      return (
+                        <div key={option.value} className="relative min-w-0">
+                          <input
+                            id={id}
+                            type="radio"
+                            name={`${networkGroupId}-network`}
+                            checked={selected}
+                            onChange={() => setNetworkAccessMode(option.value)}
+                            className="peer sr-only"
+                          />
+                          <label
+                            htmlFor={id}
+                            className={cn(
+                              "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors focus-hairline-peer",
+                              selected
+                                ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"
+                                : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700",
+                            )}
+                          >
+                            <span className="flex items-center gap-2 text-sm font-medium">
+                              {option.icon}
+                              {option.label}
+                            </span>
+                            <span className="mt-1 text-[11px] leading-snug text-zinc-500">
+                              {option.description}
+                            </span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {commentContext && (
                 <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-2.5">

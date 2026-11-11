@@ -4,31 +4,12 @@ Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at 
 
 ### Tasks
 
-1. **Run the live read-only step**: run the home-mail steps of the `read-only` scenario on a real provider. Status: open.
 2. **Prove the read boundary under bubblewrap**: the deny rule is proven on Seatbelt only. Status: done (2026-11-06, bubblewrap 0.13.1).
-3. **Close the data directory on the other providers**: OpenCode, Cursor, Pi and Grok coordinators can still read it. Status: done for Pi and OpenCode (a link defect fixed on OpenCode); Cursor in [7400](7400-cursor-coordinator-data-dir-reads.md), Grok in [7401](7401-grok-coordinator-data-dir-reads.md), OpenCode under a user `OPENCODE_CONFIG_DIR` in [7402](7402-opencode-coordinator-user-config-dir.md).
+3. **Close the data directory on the other providers**: OpenCode, Cursor, Pi and Grok coordinators can still read it. Status: done for Pi and OpenCode (a link defect fixed on OpenCode); Cursor in to-do 7400 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#provider-qualification)), Grok in [7401](7401-grok-coordinator-data-dir-reads.md), OpenCode under a user `OPENCODE_CONFIG_DIR` in 7402 (done 2026-11-10 and retired; see `docs/architecture/coordinator.md`).
 4. **Decide what a read-only review turn may read**: a worker bridge's read-only turns have no read boundary. Status: done (decided: leave as is).
-5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. Status: open. The note is on every path and tested (2026-11-09); left: a live run showing a real worker reads it, which needs a billed provider turn (see the task's Remaining).
+5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. The note is on every path and tested (2026-11-09); the billed live run showing a real worker reads it moved to the manual-test checklist. Left here: reword the note if that run shows a model ignores it. Status: blocked (waits on 7568: 6080 task 5 live run).
 6. **Measure the default**: how often coordinators need environments they did not create. Status: open (depends on usage).
 7. **Retire the two compatibility paths**: the carrier's `selfReminder` spelling and the leaf capability. Status: open (depends on the floor).
-
-### 1. Run the live read-only step
-
-**Problem.** The steps that mail the project home have never met a real model, so nothing shows a real coordinator's tool call being refused and held as the unit tests say.
-
-**Context.** X1 added them to `readOnlyScenarioPrompt` and `homeMailGateFailures` (`apps/desktop/scripts/dev/coordinator-live.ts`) and wired them in `e2e/agent-testing/coordinator-live.spec.ts`. A run is a billed provider turn, which the batch was not allowed to make.
-
-**Investigation.** `coordinator-live.test.ts` checks the prompt and every failure the evaluation can report. Nothing has run `coordinator-live.spec.ts` with these steps, so it is also unproven that `list_agent_mailboxes` counts a delivered home message in `unreadCount`, which the "nothing reached the home" check reads.
-
-**Decisions.**
-
-- **Which platforms first?**
-  - **Run `read-only` on Claude and Codex, the two `enforced` platforms (recommended).**
-    - Pros: covers what a user most often runs; each is a single turn.
-    - Cons: leaves the others on unit evidence until they next run.
-  - **Run every platform in `COORDINATOR_LIVE_PLATFORMS`.**
-    - Pros: complete.
-    - Cons: more billed turns, and Grok still has no login on the qualifying hosts ([0024](0024-coordinator-live-conformance.md) task 1).
 
 ### 2. Prove the read boundary under bubblewrap
 
@@ -76,7 +57,7 @@ Found on 2026-11-06, per provider:
 
 - **Pi** confined nothing: its `read` takes any absolute path, and its `grep` passes `--hidden` to ripgrep, so a search of the home directory reaches `~/.config/orkestrator-v2`. A read-only Pi session runs only `read`, `grep`, `find` and `ls` and has no shell, so the gate sees every built-in read.
 - **OpenCode** already refuses a direct read: the coordinator's `{"*": "deny"}` base denies `external_directory`, and the data directory is never inside the checkout. Qualified on the pinned 1.19.5 binary with a loopback model: `read`, `grep` and `glob` on the data directory are refused, and allowing `external_directory` makes the fixture readable (the control). **Defect:** OpenCode judges `external_directory` from the path as written, so `read` of a link in the checkout pointing to `control-mcp.json`, `read` through a linked directory and `grep` rooted at a linked directory all returned the fixture credential. `grep` and `glob` from the checkout root do not follow links. 1.19.5 has no `list` tool.
-- **Cursor** (`@cursor/sdk` 1.2.0) has no per-call hook that sees a built-in tool's path; the ways in are unpublished executor overrides or an `fs` tree that drops `readLints`, `semSearch` and skills. Its model is hosted, so neither can be qualified without a billed turn. Recorded in [7400](7400-cursor-coordinator-data-dir-reads.md).
+- **Cursor** (`@cursor/sdk` 1.2.0) has no per-call hook that sees a built-in tool's path; the ways in are unpublished executor overrides or an `fs` tree that drops `readLints`, `semSearch` and skills. Its model is hosted, so neither can be qualified without a billed turn. Recorded in to-do 7400 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#provider-qualification)).
 - **Grok**: the bridge's `fs/read_text_file` is already confined to the workspace, but Grok's own reading tools run in its process, and whether they ask permission is unobserved (Grok is signed out here). Recorded in [7401](7401-grok-coordinator-data-dir-reads.md).
 
 **Decisions.**
@@ -135,15 +116,8 @@ Found on 2026-11-09:
   - **Leave prompts unmarked, since the origin check already limits them to the coordinator's own workers.**
     - Pros: no work.
     - Cons: an own worker still reads an injected request as an instruction.
-- **How to prove a real worker reads the note (left open).**
-  - **Run one coordinator turn started by worker mail on Claude and Codex, the two `enforced` platforms, and check the delegated worker's first reply treats the request as not the user's (recommended).**
-    - Pros: one billed turn per platform; the same shape as task 1's run, so both can share a session.
-    - Cons: a model's reading is judged from its reply, so the check is qualitative.
-  - **Rely on the unit and command tests.**
-    - Pros: no billed turn.
-    - Cons: they prove the note is sent, not that a model weighs it.
 
-**Remaining (2026-11-09).** The code and its tests are done: every delegated path carries the note and scheduled fires use the origin of the turn that set them (see Assumptions and decisions). Still open is the live check above. It needs a billed provider turn and a signed-in provider, which the node that built this (beelink, Linux) was not allowed to use, so it was not run and no evidence is claimed. Close the task once that run passes; if a model ignores the note, record what it did and reword `COORDINATOR_MAIL_ORIGIN_NOTE`, which the mail path shares.
+**Remaining (2026-11-09).** The code and its tests are done: every delegated path carries the note and scheduled fires use the origin of the turn that set them (see Assumptions and decisions). Still open is a live check that a real worker reads the note. It needs a billed provider turn and a signed-in provider, which the node that built this (beelink, Linux) was not allowed to use, so it was not run and no evidence is claimed; it moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10. Close the task once that run passes; if a model ignores the note, reword `COORDINATOR_MAIL_ORIGIN_NOTE`, which the mail path shares, from what the run recorded.
 
 ### 6. Measure the default
 
@@ -185,9 +159,9 @@ Took the recommended option where the provider has a gate that sees the path:
 
 - The provider-neutral part of Claude's check (`canonicalPath`, `protectedDataDirBoundary`, `readBoundaryRefuses`) moved to `@orkestrator/protocol/node/coordinator-read-boundary`, so Claude and Pi share one implementation. Claude's behaviour is unchanged; its allowance list stays in the Claude bridge.
 - Pi: the approval gate (`interactions.ts`) refuses `read`, `grep`, `find` and `ls` that would reach the data directory, whatever the approval policy (`bridges/pi-bridge/src/read-boundary.ts`). The checkout and the coordinator attachment root stay readable. Pi's path spellings (`@`, unicode spaces, `file://`, `~`) are normalised as its `resolveToCwd` does; a search rooted above the directory is refused, a listing of an ancestor is not (it shows names only).
-- OpenCode: the defect is fixed with a server plugin, `orkestrator-coordinator-read-boundary.js` (`opencode-read-boundary-plugin.ts`), installed beside the credential plugin. It resolves `read`, `grep`, `glob` and `list` paths and throws in `tool.execute.before`. It reads the protected directory from its own process environment, so it is inert in every server but a coordinator's. A permission rule could not fix this, because OpenCode matches rules against the path as written. Qualified on the pinned binary in `opencode-coordinator-read-boundary-live.test.ts` (slow tier; set `ORKESTRATOR_POLICY_OPENCODE_PATH` to a worktree binary from `mise run download:opencode`).
+- OpenCode: the defect is fixed with a server plugin, `orkestrator-coordinator-read-boundary.js` (`opencode-read-boundary-plugin.ts`), installed beside the credential plugin. It resolves `read`, `grep`, `glob` and `list` paths and throws in `tool.execute.before`. It reads the protected directory from its own process environment, so it is inert in every server but a coordinator's. A permission rule could not fix this, because OpenCode matches rules against the path as written. Qualified on the pinned binary in `opencode-coordinator-read-boundary-live.test.ts` (slow tier; set `ORKESTRATOR_POLICY_OPENCODE_PATH` to a worktree binary from `mise run download:opencode`). The 1.x plugin and its test were removed with OpenCode 1.x on 2026-11-11 (`git show 5f4e27b1c:apps/backend/src/core/opencode-read-boundary-plugin.ts`); OpenCode 2 coordinators get the same link-resolving data-directory check from the coordinator guard plugin (`apps/backend/src/core/opencode2/coordinator-plugin.ts`), qualified in `opencode2/opencode2-coordinator.live.test.ts`.
 - Tier notes were left unchanged: the reasons the picker shows do not mention the data directory today, so the tool-level nature of the Pi and OpenCode checks is recorded in `docs/architecture/coordinator.md` instead. Both stay `provider-configured`.
-- Cursor and Grok are recorded in 7400 and 7401 with what blocks them; the OpenCode plugin's absence under a user `OPENCODE_CONFIG_DIR` is 7402.
+- Cursor and Grok are recorded in 7400 and 7401 with what blocks them; the OpenCode plugin's absence under a user `OPENCODE_CONFIG_DIR` is 7402. (2026-11-10: 7400 task 1 built, Cursor's reading tools now check paths, with a live Cursor run left; 7402 done and retired, the plugin now loads beside a user directory, qualified on the pinned binary.)
 
 ### Task 4: read-only review turns keep no read boundary
 
@@ -217,15 +191,13 @@ work can still reach the accepted-risk decision.
 
 ## Needs verification
 
-- Whether a real coordinator worker treats a prompt that ends its frame with the agent-mail note as the note intends (as a request whose origin is not the user's) rather than ignoring it. Task 5 is covered by unit and command tests over the real Control MCP tools and stores; no billed provider turn was run, so task 5 stays open until one is.
-
-- Whether a real Pi or OpenCode coordinator turn needs a path under the data directory beyond the checkout and the attachment root. The Pi check is unit-tested through the real gate and the OpenCode plugin through a loopback-model turn on the pinned binary; neither has met a real model.
 - Whether the Claude CLI ever needs another path under the data directory in a real coordinator turn. The scripted run covers saved tool results, memory, attachments and a command run under the sandbox; it does not cover skills or a large tool result written by a real MCP call. Re-run the qualification file on each CLI bump.
 
 ## Related
 
-- [7400](7400-cursor-coordinator-data-dir-reads.md), [7401](7401-grok-coordinator-data-dir-reads.md), [7402](7402-opencode-coordinator-user-config-dir.md): follow-ups from task 3
+- to-do 7400 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#provider-qualification)), [7401](7401-grok-coordinator-data-dir-reads.md), and 7402 (retired 2026-11-10): follow-ups from task 3
 
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on)
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
 - [Provider secrets at rest](../../architecture/storage.md#provider-secrets-at-rest)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live run of task 5, and the real Pi and OpenCode coordinator turns from Needs verification) moved there on 2026-11-10.

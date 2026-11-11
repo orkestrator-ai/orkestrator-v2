@@ -1567,9 +1567,9 @@ describe("development profile lifecycle primitives", () => {
     ]);
   });
 
-  test("prefetches and seeds both OpenCode binaries for the opencode platform", async () => {
+  test("prefetches and seeds the OpenCode binary for the opencode platform", async () => {
     const { profile, roots: profileRoots } = await toolchainFixture(["pi"]);
-    const opencode = (name: "opencode" | "opencode2", version: string): ToolchainArtifact => ({
+    const opencode = (name: "opencode2", version: string): ToolchainArtifact => ({
       name,
       version,
       platform: "darwin",
@@ -1584,11 +1584,7 @@ describe("development profile lifecycle primitives", () => {
       },
       executable: { fileName: name, size: 1, sha256: "0".repeat(64) },
     });
-    const artifacts = [
-      opencode("opencode", "1.19.5"),
-      opencode("opencode2", "2.2.6"),
-      toolchainArtifact("pi", "0.84.3"),
-    ];
+    const artifacts = [opencode("opencode2", "2.2.6"), toolchainArtifact("pi", "0.84.3")];
     const received: string[][] = [];
 
     await expect(
@@ -1601,13 +1597,10 @@ describe("development profile lifecycle primitives", () => {
           return { rootDir: "", binDir: "", executables: {} as never };
         },
       }),
-    ).resolves.toEqual({ downloaded: ["opencode@1.19.5", "opencode2@2.2.6"] });
-    expect(received).toEqual([["opencode", "opencode2"]]);
+    ).resolves.toEqual({ downloaded: ["opencode2@2.2.6"] });
+    expect(received).toEqual([["opencode2"]]);
 
-    for (const [name, version] of [
-      ["opencode", "1.19.5"],
-      ["opencode2", "2.2.6"],
-    ] as const) {
+    for (const [name, version] of [["opencode2", "2.2.6"]] as const) {
       const host = path.join(
         profileRoots.productionDataDir,
         "toolchains",
@@ -1623,7 +1616,7 @@ describe("development profile lifecycle primitives", () => {
         { ...profile, agentPlatforms: ["opencode"] },
         { roots: profileRoots, artifacts, platform: "darwin", architecture: "arm64" },
       ),
-    ).resolves.toEqual({ seeded: ["opencode@1.19.5", "opencode2@2.2.6"], failed: [] });
+    ).resolves.toEqual({ seeded: ["opencode2@2.2.6"], failed: [] });
   });
 
   test.each(["downloaded", "seeded", "failed"] as const)(
@@ -1798,15 +1791,18 @@ describe("development profile lifecycle primitives", () => {
       }),
     ).resolves.toEqual([]);
 
+    // Electron (33) gets SIGTERM at its top process only: a group SIGTERM kills
+    // Chromium's GPU process and zygote under a running browser, which then
+    // dumps core with SIGTRAP (to-dos 7552 and 7554).
     expect(signals).toEqual([
       { pid: 22, signal: "SIGTERM", processGroup: true },
-      { pid: 33, signal: "SIGTERM", processGroup: true },
+      { pid: 33, signal: "SIGTERM", processGroup: false },
     ]);
     expect(active.size).toBe(0);
   });
 
   test("stops at the launcher when its shutdown takes the whole tree with it", async () => {
-    // The launcher's own SIGTERM handler kills the Vite and Electron groups, so
+    // The launcher's own SIGTERM handler stops Vite's group and Electron, so
     // signalling every tracked PID as well would be redundant at best and, once
     // those PIDs are recycled, aimed at something else entirely.
     const active = new Set([11, 22, 33, 44]);
@@ -1827,7 +1823,7 @@ describe("development profile lifecycle primitives", () => {
   });
 
   test("escalates to SIGKILL and reports whatever outlives it", async () => {
-    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const signals: Array<{ pid: number; signal: NodeJS.Signals; processGroup: boolean }> = [];
     let clock = 0;
     // Nothing ever exits: SIGTERM to the launcher, then SIGTERM to all four,
     // then SIGKILL to the four survivors, and the caller learns every name.
@@ -1836,7 +1832,7 @@ describe("development profile lifecycle primitives", () => {
     await expect(
       stopTrackedRuntimeProcesses(runtimeStatus(), {
         matches: (pid) => Boolean(pid),
-        signal: (pid, signal) => void signals.push({ pid, signal }),
+        signal: (pid, signal, processGroup) => void signals.push({ pid, signal, processGroup }),
         sleep: async (milliseconds) => void (clock += milliseconds),
         now: () => clock,
       }),
@@ -1848,6 +1844,10 @@ describe("development profile lifecycle primitives", () => {
     expect(signals.filter((entry) => entry.signal === "SIGKILL").map((entry) => entry.pid)).toEqual(
       [11, 22, 33, 44],
     );
+    // Only Vite's group takes a SIGTERM; Electron's group is swept by SIGKILL alone.
+    expect(
+      signals.filter((entry) => entry.processGroup).map((entry) => `${entry.signal} ${entry.pid}`),
+    ).toEqual(["SIGTERM 22", "SIGKILL 22", "SIGKILL 33"]);
   });
 
   test("treats surviving processes without a launcher as orphans that block a restart", () => {

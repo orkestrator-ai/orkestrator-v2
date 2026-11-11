@@ -1,13 +1,13 @@
 import { GOAL_TOKEN_BUDGET_PLATFORMS } from "@orkestrator/protocol/native-agent-goal";
 /**
  * The goal loop against real providers (`mise run test:agent:goals`,
- * `plans/goals/109`, Phase 3). Opt-in only: every case runs real model turns on
+ * `docs/architecture/goals.md`, Qualification). Opt-in only: every case runs real model turns on
  * the host's credentials, so it is skipped unless
  * `ORKESTRATOR_AGENT_TEST_LIVE_GOALS=1`.
  *
  * Assertions read the durable goal record and the workspace. The transcript is
  * read only to record what a provider showed. The summary it writes is the
- * qualification record for `plans/goals/001` and `305`: what each provider
+ * provider qualification record (`docs/architecture/goals.md`): what each provider
  * answered, with no prompts or output.
  */
 import { expect, test, type Page } from "@playwright/test";
@@ -37,7 +37,7 @@ const TURN_TIMEOUT_MS = 300_000;
 const only = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY;
 /**
  * Something slow for the agent to do. Grok's shell fails to spawn in Orkestrator
- * sessions, with or without a goal (`plans/goals/303`); Cursor can background
+ * sessions, with or without a goal (`docs/architecture/goals.md`); Cursor can background
  * long shell commands. Stream text on both so Stop has a live turn to stop.
  */
 function slowStep(seconds: number): string {

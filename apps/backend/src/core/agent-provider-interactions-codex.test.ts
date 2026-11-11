@@ -293,7 +293,7 @@ describe("Codex interaction adapter", () => {
       return new Response(null, { status: 404 });
     }, codexConnection);
 
-    // A bridge from before todo 0160 still describes the amendments; the card
+    // A bridge from before #1325 still describes the amendments; the card
     // must not offer them, because the rule each saves cannot be listed or revoked.
     const request = (await provider.interactions!.listPendingInteractions("session-1"))
       .requests[0]!;

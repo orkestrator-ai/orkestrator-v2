@@ -21,6 +21,12 @@ Status: Historical — 2026-08-16 inventory plus a 2026-09-11 current-state note
 > no longer has a separate renderer-side client or store. §3.1 and §3.6
 > statements that say otherwise are the 2026-08-16 snapshot.
 
+> **Current (2026-11-11).** OpenCode runs only on OpenCode 2.x: the backend
+> drives the 2.x server's `/api/*` (`apps/backend/src/core/opencode2/`), and
+> the 1.x `opencode serve` and its SDK were retired. OpenCode sessions steer.
+> Rows below that name OpenCode's transport, steer or undo routes are updated
+> to that; other OpenCode statements are the snapshot.
+
 > **Current (2026-10-31).** Grok takes file attachments as well as images: it
 > advertises ACP `embeddedContext`, and the ACP bridge sends a text file as a
 > `resource` block (binary refused). Cursor is still images only, so the
@@ -52,7 +58,7 @@ The six surfaces compared:
 | Codex Native | Codex | `bridges/codex-bridge/` speaking JSON-RPC to `codex app-server` |
 | Cursor Agent Native | Cursor Agent | `bridges/cursor-bridge/` via `@cursor/sdk` (ACP path removed) |
 | Grok Build Native | Grok Build | Same ACP bridge (`ACP_PROVIDER=grok`) |
-| OpenCode Native | OpenCode | No Orkestrator bridge; backend drives `opencode serve` via SDK v2 |
+| OpenCode Native | OpenCode | No Orkestrator bridge; backend drives the OpenCode 2.x server's `/api/*` through `OpenCode2Client` |
 
 Five native platforms share `AgentNativeTab` and the single capability table in
 `packages/protocol/src/native-agent.ts` (`nativeAgentCapabilities()`). Claude
@@ -79,7 +85,7 @@ Primary sources:
 
 | | Claude Native | Claude Tmux | Codex | Cursor | Grok | OpenCode |
 | --- | --- | --- | --- | --- | --- | --- |
-| Transport | claude-bridge + SDK | tmux PTY + hooks | app-server JSON-RPC | ACP stdio | ACP stdio | `opencode serve` SDK |
+| Transport | claude-bridge + SDK | tmux PTY + hooks | app-server JSON-RPC | ACP stdio | ACP stdio | OpenCode 2.x `/api/*` HTTP |
 | UI | shared native tab | `ClaudeTmuxChatTab` | shared native tab | shared | shared | shared |
 | Process | bridge + per-turn SDK | one tmux pane / tab | **1 child / env** | **1 child / session** | **1 child / session** | vendor HTTP server |
 
@@ -121,7 +127,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Rewind files | full | **none** | none | none | none | none |
 | Undo / redo | none | none | none | none | none | **full** |
 | Share | none | none | none | none | none | none (discontinued upstream in OpenCode 1.19.1) |
-| Steer | **full** | none | **full** | **full** | none | none |
+| Steer | **full** | none | **full** | **full** | none | **full** (since 2026-11-11) |
 | Native “Review changes” | none | none | **full** | none | none | none |
 | Questions | full | full (own cards) | partial | partial | partial | full |
 | Approval mode picker | **partial** (`permissionMode`; not browser-qualified) | none | **partial** (`approvalPolicy` + reviewer; not browser-qualified) | none | none | none |
@@ -234,8 +240,8 @@ elicitations, `/config` `/login` `/mcp` as literal TUI commands.
 Tmux **stops the pane** and leaves the JSONL, so resume still works. Codex is
 the third model: unsubscribe, never `thread/delete`.~~ **Fixed:** closing a tab
 retains the conversation on every platform. Native Claude uses the bridge's
-`POST /session/:id/close`; OpenCode goes through `OpenCodeProvider.closeSession`
-and never calls `client.session.delete`.
+`POST /session/:id/close`; OpenCode goes through `OpenCode2Provider.closeSession`
+and never calls OpenCode's session delete.
 
 Tmux queue drain used to live behind a mounted React tree. `PromptQueueDrainer`
 now owns claim → submit → acknowledge server-side. Remount hydrates from
@@ -346,7 +352,7 @@ Each native platform grew unique Agent Info verbs and never back-ported them:
 | --- | --- |
 | Claude Native | rewind files, background tasks, local settings, prompt suggestions |
 | Codex | steer (`turn/steer`), native review (`review/start`), `CodexPlanModeCard`, hermetic titles |
-| OpenCode | undo (`session.revert`), redo (`unrevert`); share / unshare until upstream discontinued sharing in 1.19.1 |
+| OpenCode | steer, undo (staged `revert`), redo (clear the staged revert); share / unshare until upstream discontinued sharing in 1.19.1 |
 | Cursor | steer (`Run.steer`), rewind messages |
 | Grok | none (`actions: {}`) |
 | Claude Tmux | none of those APIs; compact/fast/model are TUI keystrokes |
@@ -391,11 +397,11 @@ paths only.
 - **ACP** has `/attach` (the only platforms that do) and a 4× session-create
   retry. Journal is in-memory. `/activity` is side-effect-free; unknown session
   is `{activity:"missing"}`. Stderr is drained, never logged.
-- **OpenCode** has no bridge. The backend subscribes to `opencode serve`'s
-  event stream and feeds the shared projection; the tab reads backend
-  projections like every other native platform. At-most-once is
-  transcript-marker based (a durable marker in OpenCode's own history), not a
-  bridge journal. ~~Tab close **HTTP DELETE**s the vendor session.~~ **Fixed:**
+- **OpenCode** has no bridge. The backend subscribes to the server's
+  `/api/event` stream and feeds the shared projection; the tab reads backend
+  projections like every other native platform. At-most-once rests on the
+  request id each prompt and steer carries in its metadata, which OpenCode
+  echoes on the user row (`opencode2/provider.ts`), not on a bridge journal. ~~Tab close **HTTP DELETE**s the vendor session.~~ **Fixed:**
   tab close is non-destructive.
 - **Tmux** events only reach mounted listeners. Remount hydrates from status /
   transcript / pending hooks. Queue drain is backend-owned. Interactive terminal
@@ -638,7 +644,7 @@ Do not fake these on platforms that lack the vendor method.
 | Codex native review (uncommitted changes) | Thread review API; not Multi Review. |
 | Codex plan-mode card | Codex `planReview` transcript flag after plan turns. |
 | Codex hermetic titles | Isolated `codex exec`; must not inherit user tools/config. |
-| OpenCode undo / redo / share | OpenCode SDK `session.revert` / `unrevert` / `share`. |
+| OpenCode undo / redo | `POST /api/session/:id/revert/stage` / `DELETE /api/session/:id/revert` (`opencode2/revert.ts`); share was discontinued upstream in 1.19.1. |
 | OpenCode execution profiles | OpenCode primary agents, not Claude subagents / Codex profiles. |
 | OpenCode provider allowlist | Thousands of models; other platforms are single-catalogue. |
 | Bridge image-only attachments | Cursor's SDK bridge and Grok's ACP bridge take inline image blocks, not files. |

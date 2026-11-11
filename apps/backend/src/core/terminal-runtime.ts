@@ -37,8 +37,6 @@ export type TerminalSessionConfig = (
     }
   | {
       kind: "local";
-      /** Applied only to the managed OpenCode bootstrap command, never the shell. */
-      openCodeDatabase?: string;
       environmentId: string;
       cols: number;
       rows: number;
@@ -225,20 +223,38 @@ export class TerminalRuntime {
     return this.containerShells.get(id);
   }
 
-  private closeContainerShell(id: string): void {
+  /**
+   * Removes a PTY's shell record without closing it, so the caller can close it
+   * itself and wait (`closeContainerShellAndWait`), or put it back with
+   * `recordContainerShell`. Cleaning up the session afterwards leaves it alone.
+   */
+  takeContainerShell(id: string): ContainerTerminalShell | undefined {
     const shell = this.containerShells.get(id);
-    if (!shell) return;
     this.containerShells.delete(id);
+    return shell;
+  }
+
+  /**
+   * Ends one in-container shell and its processes, resolving once the close
+   * exec finished. Best effort, like every container shell close: a stopped
+   * container has nothing left to end. `shutdown` aborts it.
+   */
+  closeContainerShellAndWait(shell: ContainerTerminalShell): Promise<void> {
     const close = this.closeContainerShellOption;
-    if (!close) return;
+    if (!close) return Promise.resolve();
     const controller = new AbortController();
     this.containerShellCloses.add(controller);
-    void Promise.resolve()
+    return Promise.resolve()
       .then(() => close(shell, controller.signal))
       .catch((error) => {
         log.debug("container-shell.close-failed", { error: formatLogError(error) });
       })
       .finally(() => this.containerShellCloses.delete(controller));
+  }
+
+  private closeContainerShell(id: string): void {
+    const shell = this.takeContainerShell(id);
+    if (shell) void this.closeContainerShellAndWait(shell);
   }
 
   // Output buffers

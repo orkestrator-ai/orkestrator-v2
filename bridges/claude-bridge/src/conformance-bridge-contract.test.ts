@@ -14,7 +14,11 @@ import {
   runBridgeContractSuite,
   type BridgeContractHandle,
 } from "../../../tests/conformance/bridge-contract/scenarios.js";
-import { getSession, track } from "./services/session-manager-test-harness.js";
+import {
+  getSession,
+  mockSdkDeleteSession,
+  track,
+} from "./services/session-manager-test-harness.js";
 
 const envKeys = ["CLAUDE_BRIDGE_NO_SERVER", "CLAUDE_BRIDGE_AUTH_DISABLED_FOR_TESTING"] as const;
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -73,6 +77,8 @@ runBridgeContractSuite({
           refuse = false;
         };
       },
+      // The SDK call that removes the `{sessionId}.jsonl` rollout.
+      historyDeletions: () => mockSdkDeleteSession.mock.calls.length,
       async stop() {},
     };
   },

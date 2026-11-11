@@ -1,7 +1,7 @@
 /**
  * A command still running when its turn ended, with no end to come (Codex's
  * `toolLeftRunning`), reads "left running" without a spinner, never
- * "running..." on an idle thread (to-do 7522).
+ * "running..." on an idle thread (#2064).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, screen } from "@testing-library/react";

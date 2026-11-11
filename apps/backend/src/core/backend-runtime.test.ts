@@ -237,17 +237,14 @@ describe("two BackendRuntimes in one process", () => {
   });
 
   test("host OpenCode starts take turns within one backend only", async () => {
-    const first = createRuntime({
-      emit: () => undefined,
-      localServers: { openCodeLockedStartRetryDelaysMs: [1] },
-    });
+    const first = createRuntime();
     const second = createRuntime();
 
-    const releaseFirst = await first.localServers.openCodeHostStart.acquire();
+    const releaseFirst = await first.localServers.openCode2.startGate.acquire();
     // The other backend's turn is not held behind this one.
-    const releaseSecond = await second.localServers.openCodeHostStart.acquire();
+    const releaseSecond = await second.localServers.openCode2.startGate.acquire();
     let queued = false;
-    const next = first.localServers.openCodeHostStart.acquire().then((release) => {
+    const next = first.localServers.openCode2.startGate.acquire().then((release) => {
       queued = true;
       return release;
     });
@@ -256,10 +253,6 @@ describe("two BackendRuntimes in one process", () => {
     releaseFirst();
     (await next)();
     releaseSecond();
-
-    expect(first.localServers.openCodeHostStart.lockedStartRetryDelayMs(0)).toBe(1);
-    expect(first.localServers.openCodeHostStart.lockedStartRetryDelayMs(1)).toBeUndefined();
-    expect(second.localServers.openCodeHostStart.lockedStartRetryDelayMs(1)).toBe(2_000);
   });
 
   test("Pi catalogue probes and the container-state snapshot are per backend", async () => {

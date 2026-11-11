@@ -80,6 +80,7 @@ import { registerGitHubPullRequestCommands } from "./commands-registry-github-pu
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import { registerScheduledJobCommands } from "./commands-registry-scheduled-jobs.js";
+import { registerSelfImprovementCommands } from "./commands-registry-self-improvement.js";
 import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
 import { registerUsageCommands } from "./commands-registry-usage.js";
 import {
@@ -88,6 +89,7 @@ import {
 } from "./commands-registry-accounts.js";
 import { registerWorkflowResultCommands } from "./commands-registry-workflow-results.js";
 import { registerLinearCommands } from "./commands-registry-linear.js";
+import { registerLinearSyncCommands } from "./commands-registry-linear-sync.js";
 import { registerNativeAgentCommands } from "./commands-registry-native.js";
 import { registerPullRequestCommands } from "./commands-registry-pr.js";
 import { registerProjectCommands } from "./commands-registry-projects.js";
@@ -377,11 +379,12 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerPermissionRuleCommands(register);
   registerNodeCommands(register);
   registerTicketSyncCommands(register);
+  registerLinearSyncCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);
   registerServerCommands(register, dependencies);
-  registerToolingCommands(register, dependencies);
+  registerToolingCommands(register);
   registerBugReportCommands(register);
   registerSessionCommands(register, dependencies);
   registerNativeAgentCommands(register, dependencies);
@@ -396,6 +399,7 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);
   registerScheduledJobCommands(register);
+  registerSelfImprovementCommands(register);
   registerDiskUsageCommands(register);
   registerUsageCommands(register);
   registerAgentAccountCommands(register, dependencies);

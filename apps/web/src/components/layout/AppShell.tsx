@@ -52,6 +52,7 @@ import {
   useFilesPanelPullRequestWidth,
   useWorkspaceActiveTab,
 } from "./NodeWorkspaceLayout";
+import { pinnedScroll } from "@/lib/pinned-scroll";
 
 interface AppShellProps {
   children?: React.ReactNode;
@@ -188,7 +189,7 @@ export function AppShell({ children }: AppShellProps) {
   const remoteShown = remoteWorkspace !== null;
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden">
+    <div className="flex h-full w-full flex-col overflow-hidden" {...pinnedScroll}>
       <OpenFileDialog enabled={!inTreeShown} />
       <KeyboardShortcutsDialog />
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
@@ -297,6 +298,7 @@ export function AppShell({ children }: AppShellProps) {
           <ResizablePanelGroup
             orientation="horizontal"
             className="min-h-0 flex-1"
+            {...pinnedScroll}
             data-sidebar-width-animating={sidebarMotion.animating || undefined}
             onPointerDownCapture={(event) => {
               if ((event.target as Element).closest?.("[data-separator]"))
@@ -350,7 +352,7 @@ export function AppShell({ children }: AppShellProps) {
                 }
               >
                 <ActionBar />
-                <main className={cn("flex-1 overflow-hidden bg-background")}>
+                <main className={cn("flex-1 overflow-hidden bg-background")} {...pinnedScroll}>
                   <HostSlot host={contentHost} parkRef={contentParkRef} />
                 </main>
               </div>

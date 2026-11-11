@@ -11,7 +11,16 @@ import { resetCapabilities } from "@/lib/design-client";
 import { DesignFrameView } from "./DesignFrameView";
 import { DesignFrameBridge } from "./frame-bridge";
 
-import { FakeBackend, canvasId, deferred, frameA, frameB, until } from "./design-test-backend";
+import {
+  FakeBackend,
+  canvasId,
+  deferred,
+  frameA,
+  frameB,
+  installDesignClock,
+  restoreDesignClock,
+  until,
+} from "./design-test-backend";
 import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeBackend;
@@ -53,6 +62,7 @@ describe("design canvas controller", () => {
   });
   afterEach(() => {
     resetDesignControllers();
+    restoreDesignClock();
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
     window.orkestrator = originalOrkestrator;
@@ -268,6 +278,7 @@ describe("design canvas controller", () => {
   });
 
   test("a lost execute response after commit reconciles by status without a duplicate edit", async () => {
+    const clock = installDesignClock();
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
@@ -275,7 +286,7 @@ describe("design canvas controller", () => {
       for (const token of backend.pending.keys()) backend.loseExecuteResponse.add(token);
     };
     controller.submit(geometry(frameA, 1, { x: 42 }, "lost"));
-    await until(() => controller.projection.intents.length === 0, 5000);
+    await clock.until(() => controller.projection.intents.length === 0, 5000);
     expect(backend.executions).toHaveLength(1);
     expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 42, revision: 2 });
     expect(backend.prepareCount).toBe(1);
@@ -423,6 +434,7 @@ describe("design canvas controller after a failure", () => {
   });
   afterEach(() => {
     resetDesignControllers();
+    restoreDesignClock();
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
     window.orkestrator = originalOrkestrator;
@@ -503,6 +515,7 @@ describe("design canvas controller regressions", () => {
   });
   afterEach(() => {
     resetDesignControllers();
+    restoreDesignClock();
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
     window.orkestrator = originalOrkestrator;
@@ -524,17 +537,21 @@ describe("design canvas controller regressions", () => {
       }
       return backend.handle(command, args ?? {});
     });
+    const clock = installDesignClock();
     controller.submit(geometry(frameA, 1, { x: 7 }, "offline"));
-    await sleep(200);
+    await clock.advanceBy(200);
     expect(attempts).toBe(1);
     expect(controller.projection.intents[0]!.phase).toBe("draft");
+    // The retry is armed for the backoff, which 200 ms has not reached.
+    expect(clock.pendingDelays()[0]).toBeGreaterThan(200);
     offline = false;
-    await until(() => backend.frames.get(frameA)!.frame.x === 7, 3000);
+    await clock.until(() => backend.frames.get(frameA)!.frame.x === 7, 3000);
     expect(attempts).toBe(2);
     release();
   });
 
   test("a gesture sample after a run that never arrived gets a new intent", async () => {
+    const clock = installDesignClock();
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
@@ -553,7 +570,7 @@ describe("design canvas controller regressions", () => {
     );
     const second = controller.submit(geometry(frameA, 1, { x: 8 }, "keys"));
     expect(second).not.toBe(first);
-    await until(() => backend.executions.length === 2, 4000);
+    await clock.until(() => backend.executions.length === 2, 4000);
     expect(backend.executions.map((item) => item.input)).toMatchObject([
       { patch: { x: 7 } },
       { patch: { x: 8 } },
@@ -565,6 +582,7 @@ describe("design canvas controller regressions", () => {
   });
 
   test("a lost run response is recovered from the backend's queue, never sent again", async () => {
+    const clock = installDesignClock();
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
@@ -578,7 +596,7 @@ describe("design canvas controller regressions", () => {
       return response;
     });
     controller.submit(geometry(frameA, 1, { x: 7 }, "lost"));
-    await until(() => lost && controller.projection.intents.length === 0, 4000);
+    await clock.until(() => lost && controller.projection.intents.length === 0, 4000);
     expect(backend.executions).toHaveLength(1);
     expect(backend.prepareCount).toBe(1);
     expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 7, revision: 2 });
@@ -634,6 +652,7 @@ describe("design canvas controller regressions", () => {
   });
 
   test("unsent drafts are saved to the backend, and a draft that does not fit warns and stays", async () => {
+    const clock = installDesignClock();
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
@@ -641,17 +660,17 @@ describe("design canvas controller regressions", () => {
     backend.executeBarrier = () => gate.promise;
     controller.submit(geometry(frameA, 1, { x: 1 }, "blocking"));
     const queued = controller.submit(geometry(frameA, 1, { y: 2 }, "queued"));
-    await until(() => backend.intents.some((item) => item.id === queued));
+    await clock.until(() => backend.intents.some((item) => item.id === queued));
     const saved = backend.intents.find((item) => item.id === queued)!;
     expect(saved.phase).toBe("draft");
     expect(saved.clientId).toBe(saved.descriptor.clientId!);
     backend.intentCapacity = backend.intents.length;
     const refused = controller.submit(geometry(frameB, 1, { x: 3 }, "too-many"));
-    await until(() => controller.projection.notice?.tone === "warning");
+    await clock.until(() => controller.projection.notice?.tone === "warning");
     expect(controller.projection.intents.some((item) => item.id === refused)).toBe(true);
     backend.intentCapacity = undefined;
     gate.resolve();
-    await until(() => controller.projection.intents.length === 0, 4000);
+    await clock.until(() => controller.projection.intents.length === 0, 4000);
     expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 1, y: 2 });
     expect(backend.frames.get(frameB)!.frame.x).toBe(3);
     release();
@@ -690,6 +709,7 @@ describe("design canvas controller regressions", () => {
   });
 
   test("a queued draft another window discarded leaves this window too", async () => {
+    const clock = installDesignClock();
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
@@ -697,13 +717,13 @@ describe("design canvas controller regressions", () => {
     backend.executeBarrier = () => gate.promise;
     controller.submit(geometry(frameA, 1, { x: 1 }, "blocking"));
     const queued = controller.submit(geometry(frameA, 1, { y: 2 }, "queued"));
-    await until(() => backend.intents.some((item) => item.id === queued));
+    await clock.until(() => backend.intents.some((item) => item.id === queued));
     await sleep(30);
     await backend.handle("design_intent_discard", { intentId: queued });
     await controller.refresh();
     expect(controller.projection.intents.some((item) => item.id === queued)).toBe(false);
     gate.resolve();
-    await until(() => controller.projection.intents.length === 0);
+    await clock.until(() => controller.projection.intents.length === 0);
     expect(backend.frames.get(frameA)!.frame.y).toBe(0);
     release();
   });
@@ -807,6 +827,7 @@ describe("design canvas controller regressions", () => {
   });
 
   test("resuming an unknown outcome keeps checking; a definitive not-run outcome re-prepares", async () => {
+    const clock = installDesignClock();
     const unknownToken = backend.prepareToken({
       input: { kind: "update_frame", frameId: frameA, patch: { x: 9 } },
       preconditions: { frameRevision: 1 },
@@ -842,12 +863,12 @@ describe("design canvas controller regressions", () => {
       unknownToken,
     );
     await controller.resume("i-rejected");
-    await until(() => backend.frames.get(frameB)!.frame.x === 6);
+    await clock.until(() => backend.frames.get(frameB)!.frame.x === 6);
     expect(prepares()).toBe(1);
     backend.completePending(unknownToken);
-    await until(() => backend.frames.get(frameA)!.frame.x === 9);
+    await clock.until(() => backend.frames.get(frameA)!.frame.x === 9);
     await controller.refresh();
-    await until(() => controller.projection.intents.length === 0, 4000);
+    await clock.until(() => controller.projection.intents.length === 0, 4000);
     expect(prepares()).toBe(1);
     release();
   });

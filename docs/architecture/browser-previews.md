@@ -151,6 +151,30 @@ router: on remote desktop connections a registered service opens externally,
 and an unresolved port opens a preview tab. Coordinator and mail transcripts
 have no environment and keep the plain behaviour.
 
+**`orkestrator environment exec` is not a managed root.** A dev server started
+through `environment exec` runs under a detached exec worker keyed by the
+operation, not the environment, so it is `unattributed` and its seeded service
+waits for **Show any process**. This is deliberate (to-do 0045 task 2, decided
+2026-11-11). The worker records the child's pid, process group and start time
+in its own state file, but the backend holds no live handle to it, which is
+what makes terminal and bridge roots safe against pid reuse; exec runs are
+also bounded (30-minute default, 6-hour cap) rather than meant for
+long-running servers. Revisit only if CLI-driven setups report the one click
+per seeded service as a real cost; the change would need the
+operation-to-environment mapping and a `ps` start-time check against the
+persisted `childPid`.
+
+**Qualification.** The in-app checks (wait state, two environments on one
+port with the move offer, restart and fast restart inside the verification
+window, agent links, framework hints) are
+`e2e/agent-testing/service-preview-seeded-electron.spec.ts`, run on macOS
+(`lsof`) and headless on Linux through both `ss` and `lsof`; the runs are in
+the evidence log of
+[0042](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
+The design decisions behind this section were recorded in to-do 0045, retired
+2026-11-11 (read it with
+`git show 498b68766:docs/todo/previews-and-annotations/0045-preview-service-discovery.md`).
+
 **Automatic host ports.** A port mapping with **Auto** (`hostPortMode: "auto"`,
 `hostPort: 0`) is published as `127.0.0.1::<port>` so Docker chooses a free
 host port. The resolver reads the real binding, so an auto mapping gets a
@@ -293,6 +317,15 @@ connection, as before. Backends serve both.
   asked for. Legacy URL tabs follow the same rule since 2026-10-25: their
   states carry `navigation` and their attaches `navigationBasis`
   (`attachUrl` in `browser-preview-manager.ts`).
+- A URL tab's attach also carries the tab's environment identity
+  (`environmentId`). A tab never changes environment, so an attach with a
+  different identity, null included, is taken for a different tab: main removes
+  the view and creates a new one, deliberately discarding its history, so the
+  new documents keep none of the old environment's access. A synthetic attach
+  in a test must therefore send the same identity the renderer sends, or Back
+  history is lost (the legacy URL tab Back case in
+  `e2e/agent-testing/service-preview-electron.spec.ts` once failed this way on
+  every platform).
 - The rule has a renderer half. A state whose count equals the basis of the
   path the tab chose still reports the page being left: main sends one as a
   load starts, before anything commits. The tab keeps its chosen path until the
@@ -323,7 +356,16 @@ a tab does (`forwardExternally` in `preview-transport-manager.ts`).
   ambiguous port opens a preview tab, where the user registers or picks it.
   With preview access off, an older backend, or a failed forward, the link
   falls back to the gateway path proxy (`/__orkestrator/proxy/loopback/<port>`)
-  and a toast says why (including unavailable capabilities or failed resolution).
+  of the node running the environment and a toast says why (including
+  unavailable capabilities or failed resolution). A leaf's link goes through
+  the leaf's own proxy on its current route (`resolveExternalLoopbackUrl`: the
+  browser lease's relay, or the route main reports in `nodes.gateway`), never
+  the command node's; with no route it is not opened and a toast says so. A
+  worktree link (or one from an environment the window does not know) whose
+  node is this computer (`backendOnThisDevice`) opens as written: its port is
+  already reachable here, and the command node's proxy would reach that
+  machine's port instead. A container's link still resolves to its service,
+  because the container's port is published on a different host port.
 - **Port.** On platforms with exclusive loopback binding, the forward prefers a
   browser-safe application port, so absolute `localhost:<port>` URLs and OAuth
   callbacks keep working. It binds 127.0.0.1 and ::1 together on one port, so
@@ -755,6 +797,15 @@ and a peer that stops reading is cut off 30 seconds after the close.
 Liveness pings stop once the tunnel starts closing, so an unanswered ping
 cannot cut off the drain.
 
+The desktop also acts on missing answers, but only in a v2 session
+(`PreviewTunnelSession`): any inbound frame counts as an answer, and a session
+that leaves two pings unanswered is destroyed (`terminate`, not a close,
+because a dead peer never answers the close frame). A v1 stream
+(`PreviewTunnelStream`) has no such deadline: it pauses its socket when its
+consumer stops reading, so its pongs can wait behind unread data and a
+deadline would close a healthy paused stream. A dead v1 socket costs only its
+one stream.
+
 ## Framework configuration
 
 Route details → **Framework setup hints** shows the points below for one
@@ -857,15 +908,22 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   `Sec-Purpose`, including prefetch/prerender; wildcard private DNS,
   certificates and browser traffic through `publicPort` still need deployment
   qualification. If another forwarder strips metadata, reads fall back to
-  the `Origin` check. See
-  [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
+  the `Origin` check. Keep it that way: missing metadata fails open to the
+  `Origin` check, never closed, so old browsers and non-browser clients keep
+  working. There is no per-deployment opt-out that re-allows
+  cookie-authenticated cross-service reads (a frontend and its API published
+  as two services, see **Framework configuration**). Add one only if real
+  projects report they need it; a `SameSite=Strict` preview cookie is not an
+  alternative, because it would also drop the cookie on the last hop of the
+  sign-in redirect chain and on every link from another site. Shipping Safari
+  and iOS have not been observed sending the metadata.
 - The relay needs `node` or `bun` in the image, and the `node` user.
 - Local listener attribution needs `ps` and `lsof` (or, on Linux, `ss`) on the
   backend host. Without them every loopback check is `unchecked`, and
   generated local services wait for confirmation. A listener owned by another
   OS user cannot be attributed. Servers started through `orkestrator environment exec` run
   under detached exec workers, which are not managed roots, so they are
-  `unattributed`. Inside the verification window only the listener's pid is
+  `unattributed` (see **Local environments**). Inside the verification window only the listener's pid is
   rechecked, so a pid reused within those 5 seconds would pass, and a server
   replaced between the lookup and the connect (milliseconds, or the length of a
   lookup already in flight that the connection joined) is not caught until the

@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+// First: applies a shared bridge's per-test switches before any module reads them.
+import "./fake-agent-env-file.js";
 import { appendFileSync } from "node:fs";
 
 import { handlePolicyDenial } from "./fake-agent-policy-denial.js";

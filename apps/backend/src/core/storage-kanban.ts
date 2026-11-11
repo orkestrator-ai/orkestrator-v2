@@ -38,6 +38,8 @@ export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
 import {
   kanbanTaskAwaitsMergeClosure,
+  clearKanbanLifecycleOwnership,
+  kanbanTaskReturnsForClosedPullRequest,
   pendingMergeClosures,
   type KanbanMergeClosure,
 } from "./kanban-merge-closure.js";
@@ -274,8 +276,18 @@ export class KanbanRepository {
     updates: Partial<Omit<KanbanTask, "sections" | "sectionsBasis" | "sync">> &
       KanbanTaskContentInput,
     expectedProjectId?: string,
-    options: { notifyDeliveryPolicyChange?: boolean; preserveDoneStatus?: boolean } = {},
+    options: {
+      notifyDeliveryPolicyChange?: boolean;
+      /**
+       * A build lifecycle write (`build-pipeline-kanban-lifecycle.ts`): it
+       * never moves a done ticket, and a status it writes is recorded as the
+       * ticket's `lifecycleStatus`. `preserveDoneStatus` is its older name.
+       */
+      lifecycle?: boolean;
+      preserveDoneStatus?: boolean;
+    } = {},
   ): Promise<KanbanTask> {
+    const lifecycle = options.lifecycle === true || options.preserveDoneStatus === true;
     if (
       updates.status !== undefined &&
       !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
@@ -294,10 +306,25 @@ export class KanbanRepository {
 
       // Terminal writers may have read before the monitor closed this ticket.
       // Check under the same lease as the write; user edits remain unconditional.
-      if (options.preserveDoneStatus && task.status === "done") {
+      if (lifecycle && task.status === "done") {
         const { status: _status, ...remaining } = updates;
         updates = remaining;
       }
+      // The markers are the lifecycle's and the closure's alone, whatever a
+      // caller sends.
+      const {
+        lifecycleStatus: _marker,
+        lifecyclePrUrl: _owner,
+        lifecycleEcho: _echo,
+        prClosedReturnUrl: _closed,
+        ...withoutMarker
+      } = updates as typeof updates & {
+        lifecycleStatus?: unknown;
+        lifecyclePrUrl?: unknown;
+        lifecycleEcho?: unknown;
+        prClosedReturnUrl?: unknown;
+      };
+      updates = withoutMarker;
       const before = normalizeKanbanTask(structuredClone(task));
       const oldStatus = task.status;
       const oldDeliveryPolicy = before.sections?.delivery?.policy;
@@ -341,6 +368,19 @@ export class KanbanRepository {
               )
               .map((candidate) => candidate.order),
           ) + 1;
+      }
+      if (lifecycle && updates.status) {
+        task.lifecycleStatus = updates.status;
+        // The build that raises a pull request owns the column with it; a
+        // build starting owns it with none yet, so an older build's pull
+        // request closing leaves the ticket alone.
+        if (updates.prUrl) task.lifecyclePrUrl = updates.prUrl;
+        else if (updates.status === "in-progress") delete task.lifecyclePrUrl;
+        // A command node's ticket: the move comes back from the command node
+        // with a new status revision, which is not a hand move there.
+        if (updates.status !== oldStatus && task.sync?.replica) task.lifecycleEcho = true;
+      } else if (updates.status !== undefined && updates.status !== oldStatus) {
+        clearKanbanLifecycleOwnership(task);
       }
       await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
@@ -423,6 +463,8 @@ export class KanbanRepository {
                 .map((candidate) => candidate.order),
             ) + 1;
           task.status = "done";
+          task.lifecycleStatus = "done";
+          if (task.sync?.replica) task.lifecycleEcho = true;
         }
         task.prMergeDoneUrl = prUrl;
         changes.push({ before, stored: task });
@@ -433,6 +475,47 @@ export class KanbanRepository {
         this.context.changes.announce("kanban", projectId);
       }
       return moved;
+    });
+  }
+
+  /**
+   * A ticket whose build's pull request closed without merging goes back to
+   * the backlog (`kanbanTaskReturnsForClosedPullRequest`), unless the user
+   * moved it by hand since the build last moved it, a newer build owns it, it
+   * is done, or that pull request merged once already. Each closed pull
+   * request is decided once (`prClosedReturnUrl`), so a replay, from the
+   * monitor or the build, never moves it again. Returns whether it moved.
+   */
+  async returnKanbanTaskForClosedPullRequest(taskId: string, prUrl: string): Promise<boolean> {
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task || task.prClosedReturnUrl === prUrl) return false;
+      const before = normalizeKanbanTask(structuredClone(task));
+      const returns = kanbanTaskReturnsForClosedPullRequest(task, prUrl);
+      task.prClosedReturnUrl = prUrl;
+      if (!returns) {
+        await this.board.commit(tasks, [{ before, stored: task }]);
+        return false;
+      }
+      task.order =
+        Math.max(
+          -1,
+          ...tasks
+            .filter(
+              (candidate) =>
+                candidate.projectId === task.projectId &&
+                candidate.status === "backlog" &&
+                candidate.id !== taskId,
+            )
+            .map((candidate) => candidate.order),
+        ) + 1;
+      task.status = "backlog";
+      task.lifecycleStatus = "backlog";
+      if (task.sync?.replica) task.lifecycleEcho = true;
+      await this.board.commit(tasks, [{ before, stored: task }]);
+      this.context.changes.announce("kanban", task.projectId);
+      return true;
     });
   }
 
@@ -1086,10 +1169,15 @@ export class KanbanRepository {
     return auth?.apiKey ? auth : null;
   }
 
-  async saveLinearAuth(apiKey: string, viewer?: LinearAuth["viewer"]): Promise<LinearAuth> {
+  /** `connectedAt` is kept when given: refreshing who the key signs in as is not a new connection. */
+  async saveLinearAuth(
+    apiKey: string,
+    viewer?: LinearAuth["viewer"],
+    connectedAt?: string,
+  ): Promise<LinearAuth> {
     const auth: LinearAuth = {
       apiKey,
-      connectedAt: nowIso(),
+      connectedAt: connectedAt ?? nowIso(),
       viewer,
     };
     await this.enqueueLinearAuthMutation(() =>
@@ -1098,10 +1186,21 @@ export class KanbanRepository {
     return auth;
   }
 
-  async clearLinearAuth(): Promise<void> {
-    await this.enqueueLinearAuthMutation(() =>
-      this.context.deleteStore(this.files.linearAuthFile()),
-    );
+  /**
+   * Clears the connection. With `shouldClear`, only when it accepts the
+   * connection current at that moment: the check and the delete share the
+   * store's lease, so a connection saved after the caller last read one is
+   * judged on its own. Returns whether a connection was cleared.
+   */
+  async clearLinearAuth(shouldClear?: (auth: LinearAuth) => boolean): Promise<boolean> {
+    return this.enqueueLinearAuthMutation(async () => {
+      if (shouldClear) {
+        const current = await this.getLinearAuth();
+        if (!current || !shouldClear(current)) return false;
+      }
+      await this.context.deleteStore(this.files.linearAuthFile());
+      return true;
+    });
   }
 
   // Saves and clears take the store's lease, like every other whole-value
@@ -1201,6 +1300,7 @@ export type KanbanStorage = Pick<
   | "updateKanbanTask"
   | "recordKanbanCriteriaChecks"
   | "closeKanbanTasksForMergedPullRequests"
+  | "returnKanbanTaskForClosedPullRequest"
   | "setKanbanTaskLabel"
   | "getKanbanLabels"
   | "createKanbanLabel"

@@ -60,13 +60,12 @@ automatic address pools were exhausted.
 Run 3 failed with the probe off, so these runs do not show that the probe's
 modal causes the failures. Run 2's title timeout is a new failing step. When the
 probe ran, its modal may have opened, but that was not recorded. Whether Electron
-specs should skip the probe is [7470](../../../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
-task 1.
+specs should skip the probe was to-do 7470 task 1 (retired 2026-11-10).
 
 ## Probe off by default for Electron specs (2026-11-09)
 
-[7470](../../../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
-task 1 launches every Electron spec with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`
+To-do 7470 task 1 (retired 2026-11-10; see the
+[testing guide](../../../development/testing-guide.md#cli-scenarios)) launches every Electron spec with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`
 (`electronSpecEnvironment`), so the boot check no longer runs and its modal no
 longer opens during this journey. One headless run alone on beelink, branch
 for 7470 based on `main` at `c6de4733c`, `playwright.electron-headless.config.ts`

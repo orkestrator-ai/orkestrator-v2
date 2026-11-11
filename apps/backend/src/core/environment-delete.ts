@@ -17,12 +17,13 @@ import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-
 import { drainContainerProcesses } from "./container-readiness.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
+import { settleTicketsOfDeletedEnvironment } from "./build-pipeline-kanban-environment-deleted.js";
 import { scheduleEnvironmentCleanupReconcile } from "./environment-cleanup-reconciler.js";
 import { removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
 import { removeEnvironmentGraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import { removeProjectHomeMailAttachments } from "./mail-attachments.js";
 import { seedFilesDir } from "./nodes/index.js";
-import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
+import { removeOpenCodeCommandChangeJournals } from "./change-tracking/index.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux.js";
@@ -191,9 +192,6 @@ export async function deleteEnvironment(
             // Retire state polling before removing the container, or the next tick
             // execs into something that no longer exists.
             shutdownClaudeStatePolling(context, environment.containerId);
-            context.runtime.localServers.openCodeAgentTools.cancel(
-              `container:${environment.containerId}`,
-            );
             // Bridges and agents get the drain's SIGTERM, so they settle their
             // journals and deny parked approvals before the forced removal. A
             // stopped container has nothing to drain and is not exec'd into.
@@ -257,6 +255,10 @@ export async function deleteEnvironment(
       await storage.deleteMultiReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.
+      // Its ticket gets the ending the build can no longer give it first.
+      if (environment && typeof storage.listBuildPipelines === "function" && storage.kanban) {
+        await settleTicketsOfDeletedEnvironment(storage, environment);
+      }
       await storage.deleteBuildPipelinesByEnvironment(environmentId, environment?.buildPipelineId);
       // A graph run is scoped to one environment (D7) and its artifacts to the
       // run: both go with it, like a pipeline.
@@ -292,7 +294,7 @@ export async function deleteEnvironment(
             error: formatLogError(error),
           });
         });
-      // Measured shell-change badges of the environment's OpenCode sessions.
+      // Shell-change journals the environment's OpenCode 1.x sessions left.
       // Never rejects; a leftover journal only costs disk.
       if (typeof storage.getDataDir === "function") {
         await removeOpenCodeCommandChangeJournals(storage.getDataDir(), environmentId);

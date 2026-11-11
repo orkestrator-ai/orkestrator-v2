@@ -11,7 +11,9 @@ This analysis predates the completed code and live checks recorded below.
 The current state and qualification evidence supersede its proposed choices.
 The task statuses were brought up to date on 2026-11-10 (against `main` at
 `04639b12b`): every code task is done, and only live runs remain (Cursor,
-Grok and OpenCode, as listed under Needs verification).
+Grok and OpenCode, as listed under Needs verification). On 2026-11-11 the
+OpenCode question (task 4) became obsolete when OpenCode 1.x was retired;
+only the Cursor and Grok runs in the manual-test checklist remain.
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
@@ -27,12 +29,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    back to `prepared` and send it again under the same id. Status: done
    (2026-10-27; code item 2).
 4. **OpenCode same-id deduplication** (Needs verification): does OpenCode
-   deduplicate a `promptAsync` that reuses a message id? Status: open, live run
-   only (no code depends on it: OpenCode never answers `absent`).
-5. **Live restart-resend check per bridge** (Qualification). Status: open,
-   live runs only: Claude, Codex and Pi passed on 2026-10-27; Cursor
-   (its first send failed) and Grok (expired host login) remain, batched
-   with 0031.
+   deduplicate a `promptAsync` that reuses a message id? Status: done
+   (obsolete: OpenCode 1.x retired 2026-11-11, see
+   [0008](../agent-engines/0008-opencode-v2.md) "OpenCode 1.x retired
+   (2026-11-11)"; the OpenCode 2 provider never re-posts an ambiguous prompt,
+   so no message id is reused).
 
 ### 1. Make Build Pipeline's same-id redispatch at-most-once
 
@@ -198,6 +199,12 @@ moves the reviewer back to `prepared` through the same `commit(transition)`
 
 ### 4. OpenCode same-id deduplication
 
+Obsolete since 2026-11-11: the 1.x provider and its tests below were removed
+with OpenCode 1.x (`git show 5f4e27b1c:apps/backend/src/core/opencode-provider.ts`).
+The OpenCode 2 provider (`apps/backend/src/core/opencode2/provider.ts`) never
+re-posts an ambiguous attempt, so the question no longer arises. The analysis
+below is kept as history.
+
 **Problem.** The provider retries an ambiguous `promptAsync` with the same
 `messageID` (`apps/backend/src/core/opencode-provider.ts:648`, `:684`), trusting
 OpenCode to treat it as the same message. If OpenCode instead starts a second
@@ -227,33 +234,6 @@ messages (`OPEN_CODE_MESSAGE_HISTORY_LIMIT`, `opencode-message-id.ts:9`).
     - Cons: needs OpenCode credentials and spends a turn; it is a live
       provider run.
 
-### 5. Live restart-resend check per bridge
-
-**Problem.** The deterministic tests use fakes; nobody has watched a real
-bridge refuse or deduplicate a resend after its own restart.
-
-**Context.** Batched with
-[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-
-**Investigation.** The nearest existing proof is the real-bridge
-`tests/multi-review-claude-bridge-restart.test.ts`, which restarts the real
-Claude bridge process without a live model. No equivalent exists for the other
-bridges.
-
-**Decisions.**
-
-- **Live run, or real-bridge tests?**
-  - **Real-bridge restart tests per bridge (no model needed), with the live run
-    kept only for providers whose dedupe lives in the vendor (OpenCode)
-    (recommended).**
-    - Pros: deterministic, runs in CI, no credentials; the dedupe under test is
-      the bridge's journal, not the model.
-    - Cons: one harness per bridge to write.
-  - **One live run per provider through 0031.**
-    - Pros: covers the whole stack.
-    - Cons: needs every credential; cannot force the race on purpose, so a pass
-      proves little.
-
 Split out of todo 0112 (retired on 2026-10-29; see
 [review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery)),
 whose first item asked the fan-out to re-send a recovered `dispatching`
@@ -272,7 +252,9 @@ found.
   backend reads it as `unknown`, and an older bridge never sends it.
 - **All five HTTP bridges answer `absent`**, only while the session's journal
   is complete and holds no record of the id. OpenCode (backend-side provider)
-  never does. The durable rule is in
+  never did on 1.x; since 2026-11-11 the OpenCode 2 provider answers `absent`
+  only for a request it saw refused with a definitive 4xx in this process
+  (`dispatchStatus` in `apps/backend/src/core/opencode2/provider.ts`). The durable rule is in
   [`bridges/AGENTS.md`](../../../bridges/AGENTS.md) and
   [platform inconsistencies](../../architecture/platform-inconsistencies.md);
   each bridge's `AGENTS.md` names its marker.
@@ -412,7 +394,7 @@ the interrupted handoff. Remaining live checks stay batched with
 ## Constraints and rationale
 
 - The fan-out invariants in
-  [0027](0027-multi-review-scale-and-cost.md) apply: never re-send an
+  [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision) apply: never re-send an
   ambiguous request under a new id, and fail closed when unsure.
 - `absent` must be an assertion, never a default: a provider that cannot tell
   answers `unknown`, exactly as `dispatched` and `lost` are assertions today.
@@ -543,12 +525,9 @@ they record why each choice was made.
 
 ## Needs verification
 
-- Complete Cursor and Grok live qualification once Cursor can complete its
-  first prompt and a current Grok login can be seeded. Claude, Codex and Pi
-  passed signed-in bridge restart checks above; deterministic fake-CLI checks
-  remain separate evidence.
-- Whether OpenCode deduplicates a `promptAsync` that reuses a message id.
-  OpenCode still never answers `absent`, so nothing here depends on it.
+- ~~Whether OpenCode deduplicates a `promptAsync` that reuses a message id.~~
+  Obsolete (task 4): OpenCode 1.x was retired on 2026-11-11, and OpenCode 2
+  never re-posts an ambiguous prompt.
 
 ## Related
 
@@ -566,6 +545,7 @@ they record why each choice was made.
   a Claude bridge killed mid-write delayed the re-send of an `absent` request
   until its preference lock aged out. A dead owner's lock is now taken over at
   once, and a lock held by a live owner answers a retryable 503.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 5, the Cursor and Grok restart-resend runs) moved there on 2026-11-10.
 
 ## Replaces
 

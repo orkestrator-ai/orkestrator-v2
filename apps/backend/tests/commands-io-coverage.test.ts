@@ -193,7 +193,7 @@ afterAll(async () => {
 });
 
 describe("backend command I/O coverage", () => {
-  test("attaches, drives, lists, and detaches a container terminal", async () => {
+  test("starts, drives, lists, and detaches a container terminal", async () => {
     const context = createContext();
     const emitted: Array<{ event: string; payload: unknown }> = [];
     context.emit = eventSink((event, payload) => emitted.push({ event, payload }));
@@ -202,10 +202,11 @@ describe("backend command I/O coverage", () => {
 
     // Resolves after the ownership check the registry applies to every
     // command naming a container.
-    const sessionId = (await commands.get("attach_terminal")?.(
+    const { sessionId } = (await commands.get("create_terminal_session")!(
       { containerId: "container-1", cols: 0, rows: Number.NaN, user: "node" },
       context,
-    )) as string;
+    )) as { sessionId: string };
+    await commands.get("start_terminal_session")!({ sessionId }, context);
 
     expect(sessionId).toStartWith("container-1:");
     // The shell is marked with a fresh token so closing the tab can end it in
@@ -1391,9 +1392,10 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     ).toThrow("Expected environmentId to be a string");
   });
 
-  test("reports OpenCode agent-tool readiness only for a live server with agent tools", async () => {
-    // No `worktreePath`, so the status read reports readiness without
-    // scheduling reconciliation — this test asserts the surface, not the POST.
+  test("a local OpenCode status read reports the process and never touches agent tools", async () => {
+    // OpenCode attaches the Orkestrator MCP server per session
+    // (`opencode2/mcp.ts`), so a status read has no environment-wide MCP
+    // state to report and never mints a credential.
     const environment = { id: "env-tools", localOpencodePort: 4201, opencodePid: fakePid(5201) };
     const commands = createCommandRegistry();
     const agentTools = {
@@ -1428,22 +1430,13 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     } as unknown as ChildProcessWithoutNullStreams;
     localServers.adoptProcess("opencode:env-tools", openCodeChild);
     try {
-      // Live, but nothing has been reconciled yet: readiness is unknown rather
-      // than an unqualified claim that the ticket tools are wired up.
       await expect(
         commands.get("get_local_opencode_server_status")?.(
           { environmentId: "env-tools" },
           withAgentTools,
         ),
-      ).resolves.toEqual({
-        running: true,
-        port: 4201,
-        pid: fakePid(5201),
-        agentTools: "pending",
-      });
+      ).resolves.toEqual({ running: true, port: 4201, pid: fakePid(5201) });
 
-      // Claude has no MCP wiring of its own, and a backend built without an
-      // agent-tools server must not advertise the field at all.
       localServers.adoptProcess("claude:env-tools", claudeChild);
       await expect(
         commands.get("get_local_claude_server_status")?.(

@@ -105,6 +105,74 @@ stacked column in the panel that scrolls it, and scrolls back to the start. The 
 on, since its unrolled passes grow the line without bound. Multi Review leaves
 it off: it removed Fit in #1199 and its browser suite asserts it stays gone.
 
+A graph hidden by a pane switch keeps its size and its overview's scroll
+offset. `useMeasuredWidth` and `useMeasuredHeight` keep their last value when
+a hidden pane measures 0 (so zoom and pan are not reset on a switch), and
+`useScrollOffsetAcrossHide` (`apps/web/src/hooks/`) puts back the offset of a
+scroller that is, or holds, a container query container: Playwright WebKit
+resets such a scroller to the top across `display: none`. The Multi Review
+inspector's transcript tail and the Multi Review, pipeline and Graph Run
+overviews use it; where the browser keeps the offset, the restore writes the
+value already there. Whether desktop Safari and iOS Safari behave like
+Playwright WebKit here has not been checked.
+
+The same engine behaviour is reached without a hide when an ancestor of such
+a scroller changes its `display`: WebKit rebuilds the boxes beneath it and
+puts the scroller back at the top, firing an ordinary `scroll` with
+`scrollHeight` unchanged. A width change alone does not do it, and a scroller
+with no container query keeps its offset either way (an engine-only page,
+Playwright WebKit build 2388, 2026-11-11). The Multi Review package step met
+it when "Publish validation" switched its split from a flex column to a grid,
+which lost a package reader's place at 1600 px (to-do 6960, retired
+2026-11-11). The split now turns the column into a row instead
+(`MultiReviewTab.tsx`), so `display` never changes. Lay out around a
+container query scroller by changing `flex-direction`, grid tracks or sizes,
+never `display`; `e2e/MultiReviewPackageLayout.spec.ts` covers the package
+reader and passes in Playwright WebKit.
+
+### The Multi Review graph
+
+`MultiReviewFlowGraph.tsx` draws review package, reviewer panel,
+consolidation and Fix left to right (`multiReviewFlowLayout`, edges from
+`multiReviewFlowEdges`; a finished source takes its edge style from its
+target), with `MultiReviewInspector.tsx` below:
+
+- **Zoom.** 20% to 200% with −, the level (reset to 100%), + and Fullscreen;
+  Ctrl/⌘ + wheel, a trackpad pinch, Safari's `gesture*` events and a
+  two-finger touch pinch zoom around the pointer, while a plain wheel scrolls
+  the page. The stacked layout (below 960 px) has the same controls in a
+  sticky row with 44 px targets and keeps its own view (workflow id plus
+  `stacked`). Real trackpad, Safari and phone gestures are checked by hand
+  only; the browser suite uses synthetic events.
+- **Failed nodes** show their error joined onto one line (`errorFace="joined"`),
+  with the whole text as the accessible description and a tooltip that also
+  opens on keyboard focus.
+- **Transcript tails.** Every node has one. Reviewers read
+  `getMultiReviewReviewerTranscript`; preparation, consolidation and Fix read
+  `get_multi_review_step_transcript` (at most 100 messages and 256 KiB, a
+  session-scoped `knownSourceToken`, `unchanged` answers). A tail reads on
+  selection and on each workflow checkpoint, and polls only while its node is
+  live, the window visible and the tab active. A session several steps share
+  is read only for the step using it now (`multiReviewStepSessionAccess`).
+- **Queue position.** A pending reviewer shows "queued · #3 of 7" or
+  "starting" from `admissionState` and `queuePosition`
+  (`review-fanout-admission.ts`). They are observations and can trail the
+  scheduler by one admission; there is no expected start time.
+- **Findings so far.** `mergeReviewerFindings` lists accepted reports' issues
+  plus `report_finding` rows (`reviewer.provisionalFindings`), deduplicated by
+  file, line and title, marked "provisional" while the reviewer runs and
+  "unconfirmed (reviewer failed)" or "(reviewer stopped)" if it ended without a
+  report. The accepted report replaces them, consolidation never reads them,
+  and they are removed once the workflow is `interactive` or `completed`. A
+  staged finding lives in memory until the next review pass records it, so one
+  staged when the backend stops is lost.
+
+Selection, zoom and pan are view state and never reach the workflow; no node
+state comes from a transcript tail. The reviewer fields `admissionState`,
+`queuePosition` and `provisionalFindings` exist only while a review runs, and
+an older backend's or renderer's strict validator rejects a workflow that
+carries them, so a downgrade affects only a workflow mid-review.
+
 ## The pipeline graph
 
 `pipelineFlowModel` (`components/build-pipeline/pipeline-flow.ts`) projects the
@@ -143,7 +211,7 @@ a transcript.
   between never leaves `reviewing` with nothing to drive it.
 - **Address Findings → Verify.** Address Findings submits a typed `fix-result` and Verify reads
   it as an evidence frame, not the Address Findings session's last assistant text
-  ([review preparation](review-preparation.md#the-address--verify-handoff)). The
+  ([review preparation](review-preparation.md#the-address-findings--verify-handoff)). The
   accepted result is kept, bounded, on the Address Findings session (`fixResult`, marked
   by `addressReportKind`), and the Address Findings inspector shows it above the
   transcript as a collapsed "Address Findings report": complete or incomplete, files,
@@ -452,7 +520,9 @@ downgraded backend ignores the field and keeps the pipeline.
 `PipelineFlowView` owns selection, which follows the running step (or the last
 step reached) until the user clicks a node. A click selects; a double click
 opens the step's provider session in a tab of its own (`requireExistingResumeSession`,
-so a missing session never opens as an empty one). The inspector shows the
+so a missing session never opens as an empty one). Nothing else marks that tab
+as the pipeline's: a message typed into a running stage's tab goes to the
+provider session under that provider's own resume rules. The inspector shows the
 status, the actions, and for a session the full transcript with the same
 renderer, virtualization, find and report footer the tab always had
 (`PipelineSessionTranscript`). The message box shows only on the session the
@@ -705,12 +775,19 @@ action.
    pull request. The pull request then shows the rewound history.
 
 The previous-attempt inspector says the code was reset, from and to which
-commits and how many commits it dropped, and names the backup ref.
+commits and how many commits it dropped, and names the backup ref. The
+pipeline never prunes the backup refs. A code rewind that ages out of the
+50-rewind record also stops telling Ship to force-push.
 
 `retry_build_pipeline_reviewer` reruns one failed reviewer of the current pass,
 keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
-under its key; the retry gets `…:attempt-2`.
+under its key; the retry gets `…:attempt-2`. The retry keeps the slot's agent,
+model and effort, so a reviewer that failed on a bad model id fails again. It
+is refused once the pass has consolidated ("restart the review stage to rerun
+it"): after that only a restart from a reviewer or Consolidation reruns the
+pass, and it reruns the whole panel. A per-slot rerun after consolidation would
+need a supersede rule by panel slot beside the round rule, and is not built.
 
 ## Delivery after Verify
 
@@ -782,16 +859,55 @@ A pipeline has one such tab, separate from its key information tab, which keeps
 showing the brief alone. Both keep only the pipeline id and read the record, so
 they follow every update and survive a reload.
 
-A run seen finishing also opens that tab and activates it
-(`apps/web/src/lib/build-pipeline-completion-notes.ts`), in the pane holding the
-pipeline tab, else the environment's active pane. The trigger is a completion
-the renderer observed: a pipeline the store held in an earlier phase arriving
-as `complete`. A run already complete when first loaded opens nothing, so a
-reload or a new window never reopens old notes. The intent is held outside
-React and waits for the environment's layout to be installed, so a run that
-finishes while another environment is on screen has its notes tab open and
-active on return. An open notes tab is focused rather than duplicated; a full
-layout opens nothing, leaving the Notes step selected.
+A finished run opens that tab and selects it. The backend does this when the
+pipeline completes (`ensureBuildPipelineNotesTab` in
+`apps/backend/src/core/storage-sessions.ts`, called from the recovery
+module's `complete`): it adds the notes tab to the environment's authoritative
+layout, in the pane holding the pipeline tab, else the active pane, and makes it
+that pane's tab and the active pane. So a run that finished while no client was
+watching it (the app closed, the window on another environment, or the run on
+another node whose pipelines this window had not loaded yet) still lands on
+its notes: a client hydrating the environment adopts the backend's selection.
+An Electron window keeps its own selection, so it follows the notes tab once,
+when it first sees `completionPublished` on the tab with a new
+`completionRevision`, including a manual Notes
+tab already open in that window
+(`applyCompletionNotesArrival` in
+`apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
+published setup terminal. Manual Notes openings have no completion marker and
+leave other windows on their selected tab. A user who then picks another tab is
+not pulled back.
+The shared layout merge preserves the completion marker when the backend and
+renderer concurrently add the same Notes tab. Full-layout saves also retain it
+on an existing tab for the same environment and pipeline. Closing Notes removes
+the marker with the tab, so a later manual reopening stays unmarked.
+Successful completion is the only trigger, so a reload never reopens old notes.
+A failed run keeps its failure inspector selected and does not automatically
+open Notes; terminal ticket reconciliation still follows the durable failure save.
+
+The renderer also reacts to a completion it observed
+(`apps/web/src/lib/build-pipeline-completion-notes.ts`): a pipeline the store
+held in an earlier phase arriving as `complete` opens or focuses the same tab
+without waiting for the layout round trip. Both derive the tab id from
+`keyInformationTabId` (`@orkestrator/protocol/pane-layout`), so they merge into
+one tab. An open notes tab is focused rather than duplicated; a full layout
+opens nothing and shows the existing tab-limit notice, leaving the Notes step
+selected without evicting a tab. The observer acknowledges the handoff in a
+bounded, window-local node-scope slot before opening Notes. A later backend
+publication cannot override a newer selection, even if the user closed Notes
+in the interval. A layout-first publication likewise suppresses the later
+observer activation. The successful completion save records its own backend revision as
+`completionRevision` on the pipeline and publishes that same identity on Notes.
+Later terminal reconciliation leaves it unchanged; a restarted attempt gets a
+larger revision when it completes. Both event orders acknowledge that identity,
+including a `complete` to `complete` snapshot when a disconnected window missed
+the intermediate phases. Layout merges and full saves retain the greatest
+published completion revision on a retained tab. An unrelated pipeline update
+cannot clear an acknowledgement. Legacy publications without a revision retain
+the boolean fallback, cleared only by an observed transition out of completion
+or an environment change.
+Publishing the same or an older completion revision again is a backend no-op,
+including after the user has selected another tab.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the
@@ -865,8 +981,9 @@ bound and that test fails until the template says the same.
   `reviewFanout.workspaceBaseline` predate the read-only guard and are not
   certified against one.
 
-Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
-[0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).
+The graph's live qualification (to-do 0315, retired 2026-11-10) and the live
+rewind, re-Ship and phone checks (to-do 0405, retired 2026-11-10) are on the
+manual-test checklist (to-do 7568).
 
 ## Completed interactive Build attempts (internal foundation)
 
@@ -888,27 +1005,53 @@ user reviews its draft.
 
 ### Manual Auto-pipeline promotion
 
-The manual Multi Review configuration dialog offers **Auto-pipeline** for an
-open interactive native agent tab in a prompt environment. A picker identifies
-the transcript when several tabs are open. Running turns disable drafting with
-an explanation. Existing pipeline environments and coordinator or pipeline
-review launchers do not offer promotion.
+The toolbar's **To pipeline** button acts on the active tab, when that is an
+open interactive native agent tab in a prompt environment. A running turn
+disables it with an explanation. The button re-reads eligibility
+(`auto_pipeline_sources`) every two seconds while the window is visible; that
+read uses only storage, the persisted dispatch flags and the backend's observed
+turn activity, and never starts or contacts a bridge. Drafting itself asks the
+provider for the tab's status and refuses a busy or unreachable tab. Existing
+pipeline environments and coordinator or pipeline review launchers do not offer
+promotion.
 
-A separate read-only session uses the saved Build agent, model and effort. It
-receives the selected transcript and the branch diff against the environment's
-base commit. Its `submit_auto_pipeline_draft` result contains the ticket and the
-Build handoff together. It never sends a turn to the original tab. The backend
-bounds the transcript, diff and result, and refuses a changed checkout.
+The tab's own agent writes the draft. The button sends the tab an ordinary
+message (`autoPipelineDraftPrompt`, `packages/protocol/src/auto-pipeline.ts`)
+asking it to call `convert_to_pipeline`, an Orkestrator MCP tool listed on the
+general server to every interactive tab of a prompt environment that belongs to
+no pipeline (`agent-tools-auto-pipeline.ts`). Asking for a pipeline in plain
+chat takes the same path. The agent works from its own record of the session
+(which its provider has already compacted) and from `git status`, `git diff`
+and `git log`, so no transcript or diff is copied into a prompt and nothing
+about drafting depends on how long the session ran. The tool's input is the
+ticket and the Build handoff together.
+
+The tool only records a draft. It never creates a ticket or starts a pipeline:
+confirming is the user's click. The backend, not the agent, reads the checkout's
+fingerprint and the tab's newest dispatched request when the tool is called, and
+refuses a changed checkout or a newer message in the tab at confirmation. A
+second call replaces an unconfirmed draft. Asking again when neither has changed
+returns the existing draft without another message. Cancelling a request stops
+the drafting turn, and only that turn: the stop is request-scoped
+(`NativeAgentService.stopRequest`) and leaves the tab alone once a newer turn
+the user started has replaced it or the drafting turn has ended. A cancel that
+arrives before the tab accepted the drafting message only stops preparation and
+never stops the tab. A turn that ends without the tool being called fails the
+request with that reason; the wait itself ends after 30 minutes. A draft the
+agent submits after a failed or timed-out wait still reaches the tab.
 
 The user edits the title, description and ordered acceptance criteria before
 confirming. Generated Build notes and the pending paths are shown read-only.
 Cancel creates no ticket or pipeline; a failed draft offers retry and plain
 Multi Review. Drafts and confirmation receipts are backend-owned SQLite records.
 
-Confirmation rechecks the source and checkout, creates an in-progress ticket,
+Confirmation rechecks the source tab and checkout, creates an in-progress ticket,
 commits pending work with normal Git hooks, and admits a completed Build on the
 existing environment. The normal pipeline tab becomes active. The graph's first
-Build attempt retains the original transcript and immutable generated notes;
+Build attempt retains the original transcript, cut at confirmation to what
+adoption accepts (the first message and the newest that fit within 5,000
+messages and 4 MiB, with long strings shortened; `auto-pipeline-transcript.ts`),
+and immutable generated notes;
 its inspector also shows the reviewed acceptance criteria. The usual Review,
 Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
 Restarting Build creates an ordinary ticket-based session and retains the

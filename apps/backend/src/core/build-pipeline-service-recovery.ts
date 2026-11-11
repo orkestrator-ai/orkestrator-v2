@@ -3,7 +3,7 @@
  * repair, verification and pull-request outcomes, terminal reconciliation with
  * the Kanban task or issue, and the durable interaction-resolution journal.
  */
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -509,10 +509,23 @@ export class BuildPipelineRecovery {
       prState: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
     });
+    // Re-detected after a merge (a conflict resolution or a Ship retry that
+    // finishes once the pull request merged): the merge closes the ticket,
+    // and the raised event must not move it back to review.
+    const update = buildPipelineKanbanUpdate("pr-raised", {
+      url: detection.url,
+      state: detection.state,
+    });
     await this.updateKanbanLifecycle(
       pipeline,
-      buildPipelineKanbanUpdate("pr-raised", { url: detection.url, state: detection.state }),
+      detection.state === "open" ? update : { ...update, status: undefined },
     );
+    if (detection.state === "merged") await this.closeTicketForMerge(pipeline, detection.url);
+    // Closed without merging, found by the build itself (a conflict
+    // resolution's re-detection): the same return the PR monitor applies,
+    // decided once per pull request, so the monitor seeing the closed link
+    // later neither skips it nor repeats it.
+    if (detection.state === "closed") await this.returnTicketForClosedPr(pipeline, detection.url);
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
       mode: "normal",
@@ -525,8 +538,32 @@ export class BuildPipelineRecovery {
     delete pipeline.stallWarning;
     this.ctx.provisioningPrompts.delete(pipeline.id);
     this.ctx.lastProviderAgent.delete(pipeline.id);
+    pipeline.completionRevision = pipeline.backendRevision + 1;
     await this.ctx.save(pipeline, pipeline.backendRevision);
+    await this.openCompletionNotes(pipeline);
     await this.reconcileTerminalState(pipeline);
+  }
+
+  /**
+   * Lands the finished run on its notes: the backend publishes the notes tab
+   * and selects it, so a client that did not watch the run finish (closed,
+   * on another environment, or showing another node) still opens on them.
+   * Best effort: the run is complete whatever happens to the layout.
+   */
+  private async openCompletionNotes(pipeline: BuildPipeline): Promise<void> {
+    if (!pipeline.environmentId) return;
+    try {
+      await this.ctx.storage.ensureBuildPipelineNotesTab({
+        pipelineId: pipeline.id,
+        environmentId: pipeline.environmentId,
+        completionRevision: pipeline.completionRevision,
+      });
+    } catch (error) {
+      log.warn("completion-notes.publish-failed", {
+        pipelineId: pipeline.id,
+        error: formatLogError(error),
+      });
+    }
   }
 
   async postCompletionComment(pipeline: BuildPipeline): Promise<void> {
@@ -695,7 +732,9 @@ export class BuildPipelineRecovery {
     ) {
       await this.ctx.invoke("update_kanban_task", {
         taskId: task.id,
-        ...(options.terminal ? { preserveDoneStatus: true } : {}),
+        // Every lifecycle move: a done ticket is never reopened by a build,
+        // and storage records the column it set (`lifecycleStatus`).
+        ...(updates.status ? { preserveDoneStatus: true } : {}),
         ...(updates.status ? { status: updates.status } : {}),
         ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
         ...(updates.prState ? { prState: updates.prState } : {}),
@@ -709,11 +748,27 @@ export class BuildPipelineRecovery {
     }
   }
 
+  /** Closes the pipeline's ticket for its merged pull request (`kanban-merge-closure.ts`). */
+  private async closeTicketForMerge(pipeline: BuildPipeline, prUrl: string): Promise<void> {
+    const taskId = pipeline.source?.type === "kanban" ? pipeline.source.taskId : undefined;
+    if (!taskId) return;
+    await this.ctx.invoke("close_kanban_task_for_merged_pr", { taskId, prUrl });
+  }
+
+  /** Returns the pipeline's ticket to the backlog for its closed pull request (`kanban-merge-closure.ts`). */
+  private async returnTicketForClosedPr(pipeline: BuildPipeline, prUrl: string): Promise<void> {
+    const taskId = pipeline.source?.type === "kanban" ? pipeline.source.taskId : undefined;
+    if (!taskId) return;
+    await this.ctx.storage.kanban.returnKanbanTaskForClosedPullRequest(taskId, prUrl);
+  }
+
   /**
    * The column a ticket moves to when its build ends, or undefined to leave
    * it. A build that ends after its pull request merged closes the ticket
    * (`kanban-merge-closure.ts`) instead of moving it back to review or
-   * backlog, and a ticket already done is never reopened by a build ending.
+   * backlog, one that ends after its pull request closed without merging
+   * sends it to the backlog (there is nothing left to review), and a ticket
+   * already done is never reopened by a build ending.
    */
   private async terminalTicketStatus(
     pipeline: BuildPipeline,
@@ -731,7 +786,9 @@ export class BuildPipelineRecovery {
       });
       return undefined;
     }
-    return task.status === "done" ? undefined : status;
+    if (task.status === "done") return undefined;
+    if (environment?.prState === "closed" && environment.prUrl) return "backlog";
+    return status;
   }
 
   async configureEnvironment(pipeline: BuildPipeline): Promise<void> {

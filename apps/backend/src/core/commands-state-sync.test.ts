@@ -221,62 +221,7 @@ async function setOpenCodeModelProviders(
   });
 }
 
-describe("create-environment agent preference command", () => {
-  test("persists a successful agent-enabled create selection without replacing repository settings", async () => {
-    await withCommands(async (invoke, storage) => {
-      await storage.updateRepositoryConfig("proj-1", {
-        defaultBranch: "develop",
-        prBaseBranch: "release",
-        lastEnvironmentType: "local",
-      });
-
-      await invoke("remember_environment_agent_selection", {
-        projectId: "proj-1",
-        platform: "codex",
-        mode: "terminal",
-      });
-
-      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
-        defaultBranch: "develop",
-        prBaseBranch: "release",
-        lastEnvironmentType: "local",
-        lastEnvironmentAgentSelection: {
-          platform: "codex",
-          mode: "terminal",
-        },
-      });
-
-      await invoke("update_environment_agent_settings", {
-        environmentId: "e1",
-        defaultAgent: "claude",
-        claudeMode: "native",
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: null,
-        pendingAgentLaunch: false,
-      });
-
-      expect(
-        (await storage.getRepositoryConfig("proj-1")).lastEnvironmentAgentSelection?.platform,
-      ).toBe("codex");
-    });
-  });
-
-  test("records provider-default model and reasoning choices as omitted fields", async () => {
-    await withCommands(async (invoke, storage) => {
-      await invoke("remember_environment_agent_selection", {
-        projectId: "proj-1",
-        platform: "opencode",
-        mode: "native",
-      });
-
-      expect((await storage.getRepositoryConfig("proj-1")).lastEnvironmentAgentSelection).toEqual({
-        platform: "opencode",
-        mode: "native",
-      });
-    });
-  });
-
+describe("remembered create-environment agent selection", () => {
   test("preserves backend-owned create state when stale repository settings are saved", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.updateRepositoryConfig("proj-1", {
@@ -352,13 +297,11 @@ describe("create-environment agent preference command", () => {
   // entry with no `defaultBranch`/`prBaseBranch`, which every later reader treats
   // as configured rather than defaulted.
   test("seeds repository defaults when remembering against an unsaved project", async () => {
-    await withCommands(async (invoke, storage) => {
+    await withCommands(async (_invoke, storage) => {
       const untouched = await storage.getRepositoryConfig("proj-never-saved");
 
-      await invoke("remember_environment_agent_selection", {
-        projectId: "proj-never-saved",
-        platform: "claude",
-        mode: "native",
+      await storage.patchRepositoryConfig("proj-never-saved", {
+        lastEnvironmentAgentSelection: { platform: "claude", mode: "native" },
       });
 
       expect(await storage.getRepositoryConfig("proj-never-saved")).toEqual({
@@ -367,25 +310,6 @@ describe("create-environment agent preference command", () => {
       });
       expect(untouched.defaultBranch).toBe("main");
       expect(untouched.prBaseBranch).toBe("main");
-    });
-  });
-
-  test("rejects malformed remembered agent selections", async () => {
-    await withCommands(async (invoke) => {
-      await expect(
-        invoke("remember_environment_agent_selection", {
-          projectId: "proj-1",
-          platform: "codex",
-          mode: "background",
-        }),
-      ).rejects.toThrow("Expected mode to be terminal or native");
-      await expect(
-        invoke("remember_environment_agent_selection", {
-          projectId: "proj-1",
-          platform: "unknown",
-          mode: "native",
-        }),
-      ).rejects.toThrow("Expected platform to be a supported agent platform");
     });
   });
 });
@@ -1089,16 +1013,6 @@ describe("native agent model catalogue command", () => {
         "opencode-go",
         "opencode",
       ]);
-
-      // Storage stays the complete durable record; only the reads narrow.
-      const rewritten = (await invoke("cache_opencode_model_catalog", {
-        projectId: "proj-1",
-        models: [
-          { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
-          { id: "hpc-ai/b", name: "HPC B", provider: "hpc-ai" },
-        ],
-      })) as { models: Array<{ provider: string }> };
-      expect(rewritten.models.map((model) => model.provider)).toEqual(["hpc-ai", "opencode"]);
     });
   });
 
@@ -5970,8 +5884,6 @@ describe("pr monitor commands", () => {
         prUrl: null,
         consecutiveErrors: 0,
       });
-
-      await expect(invoke("pr_monitor_refresh", { environmentId: "e1" })).resolves.toBeUndefined();
     });
   });
 

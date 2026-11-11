@@ -13,46 +13,10 @@ Analysed 2026-11-06 against `main` at `c1724ab7`.
 
 ### Tasks
 
-1. **Live voice qualification (Remaining work 1(a))**: run the scripted voice session through a real realtime voice runtime and record latency, token counts, misresolved targets and session-handle copy errors. Status: blocked (no realtime voice runtime or credentials on the qualification machine; needs a person speaking).
-2. **`delegate` into a coordinator turn (D13)**: an action that starts a coordinator turn from outside. Status: deferred.
-3. **Stateful MCP session with `list_changed` and subscriptions (D14)**. Status: deferred.
+2. **`delegate` into a coordinator turn (D13)**: an action that starts a coordinator turn from outside. Status: deferred; the recommended removal from this file, with a pointer in `control-mcp.md`, can be done now.
+3. **Stateful MCP session with `list_changed` and subscriptions (D14)**. Status: deferred; the same removal can be done now.
 4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: done (test file split 2026-11-03, D23; `control-mcp-tools.ts` split 2026-11-06 after #1664 merged, D25).
 5. **Stale statements in this file**: D11, the profile size table and the OpenCode conformance note no longer match `main`. Status: done (2026-11-06, D26).
-
-### 1. Live voice qualification (Remaining work 1(a))
-
-**Problem.** The voice profile exists to serve realtime voice agents, but no speaking model has driven it. The two numbers that decide whether the design is right for voice (how often a spoken target resolves to the wrong environment or session, and how often a model mangles a `ses_` handle when copying it back) are unmeasured. Users who wire up a voice client are the only ones affected; the surface is opt-in.
-
-**Context.** Everything else in the script has been run live: reads p95 4.1 ms and 78 ms against a 1 s target, a real Claude command approval confirmed and approved over MCP (1(b), D19), and the relay plus scorer (D20, D21) scored a scripted recording 0 / 0. The file gives a four-step procedure. The assumption that "a voice agent can copy a `ses_` handle exactly; aliases were not added" waits on this measurement.
-
-**Investigation.** The tooling is on `main` (merged in `eb243486`, #1269): `packages/cli/examples/voice-mcp-relay.ts` (default port 34199 at `:200`, `--record` required at `:193`), `packages/cli/examples/voice-qualify.ts` (`--expect-approval` at `:173`, `--score` documented at `:38`) and `voice-recording.ts`. The procedure in `docs/architecture/control-mcp-voice.md` ("Qualifying a voice runtime") matches. `apps/backend/src/core/control-mcp-voice.test.ts` passes alone at HEAD (20 tests, 470 expects), including the voice `tools/list` budget (`CONTROL_MCP_VOICE_TOOLS_BUDGET_BYTES = 8_000`, `packages/protocol/src/control-mcp.ts:170`). The file names no pass threshold for misresolution or copy-error rates; it only says "record".
-
-**Decisions.**
-
-- **Which voice runtime and path?**
-  - **A realtime model that accepts an MCP URL directly, pointed at the local recording relay (recommended).**
-    - Pros: exercises exactly the loopback path the docs recommend (D12) and the relay records it without prompts or tokens.
-    - Cons: needs realtime-model credentials on the qualification machine, which none had on 2026-10-25.
-  - **A hosted voice platform through its own tunnel to the relay.**
-    - Pros: closer to how many users would deploy it.
-    - Cons: needs a public tunnel, which the loopback-only constraint argues against even for a test; the relay then is not the only hop.
-  - **A text model with speech-to-text and text-to-speech glued on.**
-    - Pros: available without realtime credentials.
-    - Cons: transcription errors and model behaviour differ from a realtime model, so the copy-error rate would not be representative.
-- **What counts as a pass?**
-  - **Set thresholds before the run: misresolved targets 0 across at least five repeats, copy errors under 5 % of targeted calls; anything worse opens a new todo for handle aliases (recommended).**
-    - Pros: makes the run decisive; ties the result to the deferred alias decision.
-    - Cons: thresholds are a judgement made without prior data.
-  - **Record the numbers only, as the file says, and decide afterwards.**
-    - Pros: no arbitrary threshold.
-    - Cons: the item could close without any decision about aliases.
-- **Keep the item open indefinitely, or retire it?**
-  - **Keep it blocked until someone has a realtime runtime, and re-rate the file Low meanwhile (recommended).**
-    - Pros: the measurement is the stated purpose of the voice profile; Low matches the README rule that blocked work usually rates low.
-    - Cons: the file stays open with no near-term owner.
-  - **Retire it, accepting the scripted 0 / 0 and the real-client runs on `full` as sufficient.**
-    - Pros: closes the file.
-    - Cons: the scripted run cannot misresolve or mistype by construction, so it proves the scorer, not the voice design.
 
 ### 2. `delegate` into a coordinator turn (D13)
 
@@ -66,7 +30,7 @@ Analysed 2026-11-06 against `main` at `c1724ab7`.
 
 - **What to do with the deferred item?**
   - **Remove it from this file and leave a one-line pointer in `control-mcp.md`; open a new todo only when someone asks for it (recommended).**
-    - Pros: lets this file finish when task 1 does; follows the file's own instruction that each needs its own todo.
+    - Pros: lets this file finish (the live voice qualification moved to the manual-test checklist on 2026-11-10); follows the file's own instruction that each needs its own todo.
     - Cons: the idea is less visible than as an open item.
   - **Open a new todo file for it now.**
     - Pros: tracked and rateable.
@@ -283,8 +247,9 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
 10. **Parity and budget tests.** Done; see Tests and qualification.
 11. **Docs.** Done: `control-mcp.md`, `public-cli.md`, `agent-messaging.md`,
     new `control-mcp-voice.md`, the catalog in `docs/README.md`, and a pointer
-    from the gateway constraint in
-    [`0017-cli-command-surface.md`](../cli-and-slash-commands/0017-cli-command-surface.md).
+    from the gateway constraint, now in
+    [`public-cli.md`](../../architecture/public-cli.md#rules-for-new-client-features)
+    (to-do 0017 was retired on 2026-11-11).
     The file is not fully ticked (see Remaining work), so it stays; its
     durable behaviour is already in `architecture/`.
 12. **Optional.** Deferred, not built (D13, D14): `delegate`, and a stateful
@@ -308,7 +273,7 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
 | Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
 | Live: the approval step with a real command approval | Done 2026-10-25 | Live evidence, "Real command approval" |
 | Recording relay and scoring of misresolved targets and handle copy errors | Done 2026-10-25 | `packages/cli/tests/voice-recording.test.ts` (11 tests: targets and result IDs, no prompt or token in a recording, zero score for exact handles, misresolution versus copy error, repeats following the latest session, report, relay forwarding and bounds, `--score`, `--expect-approval` pass and fail); a live relay recording scored 0 / 0 |
-| Live: a realtime voice runtime runs the script | **Not done** | Remaining work 1 |
+| Live: a realtime voice runtime runs the script | Moved to the manual-test checklist (2026-11-10) | Remaining work 1 |
 
 ## Remaining work
 
@@ -328,31 +293,14 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
      earlier note that "no public setting enables approvals" was right about
      public actions but missed the environment's own policy override, which
      is enough (D19).
-   - (a) **Still open:** the same script driven by a realtime voice runtime,
-     for misresolved targets and session-handle copy errors. The tooling is
-     ready and tested: `voice-mcp-relay.ts` records a runtime's calls (IDs and
-     sizes only) and `voice-qualify.ts --score` counts both errors (D20, D21);
-     a live relay recording of the scripted run scored 0 / 0. Not done because
-     no realtime voice runtime (audio in and out, a realtime model session) is
-     installed or credentialed on this machine (arktech-mini, 2026-10-25: no
-     OpenAI, Gemini or other realtime credentials in the environment), and the
-     two counts need a speaking model and a person. To close it:
-     1. In a disposable profile (`mise run dev:test --profile voice-live
-        --fixture --credential-source claude --agent-platforms claude`),
-        create a local environment, set its Approvals to Ask, and create a
-        Voice credential in Settings → MCP.
-     2. Run `bun packages/cli/examples/voice-mcp-relay.ts --record voice.jsonl
-        --url <profile's Control MCP URL>` and give the voice runtime
-        `http://127.0.0.1:34199/mcp` with the credential's Authorization
-        header.
-     3. Speak the script, naming the environment by name: "what's going on";
-        "start work in <name> with Claude: run printf voice >
-        voice-qualify-canary.txt, then say done"; "yes" to the approval it
-        reads out; "stop it"; "what did it say". Repeat at least five times,
-        with a new session each time.
-     4. Run `bun packages/cli/examples/voice-qualify.ts --score voice.jsonl
-        --environment <id>` and record `latency`, `tools`, `resultText` and
-        `score` here, with the runtime, model and audio path used.
+   - (a) Moved to the manual-test checklist on 2026-11-10: the same script
+     driven by a realtime voice runtime, for misresolved targets and
+     session-handle copy errors. It needs realtime-model credentials and a
+     person speaking. The tooling is ready and tested: `voice-mcp-relay.ts`
+     records a runtime's calls (IDs and sizes only) and
+     `voice-qualify.ts --score` counts both errors (D20, D21); a live relay
+     recording of the scripted run scored 0 / 0. The procedure is in
+     [`control-mcp-voice.md`](../../architecture/control-mcp-voice.md#qualifying-a-voice-runtime).
 2. **Optional, deferred:** `delegate` into a coordinator turn (D13), and a
    stateful MCP session with `list_changed` and subscriptions (D14). Each
    needs its own todo file when it is wanted.
@@ -938,3 +886,7 @@ the choice, why, and its pros and cons.
   confirmation, as the plan says, including MCP forms and plan approvals.
 - A voice agent can copy a `ses_` handle exactly; aliases were not added
   (the plan asks to measure copy errors first, which needs Remaining work 1).
+
+## Related
+
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live voice qualification) moved there on 2026-11-10.

@@ -25,6 +25,7 @@ import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { PINNED_SCROLL_ATTRIBUTE } from "@/lib/pinned-scroll";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE = useMachineViewStore.getState();
@@ -158,6 +159,27 @@ test("every node renders in the window's tree, each in its own scope", async () 
   expectDomAbsent(screen.queryByTestId("node-workspace-error"));
   // The leaf answered its own workspace's reads.
   expect(clientFor(LEAF).calls("get_projects").length).toBeGreaterThan(0);
+});
+
+test("an in-tree node's frame, panel group and main are pinned against programmatic scrolling", async () => {
+  install();
+  renderRegion();
+  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
+  const region = await screen.findByTestId("in-tree-workspace");
+  // `NodeWorkspaceLayout` draws the node's workspace once its scope is live.
+  const main = await waitFor(() => {
+    const element = region.querySelector("main");
+    if (!element) throw new Error("the node's workspace has not rendered yet");
+    return element;
+  });
+  const pinned: Element[] = [];
+  for (let node: Element | null = main; node && node !== document.body; node = node.parentElement) {
+    if (node.hasAttribute(PINNED_SCROLL_ATTRIBUTE)) pinned.push(node);
+  }
+  expect(pinned[0]).toBe(main);
+  // The real panel group spreads the pin onto its own element.
+  expect(pinned[1]!.getAttribute("data-slot")).toBe("resizable-panel-group");
+  expect(pinned[2]).toBe(region);
 });
 
 test("closing an in-tree node's view releases its scope after the grace period, never cancelling work", async () => {

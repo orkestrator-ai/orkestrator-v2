@@ -363,16 +363,6 @@ export function createBuildPipelinesApi(client: BackendClient) {
     const response: unknown = await hydrationRequests.run(() =>
       domain().list_build_pipelines({ projectId, knownRevisions }),
     );
-    // Older backends ignore knownRevisions and return the complete record array.
-    if (Array.isArray(response)) {
-      if (!response.every((entry) => isRecord(entry) && typeof entry.id === "string")) {
-        throw new Error("Invalid list_build_pipelines response");
-      }
-      return {
-        ids: response.map((entry) => entry.id as string),
-        records: response as Array<PersistedBuildPipeline<T>>,
-      };
-    }
     if (
       !isRecord(response) ||
       !Array.isArray(response.ids) ||
@@ -432,6 +422,12 @@ export function createBuildPipelinesApi(client: BackendClient) {
       draftId: string,
       ticket: import("@orkestrator/protocol/build-pipeline").AutoPipelineTicket,
     ) => pipelines(client).confirm_auto_pipeline({ draftId, ticket }),
+    getAutoPipelineState: (environmentId: string, tabId: string) =>
+      pipelines(client).get_auto_pipeline_state({ environmentId, tabId }),
+    saveAutoPipelineEdits: (
+      draftId: string,
+      edits: import("@orkestrator/protocol/build-pipeline").AutoPipelineEdits,
+    ) => pipelines(client).save_auto_pipeline_edits({ draftId, edits }),
     startBuildPipeline,
     createFeatureBuild,
     pauseBuildPipeline,
@@ -473,6 +469,8 @@ export const {
   draftAutoPipeline,
   cancelAutoPipelineDraft,
   confirmAutoPipeline,
+  getAutoPipelineState,
+  saveAutoPipelineEdits,
   startBuildPipeline,
   createFeatureBuild,
   pauseBuildPipeline,

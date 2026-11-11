@@ -118,8 +118,8 @@ for dir in "${secure_dirs[@]}"; do
     root_owned_chain "$(readlink -f "$dir")" || fail "sudo secure_path entry $dir is node-writable"
 done
 
-# 5. The launcher's programs and OpenCode's root configuration directory.
-for path in /usr/local/bin/bun /opt/opencode/bin/opencode /run/orkestrator-opencode; do
+# 5. The launcher's programs and OpenCode's root configuration directories.
+for path in /usr/local/bin/bun /opt/opencode/bin/opencode2 /run/orkestrator-opencode2; do
     [ -e "$path" ] || fail "$path is missing"
     root_owned_chain "$(readlink -f "$path")" || fail "$path is node-writable"
 done

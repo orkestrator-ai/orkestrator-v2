@@ -129,7 +129,6 @@ const ensure = mock(async () => snapshot);
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: ensure,
   getProjectCoordinatorView: mock(async () => ({
     status: "snapshot",
     generation: "view-gen",
@@ -141,7 +140,6 @@ mock.module("@/lib/backend", () => ({
   checkCoordinatorUpstreamMerge: mock(async () => null),
   selectCoordinatorConversation: mock(async () => snapshot),
   listHumanPrompts: async () => ({ prompts: workerPrompts }),
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
 }));
 
 /** Renders of each conversation's agent tab, by tab id. */

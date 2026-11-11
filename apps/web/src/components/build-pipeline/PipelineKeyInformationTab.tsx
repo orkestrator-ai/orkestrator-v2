@@ -13,7 +13,6 @@ import { useNodeScope } from "@/lib/node-scope/providers";
 import { getAllLeaves, paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData } from "@/types/paneLayout";
 import { keyInformationUpdatedLine } from "./key-information-format";
-import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
 import {
   useKeepActiveEntryInView,
   useKeyInformationSectionNav,
@@ -159,7 +158,6 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
             {keyInformationUpdatedLine(pipeline.keyInformation)}
           </div>
         </div>
-        <PipelineIntegrateButton environmentId={pipeline.environmentId} />
         {buildTab ? (
           <Button
             type="button"
@@ -193,10 +191,17 @@ export function KeyInformationDocument({
   keyInformation: info,
   scrollRef,
   lead,
+  singleColumn = false,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
   scrollRef: RefObject<HTMLDivElement | null>;
   lead?: ReactNode;
+  /**
+   * One section per row whatever the width (Context and Solution are not
+   * paired), with the section list from a narrower width: the ticket view's
+   * Notes tab, which is narrower than a pane.
+   */
+  singleColumn?: boolean;
 }) {
   if (!info || !hasKeyInformation(info)) {
     return (
@@ -213,17 +218,26 @@ export function KeyInformationDocument({
       </>
     );
   }
-  return <KeyInformationContents info={info} scrollRef={scrollRef} lead={lead} />;
+  return (
+    <KeyInformationContents
+      info={info}
+      scrollRef={scrollRef}
+      lead={lead}
+      singleColumn={singleColumn}
+    />
+  );
 }
 
 function KeyInformationContents({
   info,
   scrollRef,
   lead,
+  singleColumn,
 }: {
   info: BuildPipelineKeyInformation;
   scrollRef: RefObject<HTMLDivElement | null>;
   lead?: ReactNode;
+  singleColumn: boolean;
 }) {
   const navRef = useRef<HTMLUListElement>(null);
   const tests = countTests(info.tests);
@@ -376,7 +390,7 @@ function KeyInformationContents({
 
   // Context and Solution read side by side once the pane is wide enough for
   // two comfortable measures; everything else is one section per row.
-  const paired = new Set(["context", "solution"]);
+  const paired = new Set(singleColumn ? [] : ["context", "solution"]);
   const pairedSections = sections.filter((section) => paired.has(section.key));
   const firstPairedIndex = sections.findIndex((section) => paired.has(section.key));
 
@@ -384,7 +398,10 @@ function KeyInformationContents({
     <div className="mx-auto flex w-full max-w-7xl gap-10 px-4 py-6 @3xl:px-8">
       <nav
         aria-label="Key information sections"
-        className="sticky top-6 hidden w-44 shrink-0 self-start @5xl:block"
+        className={cn(
+          "sticky top-6 hidden w-44 shrink-0 self-start",
+          singleColumn ? "@3xl:block" : "@5xl:block",
+        )}
       >
         <div className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
           On this page

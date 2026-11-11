@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } 
 import { isValidElement, memo, StrictMode, useEffect, type ReactNode } from "react";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import { NativeMessage as NativeMessageCard } from "@/components/chat/NativeMessage";
 import type { NativeMessageProps } from "@/components/chat/NativeMessage.shared";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -258,10 +259,10 @@ const enqueuePromptQueueMessageMock = mock(async () => {});
 const removePromptQueueMessageMock = mock(async () => {});
 const movePromptQueueMessageMock = mock(async () => {});
 const dismissNativeAgentSuggestedPromptMock = mock(async () =>
-  getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
+  sessionProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
 const updateNativeAgentControlsMock = mock(async (_input: { update: Record<string, unknown> }) =>
-  getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" }),
+  sessionProjectionMock({ agent: "codex", environmentId: "env-1" }),
 );
 const dispatchNativeAgentIntentMock = mock(
   async (
@@ -292,7 +293,7 @@ const resumeNativeAgentSessionMock = mock(
   }),
 );
 const stopNativeAgentSessionMock = mock(async () =>
-  getNativeAgentProjectionMock({
+  sessionProjectionMock({
     agent: "claude",
     environmentId: "env-1",
   }),
@@ -300,7 +301,6 @@ const stopNativeAgentSessionMock = mock(async () =>
 const defaultProjection = async (input: {
   agent: AgentPlatform;
   environmentId: string;
-  messageLimit?: number;
 }): Promise<NativeAgentSessionProjection<NativeMessage>> => ({
   platform: input.agent,
   environmentId: input.environmentId,
@@ -336,7 +336,20 @@ const defaultProjection = async (input: {
   revision: 1,
   generation: "test-generation",
 });
-const getNativeAgentProjectionMock = mock(defaultProjection);
+/**
+ * The session as the fake backend holds it. Every progressive read the tab
+ * issues (transcript, session state, discovery) is answered from this one
+ * projection; see `@/test/native-agent-session-backend`.
+ */
+const sessionProjectionMock = mock(defaultProjection);
+/** Rows before the live tail, which "Load earlier messages" pages in. */
+const sessionHistoryMock = mock(
+  async (_input: { logicalSessionKey: string }): Promise<NativeMessage[]> => [],
+);
+const sessionBackend = createNativeAgentSessionBackend({
+  readProjection: (input) => sessionProjectionMock(input),
+  readHistory: (input) => sessionHistoryMock(input),
+});
 // The backend-driven Claude sign-in: what `get_agent_account_login` reports now.
 let accountLoginProgress: AgentAccountLoginProgress = { state: "idle" };
 const startAgentAccountLoginMock = mock(
@@ -364,7 +377,7 @@ const cancelAgentAccountLoginMock = mock(async () => {
   return accountLoginProgress;
 });
 const stopNativeAgentBackgroundTaskMock = mock(async () =>
-  getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
+  sessionProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
 const getLocalFileTreeMock = mock(async (_worktreePath: string) => []);
 const writeCoordinatorAttachmentMock = mock(
@@ -473,8 +486,7 @@ mock.module("@/lib/backend", () => ({
   getLocalFileTree: getLocalFileTreeMock,
   writeCoordinatorAttachment: writeCoordinatorAttachmentMock,
   writeBugReportAttachment: writeBugReportAttachmentMock,
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
-  getNativeAgentProjection: getNativeAgentProjectionMock,
+  ...sessionBackend.api,
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
   deleteComposeDraft: deleteComposeDraftMock,
@@ -662,8 +674,12 @@ afterEach(() => {
   movePromptQueueMessageMock.mockClear();
   dismissNativeAgentSuggestedPromptMock.mockClear();
   updateNativeAgentControlsMock.mockClear();
-  getNativeAgentProjectionMock.mockClear();
-  getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+  // Reset, not cleared: a failed test can leave queued once-implementations.
+  sessionProjectionMock.mockReset();
+  sessionProjectionMock.mockImplementation(defaultProjection);
+  sessionHistoryMock.mockReset();
+  sessionHistoryMock.mockImplementation(async () => []);
+  sessionBackend.reset();
   getLocalFileTreeMock.mockClear();
   writeCoordinatorAttachmentMock.mockClear();
   writeBugReportAttachmentMock.mockClear();
@@ -699,6 +715,32 @@ afterAll(() => {
   mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
   mock.module("@/hooks/useNativeComposeBarPaste", () => realNativeComposeBarPasteSnapshot);
 });
+
+/**
+ * The backend now holds `projection`: the next read answers with it, and it is
+ * installed at once, as the read that announced it would. A store write alone
+ * is not enough, because every progressive read installs what the backend
+ * holds and would put the old session back.
+ */
+function publishProjection(sessionKey: string, projection: NativeAgentSessionProjection): void {
+  sessionProjectionMock.mockImplementation(
+    async () => projection as NativeAgentSessionProjection<NativeMessage>,
+  );
+  act(() => {
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(sessionKey, projection);
+  });
+}
+
+/**
+ * The stored first row's first part's `agentState`. Read as a field: Bun 1.4's
+ * `toMatchObject` writes asymmetric matchers into the received object, which
+ * for the projection store is the state the tab is rendering.
+ */
+function firstPartAgentState(sessionKey: string): string | undefined {
+  const row = appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
+    ?.messages[0] as NativeMessage | undefined;
+  return (row?.parts[0] as { agentState?: string } | undefined)?.agentState;
+}
 
 function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
   return {
@@ -1082,7 +1124,7 @@ describe("AgentNativeTab", () => {
   test("agent transcript loopback links carry the actual AgentNativeTab identity", async () => {
     renderVirtualizedMessages = true;
     const content = "Ready at [seeded app](http://localhost:5173/).";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1168,7 +1210,7 @@ describe("AgentNativeTab", () => {
     const commentary = "The tree is clean. Validation will run as separate commands.";
     const dataset = JSON.stringify({ headRef: "a".repeat(40), commands: [{ id: "check" }] });
     const draft = '{"headRef":"abc';
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1222,7 +1264,7 @@ describe("AgentNativeTab", () => {
   test("keeps provider JSON visible in a non-review native tab", async () => {
     renderVirtualizedMessages = true;
     const combined = 'This is ordinary provider output. {"headRef":"abc';
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1247,7 +1289,7 @@ describe("AgentNativeTab", () => {
 
   test("routes questions and plan reviews into the transcript while action approvals stay pinned", async () => {
     renderVirtualizedMessages = true;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       interactions: [
         pendingInteraction("question", "question-1"),
@@ -1299,7 +1341,7 @@ describe("AgentNativeTab", () => {
       declineLabel: "Deny",
       confirmDisabled: true,
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1359,7 +1401,7 @@ describe("AgentNativeTab", () => {
         .updateGlobalConfig({ useHostClaudeCredentials: false });
       const createTab = mock(() => true);
       const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
         messages: [
           {
@@ -1394,7 +1436,7 @@ describe("AgentNativeTab", () => {
   );
 
   function claudeAuthFailureProjection(id: string, error: string) {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1518,7 +1560,7 @@ describe("AgentNativeTab", () => {
       createdAt: "2026-09-03T14:45:00.000Z",
       parts: [{ type: "text" as const, content: notice }],
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [prompt, reply],
     }));
@@ -1529,14 +1571,14 @@ describe("AgentNativeTab", () => {
     expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
     unmount();
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [prompt, reply, { ...prompt, id: "user-2", createdAt: "2026-09-03T14:46:00.000Z" }],
     }));
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-not-logged-in-later" data={identity("claude")} isActive />,
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
   });
 
@@ -1544,7 +1586,7 @@ describe("AgentNativeTab", () => {
     const notice = "Not logged in · Please run /login";
     function answerWithRefusal() {
       accountLoginProgress = { state: "idle" };
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
         messages: [
           {
@@ -1623,7 +1665,7 @@ describe("AgentNativeTab", () => {
 
   test("does not mistake another provider's reply for Claude's notice", async () => {
     const notice = "Not logged in · Please run /login";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1638,7 +1680,7 @@ describe("AgentNativeTab", () => {
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-not-logged-in-codex" data={identity("codex")} isActive />,
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
   });
 
@@ -1651,7 +1693,7 @@ describe("AgentNativeTab", () => {
       return false;
     });
     const error = "Failed to authenticate";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
@@ -1679,7 +1721,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("keeps an unauthenticated Cursor composer stable and routes recovery to settings", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -1723,7 +1765,7 @@ describe("AgentNativeTab", () => {
 
   test("Codex keeps rereading a signed-in account until the auth notice clears, then unlocks", async () => {
     let needsAuth = true;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       notices: needsAuth
         ? [
@@ -1798,7 +1840,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("hiding a signed-out Codex tab cancels its outstanding reread timer", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -1845,7 +1887,7 @@ describe("AgentNativeTab", () => {
           resolveAuth = resolve;
         }),
     );
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
     }));
@@ -1873,7 +1915,7 @@ describe("AgentNativeTab", () => {
         }
         return { state: "signed-out", signIn: { kind: "browser-url" } };
       });
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
         readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
       }));
@@ -1912,7 +1954,7 @@ describe("AgentNativeTab", () => {
         state: "signed-out",
         signIn: { kind },
       }));
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
         readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
       }));
@@ -1929,7 +1971,7 @@ describe("AgentNativeTab", () => {
     getNativeAgentAuthStatusMock.mockImplementation(async () =>
       available ? { state: "signed-out", signIn: { kind: "device-code" } } : null,
     );
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
     }));
@@ -1943,7 +1985,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("an expired Codex sign-in offers to sign in from the tab", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -1995,7 +2037,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("an abandoned Codex sign-in is cancelled on the provider's side", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
     }));
@@ -2026,7 +2068,7 @@ describe("AgentNativeTab", () => {
   test.each(["javascript:alert(1)", "not a URL"])(
     "cancels an invalid sign-in URL %s while retaining device cancellation",
     async (url) => {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
         readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
       }));
@@ -2050,7 +2092,7 @@ describe("AgentNativeTab", () => {
   );
 
   test("a Codex auth notice offers sign-in even when readiness remains ready", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       notices: [
         {
@@ -2073,7 +2115,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("reports when the Codex sign-in link cannot be opened", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
     }));
@@ -2100,7 +2142,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("keeps a delayed Codex sign-in link available when the popup is blocked", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
     }));
@@ -2127,7 +2169,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("reports a device code and a sign-in startup failure", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
     }));
@@ -2178,7 +2220,7 @@ describe("AgentNativeTab", () => {
 
   test("rehydrates a pending device login after switching environments and a renderer reload without starting another login", async () => {
     let pendingSignIn: NativeAgentAuthStatus["pendingSignIn"];
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2249,7 +2291,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("asks for a device code when the backend is on another machine", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
     }));
@@ -2276,7 +2318,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("opens a Grok sign-in terminal from the route its readiness names", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2312,7 +2354,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("sends a local OpenCode tab to Settings rather than the CLI on PATH", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2343,7 +2385,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("opens OpenCode container sign-in in its terminal", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2382,7 +2424,7 @@ describe("AgentNativeTab", () => {
     // Backend fixture: login changes only its authoritative projection. No
     // event is delivered to the original tree while another environment is open.
     let signedIn = false;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       revision: signedIn ? 2 : 1,
       readiness: input.environmentId === "env-1" && !signedIn ? locked : undefined,
@@ -2427,9 +2469,7 @@ describe("AgentNativeTab", () => {
     const other = mount("env-other");
     await waitFor(() =>
       expect(
-        getNativeAgentProjectionMock.mock.calls.some(
-          ([input]) => input.environmentId === "env-other",
-        ),
+        sessionProjectionMock.mock.calls.some(([input]) => input.environmentId === "env-other"),
       ).toBe(true),
     );
     signedIn = true;
@@ -2442,9 +2482,9 @@ describe("AgentNativeTab", () => {
     // Reload discards all renderer projections; the backend fixture still
     // holds the successful login, so recovery cannot depend on a live event.
     appCommandStore(nativeAgentProjectionStore).getState().reset();
-    getNativeAgentProjectionMock.mockClear();
+    sessionProjectionMock.mockClear();
     mount("env-1");
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     await screen.findByTitle("Send");
     await waitFor(() => expect(screen.queryByText(locked.message) === null).toBe(true));
     fireEvent.input(screen.getByRole("textbox"), { target: { textContent: "hello after login" } });
@@ -2474,7 +2514,7 @@ describe("AgentNativeTab", () => {
       state: "needs-auth",
       signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
     }));
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2505,7 +2545,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("offers inline sign-in straight from a browser-url readiness route", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2532,7 +2572,7 @@ describe("AgentNativeTab", () => {
       mode: "reauthenticate",
       completedAt: "2026-01-01T00:00:00.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
@@ -2560,7 +2600,7 @@ describe("AgentNativeTab", () => {
         hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
       },
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness,
     }));
@@ -2583,7 +2623,7 @@ describe("AgentNativeTab", () => {
     unmount();
 
     // Claude's own reply and the readiness ask for the same card.
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness,
       messages: [
@@ -2666,7 +2706,7 @@ describe("AgentNativeTab", () => {
 
   test("unlocks a preserved draft when authoritative readiness recovers", async () => {
     let authenticationRequired = true;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: authenticationRequired
         ? {
@@ -2747,7 +2787,7 @@ describe("AgentNativeTab", () => {
 
   test("the attach control follows the session's capabilities, not only its platform's", async () => {
     // OpenCode's table offers attachments; this session's projection narrows them away.
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       return {
         ...projection,
@@ -2757,12 +2797,12 @@ describe("AgentNativeTab", () => {
     const { unmount } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-narrowed" data={identity("opencode")} isActive />,
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Add attachment" }) === null).toBe(true),
     );
     unmount();
-    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    sessionProjectionMock.mockImplementation(defaultProjection);
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-full" data={identity("opencode")} isActive />,
     );
@@ -2937,7 +2977,7 @@ describe("AgentNativeTab", () => {
       { platform: "opencode" as const, modelId: "hidden" },
       { platform: "claude" as const, modelId: "claude-b" },
     ];
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       return {
         ...projection,
@@ -3655,7 +3695,7 @@ describe("AgentNativeTab", () => {
       platform: "opencode",
       modelId: "opencode/sonnet",
     });
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       if (input.agent !== "opencode") return projection;
       return {
@@ -4279,6 +4319,35 @@ describe("AgentNativeTab", () => {
       }
     },
   );
+
+  test("the OpenCode picker archives 2.x rows and offers no remove on 1.x rows", async () => {
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          { sessionId: "ses_legacy", title: "Legacy request", archivable: false },
+          { sessionId: "opencode2:ses_new", title: "New request" },
+        ] as never,
+    );
+    seedUnassignedResumeTab("tab-opencode-archive");
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-opencode-archive" />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /OpenCode/ }));
+    const picker = await screen.findByRole("dialog", { name: "Resume Session" });
+    expect(await within(picker).findByText("Legacy request")).toBeTruthy();
+    expect(listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "opencode",
+      includeArchived: true,
+    });
+    const removes = within(picker).getAllByRole("button", { name: /Remove.*list/ });
+    expect(removes).toHaveLength(1);
+    fireEvent.click(removes[0]!);
+    await waitFor(() => expect(setNativeAgentResumableSessionArchivedMock).toHaveBeenCalled());
+    expect(setNativeAgentResumableSessionArchivedMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "opencode",
+      resumableSessionId: "opencode2:ses_new",
+      archived: true,
+    });
+  });
 
   test("a tab opened only to resume creates no session before the choice", async () => {
     const calls: string[] = [];
@@ -4991,7 +5060,7 @@ describe("AgentNativeTab", () => {
       releaseSave();
       await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
       expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
-      expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+      expect(sessionProjectionMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
         sessionMode: "build",
         parameterValues: { thinking: "adaptive", context1m: false },
@@ -5028,7 +5097,7 @@ describe("AgentNativeTab", () => {
         ).toBeUndefined(),
       );
       renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
-      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
       expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
     },
   );
@@ -5079,7 +5148,7 @@ describe("AgentNativeTab", () => {
         appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.submissionPending,
       ).not.toBe(true),
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByTitle("Send")).toBeTruthy());
     remounted.unmount();
@@ -5155,7 +5224,7 @@ describe("AgentNativeTab", () => {
             ?.pendingTranscriptConfirmation?.requestId,
         ).toMatch(/\S/);
       }
-      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
       await waitFor(() => expect(screen.getByTitle("Send")).toBeTruthy());
       remounted.unmount();
     },
@@ -5241,7 +5310,7 @@ describe("AgentNativeTab", () => {
     );
     first.unmount();
 
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       turn: { phase: "running" as const },
       messages: [
@@ -5550,7 +5619,7 @@ describe("AgentNativeTab", () => {
     // The production combination: a lost acknowledgement the backend has parked
     // and is still trying to confirm against the provider.
     let status: "reconciling" | "action-required" = "reconciling";
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       turn: { phase: "running" as const },
       recoverableDispatch: { requestId, createdAt: "2026-09-09T19:12:51.000Z", status },
@@ -5599,7 +5668,7 @@ describe("AgentNativeTab", () => {
   test("holds the recovery card while a parked dispatch is still reconciling", async () => {
     const tabId = "tab-reconciling-dispatch";
     let status: "reconciling" | "action-required" = "reconciling";
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       turn: { phase: "running" as const },
       recoverableDispatch: {
@@ -5649,7 +5718,7 @@ describe("AgentNativeTab", () => {
         },
       });
     let parked = true;
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       ...(parked
         ? {
@@ -5736,7 +5805,7 @@ describe("AgentNativeTab", () => {
       requestId: "retired-direct",
     });
     let retired = false;
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       ...(retired
         ? {
@@ -5816,7 +5885,7 @@ describe("AgentNativeTab", () => {
       });
     // What the backend projects once it has retired the parked dispatch: no
     // card, the content-free marker, and the notice older renderers show.
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       notices: [
         {
@@ -5874,7 +5943,7 @@ describe("AgentNativeTab", () => {
       text: "Something newer",
       requestId: "newer",
     });
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       notices: [
         {
@@ -5901,7 +5970,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("keeps the recovery card mounted and disabled while a retry is running", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       recoverableDispatch: {
         requestId: "recoverable-slow-retry",
@@ -5952,7 +6021,7 @@ describe("AgentNativeTab", () => {
         ],
       });
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
-      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      sessionProjectionMock.mockImplementation(async (projectionInput) => ({
         ...(await defaultProjection(projectionInput)),
         turn: { phase: "running" as const },
         messages: [
@@ -5999,7 +6068,7 @@ describe("AgentNativeTab", () => {
       createdAt: "2026-08-26T14:02:00.000Z",
     };
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
-      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      sessionProjectionMock.mockImplementation(async (projectionInput) => ({
         ...(await defaultProjection(projectionInput)),
         turn: { phase: "running" as const },
         messages: [responseRow],
@@ -6056,12 +6125,12 @@ describe("AgentNativeTab", () => {
       parts: [{ type: "text" as const, content: "Inspecting the layout" }],
       createdAt: "2026-08-26T14:03:00.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       messages: [earlierPrompt, earlierReply],
     }));
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
-      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      sessionProjectionMock.mockImplementation(async (projectionInput) => ({
         ...(await defaultProjection(projectionInput)),
         turn: { phase: "running" as const },
         messages: [earlierPrompt, earlierReply, responseRow],
@@ -6178,7 +6247,7 @@ describe("AgentNativeTab", () => {
     );
     first.unmount();
 
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
       turn: { phase: "running" as const },
       messages: [
@@ -6203,7 +6272,7 @@ describe("AgentNativeTab", () => {
   test("does not mistake an older identical prompt for dispatch confirmation", async () => {
     const tabId = "tab-duplicate-prompt";
     const sessionKey = createSessionKey("env-1", tabId);
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -6254,11 +6323,11 @@ describe("AgentNativeTab", () => {
       parts: [{ type: "text" as const, content: "A question from before the window" }],
       createdAt: "2026-08-26T12:00:00.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
-      messageWindow: { limit: input.messageLimit ?? 512, truncated: true },
-      messages: (input.messageLimit ?? 0) > 512 ? [olderPrompt, recentPrompt] : [recentPrompt],
+      messages: [recentPrompt],
     }));
+    sessionHistoryMock.mockImplementation(async () => [olderPrompt]);
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
       outcome: "unknown" as const,
       requestId: input.requestId,
@@ -6312,12 +6381,11 @@ describe("AgentNativeTab", () => {
       parts: [{ type: "text" as const, content: "A question from before the window" }],
       createdAt: "2026-08-26T12:00:00.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+    sessionProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
-      messageWindow: { limit: projectionInput.messageLimit ?? 512, truncated: true },
-      messages:
-        (projectionInput.messageLimit ?? 0) > 512 ? [olderPrompt, recentReply] : [recentReply],
+      messages: [recentReply],
     }));
+    sessionHistoryMock.mockImplementation(async () => [olderPrompt]);
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (dispatchInput) => ({
       outcome: "unknown" as const,
       requestId: dispatchInput.requestId,
@@ -6431,7 +6499,7 @@ describe("AgentNativeTab", () => {
       const sessionKey = createSessionKey("env-1", tabId);
       // A brand-new tab has no provider session until its first prompt creates
       // one, and that dispatch only returns after the CLI has started.
-      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      sessionProjectionMock.mockImplementation(async (projectionInput) => ({
         ...(await defaultProjection(projectionInput)),
         sessionId: undefined,
       }));
@@ -6467,24 +6535,20 @@ describe("AgentNativeTab", () => {
       const current = appCommandStore(nativeAgentProjectionStore)
         .getState()
         .projections.get(sessionKey)!;
-      act(() => {
-        appCommandStore(nativeAgentProjectionStore)
-          .getState()
-          .setProjection(sessionKey, {
-            ...current,
-            sessionId: "new-claude-session",
-            turn: { phase: "running" as const },
-            revision: current.revision + 1,
-            messages: [
-              {
-                id: "first-prompt-user-row",
-                role: "user" as const,
-                content: "Free up some disk space",
-                parts: [{ type: "text" as const, content: "Free up some disk space" }],
-                createdAt: "2026-10-27T11:57:00.000Z",
-              },
-            ],
-          });
+      publishProjection(sessionKey, {
+        ...current,
+        sessionId: "new-claude-session",
+        turn: { phase: "running" as const },
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "first-prompt-user-row",
+            role: "user" as const,
+            content: "Free up some disk space",
+            parts: [{ type: "text" as const, content: "Free up some disk space" }],
+            createdAt: "2026-10-27T11:57:00.000Z",
+          },
+        ],
       });
       await waitFor(() =>
         expect(
@@ -6540,7 +6604,7 @@ describe("AgentNativeTab", () => {
       renderVirtualizedMessages = true;
       const tabId = `tab-ack-before-echo-${adoptionOrder}`;
       const sessionKey = createSessionKey("env-1", tabId);
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input)),
         sessionId: undefined,
       }));
@@ -6566,16 +6630,14 @@ describe("AgentNativeTab", () => {
         const current = appCommandStore(nativeAgentProjectionStore)
           .getState()
           .projections.get(sessionKey)!;
-        appCommandStore(nativeAgentProjectionStore)
-          .getState()
-          .setProjection(sessionKey, {
-            ...current,
-            sessionId: "new-claude-session",
-            revision: current.revision + 1,
-          });
+        publishProjection(sessionKey, {
+          ...current,
+          sessionId: "new-claude-session",
+          revision: current.revision + 1,
+        });
       };
       if (adoptionOrder === "before acceptance") {
-        act(adoptSession);
+        adoptSession();
         await waitFor(() =>
           expect(
             appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)
@@ -6594,37 +6656,29 @@ describe("AgentNativeTab", () => {
           appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey),
         ).toBeUndefined(),
       );
-      if (adoptionOrder === "after acceptance") act(adoptSession);
+      if (adoptionOrder === "after acceptance") adoptSession();
       expect(latestRenderedMessageActions.size).toBe(1);
       const current = appCommandStore(nativeAgentProjectionStore)
         .getState()
         .projections.get(sessionKey)!;
-      act(() =>
-        appCommandStore(nativeAgentProjectionStore)
-          .getState()
-          .setProjection(sessionKey, {
-            ...current,
-            revision: current.revision + 1,
-            messages: [
-              {
-                id: "accepted-first-echo",
-                role: "user",
-                content: "Free up some disk space",
-                parts: [{ type: "text", content: "Free up some disk space" }],
-                createdAt: "2026-10-27T11:57:00.000Z",
-              },
-            ],
-          }),
-      );
+      publishProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "accepted-first-echo",
+            role: "user",
+            content: "Free up some disk space",
+            parts: [{ type: "text", content: "Free up some disk space" }],
+            createdAt: "2026-10-27T11:57:00.000Z",
+          },
+        ],
+      });
       await waitFor(() =>
         expect(Array.from(latestRenderedMessageActions.keys())).toEqual(["accepted-first-echo"]),
       );
       // Removing the authoritative row must not bring the provisional row back.
-      act(() =>
-        appCommandStore(nativeAgentProjectionStore)
-          .getState()
-          .setProjection(sessionKey, { ...current, revision: current.revision + 2, messages: [] }),
-      );
+      publishProjection(sessionKey, { ...current, revision: current.revision + 2, messages: [] });
       await waitFor(() => expect(latestRenderedMessageActions.size).toBe(0));
       expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toBeUndefined();
     },
@@ -6634,7 +6688,7 @@ describe("AgentNativeTab", () => {
     renderVirtualizedMessages = true;
     const tabId = "tab-first-confirmation-remount";
     const sessionKey = createSessionKey("env-1", tabId);
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       sessionId: undefined,
     }));
@@ -6657,7 +6711,7 @@ describe("AgentNativeTab", () => {
       .drafts.get(sessionKey)!.pendingTranscriptConfirmation!;
     expect(confirmation.sessionId).toBe("");
     view.unmount();
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       sessionId: "new-claude-session",
     }));
@@ -6901,7 +6955,7 @@ describe("AgentNativeTab", () => {
 
   test("replaces backend peer-mail carriers with a visible trusted-frame card", async () => {
     renderVirtualizedMessages = true;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -6942,7 +6996,7 @@ describe("AgentNativeTab", () => {
     '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>',
   ])("keeps unreadable native mail visible (%#)", async (content) => {
     renderVirtualizedMessages = true;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -6964,7 +7018,7 @@ describe("AgentNativeTab", () => {
   test("keeps a native user's leading tag mention", async () => {
     renderVirtualizedMessages = true;
     const content = '<orkestrator-peer-message version="1"> is what I see. Why?';
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -6989,7 +7043,7 @@ describe("AgentNativeTab", () => {
       renderVirtualizedMessages = true;
       const carrier = (payload: string) =>
         `<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n${payload}\n</orkestrator-peer-payload-json>\nInstructions.\n</orkestrator-peer-message>`;
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input)),
         messages: [
           {
@@ -7038,7 +7092,7 @@ describe("AgentNativeTab", () => {
           providerSessionId: `${platform}-session`,
         }),
       );
-      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+      expect(sessionProjectionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agent: platform,
           environmentId: "env-1",
@@ -7201,7 +7255,7 @@ describe("AgentNativeTab", () => {
     }));
     // The session itself carries the notice, so a session its first prompt's
     // dispatch created (an answer with no room for it) still shows it.
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       notices: [
         {
@@ -7235,7 +7289,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("marks a premium-rate selection in the composer without naming the provider", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       return {
         ...projection,
@@ -7298,7 +7352,7 @@ describe("AgentNativeTab", () => {
           settleEnsure = () => resolve(defaultEnsureNativeAgentSession(input));
         }),
     );
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: [
         { kind: "toggle" as const, id: "parameter:chrome", label: "Chrome", value: true },
@@ -7323,11 +7377,11 @@ describe("AgentNativeTab", () => {
     await act(async () => {
       settleEnsure!();
     });
-    getNativeAgentProjectionMock.mockClear();
+    sessionProjectionMock.mockClear();
     view.rerender(
       <AgentNativeTab tabId="tab-claude-chrome-inactive" data={identity("claude")} isActive />,
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Chrome: On" }).getAttribute("aria-pressed")).toBe(
         "true",
@@ -7335,12 +7389,12 @@ describe("AgentNativeTab", () => {
     );
     view.unmount();
     appCommandStore(nativeAgentProjectionStore).getState().reset();
-    getNativeAgentProjectionMock.mockClear();
+    sessionProjectionMock.mockClear();
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-chrome-inactive" data={identity("claude")} isActive />,
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Chrome: On" }).getAttribute("aria-pressed")).toBe(
         "true",
@@ -7350,7 +7404,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("renders an unrelated Claude parameter supplied by the projection", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: [
         {
@@ -7366,7 +7420,7 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-claude-hidden-parameters" data={freshTab("claude")} isActive />,
     );
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     expect(screen.getByText(/Audit mode: Off/)).toBeTruthy();
   });
 
@@ -7421,7 +7475,7 @@ describe("AgentNativeTab", () => {
     ["review", true],
     ["ordinary", false],
   ] as const)("hides Claude thinking and context controls in a %s tab", async (kind, review) => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: claudeSessionControls,
     }));
@@ -7444,7 +7498,7 @@ describe("AgentNativeTab", () => {
     ["review", true],
     ["ordinary", false],
   ] as const)("suppresses no Codex parameter control in a %s tab", async (kind, review) => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: codexParameterControls,
     }));
@@ -7466,7 +7520,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: [
         {
@@ -7489,7 +7543,7 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-cursor-parameters" data={freshTab("cursor")} isActive />,
     );
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
     expect(screen.getByText(/Thinking: Adaptive/)).toBeTruthy();
     expect(screen.getByText(/1M context beta: Off/)).toBeTruthy();
   });
@@ -7636,7 +7690,7 @@ describe("AgentNativeTab", () => {
         appCommandStore(nativeComposeStore)
           .getState()
           .updateDraft(sessionKey, { attachments: [image] });
-        getNativeAgentProjectionMock.mockImplementation(async (input) => {
+        sessionProjectionMock.mockImplementation(async (input) => {
           const projection = await defaultProjection(input);
           return {
             ...projection,
@@ -7709,7 +7763,7 @@ describe("AgentNativeTab", () => {
     // its stable id. Queueing it again would carry no id and send it twice, so
     // the tab waits for idle and sends it under the id the backend dedupes.
     let phase: "running" | "idle" = "running";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       return {
         ...projection,
@@ -7755,7 +7809,14 @@ describe("AgentNativeTab", () => {
     // forgotten the rollout. "Address every finding" carries no findings of its
     // own, so firing it into an empty conversation asks the agent to act on a
     // review it cannot see.
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    adoptNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("provider session was not found");
+    });
+    ensureNativeAgentSessionMock.mockImplementation(async (input) => ({
+      ...(await defaultEnsureNativeAgentSession(input)),
+      providerSessionId: "a-replacement-session",
+    }));
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as Parameters<typeof defaultProjection>[0])),
       sessionId: "a-replacement-session",
     }));
@@ -7922,7 +7983,7 @@ describe("AgentNativeTab", () => {
       "Keep going in Cursor",
     );
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
-      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      sessionProjectionMock.mockImplementation(async (projectionInput) => ({
         ...(await defaultProjection(projectionInput)),
         messages: [
           {
@@ -8020,7 +8081,7 @@ describe("AgentNativeTab", () => {
       snapshot,
     });
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       return {
         ...projection,
@@ -8072,7 +8133,7 @@ describe("AgentNativeTab", () => {
       snapshot.bootstrapPrompt,
       "Queue this follow-up",
     );
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       const projection = await defaultProjection(input);
       return {
         ...projection,
@@ -8130,7 +8191,7 @@ describe("AgentNativeTab", () => {
       ...(await defaultEnsureNativeAgentSession(input)),
       providerSessionId: "cursor-replacement",
     }));
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       sessionId: "cursor-replacement",
     }));
@@ -8174,7 +8235,7 @@ describe("AgentNativeTab", () => {
       "Keep going in Cursor",
     );
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
-      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      sessionProjectionMock.mockImplementation(async (projectionInput) => ({
         ...(await defaultProjection(projectionInput)),
         messages: [
           {
@@ -8223,7 +8284,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       };
-      getNativeAgentProjectionMock.mockImplementation(async () => resumed);
+      sessionProjectionMock.mockImplementation(async () => resumed);
       return resumed;
     });
 
@@ -8371,7 +8432,7 @@ describe("AgentNativeTab", () => {
     rerender(<AgentNativeTab tabId="tab-swap" data={identity("opencode")} isActive />);
 
     await waitFor(() =>
-      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+      expect(sessionProjectionMock).toHaveBeenCalledWith(
         expect.objectContaining({ agent: "opencode" }),
       ),
     );
@@ -8382,7 +8443,7 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-inactive" data={identity("codex")} isActive={false} />,
     );
     await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(sessionProjectionMock).not.toHaveBeenCalled();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
   });
 
@@ -8410,7 +8471,7 @@ describe("AgentNativeTab", () => {
       });
 
     let settleRead: (() => void) | undefined;
-    getNativeAgentProjectionMock.mockImplementation(
+    sessionProjectionMock.mockImplementation(
       () =>
         new Promise((resolve) => {
           settleRead = () => resolve(cached);
@@ -8418,7 +8479,7 @@ describe("AgentNativeTab", () => {
     );
 
     renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
 
     // The pending read is only verifying an already-authoritative empty
     // transcript. No conversation has occurred, so the centered composer must
@@ -8457,7 +8518,7 @@ describe("AgentNativeTab", () => {
       });
 
     let settleRead: (() => void) | undefined;
-    getNativeAgentProjectionMock.mockImplementation(
+    sessionProjectionMock.mockImplementation(
       () =>
         new Promise((resolve) => {
           settleRead = () => resolve(cached);
@@ -8465,7 +8526,7 @@ describe("AgentNativeTab", () => {
     );
 
     renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
 
     expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
     expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
@@ -8500,7 +8561,7 @@ describe("AgentNativeTab", () => {
   );
 
   test("reports a settled read that found no session as a failed connection", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-empty-read" data={identity("cursor")} isActive />,
@@ -8514,7 +8575,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("treats a recovering Pi projection as still connecting", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
       turn: { phase: "recovering" as const },
@@ -8539,7 +8600,7 @@ describe("AgentNativeTab", () => {
     // so the backend giving up on a session has to reach the user as a failure
     // they can act on — with the reason the backend gave, not a generic one.
     let reads = 0;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       reads += 1;
       const base = await defaultProjection(input);
       return reads === 1
@@ -8579,7 +8640,7 @@ describe("AgentNativeTab", () => {
     // recovery up on its own. A reconnect the user has to click through would
     // defeat the point of holding the overlay in the first place.
     let reads = 0;
-    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+    sessionProjectionMock.mockImplementation(async (input) => {
       reads += 1;
       const base = await defaultProjection(input);
       return reads === 1
@@ -8594,9 +8655,9 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />,
     );
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalledTimes(1));
     await act(() => clock.advance(500));
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -8606,7 +8667,7 @@ describe("AgentNativeTab", () => {
     renderVirtualizedMessages = true;
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     let settleEnsure: (() => void) | undefined;
     ensureNativeAgentSessionMock.mockImplementation(
       (input) =>
@@ -8670,7 +8731,7 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
 
-    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    sessionProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
       settleEnsure!();
     });
@@ -8737,7 +8798,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("waits on the connecting logo while a prompt-less tab's first session is created", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     ensureNativeAgentSessionMock.mockImplementation(() => new Promise(() => {}));
 
     const { container } = renderInAppCommandScope(
@@ -8774,7 +8835,7 @@ describe("AgentNativeTab", () => {
       ],
     });
     // The backend has not created the provider session yet.
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     let settleEnsure: (() => void) | undefined;
     ensureNativeAgentSessionMock.mockImplementation(
       (input) =>
@@ -8817,7 +8878,7 @@ describe("AgentNativeTab", () => {
       parts: [{ type: "text", content: "Adding the toggle" }],
       createdAt: "2026-10-31T00:00:01.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       turn: { phase: "running" as const },
       messages: [response],
@@ -8938,7 +8999,7 @@ describe("AgentNativeTab", () => {
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
     }));
@@ -8967,7 +9028,7 @@ describe("AgentNativeTab", () => {
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
       readiness: {
@@ -9001,7 +9062,7 @@ describe("AgentNativeTab", () => {
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
       interactions: [pendingInteraction("question", "question-1")],
@@ -9025,7 +9086,7 @@ describe("AgentNativeTab", () => {
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
     }));
@@ -9037,7 +9098,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
     expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
 
-    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    sessionProjectionMock.mockImplementation(defaultProjection);
     await deliverResourceChange({
       resource: "native-agent-session",
       id: "env-1",
@@ -9067,7 +9128,7 @@ describe("AgentNativeTab", () => {
       parts: [{ type: "text" as const, content: "Cleared later" }],
       createdAt: "2026-09-09T00:00:00.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
       messages: [existingRow],
@@ -9079,7 +9140,7 @@ describe("AgentNativeTab", () => {
     });
     await waitFor(() => expect(screen.getByText("Cleared later")).toBeTruthy());
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       sessionId: "cursor-session-2",
       connection: "connecting" as const,
@@ -9110,7 +9171,7 @@ describe("AgentNativeTab", () => {
         .getState()
         .markTurnStopped(createSessionKey("env-1", tabId), "cursor-session");
     });
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
     }));
@@ -9128,14 +9189,14 @@ describe("AgentNativeTab", () => {
     // A fresh created tab has no session id to resume, so its retry is
     // establishment rather than refresh. It must not fall back to session
     // refresh copy that names a session which does not exist yet.
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-retry" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
 
     let settleRead: ((value: unknown) => void) | undefined;
-    getNativeAgentProjectionMock.mockImplementation(
+    sessionProjectionMock.mockImplementation(
       () =>
         new Promise((resolve) => {
           settleRead = resolve;
@@ -9171,7 +9232,7 @@ describe("AgentNativeTab", () => {
       parts: [{ type: "text" as const, content: "Already answered" }],
       createdAt: "2026-09-09T00:00:00.000Z",
     };
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
       messages: [existingRow],
@@ -9196,7 +9257,7 @@ describe("AgentNativeTab", () => {
     // coalesced while creation is in flight, then creation fails. The trailing
     // reconcile — and, a poll later, the refresh interval — read a session that
     // does not exist, and installing that empty read used to clear the error.
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     let failEnsure: (() => void) | undefined;
     ensureNativeAgentSessionMock.mockImplementation(
       () =>
@@ -9232,10 +9293,10 @@ describe("AgentNativeTab", () => {
 
       // Drive the registered production poll once. Advancing the coordinator's
       // clock is stronger and faster than sleeping beyond its nominal interval.
-      const readsBeforePoll = getNativeAgentProjectionMock.mock.calls.length;
+      const readsBeforePoll = sessionProjectionMock.mock.calls.length;
       await act(() => clock.advance(1_500));
       await waitFor(() =>
-        expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll),
+        expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll),
       );
       expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
     } finally {
@@ -9247,7 +9308,7 @@ describe("AgentNativeTab", () => {
     ensureNativeAgentSessionMock.mockImplementation(async () => {
       throw new Error("bridge refused the session");
     });
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
 
     // The reads that follow are the registered production poll; a fake clock
     // drives it instead of waiting out its 500/1,500 ms cadence.
@@ -9261,19 +9322,19 @@ describe("AgentNativeTab", () => {
       // Suppression is scoped to "the session still is not there". A read that
       // does find one supersedes the failure — otherwise the message outlives what
       // it described, and the next genuine absence reports a stale cause.
-      getNativeAgentProjectionMock.mockImplementation(defaultProjection);
-      const readsBeforePoll = getNativeAgentProjectionMock.mock.calls.length;
+      sessionProjectionMock.mockImplementation(defaultProjection);
+      const readsBeforePoll = sessionProjectionMock.mock.calls.length;
       await act(() => clock.advance(1_500));
       await waitFor(() => expect(screen.getByTestId("runtime-error").textContent).toBe(""));
-      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll);
+      expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll);
 
-      getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-      const readsBeforeEmptyPoll = getNativeAgentProjectionMock.mock.calls.length;
+      sessionProjectionMock.mockImplementation(async () => null as never);
+      const readsBeforeEmptyPoll = sessionProjectionMock.mock.calls.length;
       await act(() => clock.advance(1_500));
       await waitFor(() =>
         expect(screen.getByTestId("has-completed-read").textContent).toBe("true"),
       );
-      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeEmptyPoll);
+      expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeEmptyPoll);
       expect(screen.getByTestId("runtime-error").textContent).toBe("");
     } finally {
       resetReadCoordinatorForTests();
@@ -9299,7 +9360,7 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-new-cursor-reconcile" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
-    getNativeAgentProjectionMock.mockClear();
+    sessionProjectionMock.mockClear();
 
     await deliverResourceChange({
       resource: "native-agent-session",
@@ -9307,7 +9368,7 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
     // Deferred, not dropped: reading now could only answer "not created yet".
-    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(sessionProjectionMock).not.toHaveBeenCalled();
 
     await act(async () => {
       settleEnsure!();
@@ -9318,11 +9379,9 @@ describe("AgentNativeTab", () => {
     // a dropped invalidation, which is the state the announcement described.
     // The reconcile runs through the read coordinator, so once both reads were
     // issued an idle coordinator means no further read is still coming.
-    await waitFor(() =>
-      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThanOrEqual(2),
-    );
+    await waitFor(() => expect(sessionProjectionMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     await settleCoordinatedReads();
-    expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2);
+    expect(sessionProjectionMock).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
 
@@ -9333,7 +9392,7 @@ describe("AgentNativeTab", () => {
     // reopen the gate while a session is still being created, and the empty read
     // that follows is exactly the false Connection Failed this all exists to
     // prevent.
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     const settles: Array<() => void> = [];
     ensureNativeAgentSessionMock.mockImplementation(
       (input) =>
@@ -9363,7 +9422,7 @@ describe("AgentNativeTab", () => {
       });
     });
 
-    getNativeAgentProjectionMock.mockClear();
+    sessionProjectionMock.mockClear();
     await deliverResourceChange({
       resource: "native-agent-session",
       id: "env-1",
@@ -9371,25 +9430,25 @@ describe("AgentNativeTab", () => {
     });
 
     // The second connect has not returned, so there is still nothing to resolve.
-    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(sessionProjectionMock).not.toHaveBeenCalled();
     expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
     expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
 
-    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    sessionProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
       settles[1]!();
     });
     // And the window does close — a stuck counter would mute this tab's
     // background refreshes for the rest of its life.
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
-    getNativeAgentProjectionMock.mockClear();
+    sessionProjectionMock.mockClear();
     await deliverResourceChange({
       resource: "native-agent-session",
       id: "env-1",
       revision: 3,
     });
-    expect(getNativeAgentProjectionMock).toHaveBeenCalled();
+    expect(sessionProjectionMock).toHaveBeenCalled();
   });
 
   test("rehydrates from an authoritative read after establishing while inactive", async () => {
@@ -9436,7 +9495,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("reports a created session that still reads empty as a failed connection", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />,
@@ -9505,7 +9564,7 @@ describe("AgentNativeTab", () => {
         consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
         backendRevision: 2,
       } as never);
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -9539,7 +9598,7 @@ describe("AgentNativeTab", () => {
         consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
         backendRevision: 2,
       } as never);
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -9593,7 +9652,7 @@ describe("AgentNativeTab", () => {
         consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
         backendRevision: 2,
       } as never);
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
         {
@@ -9647,7 +9706,7 @@ describe("AgentNativeTab", () => {
         consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
         backendRevision: 2,
       } as never);
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messageWindow: {
         limit: 32,
@@ -9684,7 +9743,7 @@ describe("AgentNativeTab", () => {
       ...(await defaultEnsureNativeAgentSession(input)),
       providerSessionId: "provider-replacement",
     }));
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       sessionId: "provider-replacement",
     }));
@@ -9737,7 +9796,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("returns to connecting after Retry on an empty session read", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-retry-empty" data={identity("cursor")} isActive />,
     );
@@ -9808,7 +9867,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not keep a failed connection after the tab identity changes", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
     const { rerender } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-identity-swap" data={identity("cursor")} isActive />,
     );
@@ -9838,7 +9897,7 @@ describe("AgentNativeTab", () => {
 
   test("does not let a completed empty read mark a later identity as failed", async () => {
     let settleOpenCode: (() => void) | undefined;
-    getNativeAgentProjectionMock.mockImplementation(async (input: { agent: string }) => {
+    sessionProjectionMock.mockImplementation(async (input: { agent: string }) => {
       if (input.agent !== "opencode") return null as never;
       await new Promise<void>((resolve) => {
         settleOpenCode = resolve;
@@ -9860,7 +9919,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("forgets a completed read when the hook is no longer allowed to read", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    sessionProjectionMock.mockImplementation(async () => null as never);
 
     const { rerender } = renderInAppCommandScope(
       <NativeSessionIdentityHarness platform="cursor" />,
@@ -9876,17 +9935,22 @@ describe("AgentNativeTab", () => {
     const staleProjection = new Promise<NativeAgentSessionProjection<NativeMessage>>((resolve) => {
       resolveStale = resolve;
     });
-    getNativeAgentProjectionMock
-      .mockImplementationOnce(defaultProjection)
+    // The harness adopts `session-a`, so that is the session the backend serves.
+    const sessionA = async (input: Parameters<typeof defaultProjection>[0]) => ({
+      ...(await defaultProjection(input)),
+      sessionId: "session-a",
+    });
+    sessionProjectionMock
+      .mockImplementationOnce(sessionA)
       .mockImplementationOnce(async () => staleProjection)
-      .mockImplementation(defaultProjection);
+      .mockImplementation(sessionA);
 
     renderInAppCommandScope(<NativeSessionHarness />);
     await waitFor(() =>
-      expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
+      expect(screen.getByTestId("hook-session-id").textContent).toBe("session-a"),
     );
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "Resume B" }));
     await waitFor(() =>
       expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b"),
@@ -9932,7 +9996,7 @@ describe("AgentNativeTab", () => {
         agent: input.agent,
       };
     });
-    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => ({
+    sessionProjectionMock.mockImplementationOnce(async (input) => ({
       ...(await defaultProjection(input as never)),
       sessionId: "session-a",
       messages: [
@@ -9972,10 +10036,11 @@ describe("AgentNativeTab", () => {
     const parked = new Promise<void>((resolve) => {
       releaseRefresh = resolve;
     });
-    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => {
+    sessionProjectionMock.mockImplementationOnce(async (input) => {
       await parked;
       return {
         ...(await defaultProjection(input as never)),
+        sessionId: "session-a",
         messages: [
           {
             id: "assistant-stale",
@@ -9987,8 +10052,9 @@ describe("AgentNativeTab", () => {
         ],
       };
     });
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
+      sessionId: "session-a",
       messages: [
         {
           id: "assistant-latest",
@@ -10006,8 +10072,8 @@ describe("AgentNativeTab", () => {
   test("coalesces a resource invalidation into one trailing projection read", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
     renderInAppCommandScope(<NativeSessionHarness />);
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
-    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+    await waitFor(() => expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(0));
+    const callsWhileParked = sessionProjectionMock.mock.calls.length;
 
     // Delivered through the dispatcher's coalescing timer, so the invalidation
     // reaches the hook while the read above is still parked.
@@ -10018,7 +10084,7 @@ describe("AgentNativeTab", () => {
     });
     // Coalesced, not executed: proof the read below is the trailing
     // reconciliation rather than the invalidation's own read.
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    expect(sessionProjectionMock.mock.calls.length).toBe(callsWhileParked);
 
     await act(async () => {
       releaseRefresh();
@@ -10029,21 +10095,21 @@ describe("AgentNativeTab", () => {
       expect(screen.getByTestId("hook-message").textContent).toBe("latest transcript"),
     );
     await settleCoordinatedReads();
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
+    expect(sessionProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
   });
 
   test("drops the queued reconciliation read when the tab stops being active", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
     const { rerender } = renderInAppCommandScope(<NativeSessionHarness />);
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
-    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+    await waitFor(() => expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(0));
+    const callsWhileParked = sessionProjectionMock.mock.calls.length;
 
     await deliverResourceChange({
       resource: "native-agent-session",
       id: "env-1",
       revision: 1,
     });
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    expect(sessionProjectionMock.mock.calls.length).toBe(callsWhileParked);
     // The tab stops being visible before the in-flight read drains. A tab the
     // user cannot see must not keep reading; the next activation reconnects
     // and reads authoritatively anyway.
@@ -10057,21 +10123,21 @@ describe("AgentNativeTab", () => {
         setTimeout(resolve, 20);
       });
     });
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    expect(sessionProjectionMock.mock.calls.length).toBe(callsWhileParked);
   });
 
   test("drops the queued reconciliation read when the tab unmounts", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
     const { unmount } = renderInAppCommandScope(<NativeSessionHarness />);
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
-    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+    await waitFor(() => expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(0));
+    const callsWhileParked = sessionProjectionMock.mock.calls.length;
 
     await deliverResourceChange({
       resource: "native-agent-session",
       id: "env-1",
       revision: 1,
     });
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    expect(sessionProjectionMock.mock.calls.length).toBe(callsWhileParked);
     unmount();
 
     await act(async () => {
@@ -10080,7 +10146,7 @@ describe("AgentNativeTab", () => {
         setTimeout(resolve, 20);
       });
     });
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    expect(sessionProjectionMock.mock.calls.length).toBe(callsWhileParked);
   });
 
   test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {
@@ -10096,26 +10162,32 @@ describe("AgentNativeTab", () => {
         .entries.filter((entry) => entry.id.includes("native-agent-session") && entry.subscribers)
         .map((entry) => entry.cadenceMs);
     try {
+      // The harness adopts `session-a`, so that is the session the backend serves.
+      sessionProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        sessionId: "session-a",
+      }));
       const view = renderInAppCommandScope(<NativeSessionHarness />);
       await waitFor(() =>
-        expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
+        expect(screen.getByTestId("hook-session-id").textContent).toBe("session-a"),
       );
       expect(sessionCadence()).toEqual([1_500]);
 
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
+        sessionId: "session-a",
         turn: { phase: "running" as const },
       }));
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
       await waitFor(() => expect(sessionCadence()).toEqual([500]));
 
       // Unmounting is the inactive path: no timer may outlive the tree.
-      const before = getNativeAgentProjectionMock.mock.calls.length;
+      const before = sessionProjectionMock.mock.calls.length;
       view.unmount();
       expect(sessionCadence()).toEqual([]);
       expect(clock.pending).toBe(0);
       await act(() => clock.advance(5_000));
-      expect(getNativeAgentProjectionMock.mock.calls.length).toBe(before);
+      expect(sessionProjectionMock.mock.calls.length).toBe(before);
     } finally {
       resetReadCoordinatorForTests();
     }
@@ -10128,7 +10200,7 @@ describe("AgentNativeTab", () => {
      * duration come from backend clocks in the transcript, so a first mount
      * against the projection still reports it.
      */
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       platform: input.agent,
       environmentId: input.environmentId,
       sessionId: "claude-session",
@@ -10187,7 +10259,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("restores review follow-up, manual refresh, notices, and Escape stop in the shared tab", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       platform: input.agent,
       environmentId: input.environmentId,
       sessionId: "claude-session",
@@ -10255,7 +10327,7 @@ describe("AgentNativeTab", () => {
       mode: "build",
     });
 
-    const readsBeforeRefresh = getNativeAgentProjectionMock.mock.calls.length;
+    const readsBeforeRefresh = sessionProjectionMock.mock.calls.length;
     view.rerender(
       <AgentNativeTab
         tabId="tab-review"
@@ -10267,10 +10339,10 @@ describe("AgentNativeTab", () => {
       />,
     );
     await waitFor(() =>
-      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeRefresh),
+      expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeRefresh),
     );
 
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       platform: input.agent,
       environmentId: input.environmentId,
       sessionId: "claude-session",
@@ -10311,7 +10383,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("stops from the transcript in its pane but ignores sidebar Escape", async () => {
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+    sessionProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       turn: { phase: "running" as const },
       messages: [
@@ -10652,7 +10724,7 @@ describe("AgentNativeTab", () => {
         runtimeHealthAuthoritative?: boolean;
       } = {},
     ) {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      sessionProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
         environmentId: input.environmentId,
         sessionId: overrides.sessionId ?? `${input.agent}-session`,
@@ -10987,7 +11059,7 @@ describe("AgentNativeTab", () => {
 
       view.unmount();
       appCommandStore(nativeAgentProjectionStore).getState().reset();
-      getNativeAgentProjectionMock.mockClear();
+      sessionProjectionMock.mockClear();
       renderInAppCommandScope(
         <AgentNativeTab tabId="tab-claude-background-agent" data={identity("claude")} isActive />,
       );
@@ -11425,7 +11497,7 @@ describe("AgentNativeTab", () => {
         );
       });
 
-      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
       expect(
         await screen.findByRole("status", {
           name: "1 sub-agent working: Validate the implementation.",
@@ -11439,19 +11511,19 @@ describe("AgentNativeTab", () => {
       // the next authoritative snapshot rather than a live event the old tree observed.
       view.unmount();
       appCommandStore(nativeAgentProjectionStore).getState().reset();
-      getNativeAgentProjectionMock.mockClear();
+      sessionProjectionMock.mockClear();
       renderInAppCommandScope(
         <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />,
       );
 
-      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
       expect(
         await screen.findByRole("status", {
           name: "1 sub-agent working: Validate the implementation.",
         }),
       ).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
-      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+      expect(sessionProjectionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agent: "grok",
           logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
@@ -11524,13 +11596,7 @@ describe("AgentNativeTab", () => {
         );
 
         await waitFor(() =>
-          expect(
-            appCommandStore(nativeAgentProjectionStore)
-              .getState()
-              .projections.get(createSessionKey("env-1", tabId))?.messages[0],
-          ).toMatchObject({
-            parts: [expect.objectContaining({ agentState })],
-          }),
+          expect(firstPartAgentState(createSessionKey("env-1", tabId))).toBe(agentState),
         );
         expect(
           await screen.findByRole("status", {
@@ -11603,18 +11669,18 @@ describe("AgentNativeTab", () => {
       );
 
       await waitFor(() =>
-        expect(
-          appCommandStore(nativeAgentProjectionStore)
-            .getState()
-            .projections.get(createSessionKey("env-1", tabId))?.messages[0],
-        ).toMatchObject({ parts: [expect.objectContaining({ agentState: "failed" })] }),
+        expect(firstPartAgentState(createSessionKey("env-1", tabId))).toBe("failed"),
       );
-      expect(screen.queryByText("Cursor Agent is thinking...") === null).toBe(true);
-      expect(
-        screen.queryByRole("status", {
-          name: "1 sub-agent working: Run snapshot validation.",
-        }) === null,
-      ).toBe(true);
+      // Transcript and session state are separate reads: the failed row can
+      // land a moment before the turn's error phase does.
+      await waitFor(() => {
+        expect(screen.queryByText("Cursor Agent is thinking...") === null).toBe(true);
+        expect(
+          screen.queryByRole("status", {
+            name: "1 sub-agent working: Run snapshot validation.",
+          }) === null,
+        ).toBe(true);
+      });
       expect(
         await screen.findByRole("status", { name: "Run snapshot validation failed." }),
       ).toBeTruthy();
@@ -12072,7 +12138,7 @@ describe("AgentNativeTab", () => {
       );
 
       seedProjection({ messages, notices: [] });
-      const reads = getNativeAgentProjectionMock.mock.calls.length;
+      const reads = sessionProjectionMock.mock.calls.length;
       view.rerender(
         <AgentNativeTab
           tabId="tab-auth-refusal-card"
@@ -12082,9 +12148,7 @@ describe("AgentNativeTab", () => {
         />,
       );
       // The notice-free snapshot has been read and settled.
-      await waitFor(() =>
-        expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(reads),
-      );
+      await waitFor(() => expect(sessionProjectionMock.mock.calls.length).toBeGreaterThan(reads));
       await act(async () => {
         await Promise.resolve();
       });
@@ -12227,7 +12291,12 @@ describe("AgentNativeTab", () => {
       seedProjection({ sessionId: "session-a", notices: notice("occurrence-1") });
 
       let view = renderInAppCommandScope(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={0}
+        />,
       );
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
       const firstOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
@@ -12236,17 +12305,27 @@ describe("AgentNativeTab", () => {
 
       view.unmount();
       appCommandStore(nativeAgentProjectionStore).getState().reset();
-      getNativeAgentProjectionMock.mockClear();
+      sessionProjectionMock.mockClear();
       mockToastWarning.mockClear();
       view = renderInAppCommandScope(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={0}
+        />,
       );
-      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
       expect(mockToastWarning).not.toHaveBeenCalled();
 
       seedProjection({ sessionId: "session-a", notices: notice("occurrence-2") });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={1}
+        />,
       );
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
       const secondOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
@@ -12255,7 +12334,12 @@ describe("AgentNativeTab", () => {
 
       seedProjection({ sessionId: "session-b", notices: notice("occurrence-2") });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-b" }}
+          isActive
+          refreshRequestId={2}
+        />,
       );
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(2));
     });
@@ -12271,7 +12355,12 @@ describe("AgentNativeTab", () => {
       seedProjection({ sessionId: "session-a", notices: [notice] });
 
       const view = renderInAppCommandScope(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={0}
+        />,
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
       const firstOptions = mockToastError.mock.calls.at(-1)?.[1] as
@@ -12281,13 +12370,23 @@ describe("AgentNativeTab", () => {
 
       seedProjection({ sessionId: "session-a", notices: [notice] });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={1}
+        />,
       );
       expect(mockToastError).not.toHaveBeenCalled();
 
       seedProjection({ sessionId: "session-a", notices: [] });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={2}
+        />,
       );
       await waitFor(() =>
         expect(
@@ -12299,7 +12398,12 @@ describe("AgentNativeTab", () => {
 
       seedProjection({ sessionId: "session-a", notices: [notice] });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={3} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={3}
+        />,
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
     });
@@ -12318,7 +12422,12 @@ describe("AgentNativeTab", () => {
         runtimeHealthAuthoritative: true,
       });
       const view = renderInAppCommandScope(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={0}
+        />,
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
       const options = mockToastError.mock.calls.at(-1)?.[1] as
@@ -12332,7 +12441,12 @@ describe("AgentNativeTab", () => {
         runtimeHealthAuthoritative: false,
       });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={1}
+        />,
       );
       await waitFor(() =>
         expect(
@@ -12348,7 +12462,12 @@ describe("AgentNativeTab", () => {
         runtimeHealthAuthoritative: true,
       });
       view.rerender(
-        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
+        <AgentNativeTab
+          tabId={tabId}
+          data={{ ...identity("codex"), sessionId: "session-a" }}
+          isActive
+          refreshRequestId={2}
+        />,
       );
       expect(mockToastError).not.toHaveBeenCalled();
     });
@@ -13172,12 +13291,11 @@ describe("AgentNativeTab", () => {
                 ]
               : [{ type: "text", content: id }],
           });
-          getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+          sessionProjectionMock.mockImplementation(async (input) => ({
             ...(await defaultProjection(input)),
-            messageWindow: { limit: input.messageLimit ?? 512, truncated: true },
-            messages:
-              (input.messageLimit ?? 0) > 512 ? [row("earlier"), row("held")] : [row("held")],
+            messages: [row("held")],
           }));
+          sessionHistoryMock.mockImplementation(async () => [row("earlier")]);
           renderInAppCommandScope(
             <AgentNativeTab tabId={`tab-held-page-${merged}`} data={identity("claude")} isActive />,
           );
@@ -13191,6 +13309,15 @@ describe("AgentNativeTab", () => {
 
     test("offers to load earlier messages when the transcript is windowed", async () => {
       seedProjection({ messageWindow: { limit: 512, truncated: true } });
+      sessionHistoryMock.mockImplementation(async () => [
+        {
+          id: "earlier",
+          role: "user",
+          content: "earlier",
+          parts: [{ type: "text", content: "earlier" }],
+          createdAt: "2026-08-26T12:00:00.000Z",
+        },
+      ]);
       renderInAppCommandScope(
         <AgentNativeTab tabId="tab-window" data={identity("opencode")} isActive />,
       );
@@ -13213,9 +13340,9 @@ describe("AgentNativeTab", () => {
       ).toBe(true);
       fireEvent.click(loadEarlierButton);
       await waitFor(() =>
-        expect(
-          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 1024),
-        ).toBe(true),
+        expect(sessionBackend.api.getNativeAgentMessagePage).toHaveBeenCalledWith(
+          expect.objectContaining({ before: "fake-history:1" }),
+        ),
       );
     });
 
@@ -13228,6 +13355,15 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: true,
         },
       });
+      sessionHistoryMock.mockImplementation(async () => [
+        {
+          id: "earlier",
+          role: "user",
+          content: "earlier",
+          parts: [{ type: "text", content: "earlier" }],
+          createdAt: "2026-08-26T12:00:00.000Z",
+        },
+      ]);
       renderInAppCommandScope(
         <AgentNativeTab tabId="tab-byte-window" data={identity("cursor")} isActive />,
       );
@@ -13243,9 +13379,9 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       fireEvent.click(loadEarlierButton);
       await waitFor(() =>
-        expect(
-          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),
-        ).toBe(true),
+        expect(sessionBackend.api.getNativeAgentMessagePage).toHaveBeenCalledWith(
+          expect.objectContaining({ before: "fake-history:1" }),
+        ),
       );
     });
 
@@ -13260,28 +13396,6 @@ describe("AgentNativeTab", () => {
       });
       renderInAppCommandScope(
         <AgentNativeTab tabId="tab-byte-cap" data={identity("cursor")} isActive />,
-      );
-
-      expect(
-        await screen.findByText(
-          "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
-        ),
-      ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
-    });
-
-    test("does not offer to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
-      // The shape a backend that predates `canLoadEarlier` still sends for a
-      // hard byte cap. Widening the limit cannot restore omitted content.
-      seedProjection({
-        messageWindow: {
-          limit: 100,
-          truncated: true,
-          truncationReason: "bytes",
-        },
-      });
-      renderInAppCommandScope(
-        <AgentNativeTab tabId="tab-byte-legacy" data={identity("cursor")} isActive />,
       );
 
       expect(
@@ -13369,33 +13483,7 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
-    test("does not offer to load a truncated window already at the message ceiling", async () => {
-      seedProjection({
-        messageWindow: {
-          limit: 4096,
-          truncated: true,
-          canLoadEarlier: true,
-        },
-      });
-      renderInAppCommandScope(
-        <AgentNativeTab tabId="tab-max-window" data={identity("cursor")} isActive />,
-      );
-
-      const sessionKey = createSessionKey("env-1", "tab-max-window");
-      await waitFor(() => {
-        expect(
-          appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
-            ?.messageWindow?.limit,
-        ).toBe(4096);
-      });
-      expect(
-        appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
-          ?.messageWindow?.canLoadEarlier,
-      ).toBe(false);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
-    });
-
-    test("retires the load-earlier control after a wider read restores no messages", async () => {
+    test("retires the load-earlier control after the joined snapshot restores no messages", async () => {
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -13408,11 +13496,13 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-byte-no-progress" data={identity("cursor")} isActive />,
       );
 
+      // No cursor names the omitted rows, so the click mints one through the
+      // joined snapshot, which has none either.
       fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
       await waitFor(() =>
-        expect(
-          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),
-        ).toBe(true),
+        expect(sessionBackend.api.getNativeAgentProjectionUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ syncVersion: 1, forceSnapshot: true }),
+        ),
       );
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true),
@@ -13446,11 +13536,11 @@ describe("AgentNativeTab", () => {
         removePromptQueueMessageMock.mockImplementationOnce(async () => {
           if (step === "removal") await pending;
           else {
-            const projection = await getNativeAgentProjectionMock({
+            const projection = await sessionProjectionMock({
               agent: "codex",
               environmentId: "env-1",
             });
-            getNativeAgentProjectionMock.mockImplementationOnce(async () => {
+            sessionProjectionMock.mockImplementationOnce(async () => {
               refreshStarted = true;
               await pending;
               return projection;
@@ -13540,7 +13630,7 @@ describe("AgentNativeTab", () => {
         });
         updateNativeAgentControlsMock.mockImplementationOnce(async () => {
           await pending;
-          return getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" });
+          return sessionProjectionMock({ agent: "codex", environmentId: "env-1" });
         });
         fireEvent.click(edit);
         await waitFor(() =>
@@ -13715,6 +13805,8 @@ describe("AgentNativeTab", () => {
     ] as const)(
       "inline edit preserves unrelated %s settings failure (%s, %s)",
       async (platform, phase, errorMessage) => {
+        // A running turn re-reads the queue on the coordinator's 500 ms cadence.
+        const { clock } = fakeReadCoordinator();
         const tabId = "tab-inline-edit-unrelated-failure";
         seedProjection({
           phase,
@@ -13735,6 +13827,7 @@ describe("AgentNativeTab", () => {
         expect(mockToastError).toHaveBeenCalledTimes(1);
         expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
         expect(input.textContent).toBe("");
+        await act(() => clock.advance(500));
         await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
         fireEvent.input(input, { target: { textContent: "Still usable" } });
         expect(
@@ -14253,7 +14346,7 @@ describe("AgentNativeTab", () => {
       // come from the backend-owned projection returned during reconnect.
       first.unmount();
       appCommandStore(nativeAgentProjectionStore).getState().reset();
-      getNativeAgentProjectionMock.mockClear();
+      sessionProjectionMock.mockClear();
       renderInAppCommandScope(
         <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
       );
@@ -14263,7 +14356,7 @@ describe("AgentNativeTab", () => {
       // Drafting remains available, but there is no action that can submit a
       // second request id while the recovered one is parked.
       expect(screen.queryByTitle("Send") === null).toBe(true);
-      expect(getNativeAgentProjectionMock).toHaveBeenCalled();
+      expect(sessionProjectionMock).toHaveBeenCalled();
     });
 
     test("discards an ambiguous dispatch without re-sending it", async () => {

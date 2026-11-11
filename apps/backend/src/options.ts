@@ -214,11 +214,7 @@ export function parseOptions(
     agentToolsPort,
     loopbackClientPort,
     compression,
-    // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
-    // flags are ignored, so dropping it would strand existing service units.
-    allowNonTailscaleBind:
-      args.includes("--allow-non-tailscale-bind") ||
-      args.includes("--unsafe-allow-non-tailscale-bind"),
+    allowNonTailscaleBind: args.includes("--allow-non-tailscale-bind"),
     allowedOrigins: (
       valueAfter(args, "--allowed-origins") ?? env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS
     )

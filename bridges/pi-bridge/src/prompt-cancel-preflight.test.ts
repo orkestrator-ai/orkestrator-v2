@@ -39,7 +39,7 @@ process.env.PI_BRIDGE_TOKEN = "test-token";
 process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
 
-const { route, setCancelAckTimeoutForTests, setDeleteCancelTimeoutForTests } =
+const { route, setCancelAckTimeoutForTests, setCloseCancelTimeoutForTests } =
   await import("./http.js");
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
@@ -766,11 +766,11 @@ describe("the turn timeout", () => {
   });
 });
 
-describe("close and DELETE while preflight is held", () => {
+describe("close while preflight is held", () => {
   test("close answers pending until the late run is aborted, then a retry confirms", async () => {
     const pi = preflightSession({ holdPreflight: true });
     const state = seed(pi.session);
-    setDeleteCancelTimeoutForTests(20);
+    setCloseCancelTimeoutForTests(20);
     try {
       const prompt = post(`/session/${state.id}/prompt`, { prompt: "closing" });
       await waitFor(() => pi.preflights.length === 1);
@@ -796,29 +796,7 @@ describe("close and DELETE while preflight is held", () => {
       expect(await retry.json()).toEqual({ closed: true, retained: true });
       expect(sessions.has(state.id)).toBe(false);
     } finally {
-      setDeleteCancelTimeoutForTests();
-      pi.settleAll();
-      release(state);
-    }
-  });
-
-  test("DELETE aborts preflight at once and the accepted run on acceptance", async () => {
-    const pi = preflightSession({ holdPreflight: true });
-    const state = seed(pi.session);
-    try {
-      const prompt = post(`/session/${state.id}/prompt`, { prompt: "deleted" });
-      await waitFor(() => pi.preflights.length === 1);
-
-      const deleted = await call(`/session/${state.id}`, { method: "DELETE" });
-      expect(deleted.status).toBe(200);
-      expect(pi.counts.abortsBeforeAcceptance).toBe(1);
-      expect(sessions.has(state.id)).toBe(false);
-
-      pi.accept();
-      expect((await prompt).status).toBe(202);
-      await waitFor(() => state.promptClaim === undefined);
-      expect(pi.counts.abortsAfterAcceptance).toBe(1);
-    } finally {
+      setCloseCancelTimeoutForTests();
       pi.settleAll();
       release(state);
     }

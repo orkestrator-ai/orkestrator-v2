@@ -250,6 +250,22 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     };
   }
 
+  if (type === "auto-pipeline") {
+    if (!isRecord(value.autoPipelineData)) return null;
+    const { sourceTabId, sourceLabel } = value.autoPipelineData;
+    if (typeof sourceTabId !== "string" || !sourceTabId || sourceTabId.length > 256) return null;
+    return {
+      id,
+      type,
+      autoPipelineData: {
+        sourceTabId,
+        ...(typeof sourceLabel === "string" && sourceLabel.trim()
+          ? { sourceLabel: sourceLabel.slice(0, 200) }
+          : {}),
+      },
+    };
+  }
+
   if (type === "pull-request") {
     if (!isRecord(value.pullRequestData) || !isGitHubPullRequestRef(value.pullRequestData.ref)) {
       return null;
@@ -391,6 +407,13 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         environmentId: context.environmentId,
         pipelineId,
         ...(value.keyInformationTabData.view === "notes" ? { view: "notes" as const } : {}),
+        ...(value.keyInformationTabData.completionPublished === true
+          ? { completionPublished: true as const }
+          : {}),
+        ...(Number.isSafeInteger(value.keyInformationTabData.completionRevision) &&
+        (value.keyInformationTabData.completionRevision as number) >= 0
+          ? { completionRevision: value.keyInformationTabData.completionRevision as number }
+          : {}),
       },
     };
   }

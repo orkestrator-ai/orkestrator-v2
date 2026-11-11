@@ -81,3 +81,124 @@ automatic paging. It remained red only on the unrelated cases 1249 and 1310
 The final invisible hit-area adjustment was separately verified by the unchanged
 40px size and geometry assertions plus the new previous-content non-overlap
 assertion (`touch-hit-area-final`, exit 0, 11.0 seconds).
+
+## Action-search review repair — 2026-11-10
+
+Preparation for the coordinator action-search branch (`action-search-modal-1162dc5c0a2a-r1`, base `53340356c`, validated at `300105a39`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 5 failed, 5 flaky, 152 skipped, 1656 passed. The branch changes only the coordinator Actions panel, which renders for coordinator tabs; neither spec opens one. Evidence: `validation-11.stdout.txt` under `.orkestrator/review-artifacts/review-validation-985e2298-c3a5-42bd-bd66-83c90557e178/`. The mobile-chromium case failed its paging assertion.
+
+The complete unchanged ToolGroupFold and TranscriptPaging owners then passed together with one worker (exit 0, 296.8 s):
+
+```sh
+mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence 2026-11-11 (WebKit-scroll review)
+
+Branch `webkit-scroll-fix-d230c4f38350-r1`, base
+`498b68766f5c9f357a3a86782406d1e9e0977559`. The branch changes the shared
+`useVirtuosoScrollState` hook, but only for callers that pass `visible` or
+`viewKey` (the build pipeline transcript); the paging fixture passes neither,
+so its activation path is unchanged.
+
+- A browser suite run on a host at load average about 40, with two other
+  worktrees' suites running, hit the 30-minute group deadline at 1199 of
+  1850 tests. Among its 17 failures, mostly `page.reload`/`page.goto`
+  timeouts, this case failed on mobile.
+- The ten failing owners rerun together (`bunx playwright test --config e2e/playwright.config.ts <ten specs>`,
+  default workers, same load) failed this case on both viewports:
+  `expect(received).toBe(expected)`, expected 1, received 0, after the 30 s
+  poll for `Reached stop 0.` (282 passed, 27 failed, mostly reload timeouts).
+- The next complete `mise run test:browser` on the same tree (load about 31
+  to 35) started this case on both viewports and did not fail it; its only
+  failure was flake 1310.
+- `mise run flaky:recurrence -- 1602 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+Review round 2, same day and base, after commit `7fac685f4` changed the
+hook's `viewKey` comparison (again only for callers that pass `viewKey`):
+
+- `ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name browser-rerun -- mise run test:browser`,
+  at host load average about 30, was stopped by the 30-minute group deadline
+  at 1849 of 1852 tests with three failures. On desktop this case exceeded
+  the test timeout while tearing down its context.
+- The complete owner alone (`bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --retries=0`)
+  failed this case on both viewports (expected 1, received 0, then the test
+  timeout); 37 passed.
+- The case alone (`e2e/TranscriptPaging.spec.ts:450`) then passed, once with
+  the hook restored to the validated commit `7b45fc7a0` (27.1 s) and once at
+  `7fac685f4` (28.5 s), so the failure does not depend on that commit.
+- `mise run flaky:recurrence -- 1602 --base 498b68766f5c9f357a3a86782406d1e9e0977559` reported `open`.
+
+- A later complete `ORKESTRATOR_E2E_PORT=1498 mise run test:logged -- --name browser-rerun-3 -- mise run test:browser`
+  at `3430c8d13` (load about 11 to 21) failed only this case, on mobile:
+  1699 passed, 1 failed, 152 skipped (1284.6 s). The complete owner then
+  passed alone (`--name paging-owner-final`, exit 0, 53.4 s).
+
+Status stays open. No assertion, timeout or skip changed.
+
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 1602 --base 498b68766` reported `open`.
+The owning spec and its implementation are unchanged on the branch.
+
+Review preparation's `mise run test:browser` (nine workers, 1690 passed, 152
+skipped, two failed in 28.8 m) failed the mobile case at
+`e2e/TranscriptPaging.spec.ts:477`: the opening request count stayed 0 after the
+30 s poll, on the first attempt and the retry. Port 1422 was held by another
+checkout's fixture server during the address stage. The complete unchanged owner,
+with `DataSavingGateway`, then passed this case on both viewports with one worker
+on port 14722:
+
+```sh
+NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flake-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts --workers=1 e2e/TranscriptPaging.spec.ts e2e/DataSavingGateway.spec.ts
+```
+
+That run (40 passed, one skipped, one failed in 6.3 m) failed only the mobile
+byte-bounded prepend case recorded in 0483. Status stays open. No assertion,
+timeout or skip changed.
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Branch `transcript-history-efficiency-60750035e24d-r1` (base `498b68766f5c`, validated at `b0dc43135`): this case failed in the completed rerun of `mise run test:logged -- --name browser -- mise run test:browser` (11 failed, 1,681 passed; full list in [0382](../web-ui/0382-component-browser-parallel-load.md)). The branch changes `TranscriptScrollController.holdPlaceAcrossReflow`, which this owner runs. The complete ToolGroupFold, TranscriptPaging and MailTiles owners then passed together with one worker, with that change in place (exit 0, 337.3 s). `mise run flaky:recurrence -- 1602 --base 498b68766f5c` reported a recurrence. Status stays open. No assertion, timeout or skip changed.
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `bdc583ce4` (base `498b68766`), a
+targeted ten-spec browser run beside another checkout's browser suite (load
+average about 30 to 36, default workers) failed `native: history pages in without a click, opening with a page and paging near the top` on both projects (`:478`). The complete unchanged
+owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
+--base 498b68766` reported the case open. Details and commands:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Second Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `fa5a841ca` (base `498b68766`),
+the recorded `mise run test:browser` rerun (default workers, stopped at its
+30-minute group deadline) failed the mobile case. The complete unchanged owner
+passed alone with two workers in 133.0 s. `mise run flaky:recurrence -- 1602
+--base 498b68766` reported the case open. Details:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Merge button review — 2026-11-11
+
+Preparation for the merge button branch (`merge-button-confusion-7ba4930d15d6-r1`, base `465c473d9`, validated at `ab8580dda`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 4 failed, 2 flaky, 152 skipped, 1694 passed (26.7 m). The branch changes the action bar's merge controls, the ticket view's PR bar and their tests; neither spec renders them. `mise run flaky:recurrence -- 1602 --base 465c473d9` answered "open. Record the failure as a recurrence". Evidence: `validation-05.stderr.txt` under `.orkestrator/review-artifacts/review-validation-085f2243-54bc-4625-8ead-8f255e326766/`. mobile-chromium failed `expect(received).toBe(1)` (received 0) on the first attempt and the retry.
+
+The complete unchanged ToolGroupFold and TranscriptPaging owners then passed together with one worker (exit 0, 289.0 s):
+
+```sh
+mise run test:logged -- --name transcript-browser-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `f799aaa14`, base `14df96544` (`mise run flaky:recurrence -- 1602 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes backend read cancellation, one desktop IPC test and docs; it changes no `apps/web` or `e2e` code. `mise run test:logged -- --name browser -- mise run test:browser`: 6 failed, 153 skipped, 1709 passed (21.9 m), all six in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602). Both mobile-chromium and desktop-chromium failed `expect(received).toBe(1)` (received 0) in `native: history pages in without a click, opening with a page and paging near the top`. The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` (exit 0, 283.0 s). Status stays open; no assertion, timeout or skip changed.
+
+A second browser run on the same branch (at `487e2aa4e`: 9 failed, 1706 passed) failed the same cases again; the two owners again passed together with one worker (295.5 s). See 0382 for that run.

@@ -1,9 +1,11 @@
 # Graphs
 
 Status: Living. Describes the composable-graphs feature as built: Phases 0–2 of
-[`plans/composable-graphs.md`](../../plans/composable-graphs.md) and Phase 4
-items 401–405. The plan holds the decisions (D1–D21); the work items in
-[`plans/graphs/`](../../plans/graphs/000-index.md) hold the record of the work.
+the composable-graphs plan and Phase 4 items 401–405. The plan holds the
+decisions (D1–D21) and its work items hold the record of the work; both were
+retired on 2026-11-07 when the plans were consolidated, so read them at the
+commit before that (`git show 2b876486b:plans/composable-graphs.md`,
+`git show 2b876486b:plans/graphs/000-index.md`).
 The user-facing walkthrough is [graphs-user-guide.md](graphs-user-guide.md).
 
 ## Overview
@@ -49,8 +51,8 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
-| Isolated branch worktrees (403) | `isolation.ts`, `isolation-template.ts` | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
-| Per-node user MCP (404) | `native-agent-capabilities.ts` (`userMcpServers`) | each bridge's MCP loader, `opencode-user-mcp.ts` | `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` |
+| Isolated branch worktrees (403) | `isolation.ts`, `testing/graph-isolation-template.ts` (fixture) | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
+| Per-node user MCP (404) | `native-agent-capabilities.ts` (`userMcpServers`) | each bridge's MCP loader, `opencode2/policy-rules.ts` (`openCodeUserMcpRules`) | `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` |
 | CLI (214) | `public-api-inputs-graph.ts` | `public-api/actions-graphs.ts` | `packages/cli/src/client/commands/graphs.ts` |
 
 ## The template model
@@ -148,7 +150,8 @@ end.
 
 `replicate: {over: "items", input, maxBranches, truncate?}` runs one branch per
 item of a list input (report §4.4, §5.8; D9, D10). The design note is in
-[`plans/graphs/401-items-fanout.md`](../../plans/graphs/401-items-fanout.md).
+the retired plan item 401
+(`git show 2b876486b:plans/graphs/401-items-fanout.md`).
 
 - **Input.** The port must be `list<T>` (one item per element artifact) or of a
   named type that declares `items` (one item per entry of its item list);
@@ -473,7 +476,7 @@ How each provider loads exactly the selection (`NATIVE_AGENT_USER_MCP_SELECTION`
 | Claude | inline `mcpServers` filtered to the grant plus `strictMcpConfig: true`, so the CLI reads no MCP file and no plugin server loads; granted tools are approved up front unless the policy asks, and a read-only turn's hook admits them | ordinary and read-only turns | provider-configured |
 | Codex | `config/read` lists the effective `mcp_servers`; every other server gets `mcp_servers.<name>.enabled = false` on `thread/start`/`resume`/`fork`, a granted one `default_tools_approval_mode = "approve"` unless the policy asks; an unreadable table or an undisableable name refuses the thread | ordinary and read-only turns | provider-configured |
 | Pi | the bridge's own MCP client starts only the granted servers; the read-only gate admits their tools by exact name | ordinary and read-only turns | enforced |
-| OpenCode | one shared `opencode serve` per directory: the session's permission rules deny `<server>_*` for every server `mcp.status` lists outside the grant (re-applied when the list changes; an unreadable list refuses the session); the other servers still run | ordinary and read-only turns | provider-configured |
+| OpenCode | one shared server location per directory: the session's permission rules deny `<server>_*` for every server the location lists (`GET /api/mcp`) outside the grant (re-applied when the list changes; an unreadable list refuses the session); the other servers still run | ordinary and read-only turns | provider-configured |
 | Cursor | no settings source (each would load all its servers); the bridge reads `~/.cursor/mcp.json` (and `.cursor/mcp.json` with project resources) and passes the granted servers inline; such a session also loses the user's and project's Cursor rules and plugins | ordinary turns only | provider-configured |
 | Grok | none: Grok loads every server in its own configuration and ACP `session/new` can only add | never | advisory |
 
@@ -565,7 +568,8 @@ alone. A built-in cannot be saved, launched or mock-run as a graph
 (`engine-template`); duplicating it drops `engine`, and the copy runs on the
 graph runtime. What the templates cannot express (engine-only behaviours such
 as conflict handling and mergeability waits) is listed in
-[`108-builtin-templates.md`](../../plans/graphs/108-builtin-templates.md).
+the retired plan item 108
+(`git show 2b876486b:plans/graphs/108-builtin-templates.md`).
 
 ## Library, trust and sharing
 
@@ -1133,7 +1137,7 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
   | Grok | the session's ACP child | the bridge process |
   | Codex | every command the thread runs (per-thread `shell_environment_policy`) | the shared app-server process; a stdio MCP server whose entry names the variable |
   | Pi | the session's `bash`/`powershell` and the MCP servers the bridge starts | the bridge process and the Pi extensions running in it (project resources on); a credential written literally into an `mcp.json` entry |
-  | OpenCode | nothing: one `opencode serve` per directory | every session |
+  | OpenCode | nothing: one OpenCode server per environment | every session |
   | Cursor | nothing: the SDK runs in the bridge process | every session |
 
   Everywhere, SSH keys, a container's runtime credential file and, on an image
@@ -1149,7 +1153,8 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
 A way for several branches to write at once, each in a workspace of its own
 ("three competing implementations, a judge picks one", report §6.7, §9.3).
 Design note:
-[`plans/graphs/403-isolated-branch-worktrees.md`](../../plans/graphs/403-isolated-branch-worktrees.md).
+the retired plan item 403
+(`git show 2b876486b:plans/graphs/403-isolated-branch-worktrees.md`).
 
 - **Opting in.** `isolation: "worktree"` on a replicated writer with exactly
   one single `workspace@1` input and at most 8 branches (`isolation-*` codes).
@@ -1894,5 +1899,5 @@ environment is away, and a wait surviving a backend restart).
   host; a live `open-pull-request`, which opens a real pull request and needs
   the user's approval; a backend restart mid fan-out on a real stack (the
   seeded interleavings cover it with fakes); and the coordinator's graph
-  wakes with a live coordinator. The Phase 2 exit criteria in
-  [`000-index.md`](../../plans/graphs/000-index.md) track them.
+  wakes with a live coordinator. The Phase 2 exit criteria in the retired
+  plan index (`git show 2b876486b:plans/graphs/000-index.md`) track them.

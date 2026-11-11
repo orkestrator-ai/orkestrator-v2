@@ -46,7 +46,7 @@ function prompt(state: SessionState, requestId: string): Promise<Response> {
 }
 
 function close(state: SessionState): Promise<Response> {
-  return harness.call(`/session/${state.id}`, { method: "DELETE" });
+  return harness.call(`/session/${state.id}/close`, { method: "POST" });
 }
 
 function countingDispose(agent: FakeAgent): () => number {
@@ -376,7 +376,7 @@ describe("close route and restart", () => {
       activity: "missing",
     });
 
-    expect((await harness.call("/session/closing-1", { method: "DELETE" })).status).toBe(200);
+    expect((await harness.call("/session/closing-1/close", { method: "POST" })).status).toBe(200);
     expect(closingTombstones.has("closing-1")).toBe(false);
     const file = (await harness.readPublished()) as { closing?: unknown[] };
     expect(file.closing ?? []).toEqual([]);

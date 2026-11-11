@@ -1,7 +1,7 @@
 # Streaming transcript find convergence times out in the component aggregate
 
 - **ID:** 0767
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `scrollbar departure after find stays put when streaming reapplies highlights`, desktop Chromium, `e2e/StreamingTranscript.spec.ts:361`.
 - **Merge parents:** `37ecb753fa8da75ae546984af7c72ba5e166d503` and `a3111c7c67e3423b161b77156c070cd105c6a489`.
@@ -308,3 +308,60 @@ The full run and remaining undetermined failures are recorded in
   undetermined. The spec, fixture, scroll controller and virtualization code
   were not edited. No assertion, deadline, skip or implementation was changed
   to suppress the failure. No target-branch checkout or baseline run was made.
+
+## Completion Notes handoff validation — 2026-11-10
+
+Observed at `2d43f758a` on base
+`c6de4733c5beb87a578f82a8548725305e1ff254`.
+`mise run flaky:recurrence -- 0767 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reports the case open.
+
+The exact recorded browser command,
+`mise run test:logged -- --name browser -- mise run test:browser`, used nine
+workers and finished with exit 1 after 1,249.8 s: 1,651 passed, 152 skipped,
+one failed. The desktop `scrollbar departure after find stays put when streaming reapplies highlights`
+again received `lastOutcome: unresolved` instead of `converged` at
+`e2e/StreamingTranscript.spec.ts:371` after the 5,000 ms polling deadline.
+The originally recorded CoordinatorActions navigation failure did not recur.
+The public-site stage was not reached because the component stage failed.
+Bounded evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.G3sCEC/browser.log.gz`.
+
+The complete unchanged owner then passed alone with one worker (exit 0,
+54.4 s):
+
+```bash
+mise run test:logged -- --name streaming-transcript-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1
+```
+
+Passing output was deleted by the logged runner; no isolated case count is
+inferred. No transcript implementation, assertion, timeout or skip was changed.
+The failing fixture directly renders `VirtualizedMessageList` with an 800 px
+container and uses `useVirtuosoScrollState`; it does not render this branch's
+modified `NativeChatShell` compose dock. This inspection did not establish a
+causal link to the Notes handoff changes or a cause for convergence failure.
+The isolated pass confirms intermittence, not a green broad command or an
+environmental exemption. The browser result remains undetermined for verification.
+
+## Resolution — 2026-11-10
+
+**Reproduced: yes.** `browser-before-repairs`, selecting diagram editing/arrow
+and streaming-find departure with three repeats and three workers, failed
+the unchanged mobile convergence assertion. Totals were 13 passed, three
+skipped and two failed (the other failure was diagram typing), 18.4 s.
+
+**Test precondition and fix.** The departure case started find immediately
+after navigation, while the cold virtualizer could still be filling and
+measuring its initial tail. It now waits for the actual last history row to
+intersect the viewport and for the measured distance from bottom to be under
+two pixels before starting find. The case still requires find convergence
+and unchanged scroll position/write count after pointer departure and append.
+No controller budget, assertion, retry or test timeout was relaxed. This
+fixes the departure test's readiness; it does not claim that every cold-find
+operation on a contended machine converges.
+
+**Verification.** The same three-repeat selection passed the streaming cases
+after adding readiness. Both complete owners then passed three repeats with
+three workers through `test:logged --name diagram-and-streaming-fixed`
+(92.4 s). Original failure log: `orkestrator-test-run.JxxD2P/browser-before-repairs.log.gz`;
+retained browser evidence: `output/agent-testing/notes-repair-before/`.

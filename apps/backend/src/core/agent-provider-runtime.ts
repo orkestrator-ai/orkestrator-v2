@@ -69,14 +69,6 @@ export function setBoundedMapEntry<K, V>(
   map.set(key, value);
 }
 
-export function setBoundedSetEntry<T>(set: Set<T>, value: T, maximumSize: number): void {
-  if (!set.has(value) && set.size >= maximumSize) {
-    const oldest = set.values().next().value as T | undefined;
-    if (oldest !== undefined) set.delete(oldest);
-  }
-  set.add(value);
-}
-
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -393,6 +385,11 @@ export function normalizeProviderRuntimeSummary(
   // Counts and limits only; the protocol normalizer copies no other field.
   const steer = normalizeNativeAgentRuntimeSteerJournal(raw.steer);
   if (steer) summary.steer = steer;
+  // A positive counter only; it is compared for equality, so it is never clamped.
+  const generation = raw.runtimeGeneration;
+  if (typeof generation === "number" && Number.isSafeInteger(generation) && generation > 0) {
+    summary.runtimeGeneration = generation;
+  }
   const notices = normalizeProviderRuntimeNotices(raw.notices);
   if (notices.length > 0) summary.notices = notices;
   return Object.keys(summary).length > 0 ? summary : undefined;

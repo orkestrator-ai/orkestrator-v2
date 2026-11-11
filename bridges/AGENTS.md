@@ -189,8 +189,8 @@ When touching any of them:
 - **Close is non-destructive.** It stops owned work, denies parked approvals,
   questions and plan approvals, settles dispatch claims, and releases the
   bridge's live mapping. It never deletes vendor history: no Claude SDK
-  `deleteSession`, no Codex `thread/delete`, no OpenCode
-  `client.session.delete`.
+  `deleteSession`, no Codex `thread/delete`, no OpenCode session delete
+  (`DELETE /api/session/:id`).
 - **Only a 2xx that affirms `closed: true` is a confirmed close.** 200
   `{ closed: true, retained: true }` or `{ closed: true, missing: true }`.
   Anything else, including an empty or malformed 2xx, is not a close.
@@ -203,7 +203,8 @@ When touching any of them:
   periodic reconcile sweep retries. Errors are fixed, content-free strings.
 - **A close never falls back to DELETE.** On 404/405 the teardown stays pending
   with a `bridge-upgrade-required` failure the renderer shows as a restart
-  notice, on every platform. Claude's DELETE deletes the rollout.
+  notice, on every platform. No bridge serves `DELETE /session/:id` any more;
+  an older Claude bridge's DELETE deleted the rollout. Do not add one back.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close. A resume

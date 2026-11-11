@@ -35,6 +35,7 @@ import { FEATURE_LOG_AREAS } from "./feature.js";
 import { HOST_LOG_AREAS } from "./host.js";
 import { TRANSCRIPT_ARTIFACTS_LOG_AREAS } from "./transcript-artifacts.js";
 import { SCHEDULER_LOG_AREAS } from "./scheduler.js";
+import { SELF_IMPROVEMENT_LOG_AREAS } from "./self-improvement.js";
 import { WEB_APP_LOG_AREAS } from "./web-app.js";
 import { WEB_BUILD_PIPELINE_LOG_AREAS } from "./web-build-pipeline.js";
 import { WEB_CHAT_LOG_AREAS } from "./web-chat.js";
@@ -102,6 +103,7 @@ export const LOG_VOCABULARY = {
   ...HOST_LOG_AREAS,
   ...TRANSCRIPT_ARTIFACTS_LOG_AREAS,
   ...SCHEDULER_LOG_AREAS,
+  ...SELF_IMPROVEMENT_LOG_AREAS,
   ...WEB_APP_LOG_AREAS,
   ...WEB_BUILD_PIPELINE_LOG_AREAS,
   ...WEB_CHAT_LOG_AREAS,

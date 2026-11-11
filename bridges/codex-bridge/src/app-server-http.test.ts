@@ -139,7 +139,7 @@ describe("app-server engine over HTTP", () => {
       duplicate: true,
     });
 
-    expect(step(output, "delete").body).toMatchObject({ status: "deleted" });
+    expect(step(output, "close").body).toMatchObject({ closed: true, retained: true });
   }, 60_000);
 
   test("a version-mismatched binary still starts, and health reports what it found", async () => {

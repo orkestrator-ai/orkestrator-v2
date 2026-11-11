@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   isOpaquePreviewId,
   isPreviewServiceRef,
-  isUnknownPreviewCommandError,
   normalizePreviewPath,
   normalizeReadinessPath,
   parsePreviewPort,
@@ -194,15 +193,6 @@ describe("errors", () => {
     });
     expect(previewErrorFromUnknown(new Error("socket hang up"))).toBeNull();
     expect(previewErrorFromUnknown(new Error("PreviewError:made-up: nope"))).toBeNull();
-  });
-
-  test("only a genuinely unknown command marks an old backend", () => {
-    expect(
-      isUnknownPreviewCommandError(new Error("Unknown command: get_preview_capabilities")),
-    ).toBe(true);
-    expect(isUnknownPreviewCommandError(new Error("Unauthorized"))).toBe(false);
-    expect(isUnknownPreviewCommandError(new Error("fetch failed"))).toBe(false);
-    expect(isUnknownPreviewCommandError(new Error("Unknown command: something_else"))).toBe(false);
   });
 });
 

@@ -13,7 +13,6 @@ import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
-  withDesignLimit,
   type DesignHarness,
 } from "./test-support.js";
 import { designActions, runDesignAction } from "./tools.js";
@@ -92,48 +91,6 @@ describe("design service (legacy adapters over prepare/execute)", () => {
       DESIGN_CONFLICT,
     );
     expect((await service().get(canvas.id, "env-1")).revision).toBe(3);
-  });
-
-  test("missed events, expired replay and generation changes reset through changes()", async () => {
-    const canvas = await service().create("env-1");
-    const { frame: created } = await service().createFrame(canvas.id, "env-1", 1, frame);
-    expect(await service().changes(canvas.id, "env-1", service().generation, 1)).toMatchObject({
-      reset: false,
-      revision: 2,
-      events: [{ revision: 2, frameId: created.id }],
-    });
-    // A short change log expires in a few fsynced commits; 260 real ones
-    // exceeded the 5 s deadline under aggregate load (flakes 0218 and 0225).
-    await withDesignLimit("changeDescriptors", 8, async () => {
-      const total = DESIGN_LIMITS.changeDescriptors + 4;
-      for (let index = 1; index <= total; index++)
-        await service().mutate(canvas.id, "env-1", created.id, index, { x: index });
-      const current = 2 + total;
-      expect(await service().changes(canvas.id, "env-1", service().generation, 1)).toMatchObject({
-        reset: true,
-        events: [],
-        revision: current,
-      });
-      expect(
-        await service().changes(canvas.id, "env-1", service().generation, current - 2),
-      ).toMatchObject({
-        reset: false,
-        events: [{ revision: current - 1 }, { revision: current }],
-      });
-      expect(
-        await service().changes(canvas.id, "env-1", service().generation, current + 1),
-      ).toMatchObject({
-        reset: true,
-      });
-      const oldGeneration = service().generation;
-      const restarted = await harness.restart();
-      expect(restarted.generation).not.toBe(oldGeneration);
-      expect(await restarted.changes(canvas.id, "env-1", oldGeneration, current)).toMatchObject({
-        reset: true,
-        revision: current,
-      });
-      expect((await restarted.get(canvas.id)).frames[0]?.x).toBe(total);
-    });
   });
 
   test("imports portable documents under fresh identities and rejects oversized input", async () => {

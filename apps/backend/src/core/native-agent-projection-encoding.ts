@@ -13,7 +13,7 @@
  * read to the next keeps its object (see {@link reuseUnchangedMessages}) and is
  * therefore never serialized again while it stays in the window.
  */
-import { createHash, type Hash } from "node:crypto";
+import { createHash, randomBytes, type Hash } from "node:crypto";
 
 interface Encoding {
   json: string;
@@ -169,7 +169,7 @@ export function encodedBytesWithMessages<
  * message enters as its memoized fingerprint, so a read that changed one row
  * hashes that row's JSON once and a short string for every other row. Feeding
  * every row's JSON instead made the legacy commit's changed read slower than
- * the whole-projection `JSON.stringify` comparison it replaced (to-do 6260).
+ * the whole-projection `JSON.stringify` comparison it replaced (to-do 6260, retired).
  */
 export function digestWithMessages<T extends { messages: readonly unknown[] }>(
   prefix: string,
@@ -183,12 +183,25 @@ export function digestWithMessages<T extends { messages: readonly unknown[] }>(
 /** Containers deeper than this are serialized whole rather than walked. */
 const MAX_SPLICE_DEPTH = 8;
 const spliceableResults = new WeakSet<object>();
+/**
+ * Stands in for an encoded row while the rest of a result is serialized
+ * natively. Random per process, so no field a provider or user wrote can
+ * produce it; a body that contains it anyway is detected and serialized whole.
+ */
+const SPLICE_PLACEHOLDER = `ork-splice-${randomBytes(16).toString("hex")}-`;
+const QUOTED_SPLICE_PLACEHOLDER = `"${SPLICE_PLACEHOLDER}`;
+
+/** The placeholder prefix, so a test can forge a field that spells one. */
+export function splicePlaceholderForTests(): string {
+  return SPLICE_PLACEHOLDER;
+}
 
 /**
  * Mark a command result whose rows were already encoded on the way to it, so
- * the gateway writes it with {@link spliceEncodedJson} instead of serializing
- * those rows again. The value is untouched: every caller that is not the
- * gateway (the CLI, coordinator tools, tests) receives the same plain object.
+ * the gateway writes it with {@link spliceEncodedJsonBytes} instead of
+ * serializing those rows again. The value is untouched: every caller that is
+ * not the gateway (the CLI, coordinator tools, tests) receives the same plain
+ * object.
  */
 export function markSpliceableResult<T>(value: T): T {
   if (value !== null && typeof value === "object") spliceableResults.add(value);
@@ -200,35 +213,100 @@ export function isSpliceableResult(value: unknown): boolean {
 }
 
 /**
- * The same JSON as `JSON.stringify(value)`, with each array element that was
+ * The UTF-8 bytes of `JSON.stringify(value)`, with each array element that was
  * already encoded (a projected row, a patch) copied from the memo rather than
- * serialized again. Only plain objects and arrays are walked, and only to a
- * fixed depth; anything else (a class instance, a `toJSON`, a deep subtree)
- * goes through `JSON.stringify` whole, so the output cannot differ from it.
+ * serialized again.
+ *
+ * Everything except those rows is serialized natively in one call, with a
+ * placeholder string where each row goes, and the rows are then written
+ * straight into one buffer sized from their memoized byte counts. An earlier
+ * version walked the whole value in JavaScript and joined strings, which made
+ * a first snapshot slower than `JSON.stringify` plus `Buffer.from`; this one
+ * is faster on every row shape the changed-read benchmark has (to-do 7553,
+ * retired; figures in `docs/architecture/native-transcripts.md`, "Response
+ * encoding").
+ *
+ * Only plain objects and arrays are walked, and only to a fixed depth;
+ * anything else (a class instance, a `toJSON`, a deep subtree) is left for
+ * `JSON.stringify`, so the output cannot differ from it. Undefined only where
+ * `JSON.stringify` returns undefined.
  */
-export function spliceEncodedJson(value: unknown): string | undefined {
-  return splicedJson(value, 0);
+export function spliceEncodedJsonBytes(value: unknown): Buffer | undefined {
+  const rows: Encoding[] = [];
+  const skeleton = JSON.stringify(withPlaceholders(value, 0, rows));
+  if (skeleton === undefined) return undefined;
+  if (rows.length === 0) return Buffer.from(skeleton);
+  const pieces: string[] = [];
+  let bytes = 0;
+  let from = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    // The next placeholder in the skeleton must be exactly this row's, in the
+    // order the walk met them (the order `JSON.stringify` writes them).
+    const at = skeleton.indexOf(QUOTED_SPLICE_PLACEHOLDER, from);
+    const suffix = `${index}"`;
+    if (at < 0 || !skeleton.startsWith(suffix, at + QUOTED_SPLICE_PLACEHOLDER.length)) {
+      return Buffer.from(JSON.stringify(value));
+    }
+    const before = skeleton.slice(from, at);
+    pieces.push(before);
+    bytes += Buffer.byteLength(before) + rows[index]!.bytes;
+    from = at + QUOTED_SPLICE_PLACEHOLDER.length + suffix.length;
+  }
+  const rest = skeleton.slice(from);
+  if (rest.includes(QUOTED_SPLICE_PLACEHOLDER)) return Buffer.from(JSON.stringify(value));
+  bytes += Buffer.byteLength(rest);
+  const body = Buffer.allocUnsafe(bytes);
+  let offset = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    offset += body.write(pieces[index]!, offset);
+    offset += body.write(rows[index]!.json, offset);
+  }
+  offset += body.write(rest, offset);
+  // Unreachable while memoized byte counts are exact; never send a short body.
+  return offset === bytes ? body : Buffer.from(JSON.stringify(value));
 }
 
-function splicedJson(value: unknown, depth: number): string | undefined {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
+/**
+ * `value` with each memoized array element replaced by a placeholder, copying
+ * only the containers on the way to one. Unchanged subtrees keep their
+ * identity, so `JSON.stringify` sees exactly the keys and order it would have.
+ */
+function withPlaceholders(value: unknown, depth: number, rows: Encoding[]): unknown {
+  if (value === null || typeof value !== "object") return value;
   if (depth >= MAX_SPLICE_DEPTH || typeof (value as { toJSON?: unknown }).toJSON === "function") {
-    return JSON.stringify(value);
+    return value;
   }
   if (Array.isArray(value)) {
-    const elements: string[] = [];
+    let copy: unknown[] | undefined;
     for (let index = 0; index < value.length; index += 1) {
       const element: unknown = value[index];
-      elements.push(memoizedEncoding(element) ?? splicedJson(element, depth + 1) ?? "null");
+      const encoding =
+        element !== null && typeof element === "object" ? encodings.get(element) : undefined;
+      let next: unknown;
+      if (encoding) {
+        next = `${SPLICE_PLACEHOLDER}${rows.length}`;
+        rows.push(encoding);
+      } else {
+        next = withPlaceholders(element, depth + 1, rows);
+      }
+      if (next !== element) {
+        // `slice` keeps holes, which `JSON.stringify` writes as null either way.
+        copy ??= value.slice();
+        copy[index] = next;
+      }
     }
-    return `[${elements.join(",")}]`;
+    return copy ?? value;
   }
   const prototype = Object.getPrototypeOf(value) as unknown;
-  if (prototype !== Object.prototype && prototype !== null) return JSON.stringify(value);
-  const fields: string[] = [];
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  let copy: Record<string, unknown> | undefined;
   for (const key of Object.keys(value)) {
-    const json = splicedJson((value as Record<string, unknown>)[key], depth + 1);
-    if (json !== undefined) fields.push(`${JSON.stringify(key)}:${json}`);
+    const field = (value as Record<string, unknown>)[key];
+    const next = withPlaceholders(field, depth + 1, rows);
+    if (next !== field) {
+      copy ??= { ...(value as Record<string, unknown>) };
+      copy[key] = next;
+    }
   }
-  return `{${fields.join(",")}}`;
+  return copy ?? value;
 }

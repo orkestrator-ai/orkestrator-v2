@@ -14,13 +14,13 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 6. **Codex, Cursor, Grok and ACP: no behaviour change needed**: protocol, patch and argv rechecks. Status: done.
 7. **OpenCode 2.x gate**: whether 2.2.3–2.2.5 opened 0008's gate. Status: done (still closed).
 8. **Adopt-later and not-relevant calls**: every other change in the changelogs. Status: done (candidates moved to 0007).
-9. **Live evidence at the new pins**: signed-in checks, the container image, the Linux loopback failures. Status: open (image built and smoke-tested; Linux loopback failures fixed in the product; signed-in and macOS runs remain).
-10. **One sign-in expiry for every provider**: Claude `credential_expires_at` beside Cursor's `expiresAt`. Status: done (live signed-in check open, task 9).
+9. **Live evidence at the new pins**: the container image, the Linux loopback failures, and the checks that need no login: the macOS sandbox live test, the Linux Claude sandbox probe and `claude-host-login-refresh.ts`. Status: open (image built and smoke-tested; Linux loopback failures fixed in the product; the macOS and no-login runs remain; the signed-in checks moved to 7568 on 2026-11-10).
+10. **One sign-in expiry for every provider**: Claude `credential_expires_at` beside Cursor's `expiresAt`. Status: done (live signed-in check moved to 7568, 2026-11-10).
 11. **One "a person must answer this" marker for every provider**: Claude now, Codex `humanCommand` later. Status: done (Codex path built and fake-tested; live once Codex leaves `experimentalApi`).
-12. **Provider-neutral tool safety hints on approval cards**: Codex MCP `tool_annotations`. Status: done for Codex and Pi; Claude open (annotations only in a cached status read).
-13. **Where a turn's cost comes from**: Pi `totalFromProvider`, Grok `costUsdTicks`, ACP `Cost.currency`. Status: done (Grok ticks still wait on 0007 task 11).
+12. **Provider-neutral tool safety hints on approval cards**: Codex MCP `tool_annotations`. Status: done for Codex, Pi and Claude (Claude 2026-11-10: read from the CLI's MCP status when the call is parked; a signed-in check with a real MCP server moved to 7568, 2026-11-10).
+13. **Where a turn's cost comes from**: Pi `totalFromProvider`, Grok `costUsdTicks`, ACP `Cost.currency`. Status: done (Grok ticks still wait on 0007 task 11, whose billed turns are in 7568).
 14. **A transcript notice when a provider could not save the conversation**: Claude `session_writes_lost`, Pi's failed session write. Status: done.
-15. **Grok session writeback**: whether an ACP child uploads sessions to code.grok.com. Status: done (`GROK_STORAGE_MODE=local` for bridge children; whether it outranks remote settings needs a signed-in check, task 9).
+15. **Grok session writeback**: whether an ACP child uploads sessions to code.grok.com. Status: done (`GROK_STORAGE_MODE=local` for bridge children; whether it outranks remote settings needs a signed-in check, moved to 7568 on 2026-11-10).
 
 ### 1. Upgrade decision for each provider
 
@@ -263,7 +263,7 @@ Signed in, in the disposable profile `qa-1031-upgrade` (`dev:test --fixture --he
 - `close-retention-live.spec.ts` (Cursor, OpenCode): blocked before any agent work. This host's `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog covered the page and the environment click timed out. A host firewall rule, not the upgrade; rerun once the rule in that dialog is applied.
 - Pi and Grok: no signed-in run. The host's Pi `auth.json` holds no login, and its Grok login has expired, so the profile could not seed either.
 
-Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move); the macOS sandbox live test; the Linux Claude sandbox probe; the billed coordinator-skills probe; `claude-host-login-refresh.ts`; signed-in sessions for Pi and Grok (no host login) and Cursor/OpenCode close and resume (host firewall); model and effort switches, compaction and sub-agent cards on every provider; `mise run test:agent:goals`.
+Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move; the script was removed with OpenCode 1.x on 2026-11-11, `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`); the macOS sandbox live test; the Linux Claude sandbox probe; `claude-host-login-refresh.ts`. The signed-in checks not run (the billed coordinator-skills probe; signed-in sessions for Pi and Grok; Cursor/OpenCode close and resume, blocked here by the host firewall; model and effort switches, compaction and sub-agent cards on every provider; `mise run test:agent:goals`) moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10, with the host firewall rule.
 
 **Decisions.**
 
@@ -325,6 +325,8 @@ Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move); the 
 **Context.** The hints are MCP tool annotations, so every provider that proxies MCP tools can in principle report them; Claude's `canUseTool` already reports the server (`source` on the shared request, 0007 task 4).
 
 **Investigation.** Codex sends them in the elicitation `_meta` (`tool_name`, `tool_annotations`); `interactions.ts` in the Codex bridge builds the card without reading `_meta`. Whether Claude, Pi or Cursor expose annotations at approval time is unchecked.
+
+Claude, 2026-11-10, against the pinned CLI 2.1.319 with a loopback model and a local MCP server (no credentials): `canUseTool` carries no annotations; `mcpServerStatus()` does. The status lists the server under its configured name and each tool under its bare name (`wipe.disk tool` on `hint.srv x`), while `canUseTool` names the call `mcp__hint_srv_x__wipe_disk_tool` (every character outside `[A-Za-z0-9_-]` becomes `_`) and `mcpServer.name` is the configured name. The status keeps only hints set to `true`, under the shared keys (`readOnly`, `destructive`, `openWorld`); a `false` and `idempotentHint` are dropped. The read answers in a few milliseconds while the CLI waits on `canUseTool`.
 
 **Decisions.**
 
@@ -420,7 +422,28 @@ The shared account gained `expiresAtEstimated?: true`; Claude's date is always m
 
 ### Tasks 11 and 12: enforced in every layer, worded for every source
 
-`humanRequired` and `toolHints` are optional fields on `AgentInteractionRequest`. `ruleEligible` stays the gate, and the rule readers and the enforcer also refuse a `humanRequired` request, so a stale snapshot cannot auto-answer it. The card says "You need to answer this yourself: a saved rule can't approve it." (true for Claude's two markers and Codex's managed rule alike) and drops the session and remember options; for Codex `humanCommand` the backend also rejects a session grant and the bridge degrades one to a one-time accept. Tool hints come from Codex MCP approvals only when `_meta.codex_approval_kind` is `mcp_tool_call`, and from Pi's own MCP client's `tools/list`, captured when the call is parked. Claude's annotations exist only in a cached status read whose tool-name format is unverified, so Claude cards show no tag yet; Cursor has no approval callback and Grok's permission request carries no annotations. Read-only is a neutral grey tag, a contradictory server gets no tag, and hints never change eligibility.
+`humanRequired` and `toolHints` are optional fields on `AgentInteractionRequest`. `ruleEligible` stays the gate, and the rule readers and the enforcer also refuse a `humanRequired` request, so a stale snapshot cannot auto-answer it. The card says "You need to answer this yourself: a saved rule can't approve it." (true for Claude's two markers and Codex's managed rule alike) and drops the session and remember options; for Codex `humanCommand` the backend also rejects a session grant and the bridge degrades one to a one-time accept. Tool hints come from Codex MCP approvals only when `_meta.codex_approval_kind` is `mcp_tool_call`, and from Pi's own MCP client's `tools/list`, captured when the call is parked. Claude's annotations exist only in the CLI's MCP status read (see task 12 below for how they are now read); Cursor has no approval callback and Grok's permission request carries no annotations. Read-only is a neutral grey tag, a contradictory server gets no tag, and hints never change eligibility.
+
+### Task 12: Claude hints from the status read, taken when the call is parked
+
+Recorded 2026-11-10 by the worker that did the Claude half.
+
+- **When to read the status?**
+  - **A live `mcpServerStatus()` read when an `mcp__*` call is parked, bounded at 2 s, with no hints on any failure (chosen).**
+    - Pros: the same moment Pi captures its hints, so the card reflects the tools the CLI currently has; the read measured 1 to 4 ms while the CLI waits on `canUseTool`; a closed or slow CLI only costs the tag.
+    - Cons: one control request per parked MCP approval, and up to 2 s added to parking one if the CLI does not answer.
+  - **Cache the annotations from the MCP panel's reads.**
+    - Pros: no extra request at approval time.
+    - Cons: empty until someone opens the panel, and stale after a server's tools change.
+- **How to match the call to a status row?**
+  - **By `mcpServer.name` from `canUseTool` and the exact call name the CLI builds from the tool's bare name; any ambiguity gives no hints (chosen).**
+    - Pros: never shows a lookalike server's or another tool's tag; two names the CLI writes the same way (`a.b`, `a_b`) are refused, not guessed.
+    - Cons: a server whose call prefix the CLI writes differently (claude.ai connectors may, unobserved) shows no tag.
+  - **Match on the call name's tool suffix alone.**
+    - Pros: would also cover a differently written prefix.
+    - Cons: a tool missing from a stale status could pick up the tag of another tool whose name is its suffix.
+
+The code is `bridges/claude-bridge/src/services/claude-mcp-tool-hints.ts`, called from `turnCanUseTool`; the hints go out as the parked request's `toolHints`, which the backend already forwarded for every bridge. They are display only: `ruleEligible` is computed exactly as before. `claude-mcp-tool-hints.live.test.ts` (slow tier) runs the pinned CLI with a loopback model and fails if a CLI bump changes the names, the annotation keys or the read's timing; when `false` or `idempotent` hints start arriving, the card can use them unchanged. Because the CLI drops `false`, a server that says `readOnlyHint: true, destructiveHint: false` reaches the card as read-only, which is the same tag.
 
 ### Task 13: one rule for combining
 
@@ -437,7 +460,9 @@ Signed out against 1.0.77: `agent stdio` reads `GROK_STORAGE_MODE` (the `--stora
 ## Needs verification
 
 - Task 9's list.
-- Signed in, at the new pins: that Claude results carry `credential_expires_at` and `result_index` (task 10); a Claude ask carrying `suppressAlwaysAllowRule` or `matchedAskRule` (task 11); a Codex MCP approval with `tool_annotations` (task 12, read from Codex source and its tests); billed OpenRouter, Cursor and ACP USD costs (task 13); a real full disk for Claude and Pi (task 14, proved with synthetic frames and `EISDIR` from the real Pi SDK); whether Grok's remote settings can override `GROK_STORAGE_MODE=local` (task 15).
+- The signed-in checks at the new pins for tasks 10 to 15 moved to the
+  [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+  2026-11-10.
 - `initialize_not_first` may only arrive when `CLAUDE_CODE_STARTUP_FAILURE_RESULTS` is set, which the bridge never sets (unverified).
 - Whether an MCP tool card under Claude 2.1.319's default-on MCP tasks shows the CLI's placeholder text.
 
@@ -449,3 +474,4 @@ Signed out against 1.0.77: `agent stdio` reads `GROK_STORAGE_MODE` (the `--stora
 - [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md) (task 4, task 11)
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
 - [upgrade-agents.md](../../development/upgrade-agents.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in part of task 9 with the host firewall rule, and the signed-in checks of tasks 10 to 15) moved there on 2026-11-10.

@@ -894,20 +894,6 @@ export const updateEnvironmentAgentSettingsCommand = defineCommand({
   critical: [],
 });
 
-export const setEnvironmentPendingAgentLaunchCommand = defineCommand({
-  domain: environmentsDomain,
-  name: "set_environment_pending_agent_launch",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    environmentId: Schema.String,
-    pending: Schema.Boolean,
-  }),
-  result: ClientEnvironmentSchema,
-  critical: [],
-});
-
 export const acknowledgeStartupAgentSessionCommand = defineCommand({
   domain: environmentsDomain,
   name: "acknowledge_startup_agent_session",
@@ -918,21 +904,6 @@ export const acknowledgeStartupAgentSessionCommand = defineCommand({
     environmentId: Schema.String,
     providerSessionId: optionalUnknown,
     startedAt: optionalUnknown,
-  }),
-  result: ClientEnvironmentSchema,
-  critical: [],
-});
-
-export const setEnvironmentInitialPromptCommand = defineCommand({
-  domain: environmentsDomain,
-  name: "set_environment_initial_prompt",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    environmentId: Schema.String,
-    initialPrompt: Schema.String,
-    initialPromptAttachments: optionalUnknown,
   }),
   result: ClientEnvironmentSchema,
   critical: [],
@@ -963,21 +934,6 @@ export const updateEnvironmentAllowedDomainsCommand = defineCommand({
     domains: optionalUnknown,
   }),
   result: ClientEnvironmentSchema,
-  critical: [],
-});
-
-/** Answers the saved allowlist, comma-separated. */
-export const addEnvironmentDomainsCommand = defineCommand({
-  domain: environmentsDomain,
-  name: "add_environment_domains",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    environmentId: Schema.String,
-    domains: optionalUnknown,
-  }),
-  result: Schema.String,
   critical: [],
 });
 
@@ -1091,12 +1047,9 @@ export const ENVIRONMENTS_COMMANDS = [
   awaitEnvironmentSetupSessionCommand,
   updatePortMappingsCommand,
   updateEnvironmentAgentSettingsCommand,
-  setEnvironmentPendingAgentLaunchCommand,
   acknowledgeStartupAgentSessionCommand,
-  setEnvironmentInitialPromptCommand,
   getEnvironmentExtensionsCommand,
   updateEnvironmentAllowedDomainsCommand,
-  addEnvironmentDomainsCommand,
   removeEnvironmentDomainsCommand,
   teardownTabCommand,
   reconcileTabTeardownsCommand,

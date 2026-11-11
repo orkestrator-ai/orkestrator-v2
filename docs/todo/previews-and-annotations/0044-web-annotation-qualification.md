@@ -5,26 +5,23 @@
 Analysed 2026-10-27 against `main` at `863b5782`.
 
 Checked against `main` at `ba7cc8d4` (2026-10-25). Tasks 5, 7 and 8 were run
-against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
+against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink). Tasks 6 and 9
+were rechecked, and task 6 run, against `main` at `498b68766` on 2026-11-11
+(Linux, beelink2), with 2580 task 4 and 0124 task 1 (both now retired).
 
 ### Tasks
 
-1. **Human review of sign-offs A to C**: a person reviews the three
-   agent-written sign-off records, answers the gate-scope open questions, and
-   then the README catalogue pointer is dropped. Status: open.
-2. **Remote backend on another host**: desktop on one host captures and stages
-   into a backend on another. Status: blocked (on a second machine; batched in
-   0031).
-3. **iOS wrapper review**: run web review inside the `WKWebView` wrapper on a
-   device or simulator. Status: blocked (on a person entering the gateway token
-   against an HTTPS tailnet profile).
-4. **Native focus and keyboard resolve**: OS-level preview focus, Window-menu
-   focus, and Accept and resolve by keyboard. Status: blocked (on a frontmost
-   host and a request in `awaiting-review` inside the Electron spec).
+1. **Record the human review of sign-offs A to C**: once a person has
+   reviewed the three agent-written sign-off records and answered the
+   gate-scope questions (manual-test checklist 7568), record the outcome and
+   drop the README catalogue pointer. Status: blocked (waits on 7568: 0044
+   task 1).
 5. **Linux re-run after #969 and #983**: the first "Needs verification" item.
    Status: done (2026-11-06, headless; see "Runs on 2026-11-06").
 6. **Quiet-host baselines and targets**: repeat the baselines and decide
-   whether to set targets. Status: open.
+   whether to set targets. Status: done (2026-11-11: baselines re-measured
+   after 0124's change, at a quarter of the earlier load; no targets, as
+   recommended; see "Runs on 2026-11-11").
 7. **Gateway synthetic-capture parity**: the second "Needs verification" item.
    Status: done (2026-11-06: the gateway replays recorded desktop captures,
    which the Electron spec checks on every run).
@@ -37,135 +34,44 @@ against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
 9. **Electron OS-focus assertions on a frontmost host**: the gated `nativeFocus`,
    `getFocusedWebContents()` and `isFocused()` polls run and pass when Electron
    is really frontmost. Moved from to-do 1170 (deleted 2026-11-06).
-   Status: blocked (on a frontmost host, as task 4).
+   Status: open (the recommended host, Linux under Xvfb, needs no person, but
+   none was available on 2026-11-11: beelink2 has no Xvfb and that run's
+   ticket forbade one; headless Electron reports focus unconditionally, so it
+   cannot stand in).
 
 Code items 1 to 6, the keychain item and the create-cost item (moved to
-[0124](0124-web-annotation-commit-cost.md)) are done.
+0124, retired on 2026-11-11 with its numbers in
+[web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost))
+are done.
 
-### 1. Human review of sign-offs A to C
+### 1. Record the human review of sign-offs A to C
 
 **Problem.** The feature is on by default, and its only sign-offs were written
-by a worker agent. Until a person reviews them, "qualified" is a claim, not a
-decision.
-
-**Context.** The "Sign-off records, 2026-10-25" section and the four open
+by a worker agent. The review itself, and the answers to the gate-scope
 questions (macOS and Linux for the native gate; whether remote is in scope;
 whether unit-level fault tests count for gate A; whether WebKit counts for
-iOS). "Related" asks to drop the README catalogue pointer after sign-off.
+iOS), are the reviewer's and moved to the manual-test checklist (7568). What
+stays here is recording the outcome.
 
-**Investigation.** The rollout default is still `enabled`
-(`apps/backend/src/core/web-annotation-rollout.ts:2`, `:122`). The records cite
-evidence from #1250 (`4db5bb2a`). Since then, annotation code changed only in
-`cdaa1bb1` (0124's copy-on-write commits), `182a4031` (test reliability) and
-`1aabf049` (container runtime); none alters the gated flows, but 0124 rewrote
-the storage commit path that milestone A depends on. The pointer still exists
+**Context.** The "Sign-off records, 2026-10-25" section. "Related" asks to
+drop the README catalogue pointer after sign-off. The pointer still exists
 at `docs/README.md:57`, and `docs/architecture/web-page-annotations.md:6`,
 `:550` and `:601` link here. The capability matrix's "Exercised" table
-(`web-page-annotations.md:549-560`) is current. Needs-input and disruption
-were run on Claude only.
+(`web-page-annotations.md:549-560`) is current.
 
-**Decisions.**
+**Investigation.** The rollout default is still `enabled`
+(`apps/backend/src/core/web-annotations/rollout.ts:2`, `:122`). The records cite
+evidence from #1250 (`4db5bb2a`). Since then 0124 rewrote the storage commit
+path that milestone A depends on (`cdaa1bb1`); the 2026-11-06 Linux runs of
+`mise run test:agent:electron` and `mise run test:agent:browser:isolated`
+(task 5) were on `c1724ab7`, which contains it, so the real-stack specs have
+run on the new commit path.
 
-- **What does the reviewer accept as the gate?**
-  - **Accept A to C with the open runs recorded as deferrals in the matrix;
-    unit-level fault and migration tests count for gate A; WebKit counts as
-    the engine-level iOS signal only (recommended).**
-    - Pros: matches what the records already say; lets the file shrink to the
-      hardware runs; keeps the iOS wrapper honestly open.
-    - Cons: real-stack migration and rollback have never run; needs-input on
-      five providers is unproved.
-  - **Require real-stack migration, rollback and multi-provider needs-input
-    before sign-off.**
-    - Pros: stronger evidence for an on-by-default feature.
-    - Cons: new test code and live runs; delays sign-off with no reported
-      defect behind it.
-- **Re-run after 0124's storage rewrite before signing?**
-  - **Yes, one `mise run test:agent:electron` and
-    `mise run test:agent:browser:isolated` on current `main` (recommended).**
-    - Pros: 0124 rewrote every annotation commit; cheap, credential-free.
-    - Cons: needs an isolated profile and an Electron-capable host.
-  - **No; 0124's unit tests ran the full-diff assertion on every commit.**
-    - Pros: no extra run.
-    - Cons: the real-stack specs have not run on the new commit path.
-
-### 2. Remote backend on another host
-
-**Problem.** A desktop staging captures into a backend on a different host has
-never been run. Remote-desktop users are the ones who would see a failure.
-
-**Context.** The gateway cases already stage through the same HTTP invoke
-transport; what remains is two hosts. Assumption 11 and open question 2.
-
-**Investigation.** The command is `web_annotation_asset_stage`
-(`packages/protocol/src/web-annotations.ts:1153`, `:1628`). No test spans two
-hosts.
-
-**Decisions.**
-
-- **Run it, or record it as a deferral?**
-  - **Run it in 0031's two-machine session with 0042's tailnet run
-    (recommended).**
-    - Pros: one setup serves both files; same hardware.
-    - Cons: waits on 0031.
-  - **Record it as a deferral in the matrix and drop it here.**
-    - Pros: the transport is already covered; lets the file close sooner.
-    - Cons: a real remote path (latency, upload size over a WAN) stays unseen.
-
-### 3. iOS wrapper review
-
-**Problem.** iOS review is proved only on Playwright WebKit, not in the
-wrapper users run.
-
-**Context.** The wrapper accepts only HTTPS plus a typed gateway token, which
-agents must never handle (assumption 10).
-
-**Investigation.** HTTPS is enforced in
-`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift:32-34`.
-Capture is hidden off desktop (`canCapture`,
-`apps/web/src/components/browser/annotations/AnnotationPanel.tsx:70`).
-
-**Decisions.**
-
-- **Who runs it?**
-  - **A person, on a simulator against a tailnet-served `dev:test` profile,
-    batched in 0031 (recommended).**
-    - Pros: respects the token rule; a simulator is enough for review-only
-      flows.
-    - Cons: needs a macOS host with Xcode and a person.
-  - **Accept the WebKit run and close the item.**
-    - Pros: no hardware.
-    - Cons: WebKit is not the wrapper (native form, data store, handoff).
-
-### 4. Native focus and keyboard resolve
-
-**Problem.** OS-level focus and resolving by keyboard in the native window are
-unproved; keyboard-only users are the ones at risk.
-
-**Context.** "Found on 2026-10-17". The Electron spec deliberately has no live
-provider; its Codex is a shell probe that only records launches
-(`e2e/agent-testing/web-annotations-electron.spec.ts:132`, `:626`). The
-button is "Accept and resolve"
-(`apps/web/src/components/browser/annotations/RequestCard.tsx:635`); Window
-menu focus is in `apps/desktop/electron/window-menu.ts`.
-
-**Investigation.** `awaiting-review` is reached only through a turn outcome
-(`apps/backend/src/core/web-annotation-dispatch.ts`,
-`web-annotation-service-results.ts`), so the spec cannot get there without a
-provider that completes a turn.
-
-**Decisions.**
-
-- **How to reach `awaiting-review` in the native window?**
-  - **Run once by hand on a frontmost macOS host with a live provider
-    (recommended).**
-    - Pros: no test-only product hooks; also covers OS-level focus, which only
-      a key window can show.
-    - Cons: one-off evidence; needs a dedicated desktop.
-  - **Teach the Codex probe to answer a minimal app-server turn so the spec
-    reaches `awaiting-review` with no credentials.**
-    - Pros: permanent keyboard-resolve coverage in CI.
-    - Cons: a fake app-server protocol to maintain across Codex bumps; still
-      does not prove OS focus on a shared desktop.
+**Steps.** After the reviewer's answer is recorded in 7568: fill each record's
+"Reviewer / date" line, move whatever the reviewer accepts as a deferral (the
+remote backend, the iOS wrapper, native focus and keyboard resolve) into the
+capability matrix in `web-page-annotations.md`, and drop the README catalogue
+pointer.
 
 ### 5. Linux re-run after #969 and #983
 
@@ -199,7 +105,8 @@ specs already had. It then passed in full (16 passed, 2 container opt-ins
 skipped) inside a loopback-only network namespace, after a harness fix (the
 startup-dialog handler). `mise run test:agent:browser:isolated`: every
 annotation case passed; its three failures were two 2340 cases and one
-unrelated CLI case (to-do 7431). Headless means no Wayland or X11 window was exercised;
+unrelated CLI case (to-do 7431 (retired); cause and fix in flake
+[0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)). Headless means no Wayland or X11 window was exercised;
 OS-level focus stays task 9's. Details and decisions under "Runs on
 2026-11-06" and "Assumptions and decisions".
 
@@ -225,6 +132,17 @@ stale.
   - **Set targets from the re-measurement and assert them in the spec.**
     - Pros: a real latency guard.
     - Cons: timing assertions are the flake source already recorded in 0225.
+
+**Outcome (2026-11-11).** Done as recommended, with 0124's run, on beelink2
+(16 cores, load 5 to 14 against ~45 for the 2026-10-25 numbers). The whole
+Electron spec ran headless, and its `baselines` case gave selection → spool
+median 133 ms (p90 151, max 158; 18 captures) and spool → saved median 34 ms
+(p90 66, max 164; 19), with backend `command_ms` create mean 2 / max 6 ms and
+asset stage 2 / 4 ms. The backend create cost is now flat in the collection
+size (0124's profile, recorded in
+[web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost)).
+No target is set. Shared agent hosts are never idle, so a fully quiet run was
+not attempted; see "Assumptions and decisions".
 
 ### 7. Gateway synthetic-capture parity
 
@@ -336,8 +254,9 @@ takes focus from an open dialog, alert or menu (`isFocusHeldElsewhere` in
 `apps/web/src/lib/background-focus.ts`); startup notices return focus through
 `useDialogFocusReturn` (`apps/web/src/lib/dialog-focus.ts`).
 `e2e/agent-testing/webcontents-focus.ts` records view focus, and
-`workspace-realm-electron.spec.ts` has the forced-race step. Task 4 waits on
-the same condition.
+`workspace-realm-electron.spec.ts` has the forced-race step. The hand-run
+native focus and keyboard resolve check (former task 4) is in the manual-test
+checklist (7568).
 
 **Investigation.** Steps:
 
@@ -349,6 +268,14 @@ the same condition.
    `getFocusedWebContents()` polls (including the preview's return after the
    shortcuts dialog) and the annotation keyboard test's `isFocused()`.
 3. Record the results, and decide whether an Xvfb CI job is worth adding.
+
+Rechecked on 2026-11-11 at `498b68766`: still open. beelink2 has no Xvfb
+(`Xvfb` and `xvfb-run` are not installed) and that run's ticket forbade
+installing one or using the user's display. The headless run of the
+annotation spec reported `window-focused true` and
+`preview-focused-while-selecting true` again, which headless Ozone reports
+whether or not anything is frontmost, so it is not evidence for this task.
+Next run: a Linux host with Xvfb installed, or a CI job (step 3).
 
 **Decisions.**
 
@@ -364,8 +291,9 @@ the same condition.
 Web-page annotations shipped in #845 (`964d71f4`, 2026-09-25). They have
 unit, contract and component tests, plus real-stack specs. Milestones A–C
 have sign-off records written on 2026-10-25 by a worker agent, awaiting human
-review; three runs remain open (a remote backend on another host, the iOS
-wrapper, native focus and keyboard resolve). The evidence is the part mocks cannot give:
+review; three runs that need a person or a second machine (a remote backend on
+another host, the iOS wrapper, native focus and keyboard resolve) are in the
+manual-test checklist (7568). The evidence is the part mocks cannot give:
 the native Electron window beside the Notes column, live agents for each
 provider, Docker and remote workspaces, and review from web and iOS clients.
 This file lists those runs, the small amount of test code they need, the
@@ -381,7 +309,7 @@ that names what was actually tested.
   `-threads.ts`, `-requests.ts`, `-results.ts`); #967 moved the protocol
   fixtures to `packages/protocol/src/testing/web-annotations-fixtures.ts`;
   #947 added a Home native-preview test to the Electron spec.
-- The rollout switch (`apps/backend/src/core/web-annotation-rollout.ts`)
+- The rollout switch (`apps/backend/src/core/web-annotations/rollout.ts`)
   defaults to `enabled`. `ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it.
   `read-only` blocks every `author` command but keeps reads, resolution, drafts
   and recovery. `disabled` keeps only capabilities, rollout and metrics. In
@@ -397,7 +325,10 @@ that names what was actually tested.
   - The real renderer draws the Notes column beside the native view. The view
     must sit on its host at app zoom 0.8, 1 and 1.25 and never cover the
     column, its resize handle or a focus ring (within the one DIP that integer
-    view bounds allow). A menu and a dialog hide the view. At 150% app zoom,
+    view bounds allow). A modal dialog hides the view; since #2110 a menu
+    hides it only where the two overlap. The spec checks both: the server
+    menu opens beside the view and leaves it showing, and the same open menu,
+    moved over the preview host, hides it. At 150% app zoom,
     and in a 900 px window, the narrow Preview/Notes switch takes over.
   - Create and send by keyboard alone.
   - Capture pixels and the selection highlight stay on the target at preview
@@ -431,12 +362,13 @@ that names what was actually tested.
   untouched compose draft (`web-annotation-dispatch-flow.test.ts`). So are the
   stale-result acceptance race (`web-annotation-service-results.test.ts`) and
   migration crash and retry (`web-annotation-migration*.test.ts`).
-- `WebAnnotationMetrics` (`apps/backend/src/core/web-annotation-metrics.ts`),
+- `WebAnnotationMetrics` (`apps/backend/src/core/web-annotations/metrics.ts`),
   read through `web_annotations_metrics`, has `command_ms`,
   `request_enqueue_ms`, `request_dispatch_ms` and `request_duration_ms`
   histograms. Capture-to-saved is measured at the client by the Electron
   spec's baseline case (selection → spool, spool → backend commit); see
-  "Baselines" under "Runs on 2026-10-25".
+  "Runs on 2026-11-11" (the latest) and "Baselines" under "Runs on
+  2026-10-25".
 - Since 2026-11-06 the Electron spec (18 tests) runs headless on Linux with
   `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` through
   `playwright.electron-headless.config.ts`. It has a real Vite 8 dev-server
@@ -444,6 +376,10 @@ that names what was actually tested.
   `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) and a case that checks the
   recorded desktop captures the gateway spec replays
   (`web-annotations-native-captures.json`, task 7).
+- Since 2026-11-11 (19 tests) it also saves an element note and a quote inside
+  the fixture's open shadow root (`/pricing`, `fixture-shadow-card`) from the
+  desktop's own preview view, then pins both and shows the element note on
+  the page again after a reload (2580 task 4, retired).
 
 ## Outstanding work
 
@@ -512,16 +448,10 @@ Test code the runs below depend on.
   their reasons.
 - Done 2026-10-24 on node mbp3 (see "Runs on 2026-10-24"): the live implement
   test passed for Grok and Pi (and again for the other four).
-- **Open — remote backend on another host.** Connect the desktop to a backend
-  on another host, capture, and confirm that `web_annotation_asset_stage` and
-  materialization in the remote workspace both work. Not run: this worker had
-  one machine (arktech-mini) and no second backend host. What the 2026-10-25
-  runs do cover: every gateway case stages its PNG with
-  `web_annotation_asset_stage` over the gateway's HTTP `/__orkestrator/invoke`,
-  the same transport a desktop uses for a remote backend, and the backend then
-  materializes it into a local worktree and a Docker workspace. What remains
-  is a desktop process on one host capturing and staging into a backend on
-  another (batched in 0031).
+- Remote backend on another host: not run (one machine). Every gateway case
+  stages its PNG with `web_annotation_asset_stage` over the gateway's HTTP
+  `/__orkestrator/invoke`, the same transport a desktop uses for a remote
+  backend. The two-host run moved to the manual-test checklist (7568).
 - Done 2026-10-25 on Claude (see "Runs on 2026-10-25"): approval across
   disruption, `web-annotations-approval-live.spec.ts` (opt-in
   `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1`; it restarts the
@@ -532,7 +462,7 @@ Test code the runs below depend on.
   - menus, dialogs and focus rings are never covered;
   - create, send and resolve work by keyboard alone (create and send only;
     resolve needs a request in `awaiting-review`, which needs a live agent in
-    the Electron spec — still open, see "Native focus and keyboard resolve");
+    the Electron spec; the hand run moved to the manual-test checklist, 7568);
   - the narrow (under 720 px) Preview/Notes switch works;
   - screenshot and highlight alignment holds at the zoom and DPR values
     above;
@@ -546,13 +476,10 @@ Test code the runs below depend on.
   from the web client with capture shown as unavailable` (gateway browser
   client, Chromium and WebKit): the Notes column shows the "needs the
   Orkestrator desktop app" notice, the note and its saved image load from the
-  backend, and Show on page is not offered. **Open — the iOS wrapper.** Not
-  run: the wrapper accepts only an HTTPS tailnet origin plus the gateway token
-  typed into its native form, and an agent must never handle the gateway
-  token; plain-HTTP loopback profiles are refused by design. The WebKit run is
-  the engine-level substitute; the wrapper run needs a person (or a
-  tailnet-served profile and a token entered by hand) on a simulator or
-  device.
+  backend, and Show on page is not offered. The iOS wrapper run needs a
+  person to type the gateway token (agents must never handle it) and moved to
+  the manual-test checklist (7568); the WebKit run is the engine-level
+  substitute.
 - Done 2026-10-25: comparison cases. Matching route and viewport (no
   difference), a different route, a different viewport, an animated target
   and a loading font (`unstable`), an expired sign-in (`route` + `target`), and
@@ -561,7 +488,9 @@ Test code the runs below depend on.
   `outside-workspace`; `unavailable` is covered at unit level for a failed or
   malformed container check, `outside-workspace` on the real stack with a
   symlink).
-- Done 2026-10-25: baselines recorded (below). No target is set yet.
+- Done 2026-10-25: baselines recorded (below). Re-measured on 2026-11-11
+  after 0124's commit change (see "Runs on 2026-11-11"); no targets are set
+  (task 6).
 - Done 2026-11-06 on Linux (see "Runs on 2026-11-06"): the Electron spec
   (headless) and the isolated browser suite after #969 and #983, the gateway's
   Docker cases, the Electron container cases, and source hints from a real
@@ -572,9 +501,8 @@ Test code the runs below depend on.
   [web-page-annotations.md](../../architecture/web-page-annotations.md) now
   names what was actually tested.
 
-Batch the remaining remote, iOS and native-focus runs with other todo files
-through
-[0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+The remote, iOS and native-focus runs moved to the manual-test checklist
+(7568) on 2026-11-10.
 
 ### Found on 2026-10-17
 
@@ -589,7 +517,8 @@ through
   (safe storage) before opening the first window; answer the keychain prompt
   to continue" (`connection-manager.ts`, three unit tests). It still awaits
   the check, so a late answer keeps persistent storage.
-- **Native focus and keyboard resolve (medium, qualification). Open.** Qualify
+- **Native focus and keyboard resolve (medium, qualification). Moved to the
+  manual-test checklist (7568) on 2026-11-10.** Qualify
   the preview's OS-level focus during selection, the `electron-main`
   Window-menu focus check, and "Accept and resolve" by keyboard on a host
   where the app can be frontmost and a live agent can bring a request to
@@ -597,7 +526,7 @@ through
   (as on 2026-10-17) and the Electron spec deliberately has no live provider
   (its Codex probe refuses launches).
 - **Create cost grows with the collection (low). Located; moved to
-  [0124](0124-web-annotation-commit-cost.md).** Every commit deep-copies the
+  0124 (retired 2026-11-11).** Every commit deep-copies the
   manifest (`structuredClone` in `commitManifest`) and re-serializes every
   index row to diff it (`planRows`); each is about half the cost at 1,900
   notes. The fix is a storage redesign, so it is new work in 0124. The bench
@@ -685,6 +614,57 @@ Migration and rollback verification: not run
 Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
 ```
 
+### Runs on 2026-11-11 (Linux, beelink2)
+
+Linux 7.2.15 (Omarchy, x86_64, 16 logical CPUs), Electron 45.2.3, Playwright
+1.65.0; branch `web-annotation-tasks-2b461fddc9da-r1` from `main` at
+`498b68766`. Other agent work was running throughout (load average 5 to 14).
+No display, Docker, provider turn, login or host credential was used. The
+Electron runs were headless (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`,
+display variables removed, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) inside
+the loopback-only namespace from
+[agent-testing.md](../../development/agent-testing.md), each through
+`mise run test:logged`. The temporary `93018933` worktree used for 0124's
+"before" side was removed afterwards.
+
+| Command (abbreviated) | Result |
+| --- | --- |
+| `web-annotations-electron.spec.ts --grep 'open shadow root are saved\|real Notes column shrinks'` | Pass: 2 passed |
+| `--grep 'real Notes column shrinks'` with the spec as on `main` (negative control) | Fail: `expect.poll(...visible).toBe(false)` timed out with the menu open; since #2110 the view stays visible beside a menu that does not overlap it |
+| `--grep 'real Notes column shrinks'` after review added the covered-menu step | Pass: 1 passed |
+| The same, with `overlayCoversHost` temporarily answering "not covered" for every menu (negative control, reverted) | Fail: the covered step timed out on `view over the menu` |
+| Whole `web-annotations-electron.spec.ts` | Pass: 17 passed, 2 skipped (container opt-ins), 90 s |
+| `bun scripts/web-annotation-commit-profile.ts --json`, four interleaved rounds on `93018933` and on this branch | Recorded in [web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost): at 1,900 notes 26.3–32.8 ms before, 3.8–4.1 ms after; 6 rows serialized and 5 collections copied at every size |
+| `web-annotation-payloads.bench.test.ts` on both checkouts | Pass both (6 tests). Growth batches 29 / 71 / 110 ms before, 20 / 21 / 25 ms after |
+
+Shadow root (2580 task 4), from the desktop's preview view:
+
+| Check | Result |
+| --- | --- |
+| Element mode, trusted click on the button in `fixture-shadow-card` | Captured as `button` with scope `shadow` (`fixture-shadow-card`), saved |
+| Text mode, native drag across the root's paragraph | Quote `Shadow root card`, container scope `shadow`, saved |
+| Pins built from the stored notes, before a reload | Element `matched/semantic-context` on the button; quote `matched/text-quote` inside the paragraph |
+| After a reload (a new document; the page defines the element again) | The same for both |
+| Both pins drawn together, then Show on page from the element note | Both `matched`; `shown`, `navigated: false` |
+
+Native window, menu and dialog (the changed assertion): the server menu opened
+at (12, 81, 288 × 124) DIP and the native view at (381, 162, 695 × 774) stayed
+visible beside it (`covered: false`, recorded as `menu-beside-view`). Moved by
+a CSS `translate` to (405, 186) DIP, over the preview host, the same open menu
+hid the view (`covered: true`, `menu-over-view`); moved back, the view showed
+again. The "New connection" dialog hid the view, and after Escape it was back
+on its host.
+
+Baselines: under task 6.
+
+Findings:
+
+- **The native-window case failed on `main` since #2110 (fixed).** It expected
+  any menu to hide the preview; #2110 hides the view only under an overlay
+  that covers it. The case now requires the view hidden when the menu overlaps
+  it and visible when it does not, and records the geometry
+  (`menu-beside-view`, `menu-over-view`). The dialog step is unchanged.
+
 ### Runs on 2026-11-06 (Linux, beelink)
 
 Linux 7.1.8 (Arch, x86_64, 16 logical CPUs), Docker Engine 29.9.2, Electron
@@ -728,7 +708,7 @@ Reviewer / date: Claude (worker agent), 2026-11-06; awaiting human review
 | The two container cases, host namespace, pool shim on `PATH`, before the startup recovery | Fail twice in `beforeAll` (2340: 60–120 `ERR_NETWORK_CHANGED` lines); inside the namespace the environment could not be created (`resource-exhausted`: no free Docker address pool) |
 | The two container cases, host namespace, with the startup recovery | Pass: 2 passed, 50 s; each start reloaded once after `ERR_NETWORK_CHANGED`. Stored flags `[true, false]` (fixture HTML) and `[true, true]` (Vite app) |
 | Whole spec with the container opt-in, host namespace | Fail twice: once a descendant outlived a graceful quit (new flake [7432](../../tests/flaky-tests/previews-annotations-and-gateway/7432-annotation-restart-electron-child-outlives-quit.md), no `ERR_NETWORK_CHANGED`); once 2340 after a recovered startup (72 lines, 6 failed lazy imports when Kanban loaded) |
-| `mise run test:agent:browser:isolated` | 49 passed, 3 failed, 111 skipped (opt-in live, Docker and container cases), 1,057 s. Every annotation gateway case that runs there passed: overlapping batches, the count bound, evidence in the local worktree, web review of a desktop capture, the metrics baseline. Failures, none in annotation code: both `host maintenance rehydrates task completion while Settings is closed` cases (2340: 17 and 139 `ERR_NETWORK_CHANGED`; both passed rerun alone, 3.6 and 3.7 s) and `a CLI-initialized project and its cascade removal reach an open renderer` (failed again alone, deterministic: [to-do 7431](../cross-cutting/7431-cli-ui-cascade-removal-collapse-button.md)) |
+| `mise run test:agent:browser:isolated` | 49 passed, 3 failed, 111 skipped (opt-in live, Docker and container cases), 1,057 s. Every annotation gateway case that runs there passed: overlapping batches, the count bound, evidence in the local worktree, web review of a desktop capture, the metrics baseline. Failures, none in annotation code: both `host maintenance rehydrates task completion while Settings is closed` cases (2340: 17 and 139 `ERR_NETWORK_CHANGED`; both passed rerun alone, 3.6 and 3.7 s) and `a CLI-initialized project and its cascade removal reach an open renderer` (failed again alone, deterministic: to-do 7431 (retired); the helper raced the empty-project auto-collapse, fixed in flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)) |
 | `test:agent:docker` selection of `web-annotations-gateway.spec.ts`, profile `q0044-docker` (`--fixture-environments local,container`, credential-free, pool shim on `PATH`) | Pass: 2 passed, 1 skipped (live), 257 s. Evidence written as `node` at `/workspace/.orkestrator/annotations/<request>-<digest>.png`; container checks `exists,exists,missing,outside-workspace`; evidence removed 240 s after settlement; source hints `[true, false, false]` |
 | Focused unit tests | `web-annotations-native-captures.test.ts` 4 passed; `electron-startup-dialogs.test.ts` 2 passed, and fails against the old handler (negative control); `packaged-electron-app.test.ts` and `electron-display-setup.test.ts` pass; `source-hint-emitter-doc`, `source-hint-emitter-vite.integration` and `browser-preview-source-hints` pass |
 
@@ -761,7 +741,9 @@ Findings (fixed on this branch unless stated):
   local cases run in a loopback-only namespace; the container cases run in the
   host namespace with the startup recovery.
 - **The CLI cascade-removal browser case fails deterministically here** (to-do
-  7431; not investigated).
+  7431 (retired)). Its helper raced the sidebar's auto-collapse of an empty
+  project; fixed the same day, see flake
+  [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md).
 
 ### Runs on 2026-10-25 (macOS, arktech-mini)
 
@@ -972,8 +954,8 @@ Findings:
   unparseable logins dropped. When nothing usable remains, the launcher warns
   ("Grok is signed out in this profile: …") and seeds nothing. Containers
   now get the same access-only copy (2026-10-21; see "Single-use refresh
-  tokens" in
-  [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  tokens" in to-do 0018, retired 2026-11-11; now described in
+  [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 - **`results.json` kept the gateway cookie (fixed).** Playwright's JSON
   reporter writes after global teardown, so the sanitizer never saw
   `results.json`. A request that failed when the backend went away left
@@ -1326,7 +1308,7 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
 - Keep unverified capabilities disabled where the missing evidence affects
   safety or correctness.
 - The default stays `enabled` (decided 2026-10-15). Dispatch publishes into the
-  same per-tab prompt queue as chat sends (`web-annotation-dispatch.ts`).
+  same per-tab prompt queue as chat sends (`web-annotations/dispatch.ts`).
   Annotation-specific failures show on the request card (`unknown`, Answer in
   chat, a sign-in reason, an empty change) rather than losing data. Settings ›
   Web annotations or `ORKESTRATOR_WEB_ANNOTATIONS_MODE` rolls it back. Holding
@@ -1336,7 +1318,7 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   Claude, Codex, Cursor and OpenCode pass; Grok and Pi had no login and held
   safely in `queued` with the reason; no trigger appeared.
 - Rollback must stop new operations while keeping reads, spool recovery and
-  reconciliation of requests already sent. `web-annotation-rollout.ts` already
+  reconciliation of requests already sent. `web-annotations/rollout.ts` already
   behaves this way; any rollout test must keep it.
 - Initial-release targets from the plan: no duplicate execution under fault
   injection, deterministic recovery at every acknowledged boundary, and
@@ -1346,6 +1328,63 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   assumed SLA.
 
 ## Assumptions and decisions
+
+### Task 6: baselines only, from a shared host at a quarter of the earlier load (2026-11-11)
+
+Options: wait for an idle machine; re-measure here and record baselines only;
+set targets and assert them. Chose the second, the analysis's recommendation.
+Pros: the numbers now reflect 0124's commit change and a host at load 5 to
+14 rather than ~45; no timing assertion is added to a spec whose timing
+cases are already a recorded flake source (0225). Cons: the absolute figures
+still come from a shared host; if a target is ever wanted it needs its own
+run on an idle machine, and nothing here enforces latency.
+
+### 2580 task 4: the desktop's preview view, headless (2026-11-11)
+
+2580 recommended adding a web-component page to the fixture and running it
+through this file's desktop checklist. The fixture already had one (the open
+root on `/pricing`), so the case was added to the Electron spec instead of a
+hand run. Pros: it exercises what the Chromium check could not (the
+preview's isolated world, the main-side parse, backend storage and a reload)
+and runs on every Electron run. Cons: it ran headless, not in a Wayland, X11
+or macOS window; that gap is task 9's and the manual checklist's (7568, 0044
+task 4), not specific to shadow roots. 2580 was retired with it.
+
+### 0124 task 1: closed with a second shared-host run (2026-11-11)
+
+0124 owed its before/after commit profile and payload bench on a quiet host.
+Options: keep the file open for an idle developer machine; run the pair here
+and retire it. Chose to run it here (four interleaved profile rounds per side
+on a temporary `93018933` worktree, at load 7 to 10) and retire the file, with
+the table in
+[web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost).
+Pros: a second machine reproduces the 2026-10-26 proportions (about 7x less
+CPU per create at 1,900 notes, flat in the collection size); the regression
+guard is the bench's row-count assertion, which does not depend on timing.
+Cons: no idle-machine absolute figures exist; the doc says to read the
+proportions.
+
+### The native-window menu step follows #2110 (2026-11-11)
+
+Options: restore "a menu always hides the view"; assert overlap-based hiding.
+Chose the second, because #2110 changed the product deliberately (a menu
+beside the view no longer blanks it) and the invariant that matters is that
+the view never paints over a menu or dialog. The step checks both branches
+of the overlap rule from the measured geometry, so it still fails if a
+covering menu leaves the view visible.
+
+No menu in the browser tab opens over the view at the case's window size: the
+server menu opens in the sidebar. Review found the covered branch therefore
+never ran on the real stack. Options: rely on the unit tests in
+`browser-tab-hooks.test.tsx` and reword the claim; resize or zoom the window
+until a real menu happens to overlap; move the open server menu over the
+preview host with a CSS `translate`. Chose the last: it keeps the real menu,
+the renderer's overlay watcher (which rechecks geometry on a style change, as
+when Floating UI moves a menu), the IPC and main's `setVisible`, and does not
+depend on a layout that may change. Radix positions the menu through its
+popper wrapper's `transform`, so the `translate` on the menu itself is not
+overwritten. The positioning is synthetic; a real menu that opens over the
+view is still worth adding if one appears.
 
 ### Task 5: run the Electron spec headless, in a loopback-only namespace (2026-11-06)
 
@@ -1507,37 +1546,28 @@ Made on 2026-10-25 without the user, to be validated.
     wrapper and native focus: qualification of secondary platforms of a
     feature on by default, with its main gates now signed off.
 
-## Open questions
-
-- Is macOS (the primary development host) required as well as Linux for the
-  native-window gate?
-- Is the remote-backend run in scope now, or a deferral recorded in the
-  matrix?
-- Do the unit-level fault and race tests count for gate A, or does gate A need
-  real-stack runs of the acceptance race and migration restart too?
-- Does the WebKit run of the web review case count for the iOS gate, or must
-  the `WKWebView` wrapper itself be run by a person with the gateway token?
-
 ## Needs verification
 
 - Linux with a real window. The 2026-11-06 Linux runs were headless (Ozone
   headless, GPU off), so Wayland and X11 window behaviour and OS focus are
   unverified there (task 9).
-- The baselines were taken on a host at load ~45; repeat them on a quiet host
-  before setting targets.
 
 ## Related
 
-- [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md),
-  [0124-web-annotation-commit-cost.md](0124-web-annotation-commit-cost.md).
+- [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md).
+  Retired 2026-11-11: 0124 (commit cost; its numbers are in
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost))
+  and 2580 (shadow-root follow-ups; its last task's run is in "Runs on
+  2026-11-11").
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.
-- [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker fixtures.
 - [web-page-annotations.md](../../architecture/web-page-annotations.md),
   including §"Request states" and §"Anchors and pins".
 - Living-doc drift to fix: the `docs/README.md` catalogue row points here for
   the real-stack gates; drop that pointer after sign-off.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the review and gate-scope answers of task 1, tasks 2, 3 and 4) moved there on 2026-11-10.
 
 ## Replaces
 

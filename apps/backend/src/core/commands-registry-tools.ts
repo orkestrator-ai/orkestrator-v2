@@ -1,8 +1,11 @@
 import path from "node:path";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
-import { createHostExtensionCommandRunner } from "./commands-agent-support.js";
+import {
+  createHostExtensionCommandRunner,
+  resolveManagedBinary,
+} from "./commands-agent-support.js";
 import { discoverAgentPlugins } from "./extension-discovery.js";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.js";
 import {
@@ -29,7 +32,6 @@ import {
   checkPiCliCommand,
   getAvailableAiCliCommand,
   getContainerGithubCredentialStatusCommand,
-  getCredentialStatusCommand,
   getGithubCliLoginCommand,
   getGithubCliStatusCommand,
   hasClaudeCredentialsCommand,
@@ -72,11 +74,15 @@ async function anyPathExists(candidates: string[]): Promise<boolean> {
   return false;
 }
 
-export function registerToolingCommands(
-  register: CommandRegistrar,
-  dependencies: RegistryDependencies,
-): void {
-  const { commands } = dependencies;
+/**
+ * OpenCode is the managed `opencode2` only: it has no PATH fallback, because
+ * an `opencode` on PATH is usually a 1.x install (`resolveOpenCode2Binary`).
+ */
+async function hasManagedOpenCode(context: CommandContext): Promise<boolean> {
+  return Boolean(resolveManagedBinary(context, "opencode2"));
+}
+
+export function registerToolingCommands(register: CommandRegistrar): void {
   register(listAgentSkillsCommand, async (args, context) => {
     const provider = asAgentSkillProvider(args.provider);
     if (context.runtimeFlavor === "agent-test") {
@@ -133,10 +139,6 @@ export function registerToolingCommands(
       path.join(login.home, ".claude.json"),
     ]);
   });
-  register(getCredentialStatusCommand, async (_args, context) => ({
-    available: (await commands.get("has_claude_credentials")?.({}, context)) as boolean | undefined,
-    expiresAt: null,
-  }));
   register(checkClaudeCliCommand, (_args, context) => checkHostTool(context, "claude"));
   register(checkClaudeConfigCommand, (_args, context) => {
     const login = claudeLoginHome(context);
@@ -149,7 +151,7 @@ export function registerToolingCommands(
   });
   register(checkOpencodeCliCommand, (_args, context) => {
     compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return checkHostTool(context, "opencode");
+    return hasManagedOpenCode(context);
   });
   register(checkCodexCliCommand, (_args, context) => {
     compatibilityPathUsage.record("retired-command.provider-cli-check");
@@ -190,7 +192,7 @@ export function registerToolingCommands(
     checkAnyAiCliCommand,
     async (_args, context) =>
       (await checkHostTool(context, "claude")) ||
-      (await checkHostTool(context, "opencode")) ||
+      (await hasManagedOpenCode(context)) ||
       (await checkHostTool(context, "codex")) ||
       (await hasCursorSdkBridge(context)) ||
       (await hasManagedAcpBinary(context, "grok")) ||
@@ -199,7 +201,7 @@ export function registerToolingCommands(
   register(getAvailableAiCliCommand, async (_args, context) =>
     (await checkHostTool(context, "claude"))
       ? "claude"
-      : (await checkHostTool(context, "opencode"))
+      : (await hasManagedOpenCode(context))
         ? "opencode"
         : (await checkHostTool(context, "codex"))
           ? "codex"

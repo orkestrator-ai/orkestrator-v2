@@ -498,6 +498,76 @@ describe("ArtifactLiveHost (desktop host)", () => {
   });
 });
 
+describe("ArtifactLiveHost (desktop host) overlays", () => {
+  const rect = (left: number, top: number, width: number, height: number) => () =>
+    ({
+      x: left,
+      y: top,
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+
+  test("hides the view for a modal anywhere, and for a listbox only over its frame area", async () => {
+    const api: ArtifactHostApi = {
+      open: mock(async () => ({ ok: true as const })),
+      setBounds: mock(async () => {}),
+      setVisible: mock(async () => {}),
+      postTheme: mock(async () => {}),
+      close: mock(async () => {}),
+      onEvent: () => () => undefined,
+    };
+    (window as { orkestrator?: unknown }).orkestrator = { artifactHost: api };
+    render(<ArtifactLiveHost />);
+    act(() => {
+      useArtifactLiveHostStore.getState().request(owner(), target("a"));
+    });
+    await waitFor(() => expect(api.open).toHaveBeenCalled());
+    const hostId = useArtifactLiveHostStore.getState().active!.hostId;
+    const area = document.querySelector<HTMLElement>('[data-artifact-live-frame-area="true"]')!;
+    area.getBoundingClientRect = rect(700, 140, 800, 900);
+    const setVisible = api.setVisible as ReturnType<typeof mock>;
+    const lastVisible = () => setVisible.mock.calls.at(-1)?.[1];
+    // In the panel the view is shown whenever nothing blocks it.
+    act(() => useArtifactLiveHostStore.getState().setPlacement("panel"));
+    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(hostId, true));
+
+    const listbox = document.createElement("div");
+    listbox.setAttribute("role", "listbox");
+    listbox.getBoundingClientRect = rect(320, 860, 340, 160);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.getBoundingClientRect = rect(100, 300, 400, 300);
+    try {
+      // A listbox beside the frame area leaves the view showing.
+      const callsBefore = setVisible.mock.calls.length;
+      document.body.append(listbox);
+      fireEvent.transitionRun(listbox);
+      await act(async () => undefined);
+      expect(setVisible.mock.calls.length).toBe(callsBefore);
+      expect(lastVisible()).toBe(true);
+
+      // Over it, it hides the view.
+      listbox.getBoundingClientRect = rect(900, 860, 340, 160);
+      fireEvent.transitionEnd(listbox);
+      await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(hostId, false));
+      listbox.remove();
+      await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(hostId, true));
+
+      // A modal dialog hides it even though its content box misses the area.
+      document.body.append(dialog);
+      await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(hostId, false));
+    } finally {
+      listbox.remove();
+      dialog.remove();
+    }
+  });
+});
+
 describe("ArtifactLiveHost scope invalidation", () => {
   const environment = (id: string) => ({ id, projectId: "p1", order: 0 }) as unknown as Environment;
 

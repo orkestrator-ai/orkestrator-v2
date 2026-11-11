@@ -24,14 +24,14 @@ pins undercut one of them is it raised below (task 1).
 1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: done (pins, verification note and Codex-goals wording refreshed; see Assumptions and decisions).
 2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: done (`refactor(claude-bridge): delete dead compact-boundary guard`).
 3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
-4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (depends on 0001's live runs) for re-arm; provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
+4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: blocked (re-arm waits on 7568: 0001 tasks 3 to 6, the real-login live runs, which moved there from 0001 on 2026-11-10); provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
-8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done (custom instructions 2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi; 2026-11-06: Stop ends a Pi compaction through the cancel routes, and an Auto-compact composer toggle per session that never writes Pi's settings file). Live check on a signed-in Pi in [7280](7280-pi-compaction-controls-live-check.md).
+8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done (custom instructions 2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi; 2026-11-06: Stop ends a Pi compaction through the cancel routes, and an Auto-compact composer toggle per session that never writes Pi's settings file). Live check on a signed-in Pi was to-do 7280 (retired 2026-11-10); how it works is in [native-agent-commands.md](../../architecture/native-agent-commands.md).
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
 10. **Grok MCP elicitation**: `mcp-form` and `mcp-url` cards over `_x.ai/mcp/elicit`. Status: done (2026-10-31; proved signed in on 1.0.67 through the bridge).
-11. **Grok `costUsdTicks` qualification**: two billed Grok turns to establish the tick unit. Status: open (Grok documents 10¹⁰ ticks per USD for `grok sessions`; whether the ACP field is the same quantity, per turn or cumulative, still needs billed turns).
+11. **Grok `costUsdTicks` qualification**: once two billed Grok turns establish the tick unit, record the conversion in the `usage.ts` comment and make `parseUsdCost` accept ticks. Status: blocked (waits on 7568: 0007 task 11, the billed Grok turns).
 12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: done for `find.*` (moved to "Decided out"); Session V2 stays with 0008.
 13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: done (`docs(agent-engines): fix Claude compatibility surface and Grok ACP drift`).
 
@@ -120,7 +120,7 @@ Re-arm is still untouched.
 **Decisions.**
 
 - **Adopt re-arm?**
-  - **Yes, after 0001's live runs, re-arming as a fresh card that still denies on timeout (recommended).**
+  - **Yes, after 0001's live runs (now 7568, 0001 tasks 3 to 6), re-arming as a fresh card that still denies on timeout (recommended).**
     - Pros: closes a "lost prompt" window after warm-CLI restarts (0005 made those more common).
     - Cons: risk of showing a card for a request the CLI has already answered; needs careful tests.
   - **No; treat a restart as denying everything pending.**
@@ -268,21 +268,13 @@ Probed live 2026-10-31 on 1.0.67: `agent stdio` does forward both modes, the ans
 
 ### 11. Grok `costUsdTicks` qualification
 
-**Problem.** Grok turns show no cost because the tick unit is undocumented.
+**Problem.** Grok turns show no cost because the tick unit is not confirmed for ACP.
 
-**Context.** Batched with 0031's live provider runs.
+**Context.** Grok documents 10¹⁰ ticks per USD for `grok sessions` and headless output; whether ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative, needs two billed turns of different sizes. That run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (2026-11-10).
 
-**Investigation.** Still ignored (`bridges/acp-bridge/src/usage.ts:87,154`). The "undocumented unit" premise is out of date: the help text bundled in both Grok 1.0.67 and 1.0.70 says "`costUsdTicks` is 10¹⁰ ticks per USD (divide by `1e10` for dollars)" for `grok sessions` output, and headless mode's `total_cost_usd_ticks` is "1 USD = 10^10 ticks" (read from the binaries' strings, 2026-10-30). The fixture in `usage.test.ts` fits that unit. Still unverified: that ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative (the bridge treats ACP cost as a cumulative session snapshot).
+**Investigation.** Ticks are still ignored (`bridges/acp-bridge/src/usage.ts`); the fixture in `usage.test.ts` fits the documented unit, and the bridge treats ACP cost as a cumulative session snapshot.
 
-**Decisions.**
-
-- **What counts as a pass?**
-  - **Two billed turns of different sizes whose tick ratio matches the billed ratio, recorded in the `usage.ts` comment (recommended).**
-    - Pros: one turn cannot distinguish a scale from an offset.
-    - Cons: twice the spend; billing dashboards may round small amounts.
-  - **One billed turn, as the file says.**
-    - Pros: cheapest.
-    - Cons: a single sample can mislead.
+**Decisions.** None left here: once the checklist run records both samples, write the conversion, the samples and the date in the `usage.ts` comment and change `parseUsdCost` to accept ticks (per turn or cumulative, as the run shows).
 
 ### 12. OpenCode `find.*` and Session V2 features
 
@@ -590,9 +582,11 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
 ## Current state
 
 - Pins (upgraded 2026-11-06, [1031](1031-provider-upgrade-2026-11-06.md)):
-  Claude Agent SDK `0.3.319` / CLI `2.1.319`, Codex `0.167.0`, OpenCode SDK and
-  CLI `1.19.5`, `@cursor/sdk` `1.3.1`, Pi `1.5.0`, Grok `1.0.77`,
-  `@agentclientprotocol/sdk` `2.4.0`. `tests/unit/version-drift.test.ts` keeps
+  Claude Agent SDK `0.3.319` / CLI `2.1.319`, Codex `0.167.0`, `@cursor/sdk`
+  `1.3.1`, Pi `1.5.0`, Grok `1.0.77`, `@agentclientprotocol/sdk` `2.4.0`.
+  OpenCode is the 2.x binary `opencode2` `2.2.6` with no SDK
+  (`packages/toolchain/src/manifest.ts`): the 1.x SDK and CLI `1.19.5` were
+  retired on 2026-11-11 (see 0008 "OpenCode 1.x retired (2026-11-11)"). `tests/unit/version-drift.test.ts` keeps
   every mirror of each pin in step.
 - Drift detection:
   - Each bridge dispatches over its vendor's typed union and turns an unknown
@@ -600,12 +594,14 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
     (`NativeAgentRuntimeDrift` and the `advisory` notice in
     `packages/protocol/src/native-agent.ts`).
   - Both provider kinds implement `runtimeHealth?()` (`http-bridge-provider.ts`,
-    `opencode-provider.ts`), and every bridge serves
+    and `opencode2/provider.ts` since the 1.x `opencode-provider.ts` was
+    retired on 2026-11-11), and every bridge serves
     `GET /session/:id/runtime-health`.
   - Per-bridge tests feed invented variants: for example
     `bridges/claude-bridge/src/sdk-compatibility.test.ts`,
-    `bridges/acp-bridge/src/acp-drift.test.ts` and
-    `apps/backend/src/core/opencode-drift.test.ts`.
+    `bridges/acp-bridge/src/acp-drift.test.ts`. The OpenCode 1.x one,
+    `opencode-drift.test.ts`, was retired with 1.x on 2026-11-11
+    (`git show 5f4e27b1c:apps/backend/src/core/opencode-drift.test.ts`).
   - Codex checks its generated protocol with `mise run codex:protocol:check`.
 - `nativeAgentCapabilities()` (`packages/protocol/src/native-agent.ts`) is the
   source of truth for what each platform supports. The capability matrix in the
@@ -767,23 +763,9 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 
 ### Qualification
 
-Both runs need a signed-in Grok CLI at the pinned `1.0.70` and billed turns,
-in a throwaway Orkestrator profile (never the real data directory, never ports
-34121 or 34122); see
-[0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-
-- Grok `costUsdTicks` (task 11):
-  1. Note the xAI billing dashboard's spend for the account before starting.
-  2. Run two Grok turns of clearly different sizes, for example a one-line
-     answer and a turn that reads several large files. Wait for each to finish.
-  3. For each turn, capture the raw ACP `usage_update` and `session/prompt`
-     result that carry `costUsdTicks`. The bridge's parsed usage drops ticks,
-     so capture the raw JSON-RPC lines: drive `grok agent stdio` with a small
-     ACP client script that logs every line from the agent's stdout.
-  4. Read the billed amount for each turn from the dashboard once it settles.
-  5. Pass only if the two tick-to-USD ratios agree within the dashboard's
-     rounding. Then record the conversion, both samples and the date in the
-     `usage.ts` comment, and change `parseUsdCost` to accept ticks.
+The billed Grok `costUsdTicks` run moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+2026-11-10; task 11 is the code change that follows it.
 
 ## Constraints and rationale
 
@@ -822,11 +804,10 @@ in a throwaway Orkestrator profile (never the real data directory, never ports
   `McpServerProvenance`, `readMcpResource`, the tool `_meta.ui` members,
   `verbatimPrompts`, `additionalDirectories` and `createSdkMcpServer` are all
   still present (checked 2026-10-30 in `bridges/claude-bridge/node_modules`).
-  The Grok `1.0.67` `costUsdTicks` behaviour has not been checked live; the
-  steps are under "Qualification".
 - Pi's compaction Stop and Auto-compact toggle (task 8) are proved on the real
   SDK with the faux model only; a signed-in Pi tab has not run them
-  ([7280](7280-pi-compaction-controls-live-check.md)).
+  (to-do 7280, retired 2026-11-10; the live check is in the manual-test
+  checklist).
 - The MCP provenance line (task 4) is covered by bridge, backend, protocol and
   card tests with synthetic payloads; nobody has yet seen it on a card raised by
   a real Claude CLI for an `mcp__*` tool under the `ask` policy, nor which
@@ -841,10 +822,14 @@ in a throwaway Orkestrator profile (never the real data directory, never ports
   [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md),
   [0004-composer-model-parameters.md](0004-composer-model-parameters.md),
   [0008-opencode-v2.md](0008-opencode-v2.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed Grok turns of task 11) moved there on 2026-11-10.
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) owns removing the Claude
   `services/mcp-config.ts` parse.
-- [0016-slash-command-catalogue.md](../cli-and-slash-commands/0016-slash-command-catalogue.md) owns the Claude
-  command-discovery probe.
+- The Claude command-discovery probe and its terminal-marker check are
+  described in [native-agent-commands.md](../../architecture/native-agent-commands.md#provider-notes)
+  and checked on every SDK bump in
+  [upgrade-agents.md](../../development/upgrade-agents.md#how-to-upgrade-claude)
+  (to-do 0016, which owned them, was retired on 2026-11-11).
 - [agent-engines.md](../../architecture/agent-engines.md) and
   [upgrade-agents.md](../../development/upgrade-agents.md).
 - The living-doc drift once listed here (Grok Build's inbound-request

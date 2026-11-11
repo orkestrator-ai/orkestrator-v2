@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { LandingPage } from "./LandingPage";
-import { CONNECT_PATH, isConnectPath } from "./routes";
+import { CONNECT_PATH, RELEASES_PATH, isConnectPath } from "./routes";
 
 afterEach(() => {
   cleanup();
@@ -56,6 +56,22 @@ describe("LandingPage", () => {
     expect(logins.length).toBeGreaterThan(0);
     for (const link of logins) expect(link.getAttribute("href")).toBe(CONNECT_PATH);
     expect(screen.getByRole("link", { name: "Log in" }).getAttribute("href")).toBe(CONNECT_PATH);
+  });
+
+  test("links the navigation and footer to the Releases page", () => {
+    render(<LandingPage />);
+
+    const sections = screen.getByRole("navigation", { name: "Sections" });
+    const navLink = within(sections).getByRole("link", { name: "Releases" });
+    expect(navLink.getAttribute("href")).toBe(RELEASES_PATH);
+    expect(navLink.getAttribute("aria-current")).toBeNull();
+    expect(within(sections).getByRole("link", { name: "Security" }).getAttribute("href")).toBe(
+      "#security",
+    );
+    const footer = screen.getByRole("navigation", { name: "Footer" });
+    expect(within(footer).getByRole("link", { name: "Releases" }).getAttribute("href")).toBe(
+      RELEASES_PATH,
+    );
   });
 
   test("covers container security, pipelines and multi review", () => {

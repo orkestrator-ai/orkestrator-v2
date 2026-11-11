@@ -20,10 +20,16 @@ export const BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
         "Migrating or sweeping stage transcripts failed; the next start retries.",
       "restore.skipped": "A pipeline could not be restored at startup and was skipped.",
       "criteria.record-failed": "Acceptance criteria results could not be recorded on the ticket.",
+      "completion-notes.publish-failed":
+        "A finished pipeline's notes tab could not be added to the layout; the run stays complete.",
       "workspace.waiting": "A pipeline is waiting for its workspace; written once per reason.",
       "rewind.pending": "A pipeline's code rewind has not finished; written once per reason.",
       "kanban.status-failed":
         "A restarted pipeline's Kanban status could not be set; it retries shortly.",
+      "kanban.environment-deleted-read-failed":
+        "The pipelines of an environment being deleted could not be read, so their tickets keep their columns.",
+      "kanban.environment-deleted-update-failed":
+        "The ticket of a pipeline whose environment was deleted could not be moved; the deletion goes on.",
       "usage.read-failed": "Reading a stage session's token usage failed.",
       "checkpoint.deferred":
         "A stage transcript checkpoint could not be written yet; the provider's history stands.",

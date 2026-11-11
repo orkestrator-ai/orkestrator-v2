@@ -21,7 +21,7 @@ see **TX-10's interim map (task 4)**.
 1. **Direct cursor wherever the provider pages**: keep a direct cursor through a backend byte bound, or add a direct mint from the summary window, chosen by a measurement of the no-cursor cases. Status: done (2026-10-27, #1323: a direct cursor through the byte bound).
 2. **`loadEarlierMessages` pages directly**: stop calling the `sync-v1` projection to mint a cursor, with tests for a byte-bounded view, an OpenCode window, a prefix collapse and a held place. Status: done (2026-10-27, #1323; the mint remains only as the fallback for a view without a direct cursor).
 3. **Keep v1 cursors for older renderers and record the condition**: keep serving v1 cursors, counted by `history.joined-v1-page`, with the retirement condition in the register. Status: done (condition 2026-10-27; counter split by cause 2026-10-29).
-4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory` once the floor passes the renderer from task 2. Status: blocked (tasks 1 to 3 first shipped Stable in v2.36.0, so the floor reaches them on 2027-01-02; the rest of the register condition is also open). Holds TX-10's interim id-to-index map, to build only if the counters show real use before then.
+4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory` once the floor passes the renderer from task 2. Status: blocked (tasks 1 to 3 first shipped Stable in v2.36.0, so the floor reaches them on 2027-01-02; the rest of the register condition is also open; waits on 7568: 0232 task 4 counter reading). Reading the three joined-page counters on the maintainer's machines moved to 7568 on 2026-11-10. Holds TX-10's interim id-to-index map, to build only if the counters show real use before then.
 
 ### 1. Direct cursor wherever the provider pages
 
@@ -95,7 +95,7 @@ see **TX-10's interim map (task 4)**.
 
 **Problem.** Joined paging keeps `projectionHistory`, a byte-bounded per-session cache (`native-agent-transcript-projection.ts:770`), plus the v1 cursor namespace and `firstHistoryCursor` (`:1692`), all for compatibility only.
 
-**Context.** The retirement condition is in the register. Removal also needs the counter quiet on the machines the maintainer can reach. Efficiency finding TX-10 (report (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)) rates the cost of each joined page and proposed an interim fix; its report file 0385 was closed into this task on 2026-11-05.
+**Context.** The retirement condition is in the register. Removal also needs the counter quiet on the machines the maintainer can reach; reading it there moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10. Efficiency finding TX-10 (report (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)) rates the cost of each joined page and proposed an interim fix; its report file 0385 was closed into this task on 2026-11-05.
 
 **Investigation.** Re-checked against `cbe0f9a5b` on 2026-11-05.
 
@@ -150,6 +150,9 @@ cursor, and that cost a whole transcript read on bridges that page directly.
   - OpenCode (`openCodeCursorBefore`, `opencode-snapshots.ts`) names the
     cursor before a message, so only the first row of a message's rows names
     one (an error row does not); the search moves on to the next message.
+    Since OpenCode 1.x was retired (2026-11-11) this is `cursorBefore` in
+    `apps/backend/src/core/opencode2/transcript-snapshot.ts`, where only the
+    first row of a group can name one.
   Rows between the view's start and that position return on the first page
   and the renderer drops them by id.
 - The trigger is ordinary, not exotic: a tool call's detail reference is
@@ -246,7 +249,8 @@ cursor, and that cost a whole transcript read on bridges that page directly.
 4. Open, blocked on the support window. Once the register condition holds
    and the counter is quiet on the machines you can reach, remove joined
    paging, the v1 cursor namespace, `projectionHistory` and the renderer's
-   mint in `loadEarlierMessages` (a view without a direct cursor then has
+   mint in `loadEarlierMessages` (the counter reading on the maintainer's
+   machines is in the manual-test checklist, 7568) (a view without a direct cursor then has
    nothing older to load, and the control retires). Re-checked 2026-11-05:
    the floor reaches v2.36.0, the first Stable release with tasks 1 to 3, on
    2027-01-02; the `/messages` fallback row and direct recovery for the
@@ -458,12 +462,6 @@ collecting with the first release that carries them.
 
 ## Needs verification
 
-- How often joined pages still happen after this ships, and why: read
-  `history.joined-v1-page`, `history.joined-v1-page.unpaged-source` and
-  `history.joined-v1-page.unnamed-cursor` (`get_compatibility_path_usage`) on
-  machines running a release with the split. Not available here: the live
-  instance on this machine keeps no such counter yet, and no disposable
-  profile ran real provider sessions.
 - A live bridge session of short tool calls (Codex or Claude) in a
   disposable profile: confirm the view reports `historyPaging: "direct"` and
   Load earlier pages without a sync-v1 read. Covered by the bridge-contract
@@ -480,3 +478,6 @@ collecting with the first release that carries them.
 - Efficiency report, B (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
   (TX-10), closed into task 4; see the
   closing note for 0385 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the
+  human-only parts of this to-do (the counter reading of task 4, the
+  joined-page counter verification) moved there on 2026-11-10.

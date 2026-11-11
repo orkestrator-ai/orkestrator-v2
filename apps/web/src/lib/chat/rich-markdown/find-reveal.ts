@@ -91,10 +91,6 @@ export function restoreRichFindReveals(owner: string, keep: ReadonlySet<string> 
   }
 }
 
-export function richFindRevealedKeys(): ReadonlySet<string> {
-  return new Set(revealedByFind.keys());
-}
-
 /**
  * A block's find-reveal flag plus a way for a deliberate user toggle to end
  * the temporary reveal (so restoring after find does not undo the user).

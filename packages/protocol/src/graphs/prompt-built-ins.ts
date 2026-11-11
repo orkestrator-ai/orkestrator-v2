@@ -348,10 +348,6 @@ function deepFreeze<T>(value: T): T {
 
 const BY_ID = new Map(DEFINITIONS.map((definition) => [definition.id, deepFreeze(definition)]));
 
-export function isGraphBuiltInPromptId(value: unknown): value is GraphBuiltInPromptId {
-  return typeof value === "string" && BY_ID.has(value as GraphBuiltInPromptId);
-}
-
 /** A built-in prompt by id. */
 export function graphBuiltInPrompt(id: string): GraphBuiltInPromptDefinition | undefined {
   return BY_ID.get(id as GraphBuiltInPromptId);

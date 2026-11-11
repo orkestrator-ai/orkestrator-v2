@@ -166,6 +166,29 @@ function plainCodeBlockView(
 }
 
 export const MarkdownCodeBlock = CodeBlock.extend({
+  addKeyboardShortcuts() {
+    const moveAcrossDiagram = (forward: boolean): boolean => {
+      const { selection, doc } = this.editor.state;
+      const { $from } = selection;
+      if (!selection.empty || !$from.parent.isTextblock || $from.depth === 0) return false;
+      if ($from.parentOffset !== (forward ? $from.parent.content.size : 0)) return false;
+      const boundary = forward ? $from.after() : $from.before();
+      const resolved = doc.resolve(boundary);
+      const adjacent = forward ? resolved.nodeAfter : resolved.nodeBefore;
+      if (!adjacent?.isTextblock) return false;
+      const insideDiagram = $from.parent.type.name === this.name && diagramLanguage($from.parent);
+      const enteringDiagram = adjacent.type.name === this.name && diagramLanguage(adjacent);
+      if (!insideDiagram && !enteringDiagram) return false;
+      // A collapsed source has no useful browser caret geometry. Cross its
+      // boundary in the document model so native arrows cannot skip the fence.
+      return this.editor.commands.setTextSelection(boundary + (forward ? 1 : -1));
+    };
+    return {
+      ...this.parent?.(),
+      ArrowLeft: () => moveAcrossDiagram(false),
+      ArrowRight: () => moveAcrossDiagram(true),
+    };
+  },
   addNodeView() {
     const languageClassPrefix = this.options.languageClassPrefix;
     return (props) =>

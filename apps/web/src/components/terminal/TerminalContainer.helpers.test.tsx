@@ -134,30 +134,10 @@ const awaitEnvironmentSetupSessionMock = mock(
     getEnvironmentSetupSessionMock(environmentId),
 );
 
-const setEnvironmentPendingAgentLaunchMock = mock(
-  async (environmentId: string, pending: boolean) => ({
-    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-    pendingAgentLaunch: pending,
-    ...(pending
-      ? {}
-      : {
-          initialAgentModel: undefined,
-          initialReasoningEffort: undefined,
-        }),
-  }),
-);
-
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
   ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
-
-const setEnvironmentInitialPromptMock = mock(
-  async (environmentId: string, initialPrompt: string) => ({
-    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-    initialPrompt,
-  }),
-);
 
 const savePaneLayoutMock = mock(
   async (
@@ -257,9 +237,7 @@ mock.module("@/lib/backend", () => ({
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
-  setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
-  setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   deletePaneLayout: deletePaneLayoutMock,
@@ -427,31 +405,11 @@ describe("TerminalContainer", () => {
     awaitEnvironmentSetupSessionMock.mockClear();
     deleteMultiReviewWorkflowMock.mockReset();
     deleteMultiReviewWorkflowMock.mockResolvedValue();
-    setEnvironmentPendingAgentLaunchMock.mockReset();
-    setEnvironmentPendingAgentLaunchMock.mockImplementation(
-      async (environmentId: string, pending: boolean) => ({
-        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-        pendingAgentLaunch: pending,
-        ...(pending
-          ? {}
-          : {
-              initialAgentModel: undefined,
-              initialReasoningEffort: undefined,
-            }),
-      }),
-    );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
       ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
-    setEnvironmentInitialPromptMock.mockReset();
-    setEnvironmentInitialPromptMock.mockImplementation(
-      async (environmentId: string, initialPrompt: string) => ({
-        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-        initialPrompt,
-      }),
-    );
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
@@ -3053,6 +3011,7 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
+            experimentalTmux: true,
             agentSettings: {
               ...state.config.global.agentSettings,
               platforms: {
@@ -3097,6 +3056,7 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
+            experimentalTmux: true,
             agentSettings: {
               ...state.config.global.agentSettings,
               platforms: {
@@ -3226,6 +3186,7 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
+            experimentalTmux: true,
             agentSettings: {
               ...state.config.global.agentSettings,
               platforms: {
@@ -3258,6 +3219,53 @@ describe("TerminalContainer", () => {
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "claude-tmux");
         expect(created?.displayTitle).toBe("Forced tmux");
+      });
+    });
+
+    test("a stored tmux backend and an explicit tmux request open Agent SDK tabs while tmux mode is off", async () => {
+      appCommandStore(configStore).setState((state) => ({
+        ...state,
+        config: {
+          ...state.config,
+          global: {
+            ...state.config.global,
+            experimentalTmux: false,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { mode: "native", claudeNativeBackend: "tmux" },
+              },
+            },
+          },
+          repositories: {},
+        },
+      }));
+
+      renderInAppCommandScope(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness type="claude" options={{ displayTitle: "Stored tmux" }} />
+          <CreateTabHarness
+            type="claude"
+            options={{ agentLaunchMode: "tmux", displayTitle: "Forced tmux" }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const titles = env.root.tabs
+          .filter((t) => t.type === "agent-native")
+          .map((t) => t.displayTitle);
+        expect(titles).toEqual(expect.arrayContaining(["Stored tmux", "Forced tmux"]));
+        expect(env.root.tabs.some((t) => t.type === "claude-tmux")).toBe(false);
       });
     });
 
@@ -3469,6 +3477,10 @@ describe("TerminalContainer", () => {
     });
 
     test("carries one-shot review options through every agent launch mode", async () => {
+      appCommandStore(configStore).setState((state) => ({
+        ...state,
+        config: { ...state.config, global: { ...state.config.global, experimentalTmux: true } },
+      }));
       const launchCases = [
         { type: "claude", mode: "cli", title: "Claude CLI review", expectedType: "claude" },
         {

@@ -18,11 +18,11 @@
  * the snapshot of the first stage, so a later Redo restores everything.
  * Redo clears the whole staged revert, as 1.x `unrevert` does.
  *
- * Until a prompt commits it, the transcript hides what the marker covers, the
- * way 1.x does (`opencode-revert.ts`): the boundary row and every row after
- * it. Nothing is deleted here, so Redo brings the rows back from the same
+ * Until a prompt commits it, the transcript hides what the marker covers, as
+ * OpenCode's TUI does: the boundary row and every row after it. Nothing is deleted here, so Redo brings the rows back from the same
  * history.
  */
+import type { NativeAgentNotice } from "@orkestrator/protocol/native-agent";
 import { PromptRejectedError, ProviderUnavailableError } from "../agent-provider-contract.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import type { OpenCode2Message } from "./types.js";
@@ -42,6 +42,27 @@ export function openCode2RevertMarker(session: unknown): OpenCode2RevertMarker |
     messageId.length <= MAX_ID_LENGTH
     ? { messageId }
     : undefined;
+}
+
+/**
+ * Says a turn is undone while OpenCode holds it, as its TUI does: the next
+ * prompt deletes it for good, and Redo brings it back until then. The
+ * occurrence id keeps the shape 1.x used (`opencode-revert:<message>:<part>`),
+ * so a notice already dismissed stays dismissed.
+ */
+export function openCode2RevertNotice(
+  marker: OpenCode2RevertMarker | undefined,
+): NativeAgentNotice[] {
+  if (!marker) return [];
+  return [
+    {
+      kind: "advisory",
+      severity: "info",
+      occurrenceId: `opencode-revert:${marker.messageId}:`,
+      message:
+        "Turn undone. Sending a new prompt discards it for good; Redo turn in Agent Info brings it back.",
+    },
+  ];
 }
 
 /**

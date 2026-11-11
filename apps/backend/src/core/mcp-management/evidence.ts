@@ -59,10 +59,10 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpApplyState, McpRuntimeApplyEntry } from "@orkestrator/protocol/mcp-management";
 
+import { runWithTimeout } from "../abortable-timing.js";
 import type { RuntimeProbe } from "./apply.js";
 import { heldRuntimes, noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
 import type { StoredOperation } from "./operations-store.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 export const EVIDENCE_WINDOW_MS = 24 * 60 * 60_000;
 export const EVIDENCE_READS_PER_TICK = 8;
@@ -126,8 +126,8 @@ export function evidenceRole(provider: AgentPlatform, sourceId: string): Evidenc
 
 /**
  * Whether a planned runtime in `state` is waiting for evidence at all. A
- * Cursor or Pi runtime is `restart-required` only behind an older bridge, and
- * a restarted bridge can still prove it.
+ * Claude, Cursor or Pi runtime is `restart-required` only behind a bridge that
+ * does not report, and a restarted bridge can still prove it.
  */
 export function awaitsEvidenceIn(provider: AgentPlatform, state: McpApplyState): boolean {
   switch (provider) {
@@ -231,42 +231,23 @@ export function appliedReason(provider: AgentPlatform): string {
 export const NEWER_RUN_REASON =
   "A newer run of this session, started after apply was planned, loaded the saved configuration.";
 
-const BRIDGE_LABEL: Partial<Record<AgentPlatform, string>> = {
-  claude: "Claude",
-  cursor: "Cursor",
-  grok: "Grok Build",
-  pi: "Pi",
+/**
+ * What a runtime is told when its bridge does not report which MCP
+ * configuration it loaded. Every published bridge that loads from these files
+ * reports it, so only an unpublished build lands here; it may not reload MCP
+ * servers between turns, so a restart is the one step that loads the change.
+ * The runtime is still polled, and a restarted bridge proves it.
+ */
+export const UNREPORTED_BRIDGE_OUTCOME: { state: McpApplyState; reason: string } = {
+  state: "restart-required",
+  reason:
+    "This bridge does not report which MCP configuration it loaded. Stop and start the environment to load the change.",
 };
 
 /**
- * What a runtime behind a bridge older than the MCP configuration report is
- * told. Claude bridges that old still re-read their files at every query, so
- * the change loads; bridges since #838 report what a query loaded once one
- * has run, which confirms it with no restart (seen live on 2026-10-18), and
- * only one older still never does. Cursor and Pi bridges that old do not
- * reload between turns, and Grok only ever loads on restart.
+ * Stops waiting for `promise` after `ms`. Only for the reload mutations, whose
+ * work an abort cannot stop; a read takes a signal through `runWithTimeout`.
  */
-export function olderBridgeOutcome(provider: AgentPlatform): {
-  state: McpApplyState;
-  reason: string;
-} {
-  compatibilityPathUsage.record("mcp-report.older-bridge-outcome");
-  const label = BRIDGE_LABEL[provider] ?? provider;
-  if (provider === "claude") {
-    return {
-      state: "pending-next-turn",
-      reason: `This ${label} bridge is older than this backend and does not report what it loads. The change loads on the session's next message and is confirmed once the bridge reports that message's query; if it never does, restart the environment to confirm it.`,
-    };
-  }
-  return {
-    state: "restart-required",
-    reason:
-      provider === "grok"
-        ? `This ${label} bridge is older than this backend and cannot confirm what it loaded. Stop and start the environment to load the change.`
-        : `This ${label} bridge is older than this backend and may not reload MCP servers between turns. Stop and start the environment to load the change.`,
-  };
-}
-
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -395,9 +376,15 @@ export class EvidenceScheduler {
       const readKey = `${record.environmentId}\u0000${agent}\u0000${record.logicalSessionKey}`;
       let read = reads.get(readKey);
       if (!read) {
-        read = withTimeout(
-          this.deps.probe.mcpConfigEvidence(record.environmentId, agent, record.logicalSessionKey),
-          EVIDENCE_READ_TIMEOUT_MS,
+        read = runWithTimeout(
+          (signal) =>
+            this.deps.probe.mcpConfigEvidence(
+              record.environmentId,
+              agent,
+              record.logicalSessionKey,
+              signal,
+            ),
+          { timeoutMs: EVIDENCE_READ_TIMEOUT_MS },
         ).catch((): RuntimeEvidenceRead => ({ state: "none" }));
         reads.set(readKey, read);
       }
@@ -439,7 +426,7 @@ export class EvidenceScheduler {
         continue;
       }
       if (answer.state === "unsupported") {
-        const older = olderBridgeOutcome(agent);
+        const older = UNREPORTED_BRIDGE_OUTCOME;
         if (stored.snapshot.apply.runtimes !== candidate.runtimes) continue;
         if (!awaitsEvidenceIn(agent, runtime.state)) continue;
         if (runtime.state === older.state && runtime.reason === older.reason) continue;

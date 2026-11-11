@@ -14,6 +14,7 @@ import {
   Network,
   StickyNote,
   Workflow,
+  WandSparkles,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
@@ -285,6 +286,7 @@ export function DraggableTab({
     if (tab.type === "graph-run") {
       return `${tab.graphRunData?.title?.trim() || "Graph run"} ${tabNumber}`;
     }
+    if (tab.type === "auto-pipeline") return `Auto-pipeline ${tabNumber}`;
     if (tab.type === "browser") return `${serviceLabel || "Browser"} ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
@@ -300,6 +302,8 @@ export function DraggableTab({
     if (tab.type === "graph-designer")
       return <Network className="h-3 w-3 shrink-0 text-indigo-400" />;
     if (tab.type === "graph-run") return <Workflow className="h-3 w-3 shrink-0 text-indigo-400" />;
+    if (tab.type === "auto-pipeline")
+      return <WandSparkles className="h-3 w-3 shrink-0 text-cyan-400" />;
     if (tab.type === "key-information" && tab.keyInformationTabData?.view === "notes")
       return <StickyNote className="h-3 w-3 shrink-0 text-amber-400" />;
     if (tab.type === "key-information")

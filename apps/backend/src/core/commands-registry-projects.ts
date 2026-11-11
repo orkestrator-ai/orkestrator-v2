@@ -5,7 +5,6 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { parseProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
 import {
-  getResourceRevisionManifestCommand,
   getScopedResourceRevisionManifestCommand,
   getScopedResourceSnapshotsCommand,
   greetCommand,
@@ -39,7 +38,6 @@ import {
   getProjectsCommand,
   listGitHubCloneAccountsCommand,
   listGitHubCloneRepositoriesCommand,
-  rememberEnvironmentAgentSelectionCommand,
   removeProjectCommand,
   reorderProjectsCommand,
   updateProjectCommand,
@@ -50,11 +48,9 @@ import { switchOriginToHttps } from "./git-ssh-transport.js";
 import {
   getConfigCommand,
   getDesktopConnectionsCommand,
-  getGlobalConfigCommand,
   getRepositoryConfigCommand,
   patchGlobalConfigCommand,
   patchRepositorySettingsCommand,
-  saveConfigCommand,
   saveDesktopConnectionsCommand,
   setAnthropicApiKeyCommand,
   setCursorApiKeyCommand,
@@ -115,18 +111,13 @@ import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/
 import {
   asString,
   asRecord,
-  redactGlobalConfig,
   redactAppConfig,
   stripRendererCredentials,
   asOptionalString,
   asStringArray,
   asNonBlankString,
   asRequiredBoolean,
-  asCachedCodexModels,
-  peekLocalAgentBridge,
-  peekContainerAgentBridge,
   fetchAcpNormalizedModelsResult,
-  parseClaudeBridgeModelCatalog,
   readOriginUrl,
   addExistingProject,
   createProjectFromScratch,
@@ -138,9 +129,9 @@ import {
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
+import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
-  cacheAgentModelCatalogCommand,
   ensureHostPiModelCatalogCommand,
   getAgentModelCatalogCacheCommand,
   getNativeAgentModelCatalogCommand,
@@ -312,29 +303,6 @@ export function registerProjectCommands(
     greetCommand,
     ({ name }) => `Hello, ${name}! You've been greeted from the Orkestrator backend!`,
   );
-  register(
-    getResourceRevisionManifestCommand,
-    ({ knownGeneration, knownRevisions }, { storage }) => {
-      const parsed: Partial<ResourceRevisionMap> = {};
-      if (knownRevisions !== undefined) {
-        const revisions = asRecord(knownRevisions, "knownRevisions");
-        for (const [resource, revision] of Object.entries(revisions)) {
-          if (!isResourceManifestKind(resource)) {
-            throw new Error(`Unknown manifest resource: ${resource}`);
-          }
-          if (!isResourceSnapshotRevision(revision)) {
-            throw new Error(`Invalid manifest revision for ${resource}`);
-          }
-          parsed[resource] = revision;
-        }
-      }
-      if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
-        throw new Error("knownGeneration must be an opaque resource generation");
-      }
-      return storage.getResourceRevisionManifest(knownGeneration, parsed);
-    },
-  );
-
   register(
     getScopedResourceRevisionManifestCommand,
     ({ knownGeneration, cursor, highWater, knownRevisions }, { storage }) => {
@@ -805,12 +773,10 @@ export function registerProjectCommands(
       config.global.openCodeModelProviders,
     );
     let openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
-    const runningOpenCodeBridge =
-      environment.environmentType === "local"
-        ? await peekLocalAgentBridge(environment.id, context, "opencode")
-        : environment.containerId
-          ? await peekContainerAgentBridge(environment.containerId, "opencode")
-          : null;
+    // The environment's running OpenCode 2.x server (host or in-container), never started here.
+    const runningOpenCodeBridge = await openCode2EnvironmentServer(context, environment.id, {
+      start: false,
+    }).catch(() => undefined);
     const openCodeCatalogInput = {
       environmentId: id,
       agent: "opencode" as const,
@@ -1016,57 +982,10 @@ export function registerProjectCommands(
           : ("failed" as const),
     };
   });
-  register(cacheAgentModelCatalogCommand, (args, { storage }) => {
-    const agent = asNonBlankString(args.agent, "agent");
-    if (agent === "claude") {
-      const catalog = parseClaudeBridgeModelCatalog({
-        models: args.models,
-        source: "sdk",
-        fetchedAt: new Date().toISOString(),
-      });
-      return storage.cacheAgentModelCatalog("claude", catalog.models);
-    }
-    if (agent === "codex") {
-      return storage.cacheAgentModelCatalog("codex", asCachedCodexModels(args.models));
-    }
-    if (agent === "pi") {
-      return storage.cacheAgentModelCatalog("pi", args.models as AgentModel[]);
-    }
-    throw new Error("Expected agent to be claude, codex, or pi");
-  });
-  register(saveConfigCommand, async ({ config }, context) => {
-    const { storage } = context;
-    const candidate = asRecord(config, "config") as unknown as AppConfig;
-    await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
-      storage.saveConfig(
-        {
-          ...candidate,
-          global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
-        },
-        { preserveCredentials: true },
-      ),
-    );
-    const savedGlobal = (await storage.loadConfig()).global;
-    context.runtime.terminals.history.configureRetention({
-      enabled: savedGlobal.terminalHistoryEnabled,
-      sessionMb: savedGlobal.terminalHistoryRetentionMb,
-      globalMb: savedGlobal.terminalHistoryGlobalRetentionMb,
-      days: savedGlobal.terminalHistoryRetentionDays,
-    });
-    await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
-    // A whole-config write can move any repository's baseline; see
-    // `update_repository_config`.
-    void context.runtime.diffStats.sync(context).catch(() => undefined);
-    // The experimental scheduling switch takes effect now, not at the next tick.
-    context.scheduledJobs?.wake();
-  });
   register(getDesktopConnectionsCommand, (_args, { storage }) => storage.getDesktopConnections());
   register(saveDesktopConnectionsCommand, ({ desktopConnections }, { storage }) => {
     return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
   });
-  register(getGlobalConfigCommand, async (_args, { storage }) =>
-    redactGlobalConfig((await storage.loadConfig()).global),
-  );
   // The platform is checked before the decode, so an unknown platform with a
   // wrong `force` still reports the platform (plan item 7008).
   const planUsagePlatform = (value: unknown) => {
@@ -1237,29 +1156,6 @@ export function registerProjectCommands(
     void context.runtime.diffStats.sync(context).catch(() => undefined);
     return redactAppConfig(updated);
   });
-  // No current renderer calls this: create dialogs resolve every agent control
-  // from Settings. It stays because a cached older web client still sends it,
-  // and this is the only compatibility surface that a shipped bundle can reach —
-  // an old renderer carries its own copy of the client-side wrapper, so keeping
-  // one here would have protected nothing.
-  register(
-    rememberEnvironmentAgentSelectionCommand,
-    async ({ projectId, platform, mode }, { storage }) => {
-      if (!isAgentPlatform(platform)) {
-        throw new Error("Expected platform to be a supported agent platform");
-      }
-      const selectedPlatform = platform;
-      const selectedMode = asString(mode, "mode");
-      if (selectedMode !== "terminal" && selectedMode !== "native") {
-        throw new Error("Expected mode to be terminal or native");
-      }
-      return redactAppConfig(
-        await storage.patchRepositoryConfig(asString(projectId, "projectId"), {
-          lastEnvironmentAgentSelection: { platform: selectedPlatform, mode: selectedMode },
-        }),
-      );
-    },
-  );
 }
 
 /**

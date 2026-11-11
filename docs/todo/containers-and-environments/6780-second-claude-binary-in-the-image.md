@@ -6,14 +6,33 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`.
 
 ### Tasks
 
-1. **Maintainer decision on the second binary (DK-10)**: drop it, share it with the CLI while the pins agree, or keep both. Status: open.
-2. **Build and qualify the chosen option**: change `docker/Dockerfile`, its tests and the image checks, then prove the bridge still works in a container. Status: open (depends on 1).
+2. **Build and qualify the chosen option**: change `docker/Dockerfile`, its tests and the image checks, then prove the bridge still works in a container. Status: blocked (waits on 7568: 6780 task 1).
 
-### 1. Maintainer decision on the second binary (DK-10)
+### 2. Build and qualify the chosen option
+
+**Problem.** Whichever option is chosen other than leaving both, the image changes, and the bridge must still start and drive Claude in a container.
+
+**Context.** The image checks are `docker/tests/final-image-smoke.sh` (bridge health for all five bridges) and `mise run test:agent:docker:isolated`; layer re-pull was measured for DK-7 in 1202 task 14 by comparing `RootFS.Layers` digests.
+
+**Investigation.** Not started; it waits on the maintainer's choice (7568: 6780 task 1). Nothing in the Dockerfile was changed by the 2026-11-05 check.
+
+**Decisions.**
+
+- **How much live proof is needed?**
+  - **Final-image smoke, the isolated Docker suite, `docker history` before and after, and one credential-free bridge request that spawns the CLI, such as a model catalogue refresh (`claude-model-catalog.ts`, a control-only query) (recommended).**
+    - Pros: proves the bridge spawns the CLI with the SDK copy gone or linked, without a billed turn; shows the saving and that DK-7's layer order still holds.
+    - Cons: an image build and a suite run on a shared host, about 10–15 minutes.
+  - **Smoke only.**
+    - Pros: fast.
+    - Cons: the smoke checks bridge health, and the bridge's `/global/auth-check` answers without spawning the CLI (`bridges/claude-bridge/src/index.ts:184`), so a missing engine could go unnoticed until a user's first turn.
+
+## Evidence for the maintainer's choice
+
+The choice itself (drop the SDK copy, link it, or keep both) moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the evidence and the options it rests on stay here.
 
 **Problem.** Every image carries two copies of the same 298 MB Claude Code native binary: the global CLI's and the one the Claude Agent SDK vendors into the Claude bridge.
 
-**Context.** This is efficiency finding DK-10 (report, section G (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)), carried by [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 14 and then by efficiency report 0693, which was checked back and deleted on 2026-11-05 (its last version is in the commit before the one that deleted it). [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, and the Dockerfile says the same at `docker/Dockerfile:205-206`, so the two pins can diverge.
+**Context.** This is efficiency finding DK-10 (report, section G (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)), carried by to-do 1202 (retired 2026-11-10) task 14 and then by efficiency report 0693, which was checked back and deleted on 2026-11-05 (its last version is in the commit before the one that deleted it). [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, and the Dockerfile says the same at `docker/Dockerfile:205-206`, so the two pins can diverge.
 
 Where the two copies come from, on `main` at `cbe0f9a5b`:
 
@@ -48,24 +67,6 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 
   The recommendation is to drop the copy. It is the only option that keeps the saving after the pins diverge, which `upgrade-agents.md` expects them to, and the verified facts above show the copy is not what the container bridge runs. The symlink option was recommended before it was known that the bridge never runs the SDK's binary in a container.
 
-### 2. Build and qualify the chosen option
-
-**Problem.** Whichever option is chosen other than leaving both, the image changes, and the bridge must still start and drive Claude in a container.
-
-**Context.** The image checks are `docker/tests/final-image-smoke.sh` (bridge health for all five bridges) and `mise run test:agent:docker:isolated`; layer re-pull was measured for DK-7 in 1202 task 14 by comparing `RootFS.Layers` digests.
-
-**Investigation.** Not started; it waits on task 1. Nothing in the Dockerfile was changed by the 2026-11-05 check.
-
-**Decisions.**
-
-- **How much live proof is needed?**
-  - **Final-image smoke, the isolated Docker suite, `docker history` before and after, and one credential-free bridge request that spawns the CLI, such as a model catalogue refresh (`claude-model-catalog.ts`, a control-only query) (recommended).**
-    - Pros: proves the bridge spawns the CLI with the SDK copy gone or linked, without a billed turn; shows the saving and that DK-7's layer order still holds.
-    - Cons: an image build and a suite run on a shared host, about 10–15 minutes.
-  - **Smoke only.**
-    - Pros: fast.
-    - Cons: the smoke checks bridge health, and the bridge's `/global/auth-check` answers without spawning the CLI (`bridges/claude-bridge/src/index.ts:184`), so a missing engine could go unnoticed until a user's first turn.
-
 ## Constraints and rationale
 
 - The bridge deliberately follows the SDK's release train, separate from the CLI's (`docker/Dockerfile:205-206`, `upgrade-agents.md`). None of the options changes either pin.
@@ -78,7 +79,8 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 14
-- [0022 container resource budgets](0022-container-resource-budgets-and-performance.md)
+- to-do 1202 efficiency follow-ups, task 14 (retired 2026-11-10)
+- To-do 0022, container resource budgets (retired 2026-11-11): [Built-in default](../../architecture/container-lifecycle.md#built-in-default) and [Optimisations measured and not taken](../../development/container-qualification.md#optimisations-measured-and-not-taken)
 - Efficiency, logging and database outcome (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), closing note for 0693
 - [`upgrade-agents.md`](../../development/upgrade-agents.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the maintainer's choice for the second binary) moved there on 2026-11-10.

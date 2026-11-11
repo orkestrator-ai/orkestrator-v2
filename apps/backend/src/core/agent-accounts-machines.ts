@@ -9,6 +9,7 @@ import {
   type PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 
+import { runWithTimeout, WorkTimeoutError } from "./abortable-timing.js";
 import type { CommandContext } from "./commands-context.js";
 import { listAgentAccounts } from "./agent-accounts.js";
 import { readHostAgentSignIns } from "./agent-sign-ins.js";
@@ -17,13 +18,18 @@ import { NodeUnavailableError } from "./nodes/index.js";
 /** How long one machine may take to list its accounts before it is shown as unavailable. */
 const MACHINE_ACCOUNTS_TIMEOUT_MS = 8_000;
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new NodeUnavailableError("timed out")), timeoutMs);
-    (timer as { unref?: () => void }).unref?.();
+/**
+ * One routed read with a deadline. The deadline aborts the request to the
+ * node, so the node sees its caller go away, and is reported as the machine
+ * being unavailable.
+ */
+function routedWithTimeout<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  return runWithTimeout(work, { timeoutMs }).catch((error: unknown) => {
+    throw error instanceof WorkTimeoutError ? new NodeUnavailableError("timed out") : error;
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -73,20 +79,24 @@ export async function listMachineAgentAccounts(
           self: false,
         };
         // A machine that predates the sign-in read still lists its accounts.
-        const signIns = withTimeout(
-          portal.invokeOnNode({
-            nodeId: view.nodeId,
-            command: "read_host_agent_sign_ins",
-            args: {},
-          }),
+        const signIns = routedWithTimeout(
+          (signal) =>
+            portal.invokeOnNode(
+              { nodeId: view.nodeId, command: "read_host_agent_sign_ins", args: {} },
+              { signal },
+            ),
           timeoutMs,
         ).then(
           (routed) => (routed.outcome === "ok" ? parseHostAgentSignIns(routed.result) : undefined),
           () => undefined,
         );
         try {
-          const routed = await withTimeout(
-            portal.invokeOnNode({ nodeId: view.nodeId, command: "list_agent_accounts", args: {} }),
+          const routed = await routedWithTimeout(
+            (signal) =>
+              portal.invokeOnNode(
+                { nodeId: view.nodeId, command: "list_agent_accounts", args: {} },
+                { signal },
+              ),
             timeoutMs,
           );
           if (routed.outcome !== "ok") {

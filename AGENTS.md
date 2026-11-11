@@ -20,11 +20,12 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `bridges/cursor-bridge/` | [`bridges/cursor-bridge/AGENTS.md`](bridges/cursor-bridge/AGENTS.md) |
 | `bridges/acp-bridge/` | [`bridges/acp-bridge/AGENTS.md`](bridges/acp-bridge/AGENTS.md) |
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
-| OpenCode provider, SDK pin or `patches/` | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
+| OpenCode provider or its `opencode2` pin (`apps/backend/src/core/opencode2/`, `opencode2-*.ts`) | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
 | Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
+| Cutting, building or publishing a release (`release:*`, `publish:cli`, `scripts/release-*`, `scripts/publish-cli.ts`) | [`docs/development/releasing.md`](docs/development/releasing.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
 | Another node's workspace in the window, node scopes, their tiers, budgets and snapshots (`lib/node-scope/`, `InTreeWorkspace`, `RemoteWorkspaceRegion`, `lib/federation/in-tree-scopes.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree); store recipe in [`docs/development/node-scopes.md`](docs/development/node-scopes.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
@@ -35,8 +36,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
 | Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp-coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
-| Graphs plan work items (`plans/graphs/`): starting one, updating its status | [`plans/graphs/AGENTS.md`](plans/graphs/AGENTS.md) |
-| Goals plan work items (`plans/goals/`): starting one, updating its status | [`plans/goals/AGENTS.md`](plans/goals/AGENTS.md) |
+| Unified federation plan work items (`plans/unified/`): starting one, updating its status | [`plans/unified/0000-index.md`](plans/unified/0000-index.md#how-to-use-this-board) |
 
 ## Show every visual change as an image in the transcript
 
@@ -102,6 +102,18 @@ Before pushing, verify both the current branch and its configured upstream. If
 either operation would update `main` directly, stop and correct the branch or
 upstream configuration instead of pushing.
 
+## Releases
+
+An agent cutting a release runs both desktop builds itself and does not hand
+either to the maintainer: `mise run release:desktop` on the Mac, and the Linux
+half from the same Mac with `mise run release:linux -- build`, which reaches
+the Linux builder (`omarchy-hp`) over SSH and fetches from GitHub over HTTPS
+through the builder's `gh`. Run `mise run release:linux -- check` first rather
+than guessing hosts. `release:publish` uses the stored npm token when there is
+one; otherwise the only human step is approving npm's browser sign-in, which
+raises a desktop notification. Pass any approval link to the user at once.
+Details: [`docs/development/releasing.md`](docs/development/releasing.md).
+
 ## Background Work and Transport Invariants
 
 Environments keep doing work while another environment is active in the UI. Do
@@ -136,7 +148,7 @@ compression, or synchronization code, preserve these invariants:
     credentials, tokens, or attachment data.
 13. Closing a tab never deletes the conversation. Never call Claude's
     `DELETE /session/:id` or SDK `deleteSession`, Codex `thread/delete`, or
-    OpenCode `client.session.delete` from a close path.
+    OpenCode's session delete (`DELETE /api/session/:id`) from a close path.
 14. A transcript row is one model response (one step of the agent loop),
     never a whole turn. A turn kept alive by background work runs for hours,
     and a multi-megabyte row fits no transcript window: readers get only a
@@ -209,20 +221,14 @@ read. `tests/unit/inheritance-chains.test.ts` fails on any new project-class
 inheritance; a deliberate one-level subclass (an error refinement, a hook
 override) goes in its `INTENTIONAL_SUBCLASSES` list with a reason.
 
-## OpenCode SDK v2 - CRITICAL
+## OpenCode
 
-**Always use v2 of the `@opencode-ai/sdk` package.**
-
-```typescript
-// CORRECT - v2 API
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
-
-// WRONG - v1 API (different parameter structure, missing features)
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
-```
-
-The SDK is patched (`patches/`). Read the OpenCode maintenance notes in
-`docs/architecture/agent-engines.md` before bumping it.
+OpenCode 2.x is the only OpenCode line; OpenCode 1.x and its
+`@opencode-ai/sdk` were retired on 2026-11-11. The backend talks to OpenCode
+2's own `/api/*` server through `OpenCode2Client`
+(`apps/backend/src/core/opencode2/client.ts`); do not add an OpenCode SDK.
+Read the OpenCode maintenance notes in `docs/architecture/agent-engines.md`
+before bumping the `opencode2` pin.
 
 ## Task Runner - mise; Package Manager - Bun
 
@@ -445,7 +451,10 @@ Formatting is `bun fmt` (configured by the `[fmt]` section of `bunfig.toml`),
 linting is oxlint, and typechecking is `bun check` (TypeScript 7, the same
 version as the `typescript` dev dependency). Run them from the repo root with
 `mise run format`, `mise run format:check`, `mise run lint`, `mise run lint:fix`,
-`mise run typecheck`, or `mise run check` (format, lint and typecheck). Package
+`mise run typecheck`, or `mise run check` (format, lint, guards and typecheck).
+`mise run guards` runs the repository-wide guards (source guards, DOM absence
+scan, test ownership and the like) in a few seconds; `mise run test` runs it
+first and stops when it fails. Package
 `typecheck` scripts call `bun check -p <tsconfig>`; do not add a `check` script
 to a `package.json`, because `bun check` runs that script instead of the type
 checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
@@ -597,10 +606,11 @@ session surface. When touching the session catalogue
   the rollout keeps (a task report, an interruption marker) must be produced
   by both the live loop and `normalizePersistedSessionMessages`, or a reload
   will disagree with the live tab.
-- **`DELETE /session/:id` is destructive.** It calls the SDK's
-  `deleteSession`, which removes the `{sessionId}.jsonl` rollout. Tab close
-  uses `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops
-  the query and keeps the rollout; nothing may fall back from close to DELETE.
+- **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`;
+  an older bridge's called the SDK's `deleteSession`, which removes the
+  `{sessionId}.jsonl` rollout. Tab close uses `POST /session/:id/close`
+  (`closeSessionRetainingHistory`), which stops the query and keeps the
+  rollout; nothing may fall back from close to DELETE.
   Close answers 503 pending, keeping the session registered and fenced, when
   it cannot prove the query stopped (`Query.close()` threw or did not settle,
   or a racing dispatch claim did not settle).
@@ -829,7 +839,7 @@ When touching the Pi bridge:
   until Pi settles the prompt — a late acceptance is aborted and observed — so
   every status route reports running while something can still reach Pi.
   Config and compaction take no claim, so a cancel during them cannot stop a
-  later prompt. Close and DELETE mark the session closed before their first
+  later prompt. Close marks the session closed before its first
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
@@ -903,8 +913,8 @@ When touching the SDK bridge:
   workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
   at module load and again from `start()`), which is why `index.ts` exports
   `./config.js` before anything that loads `@cursor/sdk`.
-- Permanent close (`DELETE /session/:id` and `POST /session/:id/close`, which
-  are the same non-destructive operation here) lives in `src/session-close.ts`.
+- Permanent close (`POST /session/:id/close`, non-destructive; the bridge
+  serves no DELETE) lives in `src/session-close.ts`.
   It sets `state.closed` before its first await, and every admission path —
   prompt, attach, config, steer, same-key create, resume — refuses a closed
   session. A late attach is disposed instead of installed, and a late
@@ -973,8 +983,7 @@ When touching any of them:
 - **Close is non-destructive.** It stops owned work, denies parked approvals,
   questions and plan approvals, settles dispatch claims, and releases the
   bridge's live mapping. It never deletes vendor history: no Claude SDK
-  `deleteSession`, no Codex `thread/delete`, no OpenCode
-  `client.session.delete`.
+  `deleteSession`, no Codex `thread/delete`, no OpenCode session delete.
 - **Only a 2xx that affirms `closed: true` is a confirmed close.** 200
   `{ closed: true, retained: true }` or `{ closed: true, missing: true }`.
   Anything else, including an empty or malformed 2xx, is not a close.
@@ -987,7 +996,8 @@ When touching any of them:
   periodic reconcile sweep retries. Errors are fixed, content-free strings.
 - **A close never falls back to DELETE.** On 404/405 the teardown stays pending
   with a `bridge-upgrade-required` failure the renderer shows as a restart
-  notice, on every platform. Claude's DELETE deletes the rollout.
+  notice, on every platform. No bridge serves `DELETE /session/:id` any more;
+  an older Claude bridge's DELETE deleted the rollout. Do not add one back.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close.
@@ -1144,9 +1154,10 @@ Runtimes:
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 
 Agent CLIs, one per supported platform:
-- Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), and Pi
-  (`pi`), whose runtime paths the backend reads from `CLAUDE_CLI_PATH`,
-  `CODEX_CLI_PATH`, `OPENCODE_CLI_PATH`, and `PI_CLI_PATH`.
+- Claude Code (`claude`), Codex (`codex`), OpenCode 2.x (`opencode2`; a
+  terminal's `opencode` wraps it), and Pi (`pi`), whose runtime paths the
+  backend reads from `CLAUDE_CLI_PATH`, `CODEX_CLI_PATH`, `OPENCODE2_CLI_PATH`,
+  and `PI_CLI_PATH`.
 - Grok Build (`grok`) is downloaded as a hash-verified pinned artifact. Pi is
   downloaded the same way, as a bundle rather than a single file.
 - The image build fails immediately if any managed CLI is not runnable, and if
@@ -1949,9 +1960,39 @@ above. Do not invent alternatives, imply every possible option was evaluated,
 or claim to reproduce an exhaustive history of what the agent considered.
 Omit unsupported details.
 
+## Keep references current
+
+A change that deletes, moves, renames or retires a file updates every reference
+to it in the same change: links and paths in `AGENTS.md` (its `## Orkestrator`
+section included), `CLAUDE.md`, README files, `docs/`, code comments and tests.
+The same goes for a description the change makes untrue, such as a status
+scheme or a layout example it replaces.
+
+- **This is always in scope.** A ticket, worker prompt or file rule that
+  forbids editing those files does not cover it. Change only the stale
+  reference or description, nothing else in a protected file, and name each
+  such edit in your report so the reviewer sees it.
+- **Repoint, do not just delete.** Point the reference at the file or doc that
+  now holds the content. A retired file with no successor is cited the way
+  [`docs/README.md`](docs/README.md#maintaining-the-folders) does:
+  `NNNN (retired)`, or `git show <commit>:<path>`.
+- **Never stop at the ban.** Do not mark a ticket incomplete, defer the fix to a
+  later pass or leave it for a coordinator because a file was declared off
+  limits. Only when a reference cannot be fixed from this repository, say so in
+  the report and create a follow-up to-do for it.
+- **Writing a ticket or prompt.** When you forbid edits to files, say that
+  reference updates are exempt.
+
+Find references with `git grep -n '<old name>'` before committing.
+`tests/unit/docs/instruction-links.test.ts` fails when an `AGENTS.md`,
+`CLAUDE.md` or README file, or a doc under `docs/architecture/` or
+`docs/development/`, links to a file or heading that does not exist, or when an
+`AGENTS.md`, `CLAUDE.md` or README names a repository Markdown file that does
+not exist.
+
 ## Orkestrator
 
-Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.
+Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request, except to update what their own change makes stale: a reference to a file it deletes, moves, renames or retires, or a description it makes untrue.
 
 - Never merge pull requests; the user merges.
 - Workers finish by committing, rebasing on the project's configured base branch (not a hard-coded main) and pushing their branch without opening a PR, leave git status clean, then report to the coordinator; a pipeline environment's own PR step opens the PR, and for a prompt environment the coordinator runs Multi Review and sees it through to the PR.
@@ -1964,8 +2005,8 @@ Operating decisions the user approved in Orkestrator coordinator conversations. 
 - Each todo task subsection has **Problem.**, **Context.**, **Investigation.** and **Decisions.** paragraphs; each decision lists its options with pros and cons and marks exactly one as (recommended), so a later worker can act on the file without asking.
 - After the Task analysis, a todo file keeps whichever of these sections apply, in this order: Current state, Outstanding work, Constraints and rationale, Open questions, Needs verification, Related, Replaces.
 - A worker that acts on a todo adds a `## Assumptions and decisions` section with one subsection per choice it made, naming the task it belongs to and saying what it chose and why, and updates the task statuses in the Tasks list.
-- Follow-up todos a worker creates during other work use the same format; when unsure, copy the layout of docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md.
+- Follow-up todos a worker creates during other work use the same format; when unsure, copy the layout of docs/todo/cross-cutting/6160-static-if-modified-since-compression.md.
 - The two kinds of environment are called pipeline environment (created through the build pipeline, which builds, reviews, fixes, verifies, opens the PR and resolves conflicts on its own) and prompt environment (runs a prompt; review and PR are started separately).
 - Coordinators use a pipeline environment by default whenever what is being built is known (a ticket, or settled with the user), and a prompt environment for investigation or interactive work that may stop or need back-and-forth; for a prompt environment the coordinator launches Multi Review when the work is ready and sees it through fix, PR and conflict resolution.
 - Group related fixes into as few tickets, pipelines and PRs as possible: every pipeline runs the full validation, which takes a long time and uses a lot of machine resources.
-- Every docs/todo folder index gives each to-do a Status of `backlog` (an agent can work on it alone now), `blocked` (it waits on another to-do, a release or a recurrence, not on the user), `requires user input` (nothing left in it can go ahead without the user) or `done`, plus a Needs you note naming what the user must provide; update the status in the same change that alters a file's tasks.
+- Every docs/todo area folder index gives each to-do a Status of `backlog` (an agent can work on it alone now) or `blocked` (it waits on another to-do, a release, a CI run or a recurrence, not on the user), with a Needs you note (`—`, or `Waits on: ...`); work that needs the user is an item in the manual-test checklist, the only `requires user input` row (docs/README.md, "Choosing a status"); update the status in the same change that alters a file's tasks.

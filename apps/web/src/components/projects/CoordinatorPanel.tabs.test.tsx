@@ -13,6 +13,7 @@ import {
   type ProjectGitStatus,
 } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import { configStore } from "@/stores/configStore";
@@ -36,6 +37,7 @@ import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabil
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
 import { createSessionKey } from "@/lib/utils";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
@@ -200,6 +202,8 @@ const ensureSession = mock(
   },
 );
 
+// The conversation's session as the fake backend holds it.
+const sessionBackend = createNativeAgentSessionBackend({ readProjection: () => agentProjection });
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -207,7 +211,6 @@ mock.module("@/lib/backend", () => ({
     { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
   ]),
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: ensure,
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
@@ -221,9 +224,8 @@ mock.module("@/lib/backend", () => ({
   closeCoordinatorConversation: closeConversation,
   createCoordinatorConversation: createConversation,
   assignCoordinatorConversationAgent: assignAgent,
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: ensureSession,
-  getNativeAgentProjection: mock(async () => agentProjection),
+  ...sessionBackend.api,
   dispatchNativeAgentIntent: dispatchIntent,
 }));
 
@@ -654,6 +656,60 @@ describe("CoordinatorPanel tab strip", () => {
     await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "side-2"));
     await waitFor(() => expect(storedLayout().activePaneId).toBe(right!.id));
     expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  test("tab groups that cannot be read show no groups and a Retry, never a default grouping", async () => {
+    const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
+    const healthy = invokeMock.getMockImplementation();
+    let capabilityReads = 0;
+    const saves: unknown[] = [];
+    let failing = true;
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_client_state_capabilities") {
+        capabilityReads += 1;
+        if (failing) throw new Error("transport closed");
+        return {
+          coordinatorPaneLayouts: true,
+          coordinatorUpstreamMerge: false,
+          coordinatorUpstreamAutoMerge: false,
+          noticeDismissals: false,
+          environmentAttention: false,
+        };
+      }
+      if (command === "get_coordinator_pane_layout") return null;
+      if (command === "save_coordinator_pane_layout") {
+        saves.push(command);
+        const record = {
+          projectId: "project-1",
+          layout: args.layout,
+          revision: saves.length,
+          updatedAt: new Date(0).toISOString(),
+        };
+        return { status: "saved", record };
+      }
+      return undefined;
+    });
+    try {
+      ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
+      expect(
+        await screen.findByRole("heading", { name: "Could not load the tab groups" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("tab") === null).toBe(true);
+      expect(saves).toEqual([]);
+
+      failing = false;
+      const reads = capabilityReads;
+      fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
+      expect(await screen.findByRole("tab", { name: "Side 1, Codex" })).toBeTruthy();
+      expect(capabilityReads).toBeGreaterThan(reads);
+      expect(
+        screen.queryByRole("heading", { name: "Could not load the tab groups" }) === null,
+      ).toBe(true);
+    } finally {
+      invokeMock.mockImplementation(healthy ?? (() => Promise.resolve()));
+      appCommandStore(coordinatorPaneLayoutStore).getState().reset();
+    }
   });
 
   test("the loading state is announced, and New side agent keeps its name when only its icon shows", async () => {

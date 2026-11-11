@@ -31,13 +31,24 @@
  * event-loop stall, how many manifests each pass parsed or found cached, and
  * how long a capture's write waited while a sweep ran.
  *
- * One fixture for undoing a bulk turn (todo 7310): `restore-apply` runs one
+ * One fixture for undoing a bulk turn (#2047): `restore-apply` runs one
  * turn that writes `--restore-files` new files through the whole service,
  * finalizes it (retrying a timed-out end capture as the backend would), then
  * times the restore preview and `apply` end to end. It reports the turn's end
  * capture, the apply's checkpoint and result captures with their deadlines
- * and outcomes, and how many files were restored. Each restored file is one
- * conditional-write helper process, so this is the slow one.
+ * and outcomes, and how many files were restored. The writes go through one
+ * conditional-write helper process per batch of 500 files (todo 7555; before
+ * that, one per file, about 12 ms each on a quiet host).
+ *
+ * One fixture for provisional capture churn (todo 4962): `capture-churn` runs
+ * one turn on a temporary database with the real worktree watcher feeding its
+ * hints to the service, as the environment scan does, at the real capture
+ * spacing. A scripted agent makes `--churn-steps` tool calls `--churn-step-ms`
+ * apart, cycling through reading, editing a tracked file, `git status`, a test
+ * run that writes only Git-ignored output, and `git diff`. It reports the
+ * hints, the provisional passes they started, the captures those took, how
+ * many captures moved the turn's tree (a published measurement) and how many
+ * found it unchanged. It is opt-in: it runs for about steps x step-ms.
  *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).
@@ -48,7 +59,9 @@
  *     [--bulk-files=20000] [--moving-passes=6] [--idle-passes=6] [--env-scans=12]
  *     [--retention-snapshots=400] [--retention-files=10000] [--live-views=8]
  *     [--restore-files=10000,20000] [--restore-cold] [--restore-finalization-ms=N]
+ *     [--churn-steps=40] [--churn-step-ms=1500]
  *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention,restore-apply]
+ *     (`capture-churn` runs only when named in `--only`)
  *     [--json]
  */
 
@@ -70,6 +83,7 @@ import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-track
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
 import { ChangeTrackingService } from "../apps/backend/src/core/change-tracking/service";
+import { startWorktreeWatcher } from "../apps/backend/src/core/worktree-watcher";
 import { turnIdFor } from "../apps/backend/src/core/change-tracking/turn-boundaries";
 import {
   CHANGE_LEDGER_DATABASE_FILE,
@@ -103,6 +117,8 @@ const restoreFiles = arg("restore-files", "10000,20000").split(",").map(Number);
 const restoreCold = process.argv.includes("--restore-cold");
 /** A shorter turn finalization deadline, to exercise the end-capture recovery. */
 const restoreFinalizationMs = Number(arg("restore-finalization-ms", "0")) || undefined;
+const churnSteps = Number(arg("churn-steps", "40"));
+const churnStepMs = Number(arg("churn-step-ms", "1500"));
 const only = new Set(
   arg(
     "only",
@@ -687,6 +703,173 @@ async function benchMeasurementRows() {
   }
 }
 
+/**
+ * The workload called `capture-churn` (todo 4962): how often a provisional
+ * capture, started by a real watcher hint during a turn, finds the tree it
+ * already published. The service runs on a temporary database with its real
+ * spacing; the real worktree watcher's hints go to `onDiffScanEvent` as the
+ * environment scan forwards them. A scripted agent makes `--churn-steps` tool
+ * calls `--churn-step-ms` apart. Nothing reads a real data directory.
+ */
+async function benchCaptureChurn() {
+  const repo = makeRepo(200);
+  writeFileSync(path.join(repo, ".gitignore"), "dist/\ncoverage/\n.cache/\nnode_modules/\n");
+  git(repo, "add", ".gitignore");
+  git(repo, "commit", "-qm", "ignore build output");
+  await settle();
+  const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-churn-"));
+  const database = openChangeLedgerDatabase(dataDir);
+  const service = new ChangeTrackingService({
+    dataDir,
+    database: () => database,
+    emit: () => undefined,
+    environmentTarget: async () => ({ kind: "local", worktreePath: repo }),
+    durable: false,
+    manualScheduling: true,
+  });
+  service.start();
+  const counts = { hints: 0, passes: 0, moved: 0 };
+  const provisional = service.turns.provisional.bind(service.turns);
+  service.turns.provisional = (...args) => {
+    counts.passes += 1;
+    return provisional(...args);
+  };
+  const insert = service.ledger.insertMeasurement.bind(service.ledger);
+  service.ledger.insertMeasurement = (measurement, owner, files, seq) => {
+    if (measurement.scope === "turn-net" && measurement.finality === "provisional")
+      counts.moved += 1;
+    insert(measurement, owner, files, seq);
+  };
+  const target = {
+    environmentId: "env",
+    comparisonRef: "main",
+    kind: "local" as const,
+    worktreePath: repo,
+  };
+  const watcher = startWorktreeWatcher({
+    worktreePath: repo,
+    comparisonRef: "main",
+    onChange: (hint) => {
+      counts.hints += 1;
+      service.onDiffScanEvent({
+        kind: "hint",
+        target,
+        paths: hint?.paths && !hint.overflow ? hint.paths : null,
+        at: new Date().toISOString(),
+      });
+    },
+  });
+  const run = (command: string, ...args: string[]) =>
+    execFileSync(command, args, { cwd: repo, stdio: "ignore" });
+  /** One agent tool call each; only `edit` changes what Git sees. */
+  const steps: Array<[string, (step: number) => void]> = [
+    ["read", () => run("cat", "d0/f0.ts")],
+    ["edit", (step) => writeFileSync(path.join(repo, `d${step % 50}`, "agent.ts"), `${step}\n`)],
+    ["git-status", () => run("git", "status", "--porcelain")],
+    [
+      "test-run",
+      (step) => {
+        for (const directory of ["dist", "coverage", path.join("node_modules", ".cache")]) {
+          mkdirSync(path.join(repo, directory), { recursive: true });
+          writeFileSync(path.join(repo, directory, `out${step % 5}.txt`), `${step}\n`);
+        }
+      },
+    ],
+    ["git-diff", () => run("git", "diff", "--stat")],
+  ];
+  const capturesByStatus = () =>
+    (
+      database.db
+        .query(
+          "SELECT status, COUNT(*) AS n FROM change_capture_attempts WHERE purpose = 'provisional' GROUP BY status",
+        )
+        .all() as Array<{ status: string; n: number }>
+    ).reduce<Record<string, number>>((all, row) => ({ ...all, [row.status]: row.n }), {});
+  const tally = () => {
+    const captures = capturesByStatus();
+    return {
+      hints: counts.hints,
+      passes: counts.passes,
+      captures: Object.values(captures).reduce((sum, n) => sum + n, 0),
+      published: captures.published ?? 0,
+      moved: counts.moved,
+    };
+  };
+  type Tally = ReturnType<typeof tally>;
+  const delta = (after: Tally, before: Tally) =>
+    Object.fromEntries(
+      Object.keys(after).map((key) => [
+        key,
+        after[key as keyof Tally] - before[key as keyof Tally],
+      ]),
+    ) as Tally;
+  /** What followed each kind of tool call, within its step. */
+  const byStep: Record<string, Tally & { calls: number }> = {};
+  try {
+    const requestId = "churn";
+    const session = { environmentId: "env", logicalSessionKey: "env-env:tab", requestId };
+    await service.prepareTurnStart({ ...session, provider: "claude" });
+    service.markTurnDispatched("env", "env-env:tab", requestId, "accepted");
+    // Let the watcher establish, and its first hint settle, before the agent starts.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const first = tally();
+    const started = performance.now();
+    for (let step = 0; step < churnSteps; step++) {
+      const [name, act] = steps[step % steps.length]!;
+      const before = tally();
+      act(step);
+      await new Promise((resolve) => setTimeout(resolve, churnStepMs));
+      const change = delta(tally(), before);
+      const entry = (byStep[name] ??= {
+        calls: 0,
+        hints: 0,
+        passes: 0,
+        captures: 0,
+        published: 0,
+        moved: 0,
+      });
+      entry.calls += 1;
+      for (const key of Object.keys(change) as Array<keyof Tally>) entry[key] += change[key];
+    }
+    watcher.close();
+    // A capture a late hint started finishes before the turn ends.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const total = delta(tally(), first);
+    await service.finalizeTurn(session);
+    rows.push({
+      workload: `capture-churn (${churnSteps} tool calls ${churnStepMs} ms apart, local spacing ${CHANGE_TRACKING_POLICY_V1.provisionalSpacingLocalMs} ms)`,
+      seconds: Math.round((performance.now() - started) / 100) / 10,
+      hints: total.hints,
+      provisionalPasses: total.passes,
+      captures: total.captures,
+      capturesPublished: total.published,
+      capturesMoved: total.moved,
+      capturesUnchanged: total.published - total.moved,
+      passesWithoutCapture: total.passes - total.captures,
+      byToolCall: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(byStep).map(([name, entry]) => [
+            name,
+            {
+              calls: entry.calls,
+              hints: entry.hints,
+              captures: entry.captures,
+              moved: entry.moved,
+              unchanged: entry.published - entry.moved,
+            },
+          ]),
+        ),
+      ),
+    });
+  } finally {
+    watcher.close();
+    service.shutdown();
+    database.close();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 /** Undo a turn that wrote `files` new files: end capture, preview and apply. */
 async function benchRestoreApply(files: number) {
   const repo = makeRepo(50);
@@ -901,6 +1084,7 @@ if (only.has("manifest")) await benchManifest();
 if (only.has("measurement-rows")) await benchMeasurementRows();
 if (only.has("retention")) await benchRetention();
 if (only.has("restore-apply")) for (const size of restoreFiles) await benchRestoreApply(size);
+if (only.has("capture-churn")) await benchCaptureChurn();
 const peakRssDeltaMiB = Math.round((process.memoryUsage().rss - startedRss) / 1024 / 1024);
 
 if (asJson) {

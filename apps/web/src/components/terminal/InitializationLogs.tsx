@@ -45,13 +45,15 @@ function ContainerInitializationLogs({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isStale, setIsStale] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const logBoxRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new logs arrive
+  // Follow the tail as new logs arrive. Only the log box scrolls:
+  // `scrollIntoView` would also scroll every ancestor with any overflow, the
+  // window's `overflow: hidden` layout roots included, which shifted the whole
+  // window up while a container was being created.
   useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
+    const box = logBoxRef.current;
+    if (box && logs.length > 0) box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
   }, [logs]);
 
   // Docker is the durable log buffer. Refresh from its authoritative tail so
@@ -133,7 +135,7 @@ function ContainerInitializationLogs({
       </FloatingNoticeLayer>
 
       {/* Log content */}
-      <div className="flex-1 overflow-auto p-4 font-mono text-xs">
+      <div ref={logBoxRef} className="flex-1 overflow-auto p-4 font-mono text-xs">
         {error ? (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">
@@ -185,7 +187,6 @@ function ContainerInitializationLogs({
                 {line}
               </div>
             ))}
-            <div ref={logsEndRef} />
           </div>
         )}
       </div>

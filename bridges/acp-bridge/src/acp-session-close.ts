@@ -41,9 +41,8 @@ export function denyPendingRequests(state: SessionState): void {
 /**
  * Ordinary tab close for one ACP bridge session (`POST /session/:id/close`).
  *
- * The same release as DELETE — deny parked requests, stop the agent child,
- * drop the registry entry, publish the state file — and, like DELETE, no vendor
- * call deletes anything: ACP has no session delete here, and Grok's own session
+ * Denies parked requests, stops the agent child, drops the registry entry and
+ * publishes the state file. No vendor call deletes anything: ACP has no session delete here, and Grok's own session
  * store is only ever read. `session/load` can reopen the conversation
  * afterwards through `/session/list`.
  *

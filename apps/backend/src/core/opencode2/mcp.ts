@@ -38,7 +38,7 @@ import {
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ORKESTRATOR_ARTIFACT_MCP_PATH } from "@orkestrator/protocol/transcript-artifacts";
 import { ProviderDispatchPreparationError } from "../agent-provider-contract.js";
-import { MAX_OPENCODE_CONFIGURED_MCP_SERVERS } from "../opencode-user-mcp.js";
+import { MAX_OPENCODE_CONFIGURED_MCP_SERVERS } from "./policy-rules.js";
 import type { OpenCode2Client } from "./client.js";
 import {
   isOrkestratorOpenCode2McpServer,
@@ -50,6 +50,7 @@ import {
   openCode2TabMcpServer,
   type OpenCode2SessionMcpPrefix,
 } from "./permissions.js";
+import { openCode2LocationReloadCount } from "./reload-gate.js";
 import type { OpenCode2McpServer } from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
@@ -75,7 +76,11 @@ export interface OpenCode2McpDependencies {
   connectTimeoutMs?: number;
 }
 
-type Registration = { key: string; checkedAt: number };
+/**
+ * `reloads` is the server's location reload count when the registration was
+ * made or last confirmed: a reload since dropped it (`reload-gate.ts`).
+ */
+type Registration = { key: string; checkedAt: number; reloads: number };
 
 export class OpenCode2McpServers {
   private readonly registered = new Map<string, Registration>();
@@ -154,8 +159,8 @@ export class OpenCode2McpServers {
   }
 
   /** The user's servers on this location, in the shared shape; Orkestrator's are left out. */
-  async userServers(): Promise<NativeAgentMcpServer[]> {
-    const servers = await this.client.listMcpServers();
+  async userServers(signal?: AbortSignal): Promise<NativeAgentMcpServer[]> {
+    const servers = await this.client.listMcpServers(signal);
     return servers
       .filter((server) => !isOrkestratorOpenCode2McpServer(server.name))
       .slice(0, MAX_LISTED_SERVERS)
@@ -185,10 +190,19 @@ export class OpenCode2McpServers {
     if (pending?.key === key) return pending.promise;
     const promise = (async () => {
       if (pending) await pending.promise.catch(() => undefined);
+      const reloads = openCode2LocationReloadCount(this.client.baseUrl);
       const known = this.registered.get(name);
-      if (known?.key === key && this.now() - known.checkedAt < STATUS_TRUST_MS) return;
+      // A location reload since the registration dropped it, so it is not trusted.
+      if (
+        known?.key === key &&
+        known.reloads === reloads &&
+        this.now() - known.checkedAt < STATUS_TRUST_MS
+      ) {
+        return;
+      }
       if (known?.key === key && (await this.status(name)) === "connected") {
         known.checkedAt = this.now();
+        known.reloads = reloads;
         return;
       }
       this.registered.delete(name);
@@ -202,7 +216,7 @@ export class OpenCode2McpServers {
         timeout: { startup: 5_000, catalog: 5_000 },
       });
       await this.waitConnected(name);
-      this.registered.set(name, { key, checkedAt: this.now() });
+      this.registered.set(name, { key, checkedAt: this.now(), reloads });
       this.evictOldTabs();
     })();
     const entry = { key, promise };
@@ -258,9 +272,9 @@ export class OpenCode2McpServers {
  * The user's server names (the location's servers, Orkestrator's left out) a
  * policy's MCP selection is computed over, or undefined when the policy
  * narrows nothing (no request is made). The user's global servers reach 2.x
- * through the config mirror (`user-config.ts`), so they are listed here as on
- * 1.x. Throws when the list cannot be read: without it the rules would leave
- * every server callable (`opencode-user-mcp.ts`).
+ * through the config mirror (`user-config.ts`), so they are listed here. Throws
+ * when the list cannot be read: without it the rules would leave every server
+ * callable (`policy-rules.ts`).
  */
 export async function openCode2ConfiguredUserMcpServers(
   client: Pick<OpenCode2Client, "listMcpServers">,

@@ -11,11 +11,17 @@
  * - `worker(node)`: a local environment whose worktree is ready, with one
  *   Agent (native) tab that never starts: the backends have no toolchain and
  *   no credentials.
+ * - `pairedOn(command, leaf)`: waits until the command node's portal lists
+ *   the leaf's copy of the project. The portal learns of a project added on
+ *   the leaf from the leaf's events, so a tool that checks for a copy (coordinator
+ *   mail) can run before it has; mixed-version run 42827537552 refused mail
+ *   with "has no copy of this project" that way.
  */
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 import { runSetup, until, type PeerNode } from "./harness.ts";
@@ -90,6 +96,28 @@ export class PairFixtures {
       this.workers.set(node, created);
     }
     return created;
+  }
+
+  /** The leaf's project, once the command node's portal summaries list its copy. */
+  async pairedOn(command: PeerNode, leaf: PeerNode): Promise<ProjectFixture> {
+    const project = await this.project(leaf);
+    const hint = repositoryHint(REPOSITORY_URL);
+    if (!command.has("get_node_summaries")) return project;
+    type Summaries = {
+      nodes: Array<{ nodeId: string; projects?: Array<{ repositoryHint?: string }> }>;
+    };
+    await until(
+      `${command.label}'s portal to list ${leaf.label}'s copy of the project`,
+      () => command.invoke<Summaries>("get_node_summaries", { nodeIds: [leaf.id] }),
+      (summaries) =>
+        summaries.nodes.some(
+          (node) =>
+            node.nodeId === leaf.id &&
+            (node.projects ?? []).some((entry) => entry.repositoryHint === hint),
+        ),
+      60_000,
+    );
+    return project;
   }
 
   private async createProject(node: PeerNode): Promise<ProjectFixture> {

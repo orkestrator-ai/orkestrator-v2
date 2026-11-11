@@ -14,10 +14,6 @@ import {
   type MultiReviewEngine,
 } from "@orkestrator/protocol/multi-review";
 import {
-  resolveOpenCodeProtocol,
-  type OpenCodeProtocol,
-} from "@orkestrator/protocol/opencode-protocol";
-import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
   type CoordinatorResearchMcpServer,
@@ -81,7 +77,7 @@ const log = createLogger("web.settings");
 
 // Long enough that a slider drag or a fast typist produces one write, short
 // enough that releasing a control feels like it saved immediately.
-const AUTO_SAVE_DEBOUNCE_MS = 400;
+export const AUTO_SAVE_DEBOUNCE_MS = 400;
 
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 
@@ -116,10 +112,6 @@ export function normalizeAllowedDomainsInput(value: string | string[]): string[]
 export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
   const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
   return {
-    containerResources: {
-      cpuCores: global.containerResources.cpuCores,
-      memoryGb: global.containerResources.memoryGb,
-    },
     envFilePatterns: normalizeEnvPatternsInput(global.envFilePatterns),
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
@@ -138,7 +130,6 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     ),
     agentSettings: normalizeAgentSettings(global.agentSettings),
     openCodeModelProviders: normalizeOpenCodeModelProviders(global.openCodeModelProviders),
-    openCodeProtocol: resolveOpenCodeProtocol(global.openCodeProtocol),
     codexMaxConcurrentThreads:
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     claudeBackgroundCommandLimitHours: resolveClaudeBackgroundCommandLimitHours(
@@ -160,8 +151,10 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     terminalHistoryRetentionDays:
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalScheduling: global.experimentalScheduling ?? false,
-    localWindowGatewayTransport: global.localWindowGatewayTransport ?? false,
+    localWindowGatewayTransport: global.localWindowGatewayTransport ?? true,
     experimentalGraphs: global.experimentalGraphs ?? false,
+    experimentalSelfImprovement: global.experimentalSelfImprovement ?? false,
+    experimentalTmux: global.experimentalTmux ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     logDetail: resolveLogDetail(global),
@@ -221,8 +214,6 @@ function getSavedReviewInstruction(value: unknown): string {
  */
 export function globalFormSignature(global: GlobalConfig): string {
   return JSON.stringify([
-    global.containerResources.cpuCores,
-    global.containerResources.memoryGb,
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
     global.containerGitHubCredential ?? "none",
@@ -238,7 +229,6 @@ export function globalFormSignature(global: GlobalConfig): string {
     coordinatorWebResearchSetting(global.coordinatorWebResearch),
     normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers),
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
-    resolveOpenCodeProtocol(global.openCodeProtocol),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
@@ -252,8 +242,10 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     global.experimentalScheduling ?? false,
-    global.localWindowGatewayTransport ?? false,
+    global.localWindowGatewayTransport ?? true,
     global.experimentalGraphs ?? false,
+    global.experimentalSelfImprovement ?? false,
+    global.experimentalTmux ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     resolveLogDetail(global),
@@ -276,8 +268,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const { machine } = useAccountMachine();
   const global = config.global;
 
-  const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
-  const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [cursorApiKey, setCursorApiKey] = useState("");
@@ -328,9 +318,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
   );
-  const [openCodeProtocol, setOpenCodeProtocol] = useState<OpenCodeProtocol>(() =>
-    resolveOpenCodeProtocol(global.openCodeProtocol),
-  );
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [codexMaxConcurrentThreads, setCodexMaxConcurrentThreads] = useState(
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
@@ -374,9 +361,13 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.experimentalScheduling ?? false,
   );
   const [localWindowGatewayTransport, setLocalWindowGatewayTransport] = useState(
-    global.localWindowGatewayTransport ?? false,
+    global.localWindowGatewayTransport ?? true,
   );
   const [experimentalGraphs, setExperimentalGraphs] = useState(global.experimentalGraphs ?? false);
+  const [experimentalSelfImprovement, setExperimentalSelfImprovement] = useState(
+    global.experimentalSelfImprovement ?? false,
+  );
+  const [experimentalTmux, setExperimentalTmux] = useState(global.experimentalTmux ?? false);
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -444,8 +435,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     if (syncedGlobalSignatureRef.current === signature) return;
     syncedGlobalSignatureRef.current = signature;
     syncedGlobalRef.current = global;
-    setCpuCores(global.containerResources.cpuCores);
-    setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     // Credential inputs are deliberately not reset here. They are write-only and
     // cleared explicitly once their save succeeds, so preserving whatever is
@@ -469,7 +458,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     );
     setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
-    setOpenCodeProtocol(resolveOpenCodeProtocol(global.openCodeProtocol));
     setCodexMaxConcurrentThreads(
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     );
@@ -496,8 +484,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     );
     setExperimentalScheduling(global.experimentalScheduling ?? false);
-    setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? false);
+    setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? true);
     setExperimentalGraphs(global.experimentalGraphs ?? false);
+    setExperimentalSelfImprovement(global.experimentalSelfImprovement ?? false);
+    setExperimentalTmux(global.experimentalTmux ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setLogDetail(resolveLogDetail(global));
@@ -651,7 +641,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // cannot store a partial secret.
   const localCoreFields = useMemo<CoreFieldsSnapshot>(
     () => ({
-      containerResources: { cpuCores, memoryGb },
       envFilePatterns: normalizeEnvPatternsInput(envPatterns),
       allowedDomains: normalizeAllowedDomainsInput(allowedDomains),
       useHostGitHubCredentials,
@@ -668,7 +657,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       coordinatorResearchMcpServers,
       agentSettings: normalizeAgentSettings(agentSettings),
       openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
-      openCodeProtocol,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
       sessionTitleGeneration,
@@ -686,6 +674,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       experimentalScheduling,
       localWindowGatewayTransport,
       experimentalGraphs,
+      experimentalSelfImprovement,
+      experimentalTmux,
       debugLogging,
       debugLogRetentionDays,
       logDetail,
@@ -696,8 +686,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       multiReviewEngine,
     }),
     [
-      cpuCores,
-      memoryGb,
       envPatterns,
       allowedDomains,
       useHostGitHubCredentials,
@@ -714,7 +702,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       coordinatorResearchMcpServers,
       agentSettings,
       openCodeModelProviders,
-      openCodeProtocol,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
       sessionTitleGeneration,
@@ -730,6 +717,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       experimentalScheduling,
       localWindowGatewayTransport,
       experimentalGraphs,
+      experimentalSelfImprovement,
+      experimentalTmux,
       debugLogging,
       debugLogRetentionDays,
       logDetail,
@@ -1075,10 +1064,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
 
   const sectionSettings = {
     global,
-    cpuCores,
-    setCpuCores,
-    memoryGb,
-    setMemoryGb,
     envPatterns,
     setEnvPatterns,
     anthropicApiKey,
@@ -1121,8 +1106,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setCoordinatorResearchMcpServers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
-    openCodeProtocol,
-    setOpenCodeProtocol,
     planUsageRefreshToken,
     setPlanUsageRefreshToken,
     openCodeProviderDraft,
@@ -1157,6 +1140,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
+    experimentalSelfImprovement,
+    setExperimentalSelfImprovement,
+    experimentalTmux,
+    setExperimentalTmux,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,

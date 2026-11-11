@@ -22,6 +22,7 @@ export * from "./backend/changes";
 export * from "./backend/machine-profile";
 export * from "./backend/github-pull-requests";
 export * from "./backend/scheduled-jobs";
+export * from "./backend/self-improvement";
 export * from "./backend/user-commands";
 export * from "./backend/permission-rules";
 export * from "./backend/bug-report";

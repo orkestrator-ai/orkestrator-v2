@@ -121,6 +121,33 @@ write-only to the renderer: settings reads expose only configured/effective
 source metadata. `useHostClaudeCredentials` can disable host OAuth propagation
 into normal containers.
 
+A user can also point Claude Code at its model through the `env` of the user
+settings file (`$CLAUDE_CONFIG_DIR/settings.json`, else
+`~/.claude/settings.json`): a gateway's `ANTHROPIC_BASE_URL` and token, or the
+Bedrock, Vertex or Foundry variables. Ordinary turns load that file
+themselves. Read-only turns (Multi Review reviewers and consolidation,
+plan-mode fan-out reviewers) load no settings file, so the Claude bridge reads
+it and passes only its connection entries
+(`READ_ONLY_CONNECTION_ENV_NAMES`,
+`bridges/claude-bridge/src/services/read-only-connection-env.ts`) to the turn's
+process environment, over the bridge's own values as the CLI orders them.
+Hooks, permission rules, plugins, other variables and project or local
+settings files are never taken, and `apiKeyHelper` is not run, because it is a
+command and a read-only turn runs none outside its hook. A login that relies
+on `apiKeyHelper` reaches read-only turns only through managed settings
+(`/etc/claude-code/managed-settings.json` on Linux) or the process
+environment. `AWS_PROFILE` is not taken, and a Bedrock connection that names
+no `AWS_BEARER_TOKEN_BEDROCK`, static key pair or `CLAUDE_CODE_SKIP_BEDROCK_AUTH`
+keeps its region, endpoint and models but not its Bedrock switch or
+credentials: the CLI would resolve AWS profiles, and a profile's
+`credential_process` is a command outside the hook. The bridge logs
+`read-only-connection.bedrock-withheld` when that happens. Coordinators get
+nothing from the file: their bridge runs with `CLAUDE_CONFIG_DIR` at a
+private, empty Claude home and connects with the account token the backend
+hands it. Containers do not receive the host settings file's `env`: the
+entrypoint rewrites the container's `~/.claude/settings.json` and stages only
+the host's `enabledPlugins`.
+
 #### Models
 
 The Claude bridge queries the installed SDK/CLI for the live catalogue. A
@@ -273,8 +300,12 @@ model of pi-ai's ChatGPT-backend catalogue, the `openai-codex` provider's
 built-in list, that the login's provider offers (`openai/gpt-6.1-sol` on Pi
 1.4.0). That list is Pi's own data and moves with each Pi release. An API key
 on `openai`, and every other provider, keeps the first model. A saved default
-or an explicit pick still wins, even one the login refuses. See
-[0062](../todo/agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
+or an explicit pick still wins, even one the login refuses, and the bridge
+never writes the user's `~/.pi` settings to choose a model for them; the fix
+for a refused saved default is `/model`. The live check on
+an `openai` ChatGPT login is the
+[opt-in Pi ChatGPT default-model check](testing-guide.md#opt-in-pi-chatgpt-default-model-check)
+(to-do 0062, retired 2026-11-10).
 
 The bridge's catalogue marks the model a tab with no model would start on
 (`sessionDefault: true`, from the global settings and the fallback only), and

@@ -4,7 +4,6 @@ import type {
   GraphHumanAnswerInput,
   GraphHumanWait,
   GraphRun,
-  GraphRunPendingInteraction,
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphRunCodeRewindPreview } from "@orkestrator/protocol/graphs/run-rewind";
 import type {
@@ -158,13 +157,6 @@ export function createGraphRunsApi(client: BackendClient) {
     }) as Promise<{ activationKey: string; human: GraphHumanWait | null }>;
   }
 
-  /** What a run, or every live run of an environment, waits on a person for. */
-  function listGraphRunPendingInteractions(
-    target: { runId: string } | { environmentId: string },
-  ): Promise<GraphRunPendingInteraction[]> {
-    return api().graph_run_pending({ ...target });
-  }
-
   const graphRunRewindBackend: GraphRunRewindBackend = {
     restart: async (runId, activationKey) =>
       (await restartGraphRunActivation({ runId, activationKey, requestId: requestId() })).run,
@@ -193,7 +185,6 @@ export function createGraphRunsApi(client: BackendClient) {
     getGraphRunTranscript,
     answerGraphRunQuestion,
     answerGraphRunHumanNode,
-    listGraphRunPendingInteractions,
     graphRunRewindBackend,
   };
 }
@@ -213,6 +204,5 @@ export const {
   getGraphRunTranscript,
   answerGraphRunQuestion,
   answerGraphRunHumanNode,
-  listGraphRunPendingInteractions,
   graphRunRewindBackend,
 } = createGraphRunsApi(commandBackendClient);

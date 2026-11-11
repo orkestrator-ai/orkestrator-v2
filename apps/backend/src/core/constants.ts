@@ -26,6 +26,12 @@ export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
  * creation, as `name=reason` pairs from a fixed vocabulary.
  */
 export const DOCKER_LABEL_PROJECT_SEED_REFUSED = "orkestrator-project-seed-refused";
+/**
+ * Host ports the backend chose for a rootless daemon's automatic mappings, as
+ * comma-separated numbers (`container-host-ports.ts`). Published as fixed
+ * ports, but not ports the user fixed, so the start path may retry them.
+ */
+export const DOCKER_LABEL_BACKEND_HOST_PORTS = "orkestrator-backend-host-ports";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 /**
@@ -41,14 +47,20 @@ export {
 } from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_CODEX_MAX_CONCURRENT_THREADS } from "@orkestrator/protocol/app-config-defaults";
 
-export const OPENCODE_SERVER_PORT = 4096;
+/**
+ * The retired OpenCode 1.x server's container port. Nothing starts a server
+ * there or publishes it any more; containers created before OpenCode 2.x
+ * became the only OpenCode still publish it, so it stays out of preview
+ * targets (`preview-target-resolver.ts`).
+ */
+export const RETIRED_OPENCODE1_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;
 export const CODEX_BRIDGE_PORT = 4098;
 export const CURSOR_BRIDGE_PORT = 4099;
 export const GROK_ACP_BRIDGE_PORT = 4100;
 export const PI_BRIDGE_PORT = 4101;
 /**
- * The OpenCode 2.x server inside a container (`opencode2-container-server.ts`).
+ * The OpenCode (2.x) server inside a container (`opencode2-container-server.ts`).
  * Published on every new container; only an image with `opencode2` runs it.
  */
 export const OPENCODE2_SERVER_PORT = 4102;

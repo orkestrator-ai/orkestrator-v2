@@ -1,7 +1,4 @@
-import {
-  classifyViewSnapshotResponse,
-  isUnknownViewCommandError,
-} from "@orkestrator/protocol/view-sync";
+import { classifyViewSnapshotResponse } from "@orkestrator/protocol/view-sync";
 import type { HydrationEntry, HydrationFetchResult } from "./bounded-hydration";
 
 /**
@@ -157,9 +154,10 @@ export class BoundedKeySet {
 }
 
 /**
- * Adapts a raw snapshot-command response (conditional outcome, stamped
- * snapshot, or plain legacy snapshot) into a {@link HydrationFetchResult},
- * validating the body before anything can be applied.
+ * Adapts a raw snapshot-command response (conditional outcome or stamped
+ * snapshot) into a {@link HydrationFetchResult}, validating the body before
+ * anything can be applied. An unstamped body is invalid: every peer in the
+ * support window (since v2.21.0) stamps its snapshots.
  */
 export function toHydrationFetchResult<S, V>(
   response: unknown,
@@ -171,7 +169,7 @@ export function toHydrationFetchResult<S, V>(
     case "invalid":
       return { kind: "invalid" };
     case "legacy":
-      return { kind: "snapshot", stamp: null, entries: toEntries(classified.snapshot) };
+      return { kind: "invalid" };
     case "stamped":
       return { kind: "snapshot", stamp: classified.stamp, entries: toEntries(classified.snapshot) };
     case "outcome": {
@@ -185,22 +183,13 @@ export function toHydrationFetchResult<S, V>(
 }
 
 /**
- * Runs a snapshot read, mapping the backend's unknown-command answer (and only
- * that answer) to the `unsupported` capability. Other failures propagate and
- * are retried with backoff by the controller.
+ * Runs a snapshot read and classifies its answer. Failures propagate and are
+ * retried with backoff by the controller.
  */
 export async function readViewSnapshot<S, V>(
-  command: string,
   read: () => Promise<unknown>,
   isSnapshot: (value: unknown) => value is S,
   toEntries: (snapshot: S) => HydrationEntry<V>[],
 ): Promise<HydrationFetchResult<V>> {
-  let response: unknown;
-  try {
-    response = await read();
-  } catch (error) {
-    if (isUnknownViewCommandError(error, command)) return { kind: "unsupported" };
-    throw error;
-  }
-  return toHydrationFetchResult(response, isSnapshot, toEntries);
+  return toHydrationFetchResult(await read(), isSnapshot, toEntries);
 }

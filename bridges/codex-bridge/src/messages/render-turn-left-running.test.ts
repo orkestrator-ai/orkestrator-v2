@@ -1,6 +1,6 @@
 /**
  * How a command still `in_progress` renders once its turn has ended: left
- * running, with no tool state, never "running..." (to-do 7522).
+ * running, with no tool state, never "running..." (#2064).
  */
 import { describe, expect, test } from "bun:test";
 import { TurnAccumulator } from "../sessions/turn-accumulator.js";

@@ -8,17 +8,23 @@ Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
 What is still missing — mainly provider parity and live qualification — lives in
-[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md) and
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md);
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md)
+and the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+why each platform holds the read-only boundary the way it does is in
+[`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
 OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
 worker-surface follow-ups (root changes on other nodes, adopting feature
 plans) in
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md);
-live qualification of the gap tools (`resolve_conflicts`, PR wakes,
-`stop_worker_turn`, `get_worker_changes`, `fork_worker`, schedule edits,
-worker slash commands, `answer_worker_question`) in
-[1021-coordinator-gap-tools-follow-ups.md](../todo/coordinator-and-multi-review/1021-coordinator-gap-tools-follow-ups.md).
+the gap tools (`resolve_conflicts`, PR wakes, `stop_worker_turn`,
+`get_worker_changes`, `fork_worker`, schedule edits, worker slash commands,
+`answer_worker_question`) pass the live suite's `gap-tools` case on a fake
+model, on this node and through a leaf
+([agent-testing.md](../development/agent-testing.md#coordinator-gap-tools-on-this-node-and-a-leaf-fake-model)),
+and their real-provider, GitHub and answer-relay runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(1021 (retired)).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -488,11 +494,14 @@ move, and the provider's error in its transcript is what the user sees. A side a
 stop reaches its main. So a wake that fails on a limit ends there rather than raising
 another wake: a notice cannot trigger another notice about the same stop.
 
-To check this live, with real accounts and two machines: attach a leaf to a command node
-that has the same repository, run a tab on the leaf until the provider refuses it, and
-look for one wake on the command node's coordinator and none on the leaf's. Repeat with
-the link down across a leaf restart, and with the command node's coordinator on the same
-email as the stopped tab, with and without another included account.
+`mise run test:agent:coordinator:notice-live` checks this on two real backends, on
+fixture Claude accounts and a loopback provider
+([agent-testing.md](../development/agent-testing.md#coordinator-usage-limit-notices-between-two-profiles-fixture-accounts)):
+a leaf's tab, delegated worker and pipeline session stopping on one account reach the
+command node's coordinator as one wake and the leaf's as none; a coordinator on its own
+entry of the limited login is moved, unpinned, before its wake; and a stop raised while
+the command node is down arrives once after a leaf restart. With real accounts and two
+machines, the same check is on the manual-test checklist.
 
 ## Coordinators on two nodes
 
@@ -537,7 +546,12 @@ repository exchange ordinary node mail
   On the leaf each new message from the command node's coordinator starts a
   fresh budget, as a new request to a worker does, so the leaf answers every
   question the command node actually sends; the hourly limit still applies
-  there.
+  there. Replacing the command node's main does not release a held answer:
+  the next main takes it over still held
+  ([agent-messaging.md](agent-messaging.md#budgets)). The exchange, the bound
+  and the replacement are qualified between two `dev:test` profiles with a
+  loopback model by `mise run test:agent:coordinator:node-mail-fake`
+  ([agent-testing.md](../development/agent-testing.md#coordinator-node-mail-between-two-profiles-fake-model)).
 - **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
   nothing; the call is refused with "update that machine", and
   `list_mailboxes` with its `nodeId` reports it unreachable for the same
@@ -638,6 +652,11 @@ optional `nodeId` (`coordinator-node-tickets.ts`):
 | `create_ticket` | Created on this board, then handed to the leaf now; while it is disconnected, `sync.state` is `offline` and it gets the ticket on reconnect. | Created on the leaf only; `sync.state` is `update-required`. |
 | `list_tickets`, `get_ticket` | The leaf's board: this board's copies (`syncedFromCommandNode`) and tickets made only there. Disconnected: this board, with a note. | The leaf's board. Disconnected: refused. |
 | `update_ticket`, `add_ticket_comment` | A ticket of this board is changed here and synced; a ticket made only on the leaf is changed there. | Changed on the leaf. Disconnected: refused. |
+
+The Linear tools (`list_linear_issues` and the rest, [tickets.md](tickets.md#linear))
+act on the project's linked Linear board with this machine's own key; with a
+`nodeId` they run on the coordinator's project on that machine through
+`invoke_on_node`, which reads the same board with that machine's key.
 
 The label tools (`list_ticket_labels`, `create_ticket_label`, `set_ticket_label`)
 take no `nodeId`: they act on this board, whose labels sync with the tickets.
@@ -785,7 +804,13 @@ with the stored record and the renderer adopts it, which is why a layout change
 lost in that race is not retried. Other clients hear `coordinator-pane-layout`
 and re-read. A browser's earlier local copy is imported once at revision 0, so it
 never replaces a layout already stored, and then deleted; against a backend
-without the capability the layout stays in that copy. It never opens or closes a
+without the capability the layout stays in that copy. Until a read of the
+stored layout (or of the backend's capabilities) succeeds, the panel shows no
+groups and saves nothing: a default grouping reconciled from "nothing known"
+would otherwise be saved over the user's groups. It shows **Could not load the
+tab groups** with **Retry now** instead, reads again after 1, 3 and 10 seconds,
+and then on the next resync, safety check, mount or Retry
+(`coordinatorPaneLayoutStore.ts`). It never opens or closes a
 conversation; on every snapshot it is reconciled against the backend's open set,
 dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
@@ -932,8 +957,13 @@ capability profile is rated by exactly the same rules as a coordinator.
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
 | `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can run commands (macOS; Linux whose bubblewrap can nest a user namespace, with `socat` on `PATH`); Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (1.x and the OpenCode 2 preview alike; see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
+
+The decisions behind each platform's tier, with the options weighed, are in
+[`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
+the facts they rest on are re-checked on every pin bump
+([Re-check coordinator tier decisions](../development/upgrade-agents.md#re-check-coordinator-tier-decisions)).
 
 **Settings → Coordinator → Coordinator safety level** chooses the weakest
 tier this installation will offer. It defaults to `provider-configured`:
@@ -1015,50 +1045,35 @@ What each enforced platform actually does:
   no shell, so this covers every built-in read; it is a tool-level check, not an
   OS boundary, which is why Pi stays `provider-configured`.
 
-OpenCode denies through its own permission rules and runs its `plan` agent, but
-always loads the checkout's project configuration, including any MCP servers it
-declares. Its rules also keep a coordinator out of the data directory: nothing
-in them allows `external_directory`, and the data directory is never inside the
-checkout. OpenCode judges that from the path as written, so a link in the
-checkout pointing into the data directory was read; the coordinator's server
-therefore loads `orkestrator-coordinator-read-boundary.js`
-(`opencode-read-boundary-plugin.ts`) from the host configuration directory,
-which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
-`tool.execute.before`. It is inert in every other server, and absent when the
-user sets their own `OPENCODE_CONFIG_DIR`
-([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
-Both layers are qualified on the pinned binary with a loopback model
-(`opencode-coordinator-read-boundary-live.test.ts`).
-
-Under the OpenCode 2 preview (Settings → OpenCode, "Use OpenCode 2 for new
-sessions") a coordinator conversation started from then on runs on OpenCode
-2.x; one started earlier stays on 1.x (`opencode2/coordinator.ts`). Its 2.x
-server is its own process, keyed by the conversation's runtime id, so the
-boundary is held by that process's launch rather than by any session record:
+OpenCode denies through its own permission rules and runs its `plan` agent
+(`opencode2/coordinator.ts`). A coordinator conversation's OpenCode server is
+its own process, keyed by the conversation's runtime id, so the boundary is
+held by that process's launch rather than by any session record:
 
 - It is launched with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
   the data directory, the research setting of the moment, and
   `OPENCODE_DISABLE_PROJECT_CONFIG=1`, so the checkout's `opencode.json`,
-  `.opencode/` agents, commands, plugins and MCP servers never load. This is
-  the axis 1.x cannot honour; a changed research setting replaces an idle
-  server, as it replaces the 1.x one.
+  `.opencode/` agents, commands, plugins and MCP servers never load. A changed
+  research setting replaces an idle server.
 - Its configuration directory (`opencode2/coordinator-config` under the data
   directory, never the ordinary one) holds the coordinator guard plugin
-  (`coordinator-plugin.ts`). In the server process, on every tool call a
-  sub-agent's included, it refuses any tool outside the read-only set, the
-  conversation's control tools and the research servers named at launch,
+  (`opencode2/coordinator-plugin.ts`). In the server process, on every tool
+  call a sub-agent's included, it refuses any tool outside the read-only set,
+  the conversation's control tools and the research servers named at launch,
   whatever a session's stored rules say, and refuses a `read`, `grep`, `glob`
-  or `list` that would reach the data directory, resolving links (2.2.6, like
-  1.x, judges `external_directory` from the path as written). The checkout and
-  the conversation's attachment directory stay readable.
+  or `list` that would reach the data directory, resolving links (OpenCode
+  judges `external_directory` from the path as written, so a link in the
+  checkout pointing into the data directory would otherwise be read). The
+  checkout and the conversation's attachment directory stay readable.
 - The backend keeps the launch's policy beside the process. The provider built
   for that server ignores a request's policy and a session's stored base:
   create, resume, policy synchronization and every turn write the coordinator
-  rules (1.x's, translated) and read them back before the prompt, pin the
-  `plan` agent, and refuse provider commands (2.x does not say which agent a
-  command runs as). The conversation's Control MCP credential, the one its 1.x
-  server was launched with, is registered as the location's `orkestrator`
-  server, and the research servers as theirs.
+  rules (`opencode2/policy-rules.ts`, translated by `opencode2/permissions.ts`)
+  and read them back before the prompt, pin the `plan` agent, and refuse
+  provider commands (OpenCode 2 does not say which agent a command runs as).
+  The conversation's Control MCP credential, the one its server was launched
+  with, is registered as the location's `orkestrator` server, and the
+  research servers as theirs.
 
 This is qualified against the pinned 2.2.6 binary with a scripted model
 (`opencode2-coordinator.live.test.ts`): no write, no command, no read of the
@@ -1067,15 +1082,27 @@ research tools reached, a session widened behind the backend's back refused
 by the server and restated by the next turn, and the project configuration
 not loaded where a server without the switch loads it. The tier stays
 `provider-configured`: the live coordinator suite has not been run against
-OpenCode 2 with a real model, the table rates one tier per platform while
-earlier conversations remain on 1.x, and the server process itself runs
-unsandboxed (its boundary is OpenCode's rules plus the in-process gate, not an
-OS sandbox).
+OpenCode 2 with a real model, and the server process itself runs unsandboxed
+(its boundary is OpenCode's rules plus the in-process gate, not an OS
+sandbox). Before 2026-11-11 a coordinator could also run on OpenCode 1.x,
+which always loaded the checkout's project configuration and held the data
+directory with a read-boundary plugin (`git show
+5f4e27b1c:apps/backend/src/core/opencode-read-boundary-plugin.ts`).
 
 Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
-sandbox cannot be enabled. Its reading tools still reach the data directory
-([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
+sandbox cannot be enabled. `@cursor/sdk` has no per-call hook that sees a
+built-in tool's path, so a coordinator's agent runs `read`, `grep` (which also
+serves `glob`) and `ls` on the bridge's own executors
+(`local.resourceProviderOptions`; `bridges/cursor-bridge/src/read-boundary.ts`
+and `read-tools.ts`). They refuse a path inside the data directory, directly or
+through a link, and check every file a search or listing rooted above it would
+return, since searches follow links; the checkout and the coordinator's
+attachment directory stay readable. The read executor also serves an MCP call's
+`$file:` arguments. The executor shapes are unpublished SDK internals, so this
+is proven only against fakes and the SDK's own message descriptors until a live
+Cursor turn qualifies it (to-do 7400, retired 2026-11-10; the billed turn is
+on the manual-test checklist, to-do 7568).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
@@ -1091,9 +1118,12 @@ same session a fixed continuation saying the call was refused and must not be
 retried (`POLICY_DENIAL_CONTINUATION`, `acp-prompt.ts`). The continuation
 counts as part of the same turn, and a turn gets at most eight. Without it, a
 Grok coordinator stopped at its first refused tool and never answered.
-Grok's own reading tools are among those that never ask, so nothing keeps a
-Grok coordinator out of the data directory; the bridge's `fs/read_text_file`
-is confined to the workspace already
+Nothing keeps a Grok coordinator's own reading tools out of the data
+directory; the bridge's `fs/read_text_file` is confined to the workspace
+already. Whether those tools ask permission first, which would let the bridge
+refuse a data-directory read in its answer, has not been observed: the
+`data-dir-reads` variant of `scripts/coordinator-probes/grok-web-tools-probe.mjs`
+answers it in one signed-in run
 ([7401](../todo/coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md)).
 
 The coordinator policy names operations, not one provider's tool strings:
@@ -1141,7 +1171,7 @@ Orkestrator injects each one itself, never from a file the checkout can edit.
 | --- | --- | --- | --- |
 | Codex | `web_search = "cached"` when allowed, else `"disabled"`; `features.standalone_web_search = false`. The engine reads the mode back through `config/read` once per app-server generation and refuses the thread on any other value. `cached` serves pages only from OpenAI's index: a live run had it refuse a fresh URL with "Cache miss" while `live` opened it. | No separate tool; `live` mode is never used | Process `-c mcp_servers.<name>` overrides, tools approved |
 | Claude | WebSearch on the allowlist when allowed, else in `disallowedTools` and refused by the hook | WebFetch denied by name and by the hook | Added to the inline MCP set, `mcp__<name>__*` on the allowlist and the hook |
-| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Registered on the coordinator's own `opencode serve` at launch (`POST /mcp`, replacing any project entry of the same name), before the conversation is ready. OpenCode 1.19.4 lists no MCP tools over HTTP, so the backend lists each server's tools itself and allows exactly `<name>_<tool>`, leaving out an id a project server named `<name>_…` could also produce (`opencode-coordinator-research.ts`) |
+| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Registered on the coordinator's own OpenCode server before its first turn (`PUT /api/experimental/mcp/<name>`); a server that does not connect is left out. The backend lists each server's tools itself and allows exactly `<name>_<tool>`, leaving out an id another listed server named `<name>_…` could also produce (`opencode2/research-tools.ts`, called from `opencode2/coordinator.ts`) |
 | Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Hosted in-process as `<name>__<tool>` custom tools beside Orkestrator's, because a sandboxed read-only attach cannot call an HTTP MCP server; published under their own server name (`hostResearchCustomTools`) |
 | Grok | Off. On 1.0.67 the hosted `web_search` carries `open_page` and `open_page_with_find`, which open any URL, and neither the agent profile nor `--disallowed-tools` removes them (`scripts/coordinator-probes/grok-web-tools-probe.mjs`), so search there is fetch. `--disable-web-search` removes all three; `GROK_WEB_FETCH=0` removes only the client `web_fetch`. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | None |
 | Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Connected by the bridge-owned MCP client in a coordinator process only (`research` scope, reserved like `orkestrator` so a `mcp.json` entry cannot stand in), and admitted by the gate by exact registered name |
@@ -1250,7 +1280,7 @@ runs in a skill stays inside that platform's read-only boundary.
 | --- | --- | --- | --- |
 | Codex | The account's `CODEX_HOME/skills`, which the launcher names in `ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR` because the coordinator's own `CODEX_HOME` is private, added with `skills/extraRoots/set` once per app-server generation; `~/.agents/skills`, which Codex lists from HOME | `.agents/skills` and `.codex/skills`, no longer disabled for a coordinator process (`codexLoadsProjectSkills`); `.claude/skills` as an extra root. The checkout stays pinned untrusted, so its config, hooks and MCP servers stay out | A Codex skill grants nothing; what it asks for runs as a command under the permission profile (no write, no network). The profile reads each user skill root and each skill it links to (`codexCoordinatorSkillReadRoots`): a link target is granted only when it holds a `SKILL.md` and is not HOME, `/` or an ancestor, and the checkout's own links are never followed. `features.skill_mcp_dependency_install` and `skill_env_var_dependency_prompt` are off. Proved by `live-coordinator-skills.test.ts` (no credits): the skills are listed and offered, a user skill is readable from a command, and a neighbouring file, the skill and the checkout stay unreadable or unwritable |
 | Cursor | `~/.cursor`, `~/.agents`, `~/.claude`, `~/.codex` and `~/.grok` skills, Cursor's own list | The same five directories under the checkout | The SDK has no skills-only switch (the `user` layer also brings `~/.cursor/mcp.json`), so the bridge hosts one read-only tool, `orkestrator-skills__load` (`coordinator-skills.ts`), beside the Orkestrator and research tools: its description lists the skills, and a call returns a `SKILL.md` or a file inside that skill. A directory counts as a skill only with a `SKILL.md` and not as HOME, `/` or an ancestor; a file outside the skill's own directory is refused. The allowlist and sandbox are unchanged. The list is read at attach |
-| OpenCode | OpenCode's own, `~/.claude` and `~/.agents` skills | `.opencode`, `.claude` and `.agents` skills | OpenCode discovers them itself; the `skill` permission is now allowed. On 1.19.4 it only returns the `SKILL.md` and a file list, and a shipped script still needs the denied `bash` |
+| OpenCode | OpenCode's own, `~/.claude` and `~/.agents` skills | `.opencode`, `.claude` and `.agents` skills | OpenCode discovers them itself; the `skill` permission is allowed. On 1.19.4 it only returned the `SKILL.md` and a file list, and a shipped script still needs the denied shell. Not rechecked on 2.x, including which project skill directories `OPENCODE_DISABLE_PROJECT_CONFIG=1` leaves out |
 | Pi | `~/.pi/agent/skills` and `~/.agents/skills` (`noSkills: false` in a coordinator process) | `.pi/skills`, `.agents/skills` and `.claude/skills` as `additionalSkillPaths`, with the project still untrusted, so `.pi/` settings and extensions stay out | A Pi skill is markdown the model reads with `read`; extensions stay off and the read-only gate admits no tool that could run what a skill ships. `coordinator-skills.test.ts` (pi-bridge) runs it against the real SDK |
 | Grok | Loaded from `~/.grok`, `~/.claude` and installed plugins; the coordinator has no private home | Gap: only through Grok's own folder trust, which also loads the checkout's hooks and MCP servers. The per-process overlay (`GROK_CONFIG`) applies `models` but drops a `skills` section, so `skills.paths` can be set only in the user's own `~/.grok/config.toml` (probed on 1.0.67) | Advisory tier. A checkout the user trusted in Grok already loads its hooks and MCP servers in the coordinator, a gap that predates skills |
 
@@ -1279,6 +1309,15 @@ restart. It fails closed: a host without `bwrap`, `socat` or `unshare`, whose
 bubblewrap cannot create a user namespace, or whose nested namespace is
 refused, is not sandboxed. The reason names the cause, and names
 `bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
+
+In a container environment the probe runs inside the container, where it
+answers `missing-programs`: the image ships neither program. That was checked
+with `docker exec` in a real environment container on 2026-11-10 (to-do 0145
+task 4), and the container's own bridge refused a provider-sandbox prompt
+with 422. Installing the two packages would not help: under Docker's default
+seccomp profile bubblewrap cannot create its user namespace (the CLI's own
+availability check fails too), and without seccomp it cannot mount `/proc`
+over Docker's masked one. The container is the sandbox there.
 
 Three consumers use it:
 
@@ -1328,14 +1367,54 @@ The boundary is shown, not silent:
   step (`stepRuntimes.consolidate.commandSandboxOff`). The reviewer's and the
   consolidation step's inspector show it as a warning note. A restarted
   reviewer or step starts without it.
+- **The reason names where it is.** In a container (`/.dockerenv` or
+  `/run/.containerenv`) the probe says the sandbox cannot run "in this
+  container" and that bubblewrap and socat are not in the container's image;
+  only a host is told to install the packages, since nobody installs into an
+  environment's image.
+
+A read-only turn also loads no settings file, which dropped the model
+connection a user sets in the user settings `env` (a gateway's base URL and
+token, Bedrock or Vertex), so every reviewer answered "Not logged in". The
+bridge now passes that file's connection entries, and nothing else from it,
+to the turn's process environment (`read-only-connection-env.ts`; see
+[credentials-and-models.md](../development/credentials-and-models.md)).
+`apiKeyHelper` is not run: it is a command outside the hook. For the same
+reason `AWS_PROFILE` is not taken, and a Bedrock connection that would make
+the CLI resolve AWS profiles (whose `credential_process` is a command) is
+withheld. A coordinator itself gets nothing from the file: its bridge's
+`CLAUDE_CONFIG_DIR` is the coordinator's private, empty Claude home, and it
+connects with the account token the backend hands it.
+
+Without the sandbox the hook refuses every Git command, because a
+repository's Git configuration can run helpers (an external diff, a
+textconv, `core.fsmonitor`). A packaged reviewer is told to run the
+package's `diffCommand`, which is Git, so in a container it could not see
+the change at all. The backend therefore seals the reviewed diff as a file
+beside the package when it builds it (`review-diff-artifact.ts`): it runs
+the same `git diff --no-color --no-ext-diff --no-textconv --no-renames
+<base>...<head>` the package names, writes it read-only and Git-excluded as
+`review-diff-<sha256>.patch` in the round's artifact directory, records
+`diffArtifact: { path, bytes, sha256 }` in the package, and checks its bytes
+and digest with the package before each reviewer is dispatched. The
+reviewer instructions say to read that file when the session refuses Git. A
+diff over 16 MiB, or one Git or the write could not produce, is left out
+and the package's limitations say so; the review itself never fails for
+it. The runner decodes the output as UTF-8. If it contains a replacement
+character (including a literal U+FFFD), the backend leaves the artifact out
+and records a fidelity limitation instead of sealing potentially altered bytes.
 
 Proved by the bridge's session-manager and route tests with an injected probe
 answer, and by the `read-only-*` cases of
 `conformance-coordinator-sandbox-live.test.ts`, which hide `bwrap` and
 `socat` from `PATH` and run the pinned CLI against a scripted endpoint; the
-case that pins the CLI's own refusal of a required sandbox runs only on Linux.
-Not yet run: a real Multi Review in a container environment and on stock
-Ubuntu
+case that pins the CLI's own refusal of a required sandbox runs only on Linux
+(all 19 cases passed on Linux on 2026-11-10). A real Multi Review in a
+container environment, with two Claude reviewers and a Claude consolidation
+on the image's real `claude` against a scripted Messages API, is
+`container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
+[container qualification](../development/container-qualification.md)). Not
+yet run: stock Ubuntu with AppArmor's `bwrap-userns-restrict`, and Windows
 ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
@@ -1359,8 +1438,12 @@ Otherwise Claude still works as a `provider-configured` coordinator, with the
 hook as its boundary, and an interactive session can run without the provider
 sandbox.
 
-Not yet run: stock Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor,
-Fedora (SELinux) and Docker containers
+A real container environment was probed on 2026-11-10: `missing-programs`,
+and the container's bridge refuses a provider-sandbox prompt. Ubuntu 24.04's
+runner has its own workflow (`claude-apparmor-qualification.yml`), whose
+`stock` phase requires the tier and the pinned CLI to agree with whatever the
+probe answers there. Not yet run: that workflow's first 24.04 report, stock
+Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor and Fedora (SELinux)
 ([0145](../todo/agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md)).
 
 ### Changing qualification
@@ -1618,7 +1701,7 @@ running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
 
 Both paths are qualified against a slow remote on a real profile by
-`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+`mise run test:agent:coordinator-slow-remote` (to-do 4720, retired 2026-11-10; see
 [agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
 In that run a worker's mail to a coordinator whose turn is running waits on
 the coordinator's presence (`agent-mail delivery.waiting reason=working`)
@@ -1728,8 +1811,9 @@ dropped. A node that predates the command, or fails a read, shows nothing new; a
 failed read keeps the last reading until the node is reported unavailable, when
 its prompts drop out. A remote worker's prompt still does not produce a notice to
 the coordinator: `noteWorkerHumanPrompt` is local. Two real nodes have not
-exercised this:
-[4942](../todo/coordinator-and-multi-review/4942-c7-live-checks.md).
+exercised this; the check is on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(to-do 4942, retired 2026-11-10).
 
 ### Mail tiles and the report cue
 
@@ -1750,8 +1834,12 @@ delivered: `CoordinatorService` raises `coordinator-wake-attention`, which
 once, not replayed to a client that was away, and quiet while that coordinator's
 page is on screen in a visible window. A worker's "agent stopped" cue and its wake
 within 500 ms are one sound. A backend that predates the event never sends it, and
-an older client ignores it. A desktop notification is a wider feature:
-[4941](../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md).
+an older client ignores it. A report raises no desktop notification: that
+is a wider feature (new permission handling, nothing on the web client, and a
+choice of what may show on a lock screen), and the event names no worker. Whether
+to build one is the user's call, on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(to-do 4941, retired 2026-11-10).
 
 ## User `!` commands
 
@@ -2390,11 +2478,12 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
     reviewers and consolidation alike) gets its worker's identity from
     `BuildPipelineContext.workerMailTurn`. A bridge agent's turn connects
     with a credential scoped to the worker's mailbox
-    (`resolveWorkerToolConnection`). OpenCode keeps its environment-wide
-    `orkestrator` connection, so the turn's trusted system instruction
-    carries the worker's mail capability (`workerMail`,
-    `openCodeWorkerMailInstruction`), and every mail tool on that connection
-    takes it as `mailCapability`. The capability names exactly one worker
+    (`resolveWorkerToolConnection`). An OpenCode turn gets the same scoped
+    connection, registered as the session's tab server
+    (`opencode2/turn-connections.ts`). The agent tools server still accepts a
+    worker's mail capability (`workerMail`) on an environment-wide
+    connection, where every mail tool takes it as `mailCapability`; OpenCode
+    1.x, retired on 2026-11-11, was its caller. The capability names exactly one worker
     mailbox and project, is signed by the workflow-result service's durable
     identity (domain-separated, so it survives a restart), is never a bearer
     credential, and stops working when its worker ends and loses its
@@ -2519,8 +2608,8 @@ Decisions:
   leaf's placement and reason otherwise. A lost answer is the ordinary
   outcome-unknown error with no `deliverNow` claim; retrying the same
   `requestId` replays on the leaf.
-  Live qualification is in
-  [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
+  Live qualification was to-do 0740 (retired 2026-11-10); its billed runs
+  are on the manual-test checklist (to-do 7568).
 
 `list_agents` (discovery) returns every agent tab in the project and what each
 is doing — see [`agent-registry.md`](agent-registry.md).
@@ -2619,6 +2708,16 @@ lock).
   coordinator as usual. The result says whether a follow exists and tells
   the coordinator to finish its turn. A step that fails again at once comes
   back in the result as `phase: "failed"` with the error.
+- **Live qualification.** `mise run test:agent:coordinator:restart-fake`
+  runs the incident's shape on two real backends joined by a real node link,
+  with real Pi bridges and a loopback model that refuses every build worker
+  with a usage limit (see
+  [agent-testing.md](../development/agent-testing.md#coordinator-pipeline-step-restart-after-a-usage-limit-fake-model)).
+  On this node and on a leaf, the coordinator is woken with the build
+  failed and the restart offered, restarts with `stepId` omitted, is woken
+  again when the restarted step stops, and a same-`requestId` retry replays
+  without restarting twice. A real provider's limit text and a real model
+  choosing to restart are on the manual-test checklist (4680 task 2).
 
 `resume_build_pipeline` resumes a paused pipeline only. On any other phase
 it refuses, naming the phase. Failed pipelines get restart guidance; active
@@ -3061,7 +3160,12 @@ rollup (passing, failing, running, neutral/skipped, none), merge conflicts and r
 sends nothing; an unknown mergeability keeps the last known conflict state.
 The first known conflict state is silent. Every later change sends one notice naming what changed. A merge or close
 is reported once and ends the watch; a pull request already
-settled at its first reading ends silently. *Finished work only* (`off`)
+settled at its first reading ends silently. A closed pull request that is
+later reopened is therefore not reported: ending the watch keeps the sweep's
+reads bounded, and a coordinator that needs to know starts a new watch
+(`get_environment` shows the pull request open again). This was decided on
+2026-11-01 (to-do 1021 (retired) task 6); revisit it only if a coordinator
+workflow is seen to lose a reopened pull request. *Finished work only* (`off`)
 records changes without notices, and with no main conversation open the change
 is recorded without a notice, as for other status notices. Disabled messaging also records changes quietly.
 **Deleted pull requests.** A 404 alone cannot tell a deleted pull request
@@ -3215,10 +3319,20 @@ own, and a tab that cannot be a worker (a terminal, a file) never asks. Against 
 backend without the command nothing is shown. A delegation that retention has
 removed takes its marker with it.
 
-A worker on another node has no marker on its tab. Its delegation is kept on the
-command node, while its tab renders in that node's workspace, on its node scope,
-and reads that node's backend, which holds no such record. The gap is
-[6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
+A worker a command node's coordinator launched on another node is marked too.
+Its delegation is kept on the command node, while its tab renders in the same
+window on that node's scope, whose backend holds no such record. So the command
+node's answer lists those workers apart, in `remoteOverrides`, each with the
+`nodeId` of the node that holds it; `overrides` keeps only the answering node's
+own tabs, because a renderer from before this keys a row by environment and tab
+alone and would mark whichever of its own tabs had the same ids. A tab on
+another node's scope reads its own node's answer (that node's own coordinators'
+workers) and looks itself up by node in the window's command scope's answer
+(`useCoordinatorLaunchOverride`). The command node is read once for every tab
+in the window, so a leaf tab adds no read of its own. Nothing is stored on the
+leaf. While the command node is unreachable its last answer stays; a leaf
+opened directly, as its own command node, has no other scope to ask and shows
+only its own workers' markers.
 
 ## Complete application actions
 
@@ -3499,7 +3613,11 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 `docker exec` in a running container): the patch applies whole or not at
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
-The coordinator never sees the patch.
+The coordinator never sees the patch. `mise run test:agent:coordinator:surfaces-fake`
+runs a reject and two approvals (a local and a container worker) end to end
+in the browser client on a loopback fake model, together with
+`open_worker_browser` on the container worker
+([agent-testing.md](../development/agent-testing.md#coordinator-worker-surfaces-fake-model)).
 
 **Answering a worker's question.** A delegated worker waiting on a question
 needs a person, and the coordinator cannot answer for them, but it can save
@@ -3538,8 +3656,7 @@ answer.
 
 ### Worker goals
 
-A coordinator can give a worker tab a goal, and is woken once when it stops
-(`plans/goals/403`). The tools sit on the same service as `/goal` and
+A coordinator can give a worker tab a goal, and is woken once when it stops. The tools sit on the same service as `/goal` and
 `session goal`, so its rules apply: one goal per session, an iteration cap, and no change to the permission mode.
 Coordinator tools cannot configure shell checks; a person configures checks
 through the composer or public API. A coordinator goal ends as an unverified claim.
@@ -3592,8 +3709,7 @@ the coordinator would be woken between iterations. A person's `/goal` on a remot
 worker the coordinator delegated to has that problem today.
 
 A live run is the `goal` scenario of `mise run test:agent:coordinator`, described in
-[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite). Whether
-it has passed is recorded in `plans/goals/403`.
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite).
 
 ## Saved graphs
 
@@ -3736,8 +3852,14 @@ the new objects. Nothing merges.
 **The section.** `mergeOrkestratorSection` copies everything outside the
 section byte for byte (CRLF kept, a byte-order mark kept, invalid UTF-8
 refused). A missing section is created at the end of the file, opening with a
-note that it holds coordinator-approved operating decisions every agent must
-follow; a missing file is created with just the section. Entries are compared
+note (`ORKESTRATOR_SECTION_NOTE`) that it holds coordinator-approved operating
+decisions every agent must follow, changed only through a proposal except to
+update a reference or description the agent's own change makes stale; a
+missing file is created with just the section. When a proposal changes an
+existing section whose preamble line is exactly an earlier wording of that
+note (`PREVIOUS_ORKESTRATOR_SECTION_NOTES`), the line becomes the current note
+in the same pull request, so the diff the user approves shows it; any other
+preamble is the user's text and is kept. Entries are compared
 ignoring case, spacing and a final full stop, stay de-duplicated (existing
 duplicates collapse to the first when the section changes), keep their order,
 and new ones go after the last entry. ATX and Setext level-one and level-two
@@ -3796,7 +3918,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
   refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
-  (`coordinator-pipeline-step-actions.test.ts`)
+  (`coordinator-pipeline-step-actions.test.ts`); the fake model's script
+  (`e2e/agent-testing/coordinator-restart-fake-model.test.ts`) and, on demand,
+  the two-profile run (`e2e/agent-testing/coordinator-restart-fake.spec.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a
@@ -3815,7 +3939,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   ended-worker refusals, restart): `agent-tools-pipeline-worker-mail.test.ts`;
   stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
   reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
-  and OpenCode's system field (`opencode-provider-dispatch.test.ts`)
+  and OpenCode's per-turn worker connection (`opencode2/turn-connections.test.ts`)
 - tool contract and poll guard: `control-mcp-server-reads.test.ts` and
   `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and
@@ -3843,16 +3967,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   model: the default sandbox writes the working directory, the coordinator
   sandbox refuses it and still reads, and the hook refuses `uniq in out`:
   `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
-- research servers on the pinned OpenCode, with a real `opencode serve` and a
-  local MCP server: `opencode-coordinator-research-live.test.ts`
-- a coordinator on the OpenCode 2 preview, against the pinned 2.x binary with a
-  scripted model (`RUN_LIVE_OPENCODE2=1`): no write, command or data-directory
-  read, control and research tools reached, a widened session refused by the
+- a coordinator on OpenCode, against the pinned 2.x binary with a scripted
+  model (`RUN_LIVE_OPENCODE2=1`): no write, command or data-directory read,
+  control and research tools reached, a widened session refused by the
   server's guard and restated, project configuration off:
   `opencode2-coordinator.live.test.ts`; the guard's source in
-  `coordinator-plugin.test.ts`, the rules, launch and routing in
-  `coordinator.test.ts`, `opencode2-host-server.test.ts` and
-  `native-agent-opencode-protocol.test.ts`
+  `coordinator-plugin.test.ts`, the research tool ids in
+  `research-tools.test.ts`, the rules and launch in `coordinator.test.ts` and
+  `opencode2-host-server.test.ts`
 - coordinator skills on Codex against the real pinned app-server with a
   loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
   (codex-bridge); the extra roots, read grants and project-skill rule in
@@ -3882,7 +4004,10 @@ guarantee, not by one end-to-end scenario replayed per platform:
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no
   coordinator involved. `goal` has a coordinator set a worker a two-turn goal with a
-  claim, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
+  claim, then checks one wake and its read of the result. `research` runs one
+  turn under the default research setting and passes only on a transcript row
+  attributed to the research server (Context7), never on the answer alone;
+  Grok, which loads no research servers, is skipped. Every scenario with mail also runs the renderer's
   carrier parser over each echoed carrier row and requires one toned tile per
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in
@@ -4033,3 +4158,25 @@ Only bare native tool names and explicit Orkestrator server prefixes create mark
 Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.
+
+### Searching actions
+
+A magnifying-glass button labelled "Search actions" opens a palette styled and
+driven like the ⌘K project search (`CoordinatorActionSearch.tsx`). It sits in
+the panel's header row, beside the fold control, whenever the panel is open
+(docked, or the narrow overlay once expanded); a folded docked panel shows it
+beside the icon instead, since nothing there expands on hover.
+
+The palette searches every action the shell derives (`actionCards`: recovered
+history plus the loaded transcript), not the ten cards the panel shows. Each
+whitespace-separated term must start a word of the title, the kind ("topic",
+"question", "pr", "pull request") or the state ("open", "merged", "done",
+"awaiting answer"…), case-insensitively; results are newest first, and an empty
+query lists everything. Arrow keys move the selection, Enter or a click
+chooses, and Escape closes with focus back on the button that opened it. While
+it is open the narrow overlay stays expanded behind it; choosing folds the
+overlay and focuses its icon.
+
+Choosing calls the same navigation as a card: a scroll target for the action's
+anchor message, which pages earlier history until a not-yet-loaded anchor is
+rendered. There is no keyboard shortcut for the palette.

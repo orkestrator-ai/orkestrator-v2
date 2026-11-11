@@ -125,20 +125,6 @@ describe("environment preview services", () => {
     );
     expect(invokeMock.mock.calls[0]![0]).toBe("update_preview_service");
   });
-
-  test("older backends explain that browser tabs use ports directly", async () => {
-    install({
-      get_preview_capabilities: () => {
-        throw new Error("Unknown backend command: get_preview_capabilities");
-      },
-    });
-    renderInAppCommandScope(
-      <EnvironmentPreviewServices
-        environment={{ id: FIXTURE_ENVIRONMENT_ID, environmentType: "local" }}
-      />,
-    );
-    expect(await screen.findByText(/predates preview services/)).toBeTruthy();
-  });
 });
 
 describe("preview operator settings", () => {

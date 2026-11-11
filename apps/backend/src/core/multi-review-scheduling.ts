@@ -6,9 +6,8 @@ import type {
 import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
 
 /**
- * Supervision rules for Multi Review, shared by the keyed driver and the
- * `WorkflowDueScheduler` rollback so both classify a record, and jitter its
- * passes, from exactly the same code.
+ * Supervision rules for Multi Review: how its keyed driver classifies a
+ * record, decides its next pass and jitters it.
  */
 
 export function reviewSession(
@@ -83,12 +82,65 @@ export function supervisionDemand(
 }
 
 /**
+ * Tool-mode result slots of turns the workflow has sent and is still
+ * observing: the active step's request and every running reviewer's.
+ *
+ * A model submits its result through a tool call, inside its turn, so the
+ * acceptance (and the `result-accepted` wake it raises) always lands before
+ * the turn can end. The pass that wake starts usually still finds the turn
+ * running, and nothing announces the turn's end afterwards: these sessions
+ * are not native agent sessions, so the activity sweep that raises
+ * `provider-transition` never sees them. The caller polls an accepted slot on
+ * a short settle cadence instead of the observation interval (todo 7557).
+ */
+export function resultKeysAwaitingTurnEnd(workflow: MultiReviewWorkflow): string[] {
+  const keys: string[] = [];
+  const request = workflow.activeRequest;
+  if (request?.resultTransport === "tool-v1" && request.state === "sent") {
+    keys.push(request.requestId);
+  }
+  if (workflow.phase === "reviewing") {
+    for (const reviewer of workflow.reviewers) {
+      if (
+        reviewer.status === "running" &&
+        reviewer.dispatchState === "sent" &&
+        reviewer.resultTransport === "tool-v1" &&
+        reviewer.requestId
+      ) {
+        keys.push(reviewer.requestId);
+      }
+    }
+  }
+  return keys;
+}
+
+/**
  * A graph-engine review whose run has not settled yet (item 301): the
  * service projects the run onto it and runs none of its own steps. Once the
  * run settles the record is an ordinary settled review.
  */
 export function isGraphEngineProjection(workflow: MultiReviewWorkflow): boolean {
   return workflow.engine === "graph" && workflow.graphRun?.settled !== true;
+}
+
+/**
+ * Whether the workflow's validation run is running and started less than
+ * `windowMs` ago. A short run usually ends inside that window, and its end
+ * raises no wake (todo 7564 task 3). A graph-engine projection is driven by
+ * its graph run, and a run being stopped has no completion to wait for, so
+ * neither gets the fast cadence; nor does a run whose start is unreadable.
+ */
+export function validationRunJustStarted(
+  workflow: MultiReviewWorkflow,
+  now: number,
+  windowMs: number,
+): boolean {
+  const run = workflow.validationRun;
+  if (workflow.phase !== "preparing" || run?.status !== "running") return false;
+  if (isGraphEngineProjection(workflow)) return false;
+  if (workflow.validationStopRequested === true) return false;
+  const startedAt = Date.parse(run.startedAt);
+  return Number.isFinite(startedAt) && now - startedAt < windowMs;
 }
 
 /** The initial interactive Fix turn is observed until its durable runtime settles. */

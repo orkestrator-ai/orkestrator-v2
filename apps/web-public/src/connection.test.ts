@@ -93,17 +93,15 @@ describe("saved public connection", () => {
     expect(listBrowserConnections().connections[0]?.requiresToken).toBe(true);
   });
 
-  test("removes legacy persistent tokens and migrates only the old tab token", () => {
+  test("removes a legacy persistent token", () => {
     localStorage.setItem("orkestrator.public.backend-address", "https://one.example");
     localStorage.setItem(
       "orkestrator.public.remembered-gateway-token",
       "persistent-token-must-not-survive",
     );
-    sessionStorage.setItem("orkestrator.public.gateway-token", token);
 
-    expect(loadSavedConnection()).toEqual({ address: "https://one.example", token });
+    expect(loadSavedConnection()).toEqual({ address: "https://one.example", token: "" });
     expect(localStorage.getItem("orkestrator.public.remembered-gateway-token")).toBeNull();
-    expect(sessionStorage.getItem("orkestrator.public.gateway-token")).toBeNull();
   });
 
   test("rotates the tab token and forgets the connection", () => {

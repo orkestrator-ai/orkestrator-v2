@@ -10,9 +10,9 @@ export type { SuborksStorage } from "./storage-suborks.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
-export type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
+export type { LinearStorage } from "./storage-linear.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -46,9 +46,9 @@ import type { SuborksStorage } from "./storage-suborks.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
-import type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
+import type { LinearStorage } from "./storage-linear.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -163,6 +163,8 @@ export class StorageService {
   readonly kanban: KanbanStorage;
   /** Kanban sync across machines (docs/architecture/tickets.md, "Sync across machines"). */
   readonly ticketSync: TicketSyncStorage;
+  /** Linear board links and disconnects (docs/architecture/tickets.md, "Linear"). */
+  readonly linear: LinearStorage;
   readonly coordinators: CoordinatorsStorage;
   readonly publicOperations: PublicOperationsStorage;
   readonly nodes: NodesStorage;
@@ -179,13 +181,13 @@ export class StorageService {
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
-  readonly openCode2Sessions: OpenCode2SessionsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
     this.repos = new StorageRepositories(this.context);
     this.kanban = this.repos.kanban;
     this.ticketSync = this.repos.ticketSync;
+    this.linear = this.repos.linear;
     this.coordinators = this.repos.coordinators;
     this.publicOperations = this.repos.publicOperations;
     this.nodes = this.repos.nodes;
@@ -202,7 +204,6 @@ export class StorageService {
     this.clientState = this.repos.clientState;
     this.setupApprovals = this.repos.setupApprovals;
     this.watchedPullRequests = this.repos.watchedPullRequests;
-    this.openCode2Sessions = this.repos.openCode2Sessions;
   }
 
   async init(): Promise<void> {
@@ -824,8 +825,12 @@ export class StorageService {
   deleteAutoPipelineDraftsByEnvironment(environmentId: string) {
     return this.repos.drafts.deleteAutoPipelineDraftsByEnvironment(environmentId);
   }
-  latestAutoPipelineDraft(environmentId: string, tabId: string) {
-    return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId);
+  latestAutoPipelineDraft(
+    environmentId: string,
+    tabId: string,
+    options?: { includeReviewed?: boolean; promotedOnly?: boolean },
+  ) {
+    return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId, options);
   }
   getAutoPipelineDraft(id: string) {
     return this.repos.drafts.getAutoPipelineDraft(id);
@@ -878,6 +883,14 @@ export class StorageService {
     activate?: "setup-handoff";
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureBuildPipelineTab(input);
+  }
+
+  ensureBuildPipelineNotesTab(input: {
+    pipelineId: string;
+    environmentId: string;
+    completionRevision?: number;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.repos.sessions.ensureBuildPipelineNotesTab(input);
   }
 
   ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {
@@ -1068,7 +1081,6 @@ export class StorageService {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
-          | "openCodeProtocol"
           | "modelSubstitutionNotice"
         >
       >,
@@ -1107,7 +1119,6 @@ export class StorageService {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
-          | "openCodeProtocol"
         >
       > & {
         expectedProviderSessionId?: string;
@@ -1813,6 +1824,8 @@ export class StorageService {
       includeTombstoned?: boolean;
       currentEnvironmentId?: string;
       environmentId?: string;
+      /** The config the caller already read for this pass; read here when absent. */
+      config?: AppConfig;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
     return this.repos.agentMailboxes.listAgentMailboxes(options);

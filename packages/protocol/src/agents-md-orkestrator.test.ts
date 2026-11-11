@@ -4,6 +4,7 @@ import {
   COORDINATOR_AGENTS_MD_RULE,
   MAX_AGENTS_MD_CHANGES,
   ORKESTRATOR_SECTION_NOTE,
+  PREVIOUS_ORKESTRATOR_SECTION_NOTES,
   agentsMdEntryKey,
   describeAgentsMdChange,
   diffAgentsMdLines,
@@ -205,6 +206,48 @@ describe("mergeOrkestratorSection", () => {
     const result = mergeOrkestratorSection(content, [remove("not an entry")]);
     expect(result.changed).toBe(false);
     expect(readOrkestratorSection(content).entries).toEqual(["real"]);
+  });
+
+  // A repository whose section was created before the note gained the
+  // reference-update exception would otherwise keep the bare rule for good.
+  test("an earlier backend note becomes the current note when the section next changes", () => {
+    for (const previous of PREVIOUS_ORKESTRATOR_SECTION_NOTES) {
+      const content = `# T\r\n\r\n## Orkestrator\r\n\r\n${previous}\r\n\r\n- a\r\n\r\n## Next\r\n`;
+      const result = mergeOrkestratorSection(content, [add("b")]);
+      expect(result.content).toBe(
+        `# T\r\n\r\n## Orkestrator\r\n\r\n${ORKESTRATOR_SECTION_NOTE}\r\n\r\n- a\r\n- b\r\n\r\n## Next\r\n`,
+      );
+      // The diff the user approves shows the note changing.
+      expect(diffAgentsMdLines(content, result.content)).toEqual(
+        expect.arrayContaining([
+          { type: "remove", text: previous },
+          { type: "add", text: ORKESTRATOR_SECTION_NOTE },
+        ]),
+      );
+    }
+  });
+
+  test("the current note says what an agent may update outside a proposal", () => {
+    expect(PREVIOUS_ORKESTRATOR_SECTION_NOTES).not.toContain(ORKESTRATOR_SECTION_NOTE);
+    expect(ORKESTRATOR_SECTION_NOTE).toContain("deletes, moves, renames or retires");
+    expect(ORKESTRATOR_SECTION_NOTE).toContain("a description it makes untrue");
+  });
+
+  test("a section with no applied change keeps an earlier note untouched", () => {
+    const previous = PREVIOUS_ORKESTRATOR_SECTION_NOTES[0]!;
+    const content = `## Orkestrator\n\n${previous}\n\n- a\n`;
+    const result = mergeOrkestratorSection(content, [add("a")]);
+    expect(result.changed).toBe(false);
+    expect(result.content).toBe(content);
+  });
+
+  test("a preamble the user wrote, or an entry quoting the old note, is not rewritten", () => {
+    const previous = PREVIOUS_ORKESTRATOR_SECTION_NOTES[0]!;
+    const custom = `## Orkestrator\n\n${previous} Ask in #infra first.\n\n- ${previous}\n`;
+    const result = mergeOrkestratorSection(custom, [add("b")]);
+    expect(result.content).toBe(
+      `## Orkestrator\n\n${previous} Ask in #infra first.\n\n- ${previous}\n- b\n`,
+    );
   });
 
   test("refuses a file over the size bound", () => {

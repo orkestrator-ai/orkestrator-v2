@@ -31,23 +31,23 @@ export async function containerCredentialMode(
 }
 
 /**
- * How the container's OpenCode 1.x server starts: `opencode-launcher` on an
- * image whose launcher also starts OpenCode (`opencode-launch=1`,
- * `opencode-container-launch.ts`), otherwise as the bridges' mode says, where
+ * How the container's OpenCode (2.x) server starts: `opencode2-launcher` on an
+ * image whose launcher also starts it (`opencode2-launch=1`,
+ * `opencode2-container-launch.ts`), otherwise as the bridges' mode says, where
  * `launcher` and `verifier` both keep the password in root's file and the
- * server's environment alone.
+ * server's environment alone. (`opencode-launch=1`, which started OpenCode
+ * 1.x, is never asked for.)
  */
-export type OpenCodeContainerMode = ContainerCredentialMode | "opencode-launcher";
+export type OpenCode2ContainerMode = ContainerCredentialMode | "opencode2-launcher";
 
-export async function containerOpenCodeMode(
+export async function containerOpenCode2Mode(
   context: CommandContext,
   containerId: string,
   check = containerImageCapabilitySupport,
-): Promise<OpenCodeContainerMode> {
-  // `opencode-launch` extends the bridges' launcher, so only a launcher image is asked.
+): Promise<OpenCode2ContainerMode> {
   const bridges = await containerCredentialMode(context, containerId, check);
   if (bridges !== "launcher") return bridges;
-  const launch = await check(containerId, context, "opencode-launch", 1).catch(
+  const launch = await check(containerId, context, "opencode2-launch", 1).catch(
     () => "unknown" as const,
   );
   if (launch === "unknown") {
@@ -55,5 +55,5 @@ export async function containerOpenCodeMode(
       "Cannot determine bridge credential support; retry when the container image is available",
     );
   }
-  return launch === "supported" ? "opencode-launcher" : "launcher";
+  return launch === "supported" ? "opencode2-launcher" : "launcher";
 }

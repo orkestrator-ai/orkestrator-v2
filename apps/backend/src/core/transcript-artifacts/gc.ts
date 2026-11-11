@@ -43,6 +43,7 @@ export function referencedAssets(records: EnvironmentRecords): Set<string> {
   for (const derived of records.list("derived")) {
     for (const prepared of derived.prepared) referenced.add(prepared.documentSha256);
     for (const printed of derived.printed ?? []) referenced.add(printed.sha256);
+    for (const text of derived.searchTexts ?? []) referenced.add(text.sha256);
   }
   for (const receipt of records.list("receipt")) {
     referenced.add(receipt.identity.effectiveSourceHash);

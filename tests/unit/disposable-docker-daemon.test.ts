@@ -25,6 +25,12 @@ import {
   daemonEnvironment,
   dockerdArguments,
   instancePaths,
+  CHECKOUT_FILE,
+  checkoutRootName,
+  defaultInstanceRoot,
+  disposableDockerStateBase,
+  legacyInstanceRoot,
+  recordCheckout,
   isOwnedProcess,
   isRunning,
   listRecords,
@@ -111,6 +117,52 @@ function record(name = "unit"): InstanceRecord {
     createdAt: new Date(0).toISOString(),
   };
 }
+
+describe("default instance root", () => {
+  test("lives in the user's state directory, one per checkout, never in the checkout", () => {
+    const home = "/home/u";
+    const checkout = "/home/u/orkestrator-ai/workspaces/feature-1";
+    const fromHome = defaultInstanceRoot({}, checkout, home);
+    expect(fromHome).toBe(
+      path.join("/home/u/.local/state/orkestrator-disposable-docker", checkoutRootName(checkout)),
+    );
+    expect(fromHome.startsWith(`${checkout}/`)).toBe(false);
+    expect(defaultInstanceRoot({ XDG_STATE_HOME: "/state" }, checkout, home)).toBe(
+      path.join("/state/orkestrator-disposable-docker", checkoutRootName(checkout)),
+    );
+    // A relative XDG_STATE_HOME is invalid by the specification and ignored.
+    expect(disposableDockerStateBase({ XDG_STATE_HOME: "state" }, home)).toBe(
+      "/home/u/.local/state/orkestrator-disposable-docker",
+    );
+    expect(
+      defaultInstanceRoot({ ORKESTRATOR_DISPOSABLE_DOCKER_ROOT: " /explicit " }, checkout, home),
+    ).toBe("/explicit");
+    expect(legacyInstanceRoot(checkout)).toBe(`${checkout}/output/disposable-docker`);
+  });
+
+  test("names each checkout by its directory and a hash of its whole path", () => {
+    const one = checkoutRootName("/a/feature-1");
+    expect(one).toMatch(/^feature-1-[0-9a-f]{12}$/);
+    expect(checkoutRootName("/b/feature-1")).not.toBe(one);
+    expect(checkoutRootName("/a/feature-1/")).toBe(one);
+    expect(checkoutRootName("/a/we ird$name")).toMatch(/^we_ird_name-[0-9a-f]{12}$/);
+  });
+
+  test("a root under the state directory records its checkout; any other root does not", () => {
+    const home = path.join(scratch, "home");
+    const env = {};
+    const managed = defaultInstanceRoot(env, "/a/feature-1", home);
+    mkdirSync(managed, { recursive: true });
+    recordCheckout(managed, "/a/feature-1", env, home);
+    expect(readFileSync(path.join(managed, CHECKOUT_FILE), "utf8")).toBe("/a/feature-1\n");
+    // The record is not an instance, and no instance name can collide with it.
+    expect(listRecords(managed)).toEqual([]);
+    expect(() => parseArguments(["start", "--name", CHECKOUT_FILE], root)).toThrow();
+
+    recordCheckout(root, "/a/feature-1", env, home);
+    expect(existsSync(path.join(root, CHECKOUT_FILE))).toBe(false);
+  });
+});
 
 describe("arguments", () => {
   test("defaults to slirp4netns with host loopback refused and live-restore off", () => {

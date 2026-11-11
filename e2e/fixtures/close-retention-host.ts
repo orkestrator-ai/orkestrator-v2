@@ -5,13 +5,14 @@
  * command registry (`teardown_tab`, the native agent commands, pane layouts,
  * compose drafts) over a real `StorageService` and `NativeAgentService`, the
  * real `HttpBridgeProvider` talking to the real Cursor, Pi and ACP (Grok)
- * bridges over HTTP, and the real `OpenCodeProvider`. Only the engines are
+ * bridges over HTTP, and the real OpenCode provider (`OpenCodeEnvironmentProvider`)
+ * over HTTP. Only the engines are
  * fake, each at its own boundary:
  *
  * - Cursor: `bridges/cursor-bridge/src/testing/fake-engine-server.ts`
  * - Pi: `bridges/pi-bridge/src/testing/fake-engine-server.ts` (pi-ai faux model)
  * - Grok: `bridges/acp-bridge/src/testing/fake-agent-close.ts`
- * - OpenCode: `close-retention-opencode.ts` (in-memory SDK client)
+ * - OpenCode: `close-retention-opencode.ts` (the OpenCode 2 fake server)
  *
  * The page reaches it through `/__close-retention/*`, which the spec proxies
  * here. Besides `/invoke`, the host answers `/environment` (a fresh
@@ -21,6 +22,8 @@
  * `/restart-bridge` (stop a bridge and start it again on the same port,
  * optionally shedding Cursor's persisted transcripts first),
  * `/cursor-saturate-steer` (fill a running Cursor turn's steer history),
+ * `/cursor-prompt-gate` (hold forwarding after the outgoing request is logged),
+ * `/cursor-running-turn` (read whether the bridge accepted a run),
  * `/pi-startup-gate` (hold Pi prompts in preflight, before acceptance) and
  * `/seed-native-session` (map a tab to a provider session, as an earlier
  * backend run would have).
@@ -46,7 +49,6 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { BackendRuntime } from "../../apps/backend/src/core/backend-runtime";
 import { createCommandRegistry } from "../../apps/backend/src/core/commands";
 import type { CommandContext } from "../../apps/backend/src/core/commands-context";
@@ -240,34 +242,43 @@ async function stopBridge(bridge: Bridge): Promise<void> {
 }
 
 /**
- * Rewrite Cursor's persisted state as the bridge's own budget pass would have
- * written it under a smaller budget: every transcript keeps only its newest
- * message, with the shed counts and the truncation flag set by the same
- * production code. Run while the bridge is stopped.
+ * Cut each persisted transcript to its newest message with the production
+ * budget pass. Budget each session separately: the aggregate allocator keeps
+ * newer-touched sessions first, so a shared allowance can leave one whole.
+ * Run while the bridge is stopped; vendor conversation history is untouched.
  */
 function shedCursorTranscripts(): number {
   const stateFile = path.join(root, "cursor", "state", "state.json");
   const state = JSON.parse(readFileSync(stateFile, "utf8")) as PersistedState;
   const { sessions, ...envelope } = state;
-  const budgeted: BudgetedSession[] = sessions.map((session, index) => {
+  const trimmed: PersistedState["sessions"] = [];
+  let shed = 0;
+  for (const session of sessions) {
     const { messages, ...essential } = session;
-    return { id: session.id, lastAccessed: index, essential, messages };
-  });
-  const essentials = serializeWithinBudget(
-    envelope,
-    budgeted.map((session) => ({ ...session, messages: [] })),
-    Number.MAX_SAFE_INTEGER,
-  ).bytes;
-  // Each session's newest message, plus room for the truncation fields; an
-  // older message (a whole turn row) does not fit in what is left over.
-  const newest = budgeted.reduce(
-    (total, session) =>
-      total + Buffer.byteLength(JSON.stringify(session.messages.at(-1) ?? null)) + 96,
-    0,
-  );
-  const snapshot = serializeWithinBudget(envelope, budgeted, essentials + newest);
-  writeFileSync(stateFile, snapshot.serialized);
-  return snapshot.shed.length;
+    const budgeted: BudgetedSession = {
+      id: session.id,
+      lastAccessed: 0,
+      essential,
+      messages,
+    };
+    const essentials = serializeWithinBudget(
+      envelope,
+      [{ ...budgeted, messages: [] }],
+      Number.MAX_SAFE_INTEGER,
+    ).bytes;
+    // One newest message, plus this session's truncation fields. No other
+    // session can borrow that allowance and keep an older message instead.
+    const newest = Buffer.byteLength(JSON.stringify(messages.at(-1) ?? null));
+    const snapshot = serializeWithinBudget(envelope, [budgeted], essentials + newest + 96);
+    const persisted = (JSON.parse(snapshot.serialized) as PersistedState).sessions[0]!;
+    if (persisted.messages.length !== Math.min(1, messages.length)) {
+      throw new Error("Cursor shedding fixture did not retain exactly the newest message");
+    }
+    trimmed.push(persisted);
+    shed += snapshot.shed.length;
+  }
+  writeFileSync(stateFile, JSON.stringify({ ...envelope, sessions: trimmed }));
+  return shed;
 }
 
 async function restartBridge(platform: BridgePlatform, shed: boolean): Promise<number> {
@@ -278,15 +289,39 @@ async function restartBridge(platform: BridgePlatform, shed: boolean): Promise<n
   return shedSessions;
 }
 
+let cursorPromptGate: Promise<void> | null = null;
+let releaseCursorPrompt: (() => void) | null = null;
+function setCursorPromptGate(held: boolean): void {
+  if (held) {
+    cursorPromptGate ??= new Promise<void>((resolve) => {
+      releaseCursorPrompt = resolve;
+    });
+  } else {
+    releaseCursorPrompt?.();
+    releaseCursorPrompt = null;
+    cursorPromptGate = null;
+  }
+}
+
+/** The bridge's accepted run, rather than a request the host has only started sending. */
+async function cursorRunId(sessionId: string): Promise<string | undefined> {
+  const bridge = bridges.cursor;
+  const response = await fetch(
+    `http://127.0.0.1:${bridge.port}/session/${encodeURIComponent(sessionId)}/status`,
+    { headers: { Authorization: `Bearer ${bridge.token}` } },
+  );
+  if (!response.ok) throw new Error(`Cursor status answered ${response.status}`);
+  const status = (await response.json()) as { turnId?: string };
+  return status.turnId;
+}
+
 /** Fill the running turn's steer history until the bridge refuses one. */
 async function saturateCursorSteer(sessionId: string) {
   const bridge = bridges.cursor;
   const base = `http://127.0.0.1:${bridge.port}/session/${encodeURIComponent(sessionId)}`;
   const headers = { Authorization: `Bearer ${bridge.token}`, "Content-Type": "application/json" };
-  const status = (await (await fetch(`${base}/status`, { headers })).json()) as {
-    turnId?: string;
-  };
-  if (!status.turnId) throw new Error("The Cursor session has no running turn to steer");
+  const turnId = await cursorRunId(sessionId);
+  if (!turnId) throw new Error("The Cursor session has no running turn to steer");
   let delivered = 0;
   for (let index = 0; index < 1_024; index += 1) {
     const response = await fetch(`${base}/steer`, {
@@ -295,7 +330,7 @@ async function saturateCursorSteer(sessionId: string) {
       body: JSON.stringify({
         input: `filler steer ${index}`,
         requestId: `fill-${index}`,
-        expectedRunId: status.turnId,
+        expectedRunId: turnId,
       }),
     });
     const body = (await response.json()) as { outcome?: string; reason?: string };
@@ -313,6 +348,13 @@ const recordingFetch = (async (input: string | URL | Request, init?: RequestInit
   if (platform) {
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     bridgeRequests[platform].push(`${method.toUpperCase()} ${url.pathname}`);
+    if (
+      platform === "cursor" &&
+      method.toUpperCase() === "POST" &&
+      url.pathname.endsWith("/prompt")
+    ) {
+      await cursorPromptGate;
+    }
   }
   return fetch(input, init);
 }) as typeof fetch;
@@ -336,10 +378,7 @@ const nativeAgents = new NativeAgentService(storage, invokeInternal, {
           authToken: "close-retention",
           directory: workspace,
         },
-        {
-          openCodeClient: openCode.client,
-          openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        },
+        { openCode: { connection: async () => openCode.connection } },
       );
     }
     if (input.agent !== "cursor" && input.agent !== "pi" && input.agent !== "grok") {
@@ -530,6 +569,15 @@ const server = Bun.serve({
         return Response.json({ error: errorMessage(error) }, { status: 500 });
       }
     }
+    if (pathname === "/cursor-prompt-gate" && request.method === "POST") {
+      const { held } = (await request.json()) as { held: boolean };
+      setCursorPromptGate(held);
+      return Response.json({ held });
+    }
+    if (pathname === "/cursor-running-turn" && request.method === "GET") {
+      const sessionId = new URL(request.url).searchParams.get("sessionId") ?? "";
+      return Response.json({ running: Boolean(await cursorRunId(sessionId)) });
+    }
     if (pathname === "/cursor-saturate-steer" && request.method === "POST") {
       const { sessionId } = (await request.json()) as { sessionId: string };
       try {
@@ -562,8 +610,10 @@ const server = Bun.serve({
 });
 
 async function shutdown() {
+  setCursorPromptGate(false);
   await nativeAgents.shutdown().catch(() => undefined);
   server.stop(true);
+  openCode.stop();
   staleClaudeBridge.stop(true);
   for (const bridge of Object.values(bridges)) bridge.child.kill("SIGTERM");
   rmSync(root, { recursive: true, force: true });

@@ -56,7 +56,6 @@ import {
   HttpError,
   bridgeCredential,
   agentRuntime,
-  clientSessionKeys,
   configuredAcpMcpServers,
   parseAgentMcpConnection,
   externalSessionToken,
@@ -1076,21 +1075,6 @@ export async function route(
           error: "Session close did not complete",
         });
   }
-  if (!action && request.method === "DELETE") {
-    // DELETE is the legacy release (vendor history is kept either way). Racing
-    // a close, it joins that close rather than tearing down underneath it.
-    if (state.closing) {
-      return (await closeSessionRetaining(state)) === "closed"
-        ? json(response, 200, { deleted: true })
-        : json(response, 503, { error: "Session close did not complete" });
-    }
-    denyPendingRequests(state);
-    await state.child?.close();
-    sessions.delete(state.id);
-    if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
-    await persistState();
-    return json(response, 200, { deleted: true });
-  }
   return json(response, 405, { error: "Method not allowed" });
 }
 
@@ -1103,12 +1087,13 @@ export function authenticated(request: IncomingMessage): boolean {
   return candidates.some((candidate) => bridgeCredential.matches(candidate?.trim()));
 }
 
+/**
+ * Only the backend calls this bridge, and it sends no `Origin`. A request that
+ * carries one came from a browser page; refuse it unless the page is on this
+ * machine's loopback.
+ */
 export function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
-  // Electron's packaged renderer has an opaque origin. The bridge token is
-  // still mandatory on every data route, so accepting that origin does not
-  // make the loopback API ambiently accessible.
-  if (origin === "null" || origin === "file://") return true;
   try {
     const parsed = new URL(origin);
     return (
@@ -1123,45 +1108,15 @@ export function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   }
 }
 
-export function requestPathname(request: IncomingMessage): string {
-  try {
-    return new URL(request.url || "/", `http://${request.headers.host || "localhost"}`).pathname;
-  } catch {
-    return "";
-  }
-}
-
+/**
+ * Refuses a request from a browser page that is not on this machine's
+ * loopback, before authentication. No browser client remains, so the bridge
+ * answers no CORS preflight and echoes no origin: an `OPTIONS` request needs
+ * the token like any other.
+ */
 export function applyOriginPolicy(request: IncomingMessage, response: ServerResponse): boolean {
-  const origin = request.headers.origin;
-  if (!isTrustedBridgeOrigin(origin)) {
-    json(response, 403, { error: "Origin is not allowed" });
-    return false;
-  }
-  // `/global/health` answers before the token check so the backend can probe a
-  // bridge whose credential it does not hold, and its only client is that
-  // non-browser prober. Granting it CORS — and with it a Private Network
-  // Access opt-in — would let any page that can produce an accepted origin
-  // read it. `null` is an accepted origin, and every public site can mint one
-  // through a sandboxed iframe, so the loopback probing PNA exists to prevent
-  // would be reachable from the open web. Withhold both headers there; the
-  // route stays reachable, its body just stays unreadable to a browser.
-  const unauthenticatedRoute = requestPathname(request) === "/global/health";
-  if (origin) response.setHeader("Vary", "Origin");
-  if (origin && !unauthenticatedRoute) {
-    response.setHeader("Access-Control-Allow-Origin", origin);
-  }
-  if (request.method !== "OPTIONS") return true;
-  response.writeHead(
-    204,
-    unauthenticatedRoute
-      ? {}
-      : {
-          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": `Content-Type, Authorization, ${ACP_TOKEN_HEADER}`,
-          "Access-Control-Allow-Private-Network": "true",
-        },
-  );
-  response.end();
+  if (isTrustedBridgeOrigin(request.headers.origin)) return true;
+  json(response, 403, { error: "Origin is not allowed" });
   return false;
 }
 

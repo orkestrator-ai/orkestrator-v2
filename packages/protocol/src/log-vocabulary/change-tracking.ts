@@ -32,6 +32,8 @@ export const CHANGE_TRACKING_LOG_AREAS = defineLogAreas({
         "An environment's diff watcher failed; its scans fall back to polling.",
       "scan.failed":
         "A diff scan failed; the last results stay, marked stale, and the scan is retried.",
+      "scan.target-missing":
+        "A local environment's worktree folder is missing (deleted, moved or on an unmounted drive); no scan runs, the last results stay, marked stale, and the folder is checked again on the failure backoff.",
       "scan.freshness-read-failed": "Reading whether an environment's remote is fresh failed.",
       "scan.listener-failed": "A change-tracking scan listener threw; the scan itself stands.",
       "emit.diff-stats-failed": "A diff stats change could not be emitted to its sink.",

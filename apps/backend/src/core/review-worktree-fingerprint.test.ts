@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,15 +17,37 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
+/** One committed repository per file; each fixture is a copy of it. */
+let template: Promise<string> | undefined;
+
+afterAll(async () => {
+  const root = await template?.catch(() => undefined);
+  if (root) await fs.rm(root, { recursive: true, force: true });
+});
+
+function repositoryTemplate(): Promise<string> {
+  template ??= (async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "ork-review-fingerprint-template-"));
+    await runCommand("git", ["init", "-q"], { cwd: root });
+    await runCommand("git", ["config", "user.name", "Review Test"], { cwd: root });
+    await runCommand("git", ["config", "user.email", "review@example.invalid"], { cwd: root });
+    // No detached auto-maintenance after the commit: its maintenance.lock
+    // can vanish while fs.cp copies the template (flake 9936).
+    await runCommand("git", ["config", "maintenance.auto", "false"], { cwd: root });
+    await runCommand("git", ["config", "gc.auto", "0"], { cwd: root });
+    await fs.writeFile(path.join(root, "tracked.txt"), "base\n");
+    await runCommand("git", ["add", "tracked.txt"], { cwd: root });
+    await runCommand("git", ["commit", "-qm", "base"], { cwd: root });
+    return root;
+  })();
+  return template;
+}
+
 async function fixture(): Promise<string> {
+  const source = await repositoryTemplate();
   const root = await fs.mkdtemp(path.join(tmpdir(), "ork-review-fingerprint-"));
   roots.push(root);
-  await runCommand("git", ["init", "-q"], { cwd: root });
-  await runCommand("git", ["config", "user.name", "Review Test"], { cwd: root });
-  await runCommand("git", ["config", "user.email", "review@example.invalid"], { cwd: root });
-  await fs.writeFile(path.join(root, "tracked.txt"), "base\n");
-  await runCommand("git", ["add", "tracked.txt"], { cwd: root });
-  await runCommand("git", ["commit", "-qm", "base"], { cwd: root });
+  await fs.cp(source, root, { recursive: true });
   return root;
 }
 
@@ -255,15 +277,17 @@ for (const interpreter of INTERPRETERS) {
       const pidFile = path.join(root, ".git", "status-pid");
       // Keep the fake Git alive as the group leader, with a separate long-lived
       // child. Killing just Git must fail this regression test. Both processes
-      // are bounded even if cleanup regresses.
+      // are bounded even if cleanup regresses. The probe's first Git call is
+      // the one that blocks: it is spawned in the same tick that arms the
+      // budget, so a short budget still finds it running.
       const bin = await fakeGitBin(
         root,
-        `case " $* " in *" status "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
+        `case " $* " in *" --show-toplevel "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
       );
       const started = Date.now();
       const error = await runCommand(
         interpreter,
-        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "budget-ms=1500"],
+        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "budget-ms=500"],
         {
           cwd: root,
           timeoutMs: 10_000,
@@ -476,11 +500,12 @@ for (const interpreter of INTERPRETERS) {
     // the caller's bound fails the probe rather than it reporting a success.
     test("a lost exit with no status never reports a success", async () => {
       const root = await fixture();
+      // Well inside the 1 s before the probe would first look for a zombie.
       const error = await run(
         root,
         lostExitShim(false) + REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
         undefined,
-        1_000,
+        400,
       ).then(
         () => undefined,
         (reason: unknown) => reason as CommandFailedError,

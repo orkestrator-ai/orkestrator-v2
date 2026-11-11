@@ -20,6 +20,14 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   with native helpers, and a login needs no environment and no session.
 - The credential lives in Orkestrator's data directory, not the SDK's default
   `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
+- A coordinator's `read`, `grep` (and `glob`) and `ls` run on the bridge's own
+  executors (`src/read-boundary.ts`, `src/read-tools.ts`), passed as
+  `local.resourceProviderOptions`, because the SDK has no per-call hook that
+  sees a built-in tool's path. They refuse Orkestrator's data directory and
+  filter every search result. The executor interfaces are unpublished: on an
+  SDK bump, `read-tools.test.ts` checks the returned fields against the new
+  bundle's message descriptors, and the args and result handling in the
+  bundle (`overrideReadExecutor` and its neighbours) needs a reread.
 - Project settings (`.cursor/`) load only when the resolved environment
   execution policy enables project resources, on both host and container runs.
   Host project resources are off by default; enabling them permits repository
@@ -41,8 +49,8 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
   at module load and again from `start()`), which is why `index.ts` exports
   `./config.js` before anything that loads `@cursor/sdk`.
-- Permanent close (`DELETE /session/:id` and `POST /session/:id/close`, which
-  are the same non-destructive operation here) lives in `src/session-close.ts`.
+- Permanent close (`POST /session/:id/close`, non-destructive; the bridge
+  serves no DELETE) lives in `src/session-close.ts`.
   It sets `state.closed` before its first await, and every admission path —
   prompt, attach, config, steer, same-key create, resume — refuses a closed
   session. A late attach is disposed instead of installed, and a late
@@ -153,7 +161,7 @@ closes those out on the way in.
 
 ## Goals
 
-Orkestrator's goal loop runs in the backend (`plans/goals.md`). Cursor's model is
+Orkestrator's goal loop runs in the backend ([goals.md](../../docs/architecture/goals.md)). Cursor's model is
 offered its own `CreateGoal` and `UpdateGoal`, and `@cursor/sdk` 1.2.0 has no option to
 turn them off, so this path stays open. The carrier tells the agent to use no other
 goal tool. Re-check on each SDK upgrade.

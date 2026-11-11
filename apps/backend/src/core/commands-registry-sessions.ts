@@ -2,7 +2,6 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import {
   applyPaneLayoutIntentCommand,
-  cleanupOrphanedBuffersCommand,
   createSessionCommand,
   deletePaneLayoutCommand,
   deleteSessionCommand,
@@ -24,7 +23,6 @@ import {
   testDomainResolutionCommand,
   updateSessionActivityCommand,
   updateSessionStatusCommand,
-  validateDomainsCommand,
 } from "@orkestrator/protocol/contract/domains/native-sessions";
 import { allowlistEntryDomain, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
@@ -80,8 +78,6 @@ export function registerSessionCommands(
   );
 
   register(testDomainResolutionCommand, ({ domains }) => resolveDomains(domains));
-  // The older name of the same check.
-  register(validateDomainsCommand, ({ domains }) => resolveDomains(domains));
 
   register(
     createSessionCommand,
@@ -146,7 +142,6 @@ export function registerSessionCommands(
   register(reorderSessionsCommand, ({ environmentId, sessionIds }, { storage }) =>
     storage.reorderSessions(asString(environmentId, "environmentId"), asStringArray(sessionIds)),
   );
-  register(cleanupOrphanedBuffersCommand, (_args, { storage }) => storage.cleanupOrphanedBuffers());
 
   register(getPaneLayoutCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "pane-layout", () =>
@@ -249,7 +244,7 @@ export function registerSessionCommands(
   });
 }
 
-/** Resolves allow-list domains on the host (`test_domain_resolution`, `validate_domains`). */
+/** Resolves allow-list domains on the host (`test_domain_resolution`). */
 function resolveDomains(domains: unknown) {
   return Promise.all(
     asStringArray(domains).map(async (domain) => {

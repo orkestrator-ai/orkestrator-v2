@@ -70,6 +70,9 @@ const LazyGraphDesignerTab = lazy(async () => ({
 const LazyGraphRunTab = lazy(async () => ({
   default: (await import("@/components/graph-run/GraphRunTab")).GraphRunTab,
 }));
+const LazyAutoPipelineTab = lazy(async () => ({
+  default: (await import("@/components/review/AutoPipelineTab")).AutoPipelineTab,
+}));
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
@@ -385,6 +388,22 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 <LazyGraphRunTab
                   environmentId={environmentId}
                   data={tab.graphRunData}
+                  isActive={isTabActive && isActive}
+                />
+              </LazyLoadBoundary>
+            );
+          }
+
+          if (tab.type === "auto-pipeline" && tab.autoPipelineData) {
+            return (
+              <LazyLoadBoundary
+                key={tab.id}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyAutoPipelineTab
+                  environmentId={environmentId}
+                  data={tab.autoPipelineData}
                   isActive={isTabActive && isActive}
                 />
               </LazyLoadBoundary>

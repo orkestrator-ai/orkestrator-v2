@@ -1,4 +1,8 @@
-import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import {
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
@@ -33,6 +37,7 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.environment");
 
@@ -130,10 +135,11 @@ export function usesNativeStartupAgentTab(
   const launch = resolveStartupLaunchFromSettings(
     agentSettingsTiers(config, projectId, { agentSettings }),
   );
-  return (
-    launch.mode === "native" &&
-    !(launch.agent === "claude" && launch.claudeNativeBackend === "tmux")
+  const backend = effectiveClaudeNativeBackend(
+    launch.claudeNativeBackend,
+    isTmuxModeEnabled(config.global),
   );
+  return launch.mode === "native" && !(launch.agent === "claude" && backend === "tmux");
 }
 
 /**
@@ -171,6 +177,9 @@ export function CreateEnvironmentFlowDialog({
   startEnvironment,
 }: CreateEnvironmentFlowDialogProps) {
   const nodeBackend = useScopeBackend();
+  // The node the environment is created on: its activation and selection
+  // belong to that node, never to the window's command node.
+  const scope = useScopesWithCommandFallback().scope;
   const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
@@ -299,7 +308,7 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.pendingAgentLaunch &&
         usesNativeStartupAgentTab(config, projectId, agentSettings)
       ) {
-        armStartupAgentTabActivation(configuredEnvironment.id);
+        armStartupAgentTabActivation(configuredEnvironment.id, scope);
       }
 
       setOptions(configuredEnvironment.id, {
@@ -419,7 +428,7 @@ export function CreateEnvironmentFlowDialog({
       // idempotent retry may return before its concurrent winner has attached
       // the environment, so the one-shot activation follows the authoritative
       // pipeline snapshot in that case and survives this dialog closing.
-      activateFeatureBuildEnvironment(projectId, result);
+      activateFeatureBuildEnvironment(projectId, result, scope);
       toast.success("Build started", {
         description: "The ticket was added and its environment is being created.",
       });

@@ -142,17 +142,6 @@ export const getComposeDraftCommand = defineCommand({
   critical: [],
 });
 
-export const listComposeDraftsCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "list_compose_drafts",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({ ownerType: Schema.String, ownerId: Schema.String }),
-  result: Schema.Array(ComposeDraftSchema),
-  critical: [],
-});
-
 // expectedRevision on the draft writes: the compare-and-swap guard; a receiver
 // ignoring it would overwrite (or delete) another client's newer draft.
 
@@ -326,7 +315,6 @@ export const PROMPT_COMMANDS = [
   movePromptQueueMessageCommand,
   retryPromptQueueDispatchCommand,
   getComposeDraftCommand,
-  listComposeDraftsCommand,
   saveComposeDraftCommand,
   deleteComposeDraftCommand,
   getFileDraftCommand,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  autoPipelineDraftPrompt,
   isVerificationVerdict,
   parseAutoPipelineResult,
 } from "@orkestrator/protocol/build-pipeline";
@@ -11,6 +12,8 @@ import {
   SHELL_TOOL,
   offeredName,
   scriptedTurn,
+  taggedUserMessages,
+  turnStartTags,
   verificationResult,
 } from "./auto-pipeline-fake-model-script";
 
@@ -24,26 +27,35 @@ describe("Auto-pipeline fake model script", () => {
     expect(() => parseAutoPipelineResult(FAKE_DRAFT)).not.toThrow();
   });
 
-  test("a drafting turn submits once with its key and capability, then replies", () => {
-    const prompt = `Draft a ticket.\n${workflowResultInstruction("auto-pipeline-draft", KEY, {
-      capability: "cap-123",
-    })}`;
+  test("the To pipeline request is answered by calling convert_to_pipeline once, then replying", () => {
+    const prompt = autoPipelineDraftPrompt();
     const first = scriptedTurn({
       messages: [user(prompt)],
-      tools: tools("read", "submit_auto_pipeline_draft"),
+      tools: tools("read", "bash", "convert_to_pipeline"),
     });
     expect(first.submits).toBe(true);
-    expect(first.step).toEqual({
-      kind: "tool",
-      name: "submit_auto_pipeline_draft",
-      input: { resultKey: KEY, capability: "cap-123", result: FAKE_DRAFT },
-    });
+    expect(first.workflow).toBe("convert_to_pipeline");
+    expect(first.step).toEqual({ kind: "tool", name: "convert_to_pipeline", input: FAKE_DRAFT });
     const after = scriptedTurn({
-      messages: [user(prompt), { role: "assistant" }, { role: "tool", content: "accepted" }],
-      tools: tools("submit_auto_pipeline_draft"),
+      messages: [user(prompt), { role: "assistant" }, { role: "tool", content: "saved" }],
+      tools: tools("convert_to_pipeline"),
     });
     expect(after.step).toEqual({ kind: "text", text: FAKE_REPLY });
     expect(after.submits).toBeUndefined();
+    // The runtime may namespace the tool by its MCP server.
+    expect(
+      scriptedTurn({ messages: [user(prompt)], tools: tools("orkestrator__convert_to_pipeline") })
+        .step,
+    ).toMatchObject({ kind: "tool", name: "orkestrator__convert_to_pipeline" });
+  });
+
+  test("a runtime that does not offer the tool gets a plain explanation, not a silent pass", () => {
+    const turn = scriptedTurn({
+      messages: [user(autoPipelineDraftPrompt())],
+      tools: tools("read"),
+    });
+    expect(turn.step).toMatchObject({ kind: "text" });
+    expect(turn.submits).toBeUndefined();
   });
 
   test("a validation plan reads HEAD first and submits the SHA it read", () => {
@@ -139,5 +151,63 @@ describe("Auto-pipeline fake model script", () => {
       "mcp_orkestrator_submit_fix_result",
     );
     expect(offeredName(["submit_fix_result_v2"], "submit_fix_result")).toBeUndefined();
+  });
+});
+
+describe("qualification tags", () => {
+  const TAG = "QATAG0A1B2C3D";
+
+  test("a prompt that starts a turn counts its tag once", () => {
+    expect(turnStartTags([user(`Build it. ${TAG} and again ${TAG}`)])).toEqual([TAG]);
+  });
+
+  test("later requests of the same turn count nothing", () => {
+    expect(
+      turnStartTags([
+        user(`Build it. ${TAG}`),
+        { role: "assistant", content: null },
+        { role: "tool", content: "ok" },
+      ]),
+    ).toEqual([]);
+    expect(turnStartTags([user(`Build it. ${TAG}`), { role: "assistant", content: "x" }])).toEqual(
+      [],
+    );
+  });
+
+  test("untagged, malformed and lower-case tags count nothing", () => {
+    expect(turnStartTags([user("Build it.")])).toEqual([]);
+    expect(turnStartTags([user("qatag0a1b2c3d QATAG0A1B")])).toEqual([]);
+    expect(turnStartTags(undefined)).toEqual([]);
+  });
+
+  test("a resent prompt in a later turn counts again", () => {
+    expect(
+      turnStartTags([
+        user(`Build it. ${TAG}`),
+        { role: "assistant", content: "Done." },
+        user(`Build it. ${TAG}`),
+      ]),
+    ).toEqual([TAG]);
+  });
+});
+
+describe("tagged user messages", () => {
+  const TAG = "QATAG0A1B2C3D";
+
+  test("counts each user message that carries the tag once", () => {
+    expect(
+      taggedUserMessages([
+        { role: "system", content: `System ${TAG}` },
+        user(`Build it. ${TAG} ${TAG}`),
+        { role: "assistant", content: `Echo ${TAG}` },
+        user("Continue."),
+        user(`Build it. ${TAG}`),
+      ]),
+    ).toEqual({ [TAG]: 2 });
+  });
+
+  test("a request without tags counts nothing", () => {
+    expect(taggedUserMessages([user("Build it.")])).toEqual({});
+    expect(taggedUserMessages(null)).toEqual({});
   });
 });

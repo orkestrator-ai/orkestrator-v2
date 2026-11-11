@@ -4,7 +4,6 @@ import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import {
   RESOURCE_MANIFEST_KINDS,
-  type ResourceRevisionManifest,
   type ResourceRevisionMap,
   type ScopedResourceRevisionManifest,
 } from "@orkestrator/protocol/resource-events";
@@ -54,7 +53,9 @@ afterAll(() => {
   mock.module("@/lib/native/events", () => realEventsSnapshot);
 });
 
-const { readPrefetchedCommandResponse } = await import("./prefetched-command-responses");
+const { getWindowScope } = await import("@/lib/node-scope/app-window-scope");
+const readPrefetchedCommandResponse = (command: string, args: Record<string, unknown>) =>
+  getWindowScope().commandScope().prefetched.read(command, args);
 const { createReadCoordinator, getReadCoordinator, resetReadCoordinatorForTests } =
   await import("./read-coordinator");
 const {
@@ -104,17 +105,31 @@ function change(overrides: Partial<ResourceChange> = {}): ResourceChange {
   return { resource: "environment", id: "env-1", revision: 1, ...overrides };
 }
 
-function fullManifest(
-  generation = "a".repeat(32),
-  revision = "b".repeat(32),
-): ResourceRevisionManifest {
+function scopedManifest(
+  overrides: Partial<ScopedResourceRevisionManifest> = {},
+): ScopedResourceRevisionManifest {
   return {
-    generation,
+    generation: "a".repeat(32),
+    cursor: 1,
+    highWater: 1,
+    reset: false,
+    resetResources: [],
+    changes: [],
+    revisions: {},
+    hasMore: false,
+    ...overrides,
+  };
+}
+
+/** A generation reset naming every manifest resource, as the backend answers one. */
+function fullScopedManifest(revision = "b".repeat(32)): ScopedResourceRevisionManifest {
+  return scopedManifest({
     reset: true,
+    resetResources: [...RESOURCE_MANIFEST_KINDS],
     revisions: Object.fromEntries(
       RESOURCE_MANIFEST_KINDS.map((kind) => [kind, revision]),
     ) as ResourceRevisionMap,
-  };
+  });
 }
 
 beforeEach(() => {
@@ -827,7 +842,13 @@ describe("manifest reconciliation", () => {
       },
     ],
     ["a malformed manifest", async () => ({ generation: "bad" }) as never],
-  ])("falls back to a full reconciliation for %s", async (_label, loadManifest) => {
+    [
+      "a backend that does not know the scoped manifest",
+      async () => {
+        throw new Error("Unknown backend command: get_scoped_resource_revision_manifest");
+      },
+    ],
+  ])("falls back to a full reconciliation for %s", async (_label, loadScopedManifest) => {
     const requests: Array<{ resources: string[] | null; reason: string }> = [];
     onResourceResync((request) => {
       requests.push({
@@ -836,56 +857,52 @@ describe("manifest reconciliation", () => {
       });
     });
 
-    startResourceSync({ loadManifest });
+    startResourceSync({ loadScopedManifest });
     await tick(20);
 
     expect(requests).toEqual([{ resources: null, reason: "explicit" }]);
   });
 
   test("coalesces requests arriving during a manifest load into one follow-up", async () => {
-    let resolveFirst!: (manifest: ResourceRevisionManifest) => void;
-    const first = new Promise<ResourceRevisionManifest>((resolve) => {
+    let resolveFirst!: (manifest: ScopedResourceRevisionManifest) => void;
+    const first = new Promise<ScopedResourceRevisionManifest>((resolve) => {
       resolveFirst = resolve;
     });
-    const stable = {
-      generation: "a".repeat(32),
-      reset: false,
-      revisions: {},
-    } satisfies ResourceRevisionManifest;
-    const loadManifest = mock()
+    const stable = scopedManifest();
+    const loadScopedManifest = mock()
       .mockImplementationOnce(() => first)
       .mockImplementation(async () => stable);
 
-    startResourceSync({ loadManifest });
+    startResourceSync({ loadScopedManifest });
     await tick(10);
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
     resource?.handler({ payload: change({ revision: 10 }) });
     resource?.handler({ payload: change({ revision: 12 }) });
     resource?.handler({ payload: change({ revision: 20 }) });
     resource?.handler({ payload: change({ revision: 22 }) });
-    expect(loadManifest).toHaveBeenCalledTimes(1);
+    expect(loadScopedManifest).toHaveBeenCalledTimes(1);
 
     resolveFirst(stable);
     await tick(20);
 
-    expect(loadManifest).toHaveBeenCalledTimes(2);
+    expect(loadScopedManifest).toHaveBeenCalledTimes(2);
   });
 
   test("does not hydrate a manifest that resolves after disposal", async () => {
-    let resolveManifest!: (manifest: ResourceRevisionManifest) => void;
-    const loadManifest = mock(
+    let resolveManifest!: (manifest: ScopedResourceRevisionManifest) => void;
+    const loadScopedManifest = mock(
       () =>
-        new Promise<ResourceRevisionManifest>((resolve) => {
+        new Promise<ScopedResourceRevisionManifest>((resolve) => {
           resolveManifest = resolve;
         }),
     );
     const resync = mock(() => undefined);
     onResourceResync(resync);
 
-    const stop = startResourceSync({ loadManifest });
+    const stop = startResourceSync({ loadScopedManifest });
     await tick(10);
     stop();
-    resolveManifest(fullManifest());
+    resolveManifest(fullScopedManifest());
     await tick(20);
 
     expect(resync).not.toHaveBeenCalled();
@@ -897,7 +914,7 @@ describe("manifest reconciliation", () => {
       requests.push(request.resources === null ? null : [...request.resources]);
     });
 
-    startResourceSync({ loadManifest: async () => fullManifest() });
+    startResourceSync({ loadScopedManifest: async () => fullScopedManifest() });
     await tick(20);
 
     expect(requests[0]).toEqual(["project"]);
@@ -913,44 +930,44 @@ describe("manifest reconciliation", () => {
       intervalCallback = callback as () => void;
       return 42 as unknown as ReturnType<typeof setInterval>;
     }) as unknown as typeof setInterval;
-    const first = fullManifest();
-    const loadManifest = mock(
-      async (knownGeneration?: string): Promise<ResourceRevisionManifest> =>
+    const first = fullScopedManifest();
+    const loadScopedManifest = mock(
+      async (knownGeneration: string | undefined): Promise<ScopedResourceRevisionManifest> =>
         knownGeneration === first.generation
-          ? { generation: first.generation, reset: false, revisions: {} }
+          ? scopedManifest({ generation: first.generation })
           : first,
     );
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync({ loadManifest });
+    startResourceSync({ loadScopedManifest });
     await tick(20);
     resync.mockClear();
 
     intervalCallback?.();
     await tick(20);
 
-    expect(loadManifest).toHaveBeenCalledTimes(2);
+    expect(loadScopedManifest).toHaveBeenCalledTimes(2);
     expect(resync).not.toHaveBeenCalled();
   });
 
   test("hydrates only the resource revision that differs", async () => {
-    const initial = fullManifest();
+    const initial = fullScopedManifest();
     let calls = 0;
-    const loadManifest = async (): Promise<ResourceRevisionManifest> => {
+    const loadScopedManifest = async (): Promise<ScopedResourceRevisionManifest> => {
       calls += 1;
       return calls === 1
         ? initial
-        : {
+        : scopedManifest({
             generation: initial.generation,
-            reset: false,
+            resetResources: ["config"],
             revisions: { config: "c".repeat(32) },
-          };
+          });
     };
     const requests: Array<string[] | null> = [];
     onResourceResync((request) => {
       requests.push(request.resources === null ? null : [...request.resources]);
     });
-    startResourceSync({ loadManifest });
+    startResourceSync({ loadScopedManifest });
     await tick(20);
     requests.length = 0;
 
@@ -967,12 +984,13 @@ describe("manifest reconciliation", () => {
       generation?: string;
       revisions?: Partial<ResourceRevisionMap>;
     }> = [];
-    const loadManifest = async (
-      generation?: string,
-      revisions?: Partial<ResourceRevisionMap>,
-    ): Promise<ResourceRevisionManifest> => {
-      argumentsSeen.push({ generation, revisions });
-      return fullManifest();
+    const loadScopedManifest = async (
+      generation: string | undefined,
+      _cursor: number,
+      revisions: Partial<ResourceRevisionMap>,
+    ): Promise<ScopedResourceRevisionManifest> => {
+      argumentsSeen.push({ generation, revisions: { ...revisions } });
+      return fullScopedManifest();
     };
     let fail = true;
     const requests: Array<string[] | null> = [];
@@ -983,7 +1001,7 @@ describe("manifest reconciliation", () => {
         throw new Error("offline");
       }
     });
-    startResourceSync({ loadManifest });
+    startResourceSync({ loadScopedManifest });
     await tick(20);
     expect(requests).toEqual([["project"]]);
 
@@ -1002,16 +1020,16 @@ describe("manifest reconciliation", () => {
       generation?: string;
       revisions?: Partial<ResourceRevisionMap>;
     }> = [];
-    const loadManifest = async (
-      generation?: string,
-      revisions?: Partial<ResourceRevisionMap>,
-    ): Promise<ResourceRevisionManifest> => {
-      argumentsSeen.push({ generation, revisions });
-      return {
-        generation: "a".repeat(32),
-        reset: false,
+    const loadScopedManifest = async (
+      generation: string | undefined,
+      _cursor: number,
+      revisions: Partial<ResourceRevisionMap>,
+    ): Promise<ScopedResourceRevisionManifest> => {
+      argumentsSeen.push({ generation, revisions: { ...revisions } });
+      return scopedManifest({
+        resetResources: ["config"],
         revisions: { config: "b".repeat(32) },
-      };
+      });
     };
     let reject = true;
     onResourceResync(async () => {
@@ -1021,7 +1039,7 @@ describe("manifest reconciliation", () => {
         throw new Error("async hydration failed");
       }
     });
-    startResourceSync({ loadManifest });
+    startResourceSync({ loadScopedManifest });
     await tick(20);
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");

@@ -8,6 +8,7 @@ import {
   agentMailCapabilities,
   agentMailNeedsAttention,
   agentMailboxId,
+  isAgentMailBudgetHeld,
   normalizeAgentMessagingSettings,
   resolveTabDisplayName,
   sharedConnectionMayActAs,
@@ -36,6 +37,7 @@ import {
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import type { AppConfig } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import {
@@ -700,6 +702,15 @@ export class AgentMailboxDirectory {
           if (mailbox.kind === "pipeline") continue;
           if (message.placement !== "pending-inject" && message.placement !== "inject-held")
             continue;
+          // A closed main's budget-held mail keeps its hold: the next main
+          // takes it over still held (`moveClosedCoordinatorMail`), so only
+          // the user's Resume releases it, never replacing the main (2900).
+          if (
+            mailbox.ownerKind === "coordinator" &&
+            mailbox.coordinatorRole !== "side" &&
+            isAgentMailBudgetHeld(message)
+          )
+            continue;
           message.placement = "undeliverable";
           message.placementReason = "tab-closed";
           message.revision += 1;
@@ -842,11 +853,13 @@ export class AgentMailboxDirectory {
       includeTombstoned?: boolean;
       currentEnvironmentId?: string;
       environmentId?: string;
+      /** The config the caller already read for this pass; read here when absent. */
+      config?: AppConfig;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
     const [store, config] = await Promise.all([
       this.store.snapshot(),
-      this.repos.config.loadConfig(),
+      options.config ?? this.repos.config.loadConfig(),
     ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const query = options.q?.trim().toLocaleLowerCase();

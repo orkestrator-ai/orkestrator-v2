@@ -21,7 +21,7 @@
  * Browser-safe: the run view draws a replicated node's branches from here.
  */
 import { GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
-import type { CompiledGraphPlan, GraphPlanNode } from "./plan.js";
+import type { GraphPlanNode } from "./plan.js";
 import { isGraphBranchKey } from "./run-identity.js";
 import type { GraphFanOutItem, GraphModelBinding, GraphRunBindings } from "./run-model.js";
 
@@ -138,12 +138,4 @@ export function graphBranchBinding(
   if (binding === undefined) return undefined;
   if (!Array.isArray(binding)) return binding;
   return binding[branch?.panelIndex ?? 0];
-}
-
-/** Every branch key of every replicated node, for callers that index a whole plan. */
-export function graphPlanBranches(
-  plan: Pick<CompiledGraphPlan, "nodes">,
-  bindings: GraphRunBindings["roles"],
-): Map<string, GraphBranch[] | null> {
-  return new Map(plan.nodes.map((node) => [node.id, graphNodeBranches(node, bindings)]));
 }

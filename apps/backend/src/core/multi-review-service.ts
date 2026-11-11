@@ -175,8 +175,6 @@ import {
   type EvidencePermitPhase,
 } from "./review-evidence-permits.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
-import { WorkflowDueScheduler } from "./multi-review-scheduler.js";
-import { systemRecurringTimers } from "./recurring-scheduler.js";
 import {
   advanceMultiReviewGraph,
   MultiReviewGraphEngineError,
@@ -193,15 +191,16 @@ import {
   needsAutoPrLaunch,
   needsInteractiveAddressFindingsObservation,
   needsPausedStopReconciliation,
+  resultKeysAwaitingTurnEnd,
   reviewSession,
   stableJitterMs,
   supervisionDemand,
+  validationRunJustStarted,
   type MultiReviewObligation,
 } from "./multi-review-scheduling.js";
 import {
   DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
-  keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
   type KeyedWorkflowServiceOptions,
   type WorkflowReconcileReport,
@@ -239,7 +238,6 @@ import {
   multiReviewStepResultKind,
   multiReviewStepTurnOptions,
 } from "./multi-review-steps.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   consolidatedReportIsClean,
   addressFindingsResultCompletes,
@@ -266,7 +264,22 @@ const READ_ONLY_REPORT_TURN = Object.freeze(multiReviewStepTurnOptions("consolid
 const DEFAULT_POLL_MS = 1_000;
 /** Running provider work is observed every few seconds, with per-workflow jitter. */
 const DEFAULT_OBSERVATION_MS = 3_000;
-const DEFAULT_RECONCILE_MS = 15_000;
+/**
+ * Cadence while an accepted result waits for its turn to end (todo 7557).
+ * Nothing announces that end, and it usually follows the acceptance within a
+ * few hundred milliseconds; the window is one observation interval from the
+ * acceptance, after which the ordinary cadence is no slower.
+ */
+const RESULT_SETTLE_POLL_MS = 250;
+/**
+ * How long after a validation run starts it is read on the fast cadence
+ * (todo 7564 task 3). The run is a detached worker in the environment and
+ * nothing announces its end, so a short run waited for the next observation
+ * pass (3 s plus a spread) before the review could start. Past the window the
+ * ordinary cadence applies, so a run that takes minutes pays at most two extra
+ * status reads.
+ */
+const VALIDATION_FAST_WINDOW_MS = DEFAULT_OBSERVATION_MS;
 /** Workflows advanced at once; each carries its own bounded reviewer pool. */
 const MAX_CONCURRENT_WORKFLOW_PASSES = 8;
 const CONTROLLER_LEASE_MS = 15_000;
@@ -563,7 +576,15 @@ export function workflowCompletionOutcome(
   return undefined;
 }
 
-export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
+/**
+ * The keyed supervisor is Multi Review's only driver: its rollback, the
+ * adaptive `WorkflowDueScheduler`, was removed after the busy live profile
+ * (todo 0048 task 13), so `keyedScheduling` is not accepted here.
+ */
+export interface MultiReviewServiceOptions extends Omit<
+  KeyedWorkflowServiceOptions,
+  "keyedScheduling"
+> {
   autoAdvance?: boolean;
   pollIntervalMs?: number;
   controllerLeaseMs?: number;
@@ -580,7 +601,10 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
    * caller configured that explicitly.
    */
   observationIntervalMs?: number;
-  /** Period of the authoritative storage scan that rediscovers workflows. */
+  /**
+   * Period of the authoritative storage scan that rediscovers workflows, when
+   * `discoveryIntervalMs` is not set.
+   */
   reconcileIntervalMs?: number;
   addressFindingsDispatchRetryMs?: number;
   maxAddressFindingsDispatchAttempts?: number;
@@ -590,7 +614,7 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   ) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<
     ProviderDependencies,
-    "openCodeClient" | "monitorRetryMs" | "planUsage" | "usageLimitStops" | "openCode2Workflow"
+    "planUsage" | "usageLimitStops" | "openCodeWorkflow"
   >;
   workflowResults?: WorkflowResultService;
   /** Each reviewer's own mailbox identity on turns without a result tool. */
@@ -701,15 +725,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * across retries and backend restarts.
    */
   private readonly foregroundAddressFindingsDispatches = new Set<string>();
-  /** The due scheduler's lease renewal; the keyed driver runs its own. */
-  private renewTimer: unknown = null;
-  private readonly scheduler: WorkflowDueScheduler;
   private stopped = false;
-  /**
-   * Selected once: the keyed driver, else the adaptive due scheduler (its
-   * rollback). Never both.
-   */
-  private readonly keyed: boolean;
   private supervisor: KeyedWorkflowSupervisor<MultiReviewObligation> | null = null;
   private unsubscribeStorage: (() => void) | null = null;
   /** How each running pass was triggered, for the attempt-counted deadlines. */
@@ -748,40 +764,16 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // Collected by the workflow's next pass, like an accepted result is.
       wake: (environmentId) => this.wakeEnvironment(environmentId, "result-accepted"),
     });
-    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("multi-review");
     // The spacing is the slowest cadence these counts were designed for (the
     // 3 s observation interval), so the elapsed bound never shortens a grace.
     this.pollGate = new ElapsedPollGate(
       options.observationIntervalMs ?? options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS,
       options.schedulerClock ? { now: options.schedulerClock.now } : {},
     );
-    const schedulerNow = options.schedulerClock?.now ?? Date.now;
-    this.scheduler = new WorkflowDueScheduler({
-      run: (workflowId) => this.runScheduled(workflowId),
-      nextDueAt: async (workflowId) => {
-        const delayMs = await this.nextDelayMs(workflowId);
-        return delayMs === undefined ? undefined : schedulerNow() + delayMs;
-      },
-      discover: () => this.discoverSupervisedWorkflows(),
-      reconcileIntervalMs:
-        this.options.reconcileIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_RECONCILE_MS,
-      maxConcurrent: MAX_CONCURRENT_WORKFLOW_PASSES,
-      ...(options.schedulerClock
-        ? { now: options.schedulerClock.now, timers: options.schedulerClock.timers }
-        : {}),
-      onPass: ({ queueDelayMs, durationMs }) =>
-        recordEfficiency(this.options.efficiency, {
-          owner: "multi-review",
-          operation: "scheduler.pass",
-          count: queueDelayMs,
-          elapsedMs: durationMs,
-        }),
-    });
   }
 
   async init(): Promise<void> {
     this.stopped = false;
-    this.stopLeaseRenewal();
     // The workflow store is authoritative across backend restarts. Restore the
     // environment projection before the renderer can mistake an active review
     // for completed work, and retire a stale working source left by a workflow
@@ -791,7 +783,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     this.supervisor = null;
     this.unsubscribeStorage?.();
     this.unsubscribeStorage = null;
-    if (this.options.autoAdvance !== false && this.keyed) {
+    if (this.options.autoAdvance !== false) {
       this.supervisor = this.createSupervisor();
       this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
         if (change.resource === "multi-review" && change.deleted) {
@@ -811,48 +803,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         run: () => this.renewLeasesOnce(),
       });
       this.supervisor.start();
-      return;
     }
-    if (this.options.autoAdvance !== false) {
-      // The first reconciliation scan runs immediately and rebuilds every
-      // due time from storage; nothing about scheduling survives a restart.
-      this.scheduler.start();
-      this.armLeaseRenewal();
-      this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
-        const graphWorkflow =
-          change.resource === "graph-run" ? multiReviewWorkflowIdOfRun(change.id) : undefined;
-        if (graphWorkflow) void this.advanceNow(graphWorkflow);
-      });
-    }
-  }
-
-  /** A fixed-period renewal on the scheduler's clock, re-armed after each run. */
-  private armLeaseRenewal(): void {
-    const timers = this.options.schedulerClock?.timers ?? systemRecurringTimers;
-    const handle = timers.set(() => {
-      if (this.renewTimer !== handle) return;
-      void this.renewLeases().finally(() => {
-        if (this.renewTimer === handle && !this.stopped) this.armLeaseRenewal();
-      });
-    }, this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS);
-    this.renewTimer = handle;
-  }
-
-  private stopLeaseRenewal(): void {
-    if (this.renewTimer !== null) {
-      (this.options.schedulerClock?.timers ?? systemRecurringTimers).clear(this.renewTimer);
-    }
-    this.renewTimer = null;
   }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
-    this.stopLeaseRenewal();
     this.supervisor?.stop();
     this.supervisor = null;
     this.unsubscribeStorage?.();
     this.unsubscribeStorage = null;
-    await this.scheduler.stop();
     await Promise.allSettled([
       ...this.locks.values(),
       ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
@@ -2749,11 +2708,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * The keyed driver. Same due-time policy as the adaptive
-   * scheduler it replaces (`nextDueAt`: 1 s for boundaries, 3 s plus a stable
-   * spread while simply observing a provider, address-handoff backoff), but
-   * on the shared primitive with obligation-aware discovery, scoped wakeups,
-   * bounded admission and a critical lease-renewal job.
+   * The only driver: per-workflow due times (`nextDelayMs`: 1 s for
+   * boundaries, 3 s plus a stable spread while simply observing a provider,
+   * address-handoff backoff) on the shared primitive, with obligation-aware
+   * discovery, scoped wakeups, bounded admission and a critical lease-renewal
+   * job.
    */
   private createSupervisor(): KeyedWorkflowSupervisor<MultiReviewObligation> {
     const dispatches = this.options.dispatchAddressFindingsPrompt !== undefined;
@@ -2762,8 +2721,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       kind: "multi-review-tick",
       progressIntervalMs: this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
       // Safety discovery only: every obligation is noted where it is written
-      // and woken by its events, so the adaptive scheduler's 15 s scan
-      // becomes the shared 30 s safety interval.
+      // and woken by its events, so the shared 30 s safety interval is enough.
       discoveryIntervalMs:
         this.options.discoveryIntervalMs ??
         this.options.reconcileIntervalMs ??
@@ -2776,7 +2734,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           dispatches,
         ),
       advance: async (pass) => {
-        this.passTriggers.set(pass.key, pass.trigger);
+        // Automatic observations can run at the 250 ms settle cadence.
+        // Give them the same elapsed deadline spacing as event wakes.
+        this.passTriggers.set(pass.key, pass.trigger === "periodic" ? "wake" : pass.trigger);
         try {
           await this.runLocked(pass.key);
         } finally {
@@ -2826,66 +2786,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /**
    * Runs a pass now. Used by user actions and state transitions; a request
-   * that arrives while a pass is running reruns it once afterwards. The next
-   * periodic pass is scheduled from this one's completion.
+   * that arrives while a pass is running reruns it once afterwards. Periodic
+   * passes stay with the keyed supervisor.
    */
   advanceNow(workflowId: string): Promise<void> {
     recordEfficiency(this.options.efficiency, {
       owner: "multi-review",
       operation: "scheduler.wake",
     });
-    const run = this.runLocked(workflowId);
-    // Same promise for every caller that joins this pass; scheduling the next
-    // one is a side effect of completion, not part of what callers await.
-    const reschedule = () => void this.scheduler.reschedule(workflowId);
-    void run.then(reschedule, reschedule);
-    return run;
-  }
-
-  /**
-   * A timer-driven pass. Unlike {@link advanceNow} it joins a pass already in
-   * progress instead of requesting another: a timer that fires during a slow
-   * pass is not evidence that anything changed.
-   *
-   * Under the adaptive scheduler one `multi-review-tick` attempt is either a
-   * reconciliation scan or one workflow's due pass; both are observed so the
-   * cost stays comparable with the keyed driver's.
-   */
-  private runScheduled(workflowId: string): Promise<void> {
-    recurringWorkMetrics.requested("multi-review-tick");
-    const existing = this.scheduledRuns.get(workflowId);
-    if (existing) {
-      recurringWorkMetrics.coalesced("multi-review-tick");
-      return existing.promise;
-    }
-    return recurringWorkMetrics.observe("multi-review-tick", (span) => {
-      span.work("record-selected");
-      return this.runLocked(workflowId);
-    });
-  }
-
-  /** Workflow IDs storage says need supervision; the scheduler's ground truth. */
-  private discoverSupervisedWorkflows(): Promise<string[]> {
-    if (this.stopped) return Promise.resolve([]);
-    recurringWorkMetrics.requested("multi-review-tick");
-    return recurringWorkMetrics.observe("multi-review-tick", async (span) => {
-      const records = await this.storage.listAllMultiReviewWorkflows();
-      span.work("record-scanned", records.length);
-      return records.flatMap((record) =>
-        isMultiReviewWorkflow(record.snapshot) &&
-        supervisionDemand(
-          record.snapshot,
-          this.options.dispatchAddressFindingsPrompt !== undefined,
-        ) !== "none"
-          ? [record.id]
-          : [],
-      );
-    });
+    // Same promise for every caller that joins this pass. The supervisor
+    // keeps this workflow's own due time; a pass that leaves a new obligation
+    // reaches its index through `noteRecord`.
+    return this.runLocked(workflowId);
   }
 
   /**
    * Delay until the next pass for one workflow, computed from the state its
-   * last pass left. Relative, so each driver adds it to its own clock; the
+   * last pass left. Relative, so the supervisor adds it to its own clock; the
    * retry stamps it compares against are wall-clock.
    */
   private async nextDelayMs(workflowId: string): Promise<number | undefined> {
@@ -2908,8 +2825,38 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     const observeMs =
       this.options.observationIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS;
+    if (await this.acceptedResultAwaitsTurnEnd(workflow, now, observeMs)) {
+      return Math.min(RESULT_SETTLE_POLL_MS, observeMs);
+    }
+    if (validationRunJustStarted(workflow, now, Math.min(VALIDATION_FAST_WINDOW_MS, observeMs))) {
+      return Math.min(fastMs, observeMs);
+    }
     // Spread workflows restored together across a third of the interval.
     return observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);
+  }
+
+  /**
+   * Whether a result this workflow is observing was accepted within the last
+   * `windowMs` and not consumed yet. Its pass consumes it only once the turn
+   * that submitted it has ended, and that end raises no wake, so without a
+   * short follow-up the workflow waited a whole observation interval after
+   * a pass that read the turn still running (todo 7557).
+   */
+  private async acceptedResultAwaitsTurnEnd(
+    workflow: MultiReviewWorkflow,
+    now: number,
+    windowMs: number,
+  ): Promise<boolean> {
+    const results = this.options.workflowResults;
+    if (!results) return false;
+    const scope = { environmentId: workflow.environmentId, projectId: workflow.projectId };
+    for (const resultKey of resultKeysAwaitingTurnEnd(workflow)) {
+      const status = await results.status(scope, resultKey);
+      if (status?.lifecycle !== "accepted") continue;
+      const acceptedAt = Date.parse(status.receipt?.acceptedAt ?? "");
+      if (Number.isFinite(acceptedAt) && now - acceptedAt < windowMs) return true;
+    }
+    return false;
   }
 
   private runLocked(workflowId: string): Promise<void> {
@@ -5491,12 +5438,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       this.leases.delete(workflowId);
       throw new ControllerFenceError();
     }
-  }
-
-  private renewLeases(): Promise<void> {
-    if (this.stopped) return Promise.resolve();
-    recurringWorkMetrics.requested("multi-review-lease-renewal");
-    return recurringWorkMetrics.observe("multi-review-lease-renewal", () => this.renewLeasesOnce());
   }
 
   private async renewLeasesOnce(): Promise<void> {

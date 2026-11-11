@@ -51,6 +51,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
+import { pinLayoutRootScroll } from "@/lib/pinned-scroll";
 import { useDialogFocusReturn, useDialogFocusReturnGroup } from "@/lib/dialog-focus";
 import { Loader2 } from "lucide-react";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -124,22 +125,14 @@ function desktopConnectionScopeSeed(): {
 export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
 
 /**
- * A single daemon probe, normalised to a structured result. It never rejects -
- * the poll would otherwise leave an unhandled rejection behind. The boolean
- * fallback keeps the renderer compatible with an older backend during a dev
- * hot reload.
+ * A single daemon probe. It never rejects - the poll would otherwise leave an
+ * unhandled rejection behind.
  */
 async function probeDocker(
   source: "startup" | "retry" | "poll",
 ): Promise<DockerAvailability | null> {
   try {
-    const result: DockerAvailability | boolean = await checkDocker();
-    if (typeof result === "boolean") {
-      return result
-        ? { available: true, reason: null }
-        : { available: false, reason: "daemon-unavailable" };
-    }
-    return result;
+    return await checkDocker();
   } catch (error) {
     log.error("docker.check-failed", { source, error: formatLogError(error) });
     // A failed request says nothing about Docker. In particular, treating an
@@ -220,6 +213,8 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
+  // A stray `scrollIntoView` or `focus()` must not shift the whole window.
+  useEffect(() => pinLayoutRootScroll(document), []);
   // The window scope and its command scope are the root of every per-node
   // store and service. Only the command scope exists yet, and nothing reads
   // it until the stores convert, so this mount changes no behaviour.

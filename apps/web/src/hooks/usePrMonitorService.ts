@@ -78,7 +78,6 @@ export function fetchPrMonitorView(
   scope: NodeScope = appCommandScope(),
 ) {
   return readViewSnapshot(
-    "get_pr_monitor_state",
     () =>
       backendApiForScope(scope, createFilesSessionsApi, {
         getPrMonitorState: backend.getPrMonitorState,

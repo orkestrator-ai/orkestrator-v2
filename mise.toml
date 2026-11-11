@@ -136,8 +136,8 @@ description = "Download the pinned Claude CLI"
 run = "bun scripts/download-agent.ts claude"
 
 [tasks."download:opencode"]
-description = "Download the pinned OpenCode CLI"
-run = "bun scripts/download-agent.ts opencode"
+description = "Download the pinned OpenCode CLI (OpenCode 2.x, the toolchain's `opencode2`)"
+run = "bun scripts/download-agent.ts opencode2"
 
 [tasks."download:codex"]
 description = "Download the pinned Codex CLI"
@@ -321,7 +321,7 @@ depends = ["build:cli:test"]
 run = "bun packages/cli/scripts/run-scenarios.ts"
 
 [tasks."test:agent:docker:isolated"]
-description = "Build and smoke the image, run its live image qualifications, run the credential-free Docker fixture, and reset its disposable profile"
+description = "Build the image, then smoke and qualify it while the Docker fixture profiles start, run the fixture shards side by side, and reset the disposable profiles"
 depends = ["playwright:install"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode,cursor,pi"
 
@@ -377,6 +377,26 @@ run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
 description = "Coordinator routing build case (a cancelled build is not restarted) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-routing-fake.ts"
 
+[tasks."test:agent:coordinator:surfaces-fake"]
+description = "Coordinator worker surfaces (root-changes approval to local and container workers, a container worker's browser preview) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-surfaces-fake.ts"
+
+[tasks."test:agent:coordinator:node-mail-fake"]
+description = "Coordinator-to-coordinator node mail (round trip, loop bound, main replacement) between two disposable Pi-only profiles, one the other's leaf, with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-node-mail-fake.ts"
+
+[tasks."test:agent:coordinator:restart-fake"]
+description = "Coordinator restarts a build pipeline step a usage limit stopped, on this node and on a leaf, between two disposable Pi-only profiles with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-restart-fake.ts"
+
+[tasks."test:agent:coordinator:notice-live"]
+description = "Coordinator usage-limit notices (grouped stops from a leaf, a move off the limited login, a stop queued across restarts) between two disposable Claude and Pi profiles on fixture accounts and a loopback provider (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-notice-live.ts"
+
+[tasks."test:agent:coordinator:gap-tools-fake"]
+description = "Coordinator gap tools (worker changes, fork, stop, slash command, schedule edits, PR and question refusals) on this node and through a leaf node, on two disposable Pi-only profiles with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-gap-tools-fake.ts"
+
 [tasks."test:agent:coordinator-slow-remote"]
 description = "Coordinator typed message and mail fast-forward with a slow local remote, on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-slow-remote.ts"
@@ -396,6 +416,18 @@ run = "bun scripts/test-ios.ts"
 [tasks."test:unit"]
 description = "Run the root unit tests"
 run = "bun test tests/unit"
+
+[tasks.improvement]
+description = "Run self-improvement now and wait for it (experimental; turn it on in Settings → Experimental; docs/architecture/self-improvement.md)"
+run = "orkestrator self-improvement run --wait"
+
+[tasks."improvement:preview"]
+description = "Show what a self-improvement run would file, without filing it or calling a model"
+run = "orkestrator self-improvement run --dry-run --wait"
+
+[tasks."improvement:status"]
+description = "Show self-improvement's settings, last run, tracked tickets and themes"
+run = "orkestrator self-improvement status"
 
 [tasks."efficiency:baseline"]
 description = "Run the efficiency counters harness (docs/development/efficiency-harness.md)"
@@ -432,17 +464,30 @@ run = "bunx oxlint ."
 description = "Fix auto-fixable lint findings"
 run = "bunx oxlint --fix ."
 
-[tasks.check]
-description = "Check formatting, lint, and types"
-run = ["mise run format:check", "mise run lint", "mise run typecheck"]
+[tasks.guards]
+description = "Run the repository-wide guards (source guards, DOM absence, inheritance, test ownership, raw console, doc registers) in one fast process"
+raw_args = true
+run = "bun scripts/guards.ts"
 
-[tasks."verify:opencode:live"]
-description = "Run live OpenCode compatibility checks"
-env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
+[tasks.check]
+description = "Check formatting, lint, guards, and types"
+run = ["mise run format:check", "mise run lint", "mise run guards", "mise run typecheck"]
+
+[tasks."verify:opencode2:live"]
+description = "Run the OpenCode 2.x live set against the pinned 2.x binary (OPENCODE2_CLI_PATH; isolated HOME, scripted local model, no credentials)"
+env = { RUN_LIVE_OPENCODE2 = "1" }
 run = [
-  "bun test --cwd apps/backend src/core/opencode-live-compatibility.live.test.ts",
-  "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
-  "bun test --cwd apps/backend src/core/native-agent-suborks-opencode.live.test.ts",
+  'test -x "${OPENCODE2_CLI_PATH:-}" || { echo "verify:opencode2:live: set OPENCODE2_CLI_PATH to the pinned 2.x binary" >&2; exit 2; }',
+  "bun test --cwd apps/backend src/core/opencode2/opencode2- --parallel=1",
+]
+
+[tasks."verify:opencode2:real-stack"]
+description = "Run the idle-observation spec's OpenCode cases, steer included, with scripted models against a running dev:test profile (ORKESTRATOR_AGENT_TEST_PROFILE)"
+depends = ["build:cli:test", "playwright:install"]
+env = { ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION = "1", ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS = "1", ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS = "opencode" }
+run = [
+  'test -n "${ORKESTRATOR_AGENT_TEST_PROFILE:-}" || { echo "verify:opencode2:real-stack: set ORKESTRATOR_AGENT_TEST_PROFILE to a running dev:test profile" >&2; exit 2; }',
+  'ORKESTRATOR_AGENT_TEST_IDLE_CASES="${ORKESTRATOR_AGENT_TEST_IDLE_CASES:-missed-final,approval,reconnect,hidden,no-renderer,steer}" bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/idle-observation-live.spec.ts',
 ]
 
 [tasks."verify:accounts:resend-live"]
@@ -458,7 +503,7 @@ description = "Prove what a parked Claude spare does and refuses, on the pinned 
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-first-turn.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
 [tasks."verify:claude:sandbox-live"]
-description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS; real CLI, no credentials, scripted model)"
+description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS, or Linux whose bubblewrap can nest the CLI's namespace; real CLI, no credentials, scripted model)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-provider-sandbox.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
 [tasks."measure:claude:first-turn"]
@@ -469,11 +514,6 @@ run = "bun bridges/claude-bridge/src/services/claude-first-turn.live-probe.ts 5"
 description = "Prove the MCP editor's Claude plugin rows match the pinned CLI (real CLI, no credentials)"
 env = { RUN_LIVE_CLAUDE_PLUGIN_MCP = "1" }
 run = "bun test --cwd apps/backend ./tests/claude-plugin-mcp-live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
-
-[tasks."verify:opencode:mcp-live"]
-description = "Prove OpenCode's in-place MCP reload on the pinned binary (real binary, no credentials)"
-env = { RUN_LIVE_OPENCODE_MCP = "1" }
-run = "bun test --cwd apps/backend ./tests/opencode-mcp-reload-live.test.ts --parallel=1"
 
 [tasks."verify:codex:mcp-live"]
 description = "Prove the MCP editor's Codex trust and merge rules match the pinned binary (real binary, no credentials)"
@@ -594,6 +634,11 @@ run = "bun scripts/set-version.ts"
 description = "Build this platform's desktop release and upload it to the draft GitHub release"
 raw_args = true
 run = "bun scripts/release-desktop.ts build"
+
+[tasks."release:linux"]
+description = "Run the Linux release build on the Linux builder over SSH (check | build [--no-publish] | attach)"
+raw_args = true
+run = "bun scripts/release-linux-remote.ts"
 
 [tasks."release:publish"]
 description = "Publish the draft GitHub release once macOS and Linux are both uploaded"

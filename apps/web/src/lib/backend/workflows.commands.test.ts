@@ -3,7 +3,6 @@ import { afterEach, describe, expect, test, type Mock } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
   dispatchNativeAgentIntent,
-  dispatchNativeAgentPrompt,
   enqueuePromptQueueMessage,
   getNativeAgentDiscoveryUpdate,
   getNativeAgentLiveUpdate,
@@ -58,7 +57,7 @@ describe("native command wrappers", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("refresh_native_agent_commands", input);
   });
 
-  test("dispatch wrappers pass command intent through unchanged", async () => {
+  test("the dispatch wrapper passes command intent through unchanged", async () => {
     const command = { kind: "selected" as const, commandId: "codex:/review", bindingRevision: "r" };
     const base = {
       environmentId: "env-1",
@@ -73,8 +72,6 @@ describe("native command wrappers", () => {
       ...base,
       clientTimeZone: hostTimeZone(),
     });
-    await dispatchNativeAgentPrompt(base);
-    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_prompt", base);
   });
 
   test("queued messages keep their command intent", async () => {

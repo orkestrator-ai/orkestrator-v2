@@ -14,6 +14,8 @@ export interface FakeOpenCode2Session {
   inbox: Row[];
   running: boolean;
   model?: unknown;
+  /** API-managed instruction entries, by key (`/api/experimental/session/:id/instructions`). */
+  instructions?: Record<string, unknown>;
   /** The session's own permission rules (`permissions` on the wire). */
   rules?: unknown[];
   metadata?: Record<string, unknown>;
@@ -70,19 +72,44 @@ export function fakeOpenCode2Model(
   };
 }
 
+export interface FakeOpenCode2Attempt {
+  id: string;
+  integrationID: string;
+  methodID: string;
+  answer?: unknown;
+  mode: "auto" | "code";
+  status: "pending" | "complete" | "failed" | "expired";
+  /** The code `complete` was sent, for a `code` attempt. */
+  code?: string;
+}
+
 export class FakeOpenCode2Server {
   readonly sessions = new Map<string, FakeOpenCode2Session>();
   readonly calls: Array<{ method: string; path: string; body?: unknown }> = [];
   /** Answer the next prompt with this status and body instead of admitting it. */
   failNextPrompt?: { status: number; body?: unknown } | "network";
+  /** Admit the next prompt but answer 502, as when only the acknowledgement is lost. */
+  loseNextPromptAck = false;
   /** Answer the next form reply with this status and body instead of applying it. */
   failNextFormReply?: { status: number; body?: unknown };
+  /** Answer the next form reject (`DELETE .../form/:id`) with this status instead of applying it. */
+  failNextFormReject?: { status: number; body?: unknown };
   /** Runtime MCP servers by name, as `PUT /api/experimental/mcp/:server` left them. */
   readonly mcp = new Map<string, { config: unknown; status: string }>();
   /** The status a newly added MCP server reports (`connected` unless a test says otherwise). */
   mcpAddStatus = "connected";
   /** Session updates to drop silently (a write that did not persist). */
   dropNextSessionUpdate = false;
+  /**
+   * Called when a prompt wakes an idle session (a new run starts), with the
+   * prompt's text; a test that wants runs answered by themselves calls
+   * {@link finishRun} from it. Unset, runs wait for the test.
+   */
+  onRunStarted?: (sessionId: string, text: string) => void;
+  /** Session ids `POST /api/session/:id/interrupt` reached, in order, running or not. */
+  readonly interrupts: string[] = [];
+  /** Session ids `DELETE /api/session/:id` reached, in order. */
+  readonly deletions: string[] = [];
   /** `/api/model`; tests replace it. The default is one fixture model with variants. */
   models: Array<Record<string, unknown>> = [
     fakeOpenCode2Model("fixture", "fixture", ["low", "high"]),
@@ -109,6 +136,19 @@ export class FakeOpenCode2Server {
     active: boolean;
     value: unknown;
   }> = [];
+  /**
+   * `/api/integration` rows without their `connections`, which are derived
+   * from {@link credentials} as the real server reports them. Tests set it.
+   */
+  integrations: Array<Record<string, unknown>> = [];
+  /** OAuth attempts the connect route opened, by attempt id. */
+  readonly attempts = new Map<string, FakeOpenCode2Attempt>();
+  /** What the next OAuth connect answers. */
+  nextAttempt: { url: string; instructions: string; mode: "auto" | "code" } = {
+    url: "https://example.invalid/device",
+    instructions: "Enter code: ABCD-EFGH",
+    mode: "auto",
+  };
   private readonly server: ReturnType<typeof Bun.serve>;
   private events = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private seq = new Map<string, number>();
@@ -190,9 +230,172 @@ export class FakeOpenCode2Server {
     this.emit(sessionId, type, data, durable);
   }
 
+  /** `GET /api/event` connections opened so far. */
+  eventConnections = 0;
+
+  /** Write the real server's idle keepalive, a `: heartbeat` comment, to every open stream. */
+  heartbeat(): void {
+    this.broadcast(": heartbeat\n\n");
+  }
+
+  /** End every open `/api/event` body from the server side, as a dropped subscriber sees it. */
+  endEvents(): void {
+    for (const controller of Array.from(this.events)) {
+      this.events.delete(controller);
+      try {
+        controller.close();
+      } catch {}
+    }
+  }
+
   /** A fresh `msg_`/`ses_`/`per_`/`frm_` id in the server's ascending format. */
   nextId(prefix: string): string {
     return this.id(prefix);
+  }
+
+  /**
+   * Finish an OAuth attempt as the provider would: store `value` as the
+   * integration's active credential and report the attempt complete.
+   */
+  completeAttempt(attemptId: string, value: unknown): void {
+    const attempt = this.attempts.get(attemptId);
+    if (!attempt) throw new Error(`no attempt ${attemptId}`);
+    this.addCredential(attempt.integrationID, value);
+    attempt.status = "complete";
+  }
+
+  private addCredential(integrationID: string, value: unknown, label = "default"): void {
+    for (const credential of this.credentials) {
+      if (credential.integrationID === integrationID) credential.active = false;
+    }
+    this.credentials.push({ id: this.id("cred"), integrationID, label, active: true, value });
+  }
+
+  private integrationInfo(row: Record<string, unknown>): Record<string, unknown> {
+    return {
+      ...row,
+      connections: this.credentials
+        .filter((credential) => credential.integrationID === row.id)
+        .map((credential) => ({
+          type: "credential",
+          id: credential.id,
+          label: credential.label,
+          method: (credential.value as { type?: string } | undefined)?.type ?? "key",
+        })),
+    };
+  }
+
+  private integrationRoute(
+    method: string,
+    path: string,
+    body: Record<string, unknown> | undefined,
+  ): Response | undefined {
+    const location = { directory: "/work" };
+    if (path === "/api/integration" && method === "GET") {
+      return Response.json({
+        location,
+        data: this.integrations.map((row) => this.integrationInfo(row)),
+      });
+    }
+    const match = /^\/api\/integration\/([^/]+)(\/.*)?$/.exec(path);
+    if (!match) return undefined;
+    const integrationID = decodeURIComponent(match[1]!);
+    const rest = match[2] ?? "";
+    const row = this.integrations.find((candidate) => candidate.id === integrationID);
+    if (!row) {
+      return Response.json(
+        { _tag: "IntegrationNotFoundError", integrationID, message: "Integration not found" },
+        { status: 404 },
+      );
+    }
+    if (rest === "" && method === "GET") {
+      return Response.json({ location, data: this.integrationInfo(row) });
+    }
+    const methods = Array.isArray(row.methods) ? (row.methods as Record<string, unknown>[]) : [];
+    const missingField = (form: unknown, answer: unknown) =>
+      (Array.isArray(form) ? (form as Record<string, unknown>[]) : []).find(
+        (field) =>
+          field.required === true &&
+          // A conditional field is left to the real server's evaluation.
+          field.when === undefined &&
+          typeof (answer as Record<string, unknown> | undefined)?.[String(field.key)] !== "string",
+      );
+    const invalid = (field: Record<string, unknown>) =>
+      Response.json(
+        {
+          _tag: "InvalidRequestError",
+          message: `Missing required form field: ${String(field.key)}`,
+          kind: "integration_authorization",
+        },
+        { status: 400 },
+      );
+    if (rest === "/connect/key" && method === "POST") {
+      const keyMethod = methods.find((candidate) => candidate.type === "key");
+      if (!keyMethod) return invalid({ key: "key" });
+      const missing = missingField(keyMethod.form, body?.answer);
+      if (missing) return invalid(missing);
+      const answer = body?.answer as Record<string, string> | undefined;
+      this.addCredential(
+        integrationID,
+        { type: "key", key: body!.key, ...(answer ? { metadata: answer } : {}) },
+        String(row.name ?? integrationID),
+      );
+      return new Response(null, { status: 204 });
+    }
+    if (rest === "/connect/oauth" && method === "POST") {
+      const oauth = methods.find(
+        (candidate) => candidate.type === "oauth" && candidate.id === body?.methodID,
+      );
+      if (!oauth) return invalid({ key: "methodID" });
+      const missing = missingField(oauth.form, body?.answer);
+      if (missing) return invalid(missing);
+      const id = this.id("con");
+      this.attempts.set(id, {
+        id,
+        integrationID,
+        methodID: String(body!.methodID),
+        ...(body?.answer ? { answer: body.answer } : {}),
+        mode: this.nextAttempt.mode,
+        status: "pending",
+      });
+      const time = { created: Date.now(), expires: Date.now() + 600_000 };
+      return Response.json({ location, data: { attemptID: id, ...this.nextAttempt, time } });
+    }
+    const attemptMatch = /^\/connect\/oauth\/([^/]+)(\/complete)?$/.exec(rest);
+    const attempt = attemptMatch
+      ? this.attempts.get(decodeURIComponent(attemptMatch[1]!))
+      : undefined;
+    if (attemptMatch && !attempt) {
+      return Response.json(
+        {
+          _tag: "IntegrationAttemptNotFoundError",
+          integrationID,
+          message: "OAuth attempt not found",
+        },
+        { status: 404 },
+      );
+    }
+    if (attempt && attemptMatch![2] && method === "POST") {
+      // An `auto` attempt completes by itself; the real server answers 500 here.
+      if (attempt.mode !== "code") return new Response(null, { status: 500 });
+      attempt.code = typeof body?.code === "string" ? body.code : undefined;
+      return new Response(null, { status: 204 });
+    }
+    if (attempt && method === "GET") {
+      const time = { created: Date.now(), expires: Date.now() + 600_000 };
+      return Response.json({
+        location,
+        data:
+          attempt.status === "failed"
+            ? { status: "failed", message: "provider said no", time }
+            : { status: attempt.status, time },
+      });
+    }
+    if (attempt && method === "DELETE") {
+      this.attempts.delete(attempt.id);
+      return new Response(null, { status: 204 });
+    }
+    return undefined;
   }
 
   private id(prefix: string): string {
@@ -212,6 +415,10 @@ export class FakeOpenCode2Server {
       data: { sessionID: sessionId, ...data },
       ...(durable ? { durable: { aggregateID: sessionId, seq, version: 1 } } : {}),
     })}\n\n`;
+    this.broadcast(frame);
+  }
+
+  private broadcast(frame: string): void {
     const bytes = new TextEncoder().encode(frame);
     for (const controller of this.events) {
       try {
@@ -250,6 +457,7 @@ export class FakeOpenCode2Server {
     if (path === "/api/event") {
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
+          this.eventConnections += 1;
           this.events.add(controller);
           controller.enqueue(new TextEncoder().encode(`data: {"type":"server.connected"}\n\n`));
         },
@@ -315,10 +523,27 @@ export class FakeOpenCode2Server {
       return Response.json({ location: {}, data: this.defaultModel ?? this.models[0] ?? null });
     }
     if (path === "/api/agent") return ok(this.agents);
+    const instructions = path.match(
+      /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/,
+    );
+    if (instructions && request.method === "PUT") {
+      const session = this.sessions.get(decodeURIComponent(instructions[1]!));
+      if (!session) return new Response(null, { status: 404 });
+      session.instructions = {
+        ...session.instructions,
+        [decodeURIComponent(instructions[2]!)]: (body as { value?: unknown } | undefined)?.value,
+      };
+      return new Response(null, { status: 204 });
+    }
+    if (path === "/api/location/reload" && request.method === "POST") {
+      return new Response(null, { status: 204 });
+    }
     if (path === "/api/command") return Response.json({ location: {}, data: this.commands });
     if (path === "/api/provider") return ok(this.providers);
     const credentialRoute = this.credentialRoute(request.method, path, body);
     if (credentialRoute) return credentialRoute;
+    const integrationRoute = this.integrationRoute(request.method, path, body);
+    if (integrationRoute) return integrationRoute;
     if (path === "/api/session/active") {
       const active: Record<string, unknown> = {};
       for (const session of this.sessions.values()) {
@@ -334,6 +559,11 @@ export class FakeOpenCode2Server {
       Response.json({ _tag: "SessionBusyError", message: "busy" }, { status: 409 });
 
     if (rest === "" && request.method === "GET") return ok(this.sessionInfo(session));
+    if (rest === "" && request.method === "DELETE") {
+      this.deletions.push(session.id);
+      this.sessions.delete(session.id);
+      return new Response(null, { status: 204 });
+    }
     if (rest === "" && request.method === "PATCH") {
       if (this.dropNextSessionUpdate) {
         this.dropNextSessionUpdate = false;
@@ -460,6 +690,11 @@ export class FakeOpenCode2Server {
         session.running = true;
         this.drainOne(session, item);
         this.emit(session.id, "session.execution.started");
+        this.onRunStarted?.(session.id, String((item.payload as { text?: unknown }).text ?? ""));
+      }
+      if (this.loseNextPromptAck) {
+        this.loseNextPromptAck = false;
+        return new Response(null, { status: 502 });
       }
       return ok({ id: item.id, type: "user", payload: item.payload, delivery: item.delivery });
     }
@@ -524,6 +759,7 @@ export class FakeOpenCode2Server {
       return new Response(null, { status: 204 });
     }
     if (rest === "interrupt") {
+      this.interrupts.push(session.id);
       const interrupted = session.running;
       if (interrupted) this.finishRun(session.id, "interrupted");
       // Bare, like the real route.
@@ -546,6 +782,10 @@ export class FakeOpenCode2Server {
     }
     const form = /^form\/([^/]+)$/.exec(rest);
     if (form && request.method === "DELETE") {
+      const failure = this.failNextFormReject;
+      this.failNextFormReject = undefined;
+      if (failure)
+        return Response.json(failure.body ?? { _tag: "Refused" }, { status: failure.status });
       session.forms = session.forms.filter((f) => f.id !== form[1]);
       session.replies.push({ kind: "form", id: form[1]!, decision: "rejected" });
       return new Response(null, { status: 204 });

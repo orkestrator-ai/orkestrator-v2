@@ -200,6 +200,69 @@ describe("revalidating a static file with no precompressed sibling", () => {
   });
 });
 
+// To-do 6160 kept this path as it is: a date names no variant, so the 304 can
+// only describe what a 200 would send now, and that takes the compression.
+// Browsers send the tag as well (`scripts/static-revalidation-probe.ts`).
+describe("revalidating a static file by date alone", () => {
+  test("a date-only 304 carries the headers a 200 would send now", async () => {
+    const { get } = await servedAsset();
+    const first = await get({ "accept-encoding": ALL_ENCODINGS });
+    expect(first.headers["content-encoding"]).toBe("br");
+    const compressions = countCompressions();
+    cleanups.push(() => compressions.mockRestore());
+
+    const again = await get({
+      "accept-encoding": ALL_ENCODINGS,
+      "if-modified-since": String(first.headers["last-modified"]),
+    });
+    expect(again.status).toBe(304);
+    expect(again.rawBody.byteLength).toBe(0);
+    for (const header of ["vary", "content-encoding", "etag", "last-modified"]) {
+      expect(again.headers[header], header).toBe(first.headers[header]);
+    }
+    // The cost the to-do accepted: one compression per date-only revalidation.
+    expect(compressions).toHaveBeenCalledTimes(1);
+  });
+
+  test("a date-only 304 names the coding this request would get, not a held one", async () => {
+    const { get } = await servedAsset();
+    const gzip = await get({ "accept-encoding": "gzip" });
+    expect(gzip.headers["content-encoding"]).toBe("gzip");
+
+    const again = await get({
+      "accept-encoding": ALL_ENCODINGS,
+      "if-modified-since": String(gzip.headers["last-modified"]),
+    });
+    expect(again.status).toBe(304);
+    expect(again.headers["content-encoding"]).toBe("br");
+    expect(again.headers.etag).not.toBe(gzip.headers.etag);
+  });
+
+  test("a date is ignored when a tag is sent, so a stale tag still gets the body", async () => {
+    const { get } = await servedAsset();
+    const first = await get({ "accept-encoding": ALL_ENCODINGS });
+
+    const response = await get({
+      "accept-encoding": ALL_ENCODINGS,
+      "if-none-match": `W/"stale"`,
+      "if-modified-since": String(first.headers["last-modified"]),
+    });
+    expect(response.status).toBe(200);
+    expect(decodeResponseBody(response)).toBe(SOURCE);
+  });
+
+  test("a date before the file changed gets the body", async () => {
+    const { get } = await servedAsset();
+    const response = await get({
+      "accept-encoding": ALL_ENCODINGS,
+      "if-modified-since": new Date(0).toUTCString(),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers["content-encoding"]).toBe("br");
+    expect(decodeResponseBody(response)).toBe(SOURCE);
+  });
+});
+
 describe("a request that does not match still gets the right representation", () => {
   test("a stale tag gets the coded body", async () => {
     const { get } = await servedAsset();

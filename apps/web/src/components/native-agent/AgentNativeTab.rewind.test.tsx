@@ -14,6 +14,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
@@ -82,7 +83,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
   } as NativeAgentSessionProjection<NativeMessage>;
 }
 
-const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) =>
+const sessionProjectionMock = mock(async (input: { agent: AgentPlatform }) =>
   projectionFor(input.agent),
 );
 const performNativeAgentSessionActionMock = mock(async (_input: Record<string, unknown>) => ({
@@ -115,6 +116,10 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
     </div>
   ),
 }));
+// The session as the fake backend holds it; every progressive read answers from it.
+const sessionBackend = createNativeAgentSessionBackend({
+  readProjection: (input) => sessionProjectionMock(input),
+});
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentModelCatalog: async () => [],
@@ -131,8 +136,7 @@ mock.module("@/lib/backend", () => ({
   renameEnvironmentFromPrompt: async () => {},
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
-  getNativeAgentProjection: getNativeAgentProjectionMock,
+  ...sessionBackend.api,
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
   getComposeDraft: async () => null,
   saveComposeDraft: async (
@@ -182,7 +186,7 @@ async function renderTab(tabId: string, platform: AgentPlatform, text?: string) 
     <AgentNativeTab tabId={tabId} data={identity(platform)} isActive />,
   );
   await screen.findByRole("textbox");
-  await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+  await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
   await act(async () => {
     await Promise.resolve();
   });
@@ -205,7 +209,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  getNativeAgentProjectionMock.mockClear();
+  sessionProjectionMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
   appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(paneLayoutStore).setState({

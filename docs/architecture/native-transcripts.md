@@ -217,24 +217,53 @@ client falls back to a snapshot. Other clients keep whole-message deltas.
 ### Response encoding
 
 Four transcript reads mark their result (`markSpliceableResult`), and the
-gateway writes those with `spliceEncodedJson`, copying each row's memoised
-JSON instead of serialising it again: `get_native_agent_transcript_update`,
-`get_native_agent_live_update`, `get_native_agent_projection_update` and
-`get_native_agent_message_page`. The output is byte-identical to
-`JSON.stringify`; anything that is not a plain object or array is serialised
-whole.
+gateway writes those with `spliceEncodedJsonBytes`, copying each row's
+memoised JSON instead of serialising it again:
+`get_native_agent_transcript_update`, `get_native_agent_live_update`,
+`get_native_agent_projection_update` and `get_native_agent_message_page`.
+Everything except the rows is serialised natively in one `JSON.stringify`,
+with a random per-process placeholder string where each memoised row goes;
+the rows are then written straight into one buffer sized from their memoised
+byte counts. The output is byte-identical to `JSON.stringify`: anything that
+is not a plain object or array is serialised whole, and a body in which some
+field already spells a placeholder is serialised whole too. The gateway sends
+that buffer and reads the response size from it; an unmarked result is
+encoded to bytes once the same way, rather than sized as a string first.
 
-The legacy `get_native_agent_projection` is deliberately not marked. Measured
-on 2026-11-10 with the changed-read benchmark (`legacy-spliced` against
-`legacy`), splicing its whole-session projection cost more CPU per
-read than `JSON.stringify` on every row shape the benchmark has: about
-600 µs against 450 to 500 µs on the 100-row, 430 KB window. The row copy is a
-small win, but the walk over the projection's many other fields runs in
-JavaScript, and the gateway sizes the joined body, which copies it again.
+The first version (E11 part 0340) walked the whole result in JavaScript and
+joined strings, and the gateway then sized the joined string before writing
+it. That made a first snapshot, the read a tab pays on open, reload and every
+snapshot fallback, slower than plain `JSON.stringify`, by up to about twice on
+rows of a few KiB. Measured on 2026-11-11 (to-do 7553, retired) with
+`bun scripts/benchmark-transcript-changed-read.ts --snapshot --gateway
+--samples=600`, on beelink2 (Intel Core Ultra 9 285H, Bun 1.4.4) while other
+builds were running, so the host was busy; each figure is the median of
+per-round means with the two encodings alternating, from two or three runs.
+In-process, each column is the gateway's whole encoding (bytes and their
+size); through the gateway it is the round trip of one loopback request:
+
+| First snapshot | Body | `JSON.stringify` | Old splice | New splice | Gateway, old splice | Gateway, new splice |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `tool-parts`, 20 rows | 46 KB | 14–15 µs | 22 µs | 7–8 µs | 156–170 µs | 113–123 µs |
+| `revised`, 100 + 20 rows | 242 KB | 61–73 µs | 125–135 µs | 39–41 µs | 326–345 µs | 187–194 µs |
+| `near-full`, 100 rows | 423 KB | 108–153 µs | 202–205 µs | 61–66 µs | 448–488 µs | 243–270 µs |
+| `short-incomplete`, 60 rows | 62 KB | 17–20 µs | 30–31 µs | 14–16 µs | 102–108 µs | 79–85 µs |
+
+Changed reads answer with small deltas and were unaffected either way.
+
+The legacy `get_native_agent_projection` is marked too, since 2026-11-11
+(to-do 7755, retired). On 2026-11-10 the first splice cost more CPU per read
+than `JSON.stringify` on its 100-row, 430 KB projection (about 600 µs against
+450 to 500 µs), so it was left out; with the new splice the same benchmark
+(`legacy-spliced` against `legacy`) measured 570 to 690 µs against 740 to
+820 µs CPU per read on 2026-11-11, and 826 to 873 µs against 987 to 1,044 µs
+in a second pair of runs that day with two `dev:test` profiles also running.
+Its contract definition now sets `encoded`, like the other four, so its
+result is no longer schema-checked in development. Its callers are mostly
+in-process (Control MCP environment tools, node coordination), which receive
+the same plain object; only reads that cross the gateway gain.
 `commands-registry-native-splice.test.ts` pins which commands are marked;
-re-measure before marking another. The same probe found the marked commands'
-snapshot responses slower than `JSON.stringify` for rows of a few KiB; that is
-[to-do 7553](../todo/transcripts-and-observation/7553-transcript-splice-slower-on-large-rows.md).
+re-measure before marking another.
 
 ### Incomplete previews and exact recovery
 
@@ -264,6 +293,19 @@ recovery already scheduled for the same token is checked first and skips the
 measurement altogether. Measuring row by row with an early stop was tried and
 was about 15 µs slower under the target, the only side a byte-cutting bridge
 produces, so the window is measured whole.
+
+A part-trimmed head (one row larger than the whole window, reported by
+`omittedParts`) also recovers through this read, at most once a second per
+view however many readers share it; while a recovery is pending the view keeps
+the last recovered transcript. Measured on 2026-11-11 with a loopback model
+(the conditional-reads spec's `trimmed-head` scenario, see
+[agent-testing.md](../development/agent-testing.md#live-conditional-reads-loopback-models)):
+exactly one recovery read a second with one reader or two, and the view moved
+about once a second while that row stayed under about a million characters.
+Past that, each recovered transcript reached readers as a whole snapshot of
+about 3 MB, and past about 1.7 million characters the view stopped moving
+until the turn ended (to-do
+[7845](../todo/transcripts-and-observation/7845-trimmed-head-snapshots-and-stalled-view.md)).
 
 ### Deferred display bodies
 
@@ -349,6 +391,35 @@ was told to read again about once every 50 s (six announcements in 300 s,
 announcement is counted by section and by the content-free value paths that
 changed (`discoveryRenewals` in `sessionInvalidations`, below), so the next
 moving field is named by an idle run rather than guessed.
+
+What a round costs the bridge was measured on isolated profiles with
+loopback models (efficiency batch E10, to-do 6680, retired 2026-11-11:
+`git show 1fd391e3a:docs/todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md`).
+A state read is four bridge requests: Claude's `/session/:id`, `/questions`,
+`/plan-approvals` and `/interactions`, or Codex's `/status`, `/config`,
+`/approvals` and `/interactions`. Two more used to ride on every poll:
+
+- **Steer qualification.** `GET /session/:id/steer/dispatch` answers whether
+  the bridge can steer, which only changes when the bridge does. A positive
+  answer is cached per session for the connection's base URL and token, for
+  at most 60 s and 256 sessions (`http-bridge/steer-qualification.ts`); a
+  refusal is never cached, so a failing bridge is still asked, and logged, on
+  every poll.
+- **Bridge health.** Each read resolves its provider through the local
+  bridge's start command, which reuses a running bridge only after a
+  `/global/health` probe: two per poll per viewer. A passed probe now stands
+  for 2 s for the same process, port and token
+  (`LOCAL_SERVER_HEALTHY_REUSE_MS`, `local-server-runtime.ts`); a reused
+  answer never renews it. The activity sweep's peek still probes on its own
+  cadence.
+
+With both, a 20 s streaming window with one viewer made 1 steer probe (was
+39) and 9 health probes (was 78; 160 with two viewers). Near the 512 KiB
+window bound the bridge spent 3.7–4.2 ms per transcript read on Claude and
+Codex alike, on snapshots of about 495 KB that a bridge delta would have cut
+13 to 15 times. That was judged too small to justify a new wire form across
+five bridges, so bridges still send whole windows and the backend computes
+the renderer's delta.
 
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases

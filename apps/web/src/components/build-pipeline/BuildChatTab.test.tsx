@@ -4,6 +4,7 @@ import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeli
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { setMobileViewport } from "../../../../../tests/mocks/match-media";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import {
   BuildChatTab,
   showInspectorTab,
@@ -41,6 +42,9 @@ import {
 
 afterAll(restoreBuildChatTabMocks);
 afterEach(cleanupBuildChatScope);
+
+/** Radix ContextMenu opens on a touch hold after this fixed, unexported delay. */
+const RADIX_CONTEXT_MENU_LONG_PRESS_MS = 700;
 
 describe("BuildChatTab backend projection", () => {
   beforeEach(() => {
@@ -179,24 +183,34 @@ describe("BuildChatTab backend projection", () => {
         ...pipeline,
         validationRun: validationRun({ id: "validation-long-press" }),
       });
-    renderInBuildChat(<BuildChatTab data={tabData} />);
-
-    fireEvent.pointerDown(graphNode("Prepare"), {
-      pointerType: "touch",
-      pointerId: 71,
-      isPrimary: true,
-      button: 0,
-      clientX: 20,
-      clientY: 20,
+    const longPress = installControlledTimeout(RADIX_CONTEXT_MENU_LONG_PRESS_MS, {
+      label: "context-menu long press",
     });
-    await act(async () => {
-      await Bun.sleep(710);
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart validation" }));
+    try {
+      renderInBuildChat(<BuildChatTab data={tabData} />);
 
-    await waitFor(() =>
-      expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:validation-long-press"),
-    );
+      fireEvent.pointerDown(graphNode("Prepare"), {
+        pointerType: "touch",
+        pointerId: 71,
+        isPrimary: true,
+        button: 0,
+        clientX: 20,
+        clientY: 20,
+      });
+      await act(async () => {
+        expect(longPress.advance()).toBe(1);
+      });
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Restart validation" }));
+
+      await waitFor(() =>
+        expect(restartStepMock).toHaveBeenCalledWith(
+          pipeline.id,
+          "validation:validation-long-press",
+        ),
+      );
+    } finally {
+      longPress.restore();
+    }
   });
 
   test("skips running validation from the node menu and the Tests view", async () => {

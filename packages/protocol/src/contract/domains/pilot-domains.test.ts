@@ -93,7 +93,7 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
     "liveIds",
   ],
   get_ticket_sync_cursor: ["controllerId", "projectId"],
-  // `features` added with images on synced tickets (to-do 3800 task 3).
+  // `features` added with images on synced tickets (#2027).
   collect_ticket_sync_outbox: ["controllerId", "after", "features"],
   ack_ticket_sync_outbox: ["controllerId", "epoch", "upTo"],
   get_ticket_sync_status: ["projectId"],
@@ -110,12 +110,16 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
     "attachments",
   ],
   coordinator_node_ticket: ["scope", "nodeId", "action", "input"],
-  // Defined new with the to-do 3800 follow-ups (2026-11-09); they had no strict handler.
+  // Defined new with the ticket-sync follow-ups (#2027, 2026-11-09); they had no strict handler.
   read_ticket_image: ["controllerId", "imageId"],
   put_ticket_image: ["controllerId", "imageId", "data"],
   get_ticket_sync_leaf_status: ["projectId"],
   share_tickets_with_command_node: ["projectId", "taskIds"],
   dismiss_ticket_sync_conflicts: ["projectId", "ids"],
+  // Linear board-link sync and the one user-initiated key copy (2026-11-11).
+  get_linear_sync_state: ["controllerId"],
+  apply_linear_sync_state: ["controllerId", "links", "revocations"],
+  export_linear_connection: ["controllerId"],
 };
 
 const LENIENT = [
@@ -132,7 +136,7 @@ const ALL: readonly AnyCommandDef[] = [
 ];
 
 describe("pilot definitions", () => {
-  it("cover the 24 pilot commands, the 4 lenient neighbours and the 5 ticket-sync follow-ups, each in version 1 of its domain", () => {
+  it("cover the 24 pilot commands, the 4 lenient neighbours, the 5 ticket-sync follow-ups and the 3 Linear sync commands, each in version 1 of its domain", () => {
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(FORMER_KEYS).sort());
     for (const def of ALL) {
       expect(def.since).toBe(1);
@@ -386,6 +390,24 @@ describe("ticket-sync client", () => {
       ),
     ).toMatchObject({ code: "unknown-command" });
     expect(older.sent).toEqual([]);
+  });
+
+  // Mixed-version qualification run 42827537552: a 2.36.1 leaf's strict
+  // handler refused `features`, so every sync with it failed.
+  it("version 0 collects without features, which a pre-contract handler refused", async () => {
+    const collect = { controllerId: "bk_cmd", after: 3, features: ["images"] };
+    const legacy = fakeNode(undefined, ["ticket-sync"]);
+    await createDomainClient(ticketSyncClient, legacy.options).api().collectOutbox(collect);
+    expect(legacy.sent).toEqual([
+      {
+        command: "collect_ticket_sync_outbox",
+        args: { controllerId: "bk_cmd", after: 3 },
+        envelope: undefined,
+      },
+    ]);
+    const current = fakeNode({ "ticket-sync": { min: 1, max: 1 } }, []);
+    await createDomainClient(ticketSyncClient, current.options).api().collectOutbox(collect);
+    expect(current.sent[0]!.args).toEqual(collect);
   });
 });
 

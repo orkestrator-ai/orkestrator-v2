@@ -54,14 +54,13 @@ function harness(withService = true) {
 
 describe("feature planning commands", () => {
   test("validates and delegates every planning operation", async () => {
-    const { invoke, start, snapshot, retry, cancel } = harness();
+    const { invoke, start, retry, cancel } = harness();
     await invoke("start_feature_planning", {
       featureId: "feature-1",
       kind: "story",
       storyId: "story-1",
       userMessage: "Refine it",
     });
-    await invoke("get_feature_planning_snapshot", { projectId: "project-1" });
     await invoke("retry_feature_planning", { featureId: "feature-1" });
     await invoke("cancel_feature_planning", { featureId: "feature-1" });
 
@@ -71,14 +70,13 @@ describe("feature planning commands", () => {
       storyId: "story-1",
       userMessage: "Refine it",
     });
-    expect(snapshot).toHaveBeenCalledWith("project-1");
     expect(retry).toHaveBeenCalledWith("feature-1");
     expect(cancel).toHaveBeenCalledWith("feature-1");
   });
 
   // Defined commands (plan item 7008) drop unknown argument keys rather than refuse them.
   test("drops unknown fields and rejects invalid start envelopes", async () => {
-    const { invoke, start, snapshot, retry, cancel } = harness();
+    const { invoke, start, retry, cancel } = harness();
     for (const [command, args] of [
       [
         "start_feature_planning",
@@ -89,7 +87,6 @@ describe("feature planning commands", () => {
           extra: true,
         },
       ],
-      ["get_feature_planning_snapshot", { projectId: "project-1", extra: true }],
       ["retry_feature_planning", { featureId: "feature-1", extra: true }],
       ["cancel_feature_planning", { featureId: "feature-1", extra: true }],
     ] as const) {
@@ -100,7 +97,6 @@ describe("feature planning commands", () => {
       kind: "feature",
       userMessage: "Plan",
     });
-    expect(snapshot).toHaveBeenCalledWith("project-1");
     expect(retry).toHaveBeenCalledWith("feature-1");
     expect(cancel).toHaveBeenCalledWith("feature-1");
     await expect(
@@ -145,7 +141,6 @@ describe("feature planning commands", () => {
           userMessage: "Plan",
         },
       ],
-      ["get_feature_planning_snapshot", { projectId: "project-1" }],
       ["retry_feature_planning", { featureId: "feature-1" }],
       ["cancel_feature_planning", { featureId: "feature-1" }],
     ] as const) {

@@ -1,4 +1,5 @@
 import type { CommandInvocation } from "./core/commands-context.js";
+import { Base64FileReadSizeHistogram } from "./gateway-file-read-sizes.js";
 import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -36,7 +37,8 @@ import {
 export type BackendInvoker = {
   /**
    * Runs a command. `invocation` carries the invoke envelope's `domain`,
-   * `version` and `critical` (plan item 1003), only when the body had them.
+   * `version` and `critical` (plan item 1003), only when the body had them,
+   * and always the call's `signal`, which aborts when the client goes away.
    */
   invoke(
     command: string,
@@ -400,7 +402,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * timing breakdown both incomplete and different on every run.
  * `apps/backend/tests/gateway-support-extra.test.ts` pins these against the real registry.
  */
-export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 1024;
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 1536;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 export const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 export const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;
@@ -980,6 +982,7 @@ export class GatewayMetricsStore {
     GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
   );
   private readonly events = new BoundedMetricMap<GatewayEventMetrics>();
+  private readonly base64FileReads = new Base64FileReadSizeHistogram();
   private readonly recentRouteSamples: GatewayRouteSample[] = [];
   private readonly recentClientBootReports: GatewayClientBootReport[] = [];
   private readonly stream: GatewayStreamMetrics = {
@@ -1157,6 +1160,7 @@ export class GatewayMetricsStore {
     bucket.durationMs += durationMs;
     if (!success) bucket.failures += 1;
     this.commands.set(key, bucket);
+    this.base64FileReads.record(command, responseBytes, success);
   }
 
   recordEvent(event: string, serializedBytes: number): void {
@@ -1371,6 +1375,8 @@ export class GatewayMetricsStore {
       events: Object.fromEntries(
         [...this.events.entries()].sort(([left], [right]) => left.localeCompare(right)),
       ),
+      // Additive: answer sizes of the three whole-file base64 readers (5800).
+      base64FileReads: this.base64FileReads.snapshot(),
       stream: { ...this.stream },
       replay: { ...this.replay, reasons: { ...this.replay.reasons } },
       relayedReplay: { ...this.relayedReplay, reasons: { ...this.relayedReplay.reasons } },
@@ -2277,7 +2283,7 @@ export function jsonResponse(
 export function serializedJsonResponse(
   response: ServerResponse,
   statusCode: number,
-  payload: string,
+  payload: string | Buffer,
   headers: OutgoingHttpHeaders = {},
 ): void {
   bodyResponse(response, statusCode, payload, {

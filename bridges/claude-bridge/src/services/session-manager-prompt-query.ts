@@ -2,6 +2,7 @@ import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-age
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
@@ -53,6 +54,7 @@ import {
   withReadOnlyGitConfig,
   withUnattendedOverloadRetry,
 } from "./runtime-env.js";
+import { withReadOnlyConnectionEnv } from "./read-only-connection-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -84,7 +86,7 @@ import { requestsUltracode } from "./ultracode.js";
 
 /**
  * `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
- * backend, and two must never stack on one session (`plans/goals.md`, D2).
+ * backend, and two must never stack on one session (`docs/architecture/goals.md`).
  */
 export function withNativeGoalClosed(disallowed: readonly string[] | undefined): string[] {
   return [...(disallowed ?? []), "ProposeGoal"];
@@ -236,6 +238,7 @@ export async function resolveQueryPlan(
         ...ARTIFACT_TOOL_NAMES,
         ...AGENT_GOAL_TOOL_NAMES,
         ...AGENT_SUBORK_TOOL_NAMES,
+        ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
       ].map((name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`)
     : [];
   const allowedTools = coordinatorReadOnly
@@ -297,12 +300,14 @@ export async function resolveQueryPlan(
     testHooks?.afterAttachmentInitialValidation,
   );
 
-  // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
+  // A graph agent's policy denies `github.write`: its CLI gets no GitHub
+  // credential. A read-only turn loads no settings file, so it gets the user
+  // settings' model connection here instead (to-do 7565).
   const queryEnvironment = withReadOnlyGitConfig(
     policy,
     withUnattendedOverloadRetry(
       session.executionPolicy,
-      await runtimeEnvironmentForSessionQuery(policy),
+      await withReadOnlyConnectionEnv(policy, await runtimeEnvironmentForSessionQuery(policy)),
     ),
   );
   const liveSettings = claudeLiveSettings({

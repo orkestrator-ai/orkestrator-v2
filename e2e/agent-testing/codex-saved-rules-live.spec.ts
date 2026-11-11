@@ -1,4 +1,4 @@
-/** Opt-in live check of a real Codex approval card and saved rules (todo 0160).
+/** Opt-in live check of a real Codex approval card and saved rules (#1518).
  *
  * Run against a disposable profile whose Codex login is a made-up API key:
  *

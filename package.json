@@ -1,6 +1,6 @@
 {
   "name": "orkestrator-ai",
-  "version": "2.37.3-beta",
+  "version": "2.37.6-beta",
   "private": true,
   "workspaces": [
     "apps/*",
@@ -15,7 +15,7 @@
     "@happy-dom/global-registrator": "^21.0.1",
     "@orkestrator/protocol": "workspace:*",
     "@orkestrator/toolchain": "workspace:*",
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.65.0",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/bun": "~1.4.4",
@@ -30,7 +30,7 @@
     "happy-dom": "^21.0.1",
     "oxc-parser": "~0.154.0",
     "oxlint": "~1.88.0",
-    "playwright": "^1.64.0",
+    "playwright": "^1.65.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-virtuoso": "4.18.19",
@@ -173,7 +173,6 @@
   },
   "patchedDependencies": {
     "@cursor/sdk@1.3.1": "patches/@cursor%2Fsdk@1.3.1.patch",
-    "@opencode-ai/sdk@1.19.5": "patches/@opencode-ai%2Fsdk@1.19.5.patch",
     "react-virtuoso@4.18.19": "patches/react-virtuoso@4.18.19.patch"
   }
 }

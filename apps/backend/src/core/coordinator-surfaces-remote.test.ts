@@ -219,6 +219,12 @@ for (const [tabType, options, expected] of [
       status: "started",
     }));
     commands.set("launch_terminal_job", launch);
+    // Tmux mode is experimental; the worker's own node must have it on.
+    if (tabType === "claude-tmux")
+      await leaf.updateGlobalConfig({
+        ...(await leaf.loadConfig()).global,
+        experimentalTmux: true,
+      });
     const input = {
       requestId: "agent",
       environmentId: workerId,
@@ -247,6 +253,20 @@ for (const [tabType, options, expected] of [
     expect(launch).toHaveBeenCalledTimes(2);
   });
 }
+
+test("a remote claude-tmux terminal is refused while the worker's node has tmux mode off", async () => {
+  const launch = mock(async () => ({ tabId: "agent-terminal", status: "started" }));
+  commands.set("launch_terminal_job", launch as unknown as CommandHandler);
+  const result = await tool("launch_terminal", {
+    requestId: "tmux-off",
+    environmentId: workerId,
+    tabType: "claude-tmux",
+    prompt: "Inspect tests",
+  });
+  expect(result.isError).toBe(true);
+  expect(result.text).toContain("Tmux mode");
+  expect(launch).not.toHaveBeenCalled();
+});
 
 test("a browser preview on another node opens one tab there and none here", async () => {
   const input = { requestId: "preview", environmentId: workerId, url: "http://localhost:3000/" };

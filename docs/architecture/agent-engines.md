@@ -10,7 +10,7 @@ list:
 | --- | --- | --- |
 | `claude` | Claude Code | Bridge process wrapping the Claude Agent SDK |
 | `codex` | Codex | Bridge process speaking JSON-RPC to `codex app-server` |
-| `opencode` | OpenCode | No bridge — the backend drives `opencode serve` through the SDK |
+| `opencode` | OpenCode | No bridge — the backend drives OpenCode 2's own server over HTTP |
 | `cursor` | Cursor Agent | Bridge process wrapping `@cursor/sdk` |
 | `grok` | Grok Build | Bridge process speaking ACP to the CLI over stdio |
 | `pi` | Pi | Bridge process wrapping the Pi coding-agent SDK |
@@ -35,10 +35,10 @@ lists are the reason these engines are built the way they are. In short:
 3. **Every child is authenticated.** The backend generates a 32-byte `okb_` token
    per environment and gives a bridge only its SHA-256, as `CLAUDE_BRIDGE_TOKEN_SHA256`,
    `CODEX_BRIDGE_TOKEN_SHA256`, `CURSOR_BRIDGE_TOKEN_SHA256`, `ACP_BRIDGE_TOKEN_SHA256`
-   or `PI_BRIDGE_TOKEN_SHA256`. (OpenCode takes `OPENCODE_SERVER_PASSWORD`, which it
-   compares itself. A plugin running inside the server removes the variable and marks
-   the server non-dumpable before a tool can run, and the launch gives it to that one
-   process: `buildOpenCodeCredentialPluginSource`.)
+   or `PI_BRIDGE_TOKEN_SHA256`. (OpenCode takes `OPENCODE_PASSWORD`, which it
+   compares itself. A plugin running inside the server removes the variable (and in a
+   container marks the server non-dumpable) before a tool can run, and the launch gives
+   it to that one process: `buildOpenCode2CredentialPluginSource`.)
    The agent shares the bridge's uid, so the bridge holds no token for it to read,
    and marks itself non-dumpable so it cannot read one from a request in flight. On
    an image with `bridge-credential=1` the token is in root-only
@@ -91,7 +91,8 @@ The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
 its durable teardown intent until a 2xx arrives. A 404/405 from the route
 means the bridge predates it, which only an unpublished source build can do.
 The close stays pending with a "restart the environment" error on every
-platform and never falls back to `DELETE /session/:id`: Claude's calls the SDK's
+platform and never falls back to `DELETE /session/:id`, which no current bridge
+serves and which an older Claude bridge answered by calling the SDK's
 `deleteSession`.
 
 Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
@@ -120,14 +121,13 @@ Per bridge, "stop proven" means:
 - **Grok (ACP)** — see [Grok Build](#grok-build).
 
 OpenCode has no bridge. Tab close goes through the native agent service to the
-cached (or freshly peeked, never started) `OpenCodeProvider.closeSession`: it
-aborts the owned turn through the same path as a user stop, which settles
-workflow-turn ownership; restores temporary reviewer permissions; rejects every
-permission and question still pending for that session (neither the pinned SDK
-nor the server docs promise that abort withdraws them, so close fails closed);
-treats a 404 on abort as a session already gone; and forgets the provider's
-registration. OpenCode's `DELETE /session/:id` removes the session and all its
-data and is not used, so the conversation stays in `session.list` for resume.
+cached (or freshly peeked, never started) provider's `closeSession`
+(`OpenCode2Provider.closeSession`): it interrupts the owned turn through the
+same path as a user stop, settles workflow-turn grants, rejects every
+permission and form still pending for that session (close fails closed),
+treats a 404 on interrupt as a session already gone, and forgets the
+provider's registration. OpenCode's session delete removes the conversation
+and all its data and is not used, so the conversation stays listed for resume.
 
 When two tabs map the same provider session, closing one retires only its
 mapping; the last one performs the close. Teardowns are serialized per
@@ -180,8 +180,9 @@ until the user resumes it.
 | `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |
 | Native agent reconcile on an authoritative `missing` | Drop a mapping whose provider session is gone | Mapping only |
 
-Claude's `DELETE /session/:id` (SDK `deleteSession`) is the only destructive
-operation and nothing in the backend or renderer calls it.
+No bridge serves `DELETE /session/:id` any more (removed 2026-11-10). Claude's
+deleted the rollout through the SDK's `deleteSession`; nothing in the backend
+or renderer had called it since the close route.
 
 ### Removing a conversation from the resume list
 
@@ -204,6 +205,13 @@ backend's cap. The dialog shows them behind **Show archived**, including agents
 archived in Cursor's own UI. Both vendors refuse to continue an archived
 conversation, so choosing one restores it first; a refused restore does not
 resume.
+
+OpenCode offers it too. Its platform table reports `actions.archive`, and the
+OpenCode provider sends an `opencode2:` id to the environment's server, which
+sets `archived` with `PATCH /api/session/:id` and lists archived rows on
+request (`opencode2/sessions.ts`). As on Codex and Cursor,
+a 2.x conversation the server still holds for a tab or a run is refused
+("This conversation is open in a tab"); restoring is always allowed.
 
 ### Rewinding a conversation and Pi branches
 
@@ -291,6 +299,21 @@ five minutes. Cursor and Grok have no setter, so their backend title is always
 authoritative. No bridge generates a title, and the Codex bridge no longer
 reports a title it read back from the first prompt.
 
+The first-message fallback (`firstMessageSessionTitle`,
+`session-title-text.ts`) uses only the user's own words: it strips the
+coordinator preamble, provider system instructions and every
+transcript-annotation envelope (`stripTranscriptAnnotations` from
+`@orkestrator/protocol/transcript-annotations`, the parser's strict
+`cleanPrompt`, so a malformed or hand-typed tag never hides the user's text)
+before cutting to 80 characters. A first message that is only annotations
+titles nothing, and the next user message is used. A live-window row whose
+head a bridge's transcript bound cut off (the snapshot reports
+`omittedParts`) is not a title source until hydration reads it whole
+(`firstUserMessageOf`), because the bound keeps the envelope's tail and drops
+the request. The Codex bridge's resume-list label (`session-title-index.ts`)
+and the Claude tmux resume list (`titleFromTranscriptHead`, `tmux-hooks.ts`)
+strip the envelope the same way.
+
 ## Sub-agent models
 
 Orkestrator does not choose a sub-agent's model. A parent can name one when it
@@ -350,7 +373,7 @@ coordinator policy, so a read-only review there gets none either.
 | --- | --- | --- |
 | Claude | Appended to the `claude_code` system prompt preset, with Claude's own lines | `bridges/claude-bridge/src/services/system-prompt-append.ts` |
 | Codex | `developerInstructions` on every `thread/start`, `thread/resume` and `thread/fork`. That parameter replaces the configured `developer_instructions`, so the engine reads them back (`config/read`, with the project layer only when the thread loads project resources) and keeps them after Orkestrator's | `AppServerEngine.developerInstructions` |
-| OpenCode | The prompt's `system` field on every prompt, before a turn's artifact grant | `openCodePromptToolOptions` |
+| OpenCode | A durable instruction entry on the session (`PUT /api/experimental/session/:id/instructions/entries/orkestrator`), written at create and resume; OpenCode 2's prompt has no `system` field | `opencode2/instructions.ts` |
 | Pi | `appendSystemPromptOverride`, after any `APPEND_SYSTEM.md`, followed by the connected MCP servers' own instructions (Pi's SDK has no MCP client, so the bridge's client collects them) | `piAppendedInstructions` |
 | Grok | `_meta.rules` on `session/new`, appended to Grok's system prompt and kept with the session, so a `session/load` in a new process still has them (both verified live on 1.0.70). The `--rules` flag is ignored under `agent stdio` (also verified live) | `sessionInstructions`, `sessionInstructionsMeta` |
 | Cursor | A system-instructions frame after the user's text on every prompt: the SDK's `systemPrompt` replaces Cursor's whole prompt and is enabled per account. History reload strips the frame | `cursorPromptText` |
@@ -392,7 +415,7 @@ policy:
 | Cursor | Bridge `/activity` (batched) | None: every sweep | Yes | No |
 | Pi | Bridge `/activity` (batched) | None: every sweep | Yes | No |
 | Grok | Bridge `/activity` (batched) | None: every sweep | Yes | No |
-| OpenCode | Event-fed batch in the backend | SDK event stream | Yes | No |
+| OpenCode | Event-fed batch in the backend | None yet: every sweep (`observationStreamLive` is false) | Yes | No |
 
 A wakeup only makes a stably idle group due; the sweep's no-touch read stays
 the source of truth, and a group without a live wakeup is read on every sweep.
@@ -428,6 +451,20 @@ which is a deliberate choice: an Orkestrator agent tab is an interactive session
 in an isolated environment. `plan` mode is the read-only alternative, and the
 SDK's `canUseTool` callback is what routes a tool request back through the
 bridge's approval flow when one is raised.
+
+A session's CLI stays warm between turns (`session-manager-runtime.ts`), so a
+follow-up, a model or mode change and a parked approval all go to the same
+process; a launch-only change (bypass mode, plugins, policy and the rest of
+`claudeLaunchProfile`) replaces an idle CLI instead. Each CLI the bridge
+launches takes the next number from a bridge-wide counter, which
+`/session/:id/runtime-health` serves as `summary.runtimeGeneration` beside
+`attached`/`detached` and Agent Info shows as "process N". The number is how a
+test or a user tells "the same CLI" from "a new one" without reading a PID; it
+restarts at 1 with the bridge. The backend caches that read for 30 seconds
+(`INTERACTIVE_RUNTIME_METADATA_TTL_MS`) and refreshes it in the background, so
+the projection can show the previous number for up to that long after a
+relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
+against a loopback model and asserts the number holds (todo 0005 task 8).
 
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by
@@ -473,6 +510,18 @@ naming a reused pid, on 2026-11-06
 Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.ts`
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.
+
+Tmux mode is experimental and off by default (`global.experimentalTmux`,
+Settings → Experimental → Tmux mode). While it is off a stored
+`claudeNativeBackend: "tmux"` at any tier is kept but every new launch resolves
+to the Agent SDK (`effectiveClaudeNativeBackend` in
+`packages/protocol/src/agent-settings.ts`): the startup tab, new tabs, the
+create-environment flow and an explicit tmux request alike. The Claude settings
+page hides the Native backend choice, the new-agent-tab menu hides "Claude Tmux
+Tab", and the coordinator `launch_terminal` tool refuses `claude-tmux` on a node
+that has it off (`launchWorkerTerminal`). Tmux tabs that are already open keep
+running, and `launch_terminal_job` itself is not gated, so the live scripts that
+call it directly still work.
 
 Its chat tab reads the session's JSONL through `TmuxTranscriptReader`
 (`tmux-transcript-reader.ts`). A reopen reads one bounded page from the tail, and
@@ -532,6 +581,22 @@ re-attached on the next request. `thread/delete` is never called: closing a
 session unsubscribes, whereas deleting would destroy the user's rollout. Tab
 close (`POST /session/:id/close`) additionally confirms that a last-reference
 turn has actually stopped before releasing the thread.
+
+A thread is detachable after 30 minutes in which none of its sessions was
+touched (`DEFAULT_THREAD_IDLE_MS`), and the bridge sweeps for such threads
+every 5 minutes, so an idle thread is released 30 to 35 minutes after its
+last touch. Unlike Claude and Pi, whose idle clocks ignore reads, Codex's
+tab-facing reads (`GET /session/:id`, `/messages`, `/config`, …) are touches,
+so a thread stays attached for as long as a tab keeps reading it; the
+backend's activity sweep, batch activity and runtime-health reads are not.
+`/session/:id/runtime-health` reports `session.state`: `attached` while the
+session's thread is loaded in the current app-server generation, `detached`
+otherwise (idle-released, never materialized, or restored and not yet
+resumed). The backend copies it into the runtime summary's `state` while
+the engine is `ready`, the vocabulary Claude, Cursor and Pi use; a starting,
+restarting or failed engine shows its own state instead, and so does an
+older bridge without the field. The idle-observation live spec's `detach`
+case therefore waits up to 35.5 minutes for Codex, with no renderer open.
 
 Calls a sandbox refuses are the one thing the item stream leaves out. The
 models Codex serves run in code mode, so the model sends a JavaScript `exec`
@@ -671,271 +736,135 @@ the repository-context revision included before the next coordinator turn.
 
 ## OpenCode
 
-**Bridge:** none · **Transport:** HTTP + SSE via `@opencode-ai/sdk/v2/client`
+**Bridge:** none · **Transport:** HTTP + SSE to OpenCode 2's own `/api/*` server
+(`apps/backend/src/core/opencode2/client.ts`)
 
 OpenCode is the exception: it ships its own HTTP server, so Orkestrator does not
-interpose a bridge process. The backend starts `opencode serve --port <port>`
-for the environment and talks to it directly.
+interpose a bridge process. The backend runs the managed `opencode2` binary
+(OpenCode 2.x, pinned in `packages/toolchain/src/manifest.ts`) as
+`opencode serve` for the environment and talks to it directly. OpenCode 1.x and
+its SDK were retired on 2026-11-11: there is no 1.x server, no
+`@opencode-ai/sdk` dependency and no setting choosing between the lines
+([0008](../todo/agent-engines/0008-opencode-v2.md)).
 
-Every local server, and the short-lived catalogue and sign-in servers, opens
-the user's one `opencode.db` under XDG data. Two opening it in the same moment
-can lose one to SQLite's "database is locked", which exits the server before it
-is healthy. `opencode-host-start.ts` therefore lets one host server start at a
-time, from spawn until healthy or exited, and a local start whose server exits
-reporting a locked database is retried twice (0.5 s, then 2 s) before the
-dispatch that asked for it is refused with that reason. Container servers have
-their own database and are not serialised.
+**Where the server runs.**
 
-The locked database names itself only on the server's stderr, and a child's
-`exit` can fire before its last stderr chunk is read. `waitForLocalServerStartup`
-(`commands-servers.ts`) therefore decides an OpenCode exit on `close`, once
-stdio has ended, or `OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS` (1 s) after `exit`
-when a surviving grandchild holds the pipe open, whichever comes first. A
-health result that lands after `exit` does not decide the start: an exited
-server is a failed start. Other server kinds do not read stderr and still
-decide on `exit`. Deciding on `exit` reported a lost database as a plain
-"exited before becoming healthy" and skipped the retry (flake
-[0723](../tests/flaky-tests/backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md)).
+- *Local environments and coordinators:* the environment's `opencode` local
+  server. The generic supervisor (`startLocalServer` in `commands-servers.ts`)
+  owns the process under `opencode:<environmentId>`, so it is stopped with the
+  environment, on backend shutdown and on a worktree move, reaped after a
+  backend crash (`local-server-reaper.ts`) and, for a coordinator, replaced once
+  idle when its research setting changes. `opencode2/host-launch.ts` builds the
+  launch: its own `OPENCODE_DB` and configuration directory under
+  Orkestrator's data directory (never the user's `opencode.db`), a mirror of
+  the user's global OpenCode configuration without plugins
+  (`opencode2/user-config.ts`), the credential plugin that keeps the password
+  out of the agent's tools, and explicit feature flags (`opencode2/server.ts`).
+  Every host server shares that one database, so starts take turns
+  (`OpenCode2HostServerState.startGate`). `opencode2-host-server.ts` turns the
+  running server into a connection for the provider.
+- *Containers:* the in-container server on port 4102
+  (`opencode2-container-server.ts`), started by the root-owned launcher on an
+  `opencode2-launch=1` image. A container from an image without `opencode2`
+  must be rebuilt. `start_opencode_server`, `stop_opencode_server` and
+  `get_opencode_server_status` all reach it.
 
-That shared database is the user's, and their own OpenCode 2 may have written
-it. OpenCode 1.x refuses to start on a database whose tables include no
-`session` ("Database is not empty and has no session table"), which is what 2.x
-migration `20260804233008_loose_psylocke` leaves in a database first written
-by an early 2.x build: it renames `session` to `session_v2`. Before every host
-OpenCode start (local servers, the catalogue and sign-in servers,
-`opencode models --refresh`, and the environment's host terminals, where an
-OpenCode tab types `opencode`), `opencode-host-database.ts` applies 1.x's own
-test to `opencode.db`, read-only. When it fails, the process gets
-`OPENCODE_DB=opencode-orkestrator.db`, which OpenCode resolves beside the
-shared file. The user's database is never moved, rewritten or deleted. Once
-`opencode-orkestrator.db` exists it is always used, because Orkestrator's
-sessions live in it; an `OPENCODE_DB` the environment already sets is left
-alone. A 1.x database that 2.2.5 migrates keeps `session` and stays shared.
+**Start-up cost.** OpenCode 2 builds per-directory "location" services on the
+first request in a worktree. With its file watchers on, that started a
+non-recursive `fs.watch` on every ancestor directory of the worktree up to `/`,
+on the config directory and on `.git/HEAD`. On macOS each one took 0.2 to 5 s
+to start under Bun, so the first `/api/model` or session request waited 6 to
+8 s, and shutdown waited as long again while they closed (measured on 2.2.6).
+Every launch therefore sets `OPENCODE_DISABLE_FILEWATCHER=1`
+(`OPENCODE2_DISABLE_FILEWATCHER`): location boot drops to about 40 ms and
+shutdown to under 100 ms. The watchers only live-reload configuration,
+commands, skills and `AGENTS.md`. Orkestrator writes its own before the server
+starts. An MCP settings edit reaches a running server through
+`reloadMcpConfiguration`, which rewrites the mirror and calls
+`POST /api/location/reload` while no session is at work, and the composer's
+explicit command refresh reloads an idle server's location the same way, so a
+command file added while it runs is listed (`refreshCommands`; a busy server
+is only re-read and says so). `opencode2-watchers-off.live.test.ts` qualifies
+this launch against the pinned binary: a second prompt, the shared
+instructions reaching the model, an added command file, and a reload that
+keeps a session's Orkestrator tools. The live fixture runs with the watchers
+off too. Before 1.x was
+retired, every OpenCode tab also started a 1.x `opencode serve` (with its own
+database checks and MCP registration) before the 2.x server, which is the
+other half of the 20 to 30 s first-turn delay this removed.
 
-`apps/backend/src/core/native-agent-provider.ts` is where the split happens —
-`createNativeAgentProvider()` returns an `OpenCodeProvider` for `opencode` and
-an `HttpBridgeProvider` for every other platform. Both satisfy the same
-`NativeAgentRuntimeProvider` contract in `agent-provider-contract.ts`, so
-callers (interactive tabs and build pipelines alike) do not branch on platform.
+`createNativeAgentProvider()` (`native-agent-provider.ts`) returns an
+`OpenCodeEnvironmentProvider` (`opencode2/environment-provider.ts`) for
+`opencode` and an `HttpBridgeProvider` for every other platform. Both satisfy
+the `NativeAgentRuntimeProvider` contract in `agent-provider-contract.ts`, so
+callers (interactive tabs, build pipelines, Multi Review, graphs) do not
+branch on platform. The environment provider holds the server connection
+(`connection({ start })`) and one `OpenCode2Provider` (`opencode2/provider.ts`)
+per server generation; a replaced server (new port or password) gets a new
+one. Observers (activity, catalogue and interaction reads) never start the
+server, and a session whose server is not running reads idle.
 `apps/backend/src/core/build-pipeline-provider.ts` re-exports a deliberately
-smaller slice of that contract for pipeline code.
+smaller slice of the contract for pipeline code.
 
 ### Why OpenCode has no bridge
 
 The other bridges exist because their vendor surface is an in-process SDK or a
 stdio child; the bridge supplies the long-lived process, the authenticated HTTP
-surface and the session state. `opencode serve` already is a long-lived,
-password-protected HTTP + SSE server with its own persistent session store, and
-its at-most-once evidence (a request marker in its own history) is durable. A
-bridge in front of it would add a process and a hop per environment, a second
+surface and the session state. OpenCode's server already is a long-lived,
+password-protected HTTP + SSE server with its own persistent session store,
+and its at-most-once evidence (a request marker in its own history) is durable.
+A bridge in front of it would add a process and a hop per environment, a second
 copy of session state, and the full bridge route contract, while the
 translation code would only move, not shrink.
 
-The trade-off is fault isolation: SDK and SSE-client failures surface in the
-backend process rather than in a disposable bridge (see the patched SSE client
-below). Revisit the decision if that recurs. Until then, treat
-`OpenCodeProvider` as an in-process bridge and keep the boundary as strict as
-an HTTP one:
+The trade-off is fault isolation: client and SSE failures surface in the
+backend process rather than in a disposable bridge. Treat
+`OpenCodeEnvironmentProvider` as an in-process bridge and keep the boundary as
+strict as an HTTP one:
 
 - Shared native-agent code (`native-agent-service-*.ts`) does not branch on
-  `agent === "opencode"` or import `opencode-*` modules
-  (`agent-provider-boundaries.test.ts` enforces both). OpenCode-specific policy
-  is reached through a provider-neutral seam selected per platform, and the
-  service hands `createNativeAgentProvider` a neutral
-  `NativeAgentProviderEnvironment` (environment id, data directory, config
-  reader) from which `opencode-provider-environment.ts` derives OpenCode's
-  shell-change journals and model-provider allowlist.
-- The renderer does not talk to `opencode serve` and does not normalize
+  `agent === "opencode"` or import OpenCode modules
+  (`agent-provider-boundaries.test.ts` enforces both). The service hands
+  `createNativeAgentProvider` the environment's server through a
+  provider-neutral seam (`native-agent-opencode-server.ts`).
+- The renderer does not talk to the OpenCode server and does not normalize
   OpenCode messages; it receives the same normalized projections and
-  transcripts as every other platform.
+  transcripts as every other platform (`opencode2/transcript.ts`).
+  Build-pipeline and Multi Review transcripts that older versions persisted in
+  OpenCode 1.x's `{ info, parts }` shape are still normalized for display on
+  the way out (`opencode-display-transcript.ts`).
 
-Always use **v2** of the SDK (`@opencode-ai/sdk/v2/client`). v2 takes flat
-parameters — `client.session.promptAsync({ sessionID, parts })` — where v1 took
-nested `{ path, body }` objects, and the question APIs
-(`client.question.list/reply/reject`) exist only in v2. Only the backend talks
-to `opencode serve`; the renderer has no OpenCode client. Build-pipeline and
-Multi Review transcripts are stored raw and normalized for display on the way
-out (`apps/backend/src/core/opencode-display-transcript.ts`), so the renderer
-carries no OpenCode normalizer. It accepts entries with display-row fields
-(`role`, `content`, or a `parts` array) and groups entries with none of those
-fields into a generic unrecognized-format notice suggesting an update of the
-older peer. The named pre-2.19.17 raw-envelope guard is retired; an envelope
-with a `parts` array follows the ordinary display-row path
-([remote-gateway.md](remote-gateway.md#version-reminders)).
-
-Because the server is the vendor's rather than ours, the SSE event vocabulary is
-theirs too: `message.updated`, `message.part.updated`, `session.updated`,
-`session.error`, `question.asked`, `question.replied`, `question.rejected`.
-The SDK and CLI are pinned to the same exact version, and
-`tests/unit/version-drift.test.ts` enforces that they agree.
-
-Attachments travel as `file` parts (`openCodePromptParts` in
-`opencode-provider-helpers.ts`), and OpenCode routes a `file://` part by its
-declared MIME type alone: `text/plain` runs its Read tool (text inline, images
-and PDFs as attachments, binary refused in a message the model still gets), an
-image type is decoded as an image, and anything else is inlined as a data URL.
-`openCodeAttachmentMime` therefore labels a non-image file `text/plain`; a text
-file once labelled `image/png` failed decoding after `promptAsync` had
-returned 204, and OpenCode stored no message. Such a background failure
-reaches the backend only as a `session.error`; `OpenCodeStreamState` keeps the
-first one after each dispatch (`dispatchFailure`), and
-`readOpenCodeTurnTerminalError` settles the request `failed` with it when the
-history holds no message for the request.
+Every OpenCode 2 session can be steered (`opencode2/steer.ts`); tab close stops
+owned work and releases the session but never deletes the conversation
+(`OpenCode2Provider.closeSession`). Sign-in writes credentials into the host
+database through `/api/integration` and `/api/credential`
+(`opencode-provider-login.ts`, `opencode2/credentials.ts`); the host
+`auth.json` is kept only as the copy containers are handed.
 
 ### Maintaining the OpenCode integration
 
-The credential plugin depends on three things a bump can change, all exercised by
-`apps/backend/tests/bridge-credential-docker.test.ts`: OpenCode reads its password
-once at startup, so removing the variable leaves authentication on; plugins load
-before the first tool; and nothing it spawns uses a bare `Bun.spawn`, which passes on
-the variable a deleted `process.env` entry no longer shows.
+Agent version bumps follow
+[`docs/development/upgrade-agents.md`](../development/upgrade-agents.md). On an
+OpenCode bump, re-check:
 
-Upstream is building a goal plugin into OpenCode core, unreleased at 1.19.5. If a pin
-ships it, reserve its command and record how to keep it off, because Orkestrator's
-loop must not stack on it ([goals.md](goals.md)).
+- `OPENCODE2_FLAGS` names every feature flag the new pin has, and
+  `OPENCODE_DISABLE_FILEWATCHER` still reaches the location watcher layer
+  (start a server in a worktree with `--print-logs --log-level info` and look
+  for `location services booted` in tens of milliseconds, not seconds).
+- The credential plugin's hook names (`opencode2/server.ts`), exercised by
+  `apps/backend/tests/bridge-credential-docker.test.ts` and the live tests
+  under `apps/backend/src/core/opencode2/`.
+- The routes the client and the feature modules call (`GET /openapi.json` on a
+  running server lists them).
 
-The v2 SDK uses flat parameters instead of nested `path`/`body` objects:
-
-```typescript
-// v2 (CORRECT)
-await client.session.create({ title });
-await client.session.messages({ sessionID: id });
-await client.session.promptAsync({ sessionID: id, parts });
-await client.session.abort({ sessionID: id });
-await client.session.delete({ sessionID: id });
-await client.question.reply({ requestID: id, answers });
-await client.question.reject({ requestID: id });
-
-// v1 (WRONG - do not use)
-await client.session.create({ body: { title } });
-await client.session.messages({ path: { id } });
-```
-
-`client.session.delete` is shown only for its parameter shape. It deletes the
-conversation and all of its data, so tab close must never call it: ordinary
-close is `OpenCodeProvider.closeSession` (abort, settle workflow ownership,
-restore reviewer permissions, reject pending requests, forget the session;
-`apps/backend/src/core/opencode-session-close.ts`). An ordinary
-`OpenCodeProvider.abort` rejects the session's pending requests the same way but
-keeps it registered. Explicit aborts, retaining closes, and automatic retry-action
-aborts all use the workflow-result broker's shared abort path. It starts the
-transport interrupt immediately and reserves the session dispatch lock before
-waiting for that response. Ownership settlement and pending-request rejection
-finish under that lock before a later prompt can dispatch. Once transport abort
-succeeds, rejection runs even if ownership settlement fails; a failed transport
-abort leaves pending requests untouched. The native stop ladder still polls
-status, attempts an available force-stop, and records its notice before surfacing
-an abort cleanup error.
-
-`opencode-provider-abort.live.test.ts` exercises both a permission and a question
-parked in the same turn against the pinned CLI, real v2 SDK, and a scripted local
-model in a disposable profile. It checks HTTP 200 rejection, the HTTP 404 race
-where another responder rejects after the pending read, and stale-card answers.
-Run it with `RUN_LIVE_OPENCODE_COMPATIBILITY=1` and `OPENCODE_CLI_PATH` pointing to
-the pinned executable; it needs no agent credentials or remote model.
-
-**The patched SSE client.** `@opencode-ai/sdk` is patched — see `patches/`,
-wired in through `patchedDependencies` in the root `package.json`. The generated
-SSE client calls `reader.cancel()` from its abort handler with no `.catch`; when
-a `reader.read()` is pending the body stream is already errored by the aborted
-fetch, so that call returns a rejected promise nobody owns. That is what
-`OpenCodeProvider.dispose()` turned into a dead backend.
-
-Re-check the patch on every SDK bump. It still applies as of 1.19.0, the file
-is generated by `@hey-api/openapi-ts` rather than hand-written upstream, and
-`bun patch` fails loudly when the target no longer matches. `apps/backend` is
-the only workspace that depends on the SDK (`apps/web` has no OpenCode client),
-so there is one pin for the patch to cover. An SDK upgrade is incomplete until
-all of the following agree on the new version:
-
-- The `apps/backend/package.json` dependency pin.
-- The root `package.json` `patchedDependencies` key and patch path.
-- The filename under `patches/` and the matching entry in `bun.lock`.
-
-Regenerate or rebase the patch against the new SDK rather than only renaming
-the old file, and confirm both `dist/gen/core/serverSentEvents.gen.js` and
-`dist/v2/gen/core/serverSentEvents.gen.js` still handle a rejected
-`reader.cancel()`. Keep the `patches` copy before the filtered `bun install` in
-`docker/Dockerfile` (see [`docker/AGENTS.md`](../../docker/AGENTS.md)).
-
-`apps/backend/src/core/opencode-provider-dispose.test.ts` is the regression, and
-it deliberately drives the real client against a real `Bun.serve` SSE endpoint:
-the `eventHarness` fake in `agent-provider-test-support.ts` closes cleanly on
-abort and cannot reproduce this, which is why the bug shipped.
-
-**History paging relies on OpenCode's message cursor.** Every OpenCode step is
-its own message, so a long turn outgrows the native live window by itself.
-`transcriptSnapshot` names a `before` cursor at its oldest kept message and
-`transcriptPage` reads `session.messages({ limit, before })` from it
-(`opencode-snapshots.ts`). The backend mints that cursor the way OpenCode's
-`MessageV2.page` does — base64url JSON `{ id, time }` with `time` the message's
-`info.time.created`, selecting rows strictly older by `(time_created, id)` —
-verified against the 1.18.35 and pinned 1.19.0 servers, not a documented
-contract. Re-check it on every SDK bump; a server that rejects the cursor fails
-the page read with 400, and rows a server returns that are not strictly older
-than the cursor explicitly expire the page instead of claiming completion
-from a filtered window. Only a message OpenCode reported can name a
-cursor: not the stream's synthetic compaction row, nor a placeholder a part
-event created before its `message.updated`.
-
-The window estimate (`openCodeDisplayBytes`) must follow the projection's
-deferral rules (`inlineFileUrlDisposition`): an inline payload the projection
-keeps, such as a PDF, counts in full. The history epoch moves on a
-`message.removed` and when a re-read after a stream gap proves history was
-rewritten (`OpenCodeStreamState.markGap`/`verifyGap`), not on every reconnect.
-Messages changed in place are noted in the stream state, and those before the
-window travel as `revisedMessages`.
-
-**Undo hides a turn OpenCode still holds.** OpenCode 1.19 does not delete a
-reverted turn: `session.revert` records `Session.revert = { messageID,
-partID?, snapshot, diff }` and keeps every message, `session.unrevert` clears
-it, and only the next prompt deletes the covered messages
-(`SessionRevert.cleanup`: a `message.removed` for each, then a
-`session.updated` without the marker). The transcript snapshot, history pages,
-revised rows and the joined `interactiveSnapshot` therefore drop what the
-marker covers (`opencode-revert.ts`), following `cleanup` exactly: every
-message from `messageID` on, and with a `partID` only that message's parts
-from the part on. A read that does not hold the target compares ids, which
-OpenCode mints ascending, as its TUI does. Nothing is deleted on the backend's
-side, so Redo restores the rows from the same cache. The marker comes from
-the revert and unrevert answers (both return the updated Session), from
-`session.updated` (every one carries the whole merged Session, and a cleared
-revert is published without the field), and from `session.get` when a stream
-gap or a fresh backend leaves it unknown. A marker change moves the revision
-and the history epoch, so a cached snapshot and paged history named under
-the old marker expire. While a revert is pending the session state carries an
-info advisory saying the next prompt discards the turn and Redo restores it.
-Only the interactive projection hides a reverted turn: build-pipeline and Multi
-Review transcript reads (`opencode-display-transcript.ts`) are unfiltered, as
-those sessions never offer Undo, and usage still counts the reverted turn's
-tokens, which were billed. Re-check `revert.ts` and `Session.patch` on every
-OpenCode bump.
-
-| Component                         | Purpose                                      |
-| --------------------------------- | -------------------------------------------- |
-| `OpenCodeProvider`                | SDK session surface and backend SSE handling |
-| `OpenCodeInteractionAdapter`      | Questions and permissions                    |
-| `OpenCodeStreamState`             | Bounded incremental SSE projection state     |
-| `AgentNativeTab`                  | Shared native-agent chat UI                  |
-| `NativeAgentQuestionCard`         | Shared question/answer UI                    |
-| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts`. Interactive only: an unattended OpenCode overload is continued by `OpenCodeCapacityRetry` (`opencode-capacity-retry.ts`), which keeps the workflow's request and result tool |
-
-The server's SSE event types:
-
-- `message.updated` - Message content changed
-- `message.part.updated` - Streaming part update
-- `message.part.delta` - Streaming text delta
-- `todo.updated` / `session.diff` - Runtime summary changed
-- `session.status` / `session.idle` - Session activity changed
-- `session.updated` / `session.deleted` - Session metadata or existence changed
-- `session.error` - Error occurred
-- `session.compacted` - Context compaction completed
-- `mcp.tools.changed` - MCP inventory changed
-- `permission.replied` - Permission interaction resolved
-- `question.asked` - AI is asking a question
-- `question.replied` - Question was answered
-- `question.rejected` - Question was dismissed
-- `server.connected` / `server.instance.disposed` / `global.disposed` - Reconcile or reconnect
+| Component                        | Purpose                                                           |
+| -------------------------------- | ----------------------------------------------------------------- |
+| `OpenCodeEnvironmentProvider`    | The environment's provider: server connection, generations        |
+| `OpenCode2Provider`              | Dispatch, activity, steer, the event stream                       |
+| `OpenCode2SessionReads`          | Transcript windows and pages, session state, interaction cards    |
+| `OpenCode2SessionFeatures`       | Models, commands, Plan/Build, compact, undo/redo, fork, resume     |
+| `AgentNativeTab`                 | Shared native-agent chat UI                                       |
+| `NativeAgentQuestionCard`        | Shared question/answer UI                                         |
 
 ## Execution policy
 
@@ -965,7 +894,31 @@ sandbox (a `provider` sandbox, or a coordinator qualified on it) when
 bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
 Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
 probe's reason instead of every Bash call failing; see
-[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux). Inside a
+container environment the probe answers `missing-programs` (the image ships
+neither `bwrap` nor `socat`, and Docker's default seccomp profile and masked
+`/proc` would refuse bubblewrap anyway), so a container session overridden to
+`provider` is refused the same way; the container is its sandbox.
+
+Where Claude's provider sandbox runs, it holds the same two options on macOS
+(Seatbelt) and Linux (bubblewrap): under auto-approval a command cannot write
+outside its writable paths or escape with `dangerouslyDisableSandbox`
+(`allowUnsandboxedCommands: false`), and a restricted network refuses an
+unlisted host at the sandbox proxy without a card (`strictAllowlist`). One
+difference follows from the CLI: `network.allowLocalBinding` is macOS-only,
+and on Linux each command gets its own network namespace whose only way out
+is the proxy, which `NO_PROXY` skips for loopback. So with full network a
+sandboxed command on Linux cannot reach a service on the machine's loopback
+directly (a dev server, a local database); on macOS it can. On Linux the
+Claude bridge's reported policy for such a session keeps `networkAccess:
+"full"` (true for every host but loopback) and adds a `note` naming the
+exception, which Agent Info shows under the policy
+(`CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE` in
+`bridges/claude-bridge/src/services/claude-query-config.ts`). Orkestrator does
+not work around it: the SDK exposes no way to take loopback out of `NO_PROXY`,
+and a proxy of Orkestrator's own would take over the CLI's network filtering.
+`mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
+either system (to-do 0001 task 9).
 
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the
@@ -1109,9 +1062,10 @@ platform does:
   Gap: it also runs without the user's and the project's Cursor rules and
   plugins; read-only attaches keep loading only Orkestrator's server, so a
   grant is not delivered there.
-- **OpenCode** (`opencode-user-mcp.ts`): servers cannot be attached per
-  session in the shared `opencode serve`, so the session's permission rules
-  deny `<server>_*` for every server `mcp.status` lists outside the selection,
+- **OpenCode** (`openCodeUserMcpRules` in `opencode2/policy-rules.ts`): servers
+  cannot be attached per session on the location's shared server, so the
+  session's permission rules deny `<server>_*` for every server the location
+  lists (`GET /api/mcp`) outside the selection,
   re-applied at each turn when the list changes; an unreadable list refuses
   the session. The servers' processes still run.
 - **Grok**: not supported. Grok loads every server of its own configuration
@@ -1210,7 +1164,7 @@ and clicking again restarts a fresh window.
   pause but warn that their server may stop waiting first. OpenCode publishes
   no deadline, so there is nothing to pause; its requests wait until they are
   answered, and aborting the turn or closing the tab rejects what is still
-  pending (`rejectPendingOpenCodeRequests` in `opencode-session-close.ts`).
+  pending (`rejectPendingRequests` in `opencode2/provider.ts`).
   No backend timer stands in for one, by choice: the backend enforces no
   deadline for any provider, an unattended OpenCode session never waits (its
   policy answers at once), and an interactive card waits only while its user
@@ -1386,7 +1340,7 @@ contents. Vendor wire formats stay inside the adapter — `session-config.ts`
 converts them to the shared `NativeAgentComposerState` that HTTP clients see.
 
 Tab close (`POST /session/:id/close`, `acp-session-close.ts`) runs one
-operation per session id; a second close or DELETE joins it. It fences the
+operation per session id; a second close joins it. It fences the
 session first (`closing`: prompt, attach, config, resume, create-by-key and
 approval/interaction answers get 409 `Session is closing`; reads, cancel and
 close still work), denies every parked permission, question and plan approval
@@ -1731,8 +1685,28 @@ the read-only turns of a packaged review:
 | Grok (ACP) | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 | Pi | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 
-None of these has been run against a real reviewer on its provider yet; see
-[0029-multi-review-flow-graph.md](../todo/coordinator-and-multi-review/0029-multi-review-flow-graph.md).
+None of these has been run against a real reviewer on its provider yet; the
+live runs (from to-do 0029, retired 2026-11-10) are on the manual-test
+checklist (to-do 7568).
+
+**Codex handshake budget.** Before a Codex workflow-result turn starts, the
+bridge asks app-server whether the thread's `orkestrator` server offers the
+submit tool (`bridges/codex-bridge/src/engine/mcp-tool-availability.ts`). Codex
+marks a thread-scoped MCP server that has not finished `initialize` and
+`tools/list` within its `startup_timeout_sec` as failed for the life of the
+thread, so every Orkestrator server the bridge adds (`orkestrator`,
+`orkestrator-artifacts`, `orkestrator-design`) gets
+`ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC` (15 s), and the availability check waits
+5 s longer than that (`MCP_TOOL_AVAILABILITY_TIMEOUT_MS`, 20 s) so a slow
+handshake settles as connected or failed inside the wait. A definite failure
+refuses the prompt with HTTP 424 ("could not list its tools"); an answer that
+does not come in time is `unverified` and the turn is sent. The old 3 s budget
+refused most Codex preparation and consolidation turns when about ten Multi
+Reviews ran at once on a host with a load average above 100.
+`bridges/codex-bridge/src/app-server/mcp-startup.live.test.ts`
+(`RUN_LIVE_CODEX_APP_SERVER=1`, no model turn or login) checks the real Codex
+against delayed handshakes, and
+`apps/backend/scripts/agent-mcp-handshake-bench.ts` measures the backend side.
 
 ### Attempt tools in read-only turns (Grok, Pi)
 

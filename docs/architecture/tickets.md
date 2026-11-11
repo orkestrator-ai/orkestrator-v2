@@ -3,8 +3,8 @@
 A Kanban ticket has a **kind**, **typed optional sections** stored as JSON, and
 two plain-text **mirrors** that every older reader keeps using. Acceptance
 criteria are items that a Build pipeline's Verify step marks passed, failed or
-not checked, with evidence. The design record (options, pros and cons) is
-[0742-structured-tickets.md](../todo/coordinator-and-multi-review/0742-structured-tickets.md).
+not checked, with evidence. The design options were weighed in to-do 0742
+(retired 2026-11-10).
 
 Code: `packages/protocol/src/ticket-sections.ts` (schema, markdown, mirrors,
 migration), `apps/backend/src/core/storage-kanban.ts` (reads and writes),
@@ -25,6 +25,16 @@ Standing project rules (report format, the checks every change runs, the PR
 flow, safety rules) belong in the project's `AGENTS.md` `## Orkestrator`
 section. Tickets carry only what differs for this piece of work; the tool
 descriptions say so.
+
+A constraint that limits which files the work may edit never covers updating
+references to files the work deletes, moves or renames, or descriptions (a
+status scheme, a layout example) the work makes untrue. The sections guidance
+in the ticket tools tells ticket writers to say so, and every build, rework
+and address prompt tells the worker to repair such references and
+descriptions anyway (`REFERENCE_UPDATE_RULE` in `build-pipeline-prompts.ts`;
+root `AGENTS.md`, "Keep references current"). Edit bans had left `AGENTS.md`
+naming deleted to-dos and an outdated status rule, with the work reported
+incomplete.
 
 ## Sections
 
@@ -251,7 +261,67 @@ stage instead of guessing. A build
 from a Linear or GitHub ticket has only this copy: the launch dialog's choice
 stays with that pipeline, and its completion comment says how it was delivered.
 
-## Merged pull requests close the ticket
+## Build lifecycle
+
+A ticket linked to a build pipeline moves through the board on its own. The
+events and their columns are one table,
+`apps/backend/src/core/build-pipeline-kanban-lifecycle.ts`, read by the
+pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
+`update-ticket` node (`graph-system-ticket.ts`):
+
+| Event | Column | Writer |
+| --- | --- | --- |
+| Build starts, including a restart | In progress | `startStage("build")`; the supervisor's reactivation after a restart |
+| A rework (fix) round | unchanged (In progress) | none |
+| Ship finds the pull request open | Review, PR linked | `persistPullRequest` (`pr-raised`) |
+| Ship finds the pull request already merged | Done | `persistPullRequest` closes it (below) instead of `pr-raised`'s Review |
+| The build completes with Notes (open PR, `commit-only` or `push-no-pr`) | Review | `reconcileTerminalState` (`complete`) |
+| The build fails or is cancelled | Backlog | `reconcileTerminalState` (`failed`) |
+| The pull request merges | Done | PR monitor, a build ending, startup sweep (below) |
+| The pull request closes without merging | Backlog, unless moved by hand since the build or a newer build owns the ticket | PR monitor, or `persistPullRequest` when the build finds it closed (below) |
+| The build ends after its pull request closed | Backlog | `reconcileTerminalState` |
+| The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline-kanban-environment-deleted.ts` |
+| The build's environment is deleted after its PR merged | Done | the same |
+
+A ticket in Done is never moved by any lifecycle event, a new build or a
+restart included: every lifecycle write passes `preserveDoneStatus` (storage
+option `lifecycle`), checked under the same mutation lease as the write, so a
+writer that read before the monitor closed the ticket cannot reopen it. A move
+by the user is kept until the next lifecycle event, which moves the ticket
+again. Each lifecycle move records its column on the ticket
+(`lifecycleStatus`, local to the machine that wrote it), and any other status
+change clears it: a move by hand on this machine, a command node's snapshot
+that changes the column, and one that keeps the column under a newer status
+revision (moved away and back between two pulls). A leaf's own lifecycle move
+coming back from the command node is told apart by `lifecycleEcho`. So a
+ticket moved away and back is still one the user placed, which is what a
+closed pull request respects. A ticket's PR state, checks and conflicts are not
+columns: they are shown on the ticket's Notes tab.
+
+**On another machine.** A build started on a leaf from the command node's
+board (`start_build_pipeline` with `nodeId`) runs this same code on the leaf,
+against its copy of the ticket. Every column change, comment and pull request
+link queues in the leaf's ticket outbox and reaches the command node's board,
+and from there every other copy ([Sync across machines](#sync-across-machines)).
+The pull request monitor also runs on the leaf, where the environment is, so
+merge and close events reach the board the same way. A command node's ticket
+built elsewhere links no pull request itself; the leaf reports it as the
+ticket's work location (`sync.work`), which the startup sweep reads too.
+
+**Why tickets stuck (2026-11).** Three causes, fixed together:
+
+- Ship or conflict resolution that found the pull request again after it
+  merged applied `pr-raised`'s Review without the done check, moving a ticket
+  the monitor had just closed back to Review. Its merge was already recorded
+  (`prMergeDoneUrl`), so nothing closed it again.
+- Deleting an environment removed its pipelines without a terminal event, so
+  an unfinished build's ticket stayed In progress, and one whose pull request
+  merged later was never closed (the monitor stops with the environment).
+- Builds made before ticket sync (2026-11-03), or launched without the ticket
+  (prompt environments, a leaf-local ticket), updated no ticket on the command
+  node's board at all. The fix cannot reach those; they were moved by hand.
+
+### Merged pull requests close the ticket
 
 A ticket whose linked pull request merged moves to done, from whichever column
 it is in. The rule is in `apps/backend/src/core/kanban-merge-closure.ts`, and
@@ -262,14 +332,17 @@ every writer applies it through one storage method,
 | --- | --- |
 | PR monitor (`pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
 | Build pipeline (`updateKanbanLifecycle`, terminal events) | The build completes, fails, is cancelled or deleted after its Ship opened a pull request that has since merged. Without this the `complete` and `failed` events would move the ticket back to review or backlog. |
+| Build pipeline (`persistPullRequest`) | Ship or conflict resolution finds the pull request already merged. |
+| Environment deletion (`build-pipeline-kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
 | Startup sweep (`pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
 
-A merge is recorded when the ticket links a pull request in state `merged`, or,
-for a ticket with no linked pull request, when its latest pull-request comment
-is the monitor's `🎉 PR merged: <url>`. A later `🔗 PR raised` or `❌ PR closed`
-comment means other work followed. The sweep leaves in-progress tickets alone,
-because a ticket being built again keeps its earlier pull request until the new
-build raises one.
+A merge is recorded when the ticket links a pull request in state `merged`;
+for a ticket with no linked pull request, when its work location on another
+machine (`sync.work`) names one in state `merged`; or, with neither, when its
+latest pull-request comment is the monitor's `🎉 PR merged: <url>`. A later
+`🔗 PR raised` or `❌ PR closed` comment means other work followed. The sweep
+leaves in-progress tickets alone, because a ticket being built again keeps its
+earlier pull request until the new build raises one.
 
 The closure happens once per pull request. The ticket records the merged pull
 request that closed it (`prMergeDoneUrl`), even if it was already done when the
@@ -277,22 +350,70 @@ merge was observed. Recording that merge leaves a done ticket’s order alone.
 The marker travels with status in sync snapshots and outbox changes, sharing
 its revision and conflict rules. A ticket the user moves back out of
 done afterwards stays where they put it, until a different pull request merges.
-Separately, a build or graph run ending (`complete`, `failed`) never moves a
-ticket that is already done: storage checks this under the same mutation lease
-as the write, so a terminal writer cannot race the monitor and reopen it.
-A new build starting still moves it to in progress.
+
+### Closed pull requests return the ticket
+
+When the PR monitor sees the build's pull request close without merging, it
+asks `KanbanRepository.returnKanbanTaskForClosedPullRequest`; so does the build
+itself when a re-detection (a conflict resolution) finds the pull request
+closed (`persistPullRequest`), because the closed link it records first would
+otherwise look like work already done. The store decides each closed pull
+request once (`prClosedReturnUrl`), moved or not, so the other writer, a
+replay or a restarted monitor never moves the ticket again. The ticket goes
+back to the backlog only when it is not done, that pull request never merged
+it, its column is still the one the lifecycle set, and the build that set it
+raised this pull request (`lifecyclePrUrl`, set by `pr-raised` and cleared
+when a build starts) (`kanbanTaskReturnsForClosedPullRequest`). A ticket the
+user moved by hand since, one a newer build owns (an older environment's pull
+request closing), or one no build ever moved keeps its place. A build that
+ends after its pull request closed sends the ticket to the backlog rather than
+Review: there is nothing left to review.
 
 ## Views
 
-`TicketSectionsGrid` renders the sections as tiles in render order. It sizes to
-its container: one column, two from 36rem, three from 56rem; the summary spans
-the row and the criteria span two columns. It is used by the ticket dialog and
-the pipeline Ticket node inspector. Criteria show a status icon, evidence and a
-tally. The Ticket node inspector takes the ticks from the newest verify session
-that is not superseded and says which round they came from; the node face shows
+**The ticket view** (`KanbanTaskDialog`, parts in
+`apps/web/src/components/kanban/ticket-view/`) is a large modal (72rem, the
+top of the modal scale, 90% of the window's height) laid out like the
+full-tab Notes page. It has two tabs, **Ticket** and **Notes**, as a tablist.
+Each tab has an action bar that sits above its scrolling content, so it stays
+visible, and below it a narrow index down the left (from the `@3xl` container
+width) and one wide content column on the right; sections never sit side by
+side.
+
+- **Ticket**: the bar has Build… (the build launcher, disabled while a build
+  of the ticket runs), Edit (the markdown editor, in place) and View Build.
+  The index lists the ticket's sections (summary, criteria, the other
+  structured sections, Delivery), Images, Comments and activity (the
+  lifecycle's comments are the activity) and Pull request. Index entries are
+  links that scroll the column.
+- **Notes**: the linked build's Notes (`KeyInformationDocument`, single column,
+  led by what needs a look), with the Notes headings as its index. The bar
+  shows the pull request's state (open, draft, checks running or failed,
+  conflicts, ready to merge, merged, closed) from the same readiness rule as
+  the environment name and auto-merge, a Merge button that opens the action
+  bar's Merge PR dialog (`MergePrDialog`) with two options, Merge PR (enabled
+  only when that rule says ready) and Auto-merge & Cleanup (offered while
+  checks are still pending), and the auto-merge toggle (the action bar's
+  switch), which merges when ready and launches Resolve for conflicts. The
+  ticket view leaves out Resolve and Merge & Cleanup, which need the action
+  bar.
+  Nothing merges without a click. The tab is disabled, with the reason shown,
+  when the ticket has no build here with Notes; a ticket built on another
+  machine says which.
+
+A ticket opened from the Review column with Notes opens on the Notes tab;
+every other ticket opens on Ticket (`defaultTicketViewTab`).
+
+`TicketSectionsGrid` renders the sections as tiles in render order for the
+pipeline Ticket node inspector. It sizes to its container: one column, two
+from 36rem, three from 56rem; the summary spans the row and the criteria span
+two columns. The ticket view reads the same entries (`ticketSectionEntries`)
+as one column. Criteria show a status icon, evidence and a tally. The Ticket
+node inspector takes the ticks from the newest verify session that is not
+superseded and says which round they came from; the node face shows
 `n/m criteria`. Board cards show the first prose section and, once Verify has
-run, a criteria tally. The verdict in a Verify transcript lists each criterion's
-result under the rationale.
+run, a criteria tally. The verdict in a Verify transcript lists each
+criterion's result under the rationale.
 
 ## Sync across machines
 
@@ -424,3 +545,119 @@ work on its own board as before (see
 **Detaching.** When a command node detaches, the leaf's copies of its tickets
 become the leaf's own, keeping what they say, and nothing more is queued for
 it.
+
+## Linear
+
+A project uses Kanban or a Linear board, not both for one ticket: nothing
+links a Kanban ticket to a Linear issue. Kanban stays the default, and the
+coordinator's Linear tools say so.
+
+**The connection is per machine.** A Linear connection is a personal API key,
+stored on each machine that uses it (`linear-auth`, sensitive). It is never
+returned to a renderer, a log or the model. Connection status carries a
+16-character SHA-256 fingerprint of the key (`keyFingerprint`, from
+`linearKeyFingerprint` in `linear-boards.ts`) so machines can tell whether
+they hold the same key without exposing it. The connect dialog in a
+project's Linear tab lists the machines the window can reach that have a
+project for the same repository, and the window sends the key to each one
+the user ticks (`connect_linear` through `invokeOnMachine`); each machine
+checks the key with Linear itself. A machine is ticked by default only when
+its status is known and it holds no key or this same one: one still being
+checked, one whose status could not be read, and one holding a different key
+are left for the user to tick, so Connect never replaces a key the dialog
+could not see.
+
+**A key copied from a machine the window cannot reach.** A leaf never reaches
+its command node, so a window on a laptop cannot connect the home server. The
+command node's Linear tab then shows which machines are connected
+(`get_linear_node_connections`, read during sync), and Use it here copies that
+machine's key once over the node link (`copy_linear_connection_from_node`,
+which calls the leaf's link-only `export_linear_connection`). This is the one
+exception to "credentials never travel"
+([command-nodes.md](command-nodes.md#settings)): it runs only when the user
+asks, only over the authenticated link, and the key is verified and stored
+here like a typed one.
+
+**Disconnecting disconnects everywhere.** `disconnect_linear` records the key's
+fingerprint and the time (`linear-sync`), and sync carries it to every
+machine. A machine clears its key when the fingerprint matches and its key was
+connected before the disconnect, so a machine connected again afterwards
+stays connected and a different key is left alone. The check and the clear
+share the connection's storage lease (`clearLinearAuth` with a predicate), so
+a reconnect saved while sync was reading the disconnects is judged on its own.
+Until a leaf's next pass, the command node reports a reading of a revoked key
+as disconnected (`nodeConnections`), so Use it here never offers it back.
+Disconnects are kept for 180 days, at most 50.
+
+**One board per project, by repository.** A project links to one Linear team
+(its board), optionally narrowed to one Linear project in that team
+(`set_linear_board_link`). The link is keyed by the project's repository
+(`repo:<host/owner/name>`, `linearBoardLinkKey` in `storage-linear.ts`), so the
+same repository's project on every machine uses it; a project with no Git
+remote is keyed by its id and stays on its machine. A machine refuses a second
+of its projects on a board another one already has, and sync keeps that rule:
+when a synced link names the board another of the receiving machine's
+projects has, the link changed last keeps it and the other becomes a
+tombstone stamped now and naming the winner (`supersededBy`), so every machine
+settles on the same owner (`mergeLinearBoardLinks`). The Linear tab of an
+unlinked project shows a board picker instead of every issue the key can see,
+and a linked one lists only that board's issues (`get_linear_issues` with
+`projectId`).
+
+**List and board views.** The Linear tab shows a project's issues as a list
+grouped by workflow state, or as a board with one vertical lane per workflow
+state, like the Kanban board. Lanes come from the board's states
+(`get_linear_board_options`), so empty stages still show; an older node, or a
+failed read, falls back to the states the issues are in. The Lanes menu hides
+and shows individual lanes. The chosen view and hidden lanes are a renderer
+preference per project and node (`linearViewPreferencesStore`); they change
+nothing in Linear. Cards open the same issue detail as the list.
+
+**Moving a card.** Dragging a card to another lane moves the issue to that
+lane's workflow state in Linear (`update_linear_issue` with `stateId`, which
+the backend refuses for an issue not on the project's board). The card moves
+at once and goes back, with the reason, if Linear refuses. A card cannot be
+dragged again until its move settles. A refresh that lands during a move wins
+over its rollback, and Linear's answer is not applied over a newer read of the
+issue (`updatedAt`). Only lanes read from
+the board's states take a card, so a board whose states could not be read, or
+a node from before board links, shows the lanes without dragging. While a card
+is held the board stops snapping to lanes, because snapping fights the drag's
+edge scrolling.
+
+**Sync.** `NodeLinearSync` (`nodes/node-linear-sync.ts`) runs on the command
+node beside Kanban sync, at the same moments: a (re)connect, a leaf's project
+list being read, shortly after a change here, and the minute reconcile. For
+each connected leaf it reads the leaf's links, disconnects and connection
+(`get_linear_sync_state`), merges them here (for each link the side that
+changed it last wins; a clear is a tombstone), and sends the merged set back
+(`apply_linear_sync_state`). A change made on a leaf therefore reaches the
+command node within a minute, and other leaves on the pass after. These link
+commands and `export_linear_connection` are link-only
+(`NODE_ROUTING_EXCLUDED_COMMANDS`) and check the caller is an attached command
+node. An older leaf answers `unknown-command` and keeps its own links.
+
+**Writes stay on the board.** `create_linear_issue`, `update_linear_issue` and,
+with a `projectId`, `get_linear_issue` and `post_linear_issue_comment` refuse
+an issue that is not on the project's linked board (its team, and its Linear
+project when the link names one). `create_linear_issue` records its
+`requestKey` and the issue it made (`linear-issue-creates`, at most 500), so a
+retry returns that issue instead of creating another. Calls with one request
+key run one at a time, so a concurrent retry finds the first call's record.
+Linear has no idempotency key, but it takes a client-chosen issue id: the
+issue gets one derived from the board link and request key
+(`linearIssueCreateId`), so a retry after Linear accepted the create but the
+record was lost meets Linear's uniqueness check, and the backend returns the
+issue it already made.
+
+**Coordinator tools.** `list_linear_issues`, `get_linear_issue`,
+`create_linear_issue`, `update_linear_issue`, `add_linear_comment` and
+`list_linear_board_options` (`control-mcp-linear-tools.ts`) are offered to
+coordinators, not to operator credentials. They run on the coordinator's own
+machine with its own key; with a `nodeId` they act on the coordinator's
+project on that machine through `invoke_on_node`. On another machine every
+tool reads the project's board link there first and stops unless it is live:
+a machine from before board links answers `unknown-command`, and its older
+`get_linear_issue`, `get_linear_issues` and `post_linear_issue_comment` would
+ignore `projectId`. `add_linear_comment` is not idempotent: a retry posts
+again.

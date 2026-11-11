@@ -551,7 +551,7 @@ describe("KanbanTaskDialog", () => {
     expect(description.className).toContain("sr-only");
   });
 
-  test("edit mode keeps long ticket details inside a scrollable body", () => {
+  test("edit mode keeps long ticket details in the tab's scrolling column, under its action bar", () => {
     const longTask = makeTask({
       description: Array.from({ length: 40 }, (_, i) => `Description line ${i + 1}`).join("\n"),
       acceptanceCriteria: Array.from({ length: 40 }, (_, i) => `Acceptance line ${i + 1}`).join(
@@ -562,17 +562,19 @@ describe("KanbanTaskDialog", () => {
     renderInAppCommandScope(<KanbanTaskDialog task={longTask} open onOpenChange={() => {}} />);
 
     const dialog = screen.getByRole("dialog");
-    expect(dialog.className).toContain("max-h-[85vh]");
+    expect(dialog.className).toContain("max-h-[90vh]");
     expect(dialog.className).toContain("overflow-hidden");
 
-    const taskBody = getDialogBody(dialog);
-    expect(taskBody.style.overflow).toBe("auto");
-    expect(taskBody.textContent).toContain("Acceptance line 40");
-
-    taskBody.scrollTop = 240;
-    fireEvent.scroll(taskBody);
-    expect(taskBody.scrollTop).toBe(240);
-    expect(taskBody.contains(screen.getByPlaceholderText("Add a comment..."))).toBe(false);
+    const column = screen.getByTestId("ticket-view-scroll");
+    expect(column.className).toContain("overflow-y-auto");
+    expect(column.textContent).toContain("Acceptance line 40");
+    column.scrollTop = 240;
+    fireEvent.scroll(column);
+    expect(column.scrollTop).toBe(240);
+    // The bar is outside the column, so scrolling never takes it away.
+    const bar = screen.getByRole("toolbar", { name: "Ticket actions" });
+    expect(column.contains(bar)).toBe(false);
+    expect(column.contains(screen.getByPlaceholderText("Add a comment..."))).toBe(true);
   });
 
   test("create mode keeps long draft details inside a scrollable body", () => {

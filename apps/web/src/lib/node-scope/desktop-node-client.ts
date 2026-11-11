@@ -29,7 +29,9 @@ import type {
   ReadableSignal,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
+import { resolveNodeLoopbackBaseUrl } from "@/lib/gateway-url";
 import { createWindowOrkestratorClient } from "./command-client";
+import type { ExternalLoopbackAddressing } from "./external-loopback";
 import { createListenerFanout } from "./listener-fanout";
 import { createHelloNegotiation } from "./negotiation";
 import { createSignal } from "./signal";
@@ -106,6 +108,15 @@ export function snapshotHello(snapshot: unknown): unknown {
   }
   return (snapshot as { hello?: unknown }).hello ?? null;
 }
+
+/** The node's current gateway base in a `nodes.gateway` snapshot, or null when it has none. */
+export function snapshotBaseUrl(snapshot: unknown): string | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const baseUrl = (snapshot as { baseUrl?: unknown }).baseUrl;
+  return typeof baseUrl === "string" && baseUrl ? baseUrl : null;
+}
+
+const NODE_ROUTE_UNAVAILABLE = "This machine is reconnecting; open the link again once it is back.";
 
 /** The preview store's view of a client that addresses its node's previews (plan item 3012). */
 interface PreviewAddressing {
@@ -236,7 +247,21 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
     });
   }
 
-  const client: NodeClient & PreviewAddressing = {
+  /**
+   * A loopback URL on the node for this computer's external browser, through
+   * the node's own loopback proxy on the route main holds for it now. Read on
+   * every call: a reconnect can move the route.
+   */
+  async function resolveExternalLoopbackUrl(url: string): Promise<string> {
+    if (disposed) throw new Error("This node client is disposed.");
+    const nodes = host()?.nodes;
+    if (!nodes) throw new Error(NO_NODE_SCOPES);
+    const baseUrl = snapshotBaseUrl(await nodes.gateway(nodeId));
+    if (!baseUrl) throw new Error(NODE_ROUTE_UNAVAILABLE);
+    return resolveNodeLoopbackBaseUrl(baseUrl, url);
+  }
+
+  const client: NodeClient & PreviewAddressing & ExternalLoopbackAddressing = {
     nodeId,
     invoke: typedInvoke(invokeRaw),
     invokeRaw,
@@ -252,6 +277,7 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
     domains: negotiation.domains,
     capabilities: negotiation.capabilities,
     resolvePreviewUrl: desktopNodePreviewUrl,
+    resolveExternalLoopbackUrl,
     // Main owns the node's stream and closes it when the scope goes idle; a
     // suspended client only stops delivering, and resumes without a reopen.
     suspend() {

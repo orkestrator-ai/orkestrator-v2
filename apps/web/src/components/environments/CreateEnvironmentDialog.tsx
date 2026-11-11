@@ -1,5 +1,6 @@
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
+import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import { MachineDot } from "@/components/federation/MachineDot";
 import {
   resolveAgentPlatformSettings,
@@ -114,7 +115,7 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useNodeScope } from "@/lib/node-scope/providers";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -275,6 +276,15 @@ export function CreateEnvironmentDialog({
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const federation = useFederation();
+  // The machine the environment is created on: this node scope's, which is
+  // another machine when the dialog opens in that machine's workspace. The
+  // sidebar opens it outside every node's provider, where it is the command
+  // scope's, as for `useScopeBackend` above.
+  const dialogScope = useScopesWithCommandFallback().scope;
+  const remoteMachine = useRemoteMachineView(
+    dialogScope.role === "command" ? null : dialogScope.nodeId,
+  );
+  const targetMachine = dialogScope.role === "command" ? federation.boundMachine : remoteMachine;
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
@@ -311,7 +321,7 @@ export function CreateEnvironmentDialog({
         ? "containerized"
         : configEnvironmentType;
   // The node whose catalogue this dialog reads and seeds (plan item 3003).
-  const catalogScope = useNodeScope();
+  const catalogScope = dialogScope;
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
   const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
@@ -1595,7 +1605,7 @@ export function CreateEnvironmentDialog({
                   {projectName}
                 </span>
               )}
-              {federation.enabled && federation.boundMachine ? (
+              {federation.enabled && targetMachine ? (
                 // With several machines in view, the dialog names the machine
                 // the environment is created on.
                 <span
@@ -1603,10 +1613,10 @@ export function CreateEnvironmentDialog({
                   data-testid="create-environment-machine"
                 >
                   <MachineDot
-                    colorToken={federation.boundMachine.colorToken}
-                    machineName={federation.boundMachine.name}
+                    colorToken={targetMachine.colorToken}
+                    machineName={targetMachine.name}
                   />
-                  on {federation.boundMachine.name}
+                  on {targetMachine.name}
                 </span>
               ) : null}
             </DialogTitle>
@@ -1719,8 +1729,14 @@ export function CreateEnvironmentDialog({
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {environmentType === "local"
-                      ? "Git worktree on your machine"
-                      : "Isolated Docker environment"}
+                      ? // "Your machine" would read as the one the window runs
+                        // on; the worktree is made on the target machine.
+                        federation.enabled && targetMachine
+                        ? `Git worktree on ${targetMachine.name}`
+                        : "Git worktree on the host"
+                      : federation.enabled && targetMachine
+                        ? `Isolated Docker environment on ${targetMachine.name}`
+                        : "Isolated Docker environment"}
                   </p>
                   {!dockerAvailable && (
                     <p id="containerized-unavailable" className="text-xs text-amber-400">

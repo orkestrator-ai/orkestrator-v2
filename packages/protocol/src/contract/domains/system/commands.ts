@@ -27,6 +27,8 @@
 import * as Schema from "effect/Schema";
 import { recordDomainAdapterUsageCommand } from "../../client-usage.js";
 import { defineCommand } from "../../command.js";
+import { ownedObject } from "../../model-schema.js";
+import type { SelfImprovementRunStart, SelfImprovementStatus } from "../../../self-improvement.js";
 import { MACHINE_LOAD_COMMAND } from "../../../machine-load.js";
 import { RECORD_RENDERER_ERRORS_COMMAND } from "../../../renderer-errors.js";
 import { systemDomain } from "./domain.js";
@@ -52,7 +54,6 @@ import {
   ProjectGitMirrorUsageSchema,
   RecordRendererErrorsResultSchema,
   RecurringWorkDiagnosticsSchema,
-  ResourceRevisionManifestSchema,
   ScheduledJobCreateResultSchema,
   ScheduledJobDeleteResultSchema,
   ScheduledJobListSchema,
@@ -244,7 +245,7 @@ export const reconcileWorkflowSchedulingCommand = defineCommand({
   critical: [],
 });
 
-/** A desktop window's new renderer error counts, into the essential log. */
+/** A renderer's new error counts (a desktop window's or a browser tab's), into the essential log. */
 export const recordRendererErrorsCommand = defineCommand({
   domain: systemDomain,
   name: RECORD_RENDERER_ERRORS_COMMAND,
@@ -252,7 +253,10 @@ export const recordRendererErrorsCommand = defineCommand({
   access: "admin",
   read: false,
   // Parsed by the recorder, which keeps its own message for a malformed batch.
-  args: Schema.Struct({ entries: optionalUnknown }),
+  // `client` (optional, a renderer's upload id) gives each renderer its own
+  // share of the per-minute bound; an older backend ignores it and applies
+  // only the shared bound.
+  args: Schema.Struct({ entries: optionalUnknown, client: optionalUnknown }),
   result: RecordRendererErrorsResultSchema,
   critical: [],
 });
@@ -658,18 +662,6 @@ export const updateWorktreeLocationsCommand = defineCommand({
 
 // --- Resource manifests -----------------------------------------------------
 
-/** Revisions that differ from the client's known ones (all of them on a generation reset). */
-export const getResourceRevisionManifestCommand = defineCommand({
-  domain: systemDomain,
-  name: "get_resource_revision_manifest",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({ knownGeneration: optionalUnknown, knownRevisions: optionalUnknown }),
-  result: ResourceRevisionManifestSchema,
-  critical: [],
-});
-
 /** The changed resource scopes after `cursor`, bounded by `highWater`. */
 export const getScopedResourceRevisionManifestCommand = defineCommand({
   domain: systemDomain,
@@ -699,9 +691,41 @@ export const getScopedResourceSnapshotsCommand = defineCommand({
   critical: [],
 });
 
+// --- Self-improvement ---------------------------------------------------------
+
+/**
+ * Self-improvement status for Settings → Self-improvement: settings, the run in
+ * progress, the last run's summary, tracked tickets and themes. The machine's
+ * own (admin): it reads this machine's diagnostics and conversations.
+ */
+export const getSelfImprovementStatusCommand = defineCommand({
+  domain: systemDomain,
+  name: "get_self_improvement_status",
+  since: 1,
+  access: "admin",
+  read: true,
+  args: Schema.Struct({}),
+  result: ownedObject<SelfImprovementStatus>(),
+  critical: [],
+});
+
+/** Starts a run in the background; answers at once with whether it started. */
+export const runSelfImprovementCommand = defineCommand({
+  domain: systemDomain,
+  name: "run_self_improvement",
+  since: 1,
+  access: "admin",
+  read: false,
+  args: Schema.Struct({ dryRun: Schema.optionalKey(Schema.Boolean) }),
+  result: ownedObject<SelfImprovementRunStart>(),
+  critical: ["dryRun"],
+});
+
 /** Every defined `system` command. */
 export const SYSTEM_COMMANDS = [
   recordDomainAdapterUsageCommand,
+  getSelfImprovementStatusCommand,
+  runSelfImprovementCommand,
   getFleetUpdatePolicyCommand,
   setFleetUpdatePolicyCommand,
   getAppVersionCommand,
@@ -749,7 +773,6 @@ export const SYSTEM_COMMANDS = [
   getEnvironmentDiskUsageCommand,
   getWorktreeLocationsCommand,
   updateWorktreeLocationsCommand,
-  getResourceRevisionManifestCommand,
   getScopedResourceRevisionManifestCommand,
   getScopedResourceSnapshotsCommand,
 ] as const;

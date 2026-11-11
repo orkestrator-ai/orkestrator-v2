@@ -4,6 +4,7 @@ import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import {
   MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   type MultiReviewModelSelection,
@@ -300,6 +301,9 @@ function ReviewMountDuringPointerGesture({
     </TerminalProvider>
   );
 }
+
+/** Radix ContextMenu opens on a touch hold after this fixed, unexported delay. */
+const RADIX_CONTEXT_MENU_LONG_PRESS_MS = 700;
 
 beforeEach(() => {
   appCommandStore(multiReviewStore).setState({ workflows: new Map() });
@@ -1110,7 +1114,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     const split = screen.getByTestId("multi-review-step-split");
-    expect(split.className).toContain("@min-[88rem]:grid-cols-2");
+    expect(split.className).toContain("@min-[88rem]:flex-row");
+    // Splitting must not change the split's `display`: WebKit rebuilds the
+    // boxes under one and drops the transcript tail's reading offset
+    // (docs/architecture/build-pipeline-view.md, "Shared flow graph").
+    expect(split.className).not.toMatch(/(^|\s|:)(grid|block|inline-flex)(\s|$)/);
     expect(split.children).toHaveLength(2);
     expect(
       split.querySelector(":scope > div:first-child [aria-label='Review validation']"),
@@ -2990,36 +2998,43 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const restartStep = mock(async () => ready);
-    renderInAppCommandScope(
-      <MultiReviewTab
-        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-        isActive
-        hydrateWorkflow={mock(async () => ready)}
-        commands={{
-          address: mock(async () => ready),
-          retry: mock(async () => ready),
-          cancel: mock(async () => ready),
-          stopReviewer: mock(async () => ready),
-          restartStep,
-        }}
-      />,
-    );
-
-    const tile = flowNode("Consolidation");
-    fireEvent.pointerDown(tile, {
-      pointerType: "touch",
-      pointerId: 72,
-      isPrimary: true,
-      button: 0,
-      clientX: 20,
-      clientY: 20,
+    const longPress = installControlledTimeout(RADIX_CONTEXT_MENU_LONG_PRESS_MS, {
+      label: "context-menu long press",
     });
-    await act(async () => {
-      await Bun.sleep(710);
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+    try {
+      renderInAppCommandScope(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => ready)}
+          commands={{
+            address: mock(async () => ready),
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
+            restartStep,
+          }}
+        />,
+      );
 
-    await waitFor(() => expect(restartStep).toHaveBeenCalledWith(ready.id, "consolidate"));
+      const tile = flowNode("Consolidation");
+      fireEvent.pointerDown(tile, {
+        pointerType: "touch",
+        pointerId: 72,
+        isPrimary: true,
+        button: 0,
+        clientX: 20,
+        clientY: 20,
+      });
+      await act(async () => {
+        expect(longPress.advance()).toBe(1);
+      });
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+
+      await waitFor(() => expect(restartStep).toHaveBeenCalledWith(ready.id, "consolidate"));
+    } finally {
+      longPress.restore();
+    }
   });
 
   test("shows a repository-change note and allows reviewer restart", async () => {

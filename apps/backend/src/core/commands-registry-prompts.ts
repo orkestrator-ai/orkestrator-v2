@@ -11,7 +11,6 @@ import {
   getComposeDraftCommand,
   getFileDraftCommand,
   getPromptQueueCommand,
-  listComposeDraftsCommand,
   listEnvironmentHydrationCommand,
   listPromptQueuesCommand,
   movePromptQueueMessageCommand,
@@ -154,12 +153,6 @@ export function registerPromptCommands(
   );
   register(getComposeDraftCommand, ({ draftKey }, { storage }) =>
     storage.getComposeDraft(asString(draftKey, "draftKey")),
-  );
-  register(listComposeDraftsCommand, ({ ownerType, ownerId }, { storage }) =>
-    storage.listComposeDrafts(
-      asString(ownerType, "ownerType") as "environment" | "project",
-      asString(ownerId, "ownerId"),
-    ),
   );
   register(
     saveComposeDraftCommand,

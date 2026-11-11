@@ -9,28 +9,9 @@ Analysed 2026-11-05 against `main` at `33b3d953a`; tasks 2 and 3 done
 
 ### Tasks
 
-1. **Count the real environments in this shape**: only a running install can answer. Status: open.
 2. **Run the refusal and the row's rebuild against a real old image**: run live on Docker Desktop with an image built from `d56c3b68e`; the row's Rebuild migrated it. Status: done (the refusal itself was not run live; see the task).
 3. **Stop the inputs section claiming mounts it has no evidence for**: it now reads the cleanup review's evidence and reports `unknown` when Docker does not answer. Status: done.
-4. **Decide when the old-runtime paths can go**: they stay while any runtime needs them. Status: open (depends on 1).
-
-### 1. Count the real environments in this shape
-
-**Problem.** The report asked how many real environments still mount host agent homes. A worktree build has no real environments, and this work was not allowed to read a production install.
-
-**Context.** The cleanup review now lists them (`docker_cleanup_preview`'s `legacyRuntimes`, `apps/backend/src/core/docker-cleanup-legacy-runtimes.ts`). Open it from Settings, Docker, "Review cleanup…", on each machine.
-
-**Investigation.** Nothing was measured. The list has only run against fake Docker answers and intercepted responses on an isolated profile.
-
-**Decisions.**
-
-- **How should the count be taken?**
-  - **The user opens the review once on each machine and records the number here (recommended).**
-    - Pros: read-only; the same list the user acts on; no new code.
-    - Cons: a manual step per machine.
-  - **Add a usage counter for the list's size.**
-    - Pros: visible through `get_compatibility_path_usage` without opening anything.
-    - Cons: new code and a stored count to answer one question once.
+4. **Decide when the old-runtime paths can go**: they stay while any runtime needs them. Status: blocked (waits on 7568: 5860 task 1).
 
 ### 2. Run the refusal and the row's rebuild against a real old image
 
@@ -51,7 +32,7 @@ Run on 2026-11-06 (Docker Desktop 29.9.2, linux/arm64, profile `legacy-5860`, cr
 
 Screenshots were taken under `output/visual-previews/legacy-5860-*.png` (not committed). The profile was reset afterwards, which removed the four owner-labelled containers (both hand-built ones included), their volumes and networks; the labelled image was removed.
 
-Not run live: the refusal to *create* a new runtime from an old image (the rebuild here used the current image, as the row requires). A credential-free profile also stages no provider, so the rebuilt runtime's inputs section is an empty box; that is [7320](7320-empty-inputs-section.md).
+Not run live: the refusal to *create* a new runtime from an old image (the rebuild here used the current image, as the row requires). A credential-free profile also stages no provider, so the rebuilt runtime's inputs section was an empty box; since 7320 (retired 2026-11-11) it says "Nothing was staged into this container." ([Portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 
 **Decisions.**
 
@@ -89,12 +70,12 @@ Done 2026-11-06: both views now read `legacy-runtime-shape.ts` (one `docker insp
 
 **Context.** This is unmigrated user state, not version skew, so the support window does not retire it ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)). The lifecycle document's rule stays: a start or a read never migrates a runtime.
 
-**Investigation.** The creation branch is already gone, so these paths serve existing runtimes only. Task 1's count is the input this decision needs.
+**Investigation.** The creation branch is already gone, so these paths serve existing runtimes only. The count of real legacy runtimes (7568: 5860 task 1) is the input this decision needs.
 
 **Decisions.**
 
 - **When should they be removed?**
-  - **When task 1 finds none on the machines we can reach, with the release note saying such a runtime must be rebuilt first (recommended).**
+  - **When the count (7568: 5860 task 1) finds none on the machines we can reach, with the release note saying such a runtime must be rebuilt first (recommended).**
     - Pros: removes credential-handling code once it serves nobody we know of.
     - Cons: an unattended install's old runtime would lose its login sync.
   - **Keep them indefinitely.**
@@ -135,13 +116,13 @@ binds used a scratch directory of dummy files, never a real agent home.
 
 ## Needs verification
 
-- Task 1's number.
 - The refusal to create a runtime from a pre-`staged-inputs` image, against a real old image (task 2 ran the row's rebuild, not the refusal).
 - A user on an old default image `orkestrator-v2:latest` gets the refusal and the Settings download. Whether the first start should download a current image by itself, as it does for a missing one (`ensureEnvironmentImage`), was not decided here. Refusing is the safe outcome, and the message says what to do.
 
 ## Related
 
-- [7320: the inputs section shows an empty box for a staged revision with no providers](7320-empty-inputs-section.md)
+- 7320 (retired 2026-11-11): the inputs section showed an empty box for a staged revision with no providers; fixed in `EnvironmentInputsSection.tsx`.
 - [Container lifecycle: rollout switches and legacy runtimes](../../architecture/container-lifecycle.md#rollout-switches-and-legacy-runtimes)
 - Security review, M9 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
 - Security index (`git show 413bd6219:docs/reports/security/0000-index.md`)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, counting legacy runtimes on the user's real machines) moved there on 2026-11-10.

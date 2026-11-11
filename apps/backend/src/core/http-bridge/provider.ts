@@ -24,7 +24,7 @@ import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
-  type ProviderMcpConfigReport,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "../agent-provider-contract.js";
@@ -69,6 +69,7 @@ import {
 import { HttpBridgeInteractionAdapter } from "./interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
+import { cancelPromptDispatchHold, promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
 import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
 import {
@@ -361,6 +362,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.agent,
       await resolvePromptAttachments(options, this.stageImages),
     );
+    // Agent-test profiles only (to-do 0050 task 3): a spec can stop the
+    // backend here, after the caller journaled the attempt and before the
+    // request leaves. Production installs no hold, so this is `undefined`.
+    const holdDetail = { agent: this.agent, sessionId, requestId: options.requestId };
+    const heldBeforeSend = promptDispatchHold("before-send", holdDetail);
+    if (heldBeforeSend) await heldBeforeSend;
     let response: Response;
     try {
       response = await bridgeFetch(
@@ -440,6 +447,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
     }
+    // The bridge accepted; the caller has not recorded it yet. Same seam.
+    const heldAfterResponse = promptDispatchHold("after-response", holdDetail);
+    if (heldAfterResponse) await heldAfterResponse;
   }
 
   /**
@@ -604,9 +614,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge/mcp-evidence.ts`. */
-  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigReport> {
+  mcpConfigEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
     const { connection, fetchImpl, agent } = this;
-    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId });
+    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId, signal });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {
@@ -1101,8 +1111,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.catalogAdapter.refreshCommands(sessionId);
   }
 
-  mcpServers(sessionId: string) {
-    return this.catalogAdapter.mcpServers(sessionId);
+  mcpServers(sessionId: string, options?: ProviderReadOptions) {
+    return this.catalogAdapter.mcpServers(sessionId, options);
   }
 
   mcpServerAction(
@@ -1359,8 +1369,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       } catch {
         return { outcome: "unknown", requestId: action.requestId };
       }
-      if (response.status === 404)
+      if (response.status === 404) {
+        this.steerQualification.forget(sessionId);
         throw new PromptRejectedError(`${this.agent} session was not found`);
+      }
       const payload = asRecord(
         await boundedJson(response, `${this.agent} steer`).catch(() => ({})),
       );
@@ -1450,6 +1462,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
+    cancelPromptDispatchHold(this.agent, sessionId);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/abort`,
@@ -1460,6 +1473,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async hardAbort(sessionId: string): Promise<void> {
+    cancelPromptDispatchHold(this.agent, sessionId);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/hard-abort`,
@@ -1480,5 +1494,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
+    this.steerQualification.forget(sessionId);
   }
 }

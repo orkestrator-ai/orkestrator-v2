@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   nativeAgentCapabilities,
   type NativeAgentViewIdentity,
@@ -274,9 +274,13 @@ function installBackend() {
           result = null;
           break;
         case "get_native_agent_model_catalog":
+          result = [];
+          break;
         case "get_file_tree":
         case "get_local_file_tree":
-          result = [];
+          // A conditional read (knownDigest) answers the envelope, as every backend does.
+          result =
+            args?.knownDigest === undefined ? [] : { unchanged: false, digest: "", value: [] };
           break;
         // The agent information panel names the session's account.
         case "get_native_agent_session_account":
@@ -301,40 +305,51 @@ export function TranscriptPagingFixture() {
     return true;
   });
   const [away, setAway] = useState(false);
+  const [disposed, setDisposed] = useState(false);
+  useEffect(() => {
+    const target = window as unknown as { disposePagingTranscript?: () => void };
+    const dispose = () => setDisposed(true);
+    target.disposePagingTranscript = dispose;
+    return () => {
+      if (target.disposePagingTranscript === dispose) delete target.disposePagingTranscript;
+    };
+  }, []);
   const review = new URLSearchParams(window.location.search).has("reviewer");
   return (
     <main
       className="flex h-screen flex-col bg-background text-foreground"
       data-installed={installed}
+      data-paging-transcript={disposed ? "disposed" : "mounted"}
     >
       <button onClick={() => setAway(!away)}>
         {away ? "Return to transcript" : "Switch environment"}
       </button>
       <section className="min-h-0 flex-1" style={{ display: away ? "none" : undefined }}>
-        {review ? (
-          <MultiReviewReviewerTab
-            data={{
-              environmentId: identity.environmentId,
-              workflowId: "paging-review",
-              reviewerId: "reviewer",
-              isLocal: true,
-            }}
-            isActive={!away}
-            loadTranscript={loadTranscript}
-            loadHistoryPage={loadHistoryPage}
-          />
-        ) : (
-          <AgentNativeTab
-            tabId="paging-tab"
-            data={{
-              platform: "claude",
-              environmentId: identity.environmentId,
-              sessionId: identity.providerSessionId,
-              isLocal: true,
-            }}
-            isActive={!away}
-          />
-        )}
+        {!disposed &&
+          (review ? (
+            <MultiReviewReviewerTab
+              data={{
+                environmentId: identity.environmentId,
+                workflowId: "paging-review",
+                reviewerId: "reviewer",
+                isLocal: true,
+              }}
+              isActive={!away}
+              loadTranscript={loadTranscript}
+              loadHistoryPage={loadHistoryPage}
+            />
+          ) : (
+            <AgentNativeTab
+              tabId="paging-tab"
+              data={{
+                platform: "claude",
+                environmentId: identity.environmentId,
+                sessionId: identity.providerSessionId,
+                isLocal: true,
+              }}
+              isActive={!away}
+            />
+          ))}
       </section>
       {away ? <p>Another environment</p> : null}
     </main>

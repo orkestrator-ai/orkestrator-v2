@@ -160,7 +160,6 @@ mock.module("@/lib/backend", () => ({
     accounts: [],
     active: { claude: "default", codex: "default" },
   }),
-  getNativeAgentProjection: async () => null,
   getNativeAgentTranscriptUpdate: async (input: ReadInput) =>
     unchangedOr(input, `transcript-${identity.logicalSessionKey}-${served.length}`, (token) => ({
       viewVersion: 1,
@@ -319,10 +318,23 @@ afterEach(() => {
   }));
 });
 
+/**
+ * A chat shell renders once more `CHAT_COLUMN_SHIFT_SETTLE_MS` after it
+ * mounts, to turn its column slide on (`useChatColumnShiftStyle`). Until then
+ * its root carries a zero slide duration. A quiet 40 ms interval can end
+ * before that timer fires, and its commit then lands inside the next
+ * measurement, so settling also waits for every mounted shell to finish.
+ */
+function chatShellSettling(): boolean {
+  return Array.from(document.querySelectorAll<HTMLElement>("[style]")).some(
+    (element) => element.style.getPropertyValue("--chat-column-shift-duration") === "0ms",
+  );
+}
+
 /** Lets pending reads land, until the tab has gone quiet. */
 async function settle(): Promise<void> {
   let previous = -1;
-  while (previous !== commits) {
+  while (previous !== commits || chatShellSettling()) {
     previous = commits;
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 40));

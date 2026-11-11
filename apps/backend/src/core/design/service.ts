@@ -8,7 +8,6 @@ import {
   type DesignCanvas,
   type DesignCanvasState,
   type DesignChange,
-  type DesignChanges,
   type DesignElement,
   type DesignFrame,
   type DesignHierarchyPage,
@@ -58,6 +57,7 @@ import {
 import { DesignLibraryIndex, summarizeRecord, type DesignSummary } from "./library.js";
 import * as sessionLinks from "./session-links.js";
 import type {
+  DesignArchivedSessionLookup,
   DesignNativeSessionLookup,
   DesignSessionLinkInput,
   DesignSessionResumer,
@@ -1848,8 +1848,9 @@ export class DesignService {
     environmentId: string,
     canvasId: string,
     lookup: DesignNativeSessionLookup,
+    archived?: DesignArchivedSessionLookup,
   ): Promise<DesignSessionLinkStates> {
-    return sessionLinks.sessionLinkStates(this, environmentId, canvasId, lookup);
+    return sessionLinks.sessionLinkStates(this, environmentId, canvasId, lookup, archived);
   }
 
   recordTabSession(input: {
@@ -1864,7 +1865,7 @@ export class DesignService {
   resumeSessionLink(
     environmentId: string,
     canvasId: string,
-    input: { linkId: string; expectedTabId: string; tabId: string },
+    input: { linkId: string; expectedTabId: string; tabId: string; restoreArchived?: boolean },
     resumer: DesignSessionResumer,
   ): Promise<DesignSessionResumeResult> {
     return sessionLinks.resumeSessionLink(this, environmentId, canvasId, input, resumer);
@@ -1987,32 +1988,6 @@ export class DesignService {
       canvasRevision: status.result!.canvasRevision,
       history: await this.historyStatus(canvasId, environmentId, actor),
     };
-  }
-
-  /** Legacy cursor check: content-free events from the record's change list. */
-  async changes(
-    canvasId: string,
-    environmentId: string,
-    generation: string | undefined,
-    after: number,
-  ): Promise<DesignChanges> {
-    await this.initialize();
-    decodeSync(revision, after);
-    const { record } = await this.loadFor(canvasId, environmentId);
-    const current = record.document.revision;
-    const events = record.changes
-      .filter((change) => change.revision > after)
-      .map((change) => ({
-        canvasId,
-        revision: change.revision,
-        ...(change.frames.length === 1 ? { frameId: change.frames[0]!.id } : {}),
-      }));
-    const reset =
-      generation !== this.generation ||
-      after > current ||
-      (after !== current &&
-        (events[0]?.revision !== after + 1 || events.at(-1)?.revision !== current));
-    return { generation: this.generation, revision: current, reset, events: reset ? [] : events };
   }
 
   async deleteEnvironment(environmentId: string): Promise<number> {

@@ -439,12 +439,6 @@ export class AppServerRuntime {
     return this.tail.listModels(...args);
   }
 
-  readPlanUsage(
-    ...args: Parameters<CodexRuntimeTail["readPlanUsage"]>
-  ): ReturnType<CodexRuntimeTail["readPlanUsage"]> {
-    return this.tail.readPlanUsage(...args);
-  }
-
   listSessions(
     ...args: Parameters<CodexRuntimeTail["listSessions"]>
   ): ReturnType<CodexRuntimeTail["listSessions"]> {

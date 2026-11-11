@@ -134,6 +134,37 @@ describe("reconcilePersistedLayout", () => {
     expect(JSON.stringify(layout)).not.toContain("escape");
   });
 
+  test("Auto-pipeline tabs restore their source tab and a bounded label", () => {
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "a",
+        tabs: [
+          {
+            id: "a",
+            type: "auto-pipeline",
+            autoPipelineData: { sourceTabId: "agent-1", sourceLabel: "Feature work" },
+          },
+          { id: "b", type: "auto-pipeline", autoPipelineData: { sourceTabId: "agent-2" } },
+          { id: "c", type: "auto-pipeline", autoPipelineData: { sourceTabId: "" } },
+          { id: "d", type: "auto-pipeline" },
+        ],
+      }),
+      context,
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [
+        {
+          id: "a",
+          type: "auto-pipeline",
+          autoPipelineData: { sourceTabId: "agent-1", sourceLabel: "Feature work" },
+        },
+        { id: "b", type: "auto-pipeline", autoPipelineData: { sourceTabId: "agent-2" } },
+      ],
+    });
+  });
+
   test("key information tabs restore their pipeline in this environment only while it exists", () => {
     const layout = reconcilePersistedLayout(
       saved({
@@ -179,7 +210,12 @@ describe("reconcilePersistedLayout", () => {
           {
             id: "a",
             type: "key-information",
-            keyInformationTabData: { pipelineId: "pipeline-1", view: "notes" },
+            keyInformationTabData: {
+              pipelineId: "pipeline-1",
+              view: "notes",
+              completionPublished: true,
+              completionRevision: 8,
+            },
           },
           {
             id: "b",
@@ -192,7 +228,13 @@ describe("reconcilePersistedLayout", () => {
     );
     const { tabs } = layout!.root as PaneLeaf;
     expect(tabs.map((tab) => tab.keyInformationTabData)).toEqual([
-      { environmentId: "env-1", pipelineId: "pipeline-1", view: "notes" },
+      {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        view: "notes",
+        completionPublished: true,
+        completionRevision: 8,
+      },
       { environmentId: "env-1", pipelineId: "pipeline-1" },
     ]);
   });

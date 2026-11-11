@@ -2,7 +2,8 @@
  * The script of the Auto-pipeline fake model (`auto-pipeline-fake-model.ts`,
  * to-do 7547 task 4): what a compliant model does with each request the
  * Auto-pipeline flow sends, from the interactive source tab's first turn
- * through drafting, package preparation, review and Verify. Pure, so the
+ * through the tab's own drafting turn (the "To pipeline" request answered with
+ * `convert_to_pipeline`), package preparation, review and Verify. Pure, so the
  * rules have unit tests that need no provider.
  *
  * Requests arrive in OpenAI chat-completions form, which Pi uses for a
@@ -11,6 +12,7 @@
  * fake-model run (it proves the product's plumbing, not a model's review) and
  * also its limit.
  */
+import { AUTO_PIPELINE_TOOL_NAME } from "@orkestrator/protocol/auto-pipeline-tool";
 import { FAKE_WORKFLOW_RESULTS } from "../../scripts/recurring-live-ab-fake-model";
 
 export type ChatMessage = { role?: unknown; content?: unknown };
@@ -39,7 +41,10 @@ const CAPABILITY = /capability "([^"\s]{1,512})"/g;
 const SUBMIT_TOOL = /call the Orkestrator `(submit_[a-z_]+)` tool/g;
 const CRITERIA_BLOCK = /<acceptance-criteria-json>\s*([\s\S]*?)\s*<\/acceptance-criteria-json>/g;
 
-/** The ticket the drafting turn submits: valid, two checkable criteria. */
+/**
+ * The ticket the interactive tab's agent submits through `convert_to_pipeline`
+ * when "To pipeline" asks it to: valid, two checkable criteria.
+ */
 export const FAKE_DRAFT_TITLE = "Record the Auto-pipeline fixture note";
 export const FAKE_DRAFT = {
   title: FAKE_DRAFT_TITLE,
@@ -84,7 +89,6 @@ const FIX_RESULT = {
 /** Every result the fake submits, by submission tool. Verify's is built per request. */
 export const FAKE_RESULTS: Readonly<Record<string, unknown>> = {
   ...FAKE_WORKFLOW_RESULTS,
-  submit_auto_pipeline_draft: FAKE_DRAFT,
   submit_fix_result: FIX_RESULT,
 };
 
@@ -230,6 +234,23 @@ export function scriptedTurn(request: ScriptedRequest): ScriptedTurn {
       submits: true,
     };
   }
+  // "To pipeline" sends the tab an ordinary message naming the tool. The tab's
+  // own agent answers it by calling the tool once with the draft, then replies.
+  if (prompt.includes(`\`${AUTO_PIPELINE_TOOL_NAME}\``)) {
+    const name = offeredName(offered, AUTO_PIPELINE_TOOL_NAME);
+    if (!name)
+      return {
+        step: { kind: "text", text: `The ${AUTO_PIPELINE_TOOL_NAME} tool is not offered.` },
+        workflow: AUTO_PIPELINE_TOOL_NAME,
+      };
+    if (toolResults.length > 0)
+      return { step: { kind: "text", text: FAKE_REPLY }, workflow: AUTO_PIPELINE_TOOL_NAME };
+    return {
+      step: { kind: "tool", name, input: FAKE_DRAFT },
+      workflow: AUTO_PIPELINE_TOOL_NAME,
+      submits: true,
+    };
+  }
   const write = WRITE_MARKER.exec(prompt)?.[1];
   if (write && !write.split("/").includes("..") && toolResults.length === 0) {
     const directory = write.includes("/") ? write.slice(0, write.lastIndexOf("/")) : "";
@@ -244,4 +265,42 @@ export function scriptedTurn(request: ScriptedRequest): ScriptedTurn {
     };
   }
   return { step: { kind: "text", text: FAKE_REPLY } };
+}
+
+/**
+ * A qualification tag: `QATAG` and eight upper-case hex digits. A spec puts
+ * one in a prompt so the fake can count how many turns that prompt started
+ * without keeping any prompt text (to-do 0050 task 3).
+ */
+export const QA_TAG = /\bQATAG[0-9A-F]{8}\b/g;
+
+/**
+ * The tags in the prompt that starts a turn: the request's last message is the
+ * user's, so nothing has answered it yet. Later requests of the same turn
+ * (after a tool result or a reply) and requests with no tag answer `[]`, so a
+ * prompt delivered twice counts twice and a long turn counts once.
+ */
+export function turnStartTags(messages: unknown): string[] {
+  const list = Array.isArray(messages) ? (messages as ChatMessage[]) : [];
+  const last = list[list.length - 1];
+  if (last?.role !== "user") return [];
+  return [...new Set(messageText(last).match(QA_TAG) ?? [])];
+}
+
+/**
+ * How many of the request's user messages carry each tag. A provider session
+ * sends its whole history on every request, so a prompt delivered twice into
+ * one session shows here as 2 on its next request, while the same tag quoted
+ * by separate sessions (later stages repeat the ticket) stays at 1 each.
+ */
+export function taggedUserMessages(messages: unknown): Record<string, number> {
+  const list = Array.isArray(messages) ? (messages as ChatMessage[]) : [];
+  const counts: Record<string, number> = {};
+  for (const message of list) {
+    if (message?.role !== "user") continue;
+    for (const tag of new Set(messageText(message).match(QA_TAG) ?? [])) {
+      counts[tag] = (counts[tag] ?? 0) + 1;
+    }
+  }
+  return counts;
 }

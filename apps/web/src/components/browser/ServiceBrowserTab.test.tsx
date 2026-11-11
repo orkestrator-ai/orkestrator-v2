@@ -267,6 +267,16 @@ const serviceUri = (path = "/", serviceId = FIXTURE_SERVICE_ID) =>
     path,
   });
 
+/**
+ * Runs everything the tab has scheduled for the native view. In this suite an
+ * animation frame is a microtask (see `beforeAll`), the deferred hide
+ * (`useDeferredPreviewHide`) is a microtask and the preview mocks settle at
+ * once, so none of that work waits on a timer: one macrotask turn drains it
+ * all. A check that something did not happen is then final, not a race.
+ */
+const flushScheduledViewWork = () =>
+  act(() => new Promise<void>((resolve) => setImmediate(resolve)));
+
 describe("service browser tabs", () => {
   beforeAll(() => {
     window.requestAnimationFrame = (callback: FrameRequestCallback) => {
@@ -850,23 +860,118 @@ describe("service browser tabs", () => {
       expect(browserPreview.attach.mock.calls.at(-1)![0].service?.serviceId).toBe(API_SERVICE_ID),
     );
 
-    emitState({
-      tabId: "browser-1",
-      url: "http://127.0.0.1:41000/stale",
-      loading: false,
-      canGoBack: true,
-      canGoForward: false,
-      error: null,
-      service: {
-        serviceId: FIXTURE_SERVICE_ID,
-        path: "/stale",
-        displayUrl: "http://localhost:3000/stale",
-      },
+    // Every URL the tab is persisted with from here on, transient ones included.
+    const persisted: string[] = [];
+    const stopRecording = appCommandStore(paneLayoutStore).subscribe(() =>
+      persisted.push(tabUrl()),
+    );
+    try {
+      emitState({
+        tabId: "browser-1",
+        url: "http://127.0.0.1:41000/stale",
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+        service: {
+          serviceId: FIXTURE_SERVICE_ID,
+          path: "/stale",
+          displayUrl: "http://localhost:3000/stale",
+        },
+      });
+      expect(tabUrl()).toBe(serviceUri("/", API_SERVICE_ID));
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).not.toContain(
+        "/stale",
+      );
+      // States are handled in arrival order, so once the new service's next
+      // state is persisted, everything the stale one could have caused has run.
+      emitState({
+        tabId: "browser-1",
+        url: "http://127.0.0.1:41000/fresh",
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+        service: {
+          serviceId: API_SERVICE_ID,
+          path: "/fresh",
+          displayUrl: "http://localhost:8000/fresh",
+        },
+      });
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/fresh", API_SERVICE_ID)));
+    } finally {
+      stopRecording();
+    }
+    expect(persisted.filter((url) => url.includes("stale"))).toEqual([]);
+  });
+
+  test("hides the view at once while the next service's attach is still pending", async () => {
+    const api = fixturePreviewService({
+      definition: { serviceId: API_SERVICE_ID, applicationPort: 8000, label: "api", entry: false },
     });
-    await Bun.sleep(5);
-    expect(tabUrl()).toBe(serviceUri("/", API_SERVICE_ID));
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).not.toContain(
-      "/stale",
+    const { browserPreview } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService(), api],
+    });
+    seedTab(serviceUri("/start"));
+    const view = renderTab();
+    await waitFor(() =>
+      expect(browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+
+    // The next service's tunnel never comes up.
+    browserPreview.attach.mockImplementation(() => new Promise<BrowserPreviewState>(() => {}));
+    browserPreview.setVisible.mockClear();
+    act(() =>
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .updateTabBrowserUrl(
+          "browser-1",
+          serviceUri("/", API_SERVICE_ID),
+          FIXTURE_ENVIRONMENT_ID,
+          [],
+          -1,
+        ),
+    );
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0].service?.serviceId).toBe(API_SERVICE_ID),
+    );
+    // The previous service's page does not stay on screen for the new one.
+    expect(browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+
+    // Deactivating while that attach is pending hides now, not when it settles.
+    browserPreview.setVisible.mockClear();
+    view.rerender(<TabHarness isActive={false} />);
+    expect(browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+  });
+
+  test("a service snapshot refresh never hides the view", async () => {
+    const { browserPreview } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() =>
+      expect(browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+    browserPreview.setVisible.mockClear();
+    browserPreview.attach.mockClear();
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      await act(async () => {
+        await appCommandStore(previewServiceStore)
+          .getState()
+          .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+      });
+    }
+    await flushScheduledViewWork();
+    expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
+    expect(browserPreview.attach).not.toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false }),
     );
   });
 
@@ -1236,19 +1341,6 @@ describe("service browser tabs", () => {
         ref: { serviceId: app.definition.serviceId },
       }),
     );
-  });
-
-  test("older backends keep the original link behaviour", async () => {
-    installBackend({ capabilities: null, services: [] });
-    seedTab(
-      formatPreviewIntentUri({
-        environmentId: FIXTURE_ENVIRONMENT_ID,
-        source: "container-terminal",
-        url: "http://localhost:3000/",
-      }),
-    );
-    renderTab();
-    await waitFor(() => expect(tabUrl()).toBe("http://localhost:3000/"));
   });
 
   test("a tab saved against another backend asks for a new service", async () => {

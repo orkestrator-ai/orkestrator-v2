@@ -43,8 +43,8 @@ it into a carrier (`renderSuborkRequestCarrier`) that always opens with a tag, s
 no provider reads it as its own command, and asks the agent to call `ask_agents`.
 The agent names the targets and writes a self-contained prompt. The backend never
 parses natural language. The plain-text form works because the tool is offered to
-every tab and its description says when to use it. A real OpenCode process shows
-the path from a plain-text request to the tool (see
+every tab and its description says when to use it. A real OpenCode 1.x process
+showed the path from a plain-text request to the tool (see
 [Real-process evidence](#real-process-evidence)), but what a real model does with the
 description is [not yet qualified](../todo/agent-engines/4340-suborks-live-qualification.md).
 
@@ -111,7 +111,7 @@ requests, that a subork sees only the prompt, and to end the turn after calling.
   ],
   "prompt": "...",             // what every target receives
   "requestId": "...",          // optional: repeating it repeats nothing
-  "tabId": "..."               // only for OpenCode's shared credential
+  "tabId": "..."               // only on a shared, environment-wide credential
 }
 ```
 
@@ -199,18 +199,21 @@ dialog names an advisory tier and says when a change fails the answer.
 | Running time | 45 minutes | Fails that target; the runner's stall and idle bounds usually end it sooner |
 
 **Depth is 1.** A subork's turn runs on a result-only credential that lists
-`ask_agents` as a refusal, so the attempt gets a clear answer. OpenCode's connection
-is environment-wide, and a subork there runs in a reviewer session, which takes no
-per-turn tool map. Its session permission rules
-(`openCodeWorkflowResultPermissionRules`) therefore deny `orkestrator_ask_agents` on
-every workflow turn, and on a subork's turn deny the whole environment-wide server
-(`orkestrator_*`) apart from its own result tools. That leaves an OpenCode subork the
-same Orkestrator tools as a subork elsewhere. The real-process test found that
-without these rules OpenCode offered the subork `ask_agents` and the ticket tools. The
+`ask_agents` as a refusal, so the attempt gets a clear answer. On OpenCode a subork
+runs in a reviewer session, which takes no per-turn tool map, so its session
+permission rules (`openCodeWorkflowResultPermissionRules` in
+`opencode2/policy-rules.ts`, translated by `opencode2/permissions.ts`) deny
+`orkestrator_ask_agents` on every workflow turn, and on a subork's turn deny the
+whole `orkestrator` server (`orkestrator_*`) apart from its own result tools. That
+leaves an OpenCode subork the same Orkestrator tools as a subork elsewhere. The
+real-process test on OpenCode 1.x, whose `orkestrator` connection was
+environment-wide, found that without these rules OpenCode offered the subork
+`ask_agents` and the ticket tools. The
 `ask_agents` rule is not lifted when the turn settles. Only sessions Orkestrator runs
 itself take workflow turns, and those cannot start suborks anyway. An
-environment-wide credential is refused for any other platform's tab: only OpenCode's
-own tab can be the caller on one.
+environment-wide credential is refused for any other platform's tab: only an
+OpenCode tab could be the caller on one, and since 1.x was retired an OpenCode tab
+connects with its own tab credential (`opencode2/turn-connections.ts`).
 
 ## Lifecycle
 
@@ -284,29 +287,36 @@ and the tool connection names `host` or `container`, with the reachability check
 container turn needs. The guard's probe is the backend's
 `get_environment_uncommitted_paths` command, which answers for both kinds. Provider
 fakes cover both paths. A local environment has real-process evidence on OpenCode
-(below). No container run with a real provider has been done yet
+2 (below), as it had on OpenCode 1.x. No container run with a real provider has been done yet
 ([4340](../todo/agent-engines/4340-suborks-live-qualification.md)).
 
 ## Real-process evidence
 
-`native-agent-suborks-opencode.live.test.ts` runs the pinned `opencode serve` against
-a scripted OpenAI-compatible model on loopback, with throwaway `HOME` and XDG
-directories, so it makes no billed turn and needs no login. Everything else is
-real: the agent tools server, the subork service, the branch runner and the mail
-drain. It is in the slow tier and skipped unless
-`RUN_LIVE_OPENCODE_COMPATIBILITY=1`; `mise run download:opencode` puts the pinned
-binary in `binaries/` for `OPENCODE_CLI_PATH`. It shows, in a local environment:
+`opencode2/opencode2-suborks.live.test.ts` runs the pinned OpenCode 2
+`opencode2 serve` (2.2.6) against a scripted OpenAI-compatible model on loopback,
+with a throwaway `HOME`, XDG directories and database (`startOpenCode2Fixture`), so
+it makes no billed turn and needs no login. It is part of `mise run
+verify:opencode2:live`. Everything else is real: the agent tools server, the subork
+service, the branch runner and the mail drain. It passed on 2026-11-11 and shows,
+in a local environment:
 
 - The plain-text request *"Please ask codex and opencode to review this
-  index.html"* reaches a model that is offered `orkestrator_ask_agents` with the
-  shared description. OpenCode's own MCP client carries the call, on the
-  environment-wide credential with the tab named, and gets the handle back.
-- The real OpenCode subork runs as a plan turn without `edit` or `write`, sees
-  neither `ask_agents` nor any other environment-wide tool, sees the prompt and not
-  the caller's words, and answers through `submit_subork_answer`.
-- Both answers (the second from a Codex fake) arrive labelled in one mail, and the
-  real mail drain continues the real caller session with them.
+  index.html"* reaches a model that is offered the caller tab's `ask_agents` (on
+  its per-tab MCP server, `orkestrator_tab_<hash>_ask_agents`) with the shared
+  description. OpenCode 2's own MCP client carried the call on the tab's
+  credential and got the handle back.
+- The real OpenCode 2 subork ran as a read-only result turn: it was offered
+  neither `edit`, `write` nor 2.x's own `subagent`, no `ask_agents` and no tab
+  tool, only Orkestrator tools of its result connection; it saw the prompt and not
+  the caller's words, and answered through `submit_subork_answer`.
+- Both answers (the second from a Codex fake) arrived labelled in one mail, and the
+  real mail drain continued the real caller session with them.
 
-The script, not a model, decides to call the tool. Whether real models choose
+The same run on OpenCode 1.x (`native-agent-suborks-opencode.live.test.ts`,
+2026-11-04, removed with 1.x on 2026-11-11: `git show
+5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`) showed
+the same on the environment-wide credential.
+
+The script, not a model, decided to call the tool. Whether real models choose
 `ask_agents` for plain text, and how the other five providers behave against a live
 model, still needs live evidence.

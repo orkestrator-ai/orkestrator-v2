@@ -117,10 +117,49 @@ function policy0(policy: { enforcement?: string }): string | undefined {
   return policy.enforcement;
 }
 
+/**
+ * What the host reachability check must answer before C22 creates anything:
+ * reachable on a Linux host, and its fixed `not-linux` answer elsewhere
+ * (`container-host-reachability.ts`), so the case still runs on Docker Desktop.
+ */
+function expectedHostReachability(platform: NodeJS.Platform): {
+  status: string;
+  reason?: string;
+} {
+  return platform === "linux"
+    ? { status: "reachable" }
+    : { status: "not-applicable", reason: "not-linux" };
+}
+
 /** Left the container: reached, or dropped further on by the host. */
 const LEFT_CONTAINER = [0, 28];
 
 describe("C22 environment networks and narrow host access", () => {
+  // Runs without Docker: the expectation above matches what the real check
+  // answers on a host that is not Linux, so C22 runs on Docker Desktop.
+  test("off Linux the expected reachability is the check's own answer", async () => {
+    const { ContainerHostReachabilityService } =
+      await import("../src/core/container-host-reachability");
+    for (const platform of ["darwin", "win32"] as const) {
+      const service = new ContainerHostReachabilityService({
+        servicePort: () => 4100,
+        ownerNamespace: "c22-expectation",
+        fallbackImage: () => "unused",
+        platform,
+        run: async () => {
+          throw new Error("the check must not run Docker off Linux");
+        },
+      });
+      try {
+        expect(await service.check("manual")).toMatchObject(expectedHostReachability(platform));
+        expect(service.containerHostAddress()).toBeNull();
+      } finally {
+        await service.dispose();
+      }
+    }
+    expect(expectedHostReachability("linux")).toEqual({ status: "reachable" });
+  });
+
   live(
     "a restricted runtime reaches only the backend service port and not its siblings",
     async () => {
@@ -147,7 +186,12 @@ describe("C22 environment networks and narrow host access", () => {
       context.containerHostReachability = reachability;
       // Use the backend's real host discovery before creating either runtime.
       // RootlessKit's host address differs from the namespace bridge gateway.
-      expect((await reachability.check("manual")).status).toBe("reachable");
+      // The check is Linux-only by design: off Linux (Docker Desktop on macOS
+      // or Windows) it answers not-applicable, there is no RootlessKit address
+      // to find, and creation keeps `host-gateway`; the probes below still run.
+      expect(await reachability.check("manual")).toMatchObject(
+        expectedHostReachability(process.platform),
+      );
       const resolved = await resolveDockerImage(IMAGE);
       if (resolved.kind !== "present") throw new Error("qualification image missing");
 
@@ -254,7 +298,8 @@ describe("C22 environment networks and narrow host access", () => {
       // A full-access sibling proves the listener itself answers.
       expect(await probe(siblingId, "http://127.0.0.1:8080/")).toBe(0);
 
-      // Ingress through a published port still works.
+      // Ingress through a published port still works (OpenCode's, which no
+      // server holds here).
       await docker([
         "exec",
         "-d",
@@ -263,9 +308,9 @@ describe("C22 environment networks and narrow host access", () => {
         containerId,
         "bun",
         "-e",
-        'Bun.serve({ hostname: "0.0.0.0", port: 4096, fetch: () => new Response("ingress-ok") })',
+        'Bun.serve({ hostname: "0.0.0.0", port: 4102, fetch: () => new Response("ingress-ok") })',
       ]);
-      const published = await docker(["port", firewall, "4096/tcp"]);
+      const published = await docker(["port", firewall, "4102/tcp"]);
       const hostPort = published.split("\n")[0]!.split(":").at(-1)!;
       let ingress = "";
       for (let attempt = 0; attempt < 20 && ingress !== "ingress-ok"; attempt += 1) {

@@ -1,7 +1,7 @@
 # Diagram source arrow entry intermittently remains collapsed
 
 - **ID:** 2392
-- **Status:** open
+- **Status:** resolved
 - **Test:** `arrow keys enter and leave a collapsed diagram fence without losing source`
 - **File:** `e2e/MarkdownEditorDiagram.spec.ts:39`
 
@@ -57,3 +57,29 @@ mise run test:logged -- --name isolate-diagram -- bunx playwright test --config 
 Owner failure evidence: host temporary artifact
 `orkestrator-test-run.35iCrD/isolate-diagram.log.gz`. Status remains open;
 no implementation, assertion, timeout or skip changed.
+
+## Resolution — 2026-11-10
+
+**Reproduced: yes.** Before the fix, the three-worker, three-repeat selection
+of the diagram editing/arrow and streaming-find cases failed the desktop
+editing assertion (the typed prefix was missing). After synchronizing editor
+focus, the arrow case still failed three times across desktop/mobile.
+A new focused unit test failed for both Mermaid and chart fences: ArrowLeft
+left the selection in the paragraph instead of entering the source.
+
+**Root cause and fix.** Tiptap schedules DOM focus in an animation frame; the
+node view opens before that frame. The typing test now waits for editor focus.
+The arrow test now sets the editor's selection rather than racing a raw DOM
+selectionchange. That exposed the product gap: the collapsed source has no
+useful native caret geometry. `MarkdownCodeBlock` now crosses only adjacent
+diagram boundaries through document selections, retaining ordinary editing
+and the parent shortcuts. Unit coverage checks both entry/exit directions,
+Mermaid/chart sources, ranges, and ordinary within-source movement.
+
+**Verification.** The focused unit owner passes. Both complete browser owners
+(`MarkdownEditorDiagram.spec.ts` and `StreamingTranscript.spec.ts`) passed
+three repeats at three workers after the fixes, without changing timeouts,
+skips or assertions. Commands ran through `test:logged`: `diagram-arrow-repro`
+(failed before), `diagram-arrow-fixed` (passed), and
+`diagram-and-streaming-fixed` (passed in 92.4 s). Evidence is under
+`output/agent-testing/notes-repair-{before,after,owners-fixed}/`.

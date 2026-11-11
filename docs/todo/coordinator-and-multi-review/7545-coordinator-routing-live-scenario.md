@@ -15,9 +15,9 @@ against `main` at `04639b12b`.
 ### Tasks
 
 1. **Add a `routing` scenario to the live coordinator suite**: four plain requests, each checked for the workflow the coordinator chose. Status: done.
-2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: done (all five main platforms exercised and recorded below; Cursor qualified, other provider findings remain open).
-3. **Decide what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. Status: open (the user's decision).
-4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: done (the cancel notice and refusals now say it is the user's decision, the routing scenario checks the wake, and a loopback fake-model run passed; the backend test failures the full suite tied to it were repaired); whether Codex now obeys needs a billed run (Needs verification).
+2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: done (all five main platforms exercised and recorded below; Cursor qualified; the remaining provider reruns moved to 7568).
+3. **Apply the decision on what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. The decision is the user's and moved to 7568; once taken, either add the recommended sentence to `COORDINATOR_ENVIRONMENT_CHOICE_RULE` or relax the `review` case's assertion. Status: blocked (waits on 7568: 7545 task 3).
+4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: done (the cancel notice and refusals now say it is the user's decision, the routing scenario checks the wake, and a loopback fake-model run passed; the backend test failures the full suite tied to it were repaired); the billed Codex rerun that shows whether a real model obeys moved to 7568.
 
 ### 1. Add a `routing` scenario to the live coordinator suite
 
@@ -74,7 +74,7 @@ model's wording.
     - Cons: three extra full Builds or reviews per platform; many minutes and billed turns for little extra evidence.
 - **One scenario or four?**
   - **One `routing` scenario with four ordered cases (recommended).**
-    - Pros: one profile boot; matches how 1021 and 0395 plan their scenarios.
+    - Pros: one profile boot; matches how 1021 (retired) and 0395 plan their scenarios.
     - Cons: an early failure hides later cases unless each case records its own result first.
   - **Four scenarios.**
     - Pros: independent failures.
@@ -99,7 +99,7 @@ each summary's checks and tool-call names (`output/agent-testing/<profile>/coord
 | `build` | Passed: `create_ticket`, then `start_build_pipeline` on that ticket, no overrides | Passed, same calls |
 | `investigate` | Passed: one `launch_environment` | Passed: one `launch_environment` |
 | `review` | **Failed**: `list_environments`, `get_worker_changes`, then an answer; no Multi Review | **Failed**: `list_environments`, `get_worker_changes`, `launch_job`; no Multi Review |
-| `delivery` | Passed: build `complete` under `commit-only`, no PR session, no `create_pr` | Routing passed; **build failed** in its review stage ("The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account"), which is [7546](7546-build-review-row-pins-unoffered-codex-model.md), not routing |
+| `delivery` | Passed: build `complete` under `commit-only`, no PR session, no `create_pr` | Routing passed; **build failed** in its review stage ("The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account"), which is to-do 7546 (retired 2026-11-10), not routing |
 
 No interaction reached the harness on either platform, and every mail-tile
 check passed. The first Codex attempt (23:18 UTC) produced no verdict:
@@ -131,6 +131,11 @@ review model.
     - Cons: platform-specific prompt text is what the qualification rules avoid.
 
 ### 3. Decide what "review this branch" should start
+
+**Split 2026-11-10.** The decision below is the user's and is on the
+manual-test checklist (7568, 7545 task 3). What stays here is applying it:
+the rule sentence, or a `review` case that accepts the coordinator's own
+review.
 
 **Problem.** Asked to "review the work on the branch … and tell me what needs
 attention", both Claude and Codex read the change themselves
@@ -467,21 +472,9 @@ found"; `mise run test` strips that variable, so those are not real failures.
 
 ## Needs verification
 
-- Pi supplied a live pass for `review-auto-actions-off` on 2026-11-09.
-  Claude and Codex still did not route the review to Multi Review.
-- Pi's delivery review returned no required structured result; full delivery
-  qualification remains open on Pi.
-- Codex's `delivery` outcome, after [7546](7546-build-review-row-pins-unoffered-codex-model.md).
-- Cursor fully qualified on 2026-11-09; OpenCode still needs evidence of
-  actual workflow routing rather than read-only answers.
-- Task 4 on a real model: rerun
-  `mise run test:agent:coordinator --credential-source codex --scenario routing`
-  (billed, needs the Codex login) and read `build-cancel-respected`. Codex is
-  the platform that restarted; the fake-model run proves only that the notice
-  reaches the model with the new wording. Not run here: this node's build
-  forbids billed turns and logins. Until then, whether a real model obeys is
-  unproven, and refusing the restart (the other option in task 4) stays
-  available.
+- None here. The billed reruns (Codex `routing` for task 4's cancel and the
+  `delivery` case, Pi's delivery review, OpenCode's routing) are in 7568
+  (7545 tasks 2 and 4).
 
 ## Related
 
@@ -489,9 +482,11 @@ found"; `mise run test` strips that variable, so those are not real failures.
   the opposite risk (a worker launched for a read).
 - [4920-coordinator-tool-surface-live-follow-ups.md](4920-coordinator-tool-surface-live-follow-ups.md)
   task 3, launches that leave defaults alone.
-- [7544-criterion-evidence-commit-and-completion-handoff.md](7544-criterion-evidence-commit-and-completion-handoff.md)
+- To-do 7544 (retired 2026-11-10), the completion handoff; see
+  [coordinator.md](../../architecture/coordinator.md#status-wakes).
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md),
   the live suite.
-- [7546-build-review-row-pins-unoffered-codex-model.md](7546-build-review-row-pins-unoffered-codex-model.md),
-  found by this scenario's Codex run.
+- To-do 7546 (retired 2026-11-10), found by this scenario's Codex run; the
+  fix is in [build-pipeline-view.md](../../architecture/build-pipeline-view.md#starting-a-build).
 - [Routing](../../architecture/coordinator.md#routing)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the decision in task 3, the billed reruns of tasks 2 and 4) moved there on 2026-11-10.

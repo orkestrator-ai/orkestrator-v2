@@ -102,32 +102,6 @@ describe("global route outcomes", () => {
     const response = await app.request("/global/slash-commands");
     expect(response.status).toBe(404);
   });
-
-  test("reports a soft-empty plan read as a null account, not an unmetered plan", async () => {
-    await withRuntimeMethod(
-      "readPlanUsage",
-      async () => undefined,
-      async () => {
-        const response = await app.request("/global/usage");
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({ account: null });
-      },
-    );
-  });
-
-  test("returns authoritative plan windows as an account array", async () => {
-    await withRuntimeMethod(
-      "readPlanUsage",
-      async () => [{ window: "primary", label: "Weekly limit", usedPercent: 10 }],
-      async () => {
-        const response = await app.request("/global/usage");
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({
-          account: [{ window: "primary", label: "Weekly limit", usedPercent: 10 }],
-        });
-      },
-    );
-  });
 });
 
 describe("sign-in routes carry no credential", () => {
@@ -324,7 +298,7 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
-  test("the MCP inventory lists each server's tools in a stable order (todo 7530)", async () => {
+  test("the MCP inventory lists each server's tools in a stable order (#2062)", async () => {
     // app-server reports `tools` as a map whose key order varies per read.
     const reads = [
       { zeta: {}, alpha: {}, mid: {} },
@@ -435,27 +409,22 @@ describe("bridge authentication and origin policy", () => {
     }
   });
 
-  test("allows only local, file, and explicitly configured origins", () => {
+  test("allows only loopback origins, or none", () => {
     expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example")).toBe(false);
     expect(__testing.isTrustedBridgeOriginForTesting("http://127.0.0.1:5173")).toBe(true);
-    expect(__testing.isTrustedBridgeOriginForTesting("file://")).toBe(true);
-    expect(__testing.isTrustedBridgeOriginForTesting("null")).toBe(true);
+    expect(__testing.isTrustedBridgeOriginForTesting("file://")).toBe(false);
+    expect(__testing.isTrustedBridgeOriginForTesting("null")).toBe(false);
+    expect(__testing.isTrustedBridgeOriginForTesting(undefined)).toBe(true);
   });
 
-  test("reads the configured allowlist, tolerating blanks and trailing slashes", () => {
-    const previous = process.env.CODEX_BRIDGE_ALLOWED_ORIGINS;
-    process.env.CODEX_BRIDGE_ALLOWED_ORIGINS =
-      " https://app.example.test/ , , https://other.example.test ";
+  test("never accepts the token on the query string", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
     try {
-      // A trailing slash on either side is the same origin, and an empty entry
-      // from a stray comma must not become an allowlisted empty string.
-      expect(__testing.isTrustedBridgeOriginForTesting("https://app.example.test")).toBe(true);
-      expect(__testing.isTrustedBridgeOriginForTesting("https://app.example.test/")).toBe(true);
-      expect(__testing.isTrustedBridgeOriginForTesting("https://other.example.test")).toBe(true);
-      expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example")).toBe(false);
+      expect(
+        (await app.request(`/event/subscribe?token=${encodeURIComponent(AUTH_TOKEN)}`)).status,
+      ).toBe(401);
     } finally {
-      if (previous === undefined) delete process.env.CODEX_BRIDGE_ALLOWED_ORIGINS;
-      else process.env.CODEX_BRIDGE_ALLOWED_ORIGINS = previous;
+      __testing.setBridgeAuthForTesting();
     }
   });
 
@@ -469,24 +438,15 @@ describe("bridge authentication and origin policy", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
-  test("answers a preflight from a trusted origin with the headers the client needs", async () => {
+  test("answers no CORS preflight and echoes no origin", async () => {
     const response = await app.request(
       requestWithOrigin("/session/session-1/prompt", "http://127.0.0.1:5173", {
         method: "OPTIONS",
       }),
     );
-
-    expect(response.status).toBe(204);
-    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("http://127.0.0.1:5173");
-    expect(response.headers.get("Vary")).toBe("Origin");
-    expect(response.headers.get("Access-Control-Allow-Methods")).toBe("GET, POST, DELETE, OPTIONS");
-    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
-      "Content-Type, Authorization, X-Orkestrator-Codex-Token",
-    );
-    // Chrome's private-network access check, which the renderer needs to reach a
-    // loopback bridge from a page it did not itself serve.
-    expect(response.headers.get("Access-Control-Allow-Private-Network")).toBe("true");
-    expect(await response.text()).toBe("");
+    expect(response.status).not.toBe(204);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBeNull();
   });
 
   /**
@@ -1526,7 +1486,7 @@ describe("session detail route outcomes", () => {
     );
   });
 
-  test("maps abort and delete success and missing-session outcomes", async () => {
+  test("maps abort success and missing-session outcomes", async () => {
     let abortOutcome: unknown = null;
     await withRuntimeMethod(
       "abort",
@@ -1539,21 +1499,6 @@ describe("session detail route outcomes", () => {
         const accepted = await jsonRequest("/session/session-1/abort", "POST");
         expect(accepted.status).toBe(202);
         expect(await accepted.json()).toEqual(abortOutcome);
-      },
-    );
-
-    let deleted = false;
-    await withRuntimeMethod(
-      "deleteSession",
-      async () => deleted,
-      async () => {
-        const missing = await jsonRequest("/session/session-1", "DELETE");
-        expect(missing.status).toBe(404);
-
-        deleted = true;
-        const success = await jsonRequest("/session/session-1", "DELETE");
-        expect(success.status).toBe(200);
-        expect(await success.json()).toEqual({ status: "deleted" });
       },
     );
   });

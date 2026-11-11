@@ -179,7 +179,7 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   until Pi settles the prompt — a late acceptance is aborted and observed — so
   every status route reports running while something can still reach Pi.
   Config and compaction take no claim, so a cancel during them cannot stop a
-  later prompt. Close and DELETE mark the session closed before their first
+  later prompt. Close marks the session closed before its first
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
@@ -192,7 +192,10 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   because Pi creates its abort controller only after `compact()`'s own
   `abort()`; they answer `cancelled: true` once the compact route settles, and
   that route answers 409 `cancelled: true`. Only an abort the route was asked
-  for counts as stopped; any other rejection is still a failure.
+  for counts as stopped; any other rejection is still a failure. Pi's two
+  fixed refusals when there is nothing to compact ("Nothing to compact
+  (session too small)", "Already compacted") answer 409 with that reason, so
+  a `/compact` on a short session tells the user why instead of a 500.
 - Auto-compaction is a per-session toggle published as the `autoCompaction`
   model parameter on every model, defaulting to Pi's own `compaction.enabled`.
   Never call `setAutoCompactionEnabled`: it writes the account-wide

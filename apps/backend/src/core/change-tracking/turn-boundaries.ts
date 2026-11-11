@@ -578,7 +578,7 @@ export class TurnBoundaryService {
 
   /**
    * Measure a turn whose end capture ran out of `finalizationDeadlineMs`
-   * (todo 7310). The turn already ended as `end-unavailable`; nothing waits on
+   * (#2047). The turn already ended as `end-unavailable`; nothing waits on
    * this capture, so it gets the longer `endRecoveryDeadlineMs`. A publish
    * appends a superseding final measurement whose after boundary is
    * `later-recovery`, as {@link settleInterrupted} does, which gives the turn

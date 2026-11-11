@@ -420,6 +420,8 @@ const requestDialogAttention = createDialogAttention({
 });
 const nativeDialogs = createNativeDialogs<BrowserWindow>({
   hiddenWindows,
+  // A headless `dev:test` profile on Linux (HEADLESS_ELECTRON_SWITCHES).
+  noDisplay: app.commandLine.getSwitchValue("ozone-platform") === "headless",
   dialog,
   platform: process.platform,
   currentWindow: currentDialogWindow,
@@ -433,6 +435,10 @@ nativeDialogs.install();
 installUncaughtExceptionDialog(process, nativeDialogs);
 startEventLoopStallMonitor({
   report: (stall) => reportMainThreadStall(stall, (lagMs) => nativeDialogs.describeStall(lagMs)),
+  cpuUsage: () => {
+    const usage = process.cpuUsage();
+    return usage.user + usage.system;
+  },
 });
 const showNonBlockingError = (title: string, detail: string): void => {
   void showRestartPrompt({

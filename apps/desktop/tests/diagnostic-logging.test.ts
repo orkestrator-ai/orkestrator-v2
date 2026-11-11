@@ -38,6 +38,7 @@ describe("desktop diagnostic logging", () => {
         intervalMs: 500,
         folded: "; 2 shorter stall(s) since the last report, longest 1100 ms",
         level: "warn",
+        cpuMs: 1150,
       },
       describeStall,
     );
@@ -51,6 +52,7 @@ describe("desktop diagnostic logging", () => {
           lagMs: 1200,
           endedAt: "2026-11-01T12:00:00.000Z",
           intervalMs: 500,
+          cpuMs: 1150,
           openDialog: "dialog=confirm openMs=1200",
           folded: "2 shorter stall(s) since the last report, longest 1100 ms",
         },

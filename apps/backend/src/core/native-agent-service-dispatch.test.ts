@@ -24,15 +24,11 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderSendOptions,
   type ProviderStatus,
+  createNativeAgentProvider,
 } from "./native-agent-provider.js";
 
-import {
-  expectedOpenCodeMessageId,
-  openCodeFake,
-  openCodeProvider,
-} from "./agent-provider-test-support.js";
-
-import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
+import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "./opencode2/provider.js";
 
 import {
   NativeAgentService,
@@ -872,42 +868,52 @@ describe("NativeAgentService", () => {
     );
 
     /**
-     * Drives the real `OpenCodeProvider` rather than a stub, because the
-     * question this settles is whether an answer computed from OpenCode's own
-     * transcript moves the durable record — not whether the service reacts to a
-     * hand-written `"dispatched"`.
+     * Drives the real OpenCode provider over a fake OpenCode 2 server rather
+     * than a stub, because the question this settles is whether an answer
+     * computed from OpenCode's own history moves the durable record — not
+     * whether the service reacts to a hand-written `"dispatched"`.
      */
     async function withOpenCodeService(
       prefix: string,
-      transcript: () => unknown[],
+      reached: boolean,
       run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
     ): Promise<void> {
-      const fake = openCodeFake();
-      // The prompt reached OpenCode; only the acknowledgement was lost. That is
-      // exactly the shape that parks a recoverable dispatch.
-      fake.setPromptError(new Error("socket hang up"));
-      fake.setMessagesHandler(async () => ({
-        data: fake.promptCalls.length > 0 ? transcript() : [],
-      }));
-      const provider = openCodeProvider(fake);
+      const server = new FakeOpenCode2Server();
+      // The prompt reached OpenCode and only the acknowledgement was lost, or
+      // it never reached OpenCode at all. Either parks a recoverable dispatch.
+      if (reached) server.loseNextPromptAck = true;
+      else server.failNextPrompt = "network";
+      const provider = createNativeAgentProvider(
+        {
+          agent: "opencode",
+          baseUrl: server.baseUrl,
+          authToken: "pw",
+          directory: "/work",
+        },
+        {
+          openCode: {
+            connection: async () => ({
+              baseUrl: server.baseUrl,
+              password: "pw",
+              directory: "/work",
+              generation: "g1",
+            }),
+            createProvider: () => new OpenCode2Provider(server.client(), { monitorEvents: false }),
+          },
+        },
+      );
       try {
         await withService({ prefix, provider: async () => provider }, run);
       } finally {
         await provider.dispose?.();
+        server.stop();
       }
     }
 
-    function userTurn(requestId: string): Record<string, unknown> {
-      return {
-        info: { id: expectedOpenCodeMessageId(requestId), role: "user" },
-        parts: [],
-      };
-    }
-
-    test("settles a parked dispatch from the transcript OpenCode kept", async () => {
+    test("settles a parked dispatch from the history OpenCode kept", async () => {
       await withOpenCodeService(
         "orkestrator-native-opencode-settled-",
-        () => [userTurn("lost-ack")],
+        true,
         async ({ service, storage }) => {
           await expect(service.dispatchIntent({ ...base, requestId: "lost-ack" })).resolves.toEqual(
             { outcome: "accepted", requestId: "lost-ack" },
@@ -924,10 +930,10 @@ describe("NativeAgentService", () => {
       );
     });
 
-    test("parks a dispatch the transcript cannot vouch for", async () => {
+    test("parks a dispatch the history cannot vouch for", async () => {
       await withOpenCodeService(
         "orkestrator-native-opencode-parked-",
-        () => [],
+        false,
         async ({ service, storage }) => {
           await expect(
             service.dispatchIntent({ ...base, requestId: "no-proof" }),
@@ -935,26 +941,6 @@ describe("NativeAgentService", () => {
           expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toMatchObject({
             requestId: "no-proof",
           });
-        },
-      );
-    });
-
-    test("does not settle a manual prompt from an incomplete-turn continuation", async () => {
-      // Recovery continues a stalled turn under an id derived from the assistant
-      // message, on the same session the composer dispatches into. Settling one
-      // from the other's marker would clear a prompt that never ran, and the
-      // burned id means the user would never be told.
-      const continuation = openCodeIncompleteTurnRequestId("msg_stalled_assistant");
-      await withOpenCodeService(
-        "orkestrator-native-opencode-crosstalk-",
-        () => [userTurn(continuation)],
-        async ({ service, storage }) => {
-          await expect(
-            service.dispatchIntent({ ...base, requestId: "manual-1" }),
-          ).resolves.toMatchObject({ outcome: "unknown", requestId: "manual-1" });
-          const session = await storage.getNativeAgentSession(key);
-          expect(session?.pendingDispatch).toMatchObject({ requestId: "manual-1" });
-          expect(session?.dispatchedRequestIds ?? []).not.toContain("manual-1");
         },
       );
     });

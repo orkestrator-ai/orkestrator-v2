@@ -8,27 +8,8 @@ Analysed 2026-10-31 against `main` at `12b222fe`.
 
 ### Tasks
 
-1. **Confirm a Cursor reviewer starts on a release that includes #1491**: run a Build Pipeline with a Cursor reviewer on a standalone backend. Status: open (depends on a release with #1491).
-2. **Measure the first-use bridge install inside a reviewer start**: how long the on-demand install takes when a reviewer is the first Cursor use on a host. Status: open (depends on 1).
+2. **Measure the first-use bridge install inside a reviewer start**: how long the on-demand install takes when a reviewer is the first Cursor use on a host. Status: blocked (waits on 7568: 1090 task 1).
 3. **Decide what happens when a reviewer's agent cannot start**: today it fails silently in every round. Status: done (2026-11-01). The reviewer is marked as unable to start and named, with its reason, above the review and pipeline graphs; the rest of the panel carries on. See "Assumptions and decisions".
-
-### 1. Confirm a Cursor reviewer starts on a release that includes #1491
-
-**Problem.** A pipeline whose panel includes Cursor loses that reviewer in every round on a standalone backend, so the panel is one reviewer short each time and nobody is told why except on the failed node.
-
-**Context.** The failure is thrown by `apps/backend/src/core/commands-servers.ts:1160` when the bridge directory is missing. The reviewer never gets a session, so the pipeline keeps only a `sessionlessReviewers` entry on the consolidation session (`apps/backend/src/core/build-pipeline-review-fanout.ts:905`), which is what the flow graph shows on the Reviewer 3 node. The pipeline record is `3ad6fddb-143b-419f-b867-803430b61fb3` in that host's `orkestrator.sqlite` (`build-pipelines` store).
-
-**Investigation.** The 2.34.4-beta release on that host has `resources/claude-bridge` and `resources/codex-bridge` only. On `main`, #1491 (`d9b260fb9`) makes `packages/cli/scripts/build.ts` ship the Cursor and Pi bridge bundles with a pinned runtime under `resources/<bridge>/runtime/`, and `prepareBridgePath` (`commands-servers.ts:380`) installs the runtime into `<data-dir>/bridge-runtimes/` on first start (`apps/backend/src/core/bridge-runtime-install.ts`). The Cursor start path calls `prepareBridgePath(context, "cursor-bridge")` (`commands-servers.ts:1103`). Not yet run on a published release.
-
-**Decisions.**
-
-- **How to confirm it?**
-  - **One Build Pipeline with a Cursor reviewer on a standalone backend after the next release (recommended).**
-    - Pros: exercises the exact path that failed, including the reviewer fan-out.
-    - Cons: needs a release and a signed-in Cursor account on that host.
-  - **Rely on `smoke-packed.ts`, which starts the packed Cursor bridge.**
-    - Pros: already runs; no account needed.
-    - Cons: does not go through the reviewer fan-out or the installed release layout.
 
 ### 2. Measure the first-use bridge install inside a reviewer start
 
@@ -96,3 +77,4 @@ Made 2026-11-01 against `main` at `93b99bfb`. Tasks 1 and 2 stay open: they need
 
 - [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md) task 6: which bridges the published package carries.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md): live runs batched across providers.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1) moved there on 2026-11-10.

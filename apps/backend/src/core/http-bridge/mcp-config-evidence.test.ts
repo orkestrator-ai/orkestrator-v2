@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
-import { httpProvider } from "../agent-provider-test-support.js";
+import { httpProvider, waitUntil } from "../agent-provider-test-support.js";
 import {
   bridgeMcpConfigEvidence,
   bridgeReportsMcpConfig,
@@ -155,6 +155,23 @@ describe("renderer-facing health never carries the digests", () => {
     const { provider } = httpProvider(() => new Response("not found", { status: 404 }));
     expect(await provider.mcpConfigEvidence!("s-1")).toEqual({ state: "unsupported" });
   });
+
+  test("the scheduler's signal ends the evidence request", async () => {
+    const { provider, requests } = httpProvider(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const read = provider.mcpConfigEvidence!("s-1", { signal: controller.signal });
+    await waitUntil(() => requests.length === 1);
+    controller.abort(new Error("deadline"));
+    await expect(read).rejects.toThrow();
+    expect(requests[0]?.init.signal?.aborted).toBe(true);
+  });
 });
 
 describe("telling an older bridge from one with nothing loaded", () => {
@@ -171,15 +188,12 @@ describe("telling an older bridge from one with nothing loaded", () => {
     });
   });
 
-  test("a bridge that reports mcpConfig without the marker still reports", async () => {
-    // Grok's process-level report before any child listed its servers.
+  test("a readable body without the marker is a bridge that does not report", async () => {
+    expect(await read({ summary: {}, notices: [] })).toEqual({ state: "unsupported" });
+    // An `mcpConfig` alone no longer counts: every published bridge marks its body.
     expect(
       await read({ summary: {}, notices: [], mcpConfig: { inventoryScope: "process" } }),
-    ).toEqual({ state: "none" });
-  });
-
-  test("a readable body with neither is a bridge older than the report", async () => {
-    expect(await read({ summary: {}, notices: [] })).toEqual({ state: "unsupported" });
+    ).toEqual({ state: "unsupported" });
   });
 
   test("a failure that is not 404 or 405 says nothing about the version", async () => {

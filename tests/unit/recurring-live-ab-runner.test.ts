@@ -162,6 +162,32 @@ describe("live benchmark lifecycle", () => {
     expect(asyncCli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
   });
 
+  test("a checkout's busy phase drives that checkout's CLI, which an older backend accepts", async () => {
+    const h = harness();
+    const readStatus = h.runtime.readStatus;
+    h.runtime.readStatus = ((...args: Parameters<typeof readStatus>) => {
+      const current = readStatus(...args);
+      return current?.status === "ready" ? { ...current, dataDir: "/stub/data" } : current;
+    }) as typeof readStatus;
+    const asyncCli = mock(() => async () => ({ status: 0, stdout: "{}" })) as never;
+    h.runtime.asyncCliRunner = asyncCli;
+    h.runtime.busyClients = (() => ({ open: async () => [], close: async () => {} })) as never;
+    h.runtime.measureBusy = mock(async () => ({ windowSamples: [] })) as never;
+    const checkout = "/work/base";
+    const result = await runArm(
+      { ...options(), checkout, busyRounds: 1, busyClients: [0] },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "busy-checkout",
+      h.runtime,
+    );
+    expect(result.error).toBeUndefined();
+    expect(h.runtime.measureBusy).toHaveBeenCalledTimes(1);
+    expect(asyncCli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
+  });
+
   test("launcher, mise and both CLI processes use checkout cwd and process-scoped mise trust", async () => {
     const checkout = temporary();
     const child = Object.assign(new EventEmitter(), {
@@ -546,6 +572,74 @@ describe("live benchmark lifecycle", () => {
     expect(existsSync(configDirs[0]!)).toBe(false);
   });
 
+  test("a soak reader is created only when asked for, handed to the soak and closed when it throws", async () => {
+    const soakResult = {
+      cyclesCompleted: 1,
+      failures: [],
+      baseline: {},
+      final: {},
+      leaks: [],
+      backendRssKiB: { baseline: null, final: null },
+    };
+    const created: Array<{ profile: string; logDir: string }> = [];
+    let closes = 0;
+    const reader = {
+      read: async () => 0,
+      close: async () => {
+        closes += 1;
+      },
+    };
+    const soakReader = mock((profile: string, _status: Status, logDir?: string) => {
+      created.push({ profile, logDir: logDir ?? "" });
+      return reader;
+    });
+
+    // Without --soak-readers the soak runs with no reader at all.
+    const plain = harness({ soakReader: soakReader as never });
+    plain.runtime.asyncCliRunner = (() => async () => ({ status: 0, stdout: "{}" })) as never;
+    const plainSoak = mock(async (..._args: unknown[]) => soakResult);
+    plain.runtime.measureSoak = plainSoak as never;
+    const without = await runArm(
+      { ...options(), soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "no-reader",
+      plain.runtime,
+    );
+    expect(without.error).toBeUndefined();
+    expect(soakReader).not.toHaveBeenCalled();
+    expect(plainSoak.mock.calls[0]![2]).not.toHaveProperty("reader");
+
+    // With one reader, the soak gets it, and it is closed even though the soak throws.
+    const h = harness({ soakReader: soakReader as never });
+    h.runtime.asyncCliRunner = (() => async () => ({ status: 0, stdout: "{}" })) as never;
+    const failingSoak = mock(async (..._args: unknown[]) => {
+      expect(closes).toBe(0);
+      throw new Error("soak failed");
+    });
+    h.runtime.measureSoak = failingSoak as never;
+    const result = await runArm(
+      { ...options(), soakCycles: 1, soakSessions: 1, soakReaders: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "reader",
+      h.runtime,
+    );
+    expect(result.error).toBe("soak failed");
+    expect(created).toEqual([{ profile: result.profile, logDir: "/stub" }]);
+    expect(failingSoak.mock.calls[0]![2]).toMatchObject({ reader });
+    expect(closes).toBe(1);
+    // The profile is still stopped and reset after the failed soak.
+    expect(h.commands).toEqual([
+      ["dev:stop", "--profile", result.profile],
+      ["dev:reset", "--profile", result.profile],
+    ]);
+  });
+
   test("counts guard lines across logs and distinguishes unreadable logs", () => {
     const dir = temporary();
     mkdirSync(path.join(dir, "nested"));
@@ -671,6 +765,9 @@ import { EventEmitter } from "node:events";
         invoke: async () => null,
       }),
       processSamples: () => ({}),
+      // Cleanup polls for the launcher's exit without a signal, once a second;
+      // poll every 10 ms here. Sampling sleeps carry the run's signal and stay real.
+      sleep: (ms, signal) => __testing.armRuntime.sleep(signal ? ms : Math.min(ms, 10), signal),
       mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
     };
     process.exitCode = await withTerminationSignals(async (signal) => {
@@ -753,6 +850,11 @@ import { EventEmitter } from "node:events";
           invoke: async () => null,
         }),
         processSamples: () => ({}),
+        // As above, cleanup polls every 10 ms. The stuck CLI's SIGKILL
+        // escalation still runs, after 300 ms rather than a second: long
+        // enough for its SIGTERM handler to record that it ran.
+        sleep: (ms, signal) => __testing.armRuntime.sleep(signal ? ms : Math.min(ms, 10), signal),
+        asyncCliRunner: (profile, configDir, checkout) => __testing.armRuntime.asyncCliRunner(profile, configDir, checkout, 300),
         measureSoak: (gateway, cli, options, rss, signal) => measureSoak(gateway, cli, options, rss, signal, { ...__testing.soakRuntime, sleep: async () => {} }),
         mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
       };

@@ -156,6 +156,10 @@ function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSes
 }
 
 export const nativeSessionsClient = domainClient(nativeSessionsDomain, {
+  2: (call) => currentApi(call),
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: (call) => currentApi(call),
   0: legacyApi,
 });

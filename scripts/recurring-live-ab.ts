@@ -42,7 +42,11 @@ import {
   type BusyOptions,
   type BusyResult,
 } from "./recurring-live-ab-busy";
-import { playwrightBusyClients } from "./recurring-live-ab-busy-clients";
+import {
+  playwrightBusyClients,
+  playwrightSoakReader,
+  type SoakReader,
+} from "./recurring-live-ab-busy-clients";
 import {
   FAKE_PI_MODEL_REF,
   startFakeModelServer,
@@ -81,6 +85,12 @@ import {
  * environment gets a session of its own before it is deleted. No credential
  * or provider is involved.
  *
+ * With `--soak-readers 1` (which needs `--soak-sessions`) one headless
+ * Playwright reader opens each cycle's session tab, and then every long-lived
+ * session's tab, and waits for the fake reply to render before moving on, so
+ * the projection's progressive-read caches fill as a browser fills them and
+ * their gauges show in the trend (todo 7100 task 4).
+ *
  * With `--busy-rounds N` it runs the busy phase (`recurring-live-ab-busy.ts`)
  * before any soak: `--busy-environments` local environments, real Pi
  * sessions on the fake model, and for each `--busy-clients` count (0 to 2
@@ -91,9 +101,9 @@ import {
  *
  * Arms: `candidate` (defaults), `rollback`
  * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
- * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues and backend
- * activity stay keyed in both arms, their rollback drivers having been
- * removed by todo 0048 task 13) and `metrics-off`
+ * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend
+ * activity and Multi Review stay keyed in both arms, their rollback drivers
+ * having been removed by todo 0048 task 13) and `metrics-off`
  * (`ORKESTRATOR_RECURRING_METRICS=0`, CPU/RSS only).
  *
  * The gateway token is read from the profile's mode-0600 auth file and only
@@ -138,6 +148,8 @@ export type Options = BusyOptions & {
   soakCycleGapMs: number;
   /** Fake-model Pi sessions kept open on the fixture's local environment. */
   soakSessions: number;
+  /** Headless browser readers that open each soak session's tab (0 or 1). */
+  soakReaders: number;
   /**
    * `dev:test --agent-platforms`: the managed toolchains a profile prepares.
    * Unset keeps the profile default (every platform, some downloaded at start).
@@ -176,6 +188,7 @@ export function parseOptions(argv: string[]): Options {
     soakEnvironments: ["local"],
     soakCycleGapMs: 0,
     soakSessions: 0,
+    soakReaders: 0,
     window: "hidden",
     ...BUSY_DEFAULTS,
   };
@@ -212,6 +225,7 @@ export function parseOptions(argv: string[]): Options {
       options.soakCycleGapMs = positive(value(index++, name), name);
     else if (name === "--soak-sessions")
       options.soakSessions = positive(value(index++, name), name);
+    else if (name === "--soak-readers") options.soakReaders = positive(value(index++, name), name);
     else if (name === "--busy-rounds") options.busyRounds = positive(value(index++, name), name);
     else if (name === "--busy-environments")
       options.busyEnvironments = positive(value(index++, name), name);
@@ -219,6 +233,8 @@ export function parseOptions(argv: string[]): Options {
       options.busyClients = parseBusyClients(value(index++, name));
     else if (name === "--busy-burst-files")
       options.busyBurstFiles = positive(value(index++, name), name);
+    else if (name === "--busy-turn-files")
+      options.busyTurnFiles = positive(value(index++, name), name);
     else if (name === "--agent-platforms") {
       const platforms = value(index++, name);
       if (!/^[a-z]+(,[a-z]+)*$/.test(platforms))
@@ -248,6 +264,10 @@ export function parseOptions(argv: string[]): Options {
   if (!Number.isInteger(options.soakCycles)) throw new Error("--soak-cycles must be an integer");
   if (!Number.isInteger(options.soakSessions) || options.soakSessions > 8)
     throw new Error("--soak-sessions must be an integer from 0 to 8");
+  if (options.soakReaders !== 0 && options.soakReaders !== 1)
+    throw new Error("--soak-readers must be 0 or 1");
+  if (options.soakReaders > 0 && options.soakSessions === 0)
+    throw new Error("--soak-readers needs --soak-sessions: a reader opens session tabs");
   if (!Number.isInteger(options.busyRounds)) throw new Error("--busy-rounds must be an integer");
   if (
     !Number.isInteger(options.busyEnvironments) ||
@@ -257,6 +277,8 @@ export function parseOptions(argv: string[]): Options {
     throw new Error("--busy-environments must be an integer from 3 to 20");
   if (!Number.isInteger(options.busyBurstFiles) || options.busyBurstFiles < 1)
     throw new Error("--busy-burst-files must be a positive integer");
+  if (!Number.isInteger(options.busyTurnFiles))
+    throw new Error("--busy-turn-files must be an integer");
   if (options.busyRounds > 0 && !options.fixtureEnvironments.split(",").includes("local"))
     throw new Error(
       "--busy-rounds needs a local fixture environment (--fixture-environments local)",
@@ -421,8 +443,16 @@ function cliRunner(profile: string, configDir: string, checkout?: string) {
 type CliResult = { status: number | null; stdout: string };
 type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
 
-/** Wait for the CLI to exit before profile cleanup, escalating a stuck cancellation. */
-function asyncCliRunner(profile: string, configDir: string, checkout?: string): AsyncCli {
+/**
+ * Wait for the CLI to exit before profile cleanup, escalating a stuck
+ * cancellation to SIGKILL after `killGraceMs` (shortened only by tests).
+ */
+function asyncCliRunner(
+  profile: string,
+  configDir: string,
+  checkout?: string,
+  killGraceMs = 1_000,
+): AsyncCli {
   return (args, signal) => {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
@@ -441,7 +471,7 @@ function asyncCliRunner(profile: string, configDir: string, checkout?: string): 
       const stop = (error: Error) => {
         failure ??= error;
         child.kill("SIGTERM");
-        killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1_000);
+        killTimer ??= setTimeout(() => child.kill("SIGKILL"), killGraceMs);
       };
       const abort = () => stop(new Error("Soak CLI interrupted", { cause: signal?.reason }));
       const timeout = setTimeout(() => stop(new Error("Soak CLI timed out")), 10 * 60_000);
@@ -607,7 +637,7 @@ export async function measureFreshness(
   return results;
 }
 
-type SoakStep = "create" | "start" | "stop" | "restart" | "delete" | "session" | "prompt";
+type SoakStep = "create" | "start" | "stop" | "restart" | "delete" | "session" | "prompt" | "read";
 
 export type SoakResult = {
   cyclesRequested: number;
@@ -641,6 +671,13 @@ export type SoakResult = {
     /** Chat completions the fake model answered. */
     modelRequests: number;
   };
+  /** The browser reader, when `--soak-readers` asked for one. */
+  reader?: {
+    /** Environments whose Pi tabs the reader opened and saw the reply in. */
+    reads: number;
+    /** Tabs it opened in all. */
+    tabs: number;
+  };
 };
 
 /** Samples per footprint, and the gap between them. */
@@ -669,6 +706,22 @@ async function fixtureProjectId(cli: AsyncCli, signal?: AbortSignal): Promise<st
   return null;
 }
 
+/** An environment's display name, which the sidebar shows (a reader selects by it). */
+async function environmentName(
+  cli: AsyncCli,
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const listed = cliJson(await cli(["environment", "list", "--json"], signal)) as {
+    items?: unknown[];
+  } | null;
+  for (const raw of listed?.items ?? []) {
+    const entry = raw as Record<string, unknown>;
+    if (entry.id === environmentId && typeof entry.name === "string") return entry.name;
+  }
+  return null;
+}
+
 /** A ready local environment of the fixture, for long-lived soak sessions. */
 async function fixtureLocalEnvironmentId(
   cli: AsyncCli,
@@ -688,6 +741,7 @@ async function fixtureLocalEnvironmentId(
 const soakRuntime = {
   fixtureProjectId,
   fixtureLocalEnvironmentId,
+  environmentName,
   startFakeModel: (): FakeModelServer => startFakeModelServer(),
   writeFakePiModels,
   now: () => performance.now(),
@@ -718,6 +772,8 @@ export async function measureSoak(
     Partial<Pick<Options, "soakCycleGapMs" | "soakSessions">> & {
       /** The profile's data directory; needed only for `soakSessions`. */
       dataDir?: string;
+      /** A browser reader for the sessions' tabs (`--soak-readers`). */
+      reader?: SoakReader;
     },
   backendRssKiB: () => number | null,
   signal?: AbortSignal,
@@ -754,6 +810,21 @@ export async function measureSoak(
       prompts: 0,
       modelRequests: 0,
     },
+    ...(options.reader ? { reader: { reads: 0, tabs: 0 } } : {}),
+  };
+  const reader = options.reader;
+  if (reader && sessionCount === 0) throw new Error("A soak reader needs soak sessions to read");
+  /** One reader pass over an environment's Pi tabs; a failure is the cycle's `read` step. */
+  const readTabs = async (cycle: number, kind: "local" | "container", name: string | null) => {
+    if (!reader || !result.reader) return;
+    signal?.throwIfAborted();
+    try {
+      if (!name) throw new Error("no environment name");
+      result.reader.tabs += await reader.read(name);
+      result.reader.reads += 1;
+    } catch {
+      result.failures.push({ cycle, kind, step: "read" });
+    }
   };
   const projectId = await runtime.fixtureProjectId(cli, signal);
   if (!projectId) throw new Error("Soak found no fixture project");
@@ -787,6 +858,7 @@ export async function measureSoak(
     return started ? startedSessionId(started) : null;
   };
   const longLived: string[] = [];
+  let fixtureEnvironmentName: string | null = null;
   try {
     if (sessionCount > 0) {
       if (!options.dataDir) throw new Error("Soak sessions need the profile's data directory");
@@ -794,6 +866,8 @@ export async function measureSoak(
       runtime.writeFakePiModels(options.dataDir, fakeModel.baseUrl);
       const fixtureEnvironment = await runtime.fixtureLocalEnvironmentId(cli, signal);
       if (!fixtureEnvironment) throw new Error("Soak sessions need a ready local environment");
+      if (reader)
+        fixtureEnvironmentName = await runtime.environmentName(cli, fixtureEnvironment, signal);
       // The catalogue was read before the fake provider existed. `agent
       // options` takes no `--timeout`, so it is not a `step`.
       const refreshed = await cli(
@@ -850,9 +924,11 @@ export async function measureSoak(
           // The cycle's own session opens on the ready environment and is
           // still open when the environment is stopped and deleted.
           if (name === "start" && kind === "local" && sessionCount > 0) {
-            if (await openSession(id, `Soak cycle ${cycle}: reply briefly.`))
+            if (await openSession(id, `Soak cycle ${cycle}: reply briefly.`)) {
               result.sessions.cycleSessions += 1;
-            else result.failures.push({ cycle, kind, step: "session" });
+              // Read it once, then leave it: it is deleted with the cycle.
+              await readTabs(cycle, kind, `soak-${kind}-${cycle}`);
+            } else result.failures.push({ cycle, kind, step: "session" });
           }
         }
         // Always delete, so one failed step does not leave the soak's
@@ -866,6 +942,9 @@ export async function measureSoak(
           result.sessions.prompts += 1;
         else result.failures.push({ cycle, kind: "local", step: "prompt" });
       }
+      // The long-lived sessions are read every cycle and never invalidated by
+      // a deletion: the maps 7100 task 3 bounded are the ones they would fill.
+      if (longLived.length > 0) await readTabs(cycle, "local", fixtureEnvironmentName);
       result.cyclesCompleted = cycle;
       signal?.throwIfAborted();
       const metrics = await gateway.metrics();
@@ -879,6 +958,11 @@ export async function measureSoak(
       const gap = options.soakCycleGapMs ?? 0;
       if (gap > 0 && cycle < options.soakCycles) await runtime.sleep(gap, signal);
     }
+    // The reader's page holds an event stream of its own, which the baseline
+    // (taken before its first read) did not; close it before the final
+    // footprint so it is not reported as a leaked subscriber. Its owner closes
+    // it again, which is a no-op.
+    await reader?.close();
     await runtime.sleep(options.settleMs, signal);
     result.final = combineFootprints(await footprints(), "min");
     result.backendRssKiB.final = backendRssKiB();
@@ -988,6 +1072,7 @@ const armRuntime = {
   measureSoak,
   measureBusy,
   busyClients: playwrightBusyClients,
+  soakReader: playwrightSoakReader,
   countGuardLines,
   now: () => performance.now(),
   sleep,
@@ -1169,7 +1254,7 @@ export async function runArm(
       try {
         result.busy = await runtime.measureBusy(
           gateway,
-          runtime.asyncCliRunner(profile, cliConfig()),
+          runtime.asyncCliRunner(profile, cliConfig(), options.checkout),
           { ...options, dataDir: status.dataDir },
           signal,
           {
@@ -1186,13 +1271,23 @@ export async function runArm(
     if (options.soakCycles > 0) {
       checkedStatus();
       log(`${profile}: soak, ${options.soakCycles} cycles`);
-      result.soak = await runtime.measureSoak(
-        gateway,
-        runtime.asyncCliRunner(profile, cliConfig(), options.checkout),
-        { ...options, ...(status.dataDir ? { dataDir: status.dataDir } : {}) },
-        () => runtime.processSamples(checkedStatus().pids).backend?.rssKiB ?? null,
-        signal,
-      );
+      const reader =
+        options.soakReaders > 0 ? runtime.soakReader(profile, status, logDir) : undefined;
+      try {
+        result.soak = await runtime.measureSoak(
+          gateway,
+          runtime.asyncCliRunner(profile, cliConfig(), options.checkout),
+          {
+            ...options,
+            ...(status.dataDir ? { dataDir: status.dataDir } : {}),
+            ...(reader ? { reader } : {}),
+          },
+          () => runtime.processSamples(checkedStatus().pids).backend?.rssKiB ?? null,
+          signal,
+        );
+      } finally {
+        await reader?.close();
+      }
     }
     signal?.throwIfAborted();
     checkedStatus();
@@ -1334,7 +1429,11 @@ function printSummary(results: RunResult[]): void {
         soak.durationMs / 60_000,
       )} min; sessions ${soak.sessions.opened}/${soak.sessions.requested} long-lived, ${
         soak.sessions.cycleSessions
-      } per-cycle, ${soak.sessions.prompts} prompts, ${soak.sessions.modelRequests} model requests.`,
+      } per-cycle, ${soak.sessions.prompts} prompts, ${soak.sessions.modelRequests} model requests${
+        soak.reader
+          ? `; reader ${soak.reader.reads} environment reads, ${soak.reader.tabs} tabs`
+          : ""
+      }.`,
     );
     if (soak.rssTrend) {
       const rss = soak.rssTrend;

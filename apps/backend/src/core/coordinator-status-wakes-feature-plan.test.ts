@@ -558,3 +558,98 @@ describe("association kinds a reader does not know", () => {
     expect(state({ ...stored, resourceId: "deleted-plan" })).toBe("missing");
   });
 });
+
+/*
+ * Todo 0395 task 5: a feature plan the coordinator started is adopted like
+ * any other workflow. Through the same `adopt_coordinator_workflow` command
+ * the `adopt_workflow` tool calls, a conversation that did not start the plan
+ * takes it over from a closed one and is told its planning reply is ready.
+ */
+describe("adopting a feature plan", () => {
+  test("a reply that landed after its conversation closed reaches the adopter", async () => {
+    const current = await createWorld();
+    current.coordinator.startStatusWakes();
+    const original = await current.main();
+    const plan = await current.storage.kanban.createFeaturePlan(current.projectId, "plan-1");
+    await associate(current, plan.id, "op-1");
+    await startPlanning(current, plan.id, "op-1");
+    await observeSaves(current);
+
+    await current.closeMain();
+    const created = await current.coordinator.createConversation(current.projectId, "Adopter");
+    const adopterConversation = created.workspace.conversations.find((item) => !item.closedAt)!;
+    await current.coordinator.assignConversationAgent(
+      current.projectId,
+      adopterConversation.id,
+      "codex",
+    );
+    await current.storage.synchronizeAgentMailboxes();
+    const adopter = await current.main();
+    expect(adopter.conversationId).toBe(adopterConversation.id);
+
+    const commands = createCommandRegistry();
+    const context = {
+      storage: current.storage,
+      coordinators: current.coordinator,
+      runtime: { coordinatorRequests: new CoordinatorRequestFlights() },
+    } as CommandContext;
+    const adopted = (await commands.get("adopt_coordinator_workflow")!(
+      {
+        projectId: current.projectId,
+        coordinatorId: current.coordinatorId,
+        conversationId: adopter.conversationId,
+        associationId: "association-op-1",
+      },
+      context,
+    )) as CoordinatorWorkflowAssociation;
+    expect(adopted).toMatchObject({
+      kind: "feature-plan",
+      conversationId: adopter.conversationId,
+      adoptedByConversationId: adopter.conversationId,
+    });
+
+    await reply(current, plan.id, "op-1");
+    await observeSaves(current);
+    await settle(current);
+    expect(current.wakes(adopter)).toBe(1);
+    expect(current.carriers(adopter)[0]![0]).toMatchObject({
+      kind: "notice",
+      notice: { resource: { kind: "feature-plan", id: "plan-1" }, state: "ready" },
+    });
+    expect(current.wakes(original)).toBe(0);
+  });
+
+  test("adopting after the reply was reported re-sends it to the adopter", async () => {
+    const current = await createWorld();
+    current.coordinator.startStatusWakes();
+    const original = await current.main();
+    const plan = await current.storage.kanban.createFeaturePlan(current.projectId, "plan-1");
+    await associate(current, plan.id, "op-1");
+    await startPlanning(current, plan.id, "op-1");
+    await reply(current, plan.id, "op-1");
+    await observeSaves(current);
+    expect(current.wakes(original)).toBe(1);
+
+    await current.closeMain();
+    const created = await current.coordinator.createConversation(current.projectId, "Adopter");
+    const adopterConversation = created.workspace.conversations.find((item) => !item.closedAt)!;
+    await current.coordinator.assignConversationAgent(
+      current.projectId,
+      adopterConversation.id,
+      "codex",
+    );
+    await current.storage.synchronizeAgentMailboxes();
+    const adopter = await current.main();
+    await current.storage.coordinators.adoptCoordinatorWorkflowAssociation(
+      current.projectId,
+      current.coordinatorId,
+      "association-op-1",
+      adopter.conversationId!,
+    );
+    await settle(current);
+    expect(current.wakes(adopter)).toBe(1);
+    expect(current.carriers(adopter)[0]![0]).toMatchObject({
+      notice: { resource: { kind: "feature-plan", id: "plan-1" }, state: "ready" },
+    });
+  });
+});

@@ -70,6 +70,12 @@ export interface AgentPlatformPaneProps {
   modelCatalogScopeDescription?: string;
   /** Show the entry point into this platform's saved MCP servers. */
   showMcpServersLink?: boolean;
+  /**
+   * Whether this machine's experimental Tmux mode is on. While it is off the
+   * Claude "Native backend" choice is hidden (a stored Tmux at this tier stays
+   * visible so it can be cleared) and every launch uses the Agent SDK.
+   */
+  tmuxModeEnabled?: boolean;
   /** Tier-specific extras, e.g. API keys and provider lists at the app tier. */
   children?: React.ReactNode;
 }
@@ -127,6 +133,7 @@ export function AgentPlatformPane({
   refreshModelsDisabled = false,
   modelCatalogScopeDescription,
   showMcpServersLink = false,
+  tmuxModeEnabled = false,
   children,
 }: AgentPlatformPaneProps) {
   const favorites = useAgentModelFavorites();
@@ -242,11 +249,17 @@ export function AgentPlatformPane({
         </div>
       )}
 
-      {platform === "claude" && (
+      {platform === "claude" && (tmuxModeEnabled || stored?.claudeNativeBackend === "tmux") && (
         <div className="space-y-3">
           <SettingsSectionHeader title="Native backend">
             The implementation behind Native mode. Only applies when the resolved mode is Native.
           </SettingsSectionHeader>
+          {!tmuxModeEnabled && (
+            <p className="text-xs text-amber-400" role="note">
+              Tmux mode is an experimental feature that is turned off (Settings → Experimental), so
+              Claude launches on the Agent SDK until it is turned back on.
+            </p>
+          )}
           <OptionCards
             ariaLabel="Claude native backend"
             value={stored?.claudeNativeBackend ?? INHERIT}

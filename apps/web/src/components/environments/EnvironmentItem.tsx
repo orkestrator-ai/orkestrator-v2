@@ -150,7 +150,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
     localCheckoutAvailable,
   });
 
-  // The same rule as the action bar's green Merge PR button.
+  // The same rule as the Merge PR dialog's merge option.
   const mergePr = mergePrControl(environment, { dockerAvailable });
   const localAddress = getEnvironmentPortAddress(environment);
   const initialPrompt = environment.initialPrompt?.trim();
@@ -171,7 +171,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       onActivate={(modifiers) => onSelect(environment.id, modifiers)}
       actions={{
         // Opens the environment and then the action bar's own merge dialog,
-        // exactly as clicking its green Merge PR button would.
+        // exactly as clicking its Merge PR button would.
         ...(mergePr
           ? {
               mergePr: {

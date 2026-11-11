@@ -20,6 +20,10 @@ export async function criteriaEnvironmentHead(
 ): Promise<string | undefined> {
   const environmentId = typeof task.environmentId === "string" ? task.environmentId : "";
   if (!environmentId || !hasRecordedCommit(task)) return undefined;
+  // A soft budget, not a cancel: `get_environment_uncommitted_paths` runs one
+  // probe per environment shared by every caller (review, guards, this) and
+  // bounded by its own 30 s timeout, so this caller's shorter wait must not
+  // stop it for the others. Hence no signal and no `runWithTimeout` here.
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([

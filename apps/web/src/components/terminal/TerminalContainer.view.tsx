@@ -54,6 +54,7 @@ import { designApiFor } from "@/lib/design-client";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
+import { openAutoPipelineTab } from "@/components/review/auto-pipeline-open-tab";
 import { openKeyInformationTab } from "@/components/build-pipeline/key-information-open-tab";
 import {
   onGraphRunViewRequested,
@@ -66,7 +67,11 @@ import { backendForScope } from "@/lib/backend/scope-backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { agentSettingsTiers } from "@/lib/agent-settings";
-import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
+import {
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
+  resolveAgentPlatformSettings,
+} from "@orkestrator/protocol/agent-settings";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import { hydratePaneLayoutDependencies } from "@/lib/pane-layout-authoritative";
 import {
@@ -244,7 +249,13 @@ export function TerminalContainer({
   const piMode = resolveAgentPlatformSettings(tiers, "pi").mode;
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
-  const claudeNativeBackend = claude.claudeNativeBackend;
+  // Tmux mode is experimental: while it is off a stored `tmux` launches on the
+  // Agent SDK, and an explicit tmux request below does the same.
+  const tmuxModeEnabled = isTmuxModeEnabled(config.global);
+  const claudeNativeBackend = effectiveClaudeNativeBackend(
+    claude.claudeNativeBackend,
+    tmuxModeEnabled,
+  );
   const backendSetupRunning = setupPhase === "running";
   const isStartupLaunchPending = pendingAgentLaunch;
   const createScriptPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
@@ -526,9 +537,7 @@ export function TerminalContainer({
         }
         // A completed setup record can outlive its PTY. Preserve whichever
         // authoritative transcript source still exists, then demote the tab so
-        // it can create a shell of its own. Older backends do not report
-        // `hasOutput`, so retain their attach-only session conservatively during
-        // rolling upgrades rather than discarding history we cannot prove safe.
+        // it can create a shell of its own.
         if (!setupSession.running && !setupSession.terminalRunning) {
           let replayableTranscript = await loadReplayableSetupTranscript(tabId);
           if (!replayableTranscript && setupSession.hasOutput === true) {
@@ -541,19 +550,6 @@ export function TerminalContainer({
           }
           if (setupSessionBindLifecycleGenerationRef.current !== lifecycleGeneration) {
             return false;
-          }
-          // An older backend gives no safe signal about whether an empty read is
-          // authoritative. Keep the setup target until it can be upgraded or a
-          // durable transcript appears.
-          if (setupSession.hasOutput === undefined && !replayableTranscript) {
-            lookupSettled = true;
-            setupSessionBindAttemptsRef.current.delete(tabId);
-            setupSessionUnavailableTabsRef.current.delete(tabId);
-            terminalStore.setSession(key, {
-              ...existing,
-              sessionId: setupSession.sessionId,
-            });
-            return true;
           }
           // `hasOutput: true` is authoritative evidence that history exists.
           // An empty snapshot is therefore a failed/inconsistent read, not
@@ -1356,6 +1352,20 @@ export function TerminalContainer({
         });
       }
 
+      if (type === "auto-pipeline") {
+        if (!options?.autoPipeline) return false;
+        return openAutoPipelineTab({
+          scope: paneLayoutScope,
+          environmentId,
+          activePaneId,
+          allTabs,
+          maxTabs: MAX_TABS,
+          target: options.autoPipeline,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+      }
+
       if (type === "key-information") {
         if (!options?.keyInformation) return false;
         return openKeyInformationTab({
@@ -1568,7 +1578,7 @@ export function TerminalContainer({
           launchModeOverride === "native"
             ? "sdk"
             : launchModeOverride === "tmux"
-              ? "tmux"
+              ? effectiveClaudeNativeBackend("tmux", tmuxModeEnabled)
               : claudeNativeBackend;
 
         const newTab = createClaudeNativeLikeTab({
@@ -1695,6 +1705,7 @@ export function TerminalContainer({
       opencodeMode,
       claudeMode,
       claudeNativeBackend,
+      tmuxModeEnabled,
       claude.fastMode,
       codex.fastMode,
       codexMode,

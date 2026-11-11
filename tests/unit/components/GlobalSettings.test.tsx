@@ -2627,7 +2627,22 @@ describe("GlobalSettings", () => {
     );
   });
 
+  test("hides the Claude native backend choice while experimental tmux mode is off", () => {
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
+
+    expect(screen.queryByRole("radiogroup", { name: "Claude native backend" }) === null).toBe(true);
+  });
+
   test("saves the Claude native backend selection", async () => {
+    appCommandStore(configStore)
+      .getState()
+      .setConfig({
+        ...appCommandStore(configStore).getState().config,
+        global: {
+          ...appCommandStore(configStore).getState().config.global,
+          experimentalTmux: true,
+        },
+      });
     renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
 
     fireEvent.click(
@@ -2972,7 +2987,23 @@ describe("GlobalSettings", () => {
     });
   });
 
-  test("offers the direct transport only in a local desktop window, off by default", async () => {
+  test("saves the experimental self-improvement switch, off by default", async () => {
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable self-improvement" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalSelfImprovement: true }),
+        SAVE_OPTIONS,
+      );
+    });
+  });
+
+  test("offers the direct transport only in a local desktop window, on by default", async () => {
     const name = "Use the direct transport for new windows";
     const original = window.orkestrator;
     const originalGateway = window.orkestratorGateway;
@@ -2991,15 +3022,39 @@ describe("GlobalSettings", () => {
       window.orkestratorGateway = undefined;
       renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
       const toggle = screen.getByRole("switch", { name });
-      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      // Unset is on (to-do 4501 task 2); turning it off stores an explicit `false`.
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
       fireEvent.click(toggle);
       await flushAutoSave();
       await waitFor(() => {
         expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
-          expect.objectContaining({ localWindowGatewayTransport: true }),
+          expect.objectContaining({ localWindowGatewayTransport: false }),
           SAVE_OPTIONS,
         );
       });
+    } finally {
+      window.orkestrator = original;
+      window.orkestratorGateway = originalGateway;
+    }
+  });
+
+  test("keeps a stored explicit false off for the direct transport", async () => {
+    const original = window.orkestrator;
+    const originalGateway = window.orkestratorGateway;
+    try {
+      window.orkestrator = { ...original, isolatedViewState: true } as NonNullable<typeof original>;
+      window.orkestratorGateway = undefined;
+      appCommandStore(configStore).setState((state) => ({
+        config: {
+          ...state.config,
+          global: { ...state.config.global, localWindowGatewayTransport: false },
+        },
+      }));
+      renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
+      const toggle = screen.getByRole("switch", {
+        name: "Use the direct transport for new windows",
+      });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
     } finally {
       window.orkestrator = original;
       window.orkestratorGateway = originalGateway;
@@ -3017,6 +3072,22 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ experimentalGraphs: true }),
+        SAVE_OPTIONS,
+      );
+    });
+  });
+
+  test("saves the experimental tmux mode switch, off by default", async () => {
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable tmux mode" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalTmux: true }),
         SAVE_OPTIONS,
       );
     });

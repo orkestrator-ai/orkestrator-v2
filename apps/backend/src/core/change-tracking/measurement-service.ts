@@ -1201,8 +1201,3 @@ function payloadFiles(measured: EvidenceMeasurement, retained: boolean): Measure
     }),
   );
 }
-
-/** Sum of independent line counts, for aggregate labels. */
-export function sumCounts(values: readonly LineCount[]): LineCount {
-  return values.reduce((total, value) => addLineCounts(total, value), exactCount(0));
-}

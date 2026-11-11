@@ -1,18 +1,31 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import * as backend from "@/lib/backend";
 import { configStore } from "@/stores/configStore";
 import { AccountMachineProvider } from "./account-machine";
 import { MachineConfigProvider } from "./settings-config";
-import { GlobalSettings } from "./GlobalSettings";
+import { AUTO_SAVE_DEBOUNCE_MS, GlobalSettings } from "./GlobalSettings";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 import { appCommandStore } from "@/test/app-command-store";
 
 const initial = appCommandStore(configStore).getState().config;
 let selected = structuredClone(initial);
+let autoSaveClock: ReturnType<typeof installControlledTimeout>;
+/** Fires the armed auto-save debounce instead of sleeping past it. */
+async function fireAutoSave() {
+  await waitFor(() => expect(autoSaveClock.pendingCount()).toBe(1));
+  await act(async () => {
+    autoSaveClock.advance();
+    await Promise.resolve();
+  });
+}
 beforeEach(() => {
+  autoSaveClock = installControlledTimeout(AUTO_SAVE_DEBOUNCE_MS, {
+    label: "GlobalSettings auto-save debounce",
+  });
   selected = structuredClone(initial);
   selected.global.useHostGitHubCredentials = false;
   selected.global.allowedDomains = ["selected.test"];
@@ -24,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  autoSaveClock.restore();
   mock.restore();
   appCommandStore(configStore).setState({ config: initial });
 });
@@ -55,6 +69,7 @@ for (const machine of ["other"]) {
     mount("general", machine);
     const path = await screen.findByLabelText("Default projects folder");
     fireEvent.change(path, { target: { value: "/selected/projects" } });
+    await fireAutoSave();
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
         { defaultProjectsDirectory: "/selected/projects" },
@@ -68,6 +83,7 @@ for (const machine of ["other"]) {
     });
     expect(requireChecks.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(requireChecks);
+    await fireAutoSave();
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
         expect.objectContaining({ autoMergeRequireChecks: false }),
@@ -163,6 +179,7 @@ test("a different selected backend never changes this window's web server", asyn
   } as never);
   mount("web-client");
   fireEvent.click(await screen.findByRole("switch", { name: "Allow web access" }));
+  await fireAutoSave();
   await waitFor(() =>
     expect(save).toHaveBeenCalledWith({ webClientEnabled: false }, { unset: [], machine: "other" }),
   );
@@ -176,6 +193,7 @@ for (const machine of ["leaf", "other", null]) {
     );
     mount("general", machine);
     fireEvent.click(await screen.findByRole("switch", { name: "Auto-steer" }));
+    await fireAutoSave();
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith({ autoSteer: true }, { unset: [], machine }),
     );
@@ -195,10 +213,16 @@ for (const inherited of [false, true]) {
     const toggle = await screen.findByRole("switch", { name: "Auto-steer" });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe(String(!inherited));
+    await fireAutoSave();
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe(String(inherited)));
-    // Wait past a second debounce, and unmount to cover the close-time flush.
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    // The adopted value re-arms no second debounce (and any that had been
+    // armed would fire here), and unmounting covers the close-time flush.
+    await act(async () => {
+      autoSaveClock.advance();
+      await Promise.resolve();
+    });
+    expect(autoSaveClock.pendingCount()).toBe(0);
     cleanup();
     expect(save).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith(inherited ? {} : { autoSteer: true }, {
@@ -222,9 +246,11 @@ test("an Auto-steer edit made during a save survives the earlier response", asyn
   renderInAppCommandScope(<GlobalSettings activeSection="general" />);
   const toggle = await screen.findByRole("switch", { name: "Auto-steer" });
   fireEvent.click(toggle);
+  await fireAutoSave();
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   fireEvent.click(toggle);
   finishSave({ ...initial, global: { ...initial.global, autoSteer: true } });
+  await fireAutoSave();
   await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   expect(toggle.getAttribute("aria-checked")).toBe("false");
   expect(save).toHaveBeenLastCalledWith({}, { unset: ["autoSteer"], machine: undefined });

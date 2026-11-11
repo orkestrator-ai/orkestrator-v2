@@ -29,6 +29,8 @@ import type {
   NativeMessagePart,
 } from "../../apps/web/src/lib/chat/native-message-types";
 import { sha256Hex } from "../../packages/protocol/src/graphs/sha256";
+import { STATIC_PRESENTATION_POLICY } from "../../packages/protocol/src/rich-content-policy";
+import { staticHtmlDocumentText } from "../../packages/protocol/src/static-html-document-text";
 
 // ---------------------------------------------------------------------------
 // Feature-detected modules (absent at the baseline commit).
@@ -85,6 +87,8 @@ interface PerfCounters {
   unexpectedCommands: number;
   streamTicks: number;
   streamChars: number;
+  /** `search-text` reads answered: Find fetching stored document text. */
+  storedTextReads: number;
 }
 
 const counters: PerfCounters = {
@@ -98,7 +102,10 @@ const counters: PerfCounters = {
   unexpectedCommands: 0,
   streamTicks: 0,
   streamChars: 0,
+  storedTextReads: 0,
 };
+/** `search-text` reads answered, per report. */
+const storedTextReadsByReport = new Map<number, number>();
 
 // Count module workers (the highlighter) without changing their behaviour.
 const NativeWorker = window.Worker;
@@ -655,9 +662,42 @@ function representationFor(publicationId: string, representation: string) {
       executableOutsideOrkestrator: false,
     };
   }
+  if (ref.kind === "html-static" && representation === "search-text") {
+    // `?storedText=1`: publications verified by a worker that stored the
+    // document's text. Otherwise they predate it, as an older backend's do.
+    if (new URLSearchParams(window.location.search).get("storedText") !== "1")
+      throw Object.assign(new Error("Representation search-text is not available"), {
+        code: "invalid_input",
+      });
+    // The worker's own extraction, here over the fixture's effective document.
+    const text = staticHtmlDocumentText({
+      html: staticReport(k),
+      maxCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
+    });
+    const bytes = new TextEncoder().encode(text).byteLength;
+    counters.storedTextReads += 1;
+    storedTextReadsByReport.set(k, (storedTextReadsByReport.get(k) ?? 0) + 1);
+    return {
+      artifactId: ref.artifactId,
+      revision: ref.revision,
+      representation,
+      mimeType: "text/plain; charset=utf-8",
+      filename: `artifact-${k}.txt`,
+      encoding: "utf8",
+      data: text,
+      sha256: sha256Hex(text),
+      byteLength: bytes,
+      totalBytes: bytes,
+      nextOffsetBytes: null,
+      executableOutsideOrkestrator: false,
+    };
+  }
   if (ref.kind === "html-static") {
     const html = staticReport(k);
     const bytes = new TextEncoder().encode(html).byteLength;
+    // `?overBudget=<k>`: that report's effective document is past the inline
+    // display budget, so its card shows the saved preview.
+    const overBudget = new URLSearchParams(window.location.search).get("overBudget") === String(k);
     return {
       artifactId: ref.artifactId,
       revision: ref.revision,
@@ -668,7 +708,7 @@ function representationFor(publicationId: string, representation: string) {
       data: html,
       sha256: sha256Hex(html),
       byteLength: bytes,
-      totalBytes: bytes,
+      totalBytes: overBudget ? STATIC_PRESENTATION_POLICY.maxDocumentBytes + 1 : bytes,
       nextOffsetBytes: null,
       executableOutsideOrkestrator: true,
     };
@@ -738,7 +778,9 @@ function installBackend(): void {
           break;
         case "get_file_tree":
         case "get_local_file_tree":
-          result = [];
+          // A conditional read (knownDigest) answers the envelope, as every backend does.
+          result =
+            args?.knownDigest === undefined ? [] : { unchanged: false, digest: "", value: [] };
           break;
         default:
           counters.unexpectedCommands++;
@@ -789,6 +831,10 @@ interface PerfApi {
   scrollToIndex: (index: number) => void;
   scrollToBottom: () => void;
   richIndices: () => number[];
+  /** Find's cached body text for report `k`, or null (none, or an older bundle). */
+  searchBody: (k: number) => string | null;
+  /** How many times report `k`'s stored text was read. */
+  storedTextReadsOf: (k: number) => number;
 }
 
 declare global {
@@ -926,6 +972,9 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
       },
       scrollToBottom: () => scrollToBottom(),
       richIndices: () => richMessageIndices,
+      searchBody: (k: number) =>
+        artifactRequestsModule?.cachedArtifactSearchBody(artifactRef(k)) ?? null,
+      storedTextReadsOf: (k: number) => storedTextReadsByReport.get(k) ?? 0,
     };
   }, [
     messages.length,

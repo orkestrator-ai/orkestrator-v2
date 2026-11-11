@@ -27,6 +27,7 @@ import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-inst
 import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
   ARTIFACT_TOOL_NAMES,
@@ -128,7 +129,6 @@ import {
   type EngineGeneration,
   type EngineInfo,
   type EngineModel,
-  type EngineRateLimitWindow,
   type EngineThread,
   type EngineThreadTurn,
   type EngineTurn,
@@ -158,6 +158,7 @@ const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
     ...ARTIFACT_TOOL_NAMES,
     ...AGENT_GOAL_TOOL_NAMES,
     ...AGENT_SUBORK_TOOL_NAMES,
+    ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
     ...KEY_INFORMATION_TOOL_NAMES,
   ].map((name) => [name, { approval_mode: "approve" }]),
 );
@@ -378,53 +379,6 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
       : {}),
     ...(Object.keys(rateLimitsByLimitId).length > 0 ? { rateLimitsByLimitId } : {}),
   };
-}
-
-/**
- * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. A provider
- * reset timestamp outside that range yields an Invalid Date whose
- * `toISOString()` throws, so it is dropped rather than aborting the read.
- */
-const MAX_DATE_MS = 8.64e15;
-
-/**
- * Map an `account/rateLimits/read` response onto the engine's window shape.
- *
- * The on-demand read answers the same snapshot an `account/rateLimits/updated`
- * notification carries, but without a thread to attribute it to. Reusing the
- * allowlist here keeps the on-demand path from being a second, narrower
- * interpretation of the provider's payload.
- */
-export function rateLimitWindowsFromRead(value: unknown): EngineRateLimitWindow[] {
-  const response = objectRecord(value);
-  const snapshot = allowlistRateLimitSnapshot(response.rateLimits);
-  const planLabel = optionalPublicString(snapshot.limitName);
-  const normalModelSlug = optionalPublicString(snapshot.normalModelSlug);
-  const windows: EngineRateLimitWindow[] = [];
-  for (const slot of ["primary", "secondary"] as const) {
-    if (!Object.hasOwn(snapshot, slot)) continue;
-    const window = objectRecord(snapshot[slot]);
-    if (!window) continue;
-    const usedPercent = typeof window.usedPercent === "number" ? window.usedPercent : undefined;
-    const windowMinutes =
-      typeof window.windowDurationMins === "number" ? window.windowDurationMins : undefined;
-    const resetsAtSeconds = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
-    // `Date` only spans ±8.64e15 ms; a larger provider value would make
-    // `toISOString()` throw and abort the whole usage read.
-    const resetsAtMs =
-      resetsAtSeconds !== undefined && Math.abs(resetsAtSeconds * 1_000) <= MAX_DATE_MS
-        ? resetsAtSeconds * 1_000
-        : undefined;
-    const resetsAt = resetsAtMs !== undefined ? new Date(resetsAtMs).toISOString() : undefined;
-    windows.push({
-      slot,
-      label: slot === "primary" ? (planLabel ?? normalModelSlug ?? "Primary") : "Secondary",
-      ...(usedPercent !== undefined ? { usedPercent } : {}),
-      ...(resetsAt !== undefined ? { resetsAt } : {}),
-      ...(windowMinutes !== undefined ? { windowMinutes } : {}),
-    });
-  }
-  return windows;
 }
 
 function safeUsageCount(value: unknown): number | undefined {
@@ -2476,17 +2430,6 @@ export class AppServerEngine implements CodexEngine {
   async readAccountUsage(): Promise<EngineAccountUsageWindow[]> {
     const response = await this.supervisor.request("account/usage/read", undefined);
     return accountUsageWindows(response);
-  }
-
-  /**
-   * Read the account's plan-limit windows without a thread.
-   *
-   * `account/rateLimits/read` is thread-free, so the settings page can ask the
-   * app-server for quota whenever it opens rather than borrowing a session.
-   */
-  async readRateLimitWindows(): Promise<EngineRateLimitWindow[]> {
-    const response = await this.supervisor.request("account/rateLimits/read", undefined);
-    return rateLimitWindowsFromRead(response);
   }
 
   /**

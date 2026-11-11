@@ -206,7 +206,8 @@ test("real invoke rejections keep only the handler message across the context br
   }
 });
 
-type DesktopRecoveryScenario = "close" | "restart" | "remote" | "planned" | "renderer";
+type DesktopRecoveryScenario =
+  "close" | "restart" | "remote" | "planned" | "renderer" | "headless-dialog";
 
 async function testIndependentWindows(
   nicknamesOnly = false,
@@ -249,6 +250,7 @@ async function testIndependentWindows(
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(failure === "headless-dialog" ? ["--ozone-platform=headless", "--disable-gpu"] : []),
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
@@ -261,6 +263,21 @@ async function testIndependentWindows(
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
+    if (failure === "headless-dialog") {
+      const result = await app.evaluate(async ({ app, dialog }) => ({
+        ozone: app.commandLine.getSwitchValue("ozone-platform"),
+        answer: await dialog.showMessageBox({
+          message: "Headless cancellation regression",
+          buttons: ["Continue", "Cancel"],
+          cancelId: 1,
+        }),
+      }));
+      expect(result).toEqual({
+        ozone: "headless",
+        answer: { response: 1, checkboxChecked: false },
+      });
+      return;
+    }
     const startup = watchElectronStartup(app);
     dismissStartupDialogs(app);
     // Startup can briefly create a bootstrap window, and development opens
@@ -1057,4 +1074,9 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
     await closeElectronWithin(launchedApp).catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+test("real headless Electron activates the native dialog cancellation guard", async () => {
+  test.skip(process.platform !== "linux", "Linux headless Ozone regression");
+  await testIndependentWindows(false, "headless-dialog");
 });

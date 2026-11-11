@@ -4,7 +4,7 @@ import type {
 } from "@orkestrator/protocol/public-api-resources";
 import { CliError } from "../errors.js";
 import type { CommandSpec } from "../spec.js";
-import { observe, ObservationStopped } from "../wait.js";
+import { observe, ObservationStopped, observationClock } from "../wait.js";
 import { DEFAULT_WAIT_MS, TIMEOUT_OPTION } from "./common.js";
 
 /** One line per item for people; machines read `--json` or `--follow --jsonl`. */
@@ -115,6 +115,7 @@ export const attentionCommands: CommandSpec[] = [
           {
             timeoutMs: (parsed.options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
             signal: context.signal,
+            ...observationClock(context.io),
           },
         );
       } catch (error) {

@@ -128,7 +128,7 @@ function parseDiagnostics(value: unknown): BrowserPreviewPinDiagnostics | null {
   };
 }
 
-/** Parse the page layer's JSON; accepts the legacy bare-array form too. */
+/** Parse the page layer's JSON (`{ revision, results, diagnostics }`). */
 export function parsePinsOutput(
   encoded: unknown,
   ids: ReadonlySet<string>,
@@ -139,14 +139,10 @@ export function parsePinsOutput(
   diagnostics: BrowserPreviewPinDiagnostics | null;
 } | null {
   const parsed = parseJson(encoded, BROWSER_PREVIEW_PINS_MAX_CHARS);
-  const list = Array.isArray(parsed)
-    ? parsed
-    : isRecord(parsed) && Array.isArray(parsed.results)
-      ? parsed.results
-      : null;
-  if (!list) return null;
+  if (!isRecord(parsed) || !Array.isArray(parsed.results)) return null;
+  const list: unknown[] = parsed.results;
   const revision =
-    isRecord(parsed) && typeof parsed.revision === "number" && Number.isSafeInteger(parsed.revision)
+    typeof parsed.revision === "number" && Number.isSafeInteger(parsed.revision)
       ? parsed.revision
       : 0;
   const results = new Map<string, WebAnnotationAnchorResolution>();
@@ -181,7 +177,7 @@ export function parsePinsOutput(
   return {
     revision,
     results,
-    diagnostics: isRecord(parsed) ? parseDiagnostics(parsed.diagnostics) : null,
+    diagnostics: parseDiagnostics(parsed.diagnostics),
   };
 }
 

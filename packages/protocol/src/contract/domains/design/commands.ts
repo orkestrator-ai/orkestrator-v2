@@ -29,8 +29,6 @@
 import * as Schema from "effect/Schema";
 import type {
   DesignCanvas,
-  DesignChange,
-  DesignChanges,
   DesignFrame,
   DesignHierarchyPage,
   DesignHistoryStatus,
@@ -668,6 +666,7 @@ export const DesignSessionLinkStatesSchema = modelRecord<DesignSessionLinkStates
     modelRecord<DesignSessionLinkState>()({
       linkId: Str,
       session: Schema.Literals(["retained", "missing"]),
+      archived: Schema.optionalKey(Bool),
     }),
   ),
 });
@@ -675,26 +674,6 @@ export const DesignSessionLinkStatesSchema = modelRecord<DesignSessionLinkStates
 export const DesignSessionResumeResultSchema = modelRecord<DesignSessionResumeResult>()({
   link: DesignSessionLinkSchema,
   providerSessionId: Str,
-});
-
-export const DesignChangesSchema = modelRecord<DesignChanges>()({
-  generation: Str,
-  revision: Num,
-  reset: Bool,
-  events: Schema.Array(
-    modelRecord<DesignChange>()({
-      canvasId: Str,
-      revision: Num,
-      frameId: opt(Str),
-      statusVersion: opt(Num),
-    }),
-  ),
-});
-
-/** `design_status` without a design service: the legacy "not ready" answer. */
-const DesignStatusUnavailableSchema = Schema.Struct({
-  ready: Schema.Literal(false),
-  error: Str,
 });
 
 /**
@@ -736,27 +715,6 @@ export const designActionCommand = defineCommand({
   critical: [],
 });
 
-export const designStatusCommand = defineCommand({
-  ...common,
-  name: "design_status",
-  args: Schema.Struct({}),
-  result: Schema.Union([DesignRendererHealthSchema, DesignStatusUnavailableSchema]),
-  critical: [],
-});
-
-export const designChangesCommand = defineCommand({
-  ...common,
-  name: "design_changes",
-  args: Schema.Struct({
-    canvasId: DesignIdSchema,
-    environmentId: DesignEnvironmentIdSchema,
-    generation: Schema.optionalKey(DesignGenerationSchema),
-    after: DesignRevisionSchema,
-  }),
-  result: DesignChangesSchema,
-  critical: [],
-});
-
 export const designImportCommand = defineCommand({
   ...common,
   name: "design_import",
@@ -776,19 +734,6 @@ export const designImportHostFileCommand = defineCommand({
     path: boundedString(1, 4096),
   }),
   result: DesignCanvasSchema,
-  critical: [],
-});
-
-export const designSaveCommand = defineCommand({
-  ...common,
-  name: "design_save",
-  args: Schema.Struct({
-    environmentId: DesignEnvironmentIdSchema,
-    canvasId: DesignIdSchema,
-    filePath: DesignRelativePathSchema,
-    expectedRevision: DesignRevisionSchema,
-  }),
-  result: Schema.Struct({ filePath: Str, revision: Num }),
   critical: [],
 });
 
@@ -1034,7 +979,10 @@ export const designSessionLinkStatesCommand = defineCommand({
 export const designSessionResumeCommand = defineCommand({
   ...common,
   name: "design_session_resume",
-  args: v2Args("environmentId", "canvasId", "linkId", "expectedTabId", "tabId"),
+  // restoreArchived: unarchive the recorded conversation before resuming it
+  // (the user chose "Unarchive and resume"). Not critical: a backend that
+  // ignores it resumes as before, and the agent refuses an archived one.
+  args: v2Args("environmentId", "canvasId", "linkId", "expectedTabId", "tabId", "restoreArchived"),
   result: designResult(DesignSessionResumeResultSchema),
   // expectedTabId: the compare-and-set on the link's tab; a receiver ignoring
   // it would let two windows adopt one conversation.
@@ -1052,11 +1000,8 @@ export const designSessionUnlinkCommand = defineCommand({
 /** The legacy v1 commands (thrown failures). */
 export const DESIGN_LEGACY_COMMANDS = [
   designActionCommand,
-  designStatusCommand,
-  designChangesCommand,
   designImportCommand,
   designImportHostFileCommand,
-  designSaveCommand,
 ] as const;
 
 /** The protocol v2 commands (typed envelopes). */

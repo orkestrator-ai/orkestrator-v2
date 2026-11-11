@@ -21,7 +21,7 @@ import {
 } from "./control-mcp-worker-questions.js";
 
 /**
- * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
+ * Coordinator tools for a worker's own surfaces (coordinator.md, "Worker surfaces"): a terminal or
  * tmux tab, a browser preview, tab editing, the PR and Resolve tabs,
  * feature-plan launch, the request to copy the checkout's uncommitted changes into a
  * worker, and the proposal to save decisions to AGENTS.md. None of them
@@ -91,7 +91,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Open a terminal or tmux tab in a worker",
       description:
-        "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux) with an optional prompt (grok supports a bare launch only; prompt, model and reasoningEffort are refused). The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults. Pass nodeId for a worker on another connected node; if its answer is lost, retry with the same requestId, which reattaches to the same terminal there.",
+        "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux, refused unless the worker's machine has the experimental Tmux mode setting on) with an optional prompt (grok supports a bare launch only; prompt, model and reasoningEffort are refused). The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults. Pass nodeId for a worker on another connected node; if its answer is lost, retry with the same requestId, which reattaches to the same terminal there.",
       inputSchema: toolInput(
         strictObject({
           requestId,

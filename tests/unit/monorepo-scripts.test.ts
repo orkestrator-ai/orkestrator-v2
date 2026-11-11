@@ -5,7 +5,7 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
-type MiseTask = { run?: string | string[]; env?: Record<string, string> };
+type MiseTask = { run?: string | string[]; env?: Record<string, string>; raw_args?: boolean };
 const miseTasks = () =>
   (Bun.TOML.parse(read("mise.toml")) as { tasks: Record<string, MiseTask> }).tasks;
 const BRIDGE_MANIFESTS = [
@@ -334,6 +334,13 @@ describe("monorepo orchestration scripts", () => {
     );
   });
 
+  test("the Linux release build runs from the Mac through release:linux", () => {
+    const tasks = miseTasks();
+    expect(tasks["release:linux"]?.run).toBe("bun scripts/release-linux-remote.ts");
+    // Its mode and flags are passed straight through to the script.
+    expect(tasks["release:linux"]?.raw_args).toBe(true);
+  });
+
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
     // The groups are independent, so they run at once rather than in sequence.
     // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only
@@ -556,7 +563,9 @@ describe("monorepo orchestration scripts", () => {
     expect(root.tasks.build?.env).toBeUndefined();
 
     for (const script of ["apps/backend/scripts/build.ts", "packages/cli/scripts/build.ts"]) {
-      expect(read(script), script).toContain("define: buildCommitDefine()");
+      expect(read(script), script).toMatch(
+        /define:\s*\{\s*\.\.\.buildCommitDefine\(\),\s*__ORKESTRATOR_DISPATCH_HOLD__:\s*"false"\s*\}/,
+      );
       expect(read(script), script).not.toContain("rev-parse");
     }
     const stamp = '"$(bun scripts/build-commit.ts)"';

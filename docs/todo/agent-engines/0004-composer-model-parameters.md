@@ -11,11 +11,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Codex summary suppression residue**: item 1 said the `parameter:summary` suppression entry was gone while `main` still had it. Status: done (2026-10-28, 0727: descriptor and entry removed, item 1 corrected).
-2. **Unoffered held-model preflight**: the optional open half of item 6. Status: deferred (until Codex's 400 proves confusing).
-3. **Cursor extra-axis live qualification**: change a Cursor axis, send, reload, confirm the value returns. Status: open.
-4. **Codex dispatch-model and config-merge live check**: items 5 and 6 plus the Plan-mode merge fix on a real Codex login. Status: open.
+2. **Unoffered held-model preflight**: the optional open half of item 6. Status: blocked (deferred until Codex's 400 proves confusing).
 5. **Done items 2 to 5 and the retired qualification line**: decide how to keep the record. Status: done.
-6. **Codex tab shows no reasoning-summary control**: a real Codex tab offers no "Reasoning summary" or other `parameter:*` control. Moved from to-do 0727 (deleted 2026-11-06). Status: open.
 
 ### 1. Codex summary suppression residue
 
@@ -55,49 +52,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: refuses before journaling, keeping the draft.
     - Cons: a new cache with its own staleness rules, contradicting the "read every request" choice made for defaults.
 
-### 3. Cursor extra-axis live qualification
-
-**Problem.** The Cursor change-send-reload path for `thinking`, `context` and `cyber` is unproven end to end.
-
-**Context.** Needs a real-stack browser session with a Cursor login; the CLI has no parameter control. Batched in 0031's Cursor row.
-
-**Investigation.** The bridge accepts `parameterValues` (`bridges/cursor-bridge/src/agent-session.ts:734-749`); the projection unit test is at `apps/backend/src/core/native-agent-service-projection.test.ts:2455`. No browser spec covers it.
-
-**Decisions.**
-
-- **What counts as a pass?**
-  - **Value restored after reload and the Cursor run reflects it (for `thinking`, a reasoning part appears) (recommended).**
-    - Pros: proves the value reached the provider, not only backend state.
-    - Cons: needs a model where the axis has a visible effect.
-  - **Value restored after reload only.**
-    - Pros: quick, deterministic.
-    - Cons: duplicates what unit tests already show.
-- **Fold into another Cursor run?**
-  - **Yes, run it with the other Cursor rows in 0031 (recommended).**
-    - Pros: one login and profile for several gates.
-    - Cons: waits on that batch.
-  - **Run alone now.**
-    - Pros: closes this file sooner.
-    - Cons: another separate credentialed session.
-
-### 4. Codex dispatch-model and config-merge live check
-
-**Problem.** Items 5 and 6 and the config-merge fix are proven only by unit and provider tests.
-
-**Context.** The merge fix stops a model or fast pick resetting a Plan session to Build (`updateCodexSessionConfig`, `apps/backend/src/core/http-bridge/codex-config.ts:137`). The pinned Codex is now `0.164.0` (`packages/toolchain/src/manifest.ts:8`), newer than the 0.162.1 the file's live evidence used.
-
-**Investigation.** Code present on `main`. No live run recorded since 2026-10-17.
-
-**Decisions.**
-
-- **How to run it?**
-  - **`dev:test --fixture --credential-source codex`, Plan session, model pick then a read-only check, then a Control MCP dispatch naming another model and a rollout `turn_context.model` check (recommended).**
-    - Pros: covers both paths and the merge defect in one session; follows the file's own procedure.
-    - Cons: needs a ChatGPT login and reading a rollout file.
-  - **CLI-only via `orkestrator` client commands.**
-    - Pros: scriptable.
-    - Cons: the picker path is renderer-driven and would not be covered.
-
 ### 5. Done items 2 to 5 and the retired qualification line
 
 **Problem.** Most of "Outstanding work" is struck-through done text, which makes the remaining work harder to see.
@@ -116,50 +70,15 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: clearer file today.
     - Cons: two edits to the same material.
 
-### 6. Codex tab shows no reasoning-summary control
-
-**Problem.** The backend's Codex catalogue no longer offers the reasoning
-`summary` the bridge ignored. A stored Codex `summary` value is dropped on the
-next control update and never forwarded. No one has looked at a real Codex tab
-since.
-
-**Context.** Moved from to-do 0727 (deleted 2026-11-06), whose code items are
-done. `SUPPRESSED_COMPOSER_PARAMETERS` has no `codex` entry
-(`packages/protocol/src/native-agent.ts`), and `summary` is retired for Codex
-only (`apps/backend/src/core/native-agent-retired-parameters.ts`). The renderer
-test "suppresses no Codex parameter control in a %s tab" is in
-`apps/web/src/components/native-agent/AgentNativeTab.test.tsx`.
-
-**Investigation.** Steps:
-
-1. Open a `dev:test` profile with a signed-in Codex, or a seeded Codex
-   catalogue cache.
-2. Open a Codex tab and go through each catalogue model in the composer.
-3. Check that there is no "Reasoning summary" control and no other
-   `parameter:*` control.
-4. Optional: load a session record from an older build that holds
-   `parameterValues.summary`. Send a turn, change a control, and check that
-   the value is gone from the record.
-
-**Decisions.**
-
-- **Run it alone or with task 4?**
-  - **With task 4's real Codex login (recommended).**
-    - Pros: the same profile and login; one extra look.
-    - Cons: waits for task 4.
-  - **On its own with a seeded catalogue cache.**
-    - Pros: needs no login.
-    - Cons: a cache may not match what a real login is offered today.
-
 Every model axis that only some providers have renders through the generic
 `parameters` descriptors, with its value held in backend session state, and no
 axis needs its own UI. Reasoning and speed, which every provider has, stay
 first-class `AgentModel` fields by recorded decision (item 2). Every
 forwarded-but-unsourced value is resolved: Codex summary and personality, the
 Claude `permissionMode` parameter and `maxBudgetUsd` are gone, and a per-turn
-model on a Codex dispatch is now applied. What is left is a live Cursor
-qualification run, a Codex live check, a look at a real Codex tab (task 6)
-and one optional preflight case.
+model on a Codex dispatch is now applied. What is left is one optional
+preflight case (task 2); the live Cursor and Codex runs moved to the manual-test
+checklist on 2026-11-10.
 
 ## Current state
 
@@ -298,18 +217,10 @@ and one optional preflight case.
 
 ### Qualification
 
-- Change an extra Cursor axis, send a turn, reload, and confirm the value comes
-  back from the backend. Not run: it needs a real-stack browser session with a
-  Cursor login (the CLI has no parameter control), and this branch changed no
-  Cursor code. Unit tests cover a Cursor `parameterValues` update being
-  validated and re-projected ("carries the bridge's premium indicator only for
-  the selection it describes", `native-agent-service-projection.test.ts`), not
-  the full change, turn and reload path.
-- Live Codex check of items 5 and 6 and of the config-merge fix: in a Plan
-  session, pick another model in the picker and confirm the next turn is still
-  read-only; send a Control MCP `dispatch_native_agent_prompt` with another
-  `model` and confirm the rollout's `turn_context.model`. Not run on this
-  branch (unit and provider tests only).
+- The live Cursor axis run and the live Codex dispatch-model and config-merge
+  check (tasks 3 and 4) moved to the
+  [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+  2026-11-10.
 - ~~After item 2: the reasoning and speed controls on every platform round trip
   through `NativeAgentControlUpdate` and survive a reload.~~ Not applicable:
   item 2 kept both models, so nothing moved. They already round trip as
@@ -455,7 +366,7 @@ and one optional preflight case.
     unoffered default failed the same way. A Build row filled from saved
     defaults is not a pin: it names only a model its action chose, so an
     inherited platform model reaches the stage as a default and is swapped
-    there ([7546](../coordinator-and-multi-review/7546-build-review-row-pins-unoffered-codex-model.md)).
+    there ([build-pipeline-view.md](../../architecture/build-pipeline-view.md#starting-a-build); to-do 7546, retired 2026-11-10).
   - Existing sessions: the platform policy's `runsSessionHeldModel` makes the
     projection add the held model as a row marked "session model"
     rather than show the first catalogue row. Nothing is persisted on a read.
@@ -496,6 +407,7 @@ and one optional preflight case.
 - `0727-codex-summary-parameter-still-suppressed.md` (deleted 2026-11-06):
   the Codex summary descriptor and suppression entry #1260 left on `main`,
   split from task 1 and removed there (2026-10-28).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, task 4, task 6) moved there on 2026-11-10.
 
 ## Replaces
 

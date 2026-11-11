@@ -1,7 +1,7 @@
 /**
  * How often this backend has started each provider's bridges, and how often one
  * stopped without being asked: the health row's answer to "did a bridge keep
- * restarting?" (docs/todo/cross-cutting/6142-health-row-bridge-restarts.md).
+ * restarting?" (docs/architecture/logging.md).
  *
  * Counted in memory beside the log lines that already say each event one at a
  * time (`bridge.started` and `bridge.exited` for a host bridge, `bridge.launched`
@@ -18,10 +18,9 @@
  * launch path and the health summary all import it.
  */
 
-/** Every provider a bridge can be started for. `opencode2` is the host OpenCode 2 server. */
+/** Every provider a bridge can be started for; `opencode` is the OpenCode server. */
 export const BRIDGE_RESTART_PROVIDERS = [
   "opencode",
-  "opencode2",
   "claude",
   "codex",
   "cursor",

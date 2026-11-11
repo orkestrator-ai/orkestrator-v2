@@ -1,15 +1,28 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
+  LONG_PRESS_DELAY_MS,
   MessageShell,
   MessageErrorAlert,
 } from "../../../apps/web/src/components/chat/MessageShell";
+import { type ControlledTimeout, installControlledTimeout } from "../../helpers/controlled-timeout";
 
-const waitForLongPress = () => new Promise((resolve) => window.setTimeout(resolve, 550));
+let longPressTimer: ControlledTimeout;
+
+/** Lets the long-press delay elapse for the one press that is still pending. */
+const completeLongPress = () => expect(longPressTimer.advance()).toBe(1);
+/** Shows the long-press deadline cannot arrive: the gesture left no timer armed. */
+const expectNoPendingLongPress = () => expect(longPressTimer.pendingCount()).toBe(0);
+
+beforeEach(() => {
+  longPressTimer = installControlledTimeout(LONG_PRESS_DELAY_MS, { label: "message long press" });
+});
 
 afterEach(() => {
+  // Unmount first, so a press still pending is cleared rather than dropped.
   cleanup();
+  longPressTimer.restore();
 });
 
 function getUserBubble(container: HTMLElement, content: string): HTMLElement {
@@ -110,7 +123,7 @@ describe("MessageShell", () => {
       clientX: 20,
       clientY: 40,
     });
-    await waitForLongPress();
+    expectNoPendingLongPress();
     fireEvent.pointerUp(message, {
       pointerType: "touch",
       pointerId: 1,
@@ -150,7 +163,7 @@ describe("MessageShell", () => {
       clientX: 20,
       clientY: 20,
     });
-    await waitForLongPress();
+    expectNoPendingLongPress();
 
     expect(onUserLongPress).not.toHaveBeenCalled();
   });
@@ -197,7 +210,7 @@ describe("MessageShell", () => {
       clientX: 20,
       clientY: 20,
     });
-    await waitForLongPress();
+    expectNoPendingLongPress();
 
     expect(onUserLongPress).not.toHaveBeenCalled();
   });
@@ -269,7 +282,7 @@ describe("MessageShell", () => {
       clientX: 30,
       clientY: 20,
     });
-    await waitForLongPress();
+    completeLongPress();
     fireEvent.pointerUp(message, {
       pointerType: "touch",
       pointerId: 6,
@@ -293,7 +306,7 @@ describe("MessageShell", () => {
       clientX: 31,
       clientY: 20,
     });
-    await waitForLongPress();
+    expectNoPendingLongPress();
     fireEvent.pointerUp(message, {
       pointerType: "touch",
       pointerId: 7,
@@ -331,7 +344,7 @@ describe("MessageShell", () => {
       pointerId: 8,
       isPrimary: true,
     });
-    await waitForLongPress();
+    expectNoPendingLongPress();
     fireEvent.pointerUp(message, {
       pointerType: "touch",
       pointerId: 8,
@@ -408,7 +421,7 @@ describe("MessageShell", () => {
       pointerId: 11,
       isPrimary: false,
     });
-    await waitForLongPress();
+    completeLongPress();
     fireEvent.pointerUp(message, {
       pointerType: "touch",
       pointerId: 11,
@@ -446,7 +459,7 @@ describe("MessageShell", () => {
       pointerId: 12,
       isPrimary: true,
     });
-    await waitForLongPress();
+    completeLongPress();
     fireEvent.pointerUp(button, {
       pointerType: "touch",
       pointerId: 12,
@@ -482,7 +495,7 @@ describe("MessageShell", () => {
       pointerId: 13,
       isPrimary: true,
     });
-    await waitForLongPress();
+    completeLongPress();
     fireEvent.pointerUp(button, {
       pointerType: "touch",
       pointerId: 13,
@@ -534,7 +547,7 @@ describe("MessageShell", () => {
         pointerId: 15,
         isPrimary: true,
       });
-      await waitForLongPress();
+      completeLongPress();
       fireEvent.pointerUp(message, {
         pointerType: "touch",
         pointerId: 15,

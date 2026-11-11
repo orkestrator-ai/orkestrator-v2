@@ -26,7 +26,7 @@ import { join } from "node:path";
 type Json = Record<string, unknown>;
 type ChatRequest = {
   messages?: Array<{ role: string; content?: unknown }>;
-  tools?: Array<{ function?: { name?: string } }>;
+  tools?: Array<{ function?: { name?: string; description?: string } }>;
 };
 
 const STEP_SLEEP_SECONDS = 3;
@@ -70,6 +70,8 @@ export class ScriptedModel {
    */
   readonly calls: Array<{
     userTexts: string[];
+    /** The request's system messages, where session instructions arrive. */
+    systemTexts: string[];
     lastRole: string;
     tools: string[];
     /** The newest tool result the model was handed, when the request ends in one. */
@@ -77,6 +79,18 @@ export class ScriptedModel {
     lastUserContent?: unknown;
     reasoningEffort?: unknown;
   }> = [];
+  /**
+   * A live test's own script, consulted before the defaults below: given
+   * every message's text (any role), the last role and the offered tools, it
+   * answers with one tool call or a final text, or undefined for the defaults.
+   */
+  respond?: (call: {
+    texts: string[];
+    lastRole: string;
+    tools: string[];
+    /** Each offered tool's description, by name. */
+    descriptions: Record<string, string>;
+  }) => { tool: string; arguments: Json } | { text: string } | undefined;
   private server: ReturnType<typeof Bun.serve> | undefined;
 
   start(): string {
@@ -90,6 +104,9 @@ export class ScriptedModel {
         const body = (await request.json()) as ChatRequest;
         const messages = body.messages ?? [];
         const userTexts = messages.filter((m) => m.role === "user").map((m) => textOf(m.content));
+        const systemTexts = messages
+          .filter((m) => m.role === "system")
+          .map((m) => textOf(m.content));
         const lastRole = messages.at(-1)?.role ?? "";
         const tools = (body.tools ?? []).flatMap((tool) =>
           typeof tool.function?.name === "string" ? [tool.function.name] : [],
@@ -98,12 +115,29 @@ export class ScriptedModel {
         const reasoningEffort = (body as { reasoning_effort?: unknown }).reasoning_effort;
         this.calls.push({
           userTexts,
+          systemTexts,
           lastRole,
           tools,
           lastUserContent,
           reasoningEffort,
           ...(lastRole === "tool" ? { toolResult: textOf(messages.at(-1)?.content) } : {}),
         });
+        const custom = this.respond?.({
+          texts: messages.map((m) => textOf(m.content)),
+          lastRole,
+          tools,
+          descriptions: Object.fromEntries(
+            (body.tools ?? []).flatMap((tool) =>
+              typeof tool.function?.name === "string"
+                ? [[tool.function.name, tool.function.description ?? ""]]
+                : [],
+            ),
+          ),
+        });
+        if (custom && "tool" in custom) {
+          return sse(namedToolCallChunks(custom.tool, JSON.stringify(custom.arguments)));
+        }
+        if (custom) return sse(answerChunks(custom.text));
         const latestUser = userTexts.at(-1) ?? "";
         // A turn asking for a slow tool gets one bash call, then (after the tool result) an answer.
         // `RUN_BASH:<command>` runs that command instead (fixture-only; the model is scripted).
@@ -272,6 +306,11 @@ export interface OpenCode2Fixture {
   directory: string;
   model: ScriptedModel;
   version: string;
+  /**
+   * Stop the server and start it again on the same port, password, database
+   * and directories, as a crash or an upgrade restart would.
+   */
+  restart(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -313,50 +352,65 @@ export async function startOpenCode2Fixture(
   );
   const password = crypto.randomUUID();
   const port = await freePort();
-  const server = Bun.spawn([binary, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: dirs.work,
-    env: {
-      PATH: process.env.PATH,
-      HOME: dirs.home,
-      XDG_CONFIG_HOME: dirs.config,
-      XDG_DATA_HOME: dirs.data,
-      XDG_STATE_HOME: dirs.state,
-      XDG_CACHE_HOME: dirs.cache,
-      OPENCODE_DB: join(dirs.data, "fixture.db"),
-      OPENCODE_PASSWORD: password,
-      OPENCODE_DISABLE_AUTOUPDATE: "1",
-      ...options.env,
-    },
-    stdout: "ignore",
-    stderr: "ignore",
-  });
+  const spawnServer = () =>
+    Bun.spawn([binary, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: dirs.work,
+      env: {
+        PATH: process.env.PATH,
+        HOME: dirs.home,
+        XDG_CONFIG_HOME: dirs.config,
+        XDG_DATA_HOME: dirs.data,
+        XDG_STATE_HOME: dirs.state,
+        XDG_CACHE_HOME: dirs.cache,
+        OPENCODE_DB: join(dirs.data, "fixture.db"),
+        OPENCODE_PASSWORD: password,
+        OPENCODE_DISABLE_AUTOUPDATE: "1",
+        // As every Orkestrator launch runs it (`OPENCODE2_DISABLE_FILEWATCHER`
+        // in apps/backend/src/core/opencode2/server.ts), so the live set
+        // qualifies the server Orkestrator actually starts. `options.env`
+        // may turn the watchers back on.
+        OPENCODE_DISABLE_FILEWATCHER: "1",
+        ...options.env,
+      },
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  let server = spawnServer();
+  /** Signal only the process this fixture spawned, and wait for it to exit. */
+  const stopServer = async () => {
+    const current = server;
+    current.kill("SIGTERM");
+    await Promise.race([current.exited, Bun.sleep(5000)]);
+    if (current.exitCode === null && current.signalCode === null) {
+      current.kill("SIGKILL");
+      await current.exited;
+    }
+  };
   const stop = async () => {
-    server.kill("SIGTERM");
-    await Promise.race([server.exited, Bun.sleep(5000)]);
-    if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
+    await stopServer();
     model.stop();
     if (!process.env.OPENCODE2_PROBE_KEEP) await rm(root, { recursive: true, force: true });
     else log("kept", root);
   };
   const baseUrl = `http://127.0.0.1:${port}`;
   const api = new Api(baseUrl, password, dirs.work);
-  try {
+  const healthy = async (): Promise<string> => {
     for (let attempt = 0; ; attempt++) {
       const info = await api.call("GET", "/api/info").catch(() => null);
-      if (info?.status === 200) {
-        return {
-          baseUrl,
-          password,
-          directory: dirs.work,
-          model,
-          version: String((info.data as Json).version),
-          stop,
-        };
-      }
+      if (info?.status === 200) return String((info.data as Json).version);
       if (server.exitCode !== null) throw new Error(`opencode exited with ${server.exitCode}`);
       if (attempt > 120) throw new Error("opencode did not become healthy");
       await Bun.sleep(250);
     }
+  };
+  const restart = async () => {
+    await stopServer();
+    server = spawnServer();
+    await healthy();
+  };
+  try {
+    const version = await healthy();
+    return { baseUrl, password, directory: dirs.work, model, version, restart, stop };
   } catch (error) {
     await stop();
     throw error;

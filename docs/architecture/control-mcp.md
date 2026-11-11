@@ -267,6 +267,10 @@ original tools remain:
   remove one on a ticket (`list_ticket_labels`, `create_ticket_label`,
   `set_ticket_label`; [tickets.md](tickets.md#labels)). These are ticket
   labels, separate from a pull request's labels (`pr_label`, `pr_options`).
+- Coordinators only: work a project's linked Linear board
+  (`list_linear_issues`, `get_linear_issue`, `create_linear_issue`,
+  `update_linear_issue`, `add_linear_comment`, `list_linear_board_options`;
+  [tickets.md](tickets.md#linear)). Kanban stays the default board.
 - Create a validated environment with an initial agent prompt.
 - Launch a new job in an existing running environment.
 - Send a new prompt to an existing native-agent tab.
@@ -294,9 +298,9 @@ Operator credentials also get, under the names a coordinator already uses:
   that `run_status` follows. `create_pr` is refused while the environment has a
   PR and starts PR monitoring; `resolve_conflicts` refreshes the PR when it
   finishes. Neither merges. Only the button reuses an open Resolve tab
-  ([github-pull-requests.md](github-pull-requests.md#the-resolve-button));
+  ([github-pull-requests.md](github-pull-requests.md#resolve-launches));
   `resolve_conflicts` always opens a tab, so its receipt names that tab's run.
-- `merge_pr` (`pr.merge`): the action bar's Merge and Merge and Cleanup buttons,
+- `merge_pr` (`pr.merge`): the Merge PR dialog's Merge PR and Merge & Cleanup options,
   over `merge_environment_pr`, with a confirm token on every call. It takes the
   same arguments as the direct tool `pr_merge`; see
   [Pull requests](#pull-requests).

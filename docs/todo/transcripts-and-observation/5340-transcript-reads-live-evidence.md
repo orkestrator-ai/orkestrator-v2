@@ -6,13 +6,11 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`, plus the E9 build. The E9 bat
 
 ### Tasks
 
-1. **Live bytes per prompt send and per turn check**: measure what a real bridge sends for each, before and after E9. From part 0150, task 1 ("Capture the baseline"). Status: open.
-2. **How many Claude sessions reach large `/messages` bodies**: find the real share. From part 0150, "Needs verification". Status: open.
-3. **How often a tool-detail miss happens**: count evicted references users expand. From part 0110, "Needs verification". Status: open.
+1. **Live bytes per prompt send and per turn check**: measure what a real bridge sends for each, before and after E9, with a loopback model on an isolated `dev:test` profile (no billed turn). From part 0150, task 1 ("Capture the baseline"). Status: open.
 
 ### 1. Live bytes per prompt send and per turn check
 
-**Problem.** The maintainer gated the structural transcript work on numbers (1202 task 1, decided 2026-11-01). E9 took its baseline with fakes, because a real figure needs a real provider turn, which the build could not run.
+**Problem.** The maintainer gated the structural transcript work on numbers (1202 task 1, decided 2026-11-01). E9 took its baseline with fakes. A real bridge's envelope and compression can be measured without a billed turn; real row sizes need a real provider turn, which is on the manual-test checklist (7568: 5340 task 1).
 
 **Context.** Part 0150, task 1, asked for bridge read bytes per prompt send before any change. E9 recorded a fixture baseline on `69a3b4ca5`, in `apps/backend/src/core/native-agent-transcript-read-bytes.test.ts`: a provider fake over 400 rows of about 8 KB (3,292,561 bytes), counting the JSON each read returns. The method for live numbers is 1202 task 1's: the same measurement on two commits in an isolated `dev:test` profile.
 
@@ -30,55 +28,23 @@ The fake counts row JSON, not the HTTP envelope, compression or the bridge's own
 **Decisions.**
 
 - **How to get live numbers?**
-  - **Run 1202 task 1's method for these reads in one pass with the other transcript batches (recommended).**
-    - Pros: one profile run covers E9, E10 and E26; both commits are known.
-    - Cons: needs a real provider turn, which is billed, so it waits for someone who may run one.
+  - **Run 1202 task 1's method for these reads with the loopback-model profile spec from 6680 (retired 2026-11-11) task 1 (`e2e/agent-testing/conditional-reads-live.spec.ts`, [Live conditional reads](../../development/agent-testing.md#live-conditional-reads-loopback-models)), on both commits (recommended).**
+    - Pros: the profile's own renderer, gateway, backend, bridge and CLI, with no billed turn; both commits are known.
+    - Cons: the fake model's rows and filler text are not a real turn's sizes or compressibility; a billed real-provider run for those is on the manual-test checklist (7568: 5340 task 1).
+  - **Run 1202 task 1's method on a real provider turn.**
+    - Pros: one profile run covers E9, E10 and E26 with real rows.
+    - Cons: billed, so it needs someone allowed to run one (manual-test checklist).
   - **Treat the fixture figures as enough.**
     - Pros: no billed turn.
     - Cons: a fake cannot show what a real bridge's envelope, compression or row sizes cost.
 
-### 2. How many Claude sessions reach large `/messages` bodies
-
-**Problem.** Part 0150 asked for the real share of Claude sessions whose `/messages` bodies are large. Nobody has measured it.
-
-**Context.** Part 0200 now passes the limit to the `/messages` fallback, which stays until the support window passes a Claude bridge that loads sessions on `/transcript` ([version compatibility](../../architecture/version-compatibility.md#register), `bridge-transcript.messages-fallback`). The share says how much the fallback still costs until then.
-
-**Investigation.** Not measured. The fallback is counted (`bridge-transcript.messages-fallback`), but body sizes are not.
-
-**Decisions.**
-
-- **How to measure it?**
-  - **Read the fallback counter and the bridge's rollout sizes on a machine that uses Claude daily (recommended).**
-    - Pros: no code; a real workload.
-    - Cons: one user's sessions.
-  - **Add a content-free body-size bucket to the fallback counter.**
-    - Pros: lasting and exact.
-    - Cons: a new metric for a path that is being retired.
-
-### 3. How often a tool-detail miss happens
-
-**Problem.** Part 0110 traced the miss in code; nobody has seen one live, so how often users reach the "no longer available" message is unknown.
-
-**Context.** E9 made a miss on a remote reference recover from the row cache, the direct page cache or one summary read, and ask for a reload only when the row is held nowhere (`recoverRemoteToolDetails` in `native-agent-transcript-projection.ts`). The detail cache holds 4,096 entries or 64 MiB, so a miss needs a long session or many open sessions.
-
-**Investigation.** Covered by tests in `native-agent-service-summary-transcripts.test.ts` ("after eviction"). No live miss was observed.
-
-**Decisions.**
-
-- **How to find out?**
-  - **Watch for the reload message during a long multi-session day on a `dev:test` profile with a small detail cache (recommended).**
-    - Pros: shows the path a user sees, with no new code.
-    - Cons: needs real turns to build a long session.
-  - **Add a content-free counter of misses by outcome.**
-    - Pros: a lasting rate.
-    - Cons: a new metric for a path that is now cheap.
-
 ## Current state
 
-E9 is built: turn checks read session state only, an evicted remote detail is recovered without a raw read, and the `/messages` fallback asks for only the rows it keeps. Only the live evidence above is left.
+E9 is built: turn checks read session state only, an evicted remote detail is recovered without a raw read, and the `/messages` fallback asks for only the rows it keeps. Only the loopback-model figures above are left here; the real-workload readings are on the manual-test checklist (7568).
 
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1 and 5
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: a billed real-provider run; task 2, the share of large `/messages` bodies on a machine that uses Claude daily; task 3, how often a tool-detail miss happens in real use) moved there on 2026-11-10.
+- to-do 1202 efficiency follow-ups, tasks 1 and 5 (retired 2026-11-10)
 - Efficiency report, B (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) (TX-2, TX-8, TX-15, TX-18)
 - Efficiency outcome, closing check of E9 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)

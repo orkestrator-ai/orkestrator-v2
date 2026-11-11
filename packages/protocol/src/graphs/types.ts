@@ -144,10 +144,6 @@ export type GraphValueType =
   | { kind: "shape"; schema: GraphJsonSchema; budgets: ArtifactTypeBudgets; origin: string }
   | { kind: "list"; element: GraphValueType };
 
-export function graphNamedType(definition: GraphTypeDefinition): GraphValueType {
-  return { kind: "named", definition };
-}
-
 export function graphListType(element: GraphValueType): GraphValueType {
   return { kind: "list", element };
 }

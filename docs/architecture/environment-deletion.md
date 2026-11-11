@@ -267,6 +267,12 @@ watch, whose owner falls back to polling and retries; the next start spawns a ne
 helper. Linux keeps `fs.watch` in the backend: inotify has no shared stream to
 rebuild.
 
+Each rebuild also starts the stream from "now", so whatever happens under every
+other watch while it is rebuilt, about 30 ms, is lost rather than delayed. The
+helper therefore flags every other live watch after each start or close, the
+close it makes itself after a watch's error included, and their owners rescan
+([git-scan-caches.md](git-scan-caches.md#lost-events-on-macos)).
+
 The helper takes the blocking out of the backend; it does not make `fseventsd`
 any faster. With it at 100% of a core, independent Bun and Node processes writing
 one new file a second each saw their first event 72 s in, and about 44 events for
@@ -413,9 +419,8 @@ What the ticket's leads came to:
   before the fix three of six concurrent deletes took 72.1 s against 32.0 s;
   after it all six took 15.9 s.
 
-The remaining store cost is
-[6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md)
-task 6.
+The store cost was to-do 6120 task 6 (done 2026-11-09, retired 2026-11-10);
+its bounded cleanup is described above.
 
 ## Cleanup ledger
 

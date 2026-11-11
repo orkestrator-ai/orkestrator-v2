@@ -57,7 +57,17 @@ on how busy the host is. Test files that wait on something outside the test
 process — real Git, tmux, Chromium, agent CLIs, servers, sockets, or
 wall-clock sleeps and long timeouts — form the slow tier, declared in
 `scripts/test-tiers.ts`. `*-live.test.ts`, `*.live.test.ts`, and
-`*.integration.test.ts` files are slow by name.
+`*.integration.test.ts` files are slow by name in the root group and in every
+package that has such files (backend, desktop, protocol, and the Claude, Codex
+and Pi bridges). A unit test of a `scripts/*-live.ts` benchmark is named
+`*-live-script.test.ts` so that it stays in the default tier.
+
+When a file mixes cheap checks with real processes, split it rather than
+moving the cheap checks too: for example `firewall-egress-filter-names` and
+`workspace-setup-script-contract` stay in the default tier beside their
+slow-tier siblings. Before moving a file, consolidate repeated expensive setup
+(build a fixture once and copy it per test, or evaluate many cases in one
+shell) so the slow tier stays fast as well.
 
 - `mise run test` runs the default tier and prints how to run the rest.
 - `mise run test:slow` runs only the slow tier. Run it on demand, for example
@@ -273,19 +283,28 @@ are required for the escape and network cases.
 
 CI also runs `conformance-apparmor-live.test.ts` twice on the same Ubuntu
 runner, before and after its existing AppArmor remediation. The opt-in
-`ORKESTRATOR_CLAUDE_APPARMOR_PHASE` must be `restricted` or `remediated`;
-missing opt-in skips the test, but an unexpected host/probe result fails it.
+`ORKESTRATOR_CLAUDE_APPARMOR_PHASE` must be `restricted`, `stock` or
+`remediated`; missing opt-in skips the test, but an unexpected host/probe
+result fails it. `stock` is the first phase of the separate
+`claude-apparmor-qualification.yml` workflow on `ubuntu-24.04` (weekly, on
+demand, and on pull requests that change its inputs): it accepts whichever
+namespace answer the probe gives and requires the backend tier and the pinned
+CLI to agree with it, failing only on a setup error such as missing programs.
 Set `ORKESTRATOR_POLICY_CLAUDE_PATH` to the pinned native executable (its
 version is checked and every query uses that path). The restricted phase
 requires the real nested namespace refusal, a `provider-configured` backend
-tier, the CLI's `apply-seccomp` failure, successful hook-only reads, a hook
+tier, the CLI's `apply-seccomp` failure, a required-sandbox read the CLI does
+not run (also required for every refused `stock` answer, whatever the cause),
+successful hook-only reads, a hook
 write refusal, and an HTTP 422 provider-sandbox prompt refusal before dispatch.
 The remediated phase requires `enforced`, a successful sandboxed read and
 provider write control, and a coordinator sandbox write refusal without the
 hook. These use the scripted local endpoint and temporary homes, with no
 external model calls. `ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE` selects the output
-directory for `restricted.json` and `remediated.json`; CI uploads both with
-OS, kernel, revision, pinned CLI version and assertion outcomes. Remediation
+directory for `restricted.json` (or `stock.json`) and `remediated.json`; CI uploads both with
+OS, kernel, revision, pinned CLI version and assertion outcomes. Each report is
+written once the probe has answered and rewritten when the phase ends, with
+`outcome` and the `failedStage`, so a failing phase still leaves one. Remediation
 belongs only on a disposable runner; the test never changes host policy.
 
 OpenCode and Grok conformance read actual fixture project configuration using
@@ -300,7 +319,9 @@ or start a production backend.
 
 ## What the aggregate runner does
 
-`mise run test` submits four independent groups to the host capacity queue:
+`mise run test` first runs the guard stage (below) and stops, before admitting
+any group, if it fails. It then submits four independent groups to the host
+capacity queue:
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
@@ -338,9 +359,32 @@ paired Claude AppArmor qualification. The `Unit and integration tests` job passe
 only when every shard passed, so it stays the suite's single status.
 `tests/unit/ci-workflows.test.ts` checks that the shards cover every group once.
 
+GitHub Actions runs on the organisation's Free plan: at most 20 jobs at once,
+5 of them on macOS. When every merge kept its own full run and the packaged
+build validation ran on almost every change, demand passed that cap and jobs
+queued for over an hour (2026-11-10: 218 queued, 14 running). So:
+
+- A newer push to a pull request, or a newer commit on `main`, cancels the
+  older run of CI. A regression on `main` shows on the next completed run.
+- Draft pull requests run no jobs; marking one ready for review starts them.
+- `validate-bun-runtime.yml` (packaged desktop app and container image, on
+  four platforms including two macOS runners) runs on pull requests and merges
+  only when Bun, dependencies, Docker or packaging inputs change, and nightly
+  on `main` for everything else.
+
 The runner reports each group as soon as it finishes, but prints detailed
 failure sections in a stable order. It waits for every group, so one failure
 does not hide failures in groups that were already running.
+
+After a failed run it reruns each failing test file alone, once, from the
+directory and with the preloads of the suite that ran it (one worker, at most
+ten files, ten minutes in all, five per file), and prints a verdict per file:
+`PASSED ALONE` (likely a load flake: record it in the flaky-test register, never
+skip it) or `FAILED ALONE` (a real failure). The files come from Bun's
+`<file>:` header before each `(fail)` line, per Turbo task; a group that failed
+without one (a crash, a build error) is named as having nothing to rerun. The
+exit status stays the failure. `ORKESTRATOR_TEST_RERUN_FAILED=0` turns the
+reruns off.
 
 `mise run test:all` runs the same four groups first. If they pass and the host is
 macOS with Xcode available, it runs the iOS suite last and by itself because the
@@ -351,6 +395,31 @@ The Playwright component suite and the real-stack agent suites are deliberately
 not part of `mise run test`; they require different fixtures and, for agent
 testing, an isolated running application profile. Select them using the table
 above and [agent-testing.md](agent-testing.md).
+
+### Guards
+
+`mise run guards` (`scripts/guards.ts`) runs the repository-wide checks in one
+process, in about four seconds: the source-guard ratchet against
+`tests/source-guards/baseline.json` and the checks that each production-source
+guard still reaches its files, the DOM absence scan, project-class inheritance
+chains, test suite ownership, the raw-console directive scan, and the flaky-test,
+to-do and number-claim register tests (one `bun test` child alongside). They
+share one `git ls-files -co --exclude-standard` listing, one read per file and,
+for the source guards, one parse per file. On failure each guard prints its
+problems and what to do, and the command exits non-zero. `--only <id>`
+(repeatable) narrows it.
+
+These checks of the real repository run only there. The guards' fixture tests
+stay in the unit suite (`tests/unit/source-guards.test.ts`,
+`dom-absence-scan.test.ts`, `inheritance-chains.test.ts`, `raw-console.test.ts`,
+`test-suite-ownership.test.ts` and the guard-specific ones), and the root group
+leaves the three register test files out once the stage has passed in the same
+run. The stage runs whenever the root group is selected, outside the slow tier,
+without host admission: it is one short process, like lint, and queueing it
+behind another worktree's suite would defeat running it first. Set
+`ORKESTRATOR_TEST_SKIP_GUARDS=1` to skip it, for a rerun after it passed or
+when only the test groups' result matters. `mise run check` runs it between
+lint and typecheck.
 
 ## Where tests live
 
@@ -459,6 +528,35 @@ expect(client.calls("list_environments")).toHaveLength(2);
   command scope, so the component reads a provider as it does in the app
   while the suite's seeds and mocks still apply. It disposes nothing; the
   suite resets the app's scope with `resetWindowScopeForTests()` as before.
+
+### A native agent session as one projection
+
+`useNativeAgentSession` reads a session only through the progressive views
+(transcript, session state and discovery, each with its own token); a backend
+without them is reported as too old, never read another way. A suite about
+the tab's behaviour (composer, approvals, steering, coordinator panes) feeds
+it through `createNativeAgentSessionBackend`
+(`apps/web/src/test/native-agent-session-backend.ts`): describe the session
+as one `NativeAgentSessionProjection` (or `null`), and spread the returned
+`api` into the suite's `@/lib/backend` mock. It splits the projection the way
+the backend does, answers `unchanged` while a domain's content is the same,
+shares one projection read between the requests of one refresh, and pages
+the rows `readHistory` returns behind "Load earlier messages". Its `api`
+entries are mocks, so a suite can assert on the reads.
+
+- A store write is not a backend update: the next read installs what the fake
+  backend holds. To change the session mid-test, change what `readProjection`
+  answers (`AgentNativeTab.test.tsx`'s `publishProjection` does both).
+- A view whose provider session is not the tab's (`initialProviderSessionId`)
+  is ignored, so give a test's projection the session id its tab names.
+- Transcript and session state land separately; assert a combined outcome with
+  `waitFor`, not right after one of them.
+- Poll cadence runs on the read coordinator: install
+  `installFakeReadCoordinator()` and `clock.advance(…)` rather than waiting
+  for a real 500 ms or 1.5 s poll.
+- Bun 1.4's `toMatchObject` writes its asymmetric matchers
+  (`expect.objectContaining`, …) into the received object. Never point it at
+  live store state the component is still rendering; read the field instead.
 
 ### Agent CLIs on `PATH`
 
@@ -646,8 +744,9 @@ same suite, `e2e/agent-testing/service-preview-seeded-electron.spec.ts`. It
 gives the fixture project an `entryPort` and a `run` command, creates two local
 environments, and checks the wait state, two servers on one port with the
 port-move offer, a restart, agent links and framework hints in the real window
-([0045](../todo/previews-and-annotations/0045-preview-service-discovery.md),
-task 1). Both specs launch Electron through
+([browser-previews.md](../architecture/browser-previews.md#local-environments)).
+It also runs headless on Linux through `playwright.electron-headless.config.ts`
+with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`. Both specs launch Electron through
 `e2e/agent-testing/service-preview-electron-launch.ts`.
 
 Record results in the evidence log of
@@ -805,8 +904,12 @@ mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-l
 ```
 
 The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
-reported model — no prompts or tokens) is written to
-`output/cli-scenarios/<run>/manifest.json`. Record live results in the
+reported model; for a live scenario also the token counts and priced spend its
+backend recorded, in `results[].usage` — no prompts, credentials or
+environment names) is written to `output/cli-scenarios/<run>/manifest.json`.
+Usage is counted only for turns the backend has read back; a run whose last
+turn is a `session start` under-reports it
+([7815](../todo/cli-and-slash-commands/7815-cli-session-start-usage-unrecorded.md)). Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
@@ -893,11 +996,11 @@ Generate the reference before making the change; no artifact is committed
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
   runs the real feature-planning, build-pipeline and multi-review
-  supervisors over a temporary store, in rollback and keyed
-  modes, on one manual clock. Rollback is what
-  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
-  multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
-  per-workflow due passes). Each domain reports `storageReads` (store content
+  supervisors over a temporary store in keyed mode, and feature planning and
+  build pipelines also in rollback mode, on one manual clock. Rollback is what
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick. Multi
+  review has no rollback mode since its `WorkflowDueScheduler` was removed
+  (todo 0048 task 13). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
   (reuse of already-decoded records) and `storageBytes` (what those reads
   fetched from SQLite; cache-served reads fetch nothing). The test holds every attempt to a
@@ -942,8 +1045,9 @@ disappearance inside an observed interval invalidates that rate.
 
 Arms are `candidate` (defaults), `rollback`
 (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
-`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues and backend
-activity stay keyed in both arms, since their rollback drivers were removed)
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend activity
+and Multi Review stay keyed in both arms, since their rollback drivers were
+removed)
 and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
 freshness probes use it.
@@ -1027,7 +1131,10 @@ credential, login or provider: every turn goes to the fake model.
   N rounds of: `--busy-burst-files` (default 200) files written into every
   environment at once and removed; a turn in `busy-1` held at the model
   (`[hold:<id>]`) with a prompt queued behind it (`session prompt
-  --enqueue`); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  --enqueue`), with `--busy-turn-files` (default 0) files written into
+  `busy-1` while that turn is held and removed when the round ends, so the
+  turn and thread-segment owners get file lists past the 2,000-row
+  measurement cap (todo 4960); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
   which Pi parks as an approval, and agent mail to that tab; with two
   clients the second one's link cut (the outage link of
   `client-outage-support.ts`), with one its document hidden; the approval
@@ -1037,8 +1144,13 @@ credential, login or provider: every turn goes to the fake model.
   then submits fixed finding-free results) followed to `ready`, watched by
   every client whose link is up from a review view of its own (a second
   signed-in context opened on `busy-2` before the launch, selecting the
-  review's tab and recording each phase its header shows); and the cut or
-  hidden client restored.
+  review's tab and recording each phase its header shows), the previous
+  round's review cancelled and its tabs closed first (an environment holds at
+  most nine tabs, so without that every launch after the ninth round is
+  refused); and the cut or hidden client restored. A burst's badge is waited
+  for only up to the 2,000 untracked files the environment scan counts lines
+  for. The driver runs every step through this checkout's CLI, so run
+  `mise run build:cli` first.
 - Measures: each row of the latency budgets the round reaches, from the
   moment its cause is known (the fake model's arrival times, or the command's
   return) to what each connected client's page showed, plus backend rows
@@ -1189,6 +1301,115 @@ unread-state and transcript requests share the transition windows, and
 their timing-dependent totals are not WEB-3's refetch cost. The two list
 hydrators are all that remain at the 1202 baseline commit; the original
 report's third list had already been removed there.
+
+#### A claude-tmux tab in a container, and per-item counts on a busy profile
+
+Two drivers took 1202 task 1's Linux counts on 2026-11-10; both read a
+running credential-free profile and record kinds, counts and durations only.
+
+`scripts/container-tmux-tab-live.ts` opens one claude-tmux tab on the
+profile's container fixture environment. Its model is
+`e2e/agent-testing/container-fake-claude-api.ts`, run by the container's own
+Bun on the container's loopback and named in the container's
+`~/.claude/settings.json` (`container-fake-claude-install.ts`), so the image's
+real `claude` takes turns with no login. It measures five windows (no tab; the
+idle tab before its first prompt, when no transcript exists; three queued
+turns; the idle tab with its transcript bound; the container stopped with
+`docker stop` behind the app's back) and, for each, both the backend's
+`recurringWork` counters and every `docker exec` Docker itself reports for
+the container (`docker events --filter event=exec_start`), labelled by
+program only. Use Docker's count to compare commits: the claude-tmux tab
+loop has its own recurring kind, `tmux-tab-loop` (B30), only from
+2026-11-11 (todo 7567, retired that day); on older commits it is uncounted (`tmux-poll` is the
+per-container Claude state poll), and an older backend leaves more loops
+uncounted. Afterwards it starts the container again, removes the fake model
+and stops the tab.
+
+`scripts/busy-item-counts-live.ts` runs on a profile the 0048 busy driver
+filled and kept (`recurring-live-ab.ts --busy-rounds 3 --busy-clients 0
+--keep-profiles`), restarted with the same `dev:test` flags. It reads two
+windows: everything running, then every `busy-*` environment stopped through
+the public `environment.stop` action (so the presence pass meets stopped
+environments that own mailboxes), and starts them again.
+
+```bash
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ctab --fixture --fixture-environments local,container \
+  --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/container-tmux-tab-live.ts --profile ctab \
+  --out output/benchmarks/ctab.json
+mise run dev:stop --profile ctab && mise run dev:reset --profile ctab
+
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise exec -- bun scripts/recurring-live-ab.ts \
+  --arms candidate --busy-rounds 3 --busy-clients 0 --busy-environments 10 \
+  --fixture-environments local --agent-platforms pi --freshness-probes 0 \
+  --keep-profiles --profile-prefix busy --out output/benchmarks/busy.json
+mise run dev:test --profile <the kept profile> --fixture --fixture-environments local \
+  --no-agent-credentials --agent-platforms pi --headless
+mise exec -- bun scripts/busy-item-counts-live.ts --profile <the kept profile> \
+  --out output/benchmarks/items.json
+```
+
+Set `ORKESTRATOR_QUALIFICATION_DOCKER` before `PATH`: Bash expands these
+assignments in order, so with the shim's directory already on `PATH`
+`command -v docker` names the shim itself, which then execs itself in a loop
+and the profile never leaves `starting` (seen 2026-11-11).
+
+The busy driver needs `packages/cli/dist` (`bun run --cwd packages/cli
+build`) in whichever checkout runs the profile; with `--checkout` its busy
+phase uses that checkout's CLI, because today's CLI refuses a backend that
+publishes no Linux process identity. A launcher older than `--headless`
+shows its window on the signed-in desktop. On Linux keep it off with a
+two-line `electron` wrapper that `exec`s the checkout's own Electron binary
+with the switches in `HEADLESS_ELECTRON_SWITCHES`
+(`apps/desktop/electron/runtime-profile.ts`) and no `DISPLAY` or
+`WAYLAND_DISPLAY`, named by `ELECTRON_OVERRIDE_DIST_PATH` for that launcher
+(`bun install.js` in its `electron` package first if `dist/` is missing).
+Run `dev:stop` and `dev:reset` for such a profile from its own checkout.
+
+`container-tmux-tab-live.ts` also records each container change signal's
+state and rings (`tmux-hook-signal` is the claude-tmux doorbell) either side
+of every window. To see the doorbell confirmed on a Linux host whose own
+Docker cannot reach the host, run the same profile on a disposable rootless
+daemon with host loopback: its containers reach the backend through
+`10.0.2.2`, and the app's on-demand reachability check names that address
+on the first container create even with the boot check off.
+
+```bash
+mise run docker:build:dev --profile ctab        # with the qualification shim, as above
+mise run docker:disposable -- start --name ctab --host-loopback \
+  --image orkestrator-v2:dev-<hash>             # the tag docker:build:dev printed
+eval "$(mise run docker:disposable -- env --name ctab)"
+# then the same dev:test, container-tmux-tab-live.ts, dev:stop and dev:reset
+# commands as above, in this shell, so the profile and the driver use that daemon
+mise run docker:disposable -- stop --name ctab
+```
+
+`scripts/human-prompt-reads-live.ts` measures BG-9: one native Claude
+session started through the profile's CLI (`--checkout` for an older
+commit's), the profile's isolated Claude directory pointed at the loopback
+fake Anthropic model, no browser, then 60 s idle and 180 s with a turn held
+at the model. The human-prompt monitor's bridge reads are the unattributed
+`provider-request` counter; the artifact also has each kind's provider
+requests a minute.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile bg9 --fixture \
+  --fixture-environments local --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/human-prompt-reads-live.ts --profile bg9 \
+  --out output/benchmarks/bg9.json
+```
+
+A launch with a cold toolchain page cache needs no root on Linux: with the
+profile stopped, `find <dataDir>/toolchains -type f -exec dd if={} iflag=nocache count=0 status=none \;`
+evicts the toolchain's pages, and `fincore -b` on the same files confirms
+nothing is resident. Delete `<dataDir>/toolchains/.verified-stamps.json` as
+well for a full check. Time the `dev:test` start to its `Live` line (the
+launcher runs the toolchain step before Electron) and read Electron's
+`[toolchain] prepare.ready durationMs` from the profile's `logs/electron.log`,
+which is rewritten on every start.
 
 #### Image and layer sizes
 
@@ -1351,7 +1572,7 @@ orkestrator-v2 (Electron)
       └─ agent CLI → shell → mise run test  your test run
 ```
 
-The production backend, bridges, agent CLIs, and `opencode serve` processes
+The production backend, bridges, agent CLIs, and OpenCode server processes
 have the same executable names and similar command lines to the ones tests
 start. Killing any of them stops every local agent session on the host, including
 the one running the tests. On 2026-10-26 the production backend received
@@ -1850,11 +2071,11 @@ case resolved in the same change, with the Resolution section the registry's
 [Recording a case](../tests/flaky-tests/0000-index.md#recording-a-case) rules
 describe.
 
-Aggregate runs remove ambient bridge debug flags before spawning their groups:
-`ORKESTRATOR_BRIDGE_DEBUG`, `CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`,
-`ACP_BRIDGE_DEBUG`, `PI_BRIDGE_DEBUG`, and `CURSOR_BRIDGE_DEBUG`. This prevents
-a development profile's diagnostics from changing authoritative test inputs.
-If a focused reproduction needs one of those flags, set it explicitly on that
+Aggregate runs remove an ambient `ORKESTRATOR_BRIDGE_DEBUG`, the only bridge
+debug flag still read, before spawning their groups (the per-bridge spellings
+such as `CLAUDE_BRIDGE_DEBUG` are no longer read, so they are left alone). This
+prevents a development profile's diagnostics from changing authoritative test
+inputs. If a focused reproduction needs the flag, set it explicitly on that
 focused command and record it with the result.
 
 ### Reproduce before fixing

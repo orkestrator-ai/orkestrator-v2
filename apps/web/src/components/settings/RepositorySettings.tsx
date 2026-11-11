@@ -11,6 +11,7 @@ import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { SlidersHorizontal } from "lucide-react";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import {
+  isTmuxModeEnabled,
   normalizeAgentSettings,
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
@@ -748,6 +749,7 @@ export function RepositorySettings({
             onChange={setAgentSettings}
             tiers={tiers}
             canInherit
+            tmuxModeEnabled={isTmuxModeEnabled(config.global)}
             catalog={projectModelCatalog}
             disabled={isSaving}
           />

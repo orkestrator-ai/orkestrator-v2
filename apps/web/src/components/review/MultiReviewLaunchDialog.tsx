@@ -1,4 +1,3 @@
-import { AutoPipelineLaunch } from "./AutoPipelineLaunch";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Eye, Plus, Trash2, Wrench } from "lucide-react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
@@ -97,7 +96,6 @@ export type MultiReviewResolvedDefaults =
   | { status: "failed"; message: string };
 
 interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
-  autoPipelineEnvironmentId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy?: boolean;
@@ -428,7 +426,6 @@ function ModelRow({
 }
 
 export function MultiReviewLaunchDialog({
-  autoPipelineEnvironmentId,
   defaultAutoAddressFindings = false,
   defaultAutoPr = false,
   open,
@@ -568,13 +565,6 @@ export function MultiReviewLaunchDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {open && autoPipelineEnvironmentId && (
-          <AutoPipelineLaunch
-            key={autoPipelineEnvironmentId}
-            environmentId={autoPipelineEnvironmentId}
-            onPromoted={() => onOpenChange(false)}
-          />
-        )}
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
           aria-busy={busy || defaultsLoading}

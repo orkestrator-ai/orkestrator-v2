@@ -1,20 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { BASELINE_PATH, compareWithBaseline, parseBaseline } from "../source-guards/baseline";
-import { baselineKey, emptyFindings, scanRepository, scanSource } from "../source-guards/scan";
-import { repositoryModules } from "../source-guards/web-modules";
+import { compareWithBaseline, parseBaseline } from "../source-guards/baseline";
+import { baselineKey, emptyFindings, scanSource } from "../source-guards/scan";
 import {
-  WORKSPACE_EXEMPT_MODULES,
-  WORKSPACE_ROOT_MODULES,
   WORKSPACE_WINDOW_LEVEL_EXPORTS,
   commandBoundSubject,
   createWorkspaceCommandBoundCallGuard,
-  workspaceCommandBoundCall,
   workspaceGraph,
 } from "../source-guards/workspace-command-bound-call";
-
-const ROOT = path.resolve(import.meta.dir, "../..");
 
 /**
  * An in-memory renderer: a workspace root that imports a component, which
@@ -173,28 +165,6 @@ describe("workspace-command-bound-call (plan item 4007)", () => {
     expect(commandBoundSubject("packages/protocol/src/x")).toBeNull();
   });
 
-  test("the real workspace graph starts at the workspace and every exemption is in it", () => {
-    const graph = workspaceGraph(repositoryModules(ROOT), WORKSPACE_ROOT_MODULES, {});
-    for (const root of WORKSPACE_ROOT_MODULES) expect(graph.has(root)).toBe(true);
-    expect(graph.has("apps/web/src/components/terminal/TerminalContainer")).toBe(true);
-    expect(graph.has("apps/web/src/components/projects/ProjectWorkspace")).toBe(true);
-    // An exemption names a module the workspace really reaches, with a reason.
-    for (const [moduleId, reason] of Object.entries(WORKSPACE_EXEMPT_MODULES)) {
-      expect(graph.has(moduleId)).toBe(true);
-      expect(reason.length).toBeGreaterThan(10);
-    }
-  });
-
-  test("the committed baseline is the scan of the tree", () => {
-    const findings = scanRepository(ROOT, [workspaceCommandBoundCall])[
-      "workspace-command-bound-call"
-    ];
-    const counts = Object.fromEntries(
-      Object.entries(findings).map(([key, list]) => [key, list.length]),
-    );
-    const committed = parseBaseline(readFileSync(BASELINE_PATH, "utf8"))[
-      "workspace-command-bound-call"
-    ];
-    expect(counts).toEqual(committed);
-  }, 30_000);
+  // The real workspace graph (its roots, and that every exemption is in it) and
+  // the committed baseline are checked once, in the guard stage (`mise run guards`).
 });

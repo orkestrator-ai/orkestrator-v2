@@ -22,10 +22,8 @@ import {
   mergePrLocalCommand,
   prMonitorAgentTurnCompletedCommand,
   prMonitorProbeEnvironmentCommand,
-  prMonitorRefreshCommand,
   prMonitorWatchCommand,
   setEnvironmentAutoMergeCommand,
-  verifyEnvironmentPrCommand,
   verifyReviewPackageCommand,
 } from "@orkestrator/protocol/contract/domains/pull-requests";
 import {
@@ -60,7 +58,6 @@ import {
   parseReviewRound,
   parseReviewPreparationValidation,
   parseReviewPreparationFileNotes,
-  verifyEnvironmentPullRequest,
   verifyEnvironmentReviewPackage,
   generateReviewPackage,
   mergePullRequestInContainer,
@@ -155,16 +152,6 @@ export function registerPullRequestCommands(
   // argument is still a rejection.
   const registerDefined = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
     register(def, handler, ASYNC_HANDLER);
-  registerDefined(
-    verifyEnvironmentPrCommand,
-    async ({ environmentId, prUrl, targetBranch }, context) =>
-      verifyEnvironmentPullRequest(
-        asString(environmentId, "environmentId"),
-        asString(prUrl, "prUrl"),
-        asString(targetBranch, "targetBranch"),
-        context,
-      ),
-  );
   registerDefined(generateReviewPackageCommand, async (args, context) => {
     const { environmentId, packageId, round, targetBranch, preparation, additionalLimitations } =
       args;
@@ -351,7 +338,7 @@ export function registerPullRequestCommands(
           environment.autoMergeEnabledAt !== autoMergeEnabledAt ||
           environment.autoMergeCleanup !== true)
       ) {
-        throw new Error("Integration options changed; retry with current options");
+        throw new Error("Auto-merge options changed; retry with current options");
       }
       // Automatic intent remains revocable until confirmation; manual requests
       // retain their independent durable recovery timestamp.
@@ -503,19 +490,12 @@ export function registerPullRequestCommands(
       requestedMode,
     );
   });
-  /** Requests an immediate check for an environment already being monitored. */
-  registerDefined(prMonitorRefreshCommand, async ({ environmentId }, context) => {
-    await context.runtime.prMonitor.requestRefresh(
-      asString(environmentId, "environmentId"),
-      context,
-    );
-  });
   /**
    * Turns auto-merge on or off for an environment (`pr-auto-merge.ts`). The
    * flag is durable; turning it on also asks the monitor for a fresh reading
    * before acting, so a cached pre-request reading cannot authorize a merge.
    *
-   * `cleanupAfterMerge` (the Integrate dialog's "Auto-merge & Cleanup") also
+   * `cleanupAfterMerge` (the Merge PR dialog's "Auto-merge & Cleanup") also
    * deletes the environment once auto-merge has merged the PR. Every call
    * restates it, so turning auto-merge on again without it withdraws it.
    */

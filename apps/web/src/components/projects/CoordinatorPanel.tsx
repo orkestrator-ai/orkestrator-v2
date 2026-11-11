@@ -1,6 +1,6 @@
 import { flushSync } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
+import { AlertCircle, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
 import { useCoordinatorActiveTurn } from "./useCoordinatorActiveTurn";
@@ -11,6 +11,8 @@ import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkerPrompts } from "./CoordinatorWorkerPrompts";
+import { ProjectCheckoutNotice } from "./ProjectCheckoutNotice";
+import { useProjectCheckout } from "./useProjectCheckout";
 import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   COORDINATOR_SIDE_AGENT_EXPLANATION,
@@ -47,13 +49,11 @@ import {
   FloatingNoticeLayer,
 } from "@/components/ui/floating-notice";
 import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
-import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
-import { useProjectStore } from "@/stores/projectStore";
 import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -69,7 +69,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const paneLayouts = useNodeScope().store(coordinatorPaneLayoutStore);
   // The same node's compose drafts (plan item 3013).
   const composeDrafts = useNodeScope().store(nativeComposeStore);
-  const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
+  // Read from this node's own project list: a project id is per node.
+  const checkout = useProjectCheckout(projectId);
   const {
     snapshot,
     git,
@@ -129,6 +130,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }, [conversations, projectId, replacement]);
   const {
     layout,
+    layoutStatus,
+    retryLayout,
     backendSelectedId,
     updateLayout,
     changeLayout,
@@ -250,32 +253,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     mountedConversationIds,
   );
 
-  if (!project?.localPath) {
-    return (
-      <div
-        id="project-panel-coordinator"
-        role="tabpanel"
-        className="grid h-full place-items-center p-8"
-      >
-        <div className="max-w-lg rounded-xl border border-border bg-card p-6 text-center">
-          <GitBranch className="mx-auto mb-3 size-8 text-muted-foreground" />
-          <h2 className="text-lg font-semibold">Connect a local checkout</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Coordinator reads the project’s real local checkout. Set a valid local path in
-            Repository settings to continue.
-          </p>
-          <Button
-            className="mt-4"
-            variant="outline"
-            onClick={() =>
-              useAppDialogStore.getState().open({ kind: "repository-settings", nodeId, projectId })
-            }
-          >
-            Repository settings
-          </Button>
-        </div>
-      </div>
-    );
+  if (checkout !== "ready") {
+    return <ProjectCheckoutNotice projectId={projectId} state={checkout} />;
   }
 
   if (loading && !snapshot) {
@@ -642,6 +621,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   );
                 }}
               />
+            ) : layoutStatus === "failed" ? (
+              <CoordinatorLayoutReadFailed onRetry={retryLayout} />
             ) : null}
           </div>
         </FloatingNoticeLayer>
@@ -692,5 +673,32 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         </AlertDialog>
       </div>
     </CoordinatorPullRequestWatchProvider>
+  );
+}
+
+/**
+ * The tab groups could not be read. Nothing is shown in their place: a
+ * default grouping saved now would replace the user's (to-do 5000, retired).
+ * The store reads again on its own; Retry reads at once.
+ */
+function CoordinatorLayoutReadFailed({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="grid h-full place-items-center p-8">
+      <div
+        className="max-w-md rounded-xl border border-border/70 bg-card p-6 text-center"
+        data-coordinator-layout-read-failed=""
+      >
+        <AlertCircle className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden="true" />
+        <h2 className="font-semibold">Could not load the tab groups</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Your conversations are still open. They appear here, in your groups, once the groups can
+          be read. Trying again automatically.
+        </p>
+        <Button className="mt-4" variant="outline" size="sm" onClick={onRetry}>
+          <RotateCcw className="size-4" />
+          Retry now
+        </Button>
+      </div>
+    </div>
   );
 }

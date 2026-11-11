@@ -69,17 +69,10 @@ export function createGraphMockApi(client: BackendClient) {
     return graphsOn(client, machine).graph_run_mock({ ...request });
   }
 
-  function listGraphRunEffects(
-    runId: string,
-    machine?: AccountMachine,
-  ): Promise<{ effects: GraphRunEffect[] }> {
-    return graphsOn(client, machine).graph_run_effects({ runId });
-  }
-
-  return { launchGraphMockRun, listGraphRunEffects };
+  return { launchGraphMockRun };
 }
 
 export type GraphMockApi = ReturnType<typeof createGraphMockApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
-export const { launchGraphMockRun, listGraphRunEffects } = createGraphMockApi(commandBackendClient);
+export const { launchGraphMockRun } = createGraphMockApi(commandBackendClient);

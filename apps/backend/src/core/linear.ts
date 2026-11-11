@@ -21,6 +21,8 @@ export type LinearConnectionStatus = {
   hasToken: boolean;
   viewer?: LinearViewer;
   error?: string;
+  keyFingerprint?: string;
+  connectedAt?: string;
 };
 
 export type LinearIssueListItem = {
@@ -90,23 +92,23 @@ type LinearCommentCreateResponse = {
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asString(value: unknown, fallback = ""): string {
+export function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function optionalString(value: unknown): string | undefined {
+export function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function optionalNumber(value: unknown): number | undefined {
+export function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function nextPageCursor(
+export function nextPageCursor(
   pageInfo: { hasNextPage?: boolean; endCursor?: string | null } | undefined,
   seenCursors: Set<string>,
   resourceName: string,
@@ -133,7 +135,7 @@ export function sanitizeLinearError(error: unknown, secret?: string): string {
   return sanitized || "Linear request failed";
 }
 
-async function linearGraphql<T>(
+export async function linearGraphql<T>(
   apiKey: string,
   query: string,
   variables: Record<string, unknown> = {},
@@ -186,7 +188,7 @@ function readViewer(value: unknown): LinearViewer | undefined {
   return { id, name, email: optionalString(value.email) };
 }
 
-function issueFromNode(value: unknown): LinearIssueListItem | null {
+export function issueFromNode(value: unknown): LinearIssueListItem | null {
   if (!isRecord(value)) return null;
 
   const state = isRecord(value.state) ? value.state : {};
@@ -219,7 +221,7 @@ function issueFromNode(value: unknown): LinearIssueListItem | null {
   };
 }
 
-function detailFromNode(value: unknown): LinearIssueDetail | null {
+export function detailFromNode(value: unknown): LinearIssueDetail | null {
   const listItem = issueFromNode(value);
   if (!listItem || !isRecord(value)) return null;
 
@@ -267,7 +269,7 @@ function compareLinearCommentPosition(a: LinearIssueComment, b: LinearIssueComme
   return a.id.localeCompare(b.id);
 }
 
-function compareLinearIssuePosition(a: LinearIssueListItem, b: LinearIssueListItem): number {
+export function compareLinearIssuePosition(a: LinearIssueListItem, b: LinearIssueListItem): number {
   if (a.sortOrder !== undefined && b.sortOrder !== undefined && a.sortOrder !== b.sortOrder) {
     return a.sortOrder - b.sortOrder;
   }
@@ -294,7 +296,25 @@ export async function verifyLinearConnection(apiKey: string): Promise<LinearView
   return viewer;
 }
 
-export async function listLinearIssues(apiKey: string): Promise<LinearIssueListItem[]> {
+/** One Linear board: a team, optionally narrowed to one Linear project in it. */
+export type LinearBoardFilter = { teamId: string; linearProjectId?: string };
+
+/** Linear's `IssueFilter` for a board, or `undefined` for every issue the key can see. */
+export function linearBoardIssueFilter(
+  board?: LinearBoardFilter,
+): Record<string, unknown> | undefined {
+  if (!board) return undefined;
+  return {
+    team: { id: { eq: board.teamId } },
+    ...(board.linearProjectId ? { project: { id: { eq: board.linearProjectId } } } : {}),
+  };
+}
+
+export async function listLinearIssues(
+  apiKey: string,
+  board?: LinearBoardFilter,
+): Promise<LinearIssueListItem[]> {
+  const filter = linearBoardIssueFilter(board);
   const issues: LinearIssueListItem[] = [];
   let cursor: string | null = null;
   const seenCursors = new Set<string>();
@@ -302,8 +322,8 @@ export async function listLinearIssues(apiKey: string): Promise<LinearIssueListI
   while (true) {
     const data: LinearIssuesResponse = await linearGraphql<LinearIssuesResponse>(
       apiKey,
-      `query OrkestratorLinearIssues($after: String) {
-        issues(first: 100, after: $after, sort: [{ manual: { order: Ascending } }]) {
+      `query OrkestratorLinearIssues($after: String, $filter: IssueFilter) {
+        issues(first: 100, after: $after, filter: $filter, sort: [{ manual: { order: Ascending } }]) {
           nodes {
             id
             identifier
@@ -325,7 +345,7 @@ export async function listLinearIssues(apiKey: string): Promise<LinearIssueListI
           }
         }
       }`,
-      { after: cursor },
+      { after: cursor, ...(filter ? { filter } : {}) },
     );
 
     const nodes = Array.isArray(data.issues?.nodes) ? data.issues.nodes : [];

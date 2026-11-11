@@ -1,8 +1,4 @@
-import {
-  PUBLIC_API_LIMITS,
-  type PublicActionName,
-  type PublicReceipt,
-} from "@orkestrator/protocol/public-api";
+import { type PublicActionName, type PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
 import {
   classifyReceiptForWait,
@@ -12,7 +8,7 @@ import {
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
 import type { CommandContext, OptionSpec } from "../spec.js";
-import { observe, ObservationStopped, signalName } from "../wait.js";
+import { observe, ObservationStopped, signalName, observationClock } from "../wait.js";
 
 export const REQUEST_ID_OPTION: OptionSpec = {
   name: "request-id",
@@ -50,16 +46,6 @@ export const DEFAULT_WAIT_MS = 10 * 60 * 1000;
 export function stringOption(options: Record<string, unknown>, name: string): string | undefined {
   const value = options[name];
   return typeof value === "string" ? value : undefined;
-}
-
-export function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new CliError("invalid-input", `${label} is required`);
-  }
-  if (value.length > PUBLIC_API_LIMITS.pathMaxChars) {
-    throw new CliError("input-too-large", `${label} is too long`);
-  }
-  return value;
 }
 
 export function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
@@ -155,7 +141,11 @@ export async function submitForWait<T>(
             throw lookup;
           }
         },
-        { timeoutMs: Math.max(0, deadline - Date.now()), signal: context.signal },
+        {
+          timeoutMs: Math.max(0, deadline - Date.now()),
+          signal: context.signal,
+          ...observationClock(context.io),
+        },
       );
     } catch (lookup) {
       const stopped = context.signal?.aborted
@@ -288,7 +278,7 @@ export async function waitForOperation(
         }
         return { done: false };
       },
-      { timeoutMs, signal: context.signal },
+      { timeoutMs, signal: context.signal, ...observationClock(context.io) },
     );
   } catch (error) {
     if (error instanceof ObservationStopped) {
@@ -385,7 +375,7 @@ export async function waitForEnvironment(
         }
         return { done: false };
       },
-      { timeoutMs, signal: context.signal },
+      { timeoutMs, signal: context.signal, ...observationClock(context.io) },
     );
   } catch (error) {
     const stopped = context.signal?.aborted

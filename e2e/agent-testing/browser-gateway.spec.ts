@@ -1,3 +1,4 @@
+import { waitForGatewayRenderer } from "./gateway-renderer-ready";
 import { ensureProjectExpanded } from "./sidebar-project";
 import {
   newReviewValidationRun,
@@ -117,6 +118,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
   expect(response?.ok() ?? false).toBe(true);
   expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
   expect(page.url()).not.toContain("code=");
+  await waitForGatewayRenderer(page);
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     const invokeResponse = await page.request.post(
       new URL("/__orkestrator/invoke", status.browserUrl!).href,
@@ -363,7 +365,10 @@ test.describe("host path browsing", () => {
           ).toHaveValue(socketPath);
           await settings.getByRole("textbox", { name: "SSH agent socket", exact: true }).fill("");
           await settings.getByRole("button", { name: "Close settings" }).click();
-          if (pass === "initial") await page.reload({ waitUntil: "domcontentloaded" });
+          if (pass === "initial") {
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await waitForGatewayRenderer(page);
+          }
         }
       } finally {
         await new Promise<void>((resolve, reject) =>
@@ -2863,6 +2868,7 @@ for (const width of [1280, 390]) {
     expect(fixture).toBeTruthy();
     await page.setViewportSize({ width, height: 900 });
     const openUpdates = async () => {
+      await waitForGatewayRenderer(page);
       const globalSettings = page.getByRole("button", { name: "Global settings", exact: true });
       if (width < 768) {
         await expect(

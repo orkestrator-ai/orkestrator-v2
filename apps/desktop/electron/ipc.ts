@@ -165,17 +165,17 @@ export type BrowserPreviewController = {
   discardPendingCapture(captureId: string): Promise<void>;
   showPins(input: BrowserPreviewPinsInput): Promise<BrowserPreviewAnchorResult[]>;
   clearPins(tabId: string): Promise<void>;
-  // Capture contract version 2 (optional so older controllers still satisfy the type).
-  getCaptureCapabilities?(): BrowserPreviewCaptureCapabilities;
-  recordPendingCaptureReceipt?(
+  // Capture contract version 2.
+  getCaptureCapabilities(): BrowserPreviewCaptureCapabilities;
+  recordPendingCaptureReceipt(
     ack: BrowserPreviewCaptureAck,
   ): Promise<BrowserPreviewPendingCaptureDescriptor | null>;
-  listExpiredCaptureNotices?(): Promise<BrowserPreviewExpiredCaptureNotice[]>;
-  dismissExpiredCaptureNotices?(captureIds?: string[]): Promise<void>;
-  getPinResults?(tabId: string): Promise<BrowserPreviewPinSnapshot | null>;
-  getCaptureDiagnostics?(): Promise<BrowserPreviewCaptureDiagnostics>;
-  showOnPage?(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult>;
-  captureResponsiveSet?(
+  listExpiredCaptureNotices(): Promise<BrowserPreviewExpiredCaptureNotice[]>;
+  dismissExpiredCaptureNotices(captureIds?: string[]): Promise<void>;
+  getPinResults(tabId: string): Promise<BrowserPreviewPinSnapshot | null>;
+  getCaptureDiagnostics(): Promise<BrowserPreviewCaptureDiagnostics>;
+  showOnPage(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult>;
+  captureResponsiveSet(
     input: BrowserPreviewResponsiveSetInput,
   ): Promise<BrowserPreviewResponsiveSetResult>;
   destroy(tabId: string): void;
@@ -817,49 +817,40 @@ export function registerMainIpc({
     const tab = captureTabId(tabId);
     return tabPreviews(event, tab).clearPins(tab);
   });
-  // Contract version 2. Each handler checks the controller supports the operation.
-  const unavailable = () => new Error("This capture operation is unavailable");
+  // Contract version 2.
   handle("orkestrator:browser-preview:capture-capabilities", (event) => {
     const controller = previews(event);
-    if (!controller.getCaptureCapabilities) throw unavailable();
     return controller.getCaptureCapabilities();
   });
   handle("orkestrator:browser-preview:capture-pending-receipt", (event, ack: unknown) => {
     const controller = previews(event);
-    if (!controller.recordPendingCaptureReceipt) throw unavailable();
     return controller.recordPendingCaptureReceipt(captureAck(ack));
   });
   handle("orkestrator:browser-preview:capture-expired-list", (event) => {
     const controller = previews(event);
-    if (!controller.listExpiredCaptureNotices) throw unavailable();
     return controller.listExpiredCaptureNotices();
   });
   handle("orkestrator:browser-preview:capture-expired-dismiss", (event, ids: unknown) => {
     const controller = previews(event);
-    if (!controller.dismissExpiredCaptureNotices) throw unavailable();
     return controller.dismissExpiredCaptureNotices(captureIdList(ids));
   });
   handle("orkestrator:browser-preview:capture-pins-results", (event, tabId: unknown) => {
     const tab = captureTabId(tabId);
     const controller = tabPreviews(event, tab);
-    if (!controller.getPinResults) throw unavailable();
     return controller.getPinResults(tab);
   });
   handle("orkestrator:browser-preview:capture-diagnostics", (event) => {
     const controller = previews(event);
-    if (!controller.getCaptureDiagnostics) throw unavailable();
     return controller.getCaptureDiagnostics();
   });
   handle("orkestrator:browser-preview:capture-show-on-page", (event, input: unknown) => {
     const show = showOnPageInput(input);
     const controller = tabPreviews(event, show.tabId);
-    if (!controller.showOnPage) throw unavailable();
     return controller.showOnPage(show);
   });
   handle("orkestrator:browser-preview:capture-responsive-set", (event, input: unknown) => {
     const set = responsiveSetInput(input);
     const controller = tabPreviews(event, set.tabId);
-    if (!controller.captureResponsiveSet) throw unavailable();
     return controller.captureResponsiveSet(set);
   });
   handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) => {

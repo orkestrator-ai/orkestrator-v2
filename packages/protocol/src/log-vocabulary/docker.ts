@@ -34,7 +34,13 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
       "opencode.listener-replaced":
-        "The process on a container's OpenCode port is not the server the backend launched and recorded, so its password was withheld and the next start replaces it.",
+        "The process on a container's OpenCode port (`provider`: `opencode` or `opencode2`) is not the server the backend launched and recorded, so its password was withheld and the next start replaces it. `stage` is `request` when the re-check after a refused connection or an unexpected answer found it; that connection then sends nothing more.",
+      "opencode.project-config-too-large":
+        "A checkout's opencode.json or opencode.jsonc was larger than the limit, so a launched OpenCode server does not read it. File name only.",
+      "opencode.project-config-filtered":
+        "Values were left out of a checkout's OpenCode configuration before a launched server reads it: counts of plugin keys, `{env:}` and `{file:}` references and dropped instructions (including separate instructionGlob and instructionUrl counts), and the names of files that were not a JSONC object. Never values.",
+      "daemon.rootless-live-restore":
+        "The Docker daemon is rootless and has live-restore on, which a rootless restart cannot honour: the new daemon reports every container exited while the old containers' processes keep running with no network, so turn live-restore off in its daemon.json. Written once per backend.",
       "log-driver.unbounded":
         "The Docker daemon offers neither the local nor the json-file log driver, so new containers keep its default driver, whose log may be uncapped. Written once per backend.",
       "lifecycle-event.reconcile-failed":
@@ -47,6 +53,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "login-keeper.refresh-check-failed": "Checking the host Claude login after a refresh failed.",
       "login-watcher.pass-failed":
         "A container login file watcher pass failed; the next one retries.",
+      "login-watcher.opencode-renewal-failed":
+        "OAuth logins a host OpenCode server refreshed could not be copied into the `auth.json` containers are handed; the files are still delivered and the next pass retries. Error class only.",
       "lifecycle.record-failure-failed": "A failed container operation could not be recorded.",
       "lifecycle.reconcile-failed":
         "Reconciling one environment's container operation failed; the next pass retries.",
@@ -59,7 +67,9 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "availability.probe-failed":
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":
-        "An automatic host port collided on start, so it is retried once with fresh ports.",
+        "An automatic host port collided on start, so it is retried (up to three times): with fresh ports, or, when `backendChosen`, on the same backend-chosen port after a pause.",
+      "host-ports.owned-list-failed":
+        "Docker could not list the host ports the backend chose for this owner's other containers, so a new rootless container's ports were chosen avoiding only this process's recent choices.",
       "writer-lease.lost": {
         description:
           "This backend lost the registry writer lease, for the fixed `reason` given. Schedules stop and container changes are refused until it restarts.",
@@ -88,7 +98,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       },
       "bridge.listener-refused": {
         description:
-          "The socket listening on a container bridge's port is not the one the bridge the backend started opened (to-do 7250), so its token is not handed out and the next start replaces it. `reason` is a fixed label: `different-socket`, `several-sockets`, `pending` (a start has not recorded its bridge yet, or failed before it did) or `scan-incomplete`.",
+          "The socket listening on a container bridge's port is not the one the bridge the backend started opened, so its token is not handed out and the next start replaces it. `reason` is a fixed label: `different-socket`, `several-sockets`, `pending` (a start has not recorded its bridge yet, or failed before it did) or `scan-incomplete`.",
         essential: true,
         fields: { provider: "label", reason: "label" },
       },

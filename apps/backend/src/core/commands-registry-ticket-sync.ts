@@ -33,11 +33,11 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  * Command node side: `get_ticket_sync_status` for the board, and
  * `sync_node_tickets` to sync now.
  *
- * Images (to-do 3800 task 3), leaf side over the link only: `read_ticket_image`
+ * Images (#2027), leaf side over the link only: `read_ticket_image`
  * (the command node reads a leaf's image) and `put_ticket_image` (it delivers
  * an image the leaf asked for in `wantedImages`).
  *
- * The board (to-do 3800 tasks 2 and 4): `get_ticket_sync_leaf_status` and
+ * The board (#2027): `get_ticket_sync_leaf_status` and
  * `share_tickets_with_command_node` on a leaf, `dismiss_ticket_sync_conflicts`
  * on a command node.
  *
@@ -62,7 +62,7 @@ function sequence(value: unknown, name: string): number {
 }
 
 /** The calling command node, which must be attached to this node. */
-function attachedController(
+export function attachedController(
   args: { readonly controllerId?: unknown },
   context: CommandContext,
 ): string {

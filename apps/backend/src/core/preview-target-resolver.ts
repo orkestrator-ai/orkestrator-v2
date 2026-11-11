@@ -12,7 +12,7 @@ import {
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,
   GROK_ACP_BRIDGE_PORT,
-  OPENCODE_SERVER_PORT,
+  RETIRED_OPENCODE1_SERVER_PORT,
   OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
@@ -77,7 +77,8 @@ export function isAlwaysReservedPort(port: number): boolean {
  * own use and reachable through the relay, but are never preview targets.
  */
 const CONTAINER_AGENT_PORTS = new Set([
-  OPENCODE_SERVER_PORT,
+  // Still published, unused, on containers created before OpenCode 2.x.
+  RETIRED_OPENCODE1_SERVER_PORT,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,

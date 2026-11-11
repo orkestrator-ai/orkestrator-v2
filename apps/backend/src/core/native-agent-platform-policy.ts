@@ -8,7 +8,6 @@
  */
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import type { IncompleteTurnRecoveryStrategy } from "./native-agent-turn-recovery.js";
-import { openCodeIncompleteTurnRecoveryStrategy } from "./opencode-turn-recovery.js";
 
 export interface NativeAgentPlatformPolicy {
   /**
@@ -46,10 +45,9 @@ const POLICIES: Readonly<Record<BuildPipelineAgent, NativeAgentPlatformPolicy>> 
   codex: Object.freeze({ runsSessionHeldModel: true }),
   cursor: NO_POLICY,
   grok: NO_POLICY,
-  opencode: Object.freeze({
-    incompleteTurnRecovery: openCodeIncompleteTurnRecoveryStrategy,
-    infersComposerSelection: true,
-  }),
+  // OpenCode 1.x's incomplete-turn recovery read 1.x `{ info, parts }`
+  // messages; 2.x sessions report their runs' outcomes themselves.
+  opencode: Object.freeze({ infersComposerSelection: true }),
   pi: NO_POLICY,
 });
 

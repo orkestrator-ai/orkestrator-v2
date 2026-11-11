@@ -288,9 +288,6 @@ export function addLineCounts(left: LineCount, right: LineCount): LineCount {
   return partialCount(value);
 }
 
-/** The identity of zero text changes over a complete comparison. */
-export const ZERO_COUNT: LineCount = Object.freeze(exactCount(0));
-
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -480,8 +477,4 @@ export function measurementIssues(value: unknown): MeasurementValidationIssue[] 
     push("attribution.writerIsolation", "verified isolation cannot coexist with overlap");
   }
   return issues;
-}
-
-export function isChangeMeasurement(value: unknown): value is ChangeMeasurement {
-  return measurementIssues(value).length === 0;
 }

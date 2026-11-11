@@ -30,7 +30,14 @@ export function sessionRuntimeHealthBody(
   // Cursor and Pi bridges: `detached` once the idle window has released it.
   // Read from memory only, so observing it never re-attaches the session.
   const state = openClaudeRuntime(session) ? "attached" : "detached";
-  if (!session.health) return { ...emptyRuntimeHealth(), summary: { state }, ...mcpConfig };
+  // Which CLI that is (0005 task 8): unchanged across follow-ups, setting
+  // changes and approvals written into one warm process, and advanced by every
+  // launch. With `detached` it names the CLI the idle window released, so a
+  // reader can tell "released" from "never launched". A bare counter: no PID,
+  // nothing about the host.
+  const generation = session.claudeRuntimeGeneration;
+  const base = { state, ...(generation ? { runtimeGeneration: generation } : {}) };
+  if (!session.health) return { ...emptyRuntimeHealth(), summary: base, ...mcpConfig };
   const { drift, notices } = session.health.snapshot();
-  return { summary: { state, ...(drift ? { drift } : {}) }, notices, ...mcpConfig };
+  return { summary: { ...base, ...(drift ? { drift } : {}) }, notices, ...mcpConfig };
 }

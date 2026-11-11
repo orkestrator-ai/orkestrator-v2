@@ -31,66 +31,6 @@ describe("Electron backend command registry", () => {
     }
   });
 
-  test("validates and delegates resource revision manifest requests", async () => {
-    const generation = "a".repeat(32);
-    const projectRevision = "b".repeat(32);
-    const response = {
-      generation,
-      reset: false,
-      revisions: { project: projectRevision },
-    };
-    const getResourceRevisionManifest = mock(async () => response);
-    const context = {
-      storage: { getResourceRevisionManifest },
-    } as unknown as CommandContext;
-    const command = createCommandRegistry().get("get_resource_revision_manifest")!;
-
-    await expect(
-      command(
-        {
-          knownGeneration: generation,
-          knownRevisions: { project: projectRevision },
-        },
-        context,
-      ),
-    ).resolves.toEqual(response);
-    expect(getResourceRevisionManifest).toHaveBeenCalledWith(generation, {
-      project: projectRevision,
-    });
-
-    await expect(command({}, context)).resolves.toEqual(response);
-    expect(getResourceRevisionManifest).toHaveBeenLastCalledWith(undefined, {});
-
-    for (const knownRevisions of [null, [], "revisions"]) {
-      expect(() => command({ knownRevisions }, context)).toThrow("knownRevisions");
-    }
-    expect(() =>
-      command(
-        {
-          knownRevisions: { unknown: projectRevision },
-        },
-        context,
-      ),
-    ).toThrow("Unknown manifest resource: unknown");
-    expect(() =>
-      command(
-        {
-          knownRevisions: { project: "invalid" },
-        },
-        context,
-      ),
-    ).toThrow("Invalid manifest revision for project");
-    expect(() =>
-      command(
-        {
-          knownGeneration: "invalid",
-        },
-        context,
-      ),
-    ).toThrow("knownGeneration must be an opaque resource generation");
-    expect(getResourceRevisionManifest).toHaveBeenCalledTimes(2);
-  });
-
   test("requires paired, well-formed conditional snapshot cursors", async () => {
     const generation = "a".repeat(32);
     const revision = "b".repeat(32);
@@ -285,7 +225,25 @@ describe("Electron backend command registry", () => {
     },
   );
 
-  test.each(["opencode", "claude", "codex"] as const)(
+  // 200 ms is `LOCAL_SERVER_HEALTH_INTERVAL_MS`.
+  test("gives an OpenCode server the 60 s window a database creation or migration needs", async () => {
+    let checks = 0;
+    await expect(
+      commandTesting.waitForLocalServerHealth(45_678, "opencode", undefined, {
+        checkHealth: async () => {
+          checks += 1;
+          return false;
+        },
+        delay: async () => {},
+      }),
+    ).rejects.toThrow("Server on port 45678 did not become healthy");
+    expect(checks).toBe(commandTesting.OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS);
+    expect(commandTesting.OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS * 200).toBeGreaterThanOrEqual(
+      60_000,
+    );
+  });
+
+  test.each(["claude", "codex"] as const)(
     "keeps the existing startup window for %s servers",
     async (kind) => {
       let checks = 0;

@@ -24,18 +24,22 @@ projectId, conversationKey }`:
 - Agent tools derive the owner from the authenticated tool credential
   (`AgentToolScope`). Callers can never nominate a project, environment,
   conversation, path or target message.
-- When the credential is environment-wide (OpenCode's server registration),
-  the tools require `scopeCapability`: an artifact-only grant minted at
+- When the credential is environment-wide (OpenCode 1.x's server
+  registration, retired 2026-11-11), the tools require `scopeCapability`: an artifact-only grant minted at
   dispatch (`artifactDispatch.beginTurn` in the native agent service), bound
   to owner, provider session, turn and verbs, with its own HMAC secret and
   signing domain (`grants.ts`), at most 24 hours, digest-only persistence,
   revoked when the turn's outcome is recorded, and also when the provider
-  send throws (rejected or ambiguous dispatch). OpenCode receives it in the
-  prompt request's `system` field, never in visible prompt text. Because the
-  model passes it back as a tool argument, `redactArtifactGrantArgs`
+  send throws (rejected or ambiguous dispatch). OpenCode 1.x received it in
+  the prompt request's `system` field, never in visible prompt text; an
+  OpenCode 2 turn instead connects with a tab-scoped credential, or, on a
+  workflow-result broker turn, gets the grant as an artifact-only server
+  (`opencode2/turn-connections.ts`). Because a model passes a grant back as a
+  tool argument, `redactArtifactGrantArgs`
   (`@orkestrator/protocol/transcript-artifacts`) replaces `scopeCapability`
   with `"[redacted]"` in OpenCode transcript normalization
-  (`opencode-messages.ts`) and in every projected part (`projectionPart`,
+  (`opencode2/transcript-tools.ts`, and `opencode-display-transcript.ts` for
+  stored 1.x transcripts) and in every projected part (`projectionPart`,
   before the projected-message cache), for canonical artifact tool calls and
   for any value shaped like a grant (`oag1.`). The provider's own history may
   keep the (revoked) value. Grants never appear in results, diagnostics or
@@ -189,7 +193,9 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   lifetime, except that preparing the worker re-selects it; status reports
   `isolationSelection: "auto"`.
 - `container`: the pinned worker image (`docker/artifact-preview-worker/`,
-  Playwright 1.64.0 base pinned by digest) runs with `--network none
+  on the Playwright base image whose tag matches the backend's
+  `playwright-core` pin, pinned by digest; `tests/unit/version-drift.test.ts`
+  keeps the two in step) runs with `--network none
   --read-only --tmpfs /tmp --memory 1g --cpus 2 --pids-limit 128 --user
   pwuser --cap-drop ALL --security-opt no-new-privileges`, a seccomp profile
   that adds only `chroot` to Playwright's published profile so Chromium's
@@ -905,6 +911,31 @@ inside the artifact frame. Neither the artifact frame nor the shell could
 read its parent (`SecurityError`). A non-permitted ancestor receives no
 message from the shell, and the shell opened at the top level frames
 nothing.
+
+### Provider live cycle (2026-10-20)
+
+`e2e/agent-testing/rich-transcripts-live.spec.ts` is the end-to-end check
+that a real provider can author, fail, repair, publish and reopen an
+interactive artifact. It is opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_RICH_TRANSCRIPTS=1`),
+runs on a `dev:test --fixture` profile with that provider's credentials, and
+takes the provider from `ORKESTRATOR_AGENT_TEST_RICH_PROVIDER` and, where the
+default model is unusable, the model from `ORKESTRATOR_AGENT_TEST_RICH_MODEL`
+(Pi's first catalogue entry was a retired model that ended the turn with no
+reply and no error). One run checks: a calculator draft whose probe fails,
+the agent's `update_artifact` repair, publication of only the repaired
+revision with its receipt, the verified card, Run interactive through the
+trusted viewer shell under the generated CSP and headers, the live frame
+clipped to its card, reload recovery, the specification's rich Markdown
+fixture sent fenced so every rich block comes from the agent's reply, Find
+revealing and restoring a closed disclosure, and the 390 px layout.
+
+On 2026-10-20 (profile `rich-transcripts-qa`, Google Chrome, macOS, Docker
+29.8) it passed on all six providers: Codex, OpenCode, Cursor, Grok, Pi and
+Claude, 46 to 89 s each. The same day's runs found and fixed a publish check
+that compared a resolved dependency identity with the whole-manifest hash,
+and a live frame painting over the tab strip; after a backend restart, chart,
+Mermaid, static HTML and interactive publications were all read back from the
+ledger and rendered.
 
 ## Renderer commands for drafts and uploads
 

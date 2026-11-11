@@ -11,16 +11,34 @@ import {
   freshToolResults,
   freshToolStates,
   shellOutputContainsMarker,
+  lateOutputRowIds,
+  textShowsEmittedMarker,
   gapHistogram,
   discoveryRenewalDelta,
   invalidationCauseDelta,
   readCadence,
   readGaps,
   selectedCases,
+  detachWaitClosesRenderer,
+  detachWaitMs,
+  idleDetachWindowMs,
   sidebarActivityFromMarkerState,
 } from "./idle-observation-live-support";
 
 describe("idle observation live support", () => {
+  test("the detach wait follows each provider's idle window (todo 7380)", () => {
+    expect(detachWaitMs("claude", undefined)).toBe(630_000);
+    expect(detachWaitMs("pi", "")).toBe(630_000);
+    // Codex: 30 min without a touch, found by a 5 min sweep.
+    expect(idleDetachWindowMs("codex")).toBe(2_100_000);
+    expect(detachWaitMs("codex", undefined)).toBe(2_130_000);
+    expect(detachWaitMs("codex", "300000")).toBe(300_000);
+    expect(detachWaitMs("claude", "not a number")).toBe(630_000);
+    expect(detachWaitClosesRenderer("codex")).toBe(true);
+    expect(detachWaitClosesRenderer("claude")).toBe(false);
+    expect(detachWaitClosesRenderer("pi")).toBe(false);
+  });
+
   test("case selection keeps the canonical order and rejects unknown names", () => {
     expect(selectedCases(undefined)).toEqual([...IDLE_OBSERVATION_CASES]);
     expect(selectedCases(" hidden , approval ")).toEqual(["approval", "hidden"]);
@@ -193,6 +211,40 @@ describe("idle observation live support", () => {
     expect(shellOutputContainsMarker(prompt, marker)).toBe(false);
   });
 
+  test("late output never counts the case's own prompt or the echoed command", () => {
+    const marker = "IDLEQA-BGOUT-123456";
+    const prompt = `Start this shell command as a background task: sleep 20; echo ${marker}`;
+    // Fresh since the case started, but present when the initial turn settled.
+    const atSettle = new Set(["prompt", "reply"]);
+    const settledOnly = [
+      { id: "prompt", role: "user", content: prompt },
+      { id: "reply", role: "assistant", content: "IDLEQA-BG-1" },
+    ];
+    // The negative regression: a fresh user prompt holds the marker, nothing emitted it.
+    expect(lateOutputRowIds(settledOnly, new Set(), marker)).toEqual([]);
+    expect(lateOutputRowIds(settledOnly, atSettle, marker)).toEqual([]);
+    const quoted = [
+      ...settledOnly,
+      { id: "quote", role: "assistant", content: `I ran: sleep 20; echo ${marker}` },
+      { id: "quote-single", role: "assistant", content: `echo '${marker}'` },
+      { id: "late-user", role: "user", content: marker },
+      { id: "parts-only", role: "assistant", content: [{ type: "text", content: marker }] },
+    ];
+    expect(lateOutputRowIds(quoted, atSettle, marker)).toEqual([]);
+    const resumed = [
+      ...quoted,
+      { id: "status", role: "system", content: `Background command finished:\n${marker}` },
+      { id: "echoed-then-emitted", role: "assistant", content: `echo ${marker} printed ${marker}` },
+    ];
+    expect(lateOutputRowIds(resumed, atSettle, marker)).toEqual(["status", "echoed-then-emitted"]);
+    // A row that already carried the output when the turn settled is not late.
+    expect(lateOutputRowIds(resumed, new Set([...atSettle, "status"]), marker)).toEqual([
+      "echoed-then-emitted",
+    ]);
+    expect(textShowsEmittedMarker(`echo  "${marker}"`, marker)).toBe(false);
+    expect(textShowsEmittedMarker(marker, "")).toBe(false);
+  });
+
   test("only failed cases fail a provider", () => {
     expect(
       failedCases({
@@ -248,6 +300,8 @@ test("fake Pi overrides cannot escape loopback and real runs preserve overrides"
   expect(idleObservationModel("pi", true)).toBe("idleqa-fake/idleqa-1");
   expect(idleObservationModel("pi", false, "openai/real")).toBe("openai/real");
   expect(idleObservationModel("codex", true, "custom")).toBe("custom");
+  expect(idleObservationModel("opencode", true, "opencode/real")).toBe("idleqa-fake/idleqa-1");
+  expect(idleObservationModel("opencode", false, "opencode/real")).toBe("opencode/real");
 });
 test("async question prompt requests both replies the watcher expects", () => {
   const prompt = asyncQuestionPrompt("Choose a codeword", "IDLEQA-ASKED-1");

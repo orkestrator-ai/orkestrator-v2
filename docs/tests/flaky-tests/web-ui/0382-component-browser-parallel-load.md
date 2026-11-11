@@ -598,3 +598,149 @@ ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-claude-interactions
 No assertion, timeout or skip changed. Evidence:
 `orkestrator-test-run.OyQ3Ys/e2e-interaction-card.log.gz` below the host
 temporary directory.
+
+
+## Notes delivery context teardown — 2026-11-10
+
+- **Base:** `c98b20e6f6332895320b84b8edfd1f3cc9542ba0`.
+- **Observed head:** `13f709bc787ee6118c0cfca44369f3c48e562916`.
+- **Recurrence check:** `mise run flaky:recurrence -- 0382 --base c98b20e6f6332895320b84b8edfd1f3cc9542ba0`
+  reports this aggregate case open.
+- **Broad command:** `mise run test:logged -- --name delivery-browser -- mise run test:browser`,
+  nine component workers, exit 1 in 1,245.2 s: 1,665 passed, 152 skipped,
+  one failed. The public-site stage did not run in that command.
+- **Case:** desktop `native: history pages in without a click, opening with a page and paging near the top`,
+  `e2e/TranscriptPaging.spec.ts:430`.
+- **Exact error:** `Tearing down "context" exceeded the test timeout of 30000ms.`
+  This is a cleanup failure, distinct from the paging-assertion failures in
+  [1602](../native-agents-and-transcripts/1602-automatic-paging-reaches-first-row-timing.md).
+- **Trace:** the first-row paging poll completed successfully in 21,696 ms,
+  and the final Load earlier messages count assertion passed. `Close context`
+  did not settle before the context fixture failed after 30,002 ms. Worker
+  browser cleanup then completed in 36 ms. The runner reported no failed UI
+  assertion; failed intermediate attempts inside the successful poll are not
+  final assertion failures.
+- **Evidence:** bounded log `orkestrator-test-run.N3WSzA/delivery-browser.log.gz`
+  under the host temporary directory. The 16 KiB trace/context directory was
+  moved, without duplicating the trace, to
+  `output/agent-testing/delivery-validation/transcript-paging-original/`.
+
+The complete unchanged owner passed alone (39 passed, one skipped, no flaky
+count reported; exit 0, 196.2 s):
+
+```sh
+mise run test:logged -- --name delivery-paging-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/agent-testing/delivery-validation/paging-owner
+```
+
+The implicated case also passed three repeats in both viewport projects with
+three workers (exit 0, 52.3 s; passing counts were not retained):
+
+```sh
+mise run test:logged -- --name paging-cleanup-stress-selected -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --grep 'native: history pages in without a click' --repeat-each=3 --workers=3 --output output/agent-testing/delivery-paging-cleanup-stress
+```
+
+The initial diagnostic used an anchored selector that matched no tests and
+exited 1 in 0.7 s; it ran no cases. The command above corrected that selector.
+The separate public-site portion passed all eight cases in 9.9 s:
+
+```sh
+mise run test:logged -- --name delivery-public-browser -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+**Assessment:** the owner and repeated checks establish intermittence, not a
+cause or branch attribution. No paging implementation, UI assertion, timeout,
+retry or skip changed. The broad command on the observed head remains failed;
+focused passes do not replace it. Context teardown needs its own reproducer
+before changing the runner or its deadline. This record does not classify the
+failure as environmental or excuse it from qualification.
+
+
+## Explicit paging fixture lifetime — 2026-11-10
+
+The later qualification on `7c7a8b02e61188fc89742e26c66022a8c1b18fd2`
+repeated the same desktop context teardown failure in
+`e2e/TranscriptPaging.spec.ts:430`. Command:
+`mise run test:logged -- --name qualification-browser -- mise run test:browser`.
+Nine workers: 1,665 passed, 152 skipped, one failed, exit 1 in 1,241.2 s.
+The first-row poll succeeded in 21,616 ms; context teardown failed after
+30,003 ms. No paging assertion failed. Evidence:
+`orkestrator-test-run.QFwHN6/qualification-browser.log.gz` below the host
+temporary directory and
+`output/agent-testing/qualification-validation/transcript-paging-original/`.
+
+The complete unchanged owner passed (39 passed, one skipped, 195.4 s):
+
+```sh
+mise run test:logged -- --name qualification-paging-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/agent-testing/qualification-validation/paging-owner
+```
+
+The separate public-site portion passed eight cases in 10.2 s. These results
+do not replace the failed broad command.
+
+### Fixture cleanup
+
+The fixture had left its transcript mounted throughout browser-context
+teardown. It now exposes an explicit view disposer; the paging owner's
+`afterEach` invokes it while the page can still service React cleanup, then
+verifies the disposed state and absence of the transcript scroller. This ends
+the view's lifetime before closing its browser context. It does not stop
+provider work or delete a conversation, and all paging assertions run before
+cleanup. Existing test, assertion and teardown deadlines, retries and skips
+are unchanged.
+
+At `b667bb50a1689ef6bb5b95ee933d62cbc12a7264`, E2E typechecking passed,
+the complete paging owner passed with three workers (82.2 s), and the
+implicated case passed five repeats in both viewport projects with nine
+workers (53.8 s). Passing per-case counts were not retained:
+
+```sh
+mise run test:logged -- --name paging-dispose-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=3 --output output/agent-testing/paging-dispose-owner
+mise run test:logged -- --name paging-dispose-stress -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --grep 'native: history pages in without a click' --repeat-each=5 --workers=9 --output output/agent-testing/paging-dispose-stress
+```
+
+This makes fixture ownership explicit and verifies cleanup before context
+shutdown. The underlying Chromium/Playwright close stall's cause remains
+unconfirmed; the aggregate case stays open. Final committed-head qualification
+is reported in the implementation handoff, without discarding prior failures.
+
+## Action-search review repair — 2026-11-10
+
+Preparation for the coordinator action-search branch (`action-search-modal-1162dc5c0a2a-r1`, base `53340356c`, validated at `300105a39`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 5 failed, 5 flaky, 152 skipped, 1656 passed. The branch changes only the coordinator Actions panel, which renders for coordinator tabs; neither spec opens one. Evidence: `validation-11.stdout.txt` under `.orkestrator/review-artifacts/review-validation-985e2298-c3a5-42bd-bd66-83c90557e178/`. Two TranscriptPaging cases outside their own case files also failed: mobile-chromium `native: a same-minute page growing row zero holds the original tool position` (held-place assertion), and desktop-chromium `native: paging folds a visible short group during held-place restoration with reduce motion` (the `Show 60 tool calls` button lacked `aria-expanded=false`). ToolGroupFold (1012) and paging-near-the-top (1602) failures from the same run are recorded in their cases.
+
+The complete unchanged ToolGroupFold and TranscriptPaging owners then passed together with one worker (exit 0, 296.8 s):
+
+```sh
+mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Preparation for the transcript history efficiency branch (`transcript-history-efficiency-60750035e24d-r1`, base `498b68766f5c`, validated at `b0dc43135`) ran `mise run test:logged -- --name browser -- mise run test:browser`, which was killed at its 1,800,000 ms group deadline after 1,696 of 1,844 tests had started; ToolGroupFold line 79 had failed on mobile (9 px, then 141 px on retry). Evidence: `validation-10.stderr.txt` under `.orkestrator/review-artifacts/review-validation-5150afb1-3b56-4856-9919-a454adaddfb6/`. The exact command was rerun once and completed (exit 1, 27.9 min): 11 failed, 152 skipped, 1,681 passed. The failures:
+
+| Project | Spec | Case |
+| --- | --- | --- |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:79` | a live group crossing the fold threshold folds into its line with no-preference motion (1012) |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing above a released reader preserves their place with no-preference motion (0793) |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing below a released reader preserves their place with reduce motion (0793) |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:42` | native: paging before prose holds the original tool position (0483) |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:264` | native: paging folds a visible short group during held-place restoration with no-preference motion |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:450` | native: history pages in without a click, opening with a page and paging near the top (1602) |
+| desktop-chromium | `e2e/MailTiles.spec.ts:92` | find reveals a match below the mail preview and restores the saved expansion choice |
+| desktop-chromium | `e2e/ToolGroupFold.spec.ts:79` | a live group crossing the fold threshold folds into its line with no-preference motion (1012) |
+| desktop-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing above a released reader preserves their place with no-preference motion (0793) |
+| desktop-chromium | `e2e/TranscriptPaging.spec.ts:42` | native: paging before prose in a byte-bounded view holds the original tool position (0483) |
+| desktop-chromium | `e2e/TranscriptPaging.spec.ts:450` | native: history pages in without a click, opening with a page and paging near the top (1602) |
+
+This branch does change code these owners run: `TranscriptScrollController.holdPlaceAcrossReflow` now returns early while a history recovery is pending. The three complete owners then passed together with one worker, with that change in place (exit 0, 337.3 s):
+
+```sh
+mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts e2e/MailTiles.spec.ts --workers=1
+```
+
+Every failing case also failed in earlier branches' browser runs that did not carry the change (see this file and 1012, 0793, 0483, 1602). The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `487e2aa4e`, base `14df96544` (`mise run flaky:recurrence -- 0382 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes no `apps/web` or `e2e` code. A second `mise run test:logged -- --name browser -- mise run test:browser` on that branch: 9 failed, 153 skipped, 1706 passed (21.3 m), all in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602, 0793 and this case). Both desktop-chromium `native: paging folds a visible short group during held-place restoration` cases (`e2e/TranscriptPaging.spec.ts:264`) failed `toHaveAttribute("false")` with the element not found. The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone-2 -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` passed (exit 0, 295.5 s). Status stays open; no assertion, timeout or skip changed.

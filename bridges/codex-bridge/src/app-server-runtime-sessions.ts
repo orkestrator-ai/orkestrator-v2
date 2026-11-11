@@ -88,7 +88,7 @@ export class CodexRuntimeSessions {
   ) {}
 
   /**
-   * True from the moment DELETE claims this session. The session stays
+   * True from the moment `deleteSession` claims this session. The session stays
    * registered until its removal is published, so a waiting prompt retry must
    * read this rather than the registry, or it dispatches into a deleted session.
    */
@@ -1053,7 +1053,14 @@ export class CodexRuntimeSessions {
     // accepts thread-scoped MCP inventory requests for a thread loaded in the
     // current generation, so a lazy/restored or idle-detached session uses the
     // engine-global inventory until another route attaches it.
-    return this.ctx.options.engine.getRuntimeHealth(this.loadedThreadId(sessionId));
+    const threadId = this.loadedThreadId(sessionId);
+    const health = await this.ctx.options.engine.getRuntimeHealth(threadId);
+    // Whether this session's thread is loaded in the current app-server
+    // generation: the attachment fact Claude, Cursor and Pi report as
+    // `summary.state`, beside (not instead of) the engine's own health. An
+    // idle-detached, unmaterialized or restored-but-unresumed thread reads
+    // `detached`; the next prompt or tab read re-attaches it (todo 7380).
+    return { ...health, session: { state: threadId ? "attached" : "detached" } };
   }
 
   async listMcpServers(sessionId: string): Promise<unknown | null> {
@@ -1700,13 +1707,14 @@ export class CodexRuntimeSessions {
   private readonly deleteClaims = new WeakSet<BridgeSession>();
 
   /**
-   * Shared release for DELETE and the ordinary tab close.
+   * Shared release for `deleteSession` (a child session) and the ordinary
+   * tab close.
    *
    * The removal is published *before* the registry lets go, with persistence
    * fenced for this session object, so a failed write leaves nothing to
    * restore: the session is still registered and a retry reaches it.
    *
-   * - `best-effort` (DELETE): a failed tombstone is logged and the session is
+   * - `best-effort` (`deleteSession`): a failed tombstone is logged and the session is
    *   released anyway, as it always was.
    * - `strict` (close): a failed tombstone answers `unpublished` and the session
    *   stays registered, so the caller can report pending instead of claiming a
@@ -1721,7 +1729,7 @@ export class CodexRuntimeSessions {
 
     const context = this.ctx.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
-    // Last tab: stop the turn before detaching. DELETE used to only
+    // Last tab: stop the turn before detaching. A release used to only
     // unsubscribe, so Codex kept editing the worktree after the UI closed.
     if (context && turn && context.bridgeSessionIds.size === 1) {
       if (!(await this.lifecycle.capacityRetry.cancelForClose(context, turn))) {
@@ -1738,7 +1746,7 @@ export class CodexRuntimeSessions {
       if (publication === "strict") {
         if (!this.deleteClaims.has(session)) {
           this.retiredSessions.delete(session);
-          // Restore updates only if no concurrent DELETE has claimed removal.
+          // Restore updates only if no concurrent `deleteSession` has claimed removal.
           if (this.ctx.registry.getSession(sessionId) === session)
             await this.ctx.callbacks.persistSession(session);
         }

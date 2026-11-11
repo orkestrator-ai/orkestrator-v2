@@ -6,8 +6,8 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 ### Tasks
 
-1. **Real Cursor turn in the container**: a Cursor tab in the fixture container, signed in, runs a shell tool that is refused off the allowlist. Status: open (needs a Cursor login in a container profile).
-2. **Real Pi provider in the container**: a Pi tab in the fixture container on a real provider runs its `bash` tool under `auto-approve` and `ask`. Status: open (needs a Pi provider login in a container profile).
+1. **Real Cursor turn in the container**: add the opt-in variant of the fake cell (recommended below) in which a signed-in Cursor tab in the fixture container runs a shell tool that is refused off the allowlist; skipped unless its switch is set. Running it with a Cursor login and a billed turn is in the manual-test checklist (7568, 7040 task 1). Status: open.
+2. **Real Pi provider in the container**: add the opt-in variant (recommended below) in which a Pi tab in the fixture container on a real provider runs its `bash` tool under `auto-approve` and `ask`; skipped unless its model is set. Running it with a Pi provider login is in the manual-test checklist (7568, 7040 task 2). Status: open.
 
 ### 1. Real Cursor turn in the container
 
@@ -49,3 +49,4 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md) task 8 (the fake-engine cells).
 - [Exhausted-pool and probe-network evidence](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06) (what blocked the first manual profile start).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in runs of task 1 and task 2) moved there on 2026-11-10.

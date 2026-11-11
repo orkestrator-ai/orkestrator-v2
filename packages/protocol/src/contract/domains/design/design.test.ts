@@ -24,11 +24,8 @@ import {
 /** The keys each handler reads (2026-11-07), from `apps/backend/src/core/design/commands.ts`. */
 const KEYS: Record<string, readonly string[]> = {
   design_action: ["environmentId", "action", "input"],
-  design_status: [],
-  design_changes: ["canvasId", "environmentId", "generation", "after"],
   design_import: ["environmentId", "document"],
   design_import_host_file: ["environmentId", "path"],
-  design_save: ["environmentId", "canvasId", "filePath", "expectedRevision"],
   design_capabilities: [],
   design_readiness: ["probe"],
   design_snapshot: ["environmentId", "canvasId"],
@@ -70,7 +67,14 @@ const KEYS: Record<string, readonly string[]> = {
   design_capture: ["environmentId", "canvasId", "frameId", "priority"],
   design_session_link: ["environmentId", "canvasId", "link", "replaceId"],
   design_session_link_states: ["environmentId", "canvasId"],
-  design_session_resume: ["environmentId", "canvasId", "linkId", "expectedTabId", "tabId"],
+  design_session_resume: [
+    "environmentId",
+    "canvasId",
+    "linkId",
+    "expectedTabId",
+    "tabId",
+    "restoreArchived",
+  ],
   design_session_unlink: ["environmentId", "canvasId", "linkId"],
 };
 
@@ -78,13 +82,13 @@ const CANVAS = "00000000-0000-4000-8000-00000000c001";
 const ALL: readonly AnyCommandDef[] = DESIGN_COMMANDS;
 
 describe("design definitions", () => {
-  it("define the 35 design commands once each, in version 1 of the domain", () => {
+  it("define the 32 design commands once each, since version 1 of the domain", () => {
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(KEYS).sort());
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(35);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(32);
     for (const def of ALL) {
       expect([def.since, def.domain.version, def.domain.min, def.access]).toEqual([
         1,
-        1,
+        2,
         1,
         "workspace",
       ]);
@@ -111,21 +115,11 @@ describe("design definitions", () => {
       const args =
         def.name === "design_action"
           ? { environmentId: "e", action: "list_canvases", fromANewerPeer: true }
-          : def.name === "design_changes"
-            ? { canvasId: CANVAS, environmentId: "e", after: 1, fromANewerPeer: true }
-            : def.name === "design_import"
-              ? { environmentId: "e", document: "{}", fromANewerPeer: true }
-              : def.name === "design_import_host_file"
-                ? { environmentId: "e", path: "/a.orkdes", fromANewerPeer: true }
-                : def.name === "design_save"
-                  ? {
-                      environmentId: "e",
-                      canvasId: CANVAS,
-                      filePath: "a.orkdes",
-                      expectedRevision: 1,
-                      fromANewerPeer: true,
-                    }
-                  : { fromANewerPeer: true };
+          : def.name === "design_import"
+            ? { environmentId: "e", document: "{}", fromANewerPeer: true }
+            : def.name === "design_import_host_file"
+              ? { environmentId: "e", path: "/a.orkdes", fromANewerPeer: true }
+              : { fromANewerPeer: true };
       const decoded = decodeCommandArgs(def, args);
       expect(decoded._tag).toBe("Success");
       if (decoded._tag === "Success" && Object.keys(def.args.fields).length > 0) {
@@ -140,16 +134,9 @@ describe("design definitions", () => {
   });
 
   it("legacy arguments are precise: a wrong value is refused as before", () => {
-    for (const def of DESIGN_LEGACY_COMMANDS.filter((def) => def.name !== "design_status")) {
+    for (const def of DESIGN_LEGACY_COMMANDS) {
       expect(decodeCommandArgs(def, { environmentId: 7 })._tag).toBe("Failure");
     }
-    expect(
-      decodeCommandArgs(DESIGN_LEGACY_COMMANDS[2], {
-        canvasId: "not-a-uuid",
-        environmentId: "e",
-        after: 1,
-      })._tag,
-    ).toBe("Failure");
   });
 
   it("the formerly strict nested objects strip unknown keys", () => {
@@ -241,8 +228,8 @@ const resume = {
 };
 
 describe("design client", () => {
-  it("version 1: envelopes, decoded results, and every capability folded into the domain", async () => {
-    const node = fakeNode({ design: { min: 1, max: 1 } }, (command) =>
+  it("version 2: envelopes, decoded results, and every capability folded into the domain", async () => {
+    const node = fakeNode({ design: { min: 1, max: 2 } }, (command) =>
       command === "design_capabilities"
         ? { ok: true, value: { ...CAPABILITIES, sessions: false } }
         : {
@@ -251,7 +238,7 @@ describe("design client", () => {
           },
     );
     const client = createDomainClient(designClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     const design = client.api();
     expect(await design.capabilities()).toEqual({
       ok: true,
@@ -265,12 +252,12 @@ describe("design client", () => {
       {
         command: "design_capabilities",
         args: {},
-        envelope: { domain: "design", version: 1 },
+        envelope: { domain: "design", version: 2 },
       },
       {
         command: "design_session_resume",
         args: resume,
-        envelope: { domain: "design", version: 1, critical: ["expectedTabId"] },
+        envelope: { domain: "design", version: 2, critical: ["expectedTabId"] },
       },
     ]);
     expect(node.invoked).toEqual([]);

@@ -267,7 +267,7 @@ describe("temporary files left by a killed bridge", () => {
     register(newSessionState("client-a"));
     const old = new Date(Date.now() - 60 * 60 * 1_000);
     const names = {
-      legacy: "state.json.tmp",
+      formerFixedName: "state.json.tmp",
       otherStale: "state.json.999999.3.deadbeef.tmp",
       otherFresh: "state.json.999998.1.cafebabe.tmp",
       ownLeftover: `state.json.${process.pid}.1.0badf00d.tmp`,
@@ -277,14 +277,19 @@ describe("temporary files left by a killed bridge", () => {
     for (const name of Object.values(names)) {
       await realWriteFile(join(harness.stateRoot, name), "leftover");
     }
-    for (const name of [names.legacy, names.otherStale, names.unrelated, names.otherFile]) {
+    for (const name of [
+      names.formerFixedName,
+      names.otherStale,
+      names.unrelated,
+      names.otherFile,
+    ]) {
       await utimes(join(harness.stateRoot, name), old, old);
     }
 
     await persistBarrier();
 
     expect(await temporaries()).toEqual(
-      [names.otherFresh, names.unrelated, names.otherFile].sort(),
+      [names.formerFixedName, names.otherFresh, names.unrelated, names.otherFile].sort(),
     );
     expect(await harness.readPublished()).toMatchObject({ provider: "cursor" });
   });

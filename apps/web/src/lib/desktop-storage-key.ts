@@ -103,20 +103,7 @@ function namespacedKey(
 ): string {
   const { identity, legacyIdentity } = namespaceFor(desktopIdentity);
   const connectionKey = `${baseKey}:desktop:${hashIdentity(identity)}`;
-  const migrationKey = `${baseKey}:desktop:migrated-v1`;
-  // The first desktop window deliberately retains Electron's legacy default
-  // session for one release. Copy old Zustand state before persist middleware
-  // reads the first connection-specific key. Mark the base key as consumed so
-  // switching that window later cannot copy project-specific state into every
-  // other connection namespace.
   try {
-    if (localStorage.getItem(migrationKey) === null) {
-      if (localStorage.getItem(connectionKey) === null) {
-        const legacyValue = localStorage.getItem(baseKey);
-        if (legacyValue !== null) localStorage.setItem(connectionKey, legacyValue);
-      }
-      localStorage.setItem(migrationKey, "1");
-    }
     if (legacyIdentity && localStorage.getItem(connectionKey) === null) {
       // One-time adoption of the address-derived namespace by the verified
       // machine that owns that address.

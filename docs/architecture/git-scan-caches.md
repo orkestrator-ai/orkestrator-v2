@@ -44,7 +44,7 @@ below). Measured on a live macOS stack, a watch-mode build into an ignored `dist
 adds 2 to 5 scans per 10 source saves, and back-to-back builds run one scan every
 2.1–2.4 s, as continuous editing does; an install runs one to three. That cost was
 judged too small to justify reporting ignored directories as tree-only
-([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), tasks 1 and 2).
+(to-do 5060, tasks 1 and 2, retired 2026-11-10).
 
 ## What the worktree watch leaves out
 
@@ -61,7 +61,9 @@ and free of tracked files, at any depth, so an install there starts no scan.
 
 Only that name is left out, because the tree view skips `node_modules` at every depth
 and nothing a user sees depends on events from it. Other ignored directories appear
-in the tree view and the Files panel, so they stay watched. Git is asked again when
+in the tree view and the Files panel, so they stay watched, except a very large one
+on Linux, which is left out at the cost of qualified coverage
+([A large ignored tree](#a-large-ignored-tree)). Git is asked again when
 the proof could change: on a settled burst that touched the index or a `.gitignore`,
 and at once when a `node_modules` appears, so it is left out before an install enters
 it. Any failure, or more than 256 subtrees or 1,024 watches, watches the whole
@@ -72,7 +74,7 @@ What leaving out means depends on what a watch costs on the platform:
 | | Linux | macOS and other platforms |
 | --- | --- | --- |
 | A recursive watch | One inotify watch per directory, and Bun walks all of `node_modules` to place them | One FSEvents path, no per-directory cost |
-| An extra recursive watch | No measurable cost | Makes the shared FSEvents stream rebuild, which blocked whichever thread starts or closes a watch on a saturated `fseventsd` (below), so they run in a helper process (`watch-host.ts`); every rebuild also loses about 30 ms of events for every watch in that process |
+| An extra recursive watch | No measurable cost | Makes the shared FSEvents stream rebuild, which blocked whichever thread starts or closes a watch on a saturated `fseventsd` (below), so they run in a helper process (`watch-host.ts`); every rebuild also loses about 30 ms of events for every other watch in that process, which the helper flags ([Lost events on macOS](#lost-events-on-macos)) |
 | What runs | A non-recursive watch on the root and on each ancestor of a left-out subtree, and a recursive watch on every other child of those | One recursive root |
 | A left-out subtree | Not watched | Watched by the OS; its events are dropped on arrival, before they count towards a burst |
 | A new directory | The non-recursive watch sees it, and a watch is added | Covered by the root |
@@ -94,8 +96,10 @@ right list. Events are hints either way.
 Bun's recursive watch on Linux walks its tree on the event loop. When it meets a
 directory it may not open, it reports an `error` naming that directory (code `EPERM`,
 message `EACCES`) and carries on watching everything else, new directories included.
-A rootless container runtime whose data root is kept in the worktree (the disposable
-Docker daemon's `output/disposable-docker/`) holds hundreds of such directories.
+A rootless container runtime whose data root is kept in the worktree holds hundreds
+of such directories. The disposable Docker daemon kept its data root in the checkout's
+`output/disposable-docker/` until 2026-11-11; it now defaults to the user's state
+directory ([container qualification](../development/container-qualification.md#disposable-docker-daemon)).
 
 That report is not a failure. The watcher stays open and its events are still hints,
 but it withdraws qualified coverage (calling `onCoverageChange` again) and never
@@ -112,8 +116,50 @@ at a time until it dropped out of the federation. The retry budget had not stopp
 it either: coverage was announced a moment before the error arrived, and announced
 coverage used to grant a fresh budget. A failed watcher now starts a new budget only
 after holding qualified coverage for `WATCHER_STABLE_MS` (ten minutes, the longest
-watcher backoff). The one walk a large ignored tree still costs is to-do
-[7560](../todo/cross-cutting/7560-large-ignored-trees-in-the-worktree-watch.md).
+watcher backoff). The one walk a large ignored tree still cost is now avoided as
+well (below).
+
+### A large ignored tree
+
+Bun places a recursive watch's inotify watches by walking its tree on the event
+loop, at about 1 ms a directory on a loaded host (30,000 directories took about 35 s
+on beelink2). So on Linux the plan also leaves out an ignored, untracked directory
+other than `node_modules` once its subtree holds more than
+`WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES` (2,000) directories:
+
+- `listIgnoredTrees` reads both kinds of tree from the same two Git processes as
+  `listIgnoredDependencyTrees`. Past 64 other candidates
+  (`WATCH_PLAN_MAX_IGNORED_CANDIDATES`) none are measured, and all stay watched.
+- `exceedsDirectories` counts each candidate breadth first with asynchronous
+  `readdir`, off the event loop, and stops at the bound; it follows no symlink and
+  counts a directory it may not read, since Bun's walk would try it too. A result
+  over the bound stands until the directory identity (device and inode) changes.
+  One under it is reused for at most `WATCH_IGNORED_REMEASURE_MS` (60 s), so a
+  watched tree that grows in place past the bound is left out at the first plan
+  after that, rather than at the next restart.
+- A directory that appears, or is replaced, where the plan places recursive watches
+  (the root, or an ancestor of a `node_modules` left out) is not watched until a
+  plan has asked Git and measured it: the plan names each recursive target it vetted
+  with its identity, and applying a plan defers any other one and plans again. A
+  parent's rename event for a watched tree also discards its vetting and
+  measurement, because Linux hands a removed directory's inode to the next one made.
+  The cost is one Git read per such arrival, coalesced while a plan is running.
+- The tree view shows such a directory, so while one is left out the watcher is
+  open but not `qualified`, exactly as for an unreadable directory: its owner polls
+  and serves the tree on the unwatched age bound. Unlike an unreadable directory, a
+  tree that Git stops listing, or that is replaced by a new directory and measures
+  under the bound, is put back on the next plan and coverage is reported again. A
+  tree that only shrinks in place keeps its measurement until the watcher restarts:
+  that costs polling, never a count.
+- Without Git's answer the last measurement stands rather than walking the tree; a
+  rename or removal of a large tree replans before the plan moves.
+
+macOS keeps one recursive root with no per-directory cost and measures nothing.
+`worktree-watcher-large-ignored.test.ts` covers the watcher with a fake plan, and
+`worktree-watcher-real.test.ts` with real Git and real watches (2,001 ignored
+directories, the per-directory plan forced on macOS). The live check on a loaded
+Linux host is to-do
+[7560](../todo/cross-cutting/7560-large-ignored-trees-in-the-worktree-watch.md) task 3.
 
 ### Measured
 
@@ -142,7 +188,7 @@ before and 2 after, both from the sentinel. Hints during the install: 1 before,
 18–23 ms before, 2–3 ms after. A local environment in a live `dev:test` backend
 on the same disk showed edits, new files and files in new directories in under
 0.6 s, and an install into its ignored `node_modules` started no scan
-([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 4).
+(to-do 5060, task 4, retired 2026-11-10).
 
 macOS was first run on arktech-mini on 2026-11-04, where `fseventsd` was using 100–138% of a core with
 about 11 GB resident after seven days, and the first event took 3 to 35 s to arrive. Its
@@ -176,8 +222,7 @@ plan on macOS (`--mode=split`) removes those callbacks, but each start or close 
 a watch rebuilds the stream and loses events, not delays them, for every other watch
 in the process: a live watch written to every 10 ms lost 57–76 of about 177 writes
 while others were started and closed ten times, and none without. That is why macOS
-keeps one recursive root ([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md),
-task 3); the loss on any start or close is
+keeps one recursive root (to-do 5060, task 3, retired 2026-11-10); the loss on any start or close is
 [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md).
 `scripts/benchmark-recursive-watch-stall.ts` measures all of this.
 
@@ -190,11 +235,32 @@ helper says it is established. That is when the helper's `fs.watch` returned, wh
 can be before the rebuilt stream delivers: through the helper, a write straight
 after `qualified` was not named by any event in every round. The watcher's own
 change is still found, because each new watch sends a hint with unknown paths on
-establishment and the scan it starts runs after the settle. Other watches in the
-helper get no such hint ([7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md)).
+establishment and the scan it starts runs after the settle.
 
-Linux start and close for 20 watches took 6 ms and 0 ms. The measurements are recorded in
-[5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md).
+### Lost events on macOS
+
+The other watches in the helper lose about 30 ms of events on every start or close,
+because Bun 1.4.4 rebuilds its one stream from `kFSEventStreamEventIdSinceNow`
+(`schedule()` in `src/runtime/node/fs_events.rs`). So after each start or close it
+performs, the helper sets a `lost` flag on every other live watch, one boolean per
+watch per 50 ms flush like `overflow`, and the backend calls that watch's
+`onEventsLost` listeners. The close the helper makes itself after a watch's
+asynchronous error rebuilds the stream too, so it flags the other watches the same
+way. `WorktreeWatcher` turns the flag into a scan hint with unknown paths. The lost
+events may have been the `.gitignore` edit, ancestor rename or staged file that
+invalidates its `node_modules` proof, so while one is in force the watcher stops
+dropping events by it and reads it again from Git when the burst settles; a proof
+that shrank reports the subtree put back, as any replan does. A flag on a Git
+metadata watch rescans the file list only. The settle window folds a worktree's
+flags into one hint and one Git read, so an environment's start of up to four
+watches costs every other watched worktree one scan and, if it leaves anything out,
+two git processes; a worktree that leaves nothing out asks Git nothing. The graph
+project templates watch reloads on the flag too. An older helper sends no flag and
+is read as none. The upstream request to rebuild from the last delivered event id
+is to-do [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2.
+
+Linux start and close for 20 watches took 6 ms and 0 ms. The full measurements were recorded in
+to-do 5060 (retired 2026-11-10; its last version is in Git history).
 
 ## What one scan costs
 
@@ -509,4 +575,13 @@ migration's scoping, the daemon stop and the fallback wiring. Its real-daemon
 cases run wherever `git version --build-options` reports
 `feature: fsmonitor--daemon`, Linux included, and stop every daemon they start.
 
-Remaining work: [0735-git-fsmonitor-follow-ups.md](../todo/containers-and-environments/0735-git-fsmonitor-follow-ups.md).
+The Windows branch of the fingerprint probe (the bounded `taskkill /t /f`
+cleanup) has never run, and the blocking-hook regression in
+`review-worktree-fingerprint.test.ts` is skipped on Windows: it intercepts Git
+with a POSIX `sh` script named `git` first on `PATH`, which Node's
+`spawn("git")` on Windows does not resolve (it finds only `git.exe`/`.cmd`). A
+Windows variant needs another way to observe the calls (for example
+`GIT_TRACE` to a file) and a hook fixture without `#!` or SIGTERM. That run,
+and the per-call latency with and without fsmonitor on Windows, are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(0735 tasks 4 and 6; to-do 0735 retired 2026-11-10).

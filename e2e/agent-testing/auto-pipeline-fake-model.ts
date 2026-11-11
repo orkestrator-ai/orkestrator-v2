@@ -11,7 +11,9 @@
  *
  * Control routes, loopback only:
  * - `GET /__calls`: counts only (completions, refusals, submissions by tool,
- *   tools currently held). No prompt, header, body or capability is kept.
+ *   tools currently held, turns started per `QATAG…` qualification tag, and
+ *   the most user messages carrying a tag in any one request, `tagPeaks`).
+ *   No prompt, header, body or capability is kept.
  * - `POST /__release?tool=<name>`: answers every request parked on that
  *   submission tool, and every later one at once.
  *
@@ -20,7 +22,13 @@
  * something at a known point (switch environments, change the ticket's
  * delivery policy) before the pipeline moves on.
  */
-import { FAKE_REPLY, scriptedTurn, type FakeStep } from "./auto-pipeline-fake-model-script";
+import {
+  FAKE_REPLY,
+  scriptedTurn,
+  taggedUserMessages,
+  turnStartTags,
+  type FakeStep,
+} from "./auto-pipeline-fake-model-script";
 
 export const FAKE_MODEL_ID = "autopipe-1";
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -36,6 +44,8 @@ const released = new Set<string>();
 const parked = new Map<string, Set<() => void>>();
 const counts = { completions: 0, refused: 0 };
 const submissions: Record<string, number> = {};
+const tags: Record<string, number> = {};
+const tagPeaks: Record<string, number> = {};
 
 function waitFor(tool: string, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -122,6 +132,8 @@ const server = Bun.serve({
       return Response.json({
         ...counts,
         submissions: { ...submissions },
+        tags: { ...tags },
+        tagPeaks: { ...tagPeaks },
         held: [...parked.keys()],
       });
     }
@@ -152,6 +164,13 @@ const server = Bun.serve({
       return new Response("bad request", { status: 400 });
     }
     counts.completions += 1;
+    for (const tag of turnStartTags(body.messages)) {
+      if (Object.keys(tags).length < MAX_TRACKED || tag in tags) tags[tag] = (tags[tag] ?? 0) + 1;
+    }
+    for (const [tag, count] of Object.entries(taggedUserMessages(body.messages))) {
+      if (Object.keys(tagPeaks).length < MAX_TRACKED || tag in tagPeaks)
+        tagPeaks[tag] = Math.max(tagPeaks[tag] ?? 0, count);
+    }
     const turn = scriptedTurn({ messages: body.messages, tools: body.tools });
     if (turn.submits && turn.workflow) {
       await waitFor(turn.workflow, request.signal);

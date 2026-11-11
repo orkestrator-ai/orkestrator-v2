@@ -14,6 +14,7 @@ import {
   getSession,
   getSessionActivity,
   nextQueryCall,
+  queryControlOverrides,
   mockGetMcpServerNames,
   mockGetMcpServersForSdk,
   respondToInteraction,
@@ -438,6 +439,93 @@ describe("tool approvals under an ask policy", () => {
       respondToInteraction(id, { action: "decline" });
     }
     await Promise.all(decisions);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("labels an MCP call with the hints the CLI's status records, never changing eligibility", async () => {
+    // The status the pinned CLI 2.1.319 answers for a server named `hint.srv x`
+    // (`claude-mcp-tool-hints.test.ts` has the observation).
+    let statusReads = 0;
+    queryControlOverrides.mcpServerStatus = async () => {
+      statusReads += 1;
+      return [
+        {
+          name: "hint.srv x",
+          status: "connected",
+          source: "user",
+          tools: [
+            { name: "wipe.disk tool", annotations: { destructive: true } },
+            { name: "read_thing", annotations: { readOnly: true, openWorld: true } },
+            { name: "plain", annotations: {} },
+          ],
+        },
+      ];
+    };
+    const session = createSession("ask-mcp-tool-hints");
+    track(session.id);
+    session.executionPolicy = ASK_POLICY;
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+    const server = { mcpServer: { name: "hint.srv x", source: "user" } };
+
+    const decisions = [
+      call.options.canUseTool!("mcp__hint_srv_x__wipe_disk_tool", {}, context("req-h1", server)),
+      call.options.canUseTool!("mcp__hint_srv_x__read_thing", {}, context("req-h2", server)),
+      call.options.canUseTool!("mcp__hint_srv_x__plain", {}, context("req-h3", server)),
+      // A CLI that names no server: no lookup, so no label.
+      call.options.canUseTool!("mcp__hint_srv_x__read_thing", {}, context("req-h4")),
+      call.options.canUseTool!("Bash", { command: "ls" }, context("req-h5")),
+    ];
+    await waitFor(() => getPendingInteractions(session.id).length === 5);
+    const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
+    expect(pending.get("req-h1")).toMatchObject({
+      toolHints: { destructive: true },
+      mcpServer: "hint.srv x",
+      ruleEligible: true,
+    });
+    expect(pending.get("req-h2")).toMatchObject({
+      toolHints: { readOnly: true, openWorld: true },
+      ruleEligible: true,
+    });
+    for (const id of ["req-h3", "req-h4", "req-h5"]) {
+      expect(pending.get(id)).not.toHaveProperty("toolHints");
+    }
+    // One read per MCP call that names its server; none for the others.
+    expect(statusReads).toBe(3);
+
+    for (const id of ["req-h1", "req-h2", "req-h3", "req-h4", "req-h5"]) {
+      respondToInteraction(id, { action: "decline" });
+    }
+    await Promise.all(decisions);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("parks an MCP call without hints when the CLI's status read fails", async () => {
+    queryControlOverrides.mcpServerStatus = async () => {
+      throw new Error("Query closed before response received");
+    };
+    const session = createSession("ask-mcp-tool-hints-closed");
+    track(session.id);
+    session.executionPolicy = ASK_POLICY;
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    const decision = call.options.canUseTool!(
+      "mcp__repo__deploy",
+      {},
+      context("req-h6", { mcpServer: { name: "repo", source: "project" } }),
+    );
+    await waitFor(() => getPendingInteractions(session.id).length === 1);
+    const [request] = getPendingInteractions(session.id);
+    expect(request).toMatchObject({ id: "req-h6", mcpServer: "repo", ruleEligible: true });
+    expect(request).not.toHaveProperty("toolHints");
+
+    respondToInteraction("req-h6", { action: "decline" });
+    expect(await decision).toMatchObject({ behavior: "deny" });
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;

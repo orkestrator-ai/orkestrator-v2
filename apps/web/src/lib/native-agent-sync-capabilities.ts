@@ -6,6 +6,13 @@
  * node is never read with the first one's protocol. A caller that names no
  * scope gets the command node's, which is where every session read goes until
  * plan item 3009 scopes them.
+ *
+ * The renderer reads sessions only through projection sync v1 with progressive
+ * views v1, which every release since the support floor (v2.21.0) advertises.
+ * A backend that lacks either, or predates the command, is too old: there is
+ * no full-projection fallback any more, and the session hook reports
+ * {@link NativeAgentSyncUnsupportedError} on the pane's error surface instead.
+ * See docs/architecture/version-compatibility.md ("The support window").
  */
 
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
@@ -23,8 +30,8 @@ import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 const UNSUPPORTED_RECHECK_MS = 30_000;
 
 interface SyncCapability {
+  /** Projection sync v1 and progressive views v1, the only read path the renderer has. */
   supported: boolean;
-  progressive: boolean;
   /** The backend announces stamped, session-scoped activity invalidations. */
   observationEvents?: boolean;
   /** The backend can answer transcript deltas with part-level patches. */
@@ -53,8 +60,26 @@ function current(scope?: NodeScope): SyncCapability | null {
   return state.value?.generation === state.generation ? state.value : null;
 }
 
-/** Whether the node's backend speaks projection sync v1 (asks it once per generation). */
-export async function nativeAgentSyncSupported(scope?: NodeScope): Promise<boolean> {
+/**
+ * The node's backend does not speak projection sync v1 with progressive views
+ * v1: a source build from before the support floor. Its message is what the
+ * session pane shows.
+ */
+export class NativeAgentSyncUnsupportedError extends Error {
+  constructor() {
+    super(
+      "Agent sessions are not available on this machine: its backend predates native-agent sync v1 with progressive views (Orkestrator v2.21.0). Update it.",
+    );
+    this.name = "NativeAgentSyncUnsupportedError";
+  }
+}
+
+/**
+ * Whether the node's backend speaks projection sync v1 with progressive views
+ * v1 (asks it once per generation; an unsupported answer is re-asked after
+ * {@link UNSUPPORTED_RECHECK_MS}, so an updated backend is picked up).
+ */
+export async function nativeAgentProgressiveSyncSupported(scope?: NodeScope): Promise<boolean> {
   const target = scope ?? appCommandScope();
   const state = syncCapabilityState(target);
   const generation = state.generation;
@@ -72,11 +97,12 @@ export async function nativeAgentSyncSupported(scope?: NodeScope): Promise<boole
       const capabilities = await backendApiForScope(target, createWorkflowsApi, {
         getNativeAgentSyncCapabilities,
       }).getNativeAgentSyncCapabilities();
-      const supported = capabilities.projectionSyncVersions?.includes(1) === true;
+      const supported =
+        capabilities.projectionSyncVersions?.includes(1) === true &&
+        capabilities.progressiveViewVersions?.includes(1) === true;
       if (generation === state.generation) {
         state.value = {
           supported,
-          progressive: capabilities.progressiveViewVersions?.includes(1) === true,
           observationEvents:
             capabilities.observationEventVersions?.includes(
               NATIVE_AGENT_OBSERVATION_EVENT_VERSION,
@@ -97,7 +123,7 @@ export async function nativeAgentSyncSupported(scope?: NodeScope): Promise<boole
         incompatibility(error, "get_native_agent_sync_capabilities")?.code === "unknown-command"
       ) {
         if (generation === state.generation) {
-          state.value = { supported: false, progressive: false, checkedAt: Date.now(), generation };
+          state.value = { supported: false, checkedAt: Date.now(), generation };
         }
         return false;
       }
@@ -113,10 +139,15 @@ export async function nativeAgentSyncSupported(scope?: NodeScope): Promise<boole
   }
 }
 
-export async function nativeAgentProgressiveSupported(scope?: NodeScope): Promise<boolean> {
-  const target = scope ?? appCommandScope();
-  await nativeAgentSyncSupported(target);
-  return Boolean(current(target)?.progressive);
+/**
+ * Resolves once the node's backend is known to speak the sync protocol the
+ * renderer reads sessions with; throws {@link NativeAgentSyncUnsupportedError}
+ * when it does not (including a backend that predates the capability command).
+ */
+export async function requireNativeAgentProgressiveSync(scope?: NodeScope): Promise<void> {
+  if (!(await nativeAgentProgressiveSyncSupported(scope))) {
+    throw new NativeAgentSyncUnsupportedError();
+  }
 }
 
 /**

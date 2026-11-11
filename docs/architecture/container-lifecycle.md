@@ -3,8 +3,8 @@
 Living guide to how the backend owns environment containers. Qualifying a
 change against a real daemon is in
 [container-qualification.md](../development/container-qualification.md);
-outstanding work is in `docs/todo/containers-and-environments/`, starting with
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+outstanding work is in `docs/todo/containers-and-environments/`
+([index](../todo/containers-and-environments/0000-index.md)).
 
 ## Authority
 
@@ -172,7 +172,7 @@ from the repository root with those arguments.
 
 `get_docker_image_status` reports `missing`, `compatible`, `legacy`,
 `incompatible` or `unavailable` with the missing capabilities and fixed
-remediation text. `check_base_image` remains a presence-only adapter.
+remediation text.
 
 ## Daemon topology
 
@@ -193,9 +193,9 @@ Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
 4.93.0 to 4.95.0 (Engine 29.8.1 and 29.8.2) on Apple Silicon (native arm64).
 Rootless daemons are supported with gated features and were qualified on a
 Linux host (RootlessKit with slirp4netns) on 2026-10-26 and again on
-2026-11-09 with an image built from `main`; the gaps those runs left are
-[7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
-(host loopback on the gvisor-tap-vsock driver) and
+2026-11-09 with an image built from `main`; the gaps those runs left were
+7548 (host loopback on the gvisor-tap-vsock driver, fixed and retired on
+2026-11-10; [evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)) and
 [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
 (`docker cp` refusals and a second port collision). A resource budget axis the daemon reports it cannot enforce is
 refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
@@ -417,15 +417,15 @@ be resolved without them, and an ambiguous dispatch survives reconstruction
 as unknown rather than unsent.
 
 Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
-2.1.319, Codex 0.167.0, OpenCode 1.19.5, Pi 1.5.0, `@cursor/sdk` 1.3.1, Grok
+2.1.319, Codex 0.167.0, OpenCode 2.2.6, Pi 1.5.0, `@cursor/sdk` 1.3.1, Grok
 1.0.77), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
-A platform's second binary is traced on its own, in
-`PROVIDER_STATE_TRACED_TOOLCHAINS`: OpenCode 2.x (`opencode2` 2.2.6), whose
-sessions are in `OPENCODE_DB` (`opencode2.db` and its WAL and SHM files) in
-the same `opencode/db` sub-directory, so it needed no mount of its own and a
-storage set initialized before it existed mounts unchanged.
+OpenCode's CLI is the toolchain's `opencode2` (OpenCode 2.x), whose sessions
+are in `OPENCODE_DB` (`opencode2.db` and its WAL and SHM files) in the
+`opencode/db` sub-directory, so it needed no mount of its own and a storage
+set initialized before it existed mounts unchanged. The `opencode.db` that
+OpenCode 1.x left there is no longer read or copied by a rebuild.
 
 | Provider | Preserved (`state` sub-directory → mount) | Not preserved |
 | --- | --- | --- |
@@ -502,7 +502,7 @@ listing that did not finish fails the step. Images
 built before 2026-10-26 read the root from the selected listing and refused
 such a step as `root-symlink`, which blocked migrating any legacy environment
 without Codex or OpenCode databases. Codex
-databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
+databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode2.db*` are relocated
 into their state sub-directories; the rest of those homes (configuration,
 credentials, caches, OpenCode snapshots) is not copied. Hashes and paths never
 leave the helper — its result line carries counts only.
@@ -596,8 +596,8 @@ the user rebuilds it.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host; see [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 for what is still unproved on rootless. The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
-| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host. Its Linux Engine and rootless qualification is summarised in [container qualification](../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11); what is still unproved on rootless is [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md). The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
+| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([environment networks](#environment-networks-network-policy2)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
 
@@ -701,8 +701,8 @@ operation's candidate set or a pending deletion.
 from that set, re-classifying each at removal time: one that became referenced
 is a `conflict`, one outside the preview is `not-in-preview`, a volume still
 mounted is `skipped` (`in-use`), never forced. Every resource gets its own
-outcome. The earlier one-shot `docker_system_prune` / `cleanup_orphaned_containers`
-commands are refused (`invalid-request`): nothing is removed without a review.
+outcome. Nothing is removed without a review: the earlier one-shot prune and
+orphan-cleanup commands were removed on 2026-11-10.
 A container from before owner labels is classified `legacy-unadopted` — it
 could be any installation's on this daemon — and is offered for reattachment,
 never removal.
@@ -723,13 +723,23 @@ Staged per provider (`portableInputSpec`):
 | Provider | Mount | Staged |
 | --- | --- | --- |
 | Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `settings.json` filtered to its boolean `enabledPlugins` (no hooks, permissions or environment; withheld when it names no plugin), which the entrypoint merges into the container's own `settings.json` so the bridge and the CLI honour the host's plugin enablement, `.credentials.json` (access-only), `commands`, `skills`, `agents`, `ide`, `plugins`; `~/.claude.json` filtered to `oauthAccount`, the onboarding flags and container-safe user `mcpServers` (`claudeContainerConfig`: no `orkestrator` entry, no loopback URL, nothing naming a path in the host home; no projects, history, caches or API key), with the same top-level allowlist applied again by the entrypoint |
-| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The automated live data-contract suite runs authenticated active console accounts with and without these host files (`scripts/qualify-opencode-seeded-data.sh`) |
+| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The live check that showed it ran against OpenCode 1.x and was retired with it (`git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`) |
 | Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
 | Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`, `commands`; `~/.config/grok` |
 | Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
 | Cursor (`staged-inputs=2`) | `/cursor-config` | `mcp.json` only, copied to `~/.cursor/mcp.json` mode `0600`; never account or login state, IDE state, hooks, plugins, extensions, `sdk/` or `cli-config.json` (the login arrives through the key sync) |
 | Shared skills (`staged-inputs=4`) | `/agents-skills` | `~/.agents/skills`, one unit per top-level entry with the credential guard, copied to `~/.agents/skills`. Staged once, as the `shared-skills` summary entry, when Codex, Cursor, Grok, OpenCode or Pi is staged (`SHARED_SKILL_READERS`; Claude does not read it). It holds no login, so it has no revoke action |
 | Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
+
+The entrypoint rebuilds `~/.claude.json` on every boot, from the staged host
+file through `CLAUDE_JSON_ALLOWED_KEYS` or from a minimal fallback, so any
+answer Claude Code wrote there in the container is gone at the next start.
+Every path therefore sets `bypassPermissionsModeAccepted`,
+`hasCompletedOnboarding` and `hasSeenAutoDefaultNudge` itself; without the
+last, terminal Claude asks "Make auto mode your default permission mode?" in
+every Claude CLI tab after each start (`tests/unit/container-claude-settings.test.ts`
+pins it). The key is Claude Code's internal state, so a release that renames it
+brings the offer back.
 
 User-authored extension directories (Claude's `commands`, `skills`,
 `agents`, `ide`, `plugins`; Grok's `hooks`, `skills`, `commands`; Pi's
@@ -785,9 +795,23 @@ as links, within the revision bounds). `entrypoint.sh` and
 `workspace-setup.sh` read a relayed copy in place of its mount
 (`staged_input_path`), and the Claude key file is read from either. Nothing is
 widened on the host or for another user, and nothing is relayed on a rootful
-daemon, where `node` reads the mounts directly. The relay is rebuilt from the
-mounts on every boot, and revocation also removes the provider's relayed
-copies from the running container (`stagedInputRelayPaths`). On a rootless
+daemon, where `node` reads the mounts directly. Each boot checks the copies
+against the mounts: root keeps a digest of every mount it relayed (paths,
+types, modes, sizes, link targets and content, read from the read-only mount,
+never from `node`'s copy) in its own `0700` `/run/orkestrator-relay-state`, and
+a mount whose digest is unchanged and whose copy is still there is left as it
+is. Every other copy is removed and relayed again (or not at all, once the
+mount is readable, gone or over the bounds), and with no copy kept the whole
+relay directory is rebuilt, as it was before. `node` removes those copies,
+opening up any directory a workload left without write permission; if a copy
+still will not go, root rebuilds the whole relay rather than leave a stale copy
+at its live path, and a copy whose relay fails and cannot be removed takes the
+whole relay with it, so every input falls back to its unreadable mount. So the backend's rewrite of a
+login or a revocation's scrub reaches the copy at the next start, and
+revocation also removes the provider's relayed copies from the running
+container (`stagedInputRelayPaths`), which the next start relays again only if
+the mount still holds them. `node` owns its copy, so editing it changes only
+its own input, as editing its home does. On a rootless
 daemon an older image gets nothing readable: the backend logs it at creation
 and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 `imageRelaysStagedInputs`).
@@ -852,8 +876,11 @@ on revocation described above.
   host's file changes: `ContainerLoginFileWatcher` polls each file's inode,
   size and mtime every minute and pushes a changed one to every running
   container that may receive it, through the same bridge-operation queue and
-  revocation fences (the writer-lease holder only). Pi and OpenCode re-read the
-  file per request, so a running session picks a renewal up; whether Grok's
+  revocation fences (the writer-lease holder only). Pi re-reads the file per
+  request, and OpenCode's pushed logins are also written into the container
+  server's database through its `/api/credential` route
+  (`opencode2/container-credentials.ts`), which it reads per use, so a running
+  session picks a renewal up; whether Grok's
   agent re-reads it mid-session is not known. OpenCode and Pi merge
   the host's providers into the container's file, keeping a login made inside
   the container, and a host file of expired logins still blanks any refresh
@@ -869,7 +896,33 @@ on revocation described above.
   made inside the container keeps its refresh token until the next restart and
   is kept, as is an API key. A host login that has only expired leaves the copy
   alone, since it has lapsed too. A container that used an added account
-  already had its copy removed by the account switch path.
+  already had its copy removed by the account switch path. Claude's host login
+  is removed at the next container start (`buildDropHostClaudeLoginCommand`):
+  host copies go, a login the container made itself (`claudeAiOauth` or
+  an `mcpOAuth` server) keeps its access token, and a file left with no login
+  is deleted. An entry carrying any token whose SHA-256 the backend saw on the
+  host for that slot (`HostClaudeTokenDigests`, in memory, handed to the drop,
+  restrict and merge commands on stdin) is a host copy, refresh token or not.
+  Otherwise a login the container made is one still holding a refresh token
+  (a push never carries one) or, once stripped, one whose access-token SHA-256
+  the strip recorded in `.credentials.json.orkestrator-owned`; the restrict
+  and drop commands write that record before stripping, and the merge carries
+  a recorded MCP login forward while the host's login has no entry for that
+  server, so the login survives later starts and pushes. Every merge, restrict
+  and drop writes the record, empty or not, so it also marks the container as
+  tracked. In a container no pass has touched since the record existed, an
+  older strip may have left the container's own logins access-only and
+  unrecorded, so a drop there keeps (and records) every entry it cannot name
+  as the host's: a host copy the backend never saw then stays until its access
+  token expires or the next push replaces it, as before this removal existed.
+  If `flock` or the locked pass fails, the drop falls back to the strip-only
+  pass rather than deleting the file. The host reads as signed out
+  (`hostClaudeSignedOut`) only when every place the login is looked up says
+  so: each `.credentials.json` absent or holding no login, and on macOS a
+  metadata-only `security find-generic-password` (no `-w`, so no access
+  prompt) exiting 44, item not found, for each keychain searched. An
+  unreadable file, an expired login or any other Keychain answer keeps the
+  older behaviour, stripping refresh tokens in place.
 - When a container's host-imported Codex or Grok login lapses, the tab's
   sign-in message (readiness `authentication-required`) is replaced by
   guidance to renew the login on the host (or the added Codex account in
@@ -907,9 +960,12 @@ on revocation described above.
   start that finds the host token expired asks for that refresh at once
   rather than waiting for the next pass. An agent-test profile never
   refreshes the host. A switch also rewrites `oauthAccount` in
-  the running container's `~/.claude.json`. Remaining qualification and renewal
-  work is tracked in
-  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+  the running container's `~/.claude.json`. The refresh trigger is re-checked
+  with a fake login on every Claude Code bump
+  (`scripts/claude-host-refresh-trigger-probe.ts`, see
+  [upgrading agents](../development/upgrade-agents.md#re-check-oauth-refresh-token-rotation));
+  the live renewal checks with a real login are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 - Neither the Cursor key nor the Anthropic API key (when used instead of
   OAuth) is in a staged-inputs container's creation environment. The bridge
   reads the synced owner-only Cursor file. The Anthropic key is written to
@@ -927,7 +983,10 @@ on revocation described above.
   narrowed. It uses the cleanup review's evidence (`legacy-runtime-shape.ts`):
   no inputs-revision label *and* a bind at one of the old mount points. A
   runtime with no label and no such bind is `none`, and a failed inspect is
-  `unknown`, never `host-mounts`.
+  `unknown`, never `host-mounts`. A `staged` revision that holds no provider
+  and has nothing missing, disabled or revoked to report shows "Nothing was
+  staged into this container." in the environment's inputs section
+  (`EnvironmentInputsSection.tsx`), rather than an empty box.
 - Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
@@ -982,9 +1041,9 @@ full copy's, apart from the removal below.
   winning. Claude startup cleanup, publication and digest attribution share an
   exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
   publication commands. The lock file stays in place so concurrent writers always
-  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
-  but not removed after a host sign-out, as before
-  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+  lock the same inode. A Claude copy the backend pushed is left to the backend:
+  after a host sign-out the next start removes it (see the host sign-out item
+  under the access-only logins above).
 - **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
   layer, so a new runtime starts with a full copy. It holds names and digests,
   never contents. The workload can write it, so it is not a security boundary, and
@@ -994,9 +1053,18 @@ full copy's, apart from the removal below.
   binds the same either way, so there is no gate to check.
 
 The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
-relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
-applies. Timings are in
-[1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
+relay in `network-policy-entrypoint.sh` skips an unchanged mount the same way
+(see the relay above), and `copy_agent_directory` answers its entry bound, link
+check and size bound (allocated blocks, what `du -sk` sums) and the stamp's
+listing from one `find` walk, so a first start costs about five processes per
+copied directory rather than about fifteen. The walk uses GNU find's `-printf`;
+where find lacks it (BSD find, when the helpers run on macOS) the first walk
+lists nothing and the rest of the boot uses a portable walk
+(`agent_input_directory_walk`): `find -print0` classified with shell tests, and
+one `du -sk`, with the same bounds and listing. Timings are in
+[4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
+and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
+tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
@@ -1043,7 +1111,8 @@ bridge. The network asks for nothing about IPv6, so a daemon whose
 owner (the egress gateway, or the container itself) is created with
 `net.ipv6.conf.all.disable_ipv6=1`, which leaves every interface, including
 one attached later, without an IPv6 address; that was checked live on Engine
-29.9.2 with IPv6 on by default (0018 task 3). The container also gets
+29.9.2 with IPv6 on by default
+([container qualification](../development/container-qualification.md#egress-gateway-conditions-on-linux-engine-2026-10-31)). The container also gets
 three policy inputs the root bootstrap captures once, root-owned:
 
 | File | Meaning |
@@ -1086,12 +1155,36 @@ host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
 start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
 dockerd hands out automatic ports in sequence, and short-lived outbound
-sockets held two in a row in a 2026-11-09 run. Docker 29.9 detaches the
+sockets held two in a row in a 2026-11-09 run (and four in a row right after
+a daemon restart on 2026-11-11, which hands ports out again from the bottom
+of the range;
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4). Docker 29.9 detaches the
 container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
 started container still has none. A collision past the retries, or one on
-a fixed port, is the existing `port-conflict`.
+a port the user fixed, is the existing `port-conflict`.
+
+Each failed start moves rootless dockerd on by one port, so no retry count
+gets past a held run longer than itself. On a rootless daemon the backend
+therefore chooses every automatic host port itself when it creates a
+runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
+the host, where the kernel sees every socket and prefers odd ports for
+`bind` (outbound `connect` prefers even ones), publishes the result as a
+fixed port and lists it in the `orkestrator-backend-host-ports` label. A
+stopped container's ports hold no host socket, so the choice also refuses
+the ports the same create fixes, the ports labelled on every container of
+the same owner (`docker ps -a`) and, for the window before a new container
+exists, the ports this backend chose in the last 30 minutes. The
+port then stays the container's own across starts and daemon restarts. A
+collision on a labelled port is retried on the same port after a pause
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+go; one still held after the retries is a `port-conflict` that says to stop
+the holder or rebuild the environment, which chooses new ports. A port the
+user fixed is still never retried. Rootful daemons keep
+Docker's own automatic ports, since they see the host's sockets, and a
+container created before this keeps them until it is rebuilt.
 
 The same rootless daemon refuses every `docker cp` into or out of a
 container with a read-only bind whose source filesystem is mounted
@@ -1107,6 +1200,19 @@ boot record read reports `boot-record-copy-refused` instead of
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
+
+`live-restore` cannot work on a rootless daemon: a rootless restart replaces
+RootlessKit, its user and network namespaces, containerd and the shims, so
+the new daemon reports every container exited while the old containers'
+processes keep running in the old namespaces with no network, on the same
+volumes the restarted containers then mount (observed 2026-11-11,
+[evidence](../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)).
+The backend starts those containers again as it does after any restart with
+`live-restore` off, and cannot find or stop the orphans, so it warns once per
+process when a rootless daemon reports `live-restore` on (`docker`
+`daemon.rootless-live-restore`, from the capacity probe in
+`container-resources.ts`); the remedy is `"live-restore": false` in that
+daemon's `daemon.json`.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
@@ -1291,7 +1397,13 @@ Docker's own DNS rules:
   gets an `access_denied` alert, an HTTP client a 403 naming the gateway.
   Other protocols are refused on TCP 443 and relayed by address on any other
   named port; a server that speaks first (SSH, a database banner) is relayed
-  to the client while its first bytes are awaited.
+  to the client while its first bytes are awaited. A first write of
+  printable text with no newline yet is held, because it could still become
+  an HTTP request line sent a byte at a time; the daemon refuses it, with no
+  reply, after 30 s. A client-first text protocol on a named port must
+  therefore end its first command with a newline (SMTP, POP3, IMAP, Redis
+  and memcached do); a bare word such as `probe`, or `{"op":1}`, is never
+  relayed. Binary first bytes (TLS, PostgreSQL, MongoDB) are not held.
 - a redirect of every unmarked DNS query, to Docker's resolver or straight
   to any server, to the daemon. It forwards an allowlisted name (exact),
   GitHub's names and `*.docker.internal` (only when asked through Docker's
@@ -1337,7 +1449,13 @@ one moved; a restarted worker carries them on, and a new boot (fresh `/run`)
 starts at zero. The backend reads the file in the same `docker exec` as the
 firewall report and returns it as `effective.refusals` only beside
 `egressFilter: enforced` (`null` from an image before the counts), and the
-Network section says how many were refused. Counts only: no refused name,
+Network section says how many were refused. While it shows the counts and
+the window is visible, the section re-reads the policy every 15 s (one
+`docker exec` in the gateway each time) and once more when the window becomes
+visible again, so refusals made while it stays open appear without reopening
+it; closing the section stops the reads. Nothing is pushed: the file has no
+revision, and a watcher across the gateway boundary for one dialog's numbers
+was not worth its cost. Counts only: no refused name,
 part of one or digest of one is stored, logged or reported, because a refused
 name can carry the data an agent tried to send (`<secret>.attacker.tld`).
 `init-firewall.sh` holds `egress-filter.quiet` while its own boot checks ask
@@ -1355,12 +1473,67 @@ connection to an allowed address now completes its TCP handshake with the
 daemon before the upstream answers, so an unreachable upstream shows as a
 reset rather than a refusal.
 
+These limits were decided, not overlooked (to-do 6102, retired 2026-11-11):
+
+- Names inside TLS stay unseen. Seeing them needs TLS termination with a
+  per-environment CA the workload must trust, which breaks pinned clients
+  and hands the gateway every byte. Refusing any ClientHello that carries
+  the ECH extension is not an option either: Chrome and Playwright send a
+  GREASE ECH extension on every connection.
+- Only the first request on a plain HTTP connection is checked. Checking
+  every one needs body framing (chunked, `Content-Length`, upgrades) on the
+  data path, for plain HTTP on a named port, which is rare and was answered
+  by the same server.
+- UDP entries and other protocols stay address-only. They are opt-in per
+  port, and reading a QUIC Initial's SNI needs QUIC decryption in the daemon.
+- A refused upstream stays a reset. Keeping it a refusal needs TPROXY with
+  `IP_TRANSPARENT` and policy routing in the gateway, and clients treat both
+  as a failed connection.
+
 The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
 gone: every image now runs the firewall step from the root entrypoint before
 privileges drop, and an in-container runtime gets `NET_ADMIN` only for that
 firewall. `no-new-privileges` stays off: the image's entrypoint is `sudo
 network-policy-entrypoint.sh` as `node`, which it would break, and starting
 runtimes as root instead would make every `docker exec` default to root.
+
+### Isolation constraints
+
+These were decided while building network and credential isolation (to-do
+0018, retired 2026-11-11) and should keep holding:
+
+- Default ports: TCP 443 for allowed domains, TCP 443 and 22 for GitHub's
+  ranges. Everything on the default lists is HTTPS on 443, so anything else
+  needs a `host:port` (or `host:port/udp`) entry; plain HTTP (80) and SSH to
+  other Git hosts are not defaults. Lists that relied on another port are not
+  rewritten; the network status and settings help say what applies.
+- Never claim that IP allowlisting prevents exfiltration. Shared CDN
+  addresses, allowed services and DNS remain channels.
+- Never fall back to the shared default bridge when the environment network
+  cannot be created; that is an explicit error.
+- No allow-all or empty window during a refresh: build the next set beside
+  the live one, swap it in, then revoke tracked connections of removed
+  entries.
+- IPv6 stays dropped unless equivalent IPv6 enforcement is implemented and
+  tested.
+- Keep the restricted-mode sudo policy exact. Never add blanket sudo and never
+  mount the Docker socket. Do not describe a root workload as unable to change
+  its firewall unless its firewall runs in a gateway.
+- Published ports stay on loopback and authenticated.
+- A container never holds a refresh token it shares with the host or another
+  container when that provider's refresh tokens are single-use or rotating. It
+  gets the access token, re-read from the host on start, and signs out on its
+  own when that expires. A refresh token that is reused rather than rotated
+  (GitHub Copilot, Pi's Meta) may be copied, like an API key. Only the host
+  refreshes, through the provider's own CLI; Orkestrator never calls a token
+  endpoint or writes a host credential store itself, and an agent-test profile
+  never refreshes the host. Which providers rotate is re-checked on every
+  agent bump
+  ([upgrading agents](../development/upgrade-agents.md#re-check-oauth-refresh-token-rotation)).
+- Credentials go only to enabled, authorized, non-revoked providers.
+  Revocation is recorded before anything else, so an interrupted revoke still
+  gates staging and syncs. Never promise that removal retracts a credential a
+  workload already read, and never revoke an account-wide key.
 
 ## Agent tools reachability (`container-host-reachability.ts`)
 
@@ -1432,9 +1605,9 @@ trade only the user can make. Publishing the service back through a
 container's forwarded port would need a multiplexing relay in every
 container for one path, and the host's LAN address was tried live and
 refused. `10.0.2.2` is the slirp4netns and VPNKit address; on the
-gvisor-tap-vsock driver host loopback is `10.0.2.1` and the check still
-reports `blocked`
-([7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)),
+gvisor-tap-vsock driver host loopback is `10.0.2.1`, which the check probes
+and reports `reachable` (to-do 7548, retired 2026-11-10;
+[evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)),
 and other drivers stay `blocked` with the same remediation.
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)
@@ -1611,7 +1784,19 @@ least 2 GiB). The default contains a runaway environment — a leak or a fork
 bomb is killed inside its own cgroup instead of exhausting the VM or host,
 the backend and sibling environments; it is not a packing target, and the
 sum over environments may exceed the daemon. The measurements behind it are
-in [container-qualification.md](../development/container-qualification.md#workload-budgets).
+in [container-qualification.md](../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25).
+
+It is a preset capped at a fraction of the daemon's memory, not either alone.
+The experiment's fixed preset (2 CPUs, 4 GiB, 1,024 PIDs) broke the heavy
+browser workload on Docker Desktop with OOM kills, page crashes and failed
+rounds, and a pure fraction would give a 32 GiB Linux host a 24 GiB
+"budget" that contains nothing. The cap keeps one environment from
+exhausting a small Desktop VM. The margin on Desktop's heavy-browser case is
+thin (5,885 MiB peak against 5,888 MiB, with reclaim): a heavier browser
+load would fail inside its own cgroup instead of taking the VM down. Long
+agent sessions, providers other than Claude Code, and repositories larger
+than this one were not measured. Rolling the default back is "No limits" in
+Settings, or all-`null` limits on an environment.
 
 An axis the daemon cannot enforce (support `false`, or unknown on a rootless
 daemon) is left off the default and reported in the policy's `unsupported`
@@ -1686,6 +1871,20 @@ not keep answering for a container that just ended. A memory update below curren
 | Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
 | Followers | one per container, 16 per backend, 5 s idle grace, 60 s lease | `ContainerLogService` |
 
+Together these bound a runtime's diagnostic logs by construction, so nothing
+measures them live. Six launch logs (the Claude, Codex, Cursor, Pi and Grok
+bridges and the OpenCode server, the table in [The previous run](#the-previous-run))
+each hold at most the active file, its `.1` and `.2` rotations and one
+`.prev.log`: 4 × 5 MiB = 20 MiB, or 120 MiB for all six. Docker's own log
+adds 10 MiB × 3, so a runtime holds at most about 150 MiB of diagnostic
+output (plus the writer's dropped-line markers), and a rebuild discards the
+`/tmp` copies. A live per-environment total would need a `docker exec` per
+environment, the polling cost
+[0020](../todo/containers-and-environments/0020-container-state-observation.md)
+works to remove, so it is not built while the bound holds (to-do 0022
+task 6, retired 2026-11-11). Revisit if a surface needs actual sizes, or when
+another launch log is added, which also raises this bound.
+
 Bridges and the OpenCode server start through `boundedBackgroundLaunch`: when
 the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer
 <file>'`. An image without the writer keeps the first 5 MiB through
@@ -1734,8 +1933,7 @@ first, which moves the log to its `.prev.log` name:
 
 | Server | Active log | Previous run |
 | --- | --- | --- |
-| OpenCode | `/tmp/opencode-serve.log` | `/tmp/opencode-serve.prev.log` |
-| OpenCode 2.x | `/tmp/opencode2-serve.log` | `/tmp/opencode2-serve.prev.log` |
+| OpenCode | `/tmp/opencode2-serve.log` | `/tmp/opencode2-serve.prev.log` |
 | Claude | `/tmp/claude-bridge.log` | `/tmp/claude-bridge.prev.log` |
 | Codex | `/tmp/codex-bridge.log` | `/tmp/codex-bridge.prev.log` |
 | Cursor | `/tmp/cursor-bridge.log` | `/tmp/cursor-bridge.prev.log` |
@@ -1766,9 +1964,8 @@ diagnostics export is the likely first consumer.
 one `docker logs -f` per container among subscribers; a read renews the lease,
 a cursor older than the ring or from another source returns an explicit `gap`,
 and a replaced runtime is a new source id. Closing releases only the observer.
-The legacy `stream_container_logs` is an adapter onto the same service whose
-lease lapses, so an old client that never closes cannot leave an immortal
-follower. Backend shutdown stops every follower.
+A lease that is not renewed lapses, so a client that never closes cannot leave
+an immortal follower. Backend shutdown stops every follower.
 
 ## Claude terminal state signal (`claude-state-signal=3`)
 
@@ -1940,7 +2137,7 @@ need it once cloned.
   remote, it dropped the history the mirror held (31,276 objects missing on
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
-  [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
+  the measurements (to-do 1202, retired 2026-11-10).
 - **`--reference-if-able`, checked again afterwards.** A mirror removed between
   the check and the clone does not fail the clone: Git clones from the remote
   alone, with the full history. The script then checks the mirror again and, if
@@ -2159,8 +2356,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 | --- | --- | --- |
 | `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
 | `/run/orkestrator-bridge/<kind>-authority`, beside it (`bridge-launch=1`) | The private half of the bridge's authority key | The backend, in the same root exec |
-| `/run/orkestrator-bridge/opencode-listener` (`opencode-launch=1`) | The inode of the socket the OpenCode server the backend launched listens on | The backend, in the root exec that reads OpenCode's password |
-| `/run/orkestrator-opencode` (`opencode-launch=1`) | OpenCode's configuration and empty home: the user's host configuration and Orkestrator's plugins, rebuilt as root before every start | The OpenCode server, read-only |
+| `/run/orkestrator-bridge/opencode2-listener` (`opencode2-launch=1`) | The inode of the socket the OpenCode server the backend launched listens on | The backend, in the root exec that reads OpenCode's password |
+| `/run/orkestrator-opencode2` (`opencode2-launch=1`) | OpenCode's configuration directory, empty XDG and home directories and package cache: the user's host configuration and Orkestrator's plugins, rebuilt as root before every start | The OpenCode server, read-only |
 | The bridge's environment | `<TOKEN_ENV>_SHA256` and, with `bridge-launch=1`, `<TOKEN_ENV>_AUTHORITY_KEY`, both removed from `process.env` at start | Anything, harmlessly |
 | The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
 
@@ -2215,25 +2412,24 @@ What the agent's uid can still do is in
 kill the bridge, or replace it between two of the backend's checks of the
 socket on its port ([a replaced bridge is refused](agent-approvals.md#a-replaced-bridge-is-refused)),
 and on an older image catch the token on the bridge's port or plant code for the
-next start. OpenCode has no bridge and takes the plain password, in
-`opencode-token` in the same directory; on an `opencode-launch=1` image the
-launcher starts it from root's binary and configuration and the backend sends
-the password only to the listening socket it recorded in `opencode-listener`
+next start. OpenCode has no bridge and takes the plain password. Its server
+(`opencode2-container-server.ts`, container port 4102) keeps it in
+`opencode2-token` in the same directory and in its own environment alone; on
+an `opencode2-launch=1` image the launcher starts it from root's binary and
+configuration and the backend sends the password only to the listening socket
+it recorded in `opencode2-listener`
 ([agent-approvals.md](agent-approvals.md#opencode-under-the-launcher-opencode-launch1),
-follow-ups in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md));
-a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
-`agent-credential-files.ts`). In a container, a server the plugin could not harden
-refuses tools; on a host it only logs, because a host's OpenCode can be any build.
-A host server gets the plugin through `OPENCODE_CONFIG_DIR`
-(`opencode-host-credential.ts`), and a server whose user set that variable runs
-without it (`credential-plugin.skipped`).
-The OpenCode 2.x server (`opencode2-container-server.ts`, container port
-4102) takes its password the same way, in `opencode2-token` and in its own
-environment alone; its 2.x plugin (`buildOpenCode2CredentialPluginSource` with
-`hardened: "refuse-tools"`) removes it from the process and every shell,
-marks the server non-dumpable and refuses tools when it cannot. An image that
-keeps no root credential file is refused rather than given a `node`-readable
-one; every image that carries `opencode2` has one.
+and the package cache and project configuration
+[on `opencode2-launch=1` images](agent-approvals.md#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1)).
+A plugin inside the server (`buildOpenCode2CredentialPluginSource` in
+`opencode2/server.ts`, with `hardened: "refuse-tools"` in a container) removes
+it from the process and every shell, marks the server non-dumpable and
+refuses tools when it cannot. A host server gets the plugin from the
+configuration directory Orkestrator gives it (`opencode2/host-launch.ts`). An
+image that keeps no root credential file is refused rather than given a
+`node`-readable one; every image that carries `opencode2` has one. The 1.x
+server's `opencode-token`, `opencode-listener` and `/run/orkestrator-opencode`
+were retired with 1.x on 2026-11-11.
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

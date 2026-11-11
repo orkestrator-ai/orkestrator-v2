@@ -464,7 +464,7 @@ function createDesignApi(scope: NodeScope) {
     resumeSessionLink: (
       environmentId: string,
       canvasId: string,
-      input: { linkId: string; expectedTabId: string; tabId: string },
+      input: { linkId: string; expectedTabId: string; tabId: string; restoreArchived?: boolean },
     ) =>
       call(designSessionResumeCommand, {
         environmentId,

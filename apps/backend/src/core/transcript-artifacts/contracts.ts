@@ -144,6 +144,12 @@ export type PreviewJobResult =
         executableUrls: number;
       };
       elementCount: number;
+      /**
+       * The document's text for Find, read from `effectiveHtml` with the
+       * presentation frame's walk. Absent when the worker predates it or could
+       * not read it; never longer than `maxSearchTextCharacters`.
+       */
+      searchText?: string;
     })
   | (PreviewJobSuccessBase & {
       kind: "html-interactive";
@@ -272,8 +278,11 @@ export interface ArtifactContentServer {
     revision: number;
     preparedSha256: string;
     contentSecurityPolicy: string;
-    /** Loads the exact bytes; must verify the hash before serving. */
-    load: () => Promise<Uint8Array>;
+    /**
+     * Loads the exact bytes; must verify the hash before serving. `signal`
+     * aborts when the server stops waiting, and the read should stop then.
+     */
+    load: (signal: AbortSignal) => Promise<Uint8Array>;
     /**
      * Re-checks authorization on every request, before `load`: the
      * publication, its owner and environment still exist, and nothing was

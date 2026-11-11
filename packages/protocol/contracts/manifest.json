@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1018,
-    "defined": 1018,
+    "commands": 1007,
+    "defined": 1007,
     "untyped": 0,
     "events": 45
   },
@@ -14,11 +14,11 @@
       "min": 1
     },
     "agent-mail": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "agent-servers": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "claude-tmux": {
@@ -26,7 +26,7 @@
       "min": 1
     },
     "config": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "coordinator": {
@@ -34,15 +34,15 @@
       "min": 1
     },
     "design": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "docker": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "environments": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "files": {
@@ -58,7 +58,7 @@
       "min": 1
     },
     "kanban": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "mcp": {
@@ -70,7 +70,7 @@
       "min": 1
     },
     "native-sessions": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "node-files": {
@@ -94,7 +94,7 @@
       "min": 1
     },
     "projects": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "public-api": {
@@ -102,15 +102,15 @@
       "min": 1
     },
     "pull-requests": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "system": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "terminals": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "ticket-sync": {
@@ -180,15 +180,6 @@
       "critical": [],
       "argsDigest": "sha256:13b505854c13b8ea36caf530d0ca10c20f84ce3b7e962bef05fed2f0d076d676",
       "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
-    },
-    "add_environment_domains": {
-      "domain": "environments",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
-      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "add_github_issue_comment": {
       "domain": "pull-requests",
@@ -379,6 +370,15 @@
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
       "resultDigest": "sha256:3278a466d8326d281a8faeaab2216231c5dd1881139fbefa26026d82f8148962"
     },
+    "apply_linear_sync_state": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:10414558c8fdea34a82979c55dc5e28ef6a41ad5cb82fe55efc319ccd605298e",
+      "resultDigest": "sha256:f355474beb17c3410a2566775bdac15d60eae3a00f008140074ed7f0eb5cb9a3"
+    },
     "apply_mcp_configuration": {
       "domain": "mcp",
       "since": 1,
@@ -559,15 +559,6 @@
       "argsDigest": "sha256:96031f3d97ee183aa98990b5094516bd02e2263566cbeed64b653bdc3483b01a",
       "resultDigest": "sha256:001f57eeae7a1bea83fd92f7633e3e68dac21a44111f9a6e6c0d4b40725eda1a"
     },
-    "attach_terminal": {
-      "domain": "terminals",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:d88ecc9c86c1f15d2a8f29995431c92cb2b07acf40adcdcf1b0b0797f8e738a6",
-      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
-    },
     "auto_pipeline_sources": {
       "domain": "pipelines",
       "since": 1,
@@ -621,24 +612,6 @@
       "critical": [],
       "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
       "resultDigest": "sha256:d4ed1dc5d626a15908af5dc5e44550a371fc6ee8b0ecdaa437016e0467cda040"
-    },
-    "cache_agent_model_catalog": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:b8d282256558b723c90baa684b3d40a03170df51c04b751e59d750a7ea7d6d78",
-      "resultDigest": "sha256:d55953803a1c89966080142682134812e162c3533d1bc68da1912a0706e0b8e2"
-    },
-    "cache_opencode_model_catalog": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:dfb5c5be03c892a8455638b02f07b82467de810cab3c9045b9fa8479aabd8df1",
-      "resultDigest": "sha256:e3b8a9b6cf0f49b51c1e4bde2bd9fb67596cc9fa2b4b0237a1bef59965754d8e"
     },
     "cancel_agent_account_login": {
       "domain": "accounts",
@@ -903,15 +876,6 @@
     },
     "check_any_ai_cli": {
       "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
-    "check_base_image": {
-      "domain": "docker",
       "since": 1,
       "access": "workspace",
       "read": true,
@@ -1288,24 +1252,6 @@
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:f651de3f6fca02e0228ba13f091df3e423c07a51eb6b70803f379214ae9499d4"
     },
-    "cleanup_orphaned_buffers": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
-    },
-    "cleanup_orphaned_containers": {
-      "domain": "docker",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
-    },
     "cleanup_stale_local_servers_cmd": {
       "domain": "agent-servers",
       "since": 1,
@@ -1332,6 +1278,15 @@
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
       "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "clear_linear_board_link": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:19ce211607625af7105dea0db4669f7e44c04a50a7e31322f4305df8befcc2a6"
     },
     "clear_task_build_status": {
       "domain": "pipelines",
@@ -1457,7 +1412,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:bbaee338b78354b38c4541fbff4f4c76d578408a24ba523f58cc2ac3f3d7d27c",
-      "resultDigest": "sha256:515b4c99a5a6ca3b41504cf3c3d1468b91ba0c8e9c71f590466f95a19fe1c106"
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "controller_multi_review_surface": {
       "domain": "coordinator",
@@ -1494,6 +1449,15 @@
       "critical": [],
       "argsDigest": "sha256:1d2b126c1590e9b5fae79d21b14251056704c2f8dc3bf5e791713af10ae81f8f",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "copy_linear_connection_from_node": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ca77bd3b33e13665db4d22a514d7601c3b4df67b45f4296c8dee77b94c30f4b5",
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "copy_project_to_node": {
       "domain": "nodes",
@@ -1634,6 +1598,15 @@
       "critical": [],
       "argsDigest": "sha256:025f5b4372a2bd026a5584abcdad69881ec1a8d5ede38d608887d900b75e0334",
       "resultDigest": "sha256:50e7d45f9e8c5ed6b6d0ee99a12d3e1995aa838eb2218ce58d9fc83ae8926948"
+    },
+    "create_linear_issue": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestKey"],
+      "argsDigest": "sha256:7287f6941afb269d2cd04cabb9cccc90c19b47af9b3293bba3fde88390985d24",
+      "resultDigest": "sha256:4f18a63177434b691befa955db925475417991998b8fab349e3d9a063ceab6d4"
     },
     "create_local_folder": {
       "domain": "files",
@@ -1977,15 +1950,6 @@
       "argsDigest": "sha256:4a9b878579637491c692a52dd0a67b275a10f2dec2dc174197d5a4d4ee940d99",
       "resultDigest": "sha256:c021817f299d9d5df026925a41a523c179ec7e0e51a5f2f1d3f0b86f7fa5ed1f"
     },
-    "design_changes": {
-      "domain": "design",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:bcbda9a9181123c6c11670d505a01c4cba25aa72f2ca9980cbecd2436e14b937",
-      "resultDigest": "sha256:11271096bbd4fa1ef14abda9245df8c0afd3cacea2b9b50c25ba3f760f06815f"
-    },
     "design_checkpoint": {
       "domain": "design",
       "since": 1,
@@ -2175,15 +2139,6 @@
       "argsDigest": "sha256:143221b072712b551a1e9b3e23c5d57422d4717e5bc89b000a6d1c329d0315b3",
       "resultDigest": "sha256:1654616d4a17d6656abc2c8027dccf02139730b66e6e2db2e3a10c4d99709d19"
     },
-    "design_save": {
-      "domain": "design",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:e8cf7a16890274135ca4da8767bbb446f3f071c984cbd590d4f544fd23629ecb",
-      "resultDigest": "sha256:9669de6ff73e88664cb3ededcf3d407e102a2a00434ffd1956138dbe11bb0a63"
-    },
     "design_session_link": {
       "domain": "design",
       "since": 1,
@@ -2200,7 +2155,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
-      "resultDigest": "sha256:e86e0297c16c1fc0071f8b3253c07eca0e9287bb2a0fb8eb7fa820e50c4e1751"
+      "resultDigest": "sha256:0f6a5a528581c7039907254284ea3a3055abbb9d9726c4eeedfcb6d86dba7413"
     },
     "design_session_resume": {
       "domain": "design",
@@ -2208,7 +2163,7 @@
       "access": "workspace",
       "read": false,
       "critical": ["expectedTabId"],
-      "argsDigest": "sha256:1dffde9857593328026d368f73a0f5be3506961ce83fc81d4e1aedd24409d34a",
+      "argsDigest": "sha256:068887a3fe9da6f93dd49b10d86085319d4b9687b66a72c4308ab2bbe12182f9",
       "resultDigest": "sha256:1549043105579ae1534c6addfd23191cb843a92ab9ab9d3414d0c26715ab0861"
     },
     "design_session_unlink": {
@@ -2228,15 +2183,6 @@
       "critical": [],
       "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
       "resultDigest": "sha256:c62c1c0970d3868ab418ffd77800ce56571b2b965c57220edfcba18d885a5e80"
-    },
-    "design_status": {
-      "domain": "design",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:4545a8292598a55192a56b424e6da585e0527b62512a6a807f16ac109cbf94bf"
     },
     "design_sync": {
       "domain": "design",
@@ -2371,7 +2317,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:515b4c99a5a6ca3b41504cf3c3d1468b91ba0c8e9c71f590466f95a19fe1c106"
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "dismiss_native_agent_suggested_prompt": {
       "domain": "native-sessions",
@@ -2499,24 +2445,6 @@
       "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
       "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
-    "docker_system_prune": {
-      "domain": "docker",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
-    },
-    "docker_version": {
-      "domain": "docker",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
-    },
     "draft_auto_pipeline": {
       "domain": "pipelines",
       "since": 1,
@@ -2597,6 +2525,15 @@
       "critical": [],
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "export_linear_connection": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:6302105fe5078d31b374262eb2e6d771a1b8ae06da4af210d24644ba6673384a"
     },
     "fetch_project_git": {
       "domain": "coordinator",
@@ -2850,6 +2787,15 @@
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:1d608a81bcc694402232eca06c50b3a491a3e26bad1940ab3ac73879fe4a8c37"
     },
+    "get_auto_pipeline_state": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:ce7fa5703025ba417f465ab745b9635b921ed0e5420f4621a838566ac0044fc3"
+    },
     "get_available_ai_cli": {
       "domain": "agent-servers",
       "since": 1,
@@ -2992,7 +2938,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:5fd12da5d5cca12609b12d4219f92281cdacce83d09a40a840f05431a73827b5",
-      "resultDigest": "sha256:2b391c48b4e041ebe3f03beb3ab907988aca44fc2fcce04f12a3cfbc34911082"
+      "resultDigest": "sha256:ec0ca543e9becfa14255f318da9dfd0abc6bff4e89187f94152c228959726b51"
     },
     "get_container_github_credential_status": {
       "domain": "agent-servers",
@@ -3002,15 +2948,6 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:2579545a4c5aab359bdb235cba53570e4da69d20f3aa6d31c15dba1d17f58fec"
-    },
-    "get_container_host_port": {
-      "domain": "docker",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:63df2bf9a9645b1991d1583ecec1c3fdb12e8b822924e599cb5bdf38605f2237",
-      "resultDigest": "sha256:08e0a8ec5673d2c0227b309bc576f75cfaaaabe9b1f3258843ed1979a9560051"
     },
     "get_container_host_reachability": {
       "domain": "docker",
@@ -3165,15 +3102,6 @@
       "argsDigest": "sha256:9397dd4c7560923d7b2d93de605926c568dc9df2d047ac07f52acc9ee97e72f5",
       "resultDigest": "sha256:6569c87ee4a3a4dac2d230e39c2f0461594128680a7138255e0d0f6ec20e62f0"
     },
-    "get_credential_status": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:b2c04d48b78a2b47f53f3ecad797829a22028a0a7f889ee0b54b2e109a092c03"
-    },
     "get_cursor_server_log": {
       "domain": "agent-servers",
       "since": 1,
@@ -3235,7 +3163,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:ab757b7afbc066aaa3f2f2c1d77e669a2a952b680be2c0691dd798085a7e95ae"
+      "resultDigest": "sha256:b5e6f162985adfad2d7e0edad0c532fab4c62d1dd510f7a165b8cf96881a5173"
     },
     "get_docker_system_stats": {
       "domain": "docker",
@@ -3408,15 +3336,6 @@
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:d8afb3f7a3d6d9d468391b9b5df0e4df6da4f954f9bb5852a6630cfc2e0ed0f2"
     },
-    "get_feature_planning_snapshot": {
-      "domain": "kanban",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
-      "resultDigest": "sha256:31d11431ae73046b661b62aa55f1be768bc7f15334db16864ef5899f5c9eddd1"
-    },
     "get_feature_plans": {
       "domain": "kanban",
       "since": 1,
@@ -3543,15 +3462,6 @@
       "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
       "resultDigest": "sha256:65756669fc097a5a3f6b91128a60634e45d503a51a72b0ff0dfd4284427dcac8"
     },
-    "get_global_config": {
-      "domain": "config",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:b152a87030e3a3a8957c8cabb450b32cf9c5148dc586033eb91412b3ad1e5438"
-    },
     "get_grok_server_log": {
       "domain": "agent-servers",
       "since": 1,
@@ -3615,6 +3525,24 @@
       "argsDigest": "sha256:4fd04a3dce747fd27f884500f729c3c92a4ee1c37b4864f86c9bc4db9c1d2b4d",
       "resultDigest": "sha256:64c1e6bbaa848790efe28e6aae20d256506e553b7a569c74d1b0cdd14da41684"
     },
+    "get_linear_board_link": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:5064edf6147ed320f500a86bfffc61a32c8909b7bd6cbe0bfc8903e238c9a2c5"
+    },
+    "get_linear_board_options": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:e0b055cf448519a40db737c45d1e2dbbda14e72e90ca25a81a568a6d7fe8ac67"
+    },
     "get_linear_connection": {
       "domain": "kanban",
       "since": 1,
@@ -3622,7 +3550,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:515b4c99a5a6ca3b41504cf3c3d1468b91ba0c8e9c71f590466f95a19fe1c106"
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "get_linear_issue": {
       "domain": "kanban",
@@ -3630,7 +3558,7 @@
       "access": "workspace",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:029b6a76072908c7791cdaa464a1a1a1fcd7976351c60a87f1153fc03637bf59",
+      "argsDigest": "sha256:6e8a07ec284aab6047c5468696ba68af84aa08ba0a9621a18a7d062860c88bb4",
       "resultDigest": "sha256:4f18a63177434b691befa955db925475417991998b8fab349e3d9a063ceab6d4"
     },
     "get_linear_issues": {
@@ -3639,8 +3567,35 @@
       "access": "workspace",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "argsDigest": "sha256:7982596b88ea31d156d47c9dbdcd319a8c530de9aef473c193e330f29ebf15ac",
       "resultDigest": "sha256:bd37d9f9a2cb5c66e081d57eec9dd61756fd14a1926dcf9dc43116774d40f66a"
+    },
+    "get_linear_node_connections": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:43c8790aed62185253e2ea2bafc932bb4c08cb93b1318211aba2a43f134d4b91"
+    },
+    "get_linear_sync_state": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:1c3e36e91ceadbf49307bc96aeb80b7c0f58f7d0079fc4833aec85b75b850085"
+    },
+    "get_linear_teams": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7805baf91872a82480e3b9e7d2b2d473dedb4c8d9fb9771a079aae66ba8ad153"
     },
     "get_local_claude_server_status": {
       "domain": "agent-servers",
@@ -4317,15 +4272,6 @@
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:6ac9b5bf2acf382cddd1134f880d99508dcb8dbc5cbd2e619af78ce347e7d025"
     },
-    "get_resource_revision_manifest": {
-      "domain": "system",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:5490e09f5ef54bcd0950c1b160b5adc723296c0fba3ee121727053c2929bebe0",
-      "resultDigest": "sha256:8fdf74b39fdd37082df9aab8b563bdfc30666d6f85b8e81f41d0687e0006d619"
-    },
     "get_review_validation_output": {
       "domain": "multi-review",
       "since": 1,
@@ -4361,6 +4307,15 @@
       "critical": [],
       "argsDigest": "sha256:623a625a62f7acdb227b721ecbb2d6f9be7a33f6243e903224ce1a9b2211acb8",
       "resultDigest": "sha256:fedc2241efdf95a02214ca95065d67ad88d68fba565baba19ff07008b51fcbbd"
+    },
+    "get_self_improvement_status": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
     },
     "get_session": {
       "domain": "native-sessions",
@@ -5081,15 +5036,6 @@
       "argsDigest": "sha256:2b26563406f95c47f184ffd21dd2bfe4b827b03683bdc00136c76263d4272f76",
       "resultDigest": "sha256:717607dd3e3eeb252899342930561971a5492896748b48f156574a8c2dcf05fc"
     },
-    "list_agent_mail_inbox": {
-      "domain": "agent-mail",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:1c0578f6702fb0e14848053de2f5241c033998f6a6f6a8b75dbc8d47c8b778d5",
-      "resultDigest": "sha256:78b2b5f614e90d7e79cfd132eab0eabec6040b47029d4ca25c9d0d6c68229b28"
-    },
     "list_agent_mail_sent": {
       "domain": "agent-mail",
       "since": 1,
@@ -5135,15 +5081,6 @@
       "argsDigest": "sha256:0f056c475222c3f13c5e51dc41dd1f21f294bd87353135702db38ff421a98783",
       "resultDigest": "sha256:321f59c868c16a186733b1239fc0a44056b2c52587f77f22241db9f67790555e"
     },
-    "list_compose_drafts": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:d2605c8cd83ea20a647a81835a023c1b9cfe47fd59f8b3adf99a0af7621b4576",
-      "resultDigest": "sha256:4060d74be4b85896e3bf1a4acc8d1494c956014a89f27331f01aa782268498db"
-    },
     "list_controller_worker_commands": {
       "domain": "coordinator",
       "since": 1,
@@ -5187,7 +5124,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:e7007c673c615fa5f60dada2d02f697ffd85cf82801923ce08d05d84f3fda4dd"
+      "resultDigest": "sha256:3890ddc719a9f6a71cc550b895cb5920c0b52b83f232680d3ba078c49dd44676"
     },
     "list_coordinator_worker_commands": {
       "domain": "coordinator",
@@ -5206,15 +5143,6 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:6d6526158d1cf9b9a7a949c3cd9556c2c12f8509722f36aa20c67544180b81de"
-    },
-    "list_docker_containers": {
-      "domain": "docker",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:e5059d246c503dd1ba779511929c1950c2b81903793822f63c26d9a6819fcca4"
     },
     "list_environment_agent_skills": {
       "domain": "agent-servers",
@@ -5367,7 +5295,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:fcb3afeb4cbea6bd5515a8d931dad8b53aaa419122f113364888bc876fcd03a3",
-      "resultDigest": "sha256:6ccb4774a0799be68b3d68b7a5211074f446c85685c363b76efbba4d28145a1d"
+      "resultDigest": "sha256:af5a237a705c775bbe5e8881de09a6d822582e0ae070e39ea447ca01ab932785"
     },
     "list_node_action_requests": {
       "domain": "node-mail",
@@ -5841,7 +5769,7 @@
       "read": false,
       "critical": ["unset"],
       "argsDigest": "sha256:d9d2ec2805142b5145d6836ef9894a8cb626660b087f3fb8707dc3d4a0112867",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "patch_repository_settings": {
       "domain": "config",
@@ -5850,7 +5778,7 @@
       "read": false,
       "critical": ["unset"],
       "argsDigest": "sha256:0df0c5d4da03a7363c3f6ea2881f630ea4d44f28fdb969a3cbc77c83c5b1653d",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "pause_build_pipeline": {
       "domain": "pipelines",
@@ -5984,7 +5912,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:7e783db5a53eba1eb816c9af869cf8f86b1091075d99dac7a73124551b71f3a4",
+      "argsDigest": "sha256:11f150191d2741da37858966f77dfee217ffa02ba853daeee5fc372763adbeb9",
       "resultDigest": "sha256:95577e36e3ebaf4797621309d730ae42a61536ccc9e820aa7e6892f20da27d41"
     },
     "pr_monitor_agent_turn_completed": {
@@ -6000,15 +5928,6 @@
       "domain": "pull-requests",
       "since": 1,
       "access": "internal",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
-    },
-    "pr_monitor_refresh": {
-      "domain": "pull-requests",
-      "since": 1,
-      "access": "workspace",
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
@@ -6452,7 +6371,7 @@
       "access": "admin",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:a4c37688a38b9796cd1afbeb9cced6dbd7bf85f31f808d196bd0dc6567e7dd49",
+      "argsDigest": "sha256:a96e6ea12cba97235018a536c05d22b0c40f70f2c0628272969bebb777341aac",
       "resultDigest": "sha256:080b58b49b6d5ac803d77139aac4ca0c0ca86d73f259ec88003357ae1ac9ad3a"
     },
     "recover_multi_review_fix_session": {
@@ -6535,15 +6454,6 @@
       "critical": [],
       "argsDigest": "sha256:336ee5561eaa88168790a65c5faefce3d14d1e61217e345b67f678970225268b",
       "resultDigest": "sha256:9b5e99a1ca123b58c9517aff6cd70dc5c9e77ef414bdbd0c5b8d65f63594c9a4"
-    },
-    "remember_environment_agent_selection": {
-      "domain": "projects",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:b3decf5e5b5b9d85d2f6c154798a9b14463a0f40d9c961b769bcbcc87cd67ada",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
     },
     "remove_agent_account": {
       "domain": "accounts",
@@ -7220,6 +7130,15 @@
       "argsDigest": "sha256:6da5c2c9cee78dd9f933bf52b44c9df689e72e61001b6e61e52db8da3ddd67fe",
       "resultDigest": "sha256:c571141f99cb06e00d347f32530bda262a4c04e23e2a2773cd7672e333e97fe4"
     },
+    "run_self_improvement": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["dryRun"],
+      "argsDigest": "sha256:de4afe9b393d47e6e9847ed98b663b641ebaaf2dd7a7fe5eddcc911f87d8bd88",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
+    },
     "run_timer_agent_account_switch": {
       "domain": "nodes",
       "since": 1,
@@ -7247,6 +7166,15 @@
       "argsDigest": "sha256:a4658fda618fa51786c10b24f9425cfaec70455f77e5a1470455c417785ffd6e",
       "resultDigest": "sha256:e9cd931e20bbe265c53568a684f91a87c62b5f334270f26f16a4e755fbf89dec"
     },
+    "save_auto_pipeline_edits": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b8cb13c85157b27552854965a729918244f835f2bc5a1fc7785497522fe50750",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
     "save_bug_report_screenshot": {
       "domain": "system",
       "since": 1,
@@ -7273,15 +7201,6 @@
       "critical": ["expectedRevision"],
       "argsDigest": "sha256:efe098b4830a6fac973e4a45cf3b5e209f15464d8338973a27dfeca36a95a8e2",
       "resultDigest": "sha256:96555bf1050f3bcf5addf8bbcd39f8956db86a7f1f2df5af304878d36aa45d8f"
-    },
-    "save_config": {
-      "domain": "config",
-      "since": 1,
-      "access": "admin",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:29c09ee81e49f7333d7299670e1d8b86616a5cf7fc98e77fdbbaa13d707e260a",
-      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "save_coordinator_pane_layout": {
       "domain": "config",
@@ -7436,15 +7355,6 @@
       "argsDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35",
       "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
     },
-    "set_agent_messaging_paused": {
-      "domain": "agent-mail",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:f8ce696e4a640719e82003ef1c65e934df8d03d68c61b8211433cd8bf5ba9df1",
-      "resultDigest": "sha256:0d6c2c2b6b1fdc2eb033664e8d0c5861843d46d746fef35752f013675cd240ed"
-    },
     "set_anthropic_api_key": {
       "domain": "config",
       "since": 1,
@@ -7452,7 +7362,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "set_command_node_enabled": {
       "domain": "nodes",
@@ -7506,7 +7416,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "set_environment_auto_merge": {
       "domain": "pull-requests",
@@ -7524,24 +7434,6 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:ef1775c2fbc8e8835e15e3480da4bf8b2dd08b9aa22b0224764d47048b56b242",
-      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
-    },
-    "set_environment_initial_prompt": {
-      "domain": "environments",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:aeb7f6e6dc71bbad223b85abec0b195d2faef628a40524566d37db082d03caf8",
-      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
-    },
-    "set_environment_pending_agent_launch": {
-      "domain": "environments",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9f134dd36a22fc2ee584b8cecf5af783bf0c26576814de47728ce7444085fdf9",
       "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
     },
     "set_environment_pr": {
@@ -7578,7 +7470,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:58550adbce345e1852d146122acefd98ecaf98edf34fafd1c0031582bd521043",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "set_github_pull_request_file_viewed": {
       "domain": "pull-requests",
@@ -7623,7 +7515,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:7009a8d59b90b62ab3c4699375d29e33847e46bd9f55b933d8532e74cf5e0be9",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "set_host_gh_channel": {
       "domain": "system",
@@ -7651,6 +7543,15 @@
       "critical": ["projectId"],
       "argsDigest": "sha256:72977ee14dfdccaca0e10345929cae424ca309bad31f6850a37a3edece6eda6f",
       "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
+    },
+    "set_linear_board_link": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a439d4a3696a9f2de9a896f439f6e3bc6d6f2a35538724421b58a531c743b8af",
+      "resultDigest": "sha256:38fb800c989f1f9a2f340bd803600066b4d7d0f199f35e2f822e219318d679e1"
     },
     "set_mcp_management_rollout": {
       "domain": "mcp",
@@ -7686,7 +7587,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "set_preferred_agent_identity": {
       "domain": "accounts",
@@ -8300,15 +8201,6 @@
       "argsDigest": "sha256:bfeb4105781994cb4c1072d8ec3b4fbf5e750dfb31f1743250bb48ab3aaa8451",
       "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
     },
-    "stream_container_logs": {
-      "domain": "docker",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
-      "resultDigest": "sha256:bfba62bf42112daf79fbb4045dd0610cac9a2caeef71723556a7e59adb2d0070"
-    },
     "submit_agent_account_login_code": {
       "domain": "accounts",
       "since": 1,
@@ -8523,7 +8415,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:b3b528a02fec339a824da4149b6035cb978313264368c3bef167659941543c1c",
-      "resultDigest": "sha256:2092fa9bf7f8ae4ef3043f49d41fe1f95f8b0b63fcd9cef80ffc5ce3c4a6657e"
+      "resultDigest": "sha256:f7b3be73b6b4d15a9275660083778cffc48253bbfd73f57acb90f93ffe25d47b"
     },
     "transcript_artifact_read_representation": {
       "domain": "transcripts",
@@ -8532,7 +8424,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:0e8d45fc4fc5ca53c0a84cff61c83e7c728c3c1194505977390f2f0227e0122b",
-      "resultDigest": "sha256:2092fa9bf7f8ae4ef3043f49d41fe1f95f8b0b63fcd9cef80ffc5ce3c4a6657e"
+      "resultDigest": "sha256:f7b3be73b6b4d15a9275660083778cffc48253bbfd73f57acb90f93ffe25d47b"
     },
     "transcript_artifact_render_mermaid": {
       "domain": "transcripts",
@@ -8748,7 +8640,7 @@
       "read": false,
       "critical": ["preserveInheritedSettings"],
       "argsDigest": "sha256:418776fac180e0d0e5638510682576e8d4e02d9dea3094146059d517464b95f4",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "update_kanban_task": {
       "domain": "kanban",
@@ -8758,6 +8650,15 @@
       "critical": ["labels", "markdown", "preserveDoneStatus", "sections"],
       "argsDigest": "sha256:b31457c6de75194ede48ac2a8bf27d37dd820fc9f7dc9d96341700fd6c412bd6",
       "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
+    },
+    "update_linear_issue": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4a759509ef42ae7832967d341871022b8873dc31dba0b24b9eb7e63441f4117a",
+      "resultDigest": "sha256:4f18a63177434b691befa955db925475417991998b8fab349e3d9a063ceab6d4"
     },
     "update_native_agent_controls": {
       "domain": "native-sessions",
@@ -8784,7 +8685,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:2ad3430306348be73279c9dd0ad5283c4578ed8c572f59700b407ba75476b466",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "update_port_mappings": {
       "domain": "environments",
@@ -8838,7 +8739,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:aa23803e28cf28fe8c52c8c564368012503896f02356fb23ec851ce4e163a98a",
-      "resultDigest": "sha256:5cfec8d804468d2a58ce3c07f9730bdc9c91c71054472134b5eed94d54e34c30"
+      "resultDigest": "sha256:f623c929c8c64a633868fa9c2dcdb22531c93d858cc3dbbe4789cb3a319ee412"
     },
     "update_scheduled_job": {
       "domain": "system",
@@ -8885,15 +8786,6 @@
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:7516d90068ea2ddcebaa84cb2d2745b003677c751d2ef10f037fb2b65cab2c53"
     },
-    "validate_domains": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:09171c91371568a0ed756db07826473366d3ffa5cfde4efeb6451ce5d9deb803",
-      "resultDigest": "sha256:ef39565831a5008ac4d66688bcc2559f9d23baaf779d7bc82dd7a45fdb1cd332"
-    },
     "validate_git_url": {
       "domain": "projects",
       "since": 1,
@@ -8911,15 +8803,6 @@
       "critical": [],
       "argsDigest": "sha256:8cfde18a75d5882bda337d1cbc89d822506597c4e8a514d113e0518776d6bb1d",
       "resultDigest": "sha256:593cefa7bf550cca64eeefa666d4dd95bc80691c278828bdfff7da2b37584f7b"
-    },
-    "verify_environment_pr": {
-      "domain": "pull-requests",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:91534a2e1c4457ad94a931b7520d9e4f206362df68d67a732f3b52a9f08c5825",
-      "resultDigest": "sha256:5908c0e22fafe059894c98cfd2f2969e640fbe9c8ab335996a4b7db2c2df05d8"
     },
     "verify_project_launch_base": {
       "domain": "coordinator",

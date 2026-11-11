@@ -18,11 +18,11 @@ import { SuborksRepository } from "./storage-suborks.js";
 import { ClientStateRepository } from "./storage-client-state.js";
 import { SetupApprovalsRepository } from "./storage-setup-approvals.js";
 import { WatchedPullRequestsRepository } from "./storage-watched-pull-requests.js";
-import { OpenCode2SessionsRepository } from "./storage-opencode2-sessions.js";
 import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
 import { KanbanBoardStore } from "./storage-kanban-board.js";
 import { KanbanSyncRepository } from "./storage-kanban-sync-repository.js";
+import { LinearRepository } from "./storage-linear.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
 import { NativeAgentSessionsRepository } from "./storage-native.js";
 import { NodesRepository } from "./storage-nodes.js";
@@ -70,6 +70,7 @@ export class StorageRepositories {
   readonly agentMailBudgets: AgentMailBudgets;
   readonly kanban: KanbanRepository;
   readonly ticketSync: KanbanSyncRepository;
+  readonly linear: LinearRepository;
   readonly previewServices: PreviewServicesRepository;
   readonly nodes: NodesRepository;
   readonly coordinatorNotices: CoordinatorNoticesRepository;
@@ -85,7 +86,6 @@ export class StorageRepositories {
   readonly clientState: ClientStateRepository;
   readonly setupApprovals: SetupApprovalsRepository;
   readonly watchedPullRequests: WatchedPullRequestsRepository;
-  readonly openCode2Sessions: OpenCode2SessionsRepository;
 
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
@@ -110,6 +110,7 @@ export class StorageRepositories {
     const kanbanBoard = new KanbanBoardStore(context, files);
     this.kanban = new KanbanRepository(context, files, kanbanBoard);
     this.ticketSync = new KanbanSyncRepository(context, files, kanbanBoard);
+    this.linear = new LinearRepository(context);
     this.previewServices = new PreviewServicesRepository(context);
     this.nodes = new NodesRepository(context);
     this.coordinatorNotices = new CoordinatorNoticesRepository(context);
@@ -125,6 +126,5 @@ export class StorageRepositories {
     this.clientState = new ClientStateRepository(context);
     this.setupApprovals = new SetupApprovalsRepository(context);
     this.watchedPullRequests = new WatchedPullRequestsRepository(context);
-    this.openCode2Sessions = new OpenCode2SessionsRepository(context);
   }
 }

@@ -1,6 +1,4 @@
-import type { GraphCapabilityCeiling } from "@orkestrator/protocol/graphs/capability-profiles";
 import type {
-  GraphProjectCeiling,
   GraphTemplateCompileResponse,
   GraphTemplateDetail,
   GraphTemplateExport,
@@ -54,17 +52,6 @@ export function createGraphTemplatesApi(client: BackendClient) {
     return graphsOn(client, machine).graph_template_save({ template, ...input });
   }
 
-  function deleteGraphTemplate(
-    id: string,
-    expectedRevision?: number,
-    machine?: AccountMachine,
-  ): Promise<{ deleted: boolean }> {
-    return graphsOn(client, machine).graph_template_delete({
-      id,
-      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
-    });
-  }
-
   /** Copies any template into a new user template; a project template needs the digest reviewed. */
   function duplicateGraphTemplate(
     ref: GraphTemplateRef,
@@ -112,39 +99,15 @@ export function createGraphTemplatesApi(client: BackendClient) {
     return graphsOn(client, machine).graph_template_trust({ ...input });
   }
 
-  function getGraphCapabilityCeiling(
-    projectId: string,
-    machine?: AccountMachine,
-  ): Promise<GraphProjectCeiling> {
-    return graphsOn(client, machine).graph_capability_ceiling_get({ projectId });
-  }
-
-  /** Tightens (or with `null` resets) a project's ceiling; `git.push`/`github.write` are refused. */
-  function setGraphCapabilityCeiling(
-    projectId: string,
-    ceiling: GraphCapabilityCeiling | null,
-    expectedRevision?: number,
-    machine?: AccountMachine,
-  ): Promise<GraphProjectCeiling> {
-    return graphsOn(client, machine).graph_capability_ceiling_set({
-      projectId,
-      ceiling,
-      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
-    });
-  }
-
   return {
     listGraphTemplates,
     getGraphTemplate,
     saveGraphTemplate,
-    deleteGraphTemplate,
     duplicateGraphTemplate,
     compileGraphTemplateInBackend,
     importGraphTemplate,
     exportGraphTemplate,
     setGraphTemplateTrust,
-    getGraphCapabilityCeiling,
-    setGraphCapabilityCeiling,
   };
 }
 
@@ -155,12 +118,9 @@ export const {
   listGraphTemplates,
   getGraphTemplate,
   saveGraphTemplate,
-  deleteGraphTemplate,
   duplicateGraphTemplate,
   compileGraphTemplateInBackend,
   importGraphTemplate,
   exportGraphTemplate,
   setGraphTemplateTrust,
-  getGraphCapabilityCeiling,
-  setGraphCapabilityCeiling,
 } = createGraphTemplatesApi(commandBackendClient);

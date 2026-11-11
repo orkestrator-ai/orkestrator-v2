@@ -1,10 +1,5 @@
-export const GITHUB_STATUS_LABELS = {
-  todo: "ork:todo",
-  inprogress: "ork:inprogress",
-  review: "ork:review",
-} as const;
-
-export type GitHubIssueStatus = "backlog" | keyof typeof GITHUB_STATUS_LABELS;
+/** A ticket's GitHub workflow label (`ork:<status>`, see the backend's `GITHUB_STATUS_LABELS`), or none. */
+export type GitHubIssueStatus = "backlog" | "todo" | "inprogress" | "review";
 
 /**
  * The GitHub issue model is the `pull-requests` domain's (plan item 7006):

@@ -34,25 +34,13 @@ describe("desktop connection storage keys", () => {
     expect(desktopConnectionStorageKey("ui-storage", COMMAND_STORAGE_NODE)).toBe(remote);
   });
 
-  test("copies a legacy value into the first connection-specific key once", () => {
+  test("never copies an un-namespaced value: no published desktop wrote one", () => {
     window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
     localStorage.setItem("ui-storage", '{"state":{"zoomLevel":120},"version":0}');
 
-    const migratedKey = desktopConnectionStorageKey("ui-storage", COMMAND_STORAGE_NODE);
-    expect(localStorage.getItem(migratedKey)).toBe('{"state":{"zoomLevel":120},"version":0}');
-
-    localStorage.setItem(migratedKey, "newer-state");
-    desktopConnectionStorageKey("ui-storage", COMMAND_STORAGE_NODE);
-    expect(localStorage.getItem(migratedKey)).toBe("newer-state");
-
-    window.orkestratorGateway = {
-      enabled: true,
-      desktop: true,
-      baseUrl: "https://desk.example",
-    };
-    const remoteKey = desktopConnectionStorageKey("ui-storage", COMMAND_STORAGE_NODE);
-    expect(remoteKey).not.toBe(migratedKey);
-    expect(localStorage.getItem(remoteKey)).toBeNull();
+    const key = desktopConnectionStorageKey("ui-storage", COMMAND_STORAGE_NODE);
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(localStorage.getItem("ui-storage:desktop:migrated-v1")).toBeNull();
   });
 });
 

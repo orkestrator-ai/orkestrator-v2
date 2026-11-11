@@ -81,17 +81,60 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
     "modelId",
   ],
   start_feature_planning: ["operationId", "featureId", "kind", "storyId", "userMessage"],
-  get_feature_planning_snapshot: ["projectId"],
   retry_feature_planning: ["featureId"],
   cancel_feature_planning: ["featureId"],
   get_linear_connection: [],
   connect_linear: ["apiKey"],
   disconnect_linear: [],
-  get_linear_issues: [],
-  get_linear_issue: ["issueId"],
-  post_linear_issue_comment: ["issueId", "body"],
+  get_linear_issues: ["projectId"],
+  get_linear_issue: ["issueId", "projectId"],
+  post_linear_issue_comment: ["issueId", "body", "projectId"],
   post_linear_completion_comment: ["pipelineId", "issueId", "body"],
+  // Linear boards (domain version 2).
+  get_linear_teams: [],
+  get_linear_board_link: ["projectId"],
+  set_linear_board_link: ["projectId", "teamId", "linearProjectId"],
+  clear_linear_board_link: ["projectId"],
+  get_linear_board_options: ["projectId"],
+  create_linear_issue: [
+    "projectId",
+    "requestKey",
+    "title",
+    "description",
+    "priority",
+    "stateId",
+    "assigneeId",
+    "labelIds",
+    "estimate",
+  ],
+  update_linear_issue: [
+    "projectId",
+    "issueId",
+    "title",
+    "description",
+    "priority",
+    "stateId",
+    "assigneeId",
+    "addedLabelIds",
+    "removedLabelIds",
+    "estimate",
+  ],
+  get_linear_node_connections: [],
+  copy_linear_connection_from_node: ["nodeId"],
 };
+
+/** The Linear board commands, new in domain version 2. */
+const SINCE_2 = new Set([
+  "get_linear_teams",
+  "get_linear_board_link",
+  "set_linear_board_link",
+  "clear_linear_board_link",
+  "get_linear_board_options",
+  "create_linear_issue",
+  "update_linear_issue",
+  "get_linear_node_connections",
+  "copy_linear_connection_from_node",
+]);
 
 const ALL: readonly AnyCommandDef[] = KANBAN_COMMANDS;
 
@@ -117,14 +160,14 @@ function argsError(def: AnyCommandDef, raw: unknown): string {
 }
 
 describe("kanban definitions", () => {
-  it("cover the 33 commands once, each in version 1 of the domain", () => {
-    expect(ALL).toHaveLength(33);
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(33);
+  it("cover the 41 commands once, the Linear board ones since version 2", () => {
+    expect(ALL).toHaveLength(41);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(41);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({
         name: def.name,
-        since: 1,
+        since: SINCE_2.has(def.name) ? 2 : 1,
         domain: "kanban",
       });
     }
@@ -147,8 +190,14 @@ describe("kanban definitions", () => {
       });
       expect({ name: def.name, access: def.access }).toEqual({
         name: def.name,
-        // The build pipeline's terminal lifecycle calls it in process only.
-        access: def.name === "close_kanban_task_for_merged_pr" ? "internal" : "workspace",
+        // The build pipeline's terminal lifecycle calls it in process only, and
+        // copying another machine's Linear key is a machine credential write.
+        access:
+          def.name === "close_kanban_task_for_merged_pr"
+            ? "internal"
+            : def.name === "copy_linear_connection_from_node"
+              ? "admin"
+              : "workspace",
       });
     }
   });
@@ -163,6 +212,7 @@ describe("kanban definitions", () => {
       set_kanban_task_label: ["projectId"],
       add_kanban_comment: ["requestId", "projectId"],
       start_feature_planning: ["operationId"],
+      create_linear_issue: ["requestKey"],
     });
   });
 

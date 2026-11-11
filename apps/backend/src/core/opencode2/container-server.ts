@@ -4,19 +4,24 @@
  * Pure: the start script, the plugins it writes and what decides whether an
  * image runs 2.x. `opencode2-container-server.ts` drives Docker with them.
  *
+ * This is the login-shell start of an image without `opencode2-launch=1`. On
+ * a newer image the root-owned launcher starts 2.x instead
+ * (`opencode2-container-launch.ts`), because this start runs node's own
+ * binary and loads configuration node can write (#2091).
+ *
  * - **Only images that carry it.** `opencode2` is in the image manifest
  *   (`agents.opencode2`) of every image built since the 2.x pin; an older
  *   image, or a container created before {@link OPENCODE2_SERVER_PORT} was
- *   published, stays on 1.x.
- * - **Its own port and database.** A second fixed container port, and
- *   `OPENCODE_DB` beside 1.x's on the persistent `opencode/db` mount
- *   (`persistentStateExports("opencode2")`), never 1.x's `opencode.db`, which
- *   2.x would migrate in place.
+ *   published, runs no OpenCode until it is rebuilt.
+ * - **Its own port and database.** Its own fixed container port, and
+ *   `OPENCODE_DB` on the persistent `opencode/db` mount
+ *   (`persistentStateExports("opencode2")`), never the `opencode.db` 1.x left
+ *   there, which 2.x would migrate in place.
  * - **The password as 1.x's is passed.** On stdin to a root-only file and, in
  *   the server's environment alone, to the server; the credential plugin
  *   removes it from the process and every shell, marks the server
  *   non-dumpable and refuses tools when it cannot.
- * - **The managed GitHub token in shells.** The 2.x form of the 1.x
+ * - **The managed GitHub token in shells.** The 2.x form of the retired 1.x
  *   `shell.env` plugin: each shell reads the token file when it is created, so
  *   a token synced later reaches the next shell without a restart, and the
  *   server itself never holds one.
@@ -61,7 +66,7 @@ export function openCode2ContainerPluginPath(id: string): string {
 }
 
 /**
- * The 2.x form of `buildOpenCodeGitHubEnvironmentPluginSource`: every shell
+ * The 2.x form of the retired 1.x GitHub environment plugin: every shell
  * the server creates gets `GITHUB_TOKEN` and `GH_TOKEN` from the managed
  * token file, read when the shell is created. A missing or empty file adds
  * nothing. `node:fs` is built into the binary, so nothing is installed.
@@ -105,7 +110,7 @@ export function openCode2ContainerPlugins(): ReadonlyArray<{ id: string; source:
   ];
 }
 
-/** The container's copy of the user's global OpenCode configuration, which 1.x reads. */
+/** The container's copy of the user's global OpenCode configuration (OpenCode's default global directory). */
 export const OPENCODE_CONTAINER_USER_CONFIG_DIR = "/home/node/.config/opencode";
 
 /** Mirrors the user's configuration into the 2.x config directory (`user-config.ts`). */
@@ -154,6 +159,7 @@ ${plugins
     export OPENCODE_CONFIG_DIR=${OPENCODE2_CONTAINER_CONFIG_DIR}
     export OPENCODE_DISABLE_AUTOUPDATE=1
     export OPENCODE_FLAGS=${quoteShell(OPENCODE2_FLAGS)}
+    export OPENCODE_DISABLE_FILEWATCHER=1
     ${persistentStateExports("opencode2")}
     ${boundedLaunchWithPrivateEnv(serve, OPENCODE2_CONTAINER_LOG, "OPENCODE_PASSWORD")}
   `;

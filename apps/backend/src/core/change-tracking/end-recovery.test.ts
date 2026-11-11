@@ -1,5 +1,5 @@
 /**
- * Background recovery of turn ends whose capture timed out (todo 7310 task 1).
+ * Background recovery of turn ends whose capture timed out (#2047).
  * A finalization deadline of 0 makes every end capture time out at once; the
  * retry has its own deadline.
  */
@@ -417,10 +417,10 @@ describe("end capture recovery scheduling", () => {
     const reached = new Promise<void>((resolve) => (entered = resolve));
     const gate = new Promise<void>((resolve) => (release = resolve));
     const writer = h.service.restore as unknown as {
-      write: (...args: unknown[]) => Promise<unknown>;
+      writeBatch: (...args: unknown[]) => Promise<unknown>;
     };
-    const original = writer.write.bind(writer);
-    const pause = spyOn(writer, "write").mockImplementation(async (...args) => {
+    const original = writer.writeBatch.bind(writer);
+    const pause = spyOn(writer, "writeBatch").mockImplementation(async (...args) => {
       entered();
       await gate;
       return original(...args);

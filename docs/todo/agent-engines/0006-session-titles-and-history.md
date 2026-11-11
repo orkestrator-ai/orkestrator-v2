@@ -10,7 +10,7 @@ through the shared session-action bus.
 
 Analysed 2026-11-06 against main at `ee2cc8423`, with Codex 0.166.0 and the Pi SDK (`@earendil-works/pi-coding-agent`) 1.4.0. The 2026-10-31 analysis (at `931e55417`, with Claude CLI 2.1.314, Agent SDK 0.3.314 and `@cursor/sdk` 1.2.0) still holds for tasks 1 to 5 and 7.
 
-This pass ran task 6 for Codex and Pi end to end on loopback models (the real Codex app-server and the real Pi SDK against a scripted local model API, no login, no billed turn). It found three Pi bridge defects, fixed here with regression tests, and one product gap, filed as 7520 (done and deleted 2026-11-09; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)). Cursor's half of task 6 needs a login and stays open.
+This pass ran task 6 for Codex and Pi end to end on loopback models (the real Codex app-server and the real Pi SDK against a scripted local model API, no login, no billed turn). It found three Pi bridge defects, fixed here with regression tests, and one product gap, filed as 7520 (done and deleted 2026-11-09; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)). Cursor's half of task 6 needs a login; it moved to the manual-test checklist (7568) on 2026-11-10, with task 7's signed-in run and task 5's decision.
 
 ### Tasks
 
@@ -18,9 +18,9 @@ This pass ran task 6 for Codex and Pi end to end on loopback models (the real Co
 2. **External Codex rewinds**: adopt `thread/reverted` and trim the served transcript. Status: done (#1337; rechecked at 0.166.0).
 3. **Codex archive**: explicit removal from the resume list, as a shared action. Status: done (#1337 for Codex; Cursor added on 2026-10-31).
 4. **Cursor archived agents**: out of the resume list by default, reachable by a toggle. Status: done (2026-10-31; supersedes the hide-only decision 8).
-5. **Claude history decisions**: subagent rehydration and message-level rewind. Status: open (rehydration done; message rewind waits on the user's decision).
-6. **Fork and rewind live qualification**: Codex, Pi and Cursor fork/rewind plus reload. Status: open (Codex and Pi done 2026-11-06 on loopback models; Cursor needs a login).
-7. **Title live qualification**: generated, fallback and failed-push titles on every platform. Status: open (offline half done; needs a signed-in title run that measures real cost and latency).
+5. **Claude history decisions**: subagent rehydration and message-level rewind. Rehydration is done; what is left is building message rewind if the user's answer is to offer it. Status: blocked (waits on 7568: 0006 task 5).
+6. **Fork and rewind live qualification**: Codex, Pi and Cursor fork/rewind plus reload. Status: done for Codex and Pi (2026-11-06, loopback models); Cursor's signed-in half moved to 7568 on 2026-11-10.
+7. **Title live qualification**: generated, fallback and failed-push titles on every platform. Status: done offline; the signed-in run measuring real cost and latency moved to 7568 on 2026-11-10.
 
 ### 1. Backend-owned title generation
 
@@ -82,7 +82,7 @@ This pass ran task 6 for Codex and Pi end to end on loopback models (the real Co
 
 **Problem.** Users could not remove a session from the resume list without deleting it, and deletion is forbidden.
 
-**Context.** `thread/delete` is banned by the transport invariants. Design-canvas to-do 0038 waits on an archived state.
+**Context.** `thread/delete` is banned by the transport invariants. Design-canvas to-do 0038 (retired 2026-11-11) waited on an archived state; design links now show it ([`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context)).
 
 **Investigation.** #1337 shipped the action for Codex with `actions.archive`, and renamed the misleading option to `onlyArchived`. Decision 8 kept Cursor out because its SDK could only unarchive cloud agents. That is false at 1.2.0: the real SDK's `Agent.archive` and `Agent.unarchive` both work on a local agent (`JsonlLocalAgentStore`), despite `stubs.d.ts` saying "Cloud-only". So the recommended shared action is now possible, and Cursor has it.
 
@@ -139,7 +139,9 @@ That removes two of the risks, but the staged state is still needed in every rea
 
 **Decisions.**
 
-- **Offer Claude message rewind?**
+- **Offer Claude message rewind?** The answer is the user's (7568, 0006
+  task 5). Build only if it is one of the last two options; staying with fork
+  closes the task with no code.
   - **Stay with fork at a message (recommended).**
     - Pros: no new state beside the one-CLI invariant, where the recent Claude bridge bugs have been; fork already gives the same result without changing the conversation.
     - Cons: Claude alone lacks in-place rewind among Codex, Cursor and Pi; forks accumulate in the resume list.
@@ -191,7 +193,7 @@ Branch switching works with a real Pi entry id, but no client can learn one
 renderer offers neither message rewind nor branch switching on any platform.
 That is 7520 (done and deleted 2026-11-09; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
 
-Cursor: not run (needs a login).
+Cursor: not run (needs a login); moved to 7568 on 2026-11-10.
 
 **Decisions.**
 
@@ -207,8 +209,8 @@ Cursor: not run (needs a login).
   - **A signed-in run per provider.**
     - Pros: real accounts.
     - Cons: billed turns, and a login the task rules out.
-- **Cursor**: left open until a signed-in batch in 0031 (recommended), since
-  its SDK cannot be pointed at a loopback model.
+- **Cursor**: needs a signed-in run, since its SDK cannot be pointed at a
+  loopback model; moved to 7568 on 2026-11-10.
 
 ### 7. Title live qualification
 
@@ -216,7 +218,7 @@ Cursor: not run (needs a login).
 
 **Context.** Was blocked on task 1, which is done.
 
-**Investigation.** The offline half is done. `native-agent-session-titles.test.ts` runs the fallback and failed-push checks for all six platforms, and the real CLIs generate titles and fail correctly against loopback endpoints (`session-title-codex-live.test.ts`, `session-title-claude-live.test.ts`). A signed-in run across the platforms, and real title cost and latency, remain.
+**Investigation.** The offline half is done. `native-agent-session-titles.test.ts` runs the fallback and failed-push checks for all six platforms, and the real CLIs generate titles and fail correctly against loopback endpoints (`session-title-codex-live.test.ts`, `session-title-claude-live.test.ts`). A signed-in run across the platforms, and real title cost and latency, moved to 7568 on 2026-11-10.
 
 **Decisions.**
 
@@ -302,16 +304,16 @@ Cursor: not run (needs a login).
 
 ### Code
 
-Only one decision is left. Tasks 1 to 4 are done.
+Tasks 1 to 4 are done.
 
 1. **Claude message rewind**: not built. Task 5 has the options and the probe
-   results. It needs the user's decision, and its own branch if the answer is
-   to build it.
+   results. It waits on the user's decision (7568, 0006 task 5), and needs its
+   own branch if the answer is to build it.
 
 ### Qualification
 
-Task 6 is done for Codex and Pi on loopback models and needs a signed-in run
-for Cursor. Task 7 needs a signed-in title run measuring real cost. Pinned
+Task 6 is done for Codex and Pi on loopback models. Its Cursor run and task
+7's signed-in title run are in 7568. Pinned
 provider and browser qualification is recorded below; authenticated
 end-to-end product QA is listed separately.
 
@@ -639,11 +641,14 @@ part of this qualification.
 - 7520, message rewind and branch switching in the client (found by task 6;
   done and deleted 2026-11-09, outcome in
   [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
-- [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)
-  was waiting on the archive work here; it can now add an archived state.
-- [0081-annotation-fence-in-session-titles.md](0081-annotation-fence-in-session-titles.md)
-  (#1318): the annotation strip it added to the backend fallback now lives in
-  `session-title-text.ts`.
+- To-do 0038 (retired 2026-11-11) was waiting on the archive work here; design
+  links now read the archived state from the resume list and offer Unarchive
+  and resume
+  ([`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context)).
+- To-do 0081 (retired 2026-11-10; #1318): the annotation strip it added to the
+  backend fallback now lives in `session-title-text.ts`; see
+  [Session titles](../../architecture/agent-engines.md#session-titles).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user's decision in task 5, Cursor's half of task 6, task 7's signed-in run) moved there on 2026-11-10.
 
 ## Replaces
 

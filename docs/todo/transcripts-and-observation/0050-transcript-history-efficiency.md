@@ -7,17 +7,18 @@ measurement run, against `main` at `930189337` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `c1724ab7` (task 5 run and closed; the
-other tasks re-read, unchanged since 2026-10-27).
+Analysed 2026-11-11 against `main` at `498b68766` (task 4 built, run and
+closed; task 1 re-read, unchanged). Previously analysed 2026-11-10 against
+`main` at `c98b20e6f` (task 3 built, run and closed) and 2026-11-06 against
+`main` at `c1724ab7` (task 5 run and closed).
 
 ### Tasks
 
 Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joined `sync-v1` paging half moved to [0232](0232-direct-history-cursor-minting.md), which owns its retirement and register row; it is not repeated here.
 
-1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window; the Claude change is in `v2.33.0-beta` only).
-2. **Inactive Cursor run at a lowered trim threshold**: reach the producer trim while the environment is inactive, then check the bounded window, pages, sub-agent card and controls. Status: open (the pass-through is in place; no Cursor live spec exists).
-3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: blocked (on a bridge fault hook that does not exist).
-4. **Electron and Docker with real providers**: the transcript paths in the Electron window and in container environments; iOS only where the wrapper changes. Status: open.
+1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window, which the floor reaches for v2.36.0 on 2027-01-02; waits on 7568: 0050 task 1 counter reading). Reading the fallback counter on the maintainer's machines moved to 7568 on 2026-11-10.
+3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: done (2026-11-10; a test-only dispatch hold in the backend's bridge client, and `dispatch-hold-live.spec.ts` passed four times on a Pi loopback model; no product defect, two harness defects fixed; see the results section).
+4. **Electron and Docker paging harness**: make the transcript paths runnable in the Electron window and in a container environment (an Electron paging step, and a container target for `transcript-paging-live.spec.ts`); iOS only where the wrapper changes. Status: done (2026-11-11; `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` and `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`, each passed on the Codex loopback model; the Electron run found one renderer defect, fixed; see the results section). The runs with real providers are on 7568 (0050 task 4, Electron and container items). iOS: no wrapper change, so nothing to run.
 5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
 6. **Open questions and verification items**: all answered; one sentence was stale. Status: done (the sentence corrected 2026-11-06).
 
@@ -31,45 +32,20 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 **Decisions.**
 
-- **Keep the retirement in this file, or hand it to 0034?**
-  - **Hand it to 0034's window-gated removals once the qualification tasks here close, and finish this file then (recommended).**
-    - Pros: this file stops being held open for months by a date; 0034 already tracks floor-gated work, and 0232 follows the same pattern.
-    - Cons: the item's rationale must be carried across, and it adds a row to another file.
-  - **Keep it here as the last item.**
-    - Pros: one place for item 3's history.
-    - Cons: this file cannot finish until the floor moves, whatever happens to its live runs.
+- **Keep the retirement in this file, or hand it to 0034?** Re-checked 2026-11-11, when task 4 closed the last qualification task here: 0034 no longer exists (retired), so there is no window-gated removals file to hand it to.
+  - **Hand it to 0034's window-gated removals once the qualification tasks here close, and finish this file then.**
+    - Pros: this file would stop being held open for months by a date.
+    - Cons: 0034 is retired; the item would need a new home, which only moves the same blocked row elsewhere.
+  - **Keep it here as the last item (recommended).**
+    - Pros: one place for item 3's history; 0232 already waits on this task by number.
+    - Cons: this file cannot finish until the floor moves.
 - **What evidence is needed before removal, besides the floor?**
-  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).**
+  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).** Reading it is a maintainer check, moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
     - Pros: catches a bridge that is somehow older than the floor suggests (a container image built before #1296).
     - Cons: needs the counter read from several machines.
   - **The floor alone.**
     - Pros: purely mechanical.
     - Cons: a stale container image could still need the fallback and would then show empty transcripts after a restart.
-
-### 2. Inactive Cursor run at a lowered trim threshold
-
-**Problem.** Cursor bounds its transcript while streaming with no reader, but trimming has never been observed live on an inactive environment. A trim bug would corrupt the window or wedge controls for long Cursor runs.
-
-**Context.** The production threshold is far past a qualification turn. Since 2026-10-26 an agent-test profile passes `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` through. The file gives the exact procedure, and decision 15 covers the choice.
-
-**Investigation.** The bound is `MAX_TRANSCRIPT_BYTES` (`bridges/cursor-bridge/src/config.ts:107`), overridable downwards to 256 KiB (`:108`); `MAX_MESSAGES` is 2,000. The variable is on the allowlist (`apps/desktop/electron/backend-process.ts:49`). The Cursor bridge `build` script exists, so `bun run --cwd bridges/cursor-bridge build` is valid. No Cursor live spec exists in `e2e/agent-testing/`. Decision 15 notes that a container bridge does not inherit the variable, so this run is local-environment only.
-
-**Decisions.**
-
-- **Manual run or a new spec?**
-  - **A manual run following the file's steps, with results recorded here (recommended).**
-    - Pros: closes the qualification soon; the steps are already written; one paid turn.
-    - Cons: not repeatable; the next Cursor SDK bump will not rerun it.
-  - **Write a Cursor live spec first (prompt, inactive switch, `transcriptBounds` and window checks).**
-    - Pros: repeatable, and usable at Cursor bumps.
-    - Cons: a new spec for one qualification; more up-front work.
-- **What counts as a pass?**
-  - **`/runtime-health` shows a trim, the window is `truncated` with pages to the prompt, the sub-agent card settles, and Stop and steer work on return (recommended).**
-    - Pros: matches the item; every check is content-free.
-    - Cons: a sub-agent in the trimmed range may be hard to force with a prompt.
-  - **`transcriptBounds` shows a trim and the window renders.**
-    - Pros: easy to reach.
-    - Cons: misses the controls and sub-agent lifecycle, which are the risky parts.
 
 ### 3. Pre-acceptance dispatch window live
 
@@ -78,6 +54,8 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 **Context.** In the 2026-10-21 cold-restart runs the provider had always already accepted. The file says a fault hook that holds the bridge's prompt route would make the window deterministic, and that adding it is its own change.
 
 **Investigation.** `pendingPromptAttempt` is used by `apps/backend/src/core/build-pipeline-prompts.ts`, `build-pipeline-review-fanout.ts` and `build-pipeline-service-helpers.ts`. No bridge has an env-driven stall or fault hook on its prompt route; the only `process.env` reads near the routes are unrelated configuration.
+
+Done on 2026-11-10 (see [Qualification results (2026-11-10)](#qualification-results-2026-11-10-pre-acceptance-dispatch-window)). `apps/backend/src/core/agent-test-dispatch-hold.ts` holds `HttpBridgeProvider.send` at two points while a marker file exists in the profile's data directory: before the prompt request leaves the backend (`hold-before-send`) and after the bridge answered 2xx but before the caller records the send (`hold-after-response`). It is installed only when the runtime flavor is `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1` is set and the data directory is not the default one, so a production build never installs it. `e2e/agent-testing/dispatch-hold-live.spec.ts` drives one Pi build pipeline on the Auto-pipeline loopback model through both points with a backend `SIGKILL` at each. The restarted backend resent the journaled prompt once under its original request id, and settled the accepted one without resending; the run finished `complete` on the same build session. The "sent, not yet accepted inside the bridge" half stays covered by each bridge's dispatch-journal unit tests only, as the recommended option below accepted.
 
 **Decisions.**
 
@@ -92,18 +70,25 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
     - Pros: no new seam.
     - Cons: the at-most-once dispatch path stays unproved end to end.
 
-### 4. Electron and Docker with real providers
+### 4. Electron and Docker paging harness
 
-**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers.
+**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers, and no spec can drive either of them through paging yet.
 
-**Context.** Batched with 0031. iOS only where the wrapper changes.
+**Context.** Batched with 0031. iOS only where the wrapper changes. The agent part is the harness below. The credentialed runs themselves (real provider turns in the Electron window and in a container environment) are human-only and moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; they record their results here.
 
-**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging.
+**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging. `transcript-paging-live.spec.ts` creates its environments with `environmentType: "local"` only (`createEnvironment`), so it cannot reach a container bridge. Its Codex loopback mode (`ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`) needs no login, so the harness can be proved on the loopback model before any paid run.
+
+Done on 2026-11-11 (see [Qualification results (2026-11-11)](#qualification-results-2026-11-11-electron-window-and-container-environment)). Two switches on `transcript-paging-live.spec.ts`'s native case:
+
+- `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container` runs it in the profile's seeded `fixture-container` (used, never deleted). The trail is copied into `/workspace` with `tar` over `docker exec`; with the loopback model the model runs inside the container and the container's `$HOME/.codex/config.toml` points at it for the run; the bridge restart is `stop_codex_server`/`start_codex_server`, proved by a new bridge pid.
+- `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` renders the tab in the profile's own Electron window, attached over CDP. An agent-test profile started with `ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1` (new, `electronDebugSwitches` in `apps/desktop/scripts/dev/lifecycle.ts`) opens Chromium remote debugging on an OS-chosen loopback port; the spec reads the endpoint from `electron.log`. A headless profile is enough, so this runs on a host with no display.
+
+Both passed on the Codex loopback model. The Electron run found a renderer defect: after the bridge restart the reader's history was paged back in but their place was not restored. Fixed in `TranscriptScrollController.holdPlaceAcrossReflow` (results section). Two harness defects were fixed on the way: the Docker permission dialog swallowed the spec's wheel gestures, and a container environment's pane layout must carry its container id.
 
 **Decisions.**
 
-- **How to cover it?**
-  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).**
+- **How to cover it?** The Electron half was done by driving the profile's own window from the same spec rather than a step in the Electron suite (Assumptions and decisions, item 26).
+  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).** The harness is agent work here; the real-provider runs are the two 0050 task 4 items in 7568.
     - Pros: reuses the live spec's checks; the container run exercises the container bridge hop.
     - Cons: the Electron step is new work; the container run needs a profile started with `--fixture-environments local,container`.
   - **A manual pass in each, recorded in 0031.**
@@ -168,11 +153,15 @@ loads Claude sessions after a bridge restart, and the renderer pages through
 joined `sync-v1` history itself. The Claude bridge now loads those sessions on
 `/transcript`, which starts the fallback's retirement clock, and the joined
 path moved to [0232](0232-direct-history-cursor-minting.md). The hidden
-browser document is measured. What remains is real-stack qualification not
-run here: a long inactive Cursor run (now reachable in a short run), the
-pre-acceptance pipeline dispatch window, and Electron and Docker with real
-providers. The mounted tab across a bridge-only restart ran on 2026-11-06 and
-found two defects, both fixed.
+browser document is measured. The mounted tab across a bridge-only
+restart ran on 2026-11-06 and found two defects, both fixed. The
+pre-acceptance pipeline dispatch window ran on 2026-11-10 through a test-only
+dispatch hold and found no product defect. On 2026-11-11 the paging spec
+learned to run in the Electron window and in a container environment, and
+passed in both on a loopback model; the Electron run found one more defect,
+fixed. What remains for agents is task 1, which waits on the support window;
+the real-provider Electron, container and Cursor runs are on the manual-test
+checklist.
 
 ## Current state
 
@@ -440,8 +429,8 @@ found two defects, both fixed.
    loopback, or a container port on the same host. For comparison, the
    backend-to-client hop already patches the same 40-observation streams down
    to 29 to 44 KB in total. About 0.5 ms of CPU per changed read does not pay
-   for a second incremental protocol. Reopen it with
-   [0052](0052-remote-client-bandwidth.md) if a bridge ever runs remote from
+   for a second incremental protocol. Reopen it, with the remote bandwidth
+   record in [remote-bandwidth.md](../../development/remote-bandwidth.md), if a bridge ever runs remote from
    its backend.
 9. **Closed (2026-10-24): per-message provider revisions are not justified.**
    Workload `f` (a changed read of a 100-message window with one changing
@@ -473,43 +462,165 @@ Done on 2026-10-24 (results below):
 Done on 2026-10-26 (results below): a truly hidden and resumed document at
 an 8 MiB retained history, with `e2e/perf/hidden-resume-perf.ts`.
 
-Still open:
+Done on 2026-11-11 (results below): the native case in the Electron window
+and in a container environment, on the pinned Codex against a loopback model
+(task 4).
 
-- A Cursor run long enough to reach the producer trim thresholds while its
-  environment is inactive; return and check the bounded window, sub-agent
-  lifecycle and controls. Not run on 2026-10-24 or 2026-10-26. The
-  production threshold is `MAX_TRANSCRIPT_BYTES` (16 MiB minus 128 KiB, or
-  2,000 messages) in `bridges/cursor-bridge/src/config.ts`, far past a
-  qualification turn. `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` lowers it (to
-  256 KiB at least), and since 2026-10-26 an agent-test profile passes it
-  through: it is on the backend's allowlist (`AGENT_TEST_SAFE_ENV_NAMES` in
-  `apps/desktop/electron/backend-process.ts`, covered in
-  `apps/desktop/tests/backend-process.test.ts`), and local bridges inherit
-  the backend's environment. To run it: rebuild the Cursor bridge
-  (`bun run --cwd bridges/cursor-bridge build`), start
-  `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 mise run dev:test --profile
-  qa-0050-cursor --fixture --credential-source cursor --agent-platforms
-  cursor`, sign in with `mise run dev:login --profile qa-0050-cursor`, give
-  a Cursor tab a prompt that reads a chain of 20 KB files with a sub-agent
-  for part of it, switch to another environment for the turn, and on return
-  check `/runtime-health` `transcriptBounds`, the
-  `truncated` window and its history pages, the sub-agent card and the stop
-  and steer controls. Still owed: it is a paid provider run, and no Cursor
-  live spec exists yet to drive it.
-- Hit the pre-acceptance build-pipeline dispatch window live. In the
-  2026-10-21 cold-restart runs the backend was killed while the prompt was
-  journaled (`pendingPromptAttempt`), but each time the provider already
-  showed the build session running, so the retry under the same request id
-  before acceptance was proved only by unit tests. A fault hook that holds the
-  bridge's prompt route would make the window deterministic. Not done: no
-  bridge has such a hook, and adding a test-only stall to a production
-  dispatch route is its own change.
-- Electron window and Docker environments with real providers; native iOS
-  only where the wrapper changes.
+Still open, on the manual-test checklist: Electron window and Docker
+environments with real providers. Native iOS: no wrapper change, so nothing
+to run.
 
 Done on 2026-11-06 (results below): a mounted Codex tab with loaded history
 across a bridge-only restart (task 5), on the pinned Codex against a
 loopback model.
+
+Done on 2026-11-10 (results below): the pre-acceptance build-pipeline
+dispatch window (task 3), held deterministically by a test-only dispatch hold
+in the backend's bridge client, on Pi against a loopback model.
+
+## Qualification results (2026-11-11): Electron window and container environment
+
+Task 4. Worktree at `main` `498b68766` plus this change, on beelink2 (Intel
+Core Ultra 9 285H, Linux 7.2.15, Bun 1.4.4) while other builds shared the
+host. No real login and no billed turn: both profiles used `CODEX_HOME` set to
+a throwaway directory whose `auth.json` held a made-up API key, and the
+pinned Codex (0.167.0) talked to `transcript-paging-codex-model.ts`. 150-stop
+trail, as in task 5.
+
+**Profiles.**
+
+- Electron: `CODEX_HOME=<throwaway> ORKESTRATOR_HOST_REACHABILITY_CHECK=off ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1 mise run dev:test --profile qa-0050-electron --fixture --headless --credential-source codex --agent-platforms codex`.
+  Its `electron.log` recorded `DevTools listening on ws://127.0.0.1:<port>/…`.
+- Container: this host's user cannot reach the host Docker daemon, so a
+  disposable rootless daemon (`mise run docker:disposable -- start --name q0050`)
+  served it, and `dev:test` built the profile image inside that daemon:
+  `eval "$(mise run docker:disposable -- env --name q0050)"; CODEX_HOME=<throwaway> ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile qa-0050-container --fixture --fixture-environments local,container --headless --credential-source codex --agent-platforms codex`.
+  The fixture container and its egress gateway came up `restricted`.
+
+**Command** (per run; `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` for the
+Electron runs, `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container` and the
+same `DOCKER_HOST` for the container runs):
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_RUN_ID=<run> \
+ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1 \
+ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES=1 \
+  mise run test:logged -- --name transcript-paging-<run> -- \
+  mise run test:agent:browser -- e2e/agent-testing/transcript-paging-live.spec.ts
+```
+
+`ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES=1` was set because a later commit
+in the same change touched `packages/protocol` (the legacy projection's
+`encoded` flag), which the bridge freshness check counts as a bridge source
+change; no bridge code changed between the profile start and the runs.
+
+**Results after the fixes.**
+
+| Check | Electron (2 runs) | Container (2 runs) | Browser, Electron profile (1 run) |
+| --- | --- | --- | --- |
+| Backend window | truncated, 100-row tail, 52 rows in pages `[12, 40]`, complete | same | same |
+| Load earlier messages | reached the prompt, place held (clamp-aware, `errorPx` 0) | same | same |
+| Bridge restart under the mounted tab | 152 / 152 rows, 150 of 150 call ids kept, no row or stop twice, place held at stop 1 (offset 228 px, `errorPx` 0) | same, through `stop_codex_server`/`start_codex_server` | same |
+| Restart while another environment is active | recovered | recovered | recovered |
+| After a reload | paged to the prompt, place held | paged to the prompt after 4 clicks (3 empty pages while the restarted bridge re-read its rollout), place held | paged to the prompt |
+| Run time | 53 to 72 s | 72 to 77 s | 36 s |
+
+After every container run the container held no trail, no model directory, no
+model process, and no `$HOME/.codex/config.toml` (it had none before).
+
+**Defect: a width reflow cancelled the history recovery (Electron).** In the
+Electron window the reader lost their place after the bridge restart in all
+six runs before the fix: twice the tab stayed on the bare live tail (2 rows,
+18 stops) for the 30 s watched, and four times the history was paged back in
+but the reader was not moved to their part, which was left unrendered inside
+the open tool group. Console probes (temporary, not committed) showed the order: the drop
+commit started the recovery (`useRestorePlaceAfterHistoryDrop`), then a
+`ResizeObserver` callback ran `holdPlaceAcrossReflow`, which started a
+`reflow` navigation; that bumped the scroll generation, and the recovery,
+which treats a new generation as the reader having moved, gave up. The width
+changed because the shorter list lost its classic vertical scrollbar.
+Playwright's headless Chromium hides scrollbars, which is why the browser
+suite never saw it; Electron, and desktop browsers on Linux and Windows, have
+classic scrollbars. Fixed: while a history recovery is pending
+(`waitingForHistory`), a width change records the new width and does not
+navigate; the recovery places the reader when their part returns. Covered by
+`a width reflow leaves a pending history recovery in charge of the reader's place`
+in `transcript-scroll-controller.test.ts`, which fails without the fix.
+
+**Harness defects fixed.**
+
+- On this host the "Docker Permission Required" dialog opens after the Docker
+  probe answers, often after a reload has rendered the list. The spec's
+  locator handler runs only before actions and auto-waiting assertions, so the
+  dialog's overlay took the wheel gestures and the browser run failed
+  `native-after-reload: native paging must run`. Every wheel gesture now waits
+  for the list through an auto-waiting assertion first (`clearOverlays`).
+- A container environment's pane layout is fenced to its container: saving it
+  with `containerId: null` failed `Pane layout write targets stale environment
+  generation`. The layout now carries the environment's container id.
+
+Screenshots of the open tool group before and after the restart were taken
+by the spec (`output/visual-previews/`, not committed).
+
+## Qualification results (2026-11-10): pre-acceptance dispatch window
+
+Task 3. Worktree at `main` `c98b20e6f` plus this change, on Linux (beelink2,
+headless), in the isolated profile `qa-0050-dispatch-hold`
+(`--no-agent-credentials --agent-platforms pi`, with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`). Pi ran against the Auto-pipeline
+loopback model (`auto-pipeline-fake-model.ts`) named in the profile's own
+`models.json`: no login, nothing billed. How to run it is in
+[agent-testing.md](../../development/agent-testing.md#live-dispatch-hold).
+
+The new hold (`apps/backend/src/core/agent-test-dispatch-hold.ts`) parks
+`HttpBridgeProvider.send` while a marker file exists in
+`<data dir>/agent-test-fixtures/dispatch-hold/`, and writes a record of the
+held send (agent, session and request ids, times; no prompt text). The spec,
+`e2e/agent-testing/dispatch-hold-live.spec.ts`, starts one Pi build pipeline
+(commit-only delivery) whose ticket carries a random `QATAG…` word; the fake
+model counts the turns whose opening prompt carries it and the most user
+messages carrying it in any one request.
+
+| Step | Result (4 passing runs) |
+| --- | --- |
+| `hold-before-send` armed, build stage starts | The send was held with `pendingPromptAttempt` journaled, `dispatchingAt` set and the same request id as the held send; the build session showed `running`; the model had seen no turn for the tag. |
+| Backend `SIGKILL`, `hold-after-response` armed, profile restarted | The restarted backend asked the bridge, which proved the id absent, and resent under the **same** request id on the **same** Pi session: the after-response hold parked it with the original id. The model had seen exactly one turn for the tag. The resend was held 0.1 to 1.9 s before `dev:status` reported the restarted profile ready (status is polled every 2 s). Restarts took 13.2 to 17.9 s. |
+| Backend `SIGKILL` while the accepted resend was held, profile restarted | The restarted backend settled the attempt as sent without resending (1.8 to 2.9 s after ready). No restart continuation was sent. The pipeline went on through Review and Verify to `complete` on the same build session. |
+| Duplicate checks at the end | The build session's committed history (3 rows) held the task prompt in exactly one user row; no model request carried the tag in more than one user message. The tag opened 3 turns in all, one per stage session (build, review, verify), each quoting the ticket once. |
+
+No product defect showed. The run found two harness defects, both fixed in
+this change:
+
+- **A restarted credential-free profile gained every host credential.**
+  `profile.json` records `--no-agent-credentials` as `credentialSources: []`,
+  and the restart helpers in `cold-restart-live.spec.ts`,
+  `goals-restart-live.spec.ts`, `multi-review-live.spec.ts` and
+  `web-annotations-approval-live.spec.ts` passed no credential flag for an
+  empty list, which the launcher reads as "all host credentials". They and
+  the new spec now share `devTestRestartArgs` (`profile-restart-args.ts`),
+  which passes `--no-agent-credentials` for an empty list; covered by
+  `profile-restart-args.test.ts`, which parses the result with the
+  launcher's own argument parser.
+- **The spec's first pass counted later stages as duplicates** (3 turns for
+  the tag) and its second read a stale hold record left by a backend killed
+  mid-hold. Duplicates are now counted per provider session (most tagged
+  user messages in one request, and the build history's user rows), and
+  arming a point removes its old record. A profile the spec restarted
+  (without `--fixture`) no longer names its test project in `dev:status`; the
+  spec falls back to the profile's `fixtures/test-project`.
+
+Not covered: the "sent, not yet accepted inside the bridge" half (the request
+reached the bridge but the bridge had not handed it to the provider when the
+backend died). The hold sits in the backend, so it covers "journaled, not
+sent" and "accepted, not recorded"; the in-bridge half rests on each bridge's
+dispatch-journal unit tests, as task 3's recommended option accepted.
+
+Validation: the hold's unit tests (`agent-test-dispatch-hold.test.ts`, 13
+tests, including the bridge client waiting before the request and after the
+answer, and no hold on a rejected send), the fake model's tag counters
+(`auto-pipeline-fake-model.test.ts`), `profile-restart-args.test.ts`, and the
+backend, `e2e` and `e2e/agent-testing` typechecks passed. The profile was
+stopped and reset afterwards.
 
 ## Qualification results (2026-11-06): mounted Codex tab across a bridge restart
 
@@ -903,7 +1014,7 @@ Restarts took 4.9 to 9.5 s.
 | Native Codex, idle graceful restart | Pass. The first read after the restart was the persisted tail (`freshness: "cached"`) with exactly the 8 rows from before. A client following updates from it (never forcing) converged on the provider's rows: no lost or added content, no repeated prompt. All 8 rows came back under new ids (Code item 5). The browser showed the prompt and the closing word in exactly one row each, before and after the restart and after a reload. |
 | Native Codex, backend `SIGKILL` mid-turn | Pass after the fix below. The crash came 16 to 17 s after the sixth stop. The cached tail held 23 to 26 of the 25 to 30 rows that existed then, never a row the provider lacked, and always the prompt (the 10 s checkpoint age bound held). The turn went `recovering` then `error` (restarted mid-turn). The provider kept every stop read before the crash and the client converged on it. A follow-up finished the trail, and every prompt and closing word showed once in the browser. |
 | Native Claude, idle and crash | Pass. Same checks. Cold hydration split a thinking part into its own row (9 rows for 8) and re-keyed the rows, with no content lost. After the crash the cached tail lagged 7 rows (Haiku reads about a stop a second) and the turn settled straight to `error`. |
-| Build pipeline, backend `SIGKILL` with the build prompt journaled | Pass (3 runs). Each kill landed while `pendingPromptAttempt` was set and the session already showed running. After the restart the stage kept its session, the task prompt reached the provider once, at most one restart continuation was sent, no prompt repeated, and the build finished the trail. The pre-acceptance half of the window was not isolated live (see Qualification). |
+| Build pipeline, backend `SIGKILL` with the build prompt journaled | Pass (3 runs). Each kill landed while `pendingPromptAttempt` was set and the session already showed running. After the restart the stage kept its session, the task prompt reached the provider once, at most one restart continuation was sent, no prompt repeated, and the build finished the trail. The pre-acceptance half of the window was not isolated live here; it was on 2026-11-10 (task 3). |
 | Build pipeline, graceful restart mid-turn | Pass (2 runs). The committed history was readable straight after the restart, before the provider answered, with all earlier content. By then the supervisor had already committed the bridge's replay, so ids differed (Code item 5). The stage continued once on the same session and finished, and the final history held every earlier row's content once. |
 | Build pipelines, idle graceful restart | Pass. With both pipelines cancelled, every stage history (2 or 3 sessions) came back byte-identical. |
 
@@ -1178,7 +1289,7 @@ considered, the choice, and why.
      incremental protocol or per-message revisions from five bridges.
    - Pros: no speculative protocol work.
    - Cons: a remote-bridge deployment would need the question reopened
-     (pointer left to 0052).
+     (pointer left to [remote-bandwidth.md](../../development/remote-bandwidth.md), which replaced 0052).
 9. **Browser gate method (item 7).**
    - Options: a new fixture mounting `useNativeAgentSession` against a fake
      gateway; extend the existing rich-transcript perf gate.
@@ -1285,7 +1396,9 @@ measurement.
     stay open with the steps above. None was run on 2026-10-26: each needs a
     paid provider turn or a platform run that 0031 batches, and the dispatch
     window also needs the hook first. The mounted-tab run was done on
-    2026-11-06 (decisions 17 to 21).
+    2026-11-06 (decisions 17 to 21), and the dispatch window on 2026-11-10
+    with a hold in the backend's bridge client rather than a bridge hook
+    (decisions 22 to 25).
 17. **Task 5: a loopback model instead of a real Codex turn.**
     - Options: the host's Codex login with a real model (the 2026-10-24
       method); the pinned Codex CLI against a loopback stand-in for the
@@ -1344,6 +1457,124 @@ measurement.
     - Why: right after a restart the bridge answered up to eight early pages
       empty within two seconds, which used up the fixed cap in one run of
       three. Retrying per poll would tie the cadence to the poll interval.
+
+22. **Task 3: where the hold sits.**
+    - Options: a test-only hold in the backend's bridge client (task 3's
+      recommendation); a stall hook in each bridge's prompt route; a hold in
+      the build pipeline's `dispatchPending` only.
+    - Chosen: the bridge client, `HttpBridgeProvider.send`, at two points
+      (before the request, after a 2xx).
+    - Why: no production bridge route changes; the backend owns the journal
+      under test; one seam serves every HTTP bridge and every caller of
+      `send` (pipelines, Multi Review, native tabs). The after-response point
+      makes the second half ("accepted, not recorded") deterministic too,
+      which the 2026-10-21 runs only hit by chance.
+    - Pros: one small module; nothing to await when it is not installed.
+    - Cons: the in-bridge half is still not live (see the results section);
+      OpenCode's provider is not an HTTP bridge client and has no hold.
+23. **Task 3: how the hold is kept out of production.**
+    - Options: an environment variable alone; the agent-test runtime flavor
+      plus `ORKESTRATOR_AGENT_TEST_ISOLATED=1` plus a non-default data
+      directory, armed by a marker file in that directory (the pattern of
+      `agentTestTerminalSurvival`); a build-time flag.
+    - Chosen: an immutable build capability disabled in both shipping backend
+      bundles, plus the flavor, isolation switch and data-directory gate.
+    - Why: runtime flags alone cannot enforce the production-build exclusion.
+      Source-run dev:test backends retain the hold; packaged backends cannot
+      enable it even with all test runtime switches.
+    - Pros: preserves marker control across source-run backend restarts and
+      prevents shipping artifacts from honoring markers; bundled regression
+      tests exercise both capability values and both hold points.
+    - Cons: packaged backends cannot run this fault-injection qualification;
+      use the source-run dev:test profile instead.
+24. **Task 3: provider and pass criteria.**
+    - Options: Codex on a loopback model (task 5's method); Pi on the
+      Auto-pipeline loopback model; a real provider.
+    - Chosen: Pi on the Auto-pipeline loopback model.
+    - Why: the ticket rules out logins and billed turns, and that model
+      already answers every build-pipeline turn, so the run can go on to
+      `complete` and prove the stage carried on, not just that one prompt
+      arrived. Pass criteria: the same request id on the resend (read from
+      the hold's record), exactly one tagged turn before later stages, one
+      tagged user row in the build history, no request with the tag twice,
+      the same build session, and a completed run.
+    - Pros: about 50 s a run, repeatable, nothing billed.
+    - Cons: Pi's dispatch journal is the bridge exercised; Claude, Codex,
+      Cursor and Grok answer the same `/dispatch` contract but were not run
+      here.
+25. **Task 3: the restart arguments of a credential-free profile.**
+    - Options: fix only the new spec; share one helper across the five specs
+      that restart a profile.
+    - Chosen: the shared helper (`devTestRestartArgs`).
+    - Why: the same copy in four specs would restart a credential-free profile
+      with every host login, against the constraint that such runs use no
+      real logins.
+    - Pros: one tested place.
+    - Cons: touches four specs outside the task (one-line changes each).
+
+
+Made on 2026-11-11 while doing task 4.
+
+26. **Task 4: how the Electron window is driven.**
+    - Options: a new spec in the Electron suite that launches its own
+      Electron with a temporary profile, provisions Codex and runs the paging
+      journey; or an opt-in remote-debugging port on the `dev:test` profile's
+      own Electron, driven over CDP by the existing paging spec.
+    - Chosen: the debugging port (`ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`).
+    - Why: the paging spec already has every check (window, pages, held place,
+      restart, inactive restart, reload); a separate Electron spec would
+      duplicate them and its own profile would need the toolchain
+      provisioning `dev:test` already does. CDP needs no display, so it runs on
+      this headless host.
+    - Pros: one spec, both clients; headless.
+    - Cons: a loopback debugging port while the profile runs (agent-test
+      profiles only, opt-in; whoever can reach it controls a window holding
+      only fixture state); the Electron suite itself has no paging step.
+27. **Task 4: where the loopback model runs for a container.**
+    - Options: on the host, reached through the container's host gateway;
+      inside the container.
+    - Chosen: inside the container, copied in and started with `bun` over
+      `docker exec`, stopped by closing its stdin.
+    - Why: a restricted container may reach the host only on the agent-tools
+      port, and a rootless daemon refuses host loopback by default; the
+      container's own loopback is always allowed. The firewall stays untouched.
+    - Pros: works in restricted mode on any daemon.
+    - Cons: the model runs as the container user inside the fixture container
+      for the length of the case.
+28. **Task 4: which container environment.**
+    - Options: create a container environment per run; use the profile's
+      seeded `fixture-container`.
+    - Chosen: the seeded one, never deleted; the trail and the Codex config
+      change are removed afterwards, and each run uses a new tab id so it
+      starts a new conversation.
+    - Why: a new container per run costs an image start and an address pool,
+      which this host is short of.
+    - Pros: fast, no pool use.
+    - Cons: the case shares the container with anything else run on that
+      profile.
+29. **Task 4: the reflow defect's fix.**
+    - Options: skip the reflow navigation while a history recovery is pending
+      (in the controller); make the recovery ignore generation bumps from
+      `reflow` navigations (in the hook).
+    - Chosen: skip the reflow navigation.
+    - Why: the reflow's anchor names the dropped part, so its navigation could
+      not have placed the reader anyway, and the controller already knows a
+      recovery is pending (`setWaitingForHistory`). The hook's generation
+      check stays a simple "anything moved the reader".
+    - Pros: one line in one place; a reflow after the recovery still holds the
+      place.
+    - Cons: a width change during a recovery (a window resize while history
+      loads) is not compensated until the recovery places the reader.
+30. **Task 7755 (folded in from 7553): mark the legacy projection.**
+    - Options: mark `get_native_agent_projection` spliced with its contract
+      `encoded` flag; leave it unmarked.
+    - Chosen: mark it.
+    - Why: with the narrowed splice it costs less CPU per gateway read (826
+      to 873 µs against 987 to 1,044 µs on the 430 KB benchmark window, busy
+      host); the output is byte-identical.
+    - Pros: less CPU for every gateway read of a large legacy projection.
+    - Cons: its result is no longer schema-checked in development, like the
+      four progressive reads already.
 
 ## Constraints and rationale
 
@@ -1434,16 +1665,20 @@ All three checked on 2026-10-24.
 
 ## Related
 
-- [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): remote bytes,
+- 0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): remote bytes,
   encoded patch bytes and multi-client runs.
 - [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md): reviewer
   transcripts, progress probes and the multi-review benchmark.
-- [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md): the
+- 0049 (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`): the
   read side of idle native sessions.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): the
   container file-tree watcher deferred from the file-tree cache work.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window): retiring
   the sync-v1 fallback.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the
+  human-only parts of this to-do (task 2, the counter reading of task 1, and
+  the real-provider Electron and container runs of task 4) moved there on
+  2026-11-10.
 - [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
   the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).
 - `../architecture/storage.md` (display tails, pipeline transcripts),

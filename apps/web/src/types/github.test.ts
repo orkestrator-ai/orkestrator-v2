@@ -4,10 +4,10 @@ import {
   type GitHubIssueDetail as BackendGitHubIssueDetail,
   type GitHubIssuesSnapshot as BackendGitHubIssuesSnapshot,
 } from "../../../backend/src/core/github";
-import {
-  GITHUB_STATUS_LABELS as rendererStatusLabels,
-  type GitHubIssueDetail as RendererGitHubIssueDetail,
-  type GitHubIssuesSnapshot as RendererGitHubIssuesSnapshot,
+import type {
+  GitHubIssueDetail as RendererGitHubIssueDetail,
+  GitHubIssueStatus as RendererGitHubIssueStatus,
+  GitHubIssuesSnapshot as RendererGitHubIssuesSnapshot,
 } from "./github";
 
 type Assert<T extends true> = T;
@@ -19,12 +19,25 @@ type SnapshotContractMatches = Assert<
   SameShape<RendererGitHubIssuesSnapshot, BackendGitHubIssuesSnapshot>
 >;
 type DetailContractMatches = Assert<SameShape<RendererGitHubIssueDetail, BackendGitHubIssueDetail>>;
+type LabelledStatus = Exclude<RendererGitHubIssueStatus, "backlog">;
+type BackendLabelledStatus = keyof typeof backendStatusLabels;
+type StatusLabelsMatch = Assert<
+  [LabelledStatus] extends [BackendLabelledStatus]
+    ? [BackendLabelledStatus] extends [LabelledStatus]
+      ? true
+      : false
+    : false
+>;
 
-const contractChecks: [SnapshotContractMatches, DetailContractMatches] = [true, true];
+const contractChecks: [SnapshotContractMatches, DetailContractMatches, StatusLabelsMatch] = [
+  true,
+  true,
+  true,
+];
 
 describe("GitHub renderer contract", () => {
   test("keeps workflow labels and issue payloads aligned with the backend", () => {
-    expect(rendererStatusLabels).toEqual(backendStatusLabels);
-    expect(contractChecks).toEqual([true, true]);
+    expect(Object.keys(backendStatusLabels).sort()).toEqual(["inprogress", "review", "todo"]);
+    expect(contractChecks).toEqual([true, true, true]);
   });
 });

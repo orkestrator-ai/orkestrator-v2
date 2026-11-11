@@ -245,6 +245,28 @@ export function resolveAgentPlatformSettings(
   };
 }
 
+/**
+ * Whether Claude's tmux mode is switched on. It is an experimental feature, off
+ * unless `global.experimentalTmux` is exactly `true`.
+ */
+export function isTmuxModeEnabled(
+  global: { experimentalTmux?: boolean | undefined } | null | undefined,
+): boolean {
+  return global?.experimentalTmux === true;
+}
+
+/**
+ * The Claude backend a new launch actually uses. A stored `tmux` choice at any
+ * tier is kept (so turning the experiment back on restores it) but launches on
+ * the Agent SDK while the experiment is off.
+ */
+export function effectiveClaudeNativeBackend(
+  backend: ClaudeNativeBackend,
+  tmuxEnabled: boolean,
+): ClaudeNativeBackend {
+  return backend === "tmux" && !tmuxEnabled ? "sdk" : backend;
+}
+
 /** Action defaults resolved independently, so an unset action keeps inheriting. */
 export function resolveActionDefaults(tiers: AgentSettingsTiers): ActionDefaults {
   const resolved: ActionDefaults = {};

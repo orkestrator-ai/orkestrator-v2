@@ -240,7 +240,8 @@ describe("C11 explicit stop drains workload under init", () => {
 
       // The drain waits for neither SIGTERM-ignoring process: it hangs up the
       // shell, as a closed terminal would, and reports the script as
-      // remaining, well inside the grace period (2150).
+      // remaining, well inside the grace period (docs/architecture/
+      // container-lifecycle.md, "Stop and drain"; to-do 2150, retired).
       const started = performance.now();
       const drain = await drainContainerProcesses(id, 10);
       expect(performance.now() - started).toBeLessThan(5_000);

@@ -1783,12 +1783,34 @@ export function storesOverlap(left: string, right: string): boolean {
   );
 }
 
+/**
+ * Every non-test backend source, read once per test process. Several scans in
+ * one test file walk the whole tree (about 1,200 files, 18 MB); reading it
+ * once lets them share the text, and `parse()`'s cache then shares the trees.
+ * Callers only read the list: a test that rewrites a source maps it into a
+ * new object, as the storage-source rewrites do.
+ */
+let backendSourceCache: readonly SourceFile[] | undefined;
 export function backendSources(): SourceFile[] {
-  return backendSourceFiles().map((full) => ({
-    file: path.relative(repoRoot, full),
-    source: readFileSync(full, "utf8"),
-  }));
+  backendSourceCache ??= backendSourceFiles().map((full) =>
+    Object.freeze({
+      file: path.relative(repoRoot, full),
+      source: readFileSync(full, "utf8"),
+    }),
+  );
+  return [...backendSourceCache];
 }
+
+/**
+ * Budget for a test that scans the whole backend tree. The scan is
+ * synchronous: it reads and filters every backend source and parses the
+ * matches, with nothing to await. Alone it takes about 0.1–0.2 s, but the
+ * first such test in a file also pays the tree read, and in a full
+ * `mise run test` beside other worktrees' aggregates it has taken 7.8 s
+ * (flake case 6150), past Bun's 5 s default. Cases 1309 and 1316 record the
+ * same deadline for the raw-writer scan.
+ */
+export const WHOLE_TREE_SCAN_TIMEOUT_MS = 30_000;
 
 export const REPOSITORIES = [
   "ProjectsRepository",

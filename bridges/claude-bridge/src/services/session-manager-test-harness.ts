@@ -45,7 +45,7 @@ import {
   resetSdkSessionStoreMocks,
 } from "./session-manager-test-mocks.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { expect, afterAll, afterEach, mock } from "bun:test";
+import { expect, afterAll, afterEach, jest, mock } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -219,13 +219,49 @@ export function captureEvents(): { events: SSEEvent[]; stop: () => void } {
   return { events, stop: unsubscribe };
 }
 
+const WAIT_FOR_STEP_MS = 5;
+/** Set while {@link fakeTimers} runs: Bun fakes timers without replacing the globals. */
+let fakeTimersActive = false;
+
+/**
+ * Polls `predicate` every 5 ms for up to `timeoutMs`. Inside
+ * {@link fakeTimers} each step lets pending work run and then advances the
+ * fake clock by 5 ms instead of waiting, with the same budget in fake time.
+ */
 export async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  if (fakeTimersActive) {
+    for (let elapsed = 0; elapsed < timeoutMs; elapsed += WAIT_FOR_STEP_MS) {
+      if (predicate()) return;
+      // `setImmediate` stays real under Bun's fake timers.
+      await new Promise((resolve) => setImmediate(resolve));
+      jest.advanceTimersByTime(WAIT_FOR_STEP_MS);
+    }
+    throw new Error("Timed out waiting for condition");
+  }
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (predicate()) return;
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, WAIT_FOR_STEP_MS));
   }
   throw new Error("Timed out waiting for condition");
+}
+
+/**
+ * Puts timers on a fake clock that only {@link waitFor} moves, until the
+ * returned handle is disposed (`using _timers = fakeTimers()`), so a wait on the
+ * 100 ms stream coalescing window costs no wall-clock time. `Date` reads the
+ * same clock (starting at the real time), so it only moves with the timers;
+ * {@link withControlledNewDate} replaces `Date` outright and still works inside.
+ */
+export function fakeTimers(): { [Symbol.dispose](): void } {
+  jest.useFakeTimers();
+  fakeTimersActive = true;
+  return {
+    [Symbol.dispose]() {
+      fakeTimersActive = false;
+      jest.useRealTimers();
+    },
+  };
 }
 
 export async function withControlledNewDate<T>(
@@ -309,6 +345,12 @@ export function track(id: string): string {
 const defaultMcpRuntimeConfig = mockGetMcpRuntimeConfig.getMockImplementation()!;
 
 afterEach(async () => {
+  // A test that timed out inside `fakeTimers()` never disposed it; the next
+  // test must not inherit a clock nothing advances.
+  if (fakeTimersActive) {
+    fakeTimersActive = false;
+    jest.useRealTimers();
+  }
   setClaudeHomeForTesting(sessionManagerTestHome);
   // Clean up any sessions/abortable work the test created.
   for (const id of createdSessionIds.splice(0)) {

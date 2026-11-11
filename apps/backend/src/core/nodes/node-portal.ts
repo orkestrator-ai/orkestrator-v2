@@ -98,6 +98,8 @@ export class NodePortal {
       outcomes?: { load(): Promise<unknown>; save(value: unknown): Promise<void> };
       fetchImpl?: typeof fetch;
       now?: () => number;
+      /** Test seam for the read model's minimum interval between a node's change events. */
+      changeMinIntervalMs?: number;
     },
   ) {
     this.readModel = new NodeReadModel({
@@ -108,6 +110,9 @@ export class NodePortal {
       ...(options.selfHello ? { selfHello: options.selfHello } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.changeMinIntervalMs !== undefined
+        ? { changeMinIntervalMs: options.changeMinIntervalMs }
+        : {}),
     });
     const selfHello = options.selfHello;
     this.fleetUpdates = new FleetUpdatePolicyRunner({
@@ -166,10 +171,14 @@ export class NodePortal {
    * Route one command to a node. `options.envelope` is for this backend's own
    * domain clients (plan item 1010): the contract envelope they picked for that
    * node, sent with the command. A client's `invoke_on_node` never sets it.
+   * `options.signal` aborts a routed read: the request to the node ends, the
+   * node sees its client go away and aborts that call's own signal, and the
+   * read rejects with its outcome unknown (never recorded). A write ignores
+   * the signal and runs to its answer (`routeToNode`).
    */
   async invokeOnNode(
     args: Record<string, unknown>,
-    options: { envelope?: ContractEnvelope } = {},
+    options: { envelope?: ContractEnvelope; signal?: AbortSignal } = {},
   ): Promise<RoutedResult<unknown>> {
     const nodeId = args.nodeId;
     if (!isBackendId(nodeId)) throw new Error("Expected nodeId to be a node identity.");
@@ -185,6 +194,7 @@ export class NodePortal {
       args: commandArgs,
       ...(typeof args.requestKey === "string" ? { requestKey: args.requestKey.slice(0, 128) } : {}),
       ...(options.envelope ? { envelope: options.envelope } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       outcomes: this.outcomes,
     });
     if (result.outcome === "ok") {

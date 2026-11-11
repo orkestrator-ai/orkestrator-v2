@@ -7,7 +7,7 @@
  * winning branch (item 210) that selects again over the old choice.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/graphs/isolation-template";
+import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/testing/graph-isolation-template";
 import {
   graphRunBranchRefPrefix,
   type GraphRun,

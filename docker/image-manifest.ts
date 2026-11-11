@@ -72,7 +72,9 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
   },
 ];
 
-const MARKER = /ORKESTRATOR_CAPABILITY ([a-z-]+)=(\d+)/g;
+// Names may hold digits (`opencode2-launch`); a narrower class skipped such a
+// marker silently and left the capability out of the image.
+const MARKER = /ORKESTRATOR_CAPABILITY ([a-z0-9-]+)=(\d+)/g;
 
 export function probeCapabilities(
   read: (file: { installed: string; source: string }) => string | null,
@@ -183,7 +185,6 @@ function generate(outFile: string): void {
     agents: {
       claude: verifiedAgentVersion("claude", env("CLAUDE_CLI_VERSION"), runVersion),
       codex: verifiedAgentVersion("codex", env("CODEX_CLI_VERSION"), runVersion),
-      opencode: verifiedAgentVersion("opencode", env("OPENCODE_CLI_VERSION"), runVersion),
       opencode2: verifiedAgentVersion("opencode2", env("OPENCODE2_CLI_VERSION"), runVersion),
       grok: verifiedAgentVersion("grok", env("GROK_BUILD_VERSION"), runVersion),
       pi: verifiedAgentVersion("pi", env("PI_CLI_VERSION"), runVersion),

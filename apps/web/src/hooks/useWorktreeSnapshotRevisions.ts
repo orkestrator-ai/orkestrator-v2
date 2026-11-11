@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { worktreeSnapshotChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
   isWorktreeSnapshotEvent,
   isWorktreeSnapshotRevisionsSnapshot,
   type WorktreeSnapshotEvent,
@@ -51,7 +50,6 @@ export function fetchWorktreeSnapshotRevisions(
   scope: NodeScope = appCommandScope(),
 ): Promise<HydrationFetchResult<WorktreeSnapshotEvent>> {
   return readViewSnapshot(
-    WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
     () =>
       backendApiForScope(scope, createFilesSessionsApi, {
         getWorktreeSnapshotRevisions: backend.getWorktreeSnapshotRevisions,
@@ -81,8 +79,7 @@ export function toWorktreeSnapshotUpdate(
  * `docs/architecture/event-snapshot-recovery.md`): events that land during a
  * snapshot are coalesced per environment within fixed bounds, gaps and
  * generation changes trigger conditional reads, and the resource-sync safety
- * cadence runs one compact read every five minutes. A backend without the
- * command is `unsupported`, and the Files panel keeps its polling.
+ * cadence runs one compact read every five minutes.
  */
 export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsOptions) {
   const applySnapshot = useWorktreeSnapshotStore((state) => state.applySnapshot);

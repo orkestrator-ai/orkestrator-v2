@@ -178,14 +178,17 @@ export function setLiveBridgeDiagnostics(enabled: boolean | undefined): void {
   for (const scope of Array.from(liveScopes)) scope.syncActive();
 }
 
-/** A common flag takes precedence over legacy per-bridge overrides, including explicit off. */
+/**
+ * The live setting when one has arrived, else `ORKESTRATOR_BRIDGE_DEBUG`, the
+ * startup default every launcher passes. The per-bridge spellings
+ * (`CLAUDE_BRIDGE_DEBUG`, …) are no longer read.
+ */
 export function bridgeDebugEnabled(
-  bridge: BridgeName,
+  _bridge: BridgeName,
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   if (liveDiagnostics !== undefined && env === process.env) return liveDiagnostics;
-  const value = env.ORKESTRATOR_BRIDGE_DEBUG ?? env[`${bridge.toUpperCase()}_BRIDGE_DEBUG`];
-  return readBridgeDebugFlag(value);
+  return readBridgeDebugFlag(env.ORKESTRATOR_BRIDGE_DEBUG);
 }
 
 /** Whitelisted scalar metrics only; never spread a provider's health/error object. */

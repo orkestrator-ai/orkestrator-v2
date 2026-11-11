@@ -10,14 +10,14 @@ import {
 } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
-import type { WebAnnotationService } from "./web-annotation-service.js";
+import type { WebAnnotationService } from "./web-annotations/service.js";
 import {
   ENV_A,
   ENV_B,
   createHarness,
   makePng,
   type ServiceHarness,
-} from "./web-annotation-test-support.js";
+} from "./web-annotations/test-support.js";
 
 let harness: ServiceHarness | undefined;
 afterEach(async () => {

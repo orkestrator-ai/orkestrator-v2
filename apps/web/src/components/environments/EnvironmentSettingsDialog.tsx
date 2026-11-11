@@ -4,6 +4,7 @@ import { Globe2, SlidersHorizontal } from "lucide-react";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import {
+  isTmuxModeEnabled,
   normalizeAgentSettings,
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
@@ -1058,6 +1059,7 @@ export function EnvironmentSettingsDialog({
             onChange={setAgentSettings}
             tiers={tiers}
             canInherit
+            tmuxModeEnabled={isTmuxModeEnabled(config.global)}
             catalog={modelCatalog}
           />
         );

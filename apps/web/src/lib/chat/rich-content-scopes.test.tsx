@@ -30,8 +30,8 @@ import {
 import { getCapabilities, resetCapabilities } from "@/lib/design-client";
 import {
   invalidateNativeAgentSyncCapability,
-  nativeAgentProgressiveSupported,
-  nativeAgentSyncSupported,
+  nativeAgentProgressiveSyncSupported,
+  requireNativeAgentProgressiveSync,
 } from "@/lib/native-agent-sync-capabilities";
 import {
   artifactRequestCacheStats,
@@ -257,15 +257,16 @@ describe("a scope's capability cache is independent", () => {
     expect(await getChangeTrackingCapabilities()).toBeNull();
     expect(await getCapabilities("key", a.scope)).toEqual({ library: true } as never);
     await expect(getCapabilities("key")).rejects.toThrow(/too old for the design canvas/);
-    expect(await nativeAgentSyncSupported(a.scope)).toBe(true);
-    expect(await nativeAgentProgressiveSupported(a.scope)).toBe(true);
-    expect(await nativeAgentSyncSupported()).toBe(false);
+    expect(await nativeAgentProgressiveSyncSupported(a.scope)).toBe(true);
+    expect(await nativeAgentProgressiveSyncSupported()).toBe(false);
+    // The command node predates the sync protocol: an incompatible backend.
+    await expect(requireNativeAgentProgressiveSync()).rejects.toThrow(/Update it\./);
 
     // Cached on the scope: asking again does not read A again.
     await clientStateCapabilities(a.scope);
     await getChangeTrackingCapabilities(a.scope);
     await getCapabilities("key", a.scope);
-    await nativeAgentSyncSupported(a.scope);
+    await nativeAgentProgressiveSyncSupported(a.scope);
     for (const command of [
       CLIENT_STATE_CAPABILITIES_COMMAND,
       "changes_get_capabilities",

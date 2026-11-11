@@ -313,14 +313,6 @@ export const TICKET_SECTION_DEFINITIONS: readonly TicketSectionDefinition[] = [
   },
 ];
 
-const DEFINITION_BY_KEY = new Map(
-  TICKET_SECTION_DEFINITIONS.map((definition) => [definition.key, definition]),
-);
-
-export function ticketSectionHeading(key: Exclude<TicketSectionKey, "custom">): string {
-  return DEFINITION_BY_KEY.get(key)?.heading ?? key;
-}
-
 function normalizedHeading(text: string): string {
   return text
     .replace(/\*\*|__/g, "")
@@ -1257,4 +1249,4 @@ export const TICKET_KIND_GUIDANCE =
 
 /** What a tool's `sections` field says. */
 export const TICKET_SECTIONS_GUIDANCE =
-  "Structured ticket sections; each is optional and replaces only that section (an empty value clears it). acceptanceCriteria: one checkable item per entry; Verify marks each passed, failed or not checked. checks: standard commands (lint, typecheck, tests) that must pass, kept out of acceptanceCriteria. delivery.policy: commit-only, push-no-pr or open-pr; a build reads it when Verify passes, and none means open-pr. custom: extra titled sections. Do not repeat standing project rules (report format, checks every change runs, PR flow, safety rules); they live in AGENTS.md's Orkestrator section.";
+  "Structured ticket sections; each is optional and replaces only that section (an empty value clears it). acceptanceCriteria: one checkable item per entry; Verify marks each passed, failed or not checked. checks: standard commands (lint, typecheck, tests) that must pass, kept out of acceptanceCriteria. delivery.policy: commit-only, push-no-pr or open-pr; a build reads it when Verify passes, and none means open-pr. constraints: when you limit which files the work may edit, say that updating references to files it deletes, moves or renames, and descriptions it makes untrue, is exempt; workers always repair those. custom: extra titled sections. Do not repeat standing project rules (report format, checks every change runs, PR flow, safety rules); they live in AGENTS.md's Orkestrator section.";

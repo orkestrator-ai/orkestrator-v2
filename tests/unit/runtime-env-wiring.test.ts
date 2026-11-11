@@ -12,8 +12,36 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { nonRotatingOAuthProviders } from "@orkestrator/protocol/login-snapshots";
+import { titleWithSkip } from "./gnu-shell-tools";
 
 const repoRoot = join(import.meta.dir, "..", "..");
+
+// copy_agent_directory walks with GNU find's -printf and falls back to a
+// portable walk where find lacks it (BSD find on macOS). Process counts are
+// pinned only for the GNU walk.
+const NO_FIND_PRINTF =
+  Bun.spawnSync({ cmd: ["find", "/", "-prune", "-printf", ""], stderr: "pipe" }).exitCode === 0
+    ? undefined
+    : "needs GNU find -printf (macOS: brew install findutils)";
+
+/** A find that refuses GNU's -printf and -fprintf as BSD find does, otherwise the real one. */
+function bsdLikeFind(fakeBin: string): void {
+  const real = Bun.which("find");
+  if (!real) throw new Error("find is not installed");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    join(fakeBin, "find"),
+    `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    -printf|-fprintf) echo "find: $arg: unknown primary or operator" >&2; exit 1 ;;
+  esac
+done
+exec ${shellQuote(real)} "$@"
+`,
+  );
+  chmodSync(join(fakeBin, "find"), 0o755);
+}
 
 function read(rel: string): string {
   return readFileSync(join(repoRoot, rel), "utf8");
@@ -997,7 +1025,8 @@ eval "$block"
     // -wal/-shm siblings) was copied into every container on every start.
     expect(entrypoint).not.toContain("find /opencode-data -maxdepth 1 -type f");
     // The login is the only portable OpenCode data. A live run of 1.19.4
-    // (scripts/qualify-opencode-seeded-data.sh) never opened a host-seeded
+    // (`git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`, retired
+    // with OpenCode 1.x) never opened a host-seeded
     // snapshot/ directory or account.json, and read only storage/'s
     // legacy-migration index, which an empty storage/ recreates.
     const copies = entrypoint
@@ -1715,9 +1744,12 @@ printf "continued"
       }
       writeFileSync(
         join(fakeBin, "find"),
+        // One line per entry, as the helper's walk prints them, after the
+        // directory itself.
         `#!/bin/bash
+/usr/bin/printf 'd 8\\n' || exit 141
 for entry in "$AGENT_TEST_SOURCE"/skills/*; do
-  if ! /usr/bin/printf '.'; then
+  if ! /usr/bin/printf 'f 8\\n'; then
     exit 141
   fi
   /usr/bin/printf '%s\\n' "$entry" >> "$CODEX_VISIT_LOG"
@@ -1808,6 +1840,204 @@ printf "continued"
       expect(result.stdout).toEndWith("continued");
       expect(readFileSync(join(destination, "skills", "plain.md"), "utf8")).toBe("plain\n");
       expect(readFileSync(join(destination, "skills", "new\nline.md"), "utf8")).toBe("newline\n");
+    });
+  });
+
+  test.skipIf(NO_FIND_PRINTF !== undefined)(
+    titleWithSkip(
+      "a copied directory starts a handful of processes, not one per check",
+      NO_FIND_PRINTF,
+    ),
+    () => {
+      withTempDir((dir) => {
+        const source = join(dir, "source");
+        const destination = join(dir, "destination");
+        const fakeBin = join(dir, "counting-bin");
+        const log = join(dir, "started");
+        mkdirSync(fakeBin);
+        for (const skill of ["one", "two", "three"]) {
+          mkdirSync(join(source, "skills", skill, "references"), { recursive: true });
+          writeFileSync(join(source, "skills", skill, "SKILL.md"), `${skill}\n`);
+          writeFileSync(join(source, "skills", skill, "references", "notes.md"), "notes\n");
+        }
+        // Every external program the helpers could start logs its name first.
+        for (const name of ["find", "awk", "head", "du", "mkdir", "cp", "cat", "printf", "wc"]) {
+          const real = Bun.which(name);
+          if (!real) continue;
+          writeFileSync(
+            join(fakeBin, name),
+            `#!/bin/sh\necho ${name} >> "$STARTED_LOG"\nexec ${shellQuote(real)} "$@"\n`,
+          );
+          chmodSync(join(fakeBin, name), 0o755);
+        }
+        mkdirSync(join(destination, "skills"), { recursive: true });
+        const copied = join(dir, "copied");
+        writeFileSync(copied, "");
+
+        const result = runShell(
+          agentCopyHelperHarness(`
+AGENT_INPUT_COPIED_PATHS="$COPIED"
+copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
+printf "continued"
+`),
+          {
+            PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+            AGENT_TEST_SOURCE: source,
+            AGENT_TEST_DESTINATION: destination,
+            STARTED_LOG: log,
+            COPIED: copied,
+          },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).not.toContain("Warning");
+        expect(
+          readFileSync(join(destination, "skills", "two", "references", "notes.md"), "utf8"),
+        ).toBe("notes\n");
+        const started = readFileSync(log, "utf8").trim().split("\n");
+        const count = (name: string) => started.filter((entry) => entry === name).length;
+        // The entries walker's own listing, then one walk per directory.
+        expect(count("find")).toBe(1 + 3);
+        expect(count("awk")).toBe(3);
+        expect(count("mkdir")).toBe(3);
+        expect(count("cp")).toBe(3);
+        expect(count("cat")).toBe(3);
+        expect(count("du") + count("head") + count("wc") + count("printf")).toBe(0);
+        // About 5 per directory, from about 15 (to-do 6740 task 3).
+        expect(started.length).toBe(1 + 3 * 5);
+        // The listing the stamp records is what find lists from the source root.
+        const listing = readFileSync(copied, "utf8").split("\0").filter(Boolean).sort();
+        expect(listing).toEqual(
+          ["one", "two", "three"]
+            .flatMap((skill) => [
+              `dskills/${skill}`,
+              `fskills/${skill}/SKILL.md`,
+              `dskills/${skill}/references`,
+              `fskills/${skill}/references/notes.md`,
+            ])
+            .sort(),
+        );
+      });
+    },
+  );
+
+  describe("without GNU find's -printf", () => {
+    const run = (dir: string, body: string, env: Record<string, string> = {}) => {
+      const fakeBin = join(dir, "bsd-bin");
+      bsdLikeFind(fakeBin);
+      return runShell(agentCopyHelperHarness(body), {
+        PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        AGENT_TEST_SOURCE: join(dir, "source"),
+        AGENT_TEST_DESTINATION: join(dir, "destination"),
+        ...env,
+      });
+    };
+
+    test("a directory is still copied and listed for the stamp", () => {
+      withTempDir((dir) => {
+        const source = join(dir, "source");
+        for (const skill of ["one", "two"]) {
+          mkdirSync(join(source, "skills", skill, "references"), { recursive: true });
+          writeFileSync(join(source, "skills", skill, "SKILL.md"), `${skill}\n`);
+          writeFileSync(join(source, "skills", skill, "references", "new\nline.md"), "notes\n");
+        }
+        const copied = join(dir, "copied");
+        writeFileSync(copied, "");
+        const result = run(
+          dir,
+          `
+AGENT_INPUT_COPIED_PATHS="$COPIED"
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills/one Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills/two Codex
+printf "continued"
+`,
+          // Exactly the entries below skills/one; a line-based count sees one more.
+          { COPIED: copied, AGENT_COPY_MAX_DIRECTORY_ENTRIES: "4" },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).not.toContain("Warning");
+        expect(result.stdout).toEndWith("continued");
+        expect(
+          readFileSync(
+            join(dir, "destination", "skills", "two", "references", "new\nline.md"),
+            "utf8",
+          ),
+        ).toBe("notes\n");
+        const listing = readFileSync(copied, "utf8").split("\0").filter(Boolean).sort();
+        expect(listing).toEqual(
+          ["one", "two"]
+            .flatMap((skill) => [
+              `dskills/${skill}`,
+              `fskills/${skill}/SKILL.md`,
+              `dskills/${skill}/references`,
+              `fskills/${skill}/references/new\nline.md`,
+            ])
+            .sort(),
+        );
+      });
+    });
+
+    test("the entry, link and size bounds still refuse a directory", () => {
+      withTempDir((dir) => {
+        const source = join(dir, "source");
+        mkdirSync(join(source, "many"), { recursive: true });
+        for (const name of ["a", "b", "c", "d"]) writeFileSync(join(source, "many", name), "x");
+        mkdirSync(join(source, "linked"), { recursive: true });
+        symlinkSync(join(dir, "elsewhere"), join(source, "linked", "out"));
+        mkdirSync(join(source, "big"), { recursive: true });
+        writeFileSync(join(source, "big", "big.bin"), "x".repeat(64 * 1024));
+        const result = run(
+          dir,
+          `
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" many Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" linked Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" big Codex
+printf "continued"
+`,
+          { AGENT_COPY_MAX_DIRECTORY_ENTRIES: "3", AGENT_COPY_MAX_DIRECTORY_KIB: "8" },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Warning: Skipping oversized Codex directory: many");
+        expect(result.stdout).toContain(
+          "Warning: Skipping Codex directory containing symlink: linked",
+        );
+        expect(result.stdout).toContain("Warning: Skipping oversized Codex directory: big");
+        expect(result.stdout).toEndWith("continued");
+        for (const name of ["many", "linked", "big"]) {
+          expect(() => statSync(join(dir, "destination", name))).toThrow();
+        }
+      });
+    });
+  });
+
+  test("a copy into a directory that was already there still refuses its links", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const external = join(dir, "external");
+      mkdirSync(join(source, "skills", "one"), { recursive: true });
+      writeFileSync(join(source, "skills", "one", "SKILL.md"), "one\n");
+      mkdirSync(join(destination, "skills", "one", "nested"), { recursive: true });
+      mkdirSync(external);
+      symlinkSync(external, join(destination, "skills", "one", "nested", "out"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills/one Codex
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        "Warning: Skipping Codex directory containing destination symlink: skills/one",
+      );
+      expect(() => statSync(join(destination, "skills", "one", "SKILL.md"))).toThrow();
     });
   });
 
@@ -1963,7 +2193,7 @@ printf "continued"
       writeFileSync(join(source, "skills", "SKILL.md"), "skill\n");
 
       // Shadow one real binary at a time so each inspection step fails on its
-      // own; a partial `du` failure still prints a truncated total, so the size
+      // own; a failed summary may still print a plausible total, so the size
       // cap has to be driven by the exit status rather than the output.
       function pathWithFake(name: string, script: string): string {
         const fakeBin = join(dir, `fake-${name}`);
@@ -2003,33 +2233,27 @@ printf "continued"
       );
       expect(() => statSync(join(findFailure.destination, "skills"))).toThrow();
 
-      const duFailure = run("du", "#!/bin/sh\nexit 1\n", "du-destination");
-      expect(duFailure.result.exitCode).toBe(0);
-      expect(duFailure.result.stdout).toContain(
+      // The walk's summary (entries, links, blocks) comes from awk.
+      const awkFailure = run("awk", "#!/bin/sh\nprintf '0 0 0'\nexit 1\n", "awk-destination");
+      expect(awkFailure.result.exitCode).toBe(0);
+      expect(awkFailure.result.stdout).toContain(
         "Warning: Failed to inspect Codex directory: skills",
       );
-      expect(() => statSync(join(duFailure.destination, "skills"))).toThrow();
+      expect(() => statSync(join(awkFailure.destination, "skills"))).toThrow();
 
-      const duNonNumericBin = join(dir, "fake-du-non-numeric");
-      mkdirSync(duNonNumericBin, { recursive: true });
-      writeFileSync(join(duNonNumericBin, "du"), "#!/bin/sh\nprintf 'unknown\\t%s\\n' \"$2\"\n");
-      chmodSync(join(duNonNumericBin, "du"), 0o755);
-      const nonNumericDestination = join(dir, "du-non-numeric-destination");
-      const nonNumeric = runShell(
-        agentCopyHelperHarness(`
-copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
-printf "continued"
-`),
-        {
-          PATH: `${duNonNumericBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-          AGENT_TEST_SOURCE: source,
-          AGENT_TEST_DESTINATION: nonNumericDestination,
-        },
-      );
-      expect(nonNumeric.exitCode).toBe(0);
-      expect(nonNumeric.stdout).toContain("Warning: Failed to inspect Codex directory: skills");
-      expect(nonNumeric.stdout).toEndWith("continued");
-      expect(() => statSync(join(nonNumericDestination, "skills"))).toThrow();
+      for (const summary of ["unknown 0 0", "1 0", "1 0 2e3", ""]) {
+        const nonNumeric = run(
+          "awk",
+          `#!/bin/sh\ncat >/dev/null\nprintf '%s' '${summary}'\n`,
+          `awk-summary-${summary.replaceAll(" ", "-") || "empty"}`,
+        );
+        expect(nonNumeric.result.exitCode).toBe(0);
+        expect(nonNumeric.result.stdout).toContain(
+          "Warning: Failed to inspect Codex directory: skills",
+        );
+        expect(nonNumeric.result.stdout).toEndWith("continued");
+        expect(() => statSync(join(nonNumeric.destination, "skills"))).toThrow();
+      }
     });
   }, 15_000);
 
@@ -2409,7 +2633,18 @@ eval "$opencode_setup"
         : backend.slice(start, start + 1 + nextDeclaration);
     }
 
-    const commands = ["start_opencode_server", "start_claude_server", "start_codex_server"];
+    // OpenCode's container server (2.x) is started by `opencode2-container-server.ts`
+    // from one of two scripts: the launcher's preparation and the login-shell start.
+    for (const file of [
+      "apps/backend/src/core/opencode2-container-launch.ts",
+      "apps/backend/src/core/opencode2/container-server.ts",
+    ]) {
+      const script = read(file);
+      expect(script).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
+      expect(script).toContain("orkestrator_source_runtime_env");
+    }
+
+    const commands = ["start_claude_server", "start_codex_server"];
 
     for (const command of commands) {
       // Bridge-backed starts register through `registerBridgeStart`, which

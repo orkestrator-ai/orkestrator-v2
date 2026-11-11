@@ -6,7 +6,7 @@ const log = createLogger("process");
 
 /**
  * Reaps macOS children whose exit Bun 1.4.4 lost
- * (docs/todo/cross-cutting/4260-bun-loses-child-process-events.md, task 6).
+ * (docs/architecture/backend-runtime.md, "One-shot commands").
  *
  * `watchForLostExit` settles such a command from the zombie's status, but nothing
  * calls `waitpid` for it, so the child stays `Z <defunct>` until the backend exits.

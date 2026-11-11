@@ -46,6 +46,14 @@ operation owns it) or **inactive**.
   layer: its frames, the library's pending work (`cancelPendingNavigation`)
   and, after user input, a native smooth scroll in flight (one same-position
   instant write). Every callback re-checks the generation before writing.
+- Find refines its row navigation onto the match's box (a `rect` target).
+  The box names its row: when the rows above measure shorter than estimated
+  and the list moves that row out of its rendered window, the box no longer
+  resolves, so the navigation returns to the row by index, with the same
+  re-issue bound as a row target, and the list resolves the box afresh in the
+  remounted row (`retarget` restarts the unmounted count). Without the row the
+  first find on a freshly opened transcript ran out its budget above the match
+  (`e2e/FirstFindLands.spec.ts`).
 - Pauses (`selection`, `find`, `expanded-artifact`) are idempotent reason
   tokens. Taking one retires an incompatible operation (find keeps its own
   navigation). Releasing the last owes a still-following reader the growth

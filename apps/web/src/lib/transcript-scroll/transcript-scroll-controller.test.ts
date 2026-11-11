@@ -31,9 +31,10 @@ function harness() {
   row.getBoundingClientRect = () =>
     ({ top: rowTop - top, bottom: rowTop - top + 200, height: 200 }) as DOMRect;
   document.body.appendChild(scroller);
+  const scrollToIndex = mock((_location: unknown) => {});
   const controller = new TranscriptScrollController({
     current: {
-      scrollToIndex: mock(() => {}),
+      scrollToIndex,
       scrollTo: mock(() => {}),
       cancelPendingNavigation: mock(() => {}),
     },
@@ -47,6 +48,7 @@ function harness() {
     controller,
     scroller,
     row,
+    scrollToIndex,
     scrollTo(value: number) {
       top = value;
       scroller.dispatchEvent(new Event("scroll"));
@@ -457,6 +459,50 @@ describe("transcript reading ownership", () => {
     view.scrollTo(4399);
     window.dispatchEvent(new PointerEvent("pointerup"));
     expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  test("a match box whose row unmounts brings that row back by index", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    expect(view.controller.navigateTo({ kind: "row", index: 5, key: "k5" }, "find")).toBe(true);
+    const generation = view.controller.generation;
+    // The rows above measured smaller and the list moved the match's row out
+    // of the rendered window: its box no longer resolves.
+    let lost = true;
+    const box = () => (lost ? null : view.row.getBoundingClientRect());
+    expect(
+      view.controller.retarget(
+        "find",
+        { kind: "rect", rect: box, row: { kind: "row", index: 5, key: "k5", align: "center" } },
+        generation,
+      ),
+    ).toBe(true);
+    expect(view.scrollToIndex).not.toHaveBeenCalled();
+    frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+    expect(view.scrollToIndex.mock.calls[0]![0]).toMatchObject({ index: 5, align: "center" });
+    expect(view.controller.currentOwner).toBe("find");
+    // The row is back and its owner resolves the box again: the navigation lands.
+    lost = false;
+    for (let index = 0; index < 10 && view.controller.currentOwner === "find"; index += 1) frame();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().lastOutcome).toBe("converged");
+    const rect = view.row.getBoundingClientRect();
+    expect(rect.top).toBe(200);
+  });
+
+  test("a match box with no row to return to waits out its budget", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    expect(view.controller.navigateTo({ kind: "row", index: 5, key: "k5" }, "find")).toBe(true);
+    view.controller.retarget(
+      "find",
+      { kind: "rect", rect: () => null },
+      view.controller.generation,
+    );
+    for (let index = 0; index < 40 && view.controller.currentOwner === "find"; index += 1) frame();
+    expect(view.scrollToIndex).not.toHaveBeenCalled();
+    expect(view.controller.diagnostics().lastOutcome).toBe("unresolved");
   });
 
   test("scrollbar movement after completed find invalidates late match refinement", async () => {

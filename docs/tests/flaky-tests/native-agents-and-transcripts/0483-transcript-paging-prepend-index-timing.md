@@ -96,3 +96,18 @@ at `:119`. That is close to the 4 of 57 rate recorded above on detached
 `TranscriptPaging`, `StreamingTranscript`, three workers) failed only the
 mobile byte-bounded index case, 79 passed. No assertion, skip or timeout
 changed; root cause remains unconfirmed.
+
+## First-find navigation fix — 2026-11-11
+
+On the `document-find-bug-3a3f9ad04ef2-r1` branch (to-do 6620, base
+`498b68766`), with a find match box that now carries its row
+(`transcript-scroll-controller.ts`),
+`ORKESTRATOR_E2E_PORT=14937 mise run test:logged -- --name scroll-e2e -- bunx playwright test --config e2e/playwright.config.ts VirtuosoFollow.spec.ts TranscriptPaging.spec.ts TranscriptHold.spec.ts FirstFindLands.spec.ts TranscriptListRenders.spec.ts StaticHtmlTranscript.spec.ts NativeFollowStability.spec.ts`
+(default workers) failed one of 128 starts: mobile `native: paging before prose
+in a byte-bounded view holds the original tool position` kept prepend index 1
+at `:138` (107 passed, 20 skipped, 2.9 m). The case does not open find, so the
+changed path is not reached. Rerun alone,
+`ORKESTRATOR_E2E_PORT=14937 mise run test:logged -- --name paging-rerun -- bunx playwright test --config e2e/playwright.config.ts TranscriptPaging.spec.ts:42 --project mobile-chromium --repeat-each 5`
+passed all 25 starts in 70.6 s. `mise run flaky:recurrence -- 0483 --base HEAD`
+reported the case open. No assertion, skip or timeout changed; root cause
+remains unconfirmed.

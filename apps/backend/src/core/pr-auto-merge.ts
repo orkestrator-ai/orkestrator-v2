@@ -32,9 +32,11 @@ const log = createLogger("pull-request");
  * setting is on, and the shimmer follows the same setting; required checks
  * always do.
  *
- * Completed automatic Resolve turns can retry after a fresh conflict reading,
- * up to three attempts. Active or unconfirmed jobs retain the armed token.
- * Exhaustion turns integration off and stores an actionable error.
+ * A Resolve, automatic or pressed by hand, holds the armed re-check token
+ * while it works. Once every Resolve tab has settled, a conflict reading that
+ * started at least 30 seconds later (`PR_AUTO_MERGE_RESOLVE_SETTLE_MS`)
+ * consumes the token and sends the Resolve prompt again, up to three
+ * attempts. Exhaustion turns integration off and stores an actionable error.
  *
  * There is one Resolve tab per environment. A later conflict episode sends
  * the prompt again to the open Resolve tab (manual or automatic) through the
@@ -51,6 +53,15 @@ const log = createLogger("pull-request");
 export const PR_AUTO_MERGE_RETRY_BASE_MS = 60_000;
 /** Ceiling of the retry delay. */
 export const PR_AUTO_MERGE_RETRY_MAX_MS = 15 * 60_000;
+/**
+ * How long after a Resolve settles a conflict reading must start before it
+ * counts as "Resolve did not fix it": GitHub recomputes mergeability
+ * asynchronously after a push, so an earlier reading can still show the old
+ * conflict.
+ */
+export const PR_AUTO_MERGE_RESOLVE_SETTLE_MS = 30_000;
+/** Completed Resolve attempts that still leave conflicts before integration stops. */
+export const PR_AUTO_MERGE_RESOLVE_MAX_ATTEMPTS = 3;
 /** Pane title of an automatically launched Resolve, matching the button's. */
 export const PR_AUTO_MERGE_RESOLVE_TAB_TITLE = "Resolve";
 
@@ -131,6 +142,12 @@ export interface PrAutoMergeOptions {
   subscribe: (listener: (event: PrMonitorEvent) => void) => () => void;
   /** The monitor's announced state for one environment, or null. */
   monitorState: (environmentId: string) => PrMonitorEnvironmentState | null;
+  /**
+   * Whether every open Resolve tab has finished its work
+   * (`resolveTabsSettled`). Absent, a Resolve's end is learned only from the
+   * completion edge of an automatic launch.
+   */
+  resolveSettled?: (environmentId: string) => Promise<boolean>;
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
   onWarning?: (warning: PrAutoMergeWarning, error: unknown) => void;
@@ -249,47 +266,12 @@ export class PrAutoMergeController {
     // A conflict-free reading ends the Resolve episode, and with it the hold or
     // backoff of its launch, so the next conflict is acted on at once.
     if (environment.hasMergeConflicts === false) this.clearRetry(environmentId, "resolve");
-    const completedAt = Date.parse(environment.autoMergeResolveCompletedAt ?? "");
-    const checkedAt = Date.parse(
-      this.options.monitorState(environmentId)?.lastSuccessfulCheckStartedAt ?? "",
-    );
-    const completionDecision = Number.isFinite(completedAt)
-      ? decideAutoMerge(environment, this.options.monitorState(environmentId), await this.policy())
-      : null;
-    if (
-      completionDecision?.kind === "wait" &&
-      completionDecision.reason === "resolve-pending" &&
-      environment.autoMerge &&
-      environment.hasMergeConflicts === true &&
-      environment.prRecheckAfterAgentCompletionArmedAt &&
-      checkedAt > completedAt
-    ) {
-      const attempts = (environment.autoMergeResolveAttempts ?? 0) + 1;
-      await this.options.storage.updateEnvironment(
-        environmentId,
-        {
-          ...(attempts >= 3
-            ? {
-                autoMerge: false,
-                autoMergeError:
-                  "Resolve still reports conflicts after three attempts. Inspect the Resolve tab, then enable Integrate to retry.",
-              }
-            : {}),
-          autoMergeResolveAttempts: attempts,
-          autoMergeResolveCompletedAt: undefined,
-          prRecheckAfterAgentCompletionArmedAt: undefined,
-        },
-        (current) =>
-          current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
-          current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt,
-      );
+    const reading = this.options.monitorState(environmentId);
+    const decision = decideAutoMerge(environment, reading, await this.policy());
+    if (decision.kind === "wait" && decision.reason === "resolve-pending") {
+      await this.followResolve(environment, reading);
       return;
     }
-    const decision = decideAutoMerge(
-      environment,
-      this.options.monitorState(environmentId),
-      await this.policy(),
-    );
     if (decision.kind === "wait") {
       if (decision.reason === "disabled" || decision.reason === "not-open") {
         this.clearRetry(environmentId);
@@ -322,6 +304,82 @@ export class PrAutoMergeController {
         error,
       );
     }
+  }
+
+  /**
+   * A conflicting PR whose re-check token is armed: a Resolve, manual or
+   * automatic, owns the conflict. Once every Resolve tab has settled this
+   * records the completion time; a reading that started at least
+   * `PR_AUTO_MERGE_RESOLVE_SETTLE_MS` later and still reports conflicts
+   * consumes the token, counts the attempt, and re-evaluates at once, which
+   * sends the Resolve prompt again to the open Resolve tab. The settle window
+   * gives GitHub time to recompute mergeability after the Resolve's push.
+   */
+  private async followResolve(
+    environment: Environment,
+    reading: PrMonitorEnvironmentState | null,
+  ): Promise<void> {
+    const settled = this.options.resolveSettled
+      ? await this.options.resolveSettled(environment.id)
+      : null;
+    if (this.closed) return;
+    const environmentId = environment.id;
+    const completedAt = Date.parse(environment.autoMergeResolveCompletedAt ?? "");
+    // Every write below is computed from the snapshot `run()` read, the
+    // attempt count included, so each one applies only while that snapshot
+    // still holds; a write that loses leaves the stored state for the
+    // follow-up pass to decide from.
+    const unchanged = (current: Environment): boolean =>
+      current.autoMerge === true &&
+      current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
+      current.prRecheckAfterAgentCompletionArmedAt ===
+        environment.prRecheckAfterAgentCompletionArmedAt &&
+      current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt &&
+      (current.autoMergeResolveAttempts ?? 0) === (environment.autoMergeResolveAttempts ?? 0);
+    if (!Number.isFinite(completedAt)) {
+      if (settled === true) {
+        await this.options.storage.updateEnvironment(
+          environmentId,
+          { autoMergeResolveCompletedAt: new Date().toISOString() },
+          unchanged,
+        );
+      }
+      return;
+    }
+    if (settled === false) {
+      // Working again (a launch caught before its tab showed it, or more work
+      // sent to the tab): the settle window restarts when it ends.
+      await this.options.storage.updateEnvironment(
+        environmentId,
+        { autoMergeResolveCompletedAt: undefined },
+        unchanged,
+      );
+      return;
+    }
+    const checkedAt = Date.parse(reading?.lastSuccessfulCheckStartedAt ?? "");
+    if (!(checkedAt >= completedAt + PR_AUTO_MERGE_RESOLVE_SETTLE_MS)) return;
+    const attempts = (environment.autoMergeResolveAttempts ?? 0) + 1;
+    await this.options.storage.updateEnvironment(
+      environmentId,
+      {
+        ...(attempts >= PR_AUTO_MERGE_RESOLVE_MAX_ATTEMPTS
+          ? {
+              autoMerge: false,
+              autoMergeError:
+                "Resolve still reports conflicts after three attempts. Inspect the Resolve tab, then enable Integrate to retry.",
+            }
+          : {}),
+        autoMergeResolveAttempts: attempts,
+        autoMergeResolveCompletedAt: undefined,
+        prRecheckAfterAgentCompletionArmedAt: undefined,
+      },
+      unchanged,
+    );
+    if (this.closed) return;
+    // The finished launch's hold must not delay the next one; the follow-up
+    // pass decides from the stored state, so a lost race launches nothing.
+    this.clearRetry(environmentId, "resolve");
+    this.recheck.add(environmentId);
   }
 
   /**

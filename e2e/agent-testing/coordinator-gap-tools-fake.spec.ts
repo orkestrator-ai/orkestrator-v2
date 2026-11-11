@@ -52,7 +52,7 @@ import {
 } from "../../apps/desktop/scripts/dev/coordinator-live-observer";
 import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
 import { GAP_TOOLS } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools";
-import { snapshotFixtureFiles } from "./codex-fixture-files";
+import { editProfilePiFiles, withKeepRecentTokensForShortSessions } from "./pi-profile-settings";
 import type { WakeFacts } from "./coordinator-gap-tools-fake-model-script";
 import {
   authenticatedInvoke,
@@ -117,73 +117,53 @@ async function calls(origin: string): Promise<Calls> {
 /**
  * Names the fake provider in a profile's isolated Pi `models.json` and makes
  * it Pi's saved default there (never `~/.pi`); returns the restore. The key
- * is a literal placeholder.
+ * is a literal placeholder. Written through `editProfilePiFiles`, which
+ * refuses a Pi directory or file that leads out of the profile.
  */
 function pointPiAt(status: Status, baseUrl: string): () => void {
-  const root = path.resolve(status.dataDir!);
-  const directory = path.join(root, "agent-credentials", "home", ".pi", "agent");
-  const models = path.join(directory, "models.json");
-  const settings = path.join(directory, "settings.json");
-  for (const file of [models, settings]) {
-    if (!file.startsWith(`${root}${path.sep}`)) throw new Error("Pi settings escape the profile");
-  }
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const restore = snapshotFixtureFiles([models, settings]);
-  const read = (file: string) =>
-    existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>) : {};
-  const existing = read(models) as { providers?: Record<string, unknown> };
-  const config = {
-    ...existing,
-    providers: {
-      ...existing.providers,
-      [PI_PROVIDER]: {
-        name: "Coordinator gap tools fake",
-        baseUrl,
-        api: "openai-completions",
-        apiKey: "gap-tools-fake-not-a-key",
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          supportsUsageInStreaming: true,
-          maxTokensField: "max_tokens",
-        },
-        models: [
-          {
-            id: PI_MODEL,
-            name: "Gap tools 1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            // Large, so the coordinator context never triggers auto-compaction.
-            contextWindow: 1_000_000,
-            maxTokens: 4_096,
+  return editProfilePiFiles(status.dataDir!, {
+    "models.json": (existing) => ({
+      ...existing,
+      providers: {
+        ...(existing.providers as Record<string, unknown> | undefined),
+        [PI_PROVIDER]: {
+          name: "Coordinator gap tools fake",
+          baseUrl,
+          api: "openai-completions",
+          apiKey: "gap-tools-fake-not-a-key",
+          compat: {
+            supportsStore: false,
+            supportsDeveloperRole: false,
+            supportsReasoningEffort: false,
+            supportsUsageInStreaming: true,
+            maxTokensField: "max_tokens",
           },
-        ],
+          models: [
+            {
+              id: PI_MODEL,
+              name: "Gap tools 1",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              // Large, so the coordinator context never triggers auto-compaction.
+              contextWindow: 1_000_000,
+              maxTokens: 4_096,
+            },
+          ],
+        },
       },
-    },
-  };
-  writeFileSync(models, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  writeFileSync(
-    settings,
-    `${JSON.stringify(
-      {
-        ...read(settings),
+    }),
+    // The fake worker's session is a few hundred tokens: keep almost nothing,
+    // so run_worker_command's /compact really compacts (the summary request
+    // reaches the fake with no tools). Auto-compaction still never fires in a
+    // 1M-token window.
+    "settings.json": (current) =>
+      withKeepRecentTokensForShortSessions({
+        ...current,
         defaultProvider: PI_PROVIDER,
         defaultModel: PI_MODEL,
-        // Pi refuses to compact a session shorter than keepRecentTokens, and
-        // the fake worker's is a few hundred tokens: keep almost nothing, so
-        // run_worker_command's /compact really compacts (the summary request
-        // reaches the fake with no tools). Auto-compaction still never fires
-        // in a 1M-token window.
-        compaction: { ...(read(settings).compaction as object | undefined), keepRecentTokens: 1 },
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-  return restore;
+      }),
+  });
 }
 
 /**

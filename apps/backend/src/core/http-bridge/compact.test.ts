@@ -10,6 +10,7 @@ import {
   httpProvider,
   piConnection,
 } from "../agent-provider-test-support.js";
+import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 const ignoredCount = () =>
@@ -78,6 +79,27 @@ describe("HTTP bridge compaction", () => {
       "pi session compaction failed (HTTP 409): Session is already running",
     );
   });
+
+  test.each(["Nothing to compact (session too small)", "Already compacted"])(
+    "Pi's %s refusal is a definite failure that carries Pi's reason",
+    async (reason) => {
+      // The Pi bridge answers these two fixed SDK refusals 409 (not an opaque
+      // 500), so the user and a coordinator's run_worker_command read why
+      // nothing was compacted, and it is not retried as a bridge outage.
+      const { provider, requests } = httpProvider(
+        () => Response.json({ error: reason }, { status: 409 }),
+        piConnection,
+      );
+      const refused = await provider.performSessionAction!("s-1", { kind: "compact" }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(refused).toBeInstanceOf(Error);
+      expect(refused).not.toBeInstanceOf(ProviderUnavailableError);
+      expect((refused as Error).message).toBe(`pi session compaction failed (HTTP 409): ${reason}`);
+      expect(requests).toHaveLength(1);
+    },
+  );
 
   test.each([
     ["Codex", codexConnection],

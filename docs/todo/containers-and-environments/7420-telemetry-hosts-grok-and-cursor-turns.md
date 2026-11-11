@@ -118,6 +118,6 @@ nor CI configuration is substituted for an observed arm64 pass.
 
 ## Related
 
-- [6101](6101-egress-name-checks-platform-coverage.md), [6102](6102-egress-name-check-residual-channels.md)
+- [6101](6101-egress-name-checks-platform-coverage.md); 6102 (retired 2026-11-11), whose name-check limits are in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1)
 - Security report, M12 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the release-note line for existing installs) moved there on 2026-11-10.

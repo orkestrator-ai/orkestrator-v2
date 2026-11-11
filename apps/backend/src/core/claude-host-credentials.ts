@@ -166,6 +166,109 @@ export async function getHostClaudeCredentials(
   return undefined;
 }
 
+/** What a metadata-only Keychain lookup says about one record. */
+export type KeychainItemPresence = "present" | "absent" | "unknown";
+
+/**
+ * `security`'s exit status for errSecItemNotFound. Every other failure (a
+ * locked or missing keychain, a timeout, a declined prompt) says nothing about
+ * whether the record exists.
+ */
+const SECURITY_ITEM_NOT_FOUND_EXIT = 44;
+
+/**
+ * Whether a Keychain record exists, without reading its secret. Leaving out
+ * `-w` keeps the lookup from asking for access to the password, so a declined
+ * or unanswered prompt cannot pass for a missing record; only `security`'s
+ * own item-not-found status counts as absent. The attributes it prints are
+ * discarded.
+ */
+export async function probeKeychainItemCommand(
+  args: string[],
+  timeoutMs = 10_000,
+): Promise<KeychainItemPresence> {
+  try {
+    await runCommand("security", args, { timeoutMs, maxOutputBytes: 64 * 1024 });
+    return "present";
+  } catch (error) {
+    return error instanceof CommandFailedError &&
+      !error.timedOut &&
+      error.exitCode === SECURITY_ITEM_NOT_FOUND_EXIT
+      ? "absent"
+      : "unknown";
+  }
+}
+
+/**
+ * One on-disk credential file as evidence of a sign-out: absent, or a
+ * readable JSON object holding neither a subscription login nor any MCP login
+ * (what a sign-out leaves). A file that exists but cannot be read or parsed,
+ * or that still holds a login (an expired one included), is not.
+ */
+async function credentialFileSignedOut(file: string): Promise<boolean> {
+  let text: string;
+  try {
+    const stat = await fs.lstat(file);
+    if (!stat.isFile() || stat.size > MAX_HOST_AGENT_CREDENTIAL_BYTES) return false;
+    text = await fs.readFile(file, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  if (!text.trim()) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  if (record.claudeAiOauth !== undefined && record.claudeAiOauth !== null) return false;
+  const mcp = record.mcpOAuth;
+  return !(mcp && typeof mcp === "object" && Object.keys(mcp).length > 0);
+}
+
+/**
+ * Whether the host has signed out of Claude, as opposed to holding a login
+ * that has expired or cannot be read. Looks where `getHostClaudeCredentials`
+ * looks, with the same options, and answers true only when every place says
+ * there is no login: each credential file is absent or empty of logins and,
+ * on macOS, every Keychain lookup reports the record missing
+ * (`probeKeychainItemCommand`). Any unreadable file or inconclusive Keychain
+ * answer makes it false, so a misread never signs a container out.
+ */
+export async function hostClaudeSignedOut(
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = os.homedir(),
+  configDir?: string,
+  options: Parameters<typeof getHostClaudeCredentials>[3] = {},
+  probeKeychain: (args: string[]) => Promise<KeychainItemPresence> = probeKeychainItemCommand,
+): Promise<boolean> {
+  if (platform === "darwin") {
+    const args = [
+      "find-generic-password",
+      "-s",
+      options.keychainService ?? HOST_CLAUDE_KEYCHAIN_SERVICE,
+    ];
+    const attempts = [[...args, path.join(homeDir, "Library", "Keychains", "login.keychain-db")]];
+    if (options.allowDefaultKeychainSearchList === true) attempts.push(args);
+    for (const attempt of attempts) {
+      if ((await probeKeychain(attempt)) !== "absent") return false;
+    }
+  }
+  const directories = options.configDirOnly
+    ? [configDir]
+    : [configDir, path.join(homeDir, ".claude")];
+  let examined = 0;
+  for (const directory of directories) {
+    if (!directory) continue;
+    examined += 1;
+    if (!(await credentialFileSignedOut(path.join(directory, ".credentials.json")))) return false;
+  }
+  // Nowhere to look is no evidence of anything.
+  return examined > 0;
+}
+
 /**
  * Grace period applied to a recorded OAuth expiry.
  *

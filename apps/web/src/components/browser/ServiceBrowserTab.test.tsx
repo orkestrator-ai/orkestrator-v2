@@ -933,7 +933,11 @@ describe("service browser tabs", () => {
           .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
     }
-    await Bun.sleep(5);
+    // Flush the effects and the mocked attach promises the refreshes queued,
+    // rather than sleeping and hoping the host was fast enough.
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
     expect(browserPreview.attach).not.toHaveBeenCalledWith(
       expect.objectContaining({ visible: false }),

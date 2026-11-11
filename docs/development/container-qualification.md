@@ -8,8 +8,12 @@ Unit and integration tests run the container lifecycle against a fake
 permissions, name conflicts or signal delivery, so lifecycle, storage, network
 and image changes are also qualified against a real daemon. How the lifecycle
 works is in [container-lifecycle.md](../architecture/container-lifecycle.md);
-the platforms and providers still waiting for evidence are in
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+the platforms and providers still waiting for evidence are in the
+[containers to-do folder](../todo/containers-and-environments/0000-index.md)
+and, for runs that need the user, the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+To-do 0019, which tracked the qualification until 2026-11-11, is retired;
+its evidence record is in Git history (`git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`).
 
 ## Rules
 
@@ -51,7 +55,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
-| Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
+| Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart (on a rootless daemon with `live-restore` on, the containers' surviving processes are counted, probed and killed before the backend restarts them). Point that command only at a disposable daemon. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the restart's observations. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
@@ -72,7 +76,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`) | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring, no bypass-consent or auto-mode offer, and nothing of the tab left in the container after close (`container-claude-terminal-signal.spec.ts`). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port; start the profile with `--agent-tools-port` in the range one firewall rule admits ([agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port), [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)) |
+| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`) | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring, no bypass-consent or auto-mode offer, and nothing of the tab left in the container after close (`container-claude-terminal-signal.spec.ts`). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port; start the profile with `--agent-tools-port` in the range one firewall rule admits, or `--agent-tools-port auto` to take a free one there ([agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port), [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)) |
 | Real stack, Claude read-only Multi Review | A Docker profile started with `--no-agent-credentials --agent-platforms claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:agent:docker`. No login and no billed turn: the image's `claude` answers from a scripted Messages API on the container's loopback (`container-fake-claude-review-api.ts`), staged as Claude managed settings because read-only turns load no settings files. On a host whose firewall drops container traffic to the profile, run the profile on `mise run docker:disposable -- start --host-loopback` (its `DOCKER_HOST` exported for both the profile and the spec) | A two-reviewer Multi Review with Claude reviewers and a Claude consolidation, every read-only turn without the CLI's command sandbox (the image ships neither bubblewrap nor socat): the review settles `ready`; reviewers and consolidation carry the sandbox-off note in the snapshot and the inspector, worded for a container; `ls` runs, the package's `diffCommand` and a write are refused by the hook, the reviewers read the sealed diff file instead, and that file matches `diffCommand`'s output (`container-multi-review-read-only.spec.ts`, to-do [0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)). Passed on beelink on 2026-11-10 in 51 s |
 | Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the design export test (`export-container.test.ts`), the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
@@ -162,7 +166,9 @@ off), in either mode, to compare a daemon behaviour across image stores.
 
 The rootless mode rejects `--live-restore`: restarting its whole RootlessKit
 tree cannot preserve shim and network state safely (the rootful mode accepts
-it). Restart accepts no daemon
+it). On 2026-11-11 a rootless daemon with `live-restore` on reported every
+container exited after a restart while their processes kept running with no
+network ([evidence](#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)). Restart accepts no daemon
 settings overrides; choose settings at start. Lifecycle and tool publication
 use separate interprocess `flock` locks (a host prerequisite). Exported suite
 variables clear Docker context and TLS selection so the private socket wins.
@@ -303,6 +309,530 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Stop through the UI after the drain change (2026-11-11)
+
+To-do 2150 task 3 (the file is retired with this run): the
+[UI probe](#ui-response-under-multi-environment-load) of the
+[2026-11-01 run](#ui-response-under-multi-environment-load-first-run-on-a-busy-host-2026-11-01),
+repeated on an image that carries the drain change
+([Stop attribution](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)),
+and the live lifecycle suite and full benchmark on that image.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs, 62 GiB),
+  Docker Engine 29.9.2. Other agents' container work kept the load average
+  at 33–56 and the host CPU 97–99% busy throughout.
+- **Image:** `orkestrator-v2:dev-a8114303dc70` (`be94a74fcf9b`), the
+  workspace image `dev:test` built from `main` at `498b68766`. Its
+  `/usr/local/bin/orkestrator-drain.sh` is byte-identical to the checkout's
+  (SHA-256 `2dba9c72…`).
+- **Profile:** `dev:test --profile p2150-ui-load --fixture
+  --fixture-environments container --no-agent-credentials --agent-platforms
+  claude --headless`, with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` and the
+  qualification Docker shim on `PATH`. No provider turns and no logins. The
+  probe ran with its default options. `ui-load-target` had the setup
+  terminal's `zsh -l` open on `pts/0` during the stop cycles, the case that
+  took 10 s before.
+
+`stop_environment` round trip, three cycles per phase, against the
+2026-11-01 run on the released image:
+
+| Phase | 2026-11-01, median (p95) | 2026-11-11, median (min–max) |
+| --- | --- | --- |
+| Idle 1 | 10.9 s (11.2 s) | 1.32 s (1.25–1.89 s) |
+| Busy | 11.1 s (11.6 s) | 1.71 s (1.66–1.92 s) |
+| Idle 2 | 10.7 s (11.5 s) | 1.28 s (1.27–1.30 s) |
+
+The sidebar trailed each stop reply by 61–67 ms (median), as before.
+`start_environment` took 4.8, 6.3 and 4.9 s (medians), no cycle failed, and
+the frame interval stayed at 16.7 ms with no long tasks in any phase. The
+only dialog dismissed was "Claude Code Is Not Logged In".
+
+The first attempt failed before any measurement: that dialog opened after the
+app shell had loaded, and its overlay took the first sidebar click for 30 s.
+The probe dismissed dialogs only while waiting for the shell. It now
+dismisses them before each measured click and lifecycle command as well
+(`dismissDialogs`, covered by `multi-environment-ui-perf.integration.test.ts`).
+
+On a disposable rootless daemon (`mise run docker:disposable -- start --name
+q2150 --host-loopback`, slirp4netns) loaded with the same image:
+
+- **Live lifecycle** (`container-live-qualification.test.ts`, C09, C11, C12,
+  C20): 8/8 in 31.3 s.
+- **Benchmark** (`container-benchmarks.test.ts`, both tests, with
+  `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED` from one unauthenticated read of
+  `api.github.com/meta`, `TMPDIR` on the home filesystem and
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=3600000`, because the benchmark
+  prints nothing until its report and the runner's default five-minute
+  silence limit stopped the first attempt): 2/2 in 421.5 s after a harness
+  fix. The run before the fix failed the baseline test when a rebuild
+  candidate's bare `docker start` collided on an automatic host port
+  (`RootlessKit PortManager.AddPort(): … 127.0.0.1:33187: bind: address
+  already in use`). `bootRuntime` now starts runtimes through
+  `startDockerContainer`, the production start that retries that collision,
+  instead of a bare `docker start`.
+
+The same benchmark then ran on the host's rootful daemon through the
+qualification shim, to tell rootless effects from host load: 2/2 in
+410.2 s. Medians (min–max); bold marks a miss against
+[Benchmarks](#benchmarks):
+
+| Measure (target) | Rootless, `bmwbiwps3` | Rootful, `bmwbj730g` |
+| --- | --- | --- |
+| Fresh restricted to ready (≤ 3 s) | **6.66 s** (5.99–7.66) | **6.11 s** (5.29–10.56) |
+| Docker calls per fresh environment (≤ 27) | 18 (18–24) | 18 (17–25) |
+| Three concurrent, slowdown (≤ 1.5×) | 0.93× | 1.11× |
+| Warm stop (≤ 1 s) | 385 ms (307–520) | 329 ms (247–363) |
+| `stop_environment` idle (n=3) | 1,376 ms (936–1,407) | 1,396 ms (1,303–1,412) |
+| `stop_environment` with a login shell open (≤ 1.5 s, n=5) | 1,473 ms (1,281–1,584) | 1,364 ms (1,266–1,460) |
+| Drain exec, login shell open | 241 ms (216–439) | 258 ms (230–272) |
+| Gateway `docker stop`, login shell open | 848 ms (728–898) | 725 ms (697–773) |
+| Warm start (≤ 2 s) | 1.86 s (1.75–1.94) | 1.78 s (1.69–1.83) |
+| Rebuild copy and verify, 5,000 files (≤ 20 s) | **29.1 s** (29.0–29.6) | **28.8 s** (28.8–29.4) |
+| Calls per minute, view open (≤ 36) | 24 | 24 |
+| Followers after grace (0) | 0 | 0 |
+
+The stop path meets its targets on both daemons. With a terminal open, the
+drain now takes about a quarter of a second, against 9.5 s before the change
+(2026-11-02). The egress gateway's `docker stop` is now the largest step. The
+two misses are the same on both daemons, so they are not rootless effects,
+and neither path is touched by the drain: the targets were set on a quiet
+12-CPU host, and this one ran at a load average of 33–66. Judging them needs
+the quiet reference-host run that
+[0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+already tracks.
+
+- **Cleanup.** The probe deleted its environments; `dev:stop` and `dev:reset`
+  removed the profile (2 containers, 2 volumes, 1 network) and its state.
+  The killed first benchmark attempt's owner-labelled containers, volumes and
+  networks were removed by label. Every other run's `afterAll` removed its
+  own, and the disposable daemon was stopped with `docker:disposable --
+  stop`, which removed its data. Nothing else on the host daemon was
+  touched.
+
+## Backend-chosen host ports on rootless Docker (2026-11-11)
+
+To-do [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4, run in worktree `orkestrator-v2-20261111-021109-288b6a679fea`
+(branch `rootless-docker-fixes-288b6a679fea-r1`, from `main` at
+`498b68766`), after the fix: on a rootless daemon the backend chooses each
+automatic host port itself (`container-host-ports.ts`) and labels it
+`orkestrator-backend-host-ports`, and the start path retries a collision on
+a labelled port on the same port after a pause.
+
+- **Host:** beelink (kernel 7.1.8-arch1-3), other pipelines running tests at
+  the same time (about 880 TCP sockets in `TIME-WAIT`).
+- **Daemon:** `mise run docker:disposable -- start --name p7549 --image
+  oven/bun:1.4.4` (host rootless Engine 29.9.2, slirp4netns, containerd
+  image store, `live-restore` off), with
+  `orkestrator-v2:dev-3cfac2b2466a` added by `load-image` for the restart
+  case. Suites ran with its `env` variables, the `docker-qualification-bin`
+  shim first on `PATH`, `TMPDIR` on the worktree's btrfs and
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`.
+- **`container-start-docker.test.ts`, new case "the backend's ports start
+  where Docker's next automatic ports are held": passed 4 times** (three
+  whole-file runs, 4 pass and 1 skip each, the skip being the opt-in mount
+  case; and the case alone right after a daemon `restart`). It finds the
+  daemon's next automatic port, holds the next seven (more than the three
+  retries) with host listeners, and shows that a container with Docker's
+  automatic mapping fails with `address already in use` past the retries,
+  while the same container with a backend-chosen port starts on the first
+  attempt with no `start.port-collision-retrying`, publishes that exact
+  port and answers on it. Then, with the container stopped and a listener
+  on its chosen port, a start retries that port after one 1 s pause (the
+  listener closed during it) and publishes the same port again.
+- **`container-live-egress-conditions.test.ts -t "Docker daemon restart"`:
+  passed 3/3** (32 to 44 s each), on the `stopped` branch. The case now
+  asserts that a rootless gateway created by the backend publishes only
+  backend-chosen ports (7, matching the label), and that it keeps exactly
+  those ports across both daemon restarts. This is the case whose first
+  run failed on four collisions earlier the same day (task 4).
+- **What the host chooses.** Forty ports chosen in five batches of eight
+  were all odd, between 32883 and 46819: Linux hands `bind` odd ports and
+  `connect` even ones, so the host's own outbound loopback churn rarely
+  lands on a chosen port later.
+- **Cleanup.** The tests removed their own labelled containers and networks
+  (the daemon listed no container, network or volume afterwards); the
+  daemon was stopped with `docker:disposable -- stop`, then its tools cache
+  and the scratch `TMPDIR` were removed.
+
+## Rootless daemon restart with `live-restore` and on gvisor-tap-vsock, and the 7549 re-checks (2026-11-11)
+
+To-dos [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)
+tasks 1 and 2 and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+tasks 1 to 3, run in worktree `orkestrator-v2-20261111-021109-288b6a679fea`
+(branch `rootless-docker-fixes-288b6a679fea-r1`, from `main` at `498b68766`).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8-arch1-3, x86_64), `/tmp` a
+  tmpfs (`rw,nosuid,nodev`). Neither `pasta`, `passt`, `vpnkit` nor
+  `slirp4netns` is on the host's `PATH`. The host's rootful daemon was only
+  read. Other pipelines were running tests on the host at the same time
+  (about 1,650 TCP sockets in `TIME-WAIT`, most of them loopback).
+- **Daemons:** two disposable host rootless daemons, both Engine 29.9.2 on
+  the containerd image store, systemd cgroup driver on cgroup v2, pool
+  `172.30.0.0/16` as /24s, host loopback refused:
+  - `l7390`: `mise run docker:disposable -- start --name l7390` (slirp4netns
+    1.3.3). The launcher refuses `--live-restore` in the rootless mode, so
+    the instance's `daemon.json` was set to `"live-restore": true` before a
+    `restart` (the record keeps `liveRestore: false`, which is what lets
+    `restart` run); `docker info` then reported `LiveRestoreEnabled: true`.
+  - `g7390`: `mise run docker:disposable -- start --name g7390 --net
+    gvisor-tap-vsock`, `live-restore` off.
+- **Image:** `orkestrator-v2:dev-3cfac2b2466a`
+  (`sha256:1986798475fb45cbac53b468746e88f7b702565ffe0d007a0670d2a823149de4`,
+  built 2026-11-10 12:52, capabilities including `egress-gateway=1`,
+  `egress-filter=1`, `network-policy=3`), copied in with `--image`. Its
+  `docker/` sources differ from `498b68766` in `Dockerfile`,
+  `workspace-setup.sh`, `orkestrator-bridge-launch.sh`,
+  `verify-root-boundary.sh`, `image-manifest.ts` and the artifact preview
+  worker; the firewall, gateway and entrypoint scripts are identical.
+
+Each suite ran with the variables from `docker:disposable -- env`,
+`RUN_LIVE_DOCKER_TESTS=1`, the image above, `TMPDIR` on the worktree's
+btrfs, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the
+`docker-qualification-bin` shim first on `PATH` and
+`ORKESTRATOR_QUALIFICATION_EVIDENCE` naming a local JSON-lines file:
+
+```bash
+mise run test:logged -- --name l7390-restart -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-conditions.test.ts -t "Docker daemon restart"
+```
+
+- **gvisor-tap-vsock, `live-restore` off: passed 1/1** (44.6 s), on the
+  `stopped` branch: after each restart Docker started neither container,
+  refused a bare start of the runtime while its gateway was stopped, and
+  the backend's start path brought both up with the policy enforced
+  (`CapEff` 0, report `applied`, `-P OUTPUT DROP` and the final REJECT, IPv6
+  off, `registry.npmjs.org` reachable, `example.com` refused). This is
+  7390 task 2's gvisor-tap-vsock run.
+- **slirp4netns, `live-restore` on: passed 1/1 on the second run** (30.7 s),
+  on the case's new rootless branch. The case's rootful `live-restore`
+  branch expects the gateway to keep running, which the first observation
+  below rules out (that branch was not run unchanged in this session).
+  What a rootless restart does to running containers with `live-restore`
+  on, from the evidence line:
+  - the new daemon reports both the gateway and the runtime exited
+    (containerd finds no shim: the launcher's restart, like a systemd
+    unit's stop, ends the shims with RootlessKit);
+  - both containers' processes keep running: 7 processes in the gateway's
+    pid namespace and 3 in the runtime's, in the old user and network
+    namespaces, which no daemon knows any more;
+  - the orphaned gateway's network reaches nothing: `curl` to the allowed
+    registry's address from inside its namespace (entered with `nsenter`
+    through the user namespace the user owns) exited 7, connection
+    refused or unreachable, because slirp4netns went with the old
+    RootlessKit;
+  - after the test killed the orphans (each pid checked against its
+    recorded start time and its cgroup naming the container id), the
+    backend's start path brought both up again with the policy enforced,
+    as with `live-restore` off.
+
+  So `live-restore` gains nothing on a rootless daemon and leaves the old
+  containers' processes running, on the same volumes the restarted
+  containers mount, until something kills them. The backend now warns once
+  per process (`docker` `daemon.rootless-live-restore`) when a rootless
+  daemon reports `live-restore` on.
+- **The first `live-restore` run failed on a port collision, not the
+  restart.** After the first daemon restart the gateway's start collided
+  on automatic host ports four times in a row (32772, 32776, 32777, after
+  32776 once on the earlier start), past the start path's three retries,
+  and failed with `port-conflict`. The holders were short-lived loopback
+  connections in `TIME-WAIT` on even ports from 32772 upward (Linux
+  prefers even ports for outbound connections), and a restarted rootless
+  daemon hands out automatic ports again from the bottom of the range. The
+  rerun a minute later passed. Recorded as 7549 task 4, fixed the same day
+  ([evidence](#backend-chosen-host-ports-on-rootless-docker-2026-11-11)).
+- **What a retry draws.** On `l7390`, with host listeners holding the 14
+  ports after the daemon's next automatic port, a container publishing
+  three automatic ports on a labelled test network failed 14 starts in a
+  row, the network reconnected before each, each on the next held port
+  (32778 to 32789, then 32791 and 32793). Each failed start moves the
+  daemon's cursor on by one port. Without the reconnect, the second start
+  succeeded with no published ports.
+- **7549 task 1, the classification on current `main`:**
+  `docker-copy-refusal-docker.test.ts` passed 1/1 (7 assertions) on `l7390`
+  with the read-only bind from `/tmp`.
+- **7549 task 2, still not reproduced:** on `l7390` (containerd store)
+  `docker create` of the environment image and `docker cp` of a file into
+  it worked three times in a row, as a tar stream, after a start and stop,
+  and on a created container with a read-only bind from the worktree.
+- **Cleanup.** The test's labelled containers and network were removed by
+  its own `afterAll`; the probe containers and network were removed by id
+  and name; no container scope of either daemon was left under the user's
+  systemd manager; both daemons were stopped with `docker:disposable --
+  stop` (under 5 s each) and their tools cache and scratch files removed.
+
+## Linux Engine CI results and Docker daemon restarts (2026-11-11)
+
+The last two tasks of to-do 0019 (retired 2026-11-11; its earlier evidence
+record is in Git history,
+`git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`):
+recording the Linux Engine CI results (task 1) and a daemon-wide Docker
+restart during a launch and during a rebuild copy (task 5). Run in worktree
+`orkestrator-v2-20261111-021056-7529cd0810ee` at `main` `498b68766` plus
+this change, on beelink.
+
+### Linux Engine CI (task 1)
+
+Read on 2026-11-11 from the public GitHub Actions API without signing in
+(run, job and step results and the check-run annotations). Step logs and
+artefact downloads need a signed-in client, so these runs' image digests,
+Engine version and benchmark reports were not read; the 2026-10-26 runs
+reported Engine 28.0.4, and the benchmark numbers through run 40746551838
+are in [Benchmarks on Linux Engine CI](#benchmarks-on-linux-engine-ci-and-the-call-and-start-time-misses-2026-10-28).
+Every run below covers `ubuntu-24.04` (linux-x64) and `ubuntu-24.04-arm`
+(linux-arm64), with the same result on both.
+
+| Run | Event, commit | Date | Result |
+| --- | --- | --- | --- |
+| 40304582303 | weekly, `main` `f1223e0bb` | 2026-10-26 | Only "Live lifecycle" failed: C20 found no `~/.codex/auth.json` because the runner's uid is not 1000; fixed by the staged-input relay (to-do 0109, retired) |
+| 41443896856 | weekly, `main` `7f094c21a` | 2026-11-02 | Only "Live staged mount consumers" failed: `staged-input-relay-docker.test.ts:64`, the test's own mount list lacked `agents-skills`, which the entrypoint had declared since #1589. The list was updated in `6ae99a3ed` (#1670, 2026-11-03) |
+| 42620164217 | weekly, `main` `448e9fffb` | 2026-11-09 | Every step passed except "Live build pipeline code rewind": `build-pipeline-code-rewind-docker.test.ts:514` expected the backlog move without `preserveDoneStatus: true`, which the pipeline had started sending. The expectation was updated in `1e491c075` (#2004), merged the same day after this run |
+| 42914911207 | pull request #2105, a merge of `main` (merged as `85732c93e`) | 2026-11-10 | **Every step passed**, all 30 live steps and the benchmarks, on both architectures |
+
+- **C14 on any host uid.** "Live replacement (C14-C19)" passed on both
+  architectures in 42620164217 and 42914911207, the green CI run to-do 0728
+  waited for (retired 2026-11-11; its fix is recorded in
+  [C14 staged inputs on any host uid](#c14-staged-inputs-on-any-host-uid-linux-engine-2026-10-28)).
+- **C22 host-level reachability verdict: pass.** macOS reports host-level
+  reachability as not applicable; on Linux Engine it is a real result.
+  "Live network (C22, C24, C26)" passed on both architectures in
+  42620164217 and 42914911207. The C22 case asserts that the backend's own
+  host discovery reports `reachable`, that exactly the agent-tools service
+  port leaves a restricted runtime for `host.docker.internal`, and that
+  another host port and a sibling's published port are refused (curl exit 7).
+  "Live rootful host reach without a host firewall" passed in the same runs.
+- Neither red weekly run was a product failure: both were test
+  expectations that had fallen behind a change made elsewhere, and both are
+  fixed on `main`.
+
+### Docker daemon restart during launch and rebuild copy (task 5)
+
+Two scenarios, each run only when `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`
+names a command that restarts the suite's daemon (never point it at a
+shared daemon):
+
+- `container-live-readiness.test.ts`, "C09/readiness: a Docker daemon
+  restart during launch never releases the previous boot": a launch is held
+  before `ready` (the held-boot image), the whole daemon restarts, and the
+  launch must either wait for the boot that survived or be refused, typed and
+  retryable, with nothing dispatched; an explicit retry then reaches
+  `ready` on a new boot.
+- `container-live-rebuild-faults.test.ts`, "C15 Docker daemon restart
+  during the rebuild copy": a preserving rebuild of a volume-backed
+  environment with a 3 GiB workspace file
+  (`ORKESTRATOR_LIVE_RESTART_COPY_MIB` lowers it) restarts the daemon the
+  moment a copy helper is running. Nothing may commit, the failure must name
+  the outage, the original stays authoritative with its files, Git state and
+  provider databases intact, the `--rm` helper must not outlive the restart,
+  a kept candidate set is listed, not restorable and discards cleanly, and a
+  second rebuild once Docker is back must succeed with the same files.
+
+```bash
+mise run docker:disposable -- start --mode rootful --name q19r --image <image>   # also --live-restore, and the rootless default
+eval "$(mise run docker:disposable -- env --name q19r)"
+export TMPDIR=$ORKESTRATOR_DISPOSABLE_DOCKER_SHARED_DIR/tmp   # rootless: a directory without nosuid/nodev
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> ORKESTRATOR_QUALIFICATION_EVIDENCE=<file> \
+  mise run test:logged -- --name daemon-restart -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1 \
+  --test-name-pattern 'Docker daemon restart'
+# the same with ./tests/container-live-rebuild-faults.test.ts
+mise run docker:disposable -- stop --name q19r
+```
+
+Image `orkestrator-v2:qual-0019-498b6876` (`sha256:cf14de85…`, built with
+`docker/build.sh` from this worktree). Daemons: `docker:disposable`'s nested
+rootful daemon (`docker:29.9.3-dind`) with `live-restore` off and, as a
+second instance, on; and its rootless daemon (Docker 29.9.2 under
+RootlessKit, slirp4netns, `live-restore` off), all on beelink (Linux
+7.1.8, x86_64). Observations come from each scenario's evidence line.
+
+| Daemon | Launch restart | Rebuild-copy restart |
+| --- | --- | --- |
+| Rootful, `live-restore` off | Pass (three times; the restart took 2.8, 3.7 and, in the whole-file run with earlier scenarios' containers still running, 12.9 s). The restart stopped the held container; the launch was refused `not-ready` `failed:container-exited`, nothing launched, and the retry reached `ready` on a new boot | Pass (three times). The restart (1.8–3.4 s) landed 0.3–0.4 s into a copy that took 14.5–18.9 s undisturbed, with `copy-volume /source /storage/workspace` running; the rebuild failed `daemon-unavailable` before `verified`, the helper was gone after the restart, one failed-candidate set was kept and discarded, and the retry rebuilt with identical files |
+| Rootful, `live-restore` on | Pass. Before the fix below the launch was refused as `container-exited` although the container and its boot kept running; after it, the launch waited through the restart (3.1 s) and became ready on the boot that survived, with exactly one agent launch | Pass. The restart (7.7 s) landed 0.6 s into a 14.6 s copy; `daemon-unavailable`, nothing committed; the helper kept running past the restart and was gone shortly after; failed candidate discarded, retry identical |
+| Rootless | Pass. Restart 3.7 s; refused `failed:container-exited`, retry ready on a new boot | Pass on the second attempt. The restart (2.8 s) landed 0.4 s into a 5.9 s copy; `daemon-unavailable`, nothing committed, helper gone, failed candidate discarded, retry identical. The first attempt never reached the restart: the setup's legacy migration hung in a `copy-stream` helper whose input never ended, 46 s after the launch scenario had restarted this daemon twice; recorded in [7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md) |
+
+**Found and fixed: a daemon outage read as an exited container.** The
+readiness wait asks `docker inspect` whether a container it cannot reach is
+still running, and it took a failed `inspect` to mean "not running". During
+a daemon restart that turned an unreachable daemon into a `container-exited`
+refusal even when the container never stopped (`live-restore`), so a launch
+that would have become ready a few seconds later had to be retried by hand.
+`containerRunState` (`container-readiness.ts`) now reports an unanswered
+daemon (the CLI's "cannot connect" wording, or a timeout) as unknown, and the
+wait keeps polling until its deadline; a failed `inspect` for any other
+reason (a container that no longer exists) still reads as exited. Unit
+tests in `container-readiness.test.ts` cover a daemon that returns, one that
+never does (a `timed-out` refusal, never `container-exited`), and an
+`inspect` that hangs past its timeout; the first and last fail without the
+fix.
+
+**CI.** `container-live-qualification.yml` gains two last steps, "Live
+Docker daemon restart during launch (C09)" and "... during rebuild copy
+(C15)", one per scenario so a failure in one still reports the other. They run
+the scenarios with
+`ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND="sudo systemctl restart docker"`
+(the runner's own daemon, `live-restore` off) and a 1 GiB copy, so the
+restart is qualified weekly on both architectures. They run after every other
+step so no other suite shares a restarted daemon. Their first run is this
+change's pull request; they had not run when this was written.
+
+**Also run.** The whole readiness file on the rootful daemon: 9/10, the
+tenth being the C22 host-service reply, which reports itself INCOMPLETE
+because beelink's host firewall closes the agent-tools path from the nested
+daemon's containers (see the disposable daemon's "Not covered by it" above
+and [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)).
+The whole rebuild-fault file on the rootful daemon: 6/6.
+
+**Not covered.** A Docker Desktop quit (the macOS VM going away) during a
+launch and a rebuild copy: it needs a Mac whose Desktop nothing else is
+using, and is an item in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+("0019 (retired) task 5"). The gateway's own daemon-restart case is the
+[live egress conditions](#suites) suite's, which CI still runs without a
+restart command.
+
+## Benchmarks on a saturated host (2026-11-11)
+
+To-do 0022 (retired 2026-11-11) task 5 asked whether the 5,000-file copy
+still meets its target, the condition for building an
+[in-process tar hasher](#optimisations-measured-and-not-taken). The baseline
+case (`container-benchmarks.test.ts -t "fresh environment, warm stop"`) ran
+once on beelink (16 CPUs, Docker Engine 29.9.2 rootful) with image
+`orkestrator-v2:dev-3f9489ce4342` (`main` at `498b6876`), under the built-in
+default (applied: no CPU cap, 8 GiB, 4,096 PIDs), Docker through
+`apps/desktop/scripts/dev/docker-qualification-bin`. Other builds saturated
+the host throughout: load average 56 at the start and 44–49 at the end, on
+a daemon shared with other worktrees' containers. beelink is not the
+reference host, so these numbers do not gate anything; they are recorded
+because they are the nearest the copy has come to its condition.
+
+| Measure | Target | Median (min–max) |
+| --- | --- | --- |
+| Fresh restricted environment to ready | ≤ 3 s | **8.94 s** (7.80–13.25 s): storage 1.44 s, create 1.02 s, gateway 2.39 s, runtime start 0.27 s, ready 2.49 s |
+| Incomplete fresh boots | none | none |
+| Docker calls per fresh environment | ≤ 27 | 19 (18–25) |
+| Three concurrent, slowdown | ≤ 1.5× | 1.02× |
+| Warm stop | ≤ 1 s | 0.47 s |
+| Warm start | ≤ 2 s | **2.04 s** (1.91–2.21 s) |
+| Rebuild copy and verify, 5,000 files | ≤ 20 s | **30.7 s** (30.4–31.3 s, n = 3); whole rebuild 40.9 s |
+| Rebuild copy and verify, 200 files | — | 2.9 s (n = 5) |
+| Docker calls per minute, view open | ≤ 36 | 24 |
+| Log followers after the idle grace | 0 | 0 |
+
+Every timed step slowed, not only the copy: fresh boots took about three
+times their target with the same 19 calls, and the copy ran at about 6.1 ms
+per file against 2.6–2.9 ms on the 4-CPU CI runners (2026-10-26). The copy's
+source side runs one `sha256sum` per tar member, 5,000 short-lived processes,
+which is the work a saturated host slows most, so this run is consistent with
+host contention rather than a regression. The condition for the hasher is
+unchanged (a miss on the reference host or the CI runners), and the weekly
+Linux Engine CI run is the next comparison.
+
+## UI response under multi-environment load, second busy-host run (2026-11-11)
+
+To-do 0022 (retired 2026-11-11) task 3, with the
+[probe](#ui-response-under-multi-environment-load) at `498b6876` and default
+options, after the [first run](#ui-response-under-multi-environment-load-first-run-on-a-busy-host-2026-11-01).
+Like that run it is a sample of a busy shared host, not a reference figure;
+a run on a quiet reference host is item "0022 (retired) task 3" in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs, 62 GiB),
+  Docker Engine 29.9.2 rootful. Other builds rose through the run: the load
+  average was 36.5, 44.6 and 57.7 at the three phase starts, and the host CPU
+  was 96.3–99.6% busy. Unlike the first run, the daemon was shared: 15–22
+  containers were running, of which 10 were this profile's.
+- **Image and profile:** `orkestrator-v2:dev-3f9489ce4342`, built from this
+  commit (so with the [stop fix](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)).
+  `dev:test --fixture-environments container --no-agent-credentials
+  --agent-platforms claude --headless` with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, Docker through
+  `apps/desktop/scripts/dev/docker-qualification-bin`. Three busy
+  environments, one target and the fixture container, all restricted and
+  under the built-in default (applied: no CPU cap, 8 GiB, 4,096 PIDs). No
+  provider turns.
+- **Load:** each busy container used 158–176% CPU in the busy phase and
+  0–11% in the idle phases.
+
+Medians with p95 in brackets, in milliseconds unless stated:
+
+| Measure | Idle 1 | Busy | Idle 2 |
+| --- | --- | --- | --- |
+| Row selected and painted | 7.0 (12.4) | 9.0 (12.9) | 9.3 (15.8) |
+| `<main>` settled after a switch | 261 (367) | 504 (959) | 270 (413) |
+| Frame interval; stalls over 50 ms | 16.7 (16.8), max 33.3; 0 | 16.7 (16.8), max 83.3; 3 | 16.7 (16.8), max 66.7; 2 |
+| Long tasks | 0 | 1 (58 ms) | 2 (153 ms in all) |
+| Timer lag (250 ms timer) | 0.2 (2.6) | 0.7 (15.1) | 0.9 (12.7) |
+| `get_environments` round trip | 7.1 (23.0) | 14.9 (73.6) | 11.5 (51.1) |
+| `stop_environment` round trip | 1.43 s (1.57 s) | 1.93 s (2.38 s) | 1.42 s (1.58 s) |
+| `start_environment` round trip | 5.3 s (5.5 s) | 6.1 s (6.3 s) | 5.5 s (8.1 s) |
+| Sidebar after the stop reply | 64 (71) | 72 (97) | 69 (80) |
+| Sidebar after the start reply | 2 (55) | 50 (116) | −22 (84) |
+
+The first visit to each environment: selected in 11.5 ms and settled in
+148 ms (medians of 4). There were no failures, missed signals or renderer
+reloads. The one dialog dismissed was "Claude Code Is Not Logged In". It
+opened after the environments were created, past the probe's startup check,
+and its overlay swallowed the first switch's clicks. The probe now dismisses
+any open dialog again before its first click and at each phase start, and
+reports it as before.
+
+What the two runs show:
+
+- **Stops are fixed in the real stack.** `stop_environment` from the page
+  took 1.3–2.4 s in every phase, against 10.5–11.6 s on 2026-11-01. That
+  confirms to-do 2150's (retired 2026-11-11; see
+  [Stop through the UI after the drain change](#stop-through-the-ui-after-the-drain-change-2026-11-11))
+  drain change through the gateway and the page.
+- **The renderer holds up.** Selection painted within a frame in every phase
+  of both runs. This run had a few stalls and long tasks, as many in the
+  second idle phase as in the busy one, while the host load kept rising, so
+  they follow the host rather than the containers.
+- **The backend's busy-phase slowdown recurs but is not attributed.**
+  `get_environments` rose 1.3–2.1× against the idle phases (1.4–1.5× on
+  2026-11-01) and `start_environment` 1.10–1.13× (1.24–1.27×). Both runs had
+  a saturated host, and this one shared its daemon, so neither separates the
+  containers' cost from the other builds'. `<main>` settle times also roughly
+  doubled in the busy phase this time, where the first run's idle phases
+  differed more than idle and busy did.
+
+## Egress gateway on Linux Engine: qualification closed (2026-11-11)
+
+To-do 0018 (retired 2026-11-11) task 1 asked for the egress gateway to be
+qualified on rootful Linux Engine, amd64 and arm64. It is closed on the
+evidence already recorded in this guide, with no new run:
+
+- **amd64:** the self-managed rootful run on beelink
+  ([Egress name checks on rootful Linux Engine](#egress-name-checks-on-rootful-linux-engine-2026-11-06)),
+  the gateway conditions on a disposable rootful daemon
+  ([Egress gateway conditions on Linux Engine](#egress-gateway-conditions-on-linux-engine-2026-10-31)),
+  and the hosted `ubuntu-24.04` runner below.
+- **arm64:** the hosted `ubuntu-24.04-arm` runner (Engine 28.0.4). Runs
+  40338400817 (`e8306626`, 2026-10-26) and 40999226305 (`79c35c0b`,
+  2026-10-30) passed replacement, network 4/4, firewall 2/2 (tamper refusals
+  and gateway restart) and readiness 9/9 behind the gateway, and run
+  42128741746's arm64 job passed M12, network 4/4 and readiness 9/9 (its two
+  failures were the test defects fixed with it). Docker Desktop on Apple
+  Silicon, which runs a Linux arm64 kernel, passed the production gateway
+  path on 2026-10-25
+  ([Egress gateway on Docker Desktop](#egress-gateway-on-docker-desktop-2026-10-25)).
+- **Rootless:** the daemon restart and gateway suites on a disposable
+  rootless daemon
+  ([Rootless daemon restart on a disposable daemon](#rootless-daemon-restart-on-a-disposable-daemon-2026-11-06),
+  [Rollout-cap retirement review qualification](#rollout-cap-retirement-review-qualification-2026-11-04));
+  the remaining rootless settings and rootless arm64 are
+  [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md).
+
+Decision: the hosted arm64 runner counts as the arm64 Linux Engine
+qualification. It runs the same suites, against an image built from the
+branch, with exit statuses on record. A self-managed arm64 Linux host would
+add a second kernel and Engine build but no check the hosted runner does not
+already make, and no fleet machine offers one with a host daemon this work
+may use. The C14 migration failure in run 40409285999 and the weekly run's
+lifecycle failure are outside the gateway; they were tracked in to-dos 0728
+and 0019 (both retired 2026-11-11; their outcome is under
+[Linux Engine CI](#linux-engine-ci-task-1)).
+
 ## Egress name checks on rootless Docker (2026-11-10)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -431,7 +961,7 @@ Linux daemon, through the launcher's [nested rootful mode](#nested-rootful-mode)
 
 ## Rootless budget read-back without `cpu` delegation (2026-11-10)
 
-To-do [0019](../todo/containers-and-environments/0019-container-platform-qualification.md)
+To-do 0019 (retired 2026-11-11)
 task 2: on a rootless daemon whose user is delegated `memory pids` but not
 `cpu`, does Docker's reported capacity match what the cgroup enforces, and
 does the budget read-back stay truthful?
@@ -1096,7 +1626,7 @@ remains unverified (7420 tasks 2 and 4).
 
 ## Rootless daemon restart on a disposable daemon (2026-11-06)
 
-To-do [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+To-do 0018 (retired 2026-11-11)
 task 2's last open check and
 4730 (retired 2026-11-10)
 tasks 1 to 3, run in worktree `orkestrator-v2-20261106-034211-c21c9a597669`
@@ -1235,10 +1765,54 @@ gateway, network and volumes (`dev:stop`, then `dev:reset`), and the image
 tag `orkestrator-v2:dev-57301bd868fa`. The fake API, its settings merge, the
 pid walker and the comparison bundle lived only in that container.
 
+## Egress refusal counts on rootful Linux Engine (2026-11-06)
+
+To-do 6102 (retired 2026-11-11) task 4: the name-check daemon's counts of
+refused connections and DNS queries since the gateway booted, shown in the
+Network section. How they are counted and kept content-free is in
+[container lifecycle](../architecture/container-lifecycle.md#name-checks-egress-filter1).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64), host Docker Engine
+  29.9.2 rootful. Docker, its networks and the host firewall were not
+  restarted, reconfigured or pruned. The host's address pools were full, so
+  both runs used the test-only Docker shim
+  ([exhausted pools](#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06):
+  `ORKESTRATOR_QUALIFICATION_DOCKER` with
+  `apps/desktop/scripts/dev/docker-qualification-bin` on PATH), with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. No profile, provider turn or
+  credential was used.
+- **Image:** `orkestrator-v2:qual-6102-a891cd1a`, built from commit
+  `a891cd1a2` with the capability arguments from
+  `scripts/docker-image-build-args.ts` and the label
+  `orkestrator-test-run=todo-6102-refusals`.
+- **Result:** the case "the firewall report counts refused connections and
+  queries since boot, and keeps no name" in
+  `apps/backend/tests/container-live-egress-filter.test.ts` passed alone
+  (1 pass, 21 expectations, 13 s) and in the whole file (5 pass, 1 skip — the
+  older-image case, which needs `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` —
+  0 fail, 109 expectations, 69 s). In a restricted runtime behind its gateway:
+  - After boot `effective.refusals` was `{ connections: 0, queries: 0 }`:
+    the firewall's own boot checks were not counted.
+  - An allowed HTTPS request and an allowed lookup left it at zero.
+  - Two foreign SNIs at an allowed address (TLS `access_denied`), one foreign
+    Host in plain HTTP on 443 (the gateway's 403) and three refused queries
+    (UDP, TCP, and one sent straight to `192.0.2.53`) gave
+    `{ connections: 3, queries: 3 }`, and the file held exactly
+    `{"refusedConnections":3,"refusedQueries":3}`.
+  - The refused label was in none of the gateway's `/run`, `/etc`, `/tmp`,
+    `/var/log` or `/root`, nor in its Docker log.
+  - Killing the daemon's worker: the supervisor started a new one, the counts
+    stayed at 3 and 3, and one more refused query made them 3 and 4.
+  - Restarting the runtime and its gateway (a new boot) gave
+    `{ connections: 0, queries: 0 }`.
+
+Created and removed: each run's owner-labelled runtimes, gateways, fixtures
+and networks (`afterAll` found none left), and the image tag.
+
 ## Egress name checks on rootful Linux Engine (2026-11-06)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
-task 1 and [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+task 1 and 0018 (retired 2026-11-11)
 task 1: the gateway's name checks (`egress-filter=1`) and the gateway suites
 on rootful Linux Engine, x64.
 
@@ -1342,8 +1916,9 @@ on rootful Linux Engine, x64.
   `ubuntu-24.04` and `ubuntu-24.04-arm`) failed both cases in the same way on
   both runners. Its other relevant steps passed: M12 4 pass (the older-image
   case skipped, as the workflow supplies none), network 4/4 and readiness
-  9/9. The product behaviour behind them is recorded in
-  [7000](../todo/containers-and-environments/7000-name-checks-hold-newline-less-first-writes.md).
+  9/9. The product behaviour behind them is documented in
+  [container lifecycle](../architecture/container-lifecycle.md#name-checks-egress-filter1)
+  (to-do 7000, retired 2026-11-11, which kept the hold).
 - **Not run:** arm64 on a self-managed host (only CI's hosted arm64 runner
   above), rootless Docker (6101 task 2), C23 (see above), and C22 behind a
   real host daemon on this machine (its pools are full). No provider turns,
@@ -1614,7 +2189,8 @@ networks, which `afterAll` removed and listed again as empty.
 
 ## Stop attribution: the drain waited on interactive shells (2026-11-02)
 
-Todo [2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md).
+To-do 2150 (retired 2026-11-11; the confirming UI run is
+[Stop through the UI after the drain change](#stop-through-the-ui-after-the-drain-change-2026-11-11)).
 The roughly 10 s `stop_environment` was not Docker's stop grace. PID 1's
 chain (`docker-init` → `sudo` → `sleep infinity`) exits on SIGTERM. The time
 went to `orkestrator-drain.sh`, which waited its whole 10 s grace for the
@@ -1660,8 +2236,8 @@ deadline without requiring an image.
 
 ## UI response under multi-environment load, first run on a busy host (2026-11-01)
 
-Todo [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md)
-task 3, with the [probe](#ui-response-under-multi-environment-load) at
+To-do 0022 (retired 2026-11-11) task 3, with the
+[probe](#ui-response-under-multi-environment-load) at
 `5616f272`. This is a first sample on a busy shared host, not a reference
 figure.
 
@@ -1710,14 +2286,13 @@ rose 1.4–1.5× (p95 1.7–2.1×) and `start_environment` 1.24–1.27×. `<main
 more between the two idle phases (589 against 317 ms) than between idle and
 busy, so this sample cannot attribute them to the load. Every stop took
 10.5–11.6 s with or without load, against 0.1–0.6 s for the benchmark's bare
-`docker stop`; that is recorded in
-[2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md),
-which traced it to the drain waiting on the setup terminal's shell
+`docker stop`; to-do 2150 (retired 2026-11-11) traced it to the drain
+waiting on the setup terminal's shell
 ([Stop attribution](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)).
 
 ## Egress gateway conditions on Linux Engine (2026-10-31)
 
-Todo [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+Todo 0018 (retired 2026-11-11)
 task 3: IPv6, a Docker daemon restart and DNS rotation behind the egress
 gateway.
 
@@ -1790,7 +2365,7 @@ Results:
 - **Default developer run.** On the host daemon without the opt-ins: IPv6
   logged "not covered" and created no IPv6 network (host IPv6 forwarding
   stayed 0), DNS rotation passed, and the restart case skipped.
-- **Not covered:** a rootless daemon restart (0018 task 2), external IPv6
+- **Not covered:** a rootless daemon restart (0018 (retired) task 2), external IPv6
   reachability (the disposable daemon had no IPv6 uplink; the control
   container proved the IPv6 path on the network itself), and a real CDN's
   rotation over six hours.
@@ -2006,7 +2581,7 @@ the boot's readiness step, and it is quantised:
 
 ## C14 staged inputs on any host uid, Linux Engine (2026-10-28)
 
-Todo [0728](../todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md),
+Todo 0728 (retired 2026-11-11, once CI passed; `git show 498b68766:docs/todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md`),
 on omarchy-hp (rootful Docker Engine 29.9.1, x86_64, cgroup v2), with the
 workspace image `orkestrator-v2:qual-0728-2ddc39c4` (`sha256:d2a42ea4…`,
 `docker build $(bun scripts/docker-image-build-args.ts)`). This host's user
@@ -2051,9 +2626,115 @@ built by `mise run docker:build:dev --profile todo0058` before and after the
   including the new case and C16's symlinked-root refusal. The live data
   contracts suite passed 2/2.
 
+## Workload budgets and the built-in default (2026-10-25)
+
+To-do 0022 (retired 2026-11-11) chose the
+[built-in default](../architecture/container-lifecycle.md#built-in-default)
+from these runs of the [workload harness](#workload-budgets) and the
+[benchmarks](#benchmarks). Both machines were busy with other work during
+every run, so the timings are noisy. The Mac's load average was about 50 on
+18 cores (other worktrees' test suites). The Linux host was at about 8 on 12
+threads (the user's own Bun processes). Memory and PID peaks, OOM kills and
+failures are robust; wall times are not. Peaks are the kernel's
+`memory.peak` (which includes reclaimable page cache) and the sampler's
+anonymous and `shmem` maxima. "Budget" is the experiment budget of 2 CPUs,
+4 GiB and 1,024 PIDs.
+
+Provider turns ran the real Claude Code CLI with real Bash and Read tool
+calls (four per turn) against a loopback mock of the Messages API answering
+in 1 s, because no credentials were available. That measures the CLI's
+process, tools and streaming, not model output, a bridge or another
+provider. Authenticated turns through each bridge under the default are
+item "0022 (retired) task 4" in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+**Docker Desktop 29.9.2, arm64.** The VM has 18 CPUs and 7.75 GiB, so the
+default there is 5,888 MiB and 4,096 PIDs. Image `orkestrator-v2:q0022-arm64`.
+Reports: `output/benchmarks/workload-desktop-arm64*.json` on that machine.
+
+| Workload | Condition | Wall | Peak MiB (anon / shmem) | PIDs | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Browser, 3 × 2 heavy pages | unrestricted | 14.5 s | 6,046 (4,141 / 1,762) | 379 | clean |
+| | budget | 47.7 s | 4,096 (limit) | 373 | **2 OOM kills, 2 page crashes, 8 of 24 rounds failed** |
+| | default | 11.9 s | 5,885 (4,033 / 1,741) | 377 | clean |
+| Browser, 1 × 2 pages | unrestricted / budget / default | 9.8 / 14.9 / 10.3 s | 2,346 (1,706 / 616) | 136 | clean |
+| Provider, 3 CLIs × 3 turns, 36 tool calls | all three | 17.0–17.2 s | 738 (366 / 0) | 57–110 | clean |
+| Build: install, typecheck, Vite | unrestricted | 31 s | 4,777 (2,481 / 0) | 206 | clean |
+| | budget | 24 s | 3,724 (1,778 / 0) | 67 | clean |
+| | default | 54 s | 4,230 (2,238 / 0) | 214 | clean |
+| Combined: build, 1 browser, 2 CLIs | unrestricted | 35.1 s | 4,846 (2,925 / 595) | 392 | clean |
+| | budget | 41.4 s | 4,096 (limit, reclaiming) | 203 | clean |
+| | default | 66.6 s | 5,144 (2,993 / 586) | 387 | clean |
+
+CPU only (2 CPUs, no memory or PID limit), three interleaved repeats: the
+one-browser round median rose from 2.55–2.64 s to 3.69–4.57 s, every time.
+The build showed no consistent difference (typecheck 10.3–20.3 s against
+10.0–11.4 s, Vite 4.4–7.6 s against 3.9–5.6 s): its tools finish in seconds
+and contention dominates.
+
+**Linux Engine 29.9.1 rootful, amd64.** omarchy-hp, kernel 7.2.8, 12
+threads, 31 GiB, cgroup v2, systemd driver, driven from the Mac with
+`DOCKER_HOST=ssh://`. The default there is 8,192 MiB and 4,096 PIDs. The
+image was the host's own `orkestrator-v2:dev-f7622900ba3f` (2026-09-28): its
+disk had 12 GB free, too little to load a 6 GB current image. That image
+ships Bun 1.4.2, so the build workload installed the checkout's Bun 1.4.4
+first, untimed (report field `bunReplaced`), and its Chromium and CLI
+versions are older than the branch's.
+
+| Workload | Condition | Wall | Peak MiB (anon / shmem) | PIDs | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Browser, 3 × 2 heavy pages | unrestricted | 113 s | 5,463 (3,683 / 0) | 292 | clean |
+| | budget | 326 s | 4,096 (limit, 18,115 reclaim events) | 294 | clean, 2.9× slower |
+| | 8 GiB / 4,096 | 183 s | 5,708 (3,872 / 0) | 282 | clean |
+| Browser, 1 × 2 pages | all three | 67–97 s | 1,834–2,014 (≤ 1,394 / 0) | 104 | clean |
+| Provider, 3 CLIs × 3 turns | all three | 19.6–20.6 s | 692 (303 / 0) | 57–94 | clean |
+| Build: install, typecheck, Vite | unrestricted | 24 s | 4,476 (2,282 / 0) | 168 | clean |
+| | budget | 35 s (typecheck 15.1 s against 6.5 s) | 4,096 (limit) | 69 | clean |
+| | 8 GiB / 4,096 | 25 s | 4,496 (2,304 / 0) | 154 | clean |
+| Combined: build, 1 browser, 2 CLIs | unrestricted | 45.0 s | 6,284 (3,476 / 0) | 271 | clean |
+| | budget | 85.9 s | 4,096 (limit) | 173 | clean, 1.9× slower |
+| | 8 GiB / 4,096 | 47.8 s | 5,997 (3,203 / 0) | 263 | clean |
+
+On amd64 the same Chromium pages used no `shmem` at all; a direct write to
+`/dev/shm` there is accounted (200 MB showed as 200 MB), so this is a real
+platform difference, not a sampler gap. On arm64 Desktop the browser held up
+to 1.8 GB of `shmem`. That is more than the 1 GiB `/dev/shm` mount, so it
+includes memfd shared memory, which counts against the memory limit as well.
+
+**Enforcement.** All three daemons report CPU, memory and PID support:
+Desktop's VM, rootful Engine, and omarchy-hp's rootless Engine (systemd
+driver, `cpu memory pids` delegated). On the rootless daemon, a container
+started with the default's arguments read `memory.max` 8 GiB,
+`memory.swap.max` 0, `pids.max` 4096 and `cpu.max` unlimited. Its throwaway
+`busybox` image was removed afterwards, leaving the daemon empty, as it was
+found. Rootless without delegation is covered by unit tests: the default
+creates with no limits and reports the axes.
+
+**Benchmarks, Docker Desktop 29.9.2 arm64**, 18 CPUs, image
+`orkestrator-v2:q0022-arm64`, against the targets of the day (the calls
+target was 21 before [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+re-baselined it for the egress gateway):
+
+| Measure | Target | Built-in default | Unrestricted |
+| --- | --- | --- | --- |
+| Fresh restricted environment to ready | ≤ 3 s | 2.75 s | 2.56 s |
+| Incomplete fresh boots | none | none | none |
+| Docker calls per fresh environment | ≤ 21 | 15 | 15 |
+| Three concurrent, slowdown | ≤ 1.5× | 1.22× | **1.60×** |
+| Warm stop | ≤ 1 s | 0.59 s | 0.61 s |
+| Warm start | ≤ 2 s | 1.60 s | 1.62 s |
+| 5,000-file copy and verify | ≤ 20 s | 17.5 s | 19.0 s |
+| Docker calls per minute, view open | ≤ 36 | 24 | 24 |
+| Followers after grace | 0 | 0 | 0 |
+
+The unrestricted run missed the concurrency target once, on the Mac at load
+average about 50. Unrestricted is the behaviour before the default, and the
+run under the default on the same host met it. Both runs are recorded, not
+re-run until they pass.
+
 ## Egress gateway on Docker Desktop (2026-10-25)
 
-The backend's egress gateway (todo 0018 item 1), on Docker Desktop 4.96.3
+The backend's egress gateway (todo 0018 (retired) item 1), on Docker Desktop 4.96.3
 (Engine 29.9.2, linux/arm64), with a qualification image built from the
 branch (`orkestrator-v2:q0018-egress`, capabilities including
 `egress-gateway=1`). Every resource used a private owner label and was
@@ -2435,8 +3116,8 @@ read-only mode (delete and allowlist edits ignored a newer writer's marker).
 C13 now passes for Codex, OpenCode, Cursor and Pi; the full-network fixture
 and root terminal passed `test:agent:docker`; and every benchmark target was
 met at load 18. Rootless was exercised in a nested `docker:dind-rootless`
-only. Evidence, decisions and what remains are in
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md#results-2026-10-23).
+only. Evidence and decisions are in to-do 0019's "Results, 2026-10-23" (retired;
+`git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`).
 
 ## Docker Desktop on Apple Silicon (2026-10-17)
 
@@ -2475,7 +3156,7 @@ This run caught two problems. Three of the opt-in Docker suites (lifecycle,
 network and the benchmark harness) had not kept up with account switching
 (#889). And a stopped container lost its agent tabs
 from view when it was started again. Both are fixed. Detail and decisions are
-in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+in to-do 0019 (retired; `git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`).
 
 ## Build-pipeline rewind review evidence (2026-11-01)
 
@@ -2663,6 +3344,69 @@ headroom.
 Never clear a user's global Docker or cache state to manufacture a cold run;
 "cold" means a new network, volumes and staged inputs per environment.
 
+The reference host for these targets is Linux Engine amd64. Docker Desktop
+and arm64 figures are recorded for comparison and are not separate gates:
+Desktop met every target under the built-in default, so per-platform
+targets would add a table without changing a decision. Revisit that if CI
+arm64 or Desktop misses repeatedly on a quiet host.
+
+### Optimisations measured and not taken
+
+Each of these was measured against a stated condition (to-do 0022, retired
+2026-11-11) and not built. Revisit one only when its condition is met; a
+benchmark miss under the merge-gate rule above is fixed or explained before
+merging, and the matching entry here is the first candidate.
+
+- **An in-process tar hasher on the copy's source side.** `copy_stream`
+  (`docker/orkestrator-migrate.sh`) hashes each tar member with its own
+  `sha256sum`; the destination already batches 256 files per call. Revisit
+  when `rebuild.medium.copying` misses 20 s on the reference host or the CI
+  runners. Measured: 17.5 s under the default and 19.0 s unrestricted on
+  Docker Desktop arm64 at load average about 50 (3.5–3.8 ms per file, both
+  sides); 13.0–15.0 s on the 4-CPU CI runners (2026-10-26); 30.7 s on
+  beelink saturated by other builds, where every other timed step also
+  missed (2026-11-11,
+  [Benchmarks on a saturated host](#benchmarks-on-a-saturated-host-2026-11-11)).
+  The last is not the reference host and does not meet the condition, but
+  the per-member processes are what a busy host slows most. A replacement
+  needs its own safety review: the corruption, symlink-root and Git checks
+  must still pass.
+- **Bun download-cache BuildKit mounts in `docker/Dockerfile`.** The bridge
+  `bun install` layer re-ran cold in a local rebuild in 5.5 s (2026-10-25,
+  Desktop arm64). It re-runs only when the lockfile, `patches/` or a
+  workspace `package.json` changes, because the source is copied after it,
+  and CI release builds start without the mount cache anyway. About 5 s per
+  dependency change does not pay for the build-cache disk growth and the
+  extra Dockerfile syntax.
+- **Environment-private dependency cache volumes.** A cold `bun install` of
+  this repository (941 packages) in a fresh container took 8.0–19.6 s on
+  Desktop and 10.3–11.0 s on Linux; a warm reinstall from the container's
+  cache took 1.2–2.2 s and 2.6–3.1 s. Downloads cost about 7–17 s once per
+  new environment (`node_modules` lives in the workspace volume, which
+  preserving rebuilds copy), so they do not dominate an environment's life.
+  Sharing a cache across environments would also need cache-poisoning and
+  concurrency analysis.
+- **Faster usage samples.** A sample took 2.0 s (median; Desktop arm64, 8
+  running containers), nearly all of it `docker stats --no-stream`'s own CPU
+  interval. Samples are shared, the visible refresh is 5 s, and the Docker
+  view costs 24 calls a minute against a target of 36.
+- **Reusing verified input revisions.** Staging sits inside the create step
+  and is not a dominant phase. If revisited, revocation must bypass the
+  cache, and size or time alone is not proof that secret or configuration
+  contents are unchanged.
+- **A Docker events watcher for status sampling.** The sampler costs three
+  calls per sample whatever the environment count, and the 3 s status cache
+  already batches `docker ps`. Events would only ever be hints: a full owned
+  snapshot after every gap, with periodic reconciliation kept as the repair
+  path.
+- **A snapshot or reflink copy fast path.** It is not portable across Engine
+  and Desktop storage drivers, and the verified streaming copy is the
+  contract.
+
+Never weaken the separate-candidate-copy guarantee for speed: running setup
+against the only source volume is not an acceptable shortcut. Rolling back
+an optimisation must leave the storage and lifecycle contract intact.
+
 ### Workload budgets
 
 `container-workload-budget.ts` measures realistic workloads in fresh
@@ -2703,7 +3447,7 @@ has sizes, counts and durations only. Containers are labelled
 The built-in default ([container-lifecycle.md](../architecture/container-lifecycle.md#built-in-default))
 was chosen from the 2026-10-25 runs on Docker Desktop arm64 and Linux
 Engine amd64. Their results are in
-[0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md#evidence-2026-10-25).
+[Workload budgets and the built-in default](#workload-budgets-and-the-built-in-default-2026-10-25).
 Rerun them when a workload grows (a new browser default, a heavier build),
 before you change the default.
 
@@ -2730,8 +3474,11 @@ mise run dev:stop --profile ui-load && mise run dev:reset --profile ui-load
 
 It adds `--environments` container environments (`ui-load-busy-N`) and a
 `ui-load-target` to the fixture project, and signs a headless Chromium in
-through `dev:login`. Startup dialogs such as "Claude Code Is Not Logged In"
-are dismissed for that page only. In each `busy` phase, every
+through `dev:login`. Dialogs such as "Claude Code Is Not Logged In" are
+dismissed for that page only, at startup and again before each measured
+click or lifecycle command (outside the measured time), because one can open
+over the workspace at any point and its overlay takes every click; the report
+lists their titles. In each `busy` phase, every
 `ui-load-busy-N` container runs a load through `docker exec`, and only after
 its `environment-id` label has been checked. The load is `--workers` shell
 spin loops (one CPU each), a workspace file rewritten every second, and an
@@ -2929,6 +3676,6 @@ daemon was stopped, and its data root removed. The shared daemon and its
 networks were left unchanged.
 
 Limits: this does not qualify every rootless kernel, a rootless daemon restart
-with owned runtimes, or the entire replacement matrix. Those remain under todo
-0018 task 2; the prior rootless evidence is retained above. The existing readiness fault suite was rerun rather than replacing its
+with owned runtimes, or the entire replacement matrix. Those remained under todo
+0018 (retired) task 2; the prior rootless evidence is retained above. The existing readiness fault suite was rerun rather than replacing its
 assertions with a manifest-only check.

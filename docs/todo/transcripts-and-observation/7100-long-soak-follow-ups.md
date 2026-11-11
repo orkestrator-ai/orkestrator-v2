@@ -2,16 +2,17 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `281de1a17`, from the long soak of
+Analysed 2026-11-11 against `main` at `498b68766` (first analysed 2026-11-06
+at `281de1a17`), from the long soak of
 [0048](0048-recurring-work-qualification.md) task 10 (see its
 [Long soak](0048-recurring-work-qualification.md#long-soak-2026-11-06-linux)).
 
 ### Tasks
 
 1. **Release a deleted environment's projection caches**: environment deletion left every session's cached view, revision counter, epoch and projected rows resident. Status: done (2026-11-06; see Assumptions and decisions).
-2. **Container lifecycle in a long soak**: the long soak ran local environments only, because the host's Docker address pools were full. Status: open.
-3. **Projection maps with no eviction**: three per-session maps of the native projection are emptied only by an invalidation or shutdown. Status: open.
-4. **A soak with a browser reader**: no client read session transcripts during the soak, so the progressive-read caches stayed at zero. Status: open (depends on 3 for what to watch).
+2. **Container lifecycle in a long soak**: the long soak ran local environments only, because the host's Docker address pools were full. Status: open (needs a node whose agent can reach Docker; beelink2's cannot, see the task).
+3. **Projection maps with no eviction**: three per-session maps of the native projection are emptied only by an invalidation or shutdown. Status: done (2026-11-11).
+4. **A soak with a browser reader**: no client read session transcripts during the soak, so the progressive-read caches stayed at zero. Status: done (2026-11-11).
 
 ### 1. Release a deleted environment's projection caches
 
@@ -35,16 +36,27 @@ Analysed 2026-11-06 against `main` at `281de1a17`, from the long soak of
 
 **Problem.** The 2026-11-06 soak exercised local environments only. Container start, stop, delete and their signal and fetch records were not soaked for an hour.
 
-**Context.** On beelink, 29 of the daemon's 34 networks were unattached `ork-<owner>-reach-probe-net` networks created between 2026-10-31 and 2026-11-02 by other backends, so `dev:test` failed with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. Removing them is the user's call (to-do 0241, retired 2026-11-10; the sweep is `mise run disk:report -- --fix probe-networks`, see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)). This work may remove only what it created, and network pruning is banned.
+**Context.** On beelink, 29 of the daemon's 34 networks were unattached `ork-<owner>-reach-probe-net` networks created between 2026-10-31 and 2026-11-02 by other backends, so `dev:test` failed with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. Removing them is the user's call (to-do 0241, retired 2026-11-10; the sweep is `mise run disk:report -- --fix probe-networks`, see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)). This work may remove only what it created, and network pruning is banned. Full pools no longer block a run: the test-only network shim (`apps/desktop/scripts/dev/docker-qualification-bin`, first on `PATH` with `ORKESTRATOR_QUALIFICATION_DOCKER`; see [container qualification](../../development/container-qualification.md)) retries a labelled `network create` on an unrouted /29.
 
-**Investigation.** The driver already takes `--soak-environments local,container --fixture-environments local,container`; nothing else is missing. The 10-cycle container soak of 2026-10-25 left no leaked footprint.
+**Investigation.** The driver already takes `--soak-environments local,container --fixture-environments local,container`; nothing else is missing. The 10-cycle container soak of 2026-10-25 left no leaked footprint. On 2026-11-11 the run could not start on beelink2: the agent's user there is not in the `docker` group (`/var/run/docker.sock` is `root:docker` 0660, so every call through the shim answers `permission denied`), and `mise run docker:disposable` needs RootlessKit, which is not installed. A rootful nested daemon needs the outer daemon too. The run therefore needs a fleet node whose agent can reach a Docker daemon, with the shim on `PATH`:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+  PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 60000 --window-ms 60000 --sample-ms 30000 --freshness-probes 0 \
+  --fixture-environments local,container --agent-platforms pi --soak-cycles 60 \
+  --soak-environments local,container --soak-cycle-gap-ms 65000 --soak-sessions 2 \
+  --soak-readers 1 --profile-prefix rw-ctrsoak --out output/benchmarks/recurring-container-soak.json
+```
 
 **Decisions.**
 
 - **How to get container coverage?**
-  - **Rerun the same soak with containers once the pools have room (recommended).**
-    - Pros: same driver, gauges and trend analysis; a direct comparison.
-    - Cons: waits on the user clearing the leaked networks, or on another host.
+  - **Rerun the same soak with containers on a node whose agent reaches Docker, through the network shim (recommended).**
+    - Pros: same driver, gauges and trend analysis, now with the browser reader; a direct comparison; the shim removes the wait on the leaked networks.
+    - Cons: not this node (beelink2); the container image build adds time to the first run.
   - **Run it on macOS with Docker Desktop in the 0031 batch.**
     - Pros: no dependency on this host.
     - Cons: a different engine and platform from the local run it would complete.
@@ -106,6 +118,89 @@ every per-session map; a byte bound would still hold dead views. Tests:
 environment's caches) and `commands-environment-cleanup.test.ts` (called
 after the session records go). Live: see 0048's
 [Long soak](0048-recurring-work-qualification.md#long-soak-2026-11-06-linux).
+
+### Task 3: each map follows its owner (2026-11-11)
+
+Chose the recommended option, after checking the snapshot share's callers.
+In `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`):
+
+- `progressiveReadEpochs`: a read's starting epoch is deleted when the read
+  settles. Only `progressiveReadCovering`, which lets a caller join a read in
+  flight, reads it.
+- `progressiveSourceTokens`: `trimProgressiveTranscriptCache` drops the
+  evicted key's source token and any pending background recovery with its
+  transcript. The next read has no base to send the token against, so it
+  reads the whole window and schedules its own recovery.
+- `interactiveSnapshotShares`: a share exists so that the transcript and
+  state reads of one session issued together share one provider snapshot. A
+  settled share is now kept only while another progressive read of that
+  session is in flight, and the last of them to settle drops it. Kept for the
+  rest of its epoch, it answered every later read in that epoch, which moves
+  only on an invalidation, with an older snapshot.
+
+Why: each map then tracks something that is already bounded (reads in
+flight, the progressive transcript cache), so no new constant is needed, and
+join behaviour within a read is unchanged. An LRU bound would have been a
+guess and could split a join. Tests: `native-agent-projection-cache-gauges.test.ts`
+asserts that a settled read keeps neither its epoch nor its share (and a
+later read gets the newer snapshot), and that an evicted transcript takes its
+source token with it; `native-agent-service-progressive.test.ts` still pins
+that reads issued together share one snapshot. The projection, progressive
+and sync suites pass. Live: the
+task 4 soak below.
+
+### Task 4: a soak-only reader in the existing driver (2026-11-11)
+
+Chose a soak-only reader, `--soak-readers 1` (with `--soak-sessions`), built
+from the busy profile's Playwright helpers in
+`scripts/recurring-live-ab-busy-clients.ts` (sign-in, environment selection,
+the fake reply's visibility check) rather than a second driver.
+0048 task 1's client already existed, so the recommended option and this one
+converged: `playwrightSoakReader` is one headless page that, after each
+cycle's session opens, opens that environment's Pi tab, and after every cycle
+each long-lived session's tab, waiting until the fake reply renders. A failed
+read is the cycle's `read` step; the soak carries on. `measureSoak` closes
+the reader before the final footprint, because its page holds an event
+stream that the baseline, taken before its first read, did not (the first
+run reported it as a leaked `stream:open 1→2`). Tests:
+`tests/unit/recurring-live-ab-soak-sessions.test.ts`.
+
+Live on 2026-11-11, beelink2 (Linux 7.2.15, 16 cores, a busy shared host:
+load average 7 to 53 during the first run, with a 7562 busy run and other
+builds beside it), headless `dev:test` profiles with one local fixture
+environment, only the Pi toolchain, no credentials, the reachability check
+off and every model call on the driver's loopback fake model:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 60000 --window-ms 60000 --sample-ms 30000 --freshness-probes 0 \
+  --fixture-environments local --agent-platforms pi --soak-cycles 40 \
+  --soak-environments local --soak-cycle-gap-ms 65000 --soak-sessions 2 \
+  --soak-readers 1 --profile-prefix q7100r --out output/benchmarks/q7100r/result.json
+# then the confirmation: --soak-cycles 20 --soak-cycle-gap-ms 30000 --profile-prefix q7100r2
+```
+
+| Run | Build | Cycles | Duration | Failed steps | Reader | Leaked footprint | Exit |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Reader, 65 s gap | `83731af28` | 40/40 | 53 min | none | 80 environment reads, 120 tabs | `stream:open 1→2` (the reader's own page) | 1 |
+| Confirmation, 30 s gap | `88c1cb15b` (reader closed first) | 20/20 | 15 min | none | 40 environment reads, 60 tabs | none | 0 |
+
+The three task 3 maps over the 40 trend samples of the first run (the
+confirmation run agrees):
+
+| Gauge | Range | Last | Reading |
+| --- | --- | --- | --- |
+| `progressiveReadEpochs` | 0 to 2 | 0 | Follows `progressiveReads` (reads in flight), so it no longer keeps a key per session read. |
+| `progressiveSourceTokens` | 2 | 2 | Equal to `progressiveTranscripts`, the two long-lived sessions; each cycle's session was released with its environment. |
+| `interactiveSnapshotShares` | 0 | 0 | The share is the fallback for a provider with no transcript or state snapshot route; Pi's provider has both, so this soak cannot exercise it and the unit test covers it. |
+
+The gauges that rose were the two long-lived sessions' growing transcripts
+(`progressiveTranscriptBytes` 3.6 to 48 KiB, `projectedMessages` 16 to 328,
+`transcriptDeltaBaseBytes` 0 to 19 KiB), the storage row cache (17 to 49
+rows) and change tracking's `deletedEnvironments` (1 to 40, one per deleted
+environment). None grew by a session that had gone quiet. Backend RSS was 247
+MiB before and 393 MiB after. Both profiles were reset by the driver.
 
 ## Related
 

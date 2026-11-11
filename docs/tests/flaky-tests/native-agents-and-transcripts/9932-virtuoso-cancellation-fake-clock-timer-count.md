@@ -1,7 +1,7 @@
 # Virtuoso cancellation: fake-clock timer count after the deadline window
 
 - **ID:** 9932
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-10
 - **File:** `apps/web/src/lib/transcript-scroll/virtuoso-cancellation.test.tsx:95`
 
@@ -474,3 +474,54 @@ the failure as a recurrence"). The branch changes only backend change-tracking c
   desktop, protocol, toolchain, web-public, root, bridge and lockfile groups
   passed.
 - **Isolated rerun:** the runner's own rerun reported `PASSED ALONE (790ms)`.
+
+## Resolution (2026-11-11)
+
+- **Root cause:** the timer the count saw was not a Virtuoso timer. Happy DOM's
+  `AsyncTaskManager.resolveWhenComplete` (happy-dom 21.0.4,
+  `lib/async-task-manager/AsyncTaskManager.js`) arms a 1 ms "wait until
+  complete" probe whenever the last frame or timer it tracks ends, and clears
+  it when another starts. It arms the probe through a `setTimeout` it captured
+  at load, which Bun's fake clock still fakes, so `jest.getTimerCount()`
+  counts it. The final animation frame that `elapseFakeTime` delivers can be
+  that last task. Whether the probe is still pending when the count is read
+  depends on how Happy DOM's real-immediate frames interleave with the rest
+  of the turn, and on stale entries in Happy DOM's running-timer list: Bun's
+  `jest.useRealTimers()` discards still-pending fake timers without running
+  them, so Happy DOM never records that they ended, and while a stale entry
+  remains the probe is never armed. Host load changes both. The earlier
+  bounded settle rounds could not help, because each round ended with another
+  frame that could arm the probe again.
+  Evidence: a preload that wrapped the native timer functions before Happy
+  DOM loaded recorded, for every failing assertion under load, exactly one
+  pending timer, `timeout delay=1` armed from
+  `AsyncTaskManager.resolveWhenComplete` ← `endImmediate` ←
+  `BrowserWindow.requestAnimationFrame`'s immediate. A wrapper on the global
+  timer functions (what Virtuoso, React and the test call) recorded none.
+- **Fix:** `apps/web/src/test/fake-clock-frames.ts` adds `trackPageTimers()`,
+  which counts the timers the code under test arms through the global
+  `setTimeout`/`setInterval` until they run or are cleared.
+  `virtuoso-cancellation.test.tsx` installs it with the fake clock
+  (`installFakeClock`) and `elapsePastEveryDeadline` asserts that no page
+  timer is pending (listing any that are), with no extra settle rounds.
+  Timers captured by `installControlledTimeout` stay out of the count and
+  are still checked by that helper's `assertDrained()`. `afterEach` now runs
+  out the fake clock (`jest.runAllTimers()` inside `act`) before
+  `useRealTimers()`, so Bun no longer discards a pending fake timer and
+  leaves Happy DOM's records stale for the next test. The tracker still
+  catches a real late timer: with the 1300 ms windows cut to 100 ms, the
+  assertion lists Virtuoso's pending `timeout (1200 ms)`, `(200 ms)` and
+  `(150 ms)` timers and fails.
+- **Reproduced:** yes. On macOS (18 cores) with
+  `bun scripts/test-under-contention.ts --burners 120` (unpinned, load
+  average 70 to 195), the unchanged file
+  (`git show HEAD:…` copied beside it) failed 42 of 280 and 48 of 280 tests
+  with `--rerun-each=20`, all with `Expected 0, Received 1` at
+  `elapsePastEveryDeadline`. The same condition with smaller repeats failed
+  8 of 70, 9 of 42 and 7 of 56 earlier in the session. With 40 burners it
+  passed 70 of 70, so the failure needs heavy load. After the fix, the same
+  120-burner condition passed every run.
+- **Stress:** `NODE_ENV=test mise run test:logged -- --name stress-virtuoso-9932 -- bun scripts/test-under-contention.ts --burners 120 -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --rerun-each=20`
+  passed (280 of 280). Three further runs of the same command without the
+  logged wrapper passed 280 of 280 each (1,120 of 1,120 in total), at a load
+  average up to about 195. Unloaded, `--rerun-each=10` passed 140 of 140.

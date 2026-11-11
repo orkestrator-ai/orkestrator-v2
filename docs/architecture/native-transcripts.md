@@ -251,14 +251,17 @@ size); through the gateway it is the round trip of one loopback request:
 
 Changed reads answer with small deltas and were unaffected either way.
 
-The legacy `get_native_agent_projection` is not marked. On 2026-11-10 the
-first splice cost more CPU per read than `JSON.stringify` on its 100-row,
-430 KB projection (about 600 µs against 450 to 500 µs); with the new splice
-the same benchmark (`legacy-spliced` against `legacy`) measured 570 to 690 µs
-against 740 to 820 µs CPU per read on 2026-11-11, so marking it now saves
-time. Marking it also changes its contract definition (`encoded`), which
-skips its result check in development; that is
-[to-do 7755](../todo/transcripts-and-observation/7755-mark-legacy-projection-for-splicing.md).
+The legacy `get_native_agent_projection` is marked too, since 2026-11-11
+(to-do 7755, retired). On 2026-11-10 the first splice cost more CPU per read
+than `JSON.stringify` on its 100-row, 430 KB projection (about 600 µs against
+450 to 500 µs), so it was left out; with the new splice the same benchmark
+(`legacy-spliced` against `legacy`) measured 570 to 690 µs against 740 to
+820 µs CPU per read on 2026-11-11, and 826 to 873 µs against 987 to 1,044 µs
+in a second pair of runs that day with two `dev:test` profiles also running.
+Its contract definition now sets `encoded`, like the other four, so its
+result is no longer schema-checked in development. Its callers are mostly
+in-process (Control MCP environment tools, node coordination), which receive
+the same plain object; only reads that cross the gateway gain.
 `commands-registry-native-splice.test.ts` pins which commands are marked;
 re-measure before marking another.
 

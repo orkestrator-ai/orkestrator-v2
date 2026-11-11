@@ -1,13 +1,12 @@
 /**
  * Which native-agent command results the gateway splices from memoised row
- * encodings (`markSpliceableResult`). The legacy `get_native_agent_projection`
- * is still left out. On 2026-11-10 the first splice was slower than
- * `JSON.stringify` on its whole-session projection; the narrowed splice
- * (to-do 7553, retired 2026-11-11) measures cheaper there, and marking it,
- * which also sets its contract `encoded` flag, is to-do 7755. Re-measure with
- * `scripts/benchmark-transcript-changed-read.ts` (`legacy-spliced` against
- * `legacy`) before marking it; the figures are in
- * docs/architecture/native-transcripts.md, "Response encoding".
+ * encodings (`markSpliceableResult`): every transcript read, the legacy
+ * `get_native_agent_projection` included. That one was left out on 2026-11-10,
+ * when the first splice cost more than `JSON.stringify` on its whole-session
+ * projection; the narrowed splice (to-do 7553, retired 2026-11-11) costs less,
+ * so it was marked by to-do 7755 (retired the same day). Re-measure with
+ * `scripts/benchmark-transcript-changed-read.ts` before marking another; the
+ * figures are in docs/architecture/native-transcripts.md, "Response encoding".
  */
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
@@ -30,7 +29,7 @@ const nativeAgents = {
 };
 
 const calls: Array<[command: string, args: Record<string, unknown>, spliced: boolean]> = [
-  ["get_native_agent_projection", identity, false],
+  ["get_native_agent_projection", identity, true],
   ["get_native_agent_transcript_update", { ...identity, viewVersion: 1, liveWindow }, true],
   ["get_native_agent_live_update", { ...identity, viewVersion: 1, liveWindow }, true],
   ["get_native_agent_projection_update", { ...identity, syncVersion: 1, liveWindow }, true],

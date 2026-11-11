@@ -561,7 +561,20 @@ async function layoutAtTop(list: Locator, trail: Trail) {
  * Scrolls up the way a reader does, with the wheel. A programmatic scroll is
  * not user intent to the list: it stays pinned to the bottom and snaps back.
  */
+/**
+ * Waits for the list through an auto-waiting assertion, which is what runs
+ * the page's locator handlers: raw mouse and wheel input, `isVisible()` and
+ * `boundingBox()` do not. On a host whose user cannot reach the Docker daemon
+ * the "Docker Permission Required" dialog opens after the probe answers, often
+ * after a reload has already rendered the list, and its overlay then takes the
+ * wheel gestures meant for the list.
+ */
+async function clearOverlays(list: Locator): Promise<void> {
+  await expect(list).toBeVisible();
+}
+
 async function wheelUp(page: Page, list: Locator): Promise<void> {
+  await clearOverlays(list);
   const box = await list.boundingBox();
   if (!box) throw new Error("the transcript list is not laid out");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -1497,6 +1510,7 @@ test.describe("live transcript paging", () => {
         // `expandStop` opened the folded calls, so the list scrolls.
         const renderedBefore = await scanRendered(page, list, trail);
         await oldestRenderedText(page, list);
+        await clearOverlays(list);
         const box = await list.boundingBox();
         await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
         for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 500);

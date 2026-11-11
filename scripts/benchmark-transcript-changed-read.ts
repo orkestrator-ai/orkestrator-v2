@@ -25,9 +25,9 @@
  * - `legacy`: `getProjection` on the near-full rows (part 0210's case),
  *   encoded with `JSON.stringify` as the gateway writes that command;
  * - `legacy-spliced`: the same read encoded the way the gateway writes a
- *   marked result. The first splice measured slower (to-do 6860); the
- *   narrowed one measures faster (to-do 7553, retired), and marking the
- *   command is to-do 7755.
+ *   marked result, which it is since to-do 7755 (retired). The first splice
+ *   measured slower (to-do 6860); the narrowed one measures faster (to-do
+ *   7553, retired), so `legacy` is now the baseline it is compared against.
  *
  * Per read it reports CPU time (user + system, `process.cpuUsage`), wall time,
  * and, from a separate instrumented pass, the characters `JSON.stringify`

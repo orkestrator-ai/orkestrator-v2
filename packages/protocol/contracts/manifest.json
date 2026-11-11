@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1007,
-    "defined": 1007,
+    "commands": 1009,
+    "defined": 1009,
     "untyped": 0,
     "events": 45
   },
@@ -3011,6 +3011,15 @@
       "critical": [],
       "argsDigest": "sha256:7d2ff51773c95d156f18bf790610baf1ceeef8c9bae503cb5ced462ed4aa0386",
       "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
+    },
+    "get_coordinator_action_marks": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:76e52e8acb69ca97d72bac91b227241a35ab90def4f06242aaf6d0b11f978000",
+      "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
     },
     "get_coordinator_checkout_turn": {
       "domain": "coordinator",
@@ -7390,6 +7399,15 @@
       "critical": [],
       "argsDigest": "sha256:3f0014644ea7fd62ae9a15b27c06f8e533e6dea73ebe0f5eb0b54d1bf102a46e",
       "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
+    },
+    "set_coordinator_action_mark": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d585af22fe4e369406a3b609f2167d7399ac0f04d6bcfa1a50eac08104963d74",
+      "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
     },
     "set_coordinator_upstream_auto_merge": {
       "domain": "config",

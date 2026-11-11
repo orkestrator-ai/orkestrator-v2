@@ -4135,7 +4135,8 @@ and question anchors from the message holding the tool call; mail and automatic
 prompts do not start user subjects. The next actual user message handles a
 marked plain-text question. No additional model call or renderer persistence
 store is used for cards; the only renderer persistence is the docked panel's
-open or folded preference above.
+open or folded preference above. The one stored override is the user's manual
+marks (below), which the backend keeps.
 
 The panel replays historical action evidence together with the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures
@@ -4158,6 +4159,40 @@ Only bare native tool names and explicit Orkestrator server prefixes create mark
 Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.
+
+### Marking actions done by hand
+
+When the user has dealt with an action outside the transcript, they can
+right-click its card (or press the context-menu key or Shift+F10 on a focused
+card) and choose **Mark done**. The menu is the app's shared context menu
+(`components/ui/context-menu.tsx`); it gives focus back to the card when it
+closes, and a narrow overlay stays open while it is used.
+
+- A mark is an override on top of the derived state: a card is done when the
+  transcript says so or when the user marked it
+  (`applyCoordinatorActionMarks` in `coordinator-action-cards.ts`). The
+  transcript replay itself is unchanged. A marked card shows muted, its label
+  starts "Done: ", its status reads "Marked done", and it leaves the waiting
+  count.
+- **Mark not done** appears only on a card the user marked and the transcript
+  still has open, and clears that mark. A card the transcript finished offers
+  only a disabled "Done in the conversation": no mark can reopen it.
+- Marks are keyed by the card's stable `id` within one coordinator
+  conversation, and stored by the backend that owns the conversation
+  (`coordinator-action-marks`, one row per conversation owned by its project,
+  in `storage-client-state.ts`; deleted with the project). The `coordinator`
+  domain's `get_coordinator_action_marks` and `set_coordinator_action_mark`
+  read and change them; the set is idempotent and refuses a mark beyond 500
+  per conversation rather than evicting one. Each change announces
+  `coordinator-action-marks` (id: the conversation id, with its `projectId`).
+- The renderer mirrors them per node scope (`coordinatorActionMarksStore`):
+  a mark applies at once and is saved in the background, refreshes follow the
+  hint, resyncs and the periodic safety check, and a refused save is replaced
+  by the stored marks with an error toast. Every window and client showing the
+  conversation reads the same marks, after a reload or restart too. Against a
+  backend without the commands the read fails and cards offer no menu.
+- The coordinator's own `mark_topic` and `mark_question` tools are unrelated
+  and unchanged: they create cards, never manual marks.
 
 ### Searching actions
 

@@ -1,4 +1,6 @@
 import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
+import type { CoordinatorActionCard } from "@/components/projects/coordinator-action-cards";
+import { useCoordinatorActionMarks } from "@/stores/coordinatorActionMarksStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -336,6 +338,7 @@ export function SharedNativeAgentController({
   refreshRequestId = 0,
   executionPolicy,
   coordinatorProjectId,
+  coordinatorConversationId,
   coordinatorWorkspacePath,
   hiddenByLayout = false,
   beforeSend,
@@ -3346,6 +3349,23 @@ export function SharedNativeAgentController({
     platform,
     projection?.sessionId,
   );
+  const coordinatorActionMarks = useCoordinatorActionMarks(
+    coordinatorProjectId,
+    coordinatorProjectId ? coordinatorConversationId : undefined,
+  );
+  const setCoordinatorActionMark = coordinatorActionMarks.setMark;
+  const markCoordinatorAction = useCallback(
+    (card: CoordinatorActionCard, done: boolean) => {
+      void setCoordinatorActionMark(card.id, done).catch((error: unknown) => {
+        toast.error(
+          error instanceof Error && error.message
+            ? `Could not save the mark: ${error.message}`
+            : "Could not save the mark",
+        );
+      });
+    },
+    [setCoordinatorActionMark],
+  );
   const transcriptInteractions = useMemo(
     () =>
       allInteractions.filter(
@@ -4039,6 +4059,8 @@ export function SharedNativeAgentController({
       coordinatorActionHistory={coordinatorActionHistory}
       coordinatorInteractions={allInteractions}
       coordinatorNavigate={coordinatorProjectId ? requestActionNavigation : undefined}
+      coordinatorMarkedActions={coordinatorActionMarks.marked}
+      onMarkCoordinatorAction={coordinatorActionMarks.available ? markCoordinatorAction : undefined}
       messages={messages}
       agentActivityAnnouncement={agentActivityAnnouncement}
       resolveModelLabel={resolveModelLabel}

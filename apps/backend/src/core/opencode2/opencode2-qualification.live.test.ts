@@ -23,7 +23,45 @@ const liveTest = live ? test : test.skip;
 
 let fixture: OpenCode2Fixture | undefined;
 let provider: OpenCode2Provider | undefined;
-let connections = 0;
+/**
+ * The monitor's `/api/event` connections as the server answered them. Only an
+ * accepted event stream counts: an attempt refused while the server is down
+ * never reaches here, so a monitor that stopped reconnecting cannot pass for
+ * one that reconnected.
+ */
+type StreamRecord = { open: boolean; bytes: number };
+const streams: StreamRecord[] = [];
+
+/** Wraps an accepted event-stream body so the test sees its bytes and its end. */
+function observeStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const record: StreamRecord = { open: true, bytes: 0 };
+  streams.push(record);
+  const reader = body.getReader();
+  const end = () => {
+    record.open = false;
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          end();
+          controller.close();
+          return;
+        }
+        record.bytes += chunk.value.byteLength;
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        end();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      end();
+      return reader.cancel(reason);
+    },
+  });
+}
 
 const client = () =>
   new OpenCode2Client({
@@ -35,11 +73,20 @@ const client = () =>
 beforeAll(async () => {
   if (!live) return;
   fixture = await startOpenCode2Fixture(binary!);
-  // Counts the monitor's `/api/event` connections, so a test can see it reconnect.
   const counting: typeof fetch = Object.assign(
-    (input: RequestInfo | URL, init?: RequestInit) => {
-      if (new URL(String(input)).pathname === "/api/event") connections += 1;
-      return fetch(input, init);
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetch(input, init);
+      const accepted =
+        new URL(String(input)).pathname === "/api/event" &&
+        response.ok &&
+        response.body !== null &&
+        (response.headers.get("content-type") ?? "").includes("text/event-stream");
+      if (!accepted) return response;
+      return new Response(observeStream(response.body!), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     },
     { preconnect: fetch.preconnect },
   );
@@ -136,14 +183,24 @@ liveTest(
     await p.send(id, "before restart", { requestId: "q-before" });
     await idle(id);
     const rowsBefore = await transcript(id);
-    const connectionsBefore = connections;
+    const current = () => streams.at(-1);
+    await until(async () => (current()?.open ? true : undefined));
+    const streamsBefore = streams.length;
+    const streamBefore = current()!;
 
     await fixture!.restart();
-    await until(async () => (connections > connectionsBefore ? true : undefined));
+    // The old stream ended with the server, and a new one was accepted and is
+    // carrying bytes (2.2.6 writes a `: heartbeat` comment as soon as it opens).
+    await until(async () =>
+      streams.length > streamsBefore && current()!.open && current()!.bytes > 0 ? true : undefined,
+    );
+    expect(streamBefore.open).toBe(false);
+    const streamAfter = current()!;
     // Nothing is answered from a cache that predates the restart.
     expect((await transcript(id)).map((row) => row.id)).toEqual(rowsBefore.map((row) => row.id));
     expect(await p.dispatchStatus(id, "q-before")).toBe("dispatched");
 
+    const bytesAtSend = streamAfter.bytes;
     await p.send(id, "after restart", { requestId: "q-after" });
     await idle(id);
     expect(await p.dispatchStatus(id, "q-after")).toBe("dispatched");
@@ -152,6 +209,11 @@ liveTest(
       true,
     );
     expect(rows.at(-1)?.role).toBe("assistant");
+    // The reconnected stream is still the open one: the turn did not need a
+    // further reconnect, and it carried the turn's events.
+    expect(current()).toBe(streamAfter);
+    expect(streamAfter.open).toBe(true);
+    expect(streamAfter.bytes).toBeGreaterThan(bytesAtSend);
     expect(p.observationStreamLive()).toBe(true);
   },
   120_000,

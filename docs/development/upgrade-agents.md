@@ -1443,7 +1443,11 @@ To bump it:
    restart under a live provider, archive and restore). Also follow the
    "Qualification" list in `0008-opencode-v2.md`; its real-stack half is the
    idle-observation spec with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
-   on fake models ([agent-testing.md](agent-testing.md)). If
+   on fake models ([agent-testing.md](agent-testing.md)), run against a
+   disposable profile by
+   `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> mise run verify:opencode2:real-stack`
+   (the profile started with `--fixture --no-agent-credentials
+   --agent-platforms opencode --headless`). If
    `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
    (15 s at 2.2.6) has changed: measure it again and set
    `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode-stream-silence.ts`) to about

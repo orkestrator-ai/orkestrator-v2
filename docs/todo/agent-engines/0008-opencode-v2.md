@@ -179,7 +179,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 
 **Context.** The "Qualification" list; live runs are batched in `cross-cutting/0031-live-provider-and-platform-qualification.md`. Making 2.x the default needs the owner's acceptance of the mitigations under "Task 2: owner decision (2026-11-08)", which is in the manual-test checklist (7568, 0008 task 7); the qualification checks themselves need no decision.
 
-**Investigation.** Rechecked 2026-11-11: the 2.x live set is `mise run verify:opencode2:live` (fifteen `opencode2/opencode2-*.live.test.ts` files, `RUN_LIVE_OPENCODE2=1`, scripted loopback model, isolated `HOME`/`XDG_*`/`OPENCODE_DB`), beside the 1.x `verify:opencode:live`. The real-stack half is `idle-observation-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` on fake models. Item-by-item evidence is under "Qualification" and "Task 7: qualification on Linux (2026-11-11)".
+**Investigation.** Rechecked 2026-11-11: the 2.x live set is `mise run verify:opencode2:live` (fifteen `opencode2/opencode2-*.live.test.ts` files, `RUN_LIVE_OPENCODE2=1`, scripted loopback model, isolated `HOME`/`XDG_*`/`OPENCODE_DB`), beside the 1.x `verify:opencode:live`. The real-stack half is `idle-observation-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` on fake models, run by `mise run verify:opencode2:real-stack` against a running profile. Item-by-item evidence is under "Qualification" and "Task 7: qualification on Linux (2026-11-11)".
 
 **Decisions.**
 
@@ -2564,7 +2564,10 @@ no credentials and no billed turn. Two layers:
   the original record and runs once; a turn nobody reads is complete on the
   next read; a server restart (same port, password and database) under a live
   provider is followed by a reconnect, identical history and a working next
-  turn; and the resume picker's archive is refused while a tab holds the
+  turn (the test counts only event streams the server accepted, requires the
+  old one to have ended and the new one to carry bytes and the next turn's
+  events, and fails, verified 2026-11-11, when `watchEvents` stops after its
+  first loss); and the resume picker's archive is refused while a tab holds the
   conversation, then archives, hides, refuses resume, and restores. That last
   check was the open item of "Task 5: archive from the resume picker".
 - **The real stack** (`idle-observation-live.spec.ts`, a disposable headless

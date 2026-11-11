@@ -3279,10 +3279,20 @@ own, and a tab that cannot be a worker (a terminal, a file) never asks. Against 
 backend without the command nothing is shown. A delegation that retention has
 removed takes its marker with it.
 
-A worker on another node has no marker on its tab. Its delegation is kept on the
-command node, while its tab renders in that node's workspace, on its node scope,
-and reads that node's backend, which holds no such record. The gap is
-[6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
+A worker a command node's coordinator launched on another node is marked too.
+Its delegation is kept on the command node, while its tab renders in the same
+window on that node's scope, whose backend holds no such record. So the command
+node's answer lists those workers apart, in `remoteOverrides`, each with the
+`nodeId` of the node that holds it; `overrides` keeps only the answering node's
+own tabs, because a renderer from before this keys a row by environment and tab
+alone and would mark whichever of its own tabs had the same ids. A tab on
+another node's scope reads its own node's answer (that node's own coordinators'
+workers) and looks itself up by node in the window's command scope's answer
+(`useCoordinatorLaunchOverride`). The command node is read once for every tab
+in the window, so a leaf tab adds no read of its own. Nothing is stored on the
+leaf. While the command node is unreachable its last answer stays; a leaf
+opened directly, as its own command node, has no other scope to ask and shows
+only its own workers' markers.
 
 ## Complete application actions
 

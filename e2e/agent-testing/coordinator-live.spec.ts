@@ -8,7 +8,9 @@
  * `coordinator-live-deliver-now.ts`), `goal` (a worker's goal runs to a passing
  * check and wakes the coordinator once, see `coordinator-live-goal.ts`),
  * `routing` (plain requests routed to the right workflow, see
- * `coordinator-live-routing.ts`) and `peer`. Every
+ * `coordinator-live-routing.ts`), `surfaces` (each worker-surface tool once and
+ * the root-changes approval accepted in its dialog, Claude only, see
+ * `coordinator-live-surfaces.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -115,6 +117,11 @@ import { deliverNowApplies } from "../../apps/desktop/scripts/dev/coordinator-li
 import { runGoalScenario } from "../../apps/desktop/scripts/dev/coordinator-live-goal-orchestration";
 import { goalApplies } from "../../apps/desktop/scripts/dev/coordinator-live-goal";
 import { runRoutingScenario } from "../../apps/desktop/scripts/dev/coordinator-live-routing-orchestration";
+import {
+  runSurfacesScenario,
+  type RootChangesApproval,
+} from "../../apps/desktop/scripts/dev/coordinator-live-surfaces-orchestration";
+import { surfacesApplies } from "../../apps/desktop/scripts/dev/coordinator-live-surfaces";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
   coordinatorTurn,
@@ -977,6 +984,57 @@ async function routingCase(input: {
 }
 
 /**
+ * The user's part of the surfaces scenario: the root-changes request is
+ * approved in the profile's own dialog, with the file the coordinator named
+ * pre-selected, as the user would approve it.
+ */
+async function approveRootChangesInDialog(page: Page, request: RootChangesApproval) {
+  const dialog = page.getByTestId("root-changes-request");
+  await expect(dialog, "the root-changes dialog opens").toBeVisible({ timeout: 120_000 });
+  await expect(dialog.getByText(request.workerName)).toBeVisible();
+  await expect(dialog.getByRole("checkbox", { name: request.file })).toBeChecked({
+    timeout: 30_000,
+  });
+  await dialog.getByRole("button", { name: "Apply 1 file" }).click();
+  await expect(dialog).toBeHidden({ timeout: 120_000 });
+}
+
+/**
+ * The surfaces scenario: one coordinator turn calls each worker-surface tool
+ * once on a worker the harness made, and the root-changes request it raises is
+ * approved in the dialog.
+ */
+async function surfacesCase(input: {
+  page: Page;
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { page, coordinator, summary, cleanup } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, watch, mail } = await runSurfacesScenario({
+    coordinator,
+    summary,
+    cleanup,
+    checkout: coordinator.checkout,
+    approveRootChanges: (request) => approveRootChangesInDialog(page, request),
+  });
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the surfaces scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1201,6 +1259,31 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await routingCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("surfaces")) {
+      test(`worker surfaces on ${platform}: a terminal, a browser tab, list_tabs, a focus and a close in a worker, and uncommitted changes copied into it once the user approves in the dialog`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.surfaces);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "surfaces", async ({ summary, skip, cleanup }) => {
+          if (!surfacesApplies(platform)) {
+            skip(
+              `the surfaces scenario runs on Claude only: its tools are Control MCP calls, so one provider covers them`,
+            );
+          }
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await surfacesCase({ page, coordinator, summary, cleanup });
         });
       });
     }

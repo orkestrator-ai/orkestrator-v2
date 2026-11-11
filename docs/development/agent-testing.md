@@ -2425,7 +2425,9 @@ status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
 (`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
 coordinator once (`goal`), that plain requests naming no workflow start the right
-one (`routing`), and that peer mail between two ordinary environments wakes
+one (`routing`), that each worker-surface tool works on a worker of this node
+and the root-changes approval copies the user's file into it (`surfaces`, Claude
+only), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -2755,8 +2757,39 @@ prompts and verdict are in `coordinator-live-routing.ts`;
 `coordinator-live-routing-orchestration.test.ts` runs the orchestration over a
 scripted command transport.
 
+The `surfaces` case (to-do 0395 task 4) proves the worker-surface tools on a
+real stack. It runs only on Claude, so other platforms record a skip: the tools
+are Control MCP calls, so one provider covers them. It waits at most four step
+budgets:
+
+```bash
+mise run test:agent:coordinator --credential-source claude --scenario surfaces
+```
+
+The harness creates an ordinary local worker with no agent, turns on the
+project's `coordinatorOtherEnvironments` opt-in for the run, and writes one
+untracked file into the fixture checkout. One coordinator turn then calls, in
+order, `launch_terminal` (a plain tab running one `echo`), `open_worker_browser`
+(a loopback address nothing serves; the tab opens anyway), `list_tabs`,
+`edit_worker_tab` to focus the terminal tab and again to close the browser tab,
+and `request_root_changes` naming the file, and ends. Once the request is
+pending, the spec approves it in the profile's own root-changes dialog
+(**Apply 1 file**, with the coordinator's file pre-selected), and the harness
+waits for the outcome and the coordinator's wake turn, then watches 30 more
+seconds. It passes when every call was made without an error result,
+`list_tabs` listed both new tabs, the worker's layout afterwards keeps the
+terminal tab selected and holds no coordinator browser tab, the request ended
+`executed`, the file is in the worker byte for byte, the checkout's digest is
+unchanged, one system message and exactly one coordinator turn followed the
+approval, and no interaction escaped the coordinator policy. `move`, the Multi
+Review surfaces and the feature-plan tools are left out (a fresh worker has one
+pane; the others need a finished review or a planning agent's own turns). The
+prompts and verdict are in `coordinator-live-surfaces.ts`;
+`coordinator-live-surfaces-orchestration.test.ts` runs the orchestration over a
+scripted command transport.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now`, `goal`, `routing` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal`, `routing`, `surfaces` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

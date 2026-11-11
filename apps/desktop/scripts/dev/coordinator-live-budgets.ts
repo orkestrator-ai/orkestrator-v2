@@ -27,6 +27,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     goal: step * 6,
     // Four request turns, four quiet waits and the worker's report, then the build.
     routing: step * 9 + build,
+    // The surfaces turn, the wait for its request, then the outcome and its wake (two steps).
+    surfaces: step * 4,
     // Two environment starts, then the exchange.
     peer: step * 2 + peer,
   };

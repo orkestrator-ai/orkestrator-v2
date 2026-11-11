@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (288 items): run each check under
+1. **Manual tests and live checks** (289 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -73,13 +73,13 @@ agent can apply it.
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 21 | 9 |
-| Coordinator and Multi Review | 77 | 6 |
+| Coordinator and Multi Review | 78 | 6 |
 | Cross-cutting | 69 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 288 | 53 |
+| **Total** | 289 | 53 |
 
 ## Outstanding work
 
@@ -412,7 +412,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
   4. Confirm the unseen id is still `absent`, send it, then retry it, and count again.
 
   Stop and reset the profile afterwards. Record: per provider, its version, the dispatch status after restart for the accepted and the unseen id, and the user-prompt count after each retry (content-free), as rows in 0223's Qualification table.
-- [ ] **[0395](../coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md) task 4: billed Claude run of the `surfaces` scenario.** After 0395 task 4 adds the scenario, run `mise run test:agent:coordinator --credential-source claude --scenario surfaces` on a host signed in to Claude. Record: whether each tool returned without error, whether the tabs it opened appeared in `list_tabs`, whether the root-changes approval was accepted and the chosen files landed in the worker, and whether the project checkout's `git status` stayed unchanged, in 0395 task 4.
+- [ ] **[0395](../coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md) task 4: billed Claude run of the `surfaces` scenario.** The scenario exists since 2026-11-11 (its harness approves the root-changes request in the profile's own dialog). Run `mise run test:agent:coordinator --credential-source claude --scenario surfaces` on a host signed in to Claude (billed). Record, in 0395 task 4: the verdict and each failed check from `output/agent-testing/<run>/coordinator/claude-surfaces.json`, which says whether each tool returned without error, whether the tabs it opened appeared in `list_tabs`, whether the root-changes approval was accepted and the file landed in the worker, whether the project checkout stayed unchanged, and whether the outcome woke the coordinator once.
+- [ ] **6580 (retired) task 1: the launch override marker on a real leaf's worker tab.** (Background: [Launch defaults](../../architecture/coordinator.md#launch-defaults).) On two real machines, a command node and a leaf it commands, have the command node's main coordinator launch a worker on the leaf (`launch_environment` with `nodeId`) on a model other than the saved default, then open that worker's tab from the command node's window. Record: whether the leaf's tab shows "requested" with the model in its tooltip, whether a worker launched on the default shows nothing, and whether the marker stays after a reload; reply to the coordinator with the date and both machines' versions.
 - [ ] **[4700](../coordinator-and-multi-review/4700-coordinator-steer-missing-on-long-lived-coordinator.md) task 2: report the next missing Steer.** On your own install, on a release with the steer qualification logging, keep **Save Logs to Disk** on and set **Log Detail** to `native-agent=debug`. When a message typed to a busy Coordinator next queues with no Steer, note what the queued row showed ("cannot be steered here", "Waiting for the earlier message to be resolved", another note, or no note) and the time, then run `grep -E 'steer\.qualification-failed|steer\.capability-cleared' <daily log file>` over that window. Record: the row text, the time, the release and the matching lines (content-free), and whether the warning appeared at all, in 4700's Current state or to the coordinator.
 - [ ] **[6080](../coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 1: live read-only home-mail steps.** Run `mise run test:agent:coordinator --credential-source claude --scenario read-only`, then the same with `--credential-source codex` (the two `enforced` platforms). Record: pass or fail per platform, any `homeMailGateFailures` failure it reported, and whether `list_agent_mailboxes` counted the delivered home message in `unreadCount`, in 6080's Assumptions and decisions or to the coordinator.
 - [ ] **[6080](../coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 5: a real worker reads the delegated-prompt agent-mail note.** On Claude and on Codex (signed in, a disposable `dev:test --fixture` profile; it can share the session with 6080 task 1), have a worker mail its coordinator a request so the coordinator's turn starts from agent mail, and let the coordinator pass the request on with `launch_job` or `send_prompt_to_tab`. Read the delegated worker's first reply. Record: per platform, whether the reply treats the request as not the user's, described without quoting prompt content; if a model ignored the note, what it did. Write it in 6080 task 5; an agent then closes the task or rewords `COORDINATOR_MAIL_ORIGIN_NOTE`.

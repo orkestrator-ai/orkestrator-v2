@@ -1,12 +1,16 @@
 import { useEffect } from "react";
+import { useStore } from "zustand";
 import {
   COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  coordinatorLaunchOverrideKey,
   type CoordinatorLaunchOverride,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope, useSignal, useWindowScope } from "@/lib/node-scope/providers";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
@@ -15,7 +19,12 @@ import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/re
 export const COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS = 500;
 
 export interface CoordinatorLaunchOverrideStoreState {
-  /** Tabs whose launch overrode the default; every other tab is absent. */
+  /**
+   * Tabs whose launch overrode the default, keyed by
+   * `coordinatorLaunchOverrideKey`: this node's own tabs with no node, and
+   * workers its coordinators launched on other nodes by that node. Every
+   * other tab is absent.
+   */
   overrides: Map<string, CoordinatorLaunchOverride>;
   /** Keeps the projection current while at least one tab is mounted. */
   retain: () => () => void;
@@ -25,8 +34,6 @@ export interface CoordinatorLaunchOverrideStoreState {
   reset: () => void;
 }
 
-const overrideKey = (environmentId: string, tabId: string) => `${environmentId}\u0000${tabId}`;
-
 function sameOverrides(
   a: ReadonlyMap<string, CoordinatorLaunchOverride>,
   b: ReadonlyMap<string, CoordinatorLaunchOverride>,
@@ -34,7 +41,12 @@ function sameOverrides(
   if (a.size !== b.size) return false;
   for (const [key, override] of a) {
     const other = b.get(key);
-    if (!other || other.model !== override.model || other.reasoning !== override.reasoning)
+    if (
+      !other ||
+      other.nodeId !== override.nodeId ||
+      other.model !== override.model ||
+      other.reasoning !== override.reasoning
+    )
       return false;
   }
   return true;
@@ -74,8 +86,12 @@ export const coordinatorLaunchOverrideStore =
               listCoordinatorLaunchOverrides: backend.listCoordinatorLaunchOverrides,
             }).listCoordinatorLaunchOverrides();
             const overrides = new Map(
-              snapshot.overrides.map((override) => [
-                overrideKey(override.environmentId, override.tabId),
+              [...snapshot.overrides, ...(snapshot.remoteOverrides ?? [])].map((override) => [
+                coordinatorLaunchOverrideKey(
+                  override.nodeId,
+                  override.environmentId,
+                  override.tabId,
+                ),
                 override,
               ]),
             );
@@ -159,14 +175,58 @@ export const coordinatorLaunchOverrideStore =
  */
 export const useCoordinatorLaunchOverrideStore = scopedStoreHook(coordinatorLaunchOverrideStore);
 
-/** One tab's launch override, or null. Kept current while the caller is mounted. */
+/**
+ * The scope that keeps the delegations of a tab rendered on `scope`, when that
+ * is another scope: the window's command scope, for a tab on another node's
+ * scope. A worker a command node's coordinator launched on a leaf
+ * has its delegation on the command node, so the leaf's own answer lacks it.
+ * Null for a tab on the command scope, and while the window has no command
+ * scope (a test's lone leaf scope).
+ */
+function delegatingScope(scope: NodeScope, scopes: readonly NodeScope[]): NodeScope | null {
+  if (scope.role === "command") return null;
+  return scopes.find((candidate) => candidate.role === "command" && !candidate.disposed) ?? null;
+}
+
+/**
+ * One tab's launch override, or null. Kept current while the caller is mounted.
+ *
+ * A tab on the command scope reads its own node's answer. A tab on another
+ * node's scope reads both that node's answer (its own coordinator's workers)
+ * and the command scope's row for this node, which is how a worker the command
+ * node launched there is marked. The command node's answer is read once for
+ * every tab in the window, so a leaf tab adds no read of its own. While the
+ * command node is unreachable its last answer stays; a leaf opened directly as
+ * its own command node has no other scope to ask and shows only its own.
+ */
 export function useCoordinatorLaunchOverride(
   environmentId: string,
   tabId: string,
 ): CoordinatorLaunchOverride | null {
-  const retain = useCoordinatorLaunchOverrideStore((state) => state.retain);
-  useEffect(() => retain(), [retain]);
-  return useCoordinatorLaunchOverrideStore(
-    (state) => state.overrides.get(overrideKey(environmentId, tabId)) ?? null,
+  const scope = useNodeScope();
+  const windowScope = useWindowScope();
+  const scopes = useSignal(windowScope.nodeScopes);
+  const ownStore = scope.store(coordinatorLaunchOverrideStore);
+  const delegating = delegatingScope(scope, scopes);
+  const delegatingStore = delegating?.store(coordinatorLaunchOverrideStore) ?? null;
+  useEffect(() => {
+    const releases = [ownStore.getState().retain()];
+    if (delegatingStore) releases.push(delegatingStore.getState().retain());
+    return () => {
+      for (const release of releases) release();
+    };
+  }, [ownStore, delegatingStore]);
+  const own = useStore(
+    ownStore,
+    (state) =>
+      state.overrides.get(coordinatorLaunchOverrideKey(undefined, environmentId, tabId)) ?? null,
   );
+  // The hook is called whatever the scope; with nothing to ask it reads its own store as null.
+  const nodeId = delegating ? scope.nodeId : null;
+  const delegated = useStore(delegatingStore ?? ownStore, (state) =>
+    nodeId
+      ? (state.overrides.get(coordinatorLaunchOverrideKey(nodeId, environmentId, tabId)) ?? null)
+      : null,
+  );
+  return own ?? delegated;
 }

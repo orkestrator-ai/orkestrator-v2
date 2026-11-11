@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
-import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
+import {
+  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  coordinatorLaunchOverrideKey,
+} from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   dispatchResourceChange,
@@ -28,7 +31,8 @@ const settled = async () => {
   }
   await new Promise<void>((resolve) => setImmediate(resolve));
 };
-const key = (environmentId: string, tabId: string) => `${environmentId}\u0000${tabId}`;
+const key = (environmentId: string, tabId: string) =>
+  coordinatorLaunchOverrideKey(undefined, environmentId, tabId);
 
 let answer: Array<Record<string, string>>;
 let reads: number;

@@ -1215,6 +1215,16 @@ and separately waits for the running backend's one-minute check to revert raised
 log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
 macOS. Headless on Linux means the native menu bar itself is not drawn or read.
 
+`packaged-native-shortcuts-electron.spec.ts` is in the same config but skips
+unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`. It is the one packaged spec that
+is not headless: it opens the packaged Linux app as an X11 window and presses
+real keys with `xdotool` (Ctrl+Shift+/, Escape, Ctrl+K, the menu bar from the
+keyboard, typing) on the composer, a browser preview, an interactive artifact
+view and a design frame. Run it only on a disposable X display such as Xvfb:
+the keys go to whichever window has X focus. Prerequisites, the run command and
+recorded results are in
+[keyboard-shortcuts.md](../architecture/keyboard-shortcuts.md#packaged-native-qualification).
+
 ### Electron specs and their display
 
 The specs in `playwright.electron.config.ts` (`mise run test:agent:electron`)

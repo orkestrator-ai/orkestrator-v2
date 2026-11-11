@@ -511,6 +511,29 @@ export function installDesignRuntime(
       );
     }
   });
+  // A field that had focus gets it back when focus returns to the frame with
+  // nothing focused. While the editor around the frame holds focus (an app
+  // dialog opened from inside the frame, such as the keyboard shortcuts),
+  // Chromium leaves the frame with no focused element; the editor then
+  // refocuses the frame itself, so typing after the dialog closed went
+  // nowhere. A click or Tab into the frame still decides for itself: it moves
+  // focus after this runs. See docs/architecture/keyboard-shortcuts.md,
+  // "Returning to a native view".
+  let lastFocused: Element | null = null;
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      if (event.target instanceof Element && event.target !== document.body)
+        lastFocused = event.target;
+    },
+    true,
+  );
+  window.addEventListener("focus", () => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== document.documentElement) return;
+    const target = lastFocused;
+    if (target?.isConnected && target instanceof HTMLElement) target.focus({ preventScroll: true });
+  });
   // Mockup links, buttons and forms never navigate or submit, in either mode.
   document.addEventListener("click", (event) => event.preventDefault(), true);
   document.addEventListener("auxclick", (event) => event.preventDefault(), true);

@@ -8,6 +8,7 @@ import {
   tmuxSessionName,
 } from "../src/core/tmux";
 import { BackendRuntime } from "../src/core/backend-runtime";
+import { QUIET_ENVIRONMENT_RECHECK_MS } from "../src/core/tmux-runtime";
 import { TmuxBackend } from "../src/core/tmux-backend";
 import { existsSync, promises as fs } from "node:fs";
 import {
@@ -23,6 +24,7 @@ import {
   harnessRuntime,
   invoke,
   waitFor,
+  withFakeContainerTmuxRuntime,
   withFakeTmuxRuntime,
 } from "./tmux-test-harness.js";
 
@@ -438,12 +440,19 @@ describe("Electron tmux environment teardown", () => {
         ).resolves.toBeNull();
 
         // Recreate only the persisted managed hook state. With no tmux server
-        // and no in-memory sessions, reconciliation must still restore it.
+        // and no in-memory sessions, reconciliation must still restore it. The
+        // sweep that reaped the last session left the environment quiet, so
+        // only the quiet recheck finds hook state this backend did not write.
         await fs.mkdir(runtimeRoot, { recursive: true });
         await fs.writeFile(hookPath, installedHook);
         await fs.writeFile(backupPath, installedBackup);
         await fs.writeFile(settingsPath, installedSettings);
         now += 60_001;
+        await expect(
+          invoke(handlers, "claude_tmux_reconcile_orphans", {}, context),
+        ).resolves.toEqual({ reaped: 0, skipped: false });
+        await expect(fs.readFile(settingsPath, "utf8")).resolves.toBe(installedSettings);
+        now += QUIET_ENVIRONMENT_RECHECK_MS;
         await expect(
           invoke(handlers, "claude_tmux_reconcile_orphans", {}, context),
         ).resolves.toEqual({ reaped: 0, skipped: false });
@@ -748,6 +757,163 @@ describe("Electron tmux environment teardown", () => {
           "utf8",
         ),
       ).toContain("original");
+    });
+  });
+});
+
+// To-do 7531 (retired): an idle environment with no tmux sessions cost five
+// `docker exec` a minute (list-sessions, the process census, and the hook
+// removal's test and two rm) for nothing.
+describe("orphan sweep of quiet environments", () => {
+  const sweepContext = (environment: Environment) => ({
+    storage: {
+      getEnvironment: async () => environment,
+      loadEnvironments: async () => [environment],
+      loadPaneLayoutsForReconciliation: async () => ({ available: true, layouts: {} }),
+      updateEnvironment: async () => environment,
+    },
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+  });
+
+  test("skips a quiet local environment until a session starts or the recheck is due", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = sweepContext(environment);
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      const sweepLists = async (): Promise<boolean> => {
+        await fs.writeFile(log, "");
+        now += 60_001;
+        await expect(
+          invoke(handlers, "claude_tmux_reconcile_orphans", {}, context),
+        ).resolves.toEqual({ reaped: 0, skipped: false });
+        return (await fs.readFile(log, "utf8")).includes("list-sessions");
+      };
+      try {
+        expect(await sweepLists()).toBe(true);
+        expect(await sweepLists()).toBe(false);
+        expect(await sweepLists()).toBe(false);
+
+        // A session this backend starts makes the quiet record stale, even
+        // after it stops again.
+        const tabId = "tab-quiet-sweep";
+        await invoke(
+          handlers,
+          "claude_tmux_start",
+          { tabId, environmentId: environment.id },
+          context,
+        );
+        await invoke(
+          handlers,
+          "claude_tmux_stop",
+          { tabId, environmentId: environment.id },
+          context,
+        );
+        expect(await sweepLists()).toBe(true);
+        expect(await sweepLists()).toBe(false);
+
+        // Something this backend did not start is still found, on the recheck.
+        now += QUIET_ENVIRONMENT_RECHECK_MS;
+        expect(await sweepLists()).toBe(true);
+        expect(await sweepLists()).toBe(false);
+
+        // A fresh backend does not trust another process's quiet record.
+        const restarted = new BackendRuntime({ emit: () => undefined });
+        try {
+          await fs.writeFile(log, "");
+          now += 60_001;
+          await invoke(
+            handlers,
+            "claude_tmux_reconcile_orphans",
+            {},
+            {
+              ...context,
+              runtime: restarted,
+            },
+          );
+          expect(await fs.readFile(log, "utf8")).toContain("list-sessions");
+        } finally {
+          restarted.shutdown();
+        }
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  test("a session waiting out its grace keeps the environment swept every minute", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
+      const orphanName = tmuxSessionName(environment.id, "orphan-in-grace");
+      await fs.mkdir(alive, { recursive: true });
+      await fs.writeFile(path.join(alive, orphanName), "");
+      const context = sweepContext(environment);
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      try {
+        for (let sweep = 0; sweep < 3; sweep += 1) {
+          await fs.writeFile(log, "");
+          now += 60_001;
+          await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
+          expect(await fs.readFile(log, "utf8")).toContain("list-sessions");
+        }
+        expect(existsSync(path.join(alive, orphanName))).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+        await fs.rm(path.join(alive, orphanName), { force: true });
+      }
+    });
+  });
+
+  test("an idle container costs one sweep, then none; a stopped one costs none", async () => {
+    const handlers = createHandlers();
+    await withFakeContainerTmuxRuntime(async ({ environment, log }) => {
+      const nowSpy = spyOn(Date, "now");
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      const sweepExecs = async (
+        target: Environment,
+        runtime: BackendRuntime = harnessRuntime(),
+      ): Promise<string[]> => {
+        await fs.writeFile(log, "");
+        now += 60_001;
+        await invoke(
+          handlers,
+          "claude_tmux_reconcile_orphans",
+          {},
+          {
+            ...sweepContext(target),
+            runtime,
+          },
+        );
+        return (await fs.readFile(log, "utf8"))
+          .split("\n")
+          .filter((line) => line.startsWith("exec "));
+      };
+      try {
+        const first = await sweepExecs(environment);
+        expect(first.some((line) => line.includes("tmux list-sessions"))).toBe(true);
+        expect(first.some((line) => / rm /.test(line))).toBe(true);
+        expect(await sweepExecs(environment)).toEqual([]);
+
+        // A new container is a different backend: it is swept once again.
+        expect(
+          (await sweepExecs({ ...environment, containerId: "container-replaced" })).length,
+        ).toBeGreaterThan(0);
+
+        const restarted = new BackendRuntime({ emit: () => undefined });
+        try {
+          expect(await sweepExecs({ ...environment, status: "stopped" }, restarted)).toEqual([]);
+        } finally {
+          restarted.shutdown();
+        }
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 });

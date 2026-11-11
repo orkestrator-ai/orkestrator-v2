@@ -1653,6 +1653,8 @@ export { AsyncMutex };
 export class TmuxSessionManager {
   private readonly sessions = new Map<string, TmuxSession>();
   private readonly installLocks = new Map<string, AsyncMutex>();
+  /** Bumped by every insert, so a sweep can tell a session started since it last looked. */
+  private readonly insertGenerations = new Map<string, number>();
 
   private key(environmentId: string, tabId: string): string {
     return `${environmentId}\u001f${tabId}`;
@@ -1664,6 +1666,15 @@ export class TmuxSessionManager {
 
   insert(environmentId: string, tabId: string, session: TmuxSession): void {
     this.sessions.set(this.key(environmentId, tabId), session);
+    this.insertGenerations.set(environmentId, this.insertGeneration(environmentId) + 1);
+  }
+
+  /**
+   * How many sessions this backend has registered in the environment. It
+   * never decreases, so an unchanged value means nothing was started there.
+   */
+  insertGeneration(environmentId: string): number {
+    return this.insertGenerations.get(environmentId) ?? 0;
   }
 
   remove(environmentId: string, tabId: string): TmuxSession | undefined {

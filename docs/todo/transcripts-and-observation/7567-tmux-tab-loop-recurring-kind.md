@@ -136,5 +136,6 @@ session projection makes.
   measurements) and task 8 (BG-1, BG-2, BG-7).
 - [0048](0048-recurring-work-qualification.md) (the busy driver and the
   recurring-work instruments).
-- [7531](../containers-and-environments/7531-idle-tab-cleanup-execs.md)
-  (tab cleanup's execs, which base made without charging them).
+- 7531 (retired 2026-11-11; the quiet-environment skip is described in
+  [recurring-work.md](../../architecture/recurring-work.md), B13) (tab
+  cleanup's execs, which base made without charging them).

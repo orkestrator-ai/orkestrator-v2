@@ -614,6 +614,7 @@ export function registerTmuxBackendCommands(
         return { reaped: 0, skipped: true };
       }
       const survivingIds = environments.map((environment) => environment.id);
+      tmux.retainQuietEnvironments(new Set(survivingIds));
       let reaped = 0;
 
       const collectReferencedNames = (
@@ -641,12 +642,17 @@ export function registerTmuxBackendCommands(
       };
 
       for (const environment of environments) {
+        // A stopped container runs no tmux, and `docker exec` into it only fails.
+        if (environment.environmentType !== "local" && environment.status === "stopped") continue;
         let backend: TmuxBackend;
         try {
           backend = await resolveBackend(environment.id, context);
         } catch {
           continue;
         }
+        const backendIdentity = `${backend.kind}:${backend.containerId ?? backend.cwd ?? ""}`;
+        if (tmux.orphanSweepMaySkip(environment.id, backendIdentity, now)) continue;
+        const generation = tmux.sessions.insertGeneration(environment.id);
         const listed = await backend
           .exec(["tmux", "list-sessions", "-F", "#{session_name}"])
           .catch(() => null);
@@ -705,7 +711,12 @@ export function registerTmuxBackendCommands(
             path.join(runtimeRootPrefixForContext(context), environment.id),
             workspace,
           );
-          await uninstallWorkspaceHooks(backend, hookPaths).catch(() => undefined);
+          const uninstalled = await uninstallWorkspaceHooks(backend, hookPaths).then(
+            () => true,
+            () => false,
+          );
+          if (uninstalled)
+            tmux.markOrphanSweepQuiet(environment.id, backendIdentity, generation, now);
         }
       }
       return { reaped, skipped: false };

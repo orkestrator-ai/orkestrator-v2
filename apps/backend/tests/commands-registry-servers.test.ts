@@ -1488,6 +1488,9 @@ exit 0
         expect(stamp).toBeGreaterThan(reconcile);
         expect(restrict).toBeGreaterThan(stamp);
         expect(launch).toBeGreaterThan(restrict);
+        // The start strips in place; the sign-out drop, which embeds the same
+        // command behind its flock, did not run (#2150).
+        expect(log).not.toContain(".orkestrator-lock");
         expect(log).not.toContain("NEVER-DELIVER");
         expect(log).not.toContain("exec -i container-claude-login-start bash");
       });

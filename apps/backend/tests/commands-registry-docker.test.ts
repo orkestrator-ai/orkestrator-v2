@@ -560,7 +560,12 @@ exit 1
           await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
           const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
-          expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
+          // Each start syncs the GitHub credential, then restricts the
+          // container's Claude login (the host has no usable one here). The
+          // restrict is handed only digests of host tokens, never a token
+          // (#2150).
+          const restrict = '{"hostTokens":{}}\n--sync--\n';
+          expect(input).toBe(`rotated-token\n--sync--\n${restrict}\n--sync--\n${restrict}`);
           const calls = await fs.readFile(logs.all, "utf8");
           expect(calls.match(/start container-1/g)).toHaveLength(2);
           expect(

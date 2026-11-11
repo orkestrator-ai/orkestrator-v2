@@ -2,31 +2,33 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `96ee1eb3`.
+Analysed 2026-11-11 against `main` at `498b68766` (first analysed 2026-11-04 at `96ee1eb3`).
 
 What the input stamps (to-do 1202 task 15 (retired 2026-11-10), DK-14) left. See [Input stamps](../../architecture/container-lifecycle.md#input-stamps-staged-inputs5).
 
 ### Tasks
 
-1. **A Claude copy the backend pushed after a host sign-out**: remove it at the next start rather than stripping it. Status: open.
-2. **The relay still copies on every boot**: skip `relay_staged_inputs` work for an unchanged mount. Status: open.
+1. **A Claude copy the backend pushed after a host sign-out**: remove it at the next start rather than stripping it. Status: done (2026-11-11).
+2. **The relay still copies on every boot**: measure what it costs. Status: done (2026-11-11).
+3. **Skip relaying an unchanged mount**: the measurement in task 2 shows a cost, so build the skip. Status: open.
+4. **The macOS half of task 1's sign-out reading**: confirm `security`'s exit status on a Mac. Status: open.
 
 ### 1. A Claude copy the backend pushed after a host sign-out
 
-**Problem.** After a host signs out of Claude, a container whose `.credentials.json` was pushed by the backend keeps it until the access token expires (about eight hours), with its refresh tokens stripped.
+**Problem.** After a host signs out of Claude, a container whose `.credentials.json` was pushed by the backend kept it until the access token expired (about eight hours), with its refresh tokens stripped.
 
-**Context.** The stamp removes only a login that is still byte for byte what the entrypoint imported. Codex and Grok have their own sign-out paths in the backend (`buildDropImportedLoginCommand`); Claude has none for the host's own login, only for added accounts.
+**Context.** The stamp removes only a login that is still byte for byte what the entrypoint imported. Codex and Grok have their own sign-out paths in the backend (`buildDropImportedLoginCommand`); Claude had none for the host's own login, only for added accounts.
 
-**Investigation.** `syncContainerClaudeLoginUnlocked` in `apps/backend/src/core/agent-accounts-containers.ts` calls `restrictClaudeLogin` when it has nothing usable to push, so the copy stays. That is the same before and after the stamps. The entrypoint cannot decide this itself: on macOS the staged file is usually absent or stale beside the Keychain login, so its absence does not mean a sign-out, and `pushedClaudeLogin` could stop the backend pushing a removed login back. Not reproduced on a real sign-out; this comes from reading the code and from the stamp tests' fixture of a later push.
+**Investigation.** `syncContainerAgentAccountsOnStart` in `apps/backend/src/core/agent-accounts-containers.ts` called `restrictClaudeLogin` whenever the host had nothing usable to push. Done 2026-11-11: when the host login reads as signed out (`hostClaudeSignedOut` in `claude-host-credentials.ts`), the start runs `buildDropHostClaudeLoginCommand` instead, which removes `claudeAiOauth` and every `mcpOAuth` entry without a refresh token, keeps an MCP login the container made itself (refresh token stripped, as before), deletes a file left with no login and forgets the pushed digest. An expired or unreadable host login still only strips. The reading looks where the pushed login is read from (`runtimeHostClaudeLookup` in `commands-files.ts`) and says "signed out" only when every `.credentials.json` there is absent or holds no login and, on macOS, every Keychain lookup is a metadata-only `security find-generic-password` (no `-w`, so no access prompt) that exits 44, item not found. Tests: `claude-host-credentials.test.ts` (Linux files, macOS with a fake lookup, `probeKeychainItemCommand` against a fake `security` for exit 0, 44, 50, 51 and a timeout) and `agent-accounts-containers-claude-sign-out.test.ts` (the start path for an absent, an emptied, an expired and an unreadable host login, the forgotten digest, and the in-container command against real files). The live case "official in-image Node merges, restricts and drops real credential paths" in `apps/backend/tests/container-login-security-live.test.ts` now also runs the drop command with the image's own Node and `flock`; it passed on beelink against `orkestrator-v2:qual-0019-498b6876` (built from `498b68766`). Not run against a real host sign-out: no real login may be used here (7568).
 
 **Decisions.**
 
 - **Where should the removal go?**
-  - **In the backend's sync, when the host reads as signed out rather than expired or unreadable (recommended).**
+  - **In the backend's start sync, when the host reads as signed out rather than expired or unreadable (recommended, built).**
     - Pros: the backend knows the Keychain and account state, and already tells these apart for Codex and Grok (`hostSignedOut`).
-    - Cons: needs a Claude reading of "signed out" that is reliable on macOS, where a `security` failure must not count.
+    - Cons: needs a Claude reading of "signed out" that is reliable on macOS; task 4 confirms its one platform assumption.
   - **Leave it.**
-    - Pros: no risk of signing a container out on a misread; the token lapses on its own.
+    - Pros: no risk of signing a container out on a misread.
     - Cons: the access token stays usable for up to eight hours after the sign-out.
 
 ### 2. The relay still copies on every boot
@@ -35,21 +37,82 @@ What the input stamps (to-do 1202 task 15 (retired 2026-11-10), DK-14) left. See
 
 **Context.** The stamps skip the copy into the home, not this one. The relay lives in root's entrypoint and writes `node`'s `/run/orkestrator-inputs`, which is rebuilt on purpose so that an emptied revision is empty at the next start.
 
-**Investigation.** Not measured. This host's daemon is rootful with uid 1000, so the relay does not run here; the unit tests exercise a rebuilt relay against the stamps, and the real container check did not cover it. `/run` is a tmpfs in some setups, so there may be no earlier copy to compare with.
+**Investigation.** Measured 2026-11-11 on beelink (Linux 7.1.8, load average 43–58 from other builds the whole time, so compare within a row, not with E25's quiet-host figures). Fixtures as E25's (`apps/backend/scripts/portable-input-staging-costs.ts`): `medium` (5,202 files, 65 MiB staged, 6,492 relayed entries) and `plugins` (1,322 files, 300 MiB, 1,476 entries). A throwaway script (`output/efficiency/scripts/input-starts.ts`, not committed) staged each fixture with `stagePortableInputs`, created a `--network none` container of `orkestrator-v2:qual-0019-498b6876` with `stagedInputMountArguments`, bind-mounted copies of both entrypoints with timing lines added, and started it four times, waiting with `waitForContainerBoot`. Rootful: the host daemon (Engine 29.9.2, through the qualification shim) with the revision chowned to 12345 for each start, as `portable-inputs-stamps-docker.test.ts` forces the relay. Rootless: a `mise run docker:disposable` daemon (slirp4netns, containerd image store), where the relay runs on its own. Restarts 1–3, so the stamps copied nothing:
+
+| Daemon | Fixture | Relay | Stamped import | Restart, start to boot | Same, no relay (rootful, uid 1000) |
+| --- | --- | --- | --- | --- | --- |
+| Rootful, owner 12345 | `medium` | 1,266–1,844 ms | 889–1,380 ms | 4,114–5,131 ms | 1,813–2,973 ms |
+| Rootful, owner 12345 | `plugins` | 790–1,150 ms | 778–1,324 ms | 2,912–3,876 ms | 1,388–1,964 ms |
+| Rootless | `medium` | 952–1,054 ms | 674–1,373 ms | 2,265–3,123 ms | n/a |
+| Rootless | `plugins` | 813–937 ms | 693–1,720 ms | 2,271–3,164 ms | n/a |
+
+The relay takes about as long as the whole stamped import, or longer, on every restart, and roughly doubles a rootful restart where it runs. `/run` was not a tmpfs in either container, so a previous relay copy was there to compare with.
 
 **Decisions.**
 
 - **What to do about it?**
-  - **Measure on a rootless daemon first, and leave the relay as it is until that shows a cost (recommended).**
-    - Pros: the relay's rebuild is what makes revocation simple; `tar` to a tmpfs may be cheap compared with what the home copy cost.
-    - Cons: the saving stays smaller on those daemons until then.
-  - **Compare digests in the root entrypoint before relaying.**
-    - Pros: saves the same work on those daemons.
-    - Cons: adds a root step that reads `node`-owned state, which has to meet the rules in `docker/AGENTS.md`.
+  - **Measure on a rootless daemon first, and leave the relay as it is until that shows a cost (recommended, done).**
+    - Pros: the relay's rebuild is what makes revocation simple.
+    - Cons: the saving waited for the measurement.
+  - **Compare digests in the root entrypoint before relaying.** Now task 3.
+
+### 3. Skip relaying an unchanged mount
+
+**Problem.** Task 2's measurement: on rootless and non-1000 rootful daemons the relay costs about 0.8–1.8 s per restart (under heavy host load), as much as or more than everything else the stamps leave.
+
+**Context.** `relay_staged_inputs` in `docker/network-policy-entrypoint.sh` runs as root, removes `/run/orkestrator-inputs` and re-extracts each unreadable mount as `node`. The rules for root reading or deciding on anything `node` can write are in [`docker/AGENTS.md`](../../../docker/AGENTS.md). The backend rewrites a revision in place before every start (the logins) and on a revocation's scrub, and the revocation also deletes the relayed paths in a running container (`stagedInputRelayPaths`).
+
+**Investigation.** Not built in this pass: it changes root's entrypoint, so it needs a root-boundary review, an image build and a rootless and non-1000 live run of `portable-inputs-stamps-docker.test.ts` (forced relay) plus the revocation cases. The digest has to come from the read-only source mount, never from the relayed copy, which `node` owns.
+
+**Decisions.**
+
+- **How to tell that a mount is unchanged?**
+  - **Root hashes the source mount (paths, types, modes and content digests, as `agent_input_manifest` does) and compares it with a digest root kept from the last relay, in a root-only file outside `node`'s reach; equal and the relayed directory still present means skip that mount (recommended).**
+    - Pros: root reads only the backend-staged, read-only mount, as `tar` already does; a mount that changed, emptied or disappeared is relayed or removed as now; a `node` that edits its relayed copy only feeds itself different input, which the home stamps then copy.
+    - Cons: still reads every byte of the mount; saves the write and the `node`-side extraction, not the read.
+  - **Compare metadata only (inode, size, nanosecond mtime).**
+    - Pros: no content read, so the largest saving.
+    - Cons: trusts that every backend rewrite changes those fields, which the stamps deliberately do not assume.
+  - **Leave it.**
+    - Pros: no change to root's entrypoint.
+    - Cons: keeps the cost measured in task 2 on every restart of those daemons.
+
+### 4. The macOS half of task 1's sign-out reading
+
+**Problem.** Task 1 counts a Mac as signed out only when `security find-generic-password -s <service>` (no `-w`) exits 44 for every keychain it searches. That exit status was taken from `security`'s documented errSecItemNotFound mapping and tested against a fake; it was not run on a Mac, because beelink is Linux.
+
+**Context.** Any other status, a timeout included, keeps the old strip, so a wrong assumption can only make the removal not happen, never sign a signed-in container out. An agent-test profile pins the lookup to its own `login.keychain-db`, so a missing keychain file must not read as "not found".
+
+**Investigation.** Not run. On a Mac node an agent can check it without any real login: create a throwaway keychain with `security create-keychain`, look up a service it lacks with and without the keychain path, add a generic password and look it up again, then delete the keychain. Whether Claude Code's own `/logout` deletes the Keychain record (rather than emptying it) needs a real login, and is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (4580 task 4).
+
+**Decisions.**
+
+- **What if a missing pinned keychain file also exits 44?**
+  - **Make the agent-test lookup require the keychain file to exist before counting a 44 (recommended if it does).**
+    - Pros: keeps "nowhere to look" from reading as signed out.
+    - Cons: one more stat in the reading.
+  - **Accept it.**
+    - Pros: no change.
+    - Cons: an agent-test profile on a Mac whose isolated home has no keychain would remove the host copy from its own containers at every start.
+
+## Assumptions and decisions
+
+### Task 1: removal at start only
+
+The removal runs on the container start path, as the task asked, not in the login keeper's five-minute pass, which keeps stripping when it has nothing to push. A running container therefore keeps the stripped copy until its next start; the keeper path would need the same signed-out reading per pass, which is a `security` call per pass on macOS.
+
+### Task 1: what the drop keeps
+
+The subscription login is always the host's (the merge command replaces it on every push), so it goes. An `mcpOAuth` entry without a refresh token can only be an access-only copy of the host's, so it goes too. An entry with a refresh token may be the container's own, so it stays, but loses the refresh token exactly as the existing strip would have done; a file left with nothing is removed. If `node` or `flock` fails inside the container the file is removed, which is the outcome a sign-out wants anyway.
+
+### Task 2: forced relay on the rootful daemon
+
+The non-1000 rootful case was reproduced by chowning the staged revision to 12345 around each start, the method the live stamps test already uses, rather than running a second host user. The rootless case used the disposable daemon, which was stopped and removed afterwards with its downloaded tools.
 
 ## Needs verification
 
-- The relay's cost on a real rootless daemon, and the stamps with a real relay there. The live test (`apps/backend/tests/portable-inputs-stamps-docker.test.ts`) runs in the "Container live qualification" workflow, whose runner has a non-1000 host user, so the next run of it on a pull request should show the second.
+- Task 3's saving, once built, on the same fixtures and daemons as task 2.
+- The live stamps test (`apps/backend/tests/portable-inputs-stamps-docker.test.ts`) on the "Container live qualification" workflow's runner, whose host user is not uid 1000.
 
 ## Related
 

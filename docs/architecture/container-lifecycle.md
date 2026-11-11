@@ -879,7 +879,17 @@ on revocation described above.
   made inside the container keeps its refresh token until the next restart and
   is kept, as is an API key. A host login that has only expired leaves the copy
   alone, since it has lapsed too. A container that used an added account
-  already had its copy removed by the account switch path.
+  already had its copy removed by the account switch path. Claude's host login
+  is removed at the next container start (`buildDropHostClaudeLoginCommand`):
+  `claudeAiOauth` and every `mcpOAuth` entry without a refresh token go, an
+  MCP login the container made itself keeps its access token, and a file left
+  with no login is deleted. The host reads as signed out
+  (`hostClaudeSignedOut`) only when every place the login is looked up says
+  so: each `.credentials.json` absent or holding no login, and on macOS a
+  metadata-only `security find-generic-password` (no `-w`, so no access
+  prompt) exiting 44, item not found, for each keychain searched. An
+  unreadable file, an expired login or any other Keychain answer keeps the
+  older behaviour, stripping refresh tokens in place.
 - When a container's host-imported Codex or Grok login lapses, the tab's
   sign-in message (readiness `authentication-required`) is replaced by
   guidance to renew the login on the host (or the added Codex account in
@@ -937,7 +947,10 @@ on revocation described above.
   narrowed. It uses the cleanup review's evidence (`legacy-runtime-shape.ts`):
   no inputs-revision label *and* a bind at one of the old mount points. A
   runtime with no label and no such bind is `none`, and a failed inspect is
-  `unknown`, never `host-mounts`.
+  `unknown`, never `host-mounts`. A `staged` revision that holds no provider
+  and has nothing missing, disabled or revoked to report shows "Nothing was
+  staged into this container." in the environment's inputs section
+  (`EnvironmentInputsSection.tsx`), rather than an empty box.
 - Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
@@ -992,9 +1005,9 @@ full copy's, apart from the removal below.
   winning. Claude startup cleanup, publication and digest attribution share an
   exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
   publication commands. The lock file stays in place so concurrent writers always
-  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
-  but not removed after a host sign-out, as before
-  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+  lock the same inode. A Claude copy the backend pushed is left to the backend:
+  after a host sign-out the next start removes it (see the host sign-out item
+  under the access-only logins above).
 - **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
   layer, so a new runtime starts with a full copy. It holds names and digests,
   never contents. The workload can write it, so it is not a security boundary, and

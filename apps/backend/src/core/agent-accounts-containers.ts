@@ -24,7 +24,9 @@ import { dockerExec } from "./commands-container-exec.js";
 import {
   buildSyncContainerClaudeCredentialCommand,
   resolveContainerClaudeCredentials,
+  runtimeHostClaudeLookup,
 } from "./commands-files.js";
+import { hostClaudeSignedOut } from "./claude-host-credentials.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
@@ -937,6 +939,75 @@ const RESTRICT_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
   buildRestrictContainerClaudeCredentialCommand();
 
 /**
+ * Remove the host's Claude login from a container after the host signed out.
+ * The subscription login (`claudeAiOauth`) is always the host's (see
+ * `buildMergeContainerClaudeCredentialCommand`), so it goes; so does every MCP
+ * entry without a refresh token, which is an access-only copy of the host's.
+ * An MCP entry that still has a refresh token keeps its access token, with
+ * the refresh token stripped as the restrict command does. A file left with
+ * no login is removed, as is an unreadable one; a symlink is never followed.
+ */
+export function buildDropHostClaudeLoginCommand(
+  credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,
+): string {
+  const script = `
+const fs = require("fs");
+// Eval has no script-path argument: the target after -- is argv[1].
+const file = process.argv[1];
+try {
+  if (!fs.lstatSync(file).isFile()) process.exit(0);
+} catch {
+  process.exit(0);
+}
+let login;
+try {
+  login = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {}
+if (!login || typeof login !== "object" || Array.isArray(login)) {
+  fs.rmSync(file, { force: true });
+  process.exit(0);
+}
+delete login.claudeAiOauth;
+const servers = login.mcpOAuth && typeof login.mcpOAuth === "object" && !Array.isArray(login.mcpOAuth) ? login.mcpOAuth : {};
+for (const [key, entry] of Object.entries(servers)) {
+  if (!entry || typeof entry !== "object" || typeof entry.refreshToken !== "string" || !entry.refreshToken.trim()) {
+    delete servers[key];
+  } else {
+    delete entry.refreshToken;
+  }
+}
+if (Object.keys(servers).length > 0) login.mcpOAuth = servers;
+else delete login.mcpOAuth;
+if (Object.keys(login).length === 0) {
+  fs.rmSync(file, { force: true });
+  process.exit(0);
+}
+const temporary = file + "." + process.pid + ".tmp";
+try {
+  fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, file);
+} finally {
+  fs.rmSync(temporary, { force: true });
+}`;
+  return `credential_file=${quoteShell(credentialFile)}
+if [ -e "$credential_file" ] && [ ! -L "$credential_file" ]; then
+  flock -x "$credential_file.orkestrator-lock" node -e ${quoteShell(script)} -- "$credential_file" 2>/dev/null || rm -f "$credential_file"
+fi
+true
+`;
+}
+const DROP_HOST_CLAUDE_LOGIN_COMMAND = buildDropHostClaudeLoginCommand();
+
+/**
+ * Whether this runtime's host has signed out of Claude (`hostClaudeSignedOut`),
+ * read from the same places as the login the container would be handed.
+ */
+async function runtimeHostClaudeSignedOut(): Promise<boolean> {
+  const { homeDir, configDir, options } = runtimeHostClaudeLookup();
+  return hostClaudeSignedOut(process.platform, homeDir, configDir, options);
+}
+
+/**
  * Point the running container's `~/.claude.json` at the active account's
  * identity. The entrypoint copies the staged file only at start, so without
  * this `claude auth status` inside names the previous account after a switch.
@@ -1046,6 +1117,15 @@ async function restrictClaudeLogin(
   containerId: string,
 ): Promise<void> {
   await runners.exec(containerId, RESTRICT_CONTAINER_CLAUDE_CREDENTIAL_COMMAND);
+  context.runtime.accounts.forgetPushedClaudeLogin(containerId);
+}
+
+async function dropHostClaudeLogin(
+  context: CommandContext,
+  runners: ContainerRunners,
+  containerId: string,
+): Promise<void> {
+  await runners.exec(containerId, DROP_HOST_CLAUDE_LOGIN_COMMAND);
   context.runtime.accounts.forgetPushedClaudeLogin(containerId);
 }
 
@@ -1301,6 +1381,11 @@ export async function syncContainerAgentAccountsOnStart(
         (await accountHasBeenUsed(context, "claude"))
       ) {
         await removeClaudeLogin(context, runners, containerId);
+      } else if (await runtimeHostClaudeSignedOut()) {
+        // The host signed out, rather than letting its login lapse: the copy
+        // a container was handed earlier goes now instead of staying usable
+        // until its access token expires.
+        await dropHostClaudeLogin(context, runners, containerId);
       } else {
         // The host has no usable token: whatever the container kept must
         // still not be able to refresh the host's login.

@@ -744,7 +744,9 @@ retired paths and run the checks required for the files changed:
    replacement.
 3. `apps/backend/src/core/preview-verification-window.test.ts:11`: deleted
    `3230-restart-inside-verification-window.md` →
-   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3.
+   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3
+   (0045 retired 2026-11-11; the comment now points at
+   `docs/architecture/browser-previews.md` and 0042's evidence log).
 4. `apps/desktop/electron/native-dialogs.ts:19`: deleted
    `0880-desktop-main-thread-held-by-modal-dialog.md` →
    `docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md` task 7.

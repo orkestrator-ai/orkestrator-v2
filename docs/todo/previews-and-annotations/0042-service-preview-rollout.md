@@ -1669,6 +1669,46 @@ name:
   The rerun JSON has no errors outside test cases. No live service-preview
   worker or temporary service-preview profile root remained after cleanup.
 
+2026-11-11, seeded entry-port services on Linux through `ss` and `lsof`
+(to-do 0045 task 3, from 3230; 0045 retired in the same change), at `498b6876`
+plus the change that admits the spec to the headless config.
+
+| Item | Version |
+| --- | --- |
+| Host | beelink2, Omarchy Linux 7.2.15 (x86_64), no `lsof` installed, Wayland session not used |
+| Bun / Electron / Playwright | 1.4.4 / 45.2.3 / 1.65.0 |
+| `ss` | iproute2 7.3.0 |
+| `lsof` (second lookup path only) | 4.99.7 from Arch `extra`, SHA-256 checked against the host's pacman sync database, extracted into a private temporary directory and put first on `PATH`; never installed |
+
+- Change: `service-preview-seeded-electron.spec.ts` joins
+  `HEADLESS_CAPABLE_ELECTRON_SPECS` (it launches through
+  `service-preview-electron-launch.ts`, which already honoured the opt-in), so
+  the headless config admits it.
+- Command, each through `test:logged` with `DISPLAY` and `WAYLAND_DISPLAY`
+  unset, `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` and
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`: `bunx playwright test --config
+  e2e/agent-testing/playwright.electron-headless.config.ts
+  service-preview-seeded-electron.spec.ts`.
+- `ss` path, no `lsof` on `PATH`: run IDs `seeded-preview-linux-1`,
+  `seeded-preview-linux-2` and `seeded-preview-linux-ss`, **6 passed** each
+  (about 11.5 s per run including startup). In the third run a logging
+  wrapper in front of `/usr/bin/ss` recorded 38 lookups, all
+  `ss -H -ltnp "sport = :<entry port>"` or `:<entry port + 1>`, so the
+  ownership answers came from `ss`. Check 1 resolving to `managed-process`
+  is itself proof that a lookup tool answered: with none the service stays
+  `unchecked` and waits.
+- `lsof` path: run ID `seeded-preview-linux-lsof`, **6 passed**; a logging
+  wrapper recorded 32 `lsof -nP -a -iTCP:<port> -sTCP:LISTEN -Fpftn` calls.
+- Checks 3 and 6 passed on every run. Check 3: the open tab's client rendered
+  the new process, and renewal at the old generation was refused with
+  `access-expired`. Check 6 restarted A's server inside the 5 s verification
+  window and required a newer endpoint generation, so the listener-pid
+  recheck works through both tools.
+- Cleanup: each spec run removed its own temporary profile root, Vite and dev
+  servers (no `seeded-entry-dev-server` process was left); the `lsof` download
+  and both wrapper directories were deleted afterwards. No Docker, provider
+  turn, login or real data directory was used.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -2204,7 +2244,8 @@ adoption now rejects a renderer write-back.
   its read policy is in
   [browser-previews.md](../../architecture/browser-previews.md#private-https-origins)),
   [0046-embedded-service-previews.md](0046-embedded-service-previews.md),
-  [0045-preview-service-discovery.md](0045-preview-service-discovery.md),
+  to-do 0045 (retired 2026-11-11; local discovery and ownership are in
+  [browser-previews.md](../../architecture/browser-previews.md#local-environments)),
   [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md) (same
   Electron harness; annotations run inside service tabs),
   to-do 5500 (retired 2026-11-10; [gateway security notes](../../architecture/remote-gateway.md#security-notes))

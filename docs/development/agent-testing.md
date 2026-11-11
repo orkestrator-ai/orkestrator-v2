@@ -1226,8 +1226,8 @@ failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
-`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
-with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`design-canvas-electron.spec.ts`, `web-annotations-electron.spec.ts` and
+`service-preview-seeded-electron.spec.ts` can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
 when it is limited to those). Each reads
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron

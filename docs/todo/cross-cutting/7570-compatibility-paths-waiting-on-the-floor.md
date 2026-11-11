@@ -82,7 +82,7 @@ v2.36.0, which becomes the floor on 2027-01-02.
 row and a counter (task 1):
 
 - Observation stream without `"observe":true` (`http-bridge/observation-stream.ts`, `accept`): bridges before 2026-10-23 (first in v2.27.0-beta).
-- `/session/:id/human-prompts` 404 or 405 answered as `null` (`http-bridge/provider.ts`, `humanPromptOutput`): bridges before 2026-10-26 (first in v2.33.0-beta).
+- `/session/:id/human-prompts` 404 or 405 answered as `null` (`http-bridge/human-prompts.ts`, `readBridgeHumanPrompts`): bridges before 2026-10-26 (first in v2.33.0-beta).
 - The `read_host_agent_sign_ins` fallback (`agent-accounts-machines.ts`): nodes before 2026-10-24 (first in v2.29.0-beta).
 - `diffScopeUnsupported` (`coordinator-worker-changes.ts`, `olderNodeDiffScopeNote`) and the "machine predates this" auto-switch pin (`control-mcp-account-tools.ts`, `set_account_auto_switch`): nodes before 2026-11-01 (first in v2.35.0-beta).
 - `normalizeKanbanTask` rebuilding sections on every read (`storage-kanban-board.ts`): sections arrived in #1388 (first in v2.34.2-beta), so v2.21.0 to v2.34.1 write rows without them. When the floor passes, convert it into a one-time upgrade in `storage-record-upgrades.ts` (the data rule makes the upgrade permanent) and keep the `sectionsBasis` mismatch check.

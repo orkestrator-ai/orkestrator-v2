@@ -174,6 +174,7 @@ import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { backendHostPortLabelArguments, chooseBackendHostPorts } from "./container-host-ports.js";
 
 const dockerLog = createLogger("docker");
 
@@ -587,7 +588,7 @@ export async function createDockerContainer(
     );
   }
 
-  const publishArgs = [
+  const requestedPublishArgs = [
     ...publishedPortArguments(environment.portMappings ?? [], repoConfig.entryPort),
     ...[
       OPENCODE_SERVER_PORT,
@@ -598,6 +599,17 @@ export async function createDockerContainer(
       PI_BRIDGE_PORT,
       OPENCODE2_SERVER_PORT,
     ].flatMap((port) => ["-p", `127.0.0.1::${port}/tcp`]),
+  ];
+  // Rootless Docker draws automatic ports in its own namespace, blind to the
+  // host's sockets, so the backend chooses them on the host instead and
+  // labels them for the start path (to-do 7549 task 4). The label travels
+  // with the `-p` arguments to whichever container owns the namespace.
+  const backendHostPorts = topology.rootless
+    ? await chooseBackendHostPorts(requestedPublishArgs)
+    : { publishArguments: requestedPublishArgs, chosen: [] };
+  const publishArgs = [
+    ...backendHostPorts.publishArguments,
+    ...backendHostPortLabelArguments(backendHostPorts.chosen),
   ];
   // The namespace owner publishes: the gateway when there is one.
   if (enforcement !== "gateway") args.push(...publishArgs);

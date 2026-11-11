@@ -1105,7 +1105,21 @@ container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
 started container still has none. A collision past the retries, or one on
-a fixed port, is the existing `port-conflict`.
+a port the user fixed, is the existing `port-conflict`.
+
+Each failed start moves rootless dockerd on by one port, so no retry count
+gets past a held run longer than itself. On a rootless daemon the backend
+therefore chooses every automatic host port itself when it creates a
+runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
+the host, where the kernel sees every socket and prefers odd ports for
+`bind` (outbound `connect` prefers even ones), publishes the result as a
+fixed port and lists it in the `orkestrator-backend-host-ports` label. The
+port then stays the container's own across starts and daemon restarts. A
+collision on a labelled port is retried on the same port after a pause
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+go; a port the user fixed is still never retried. Rootful daemons keep
+Docker's own automatic ports, since they see the host's sockets, and a
+container created before this keeps them until it is rebuilt.
 
 The same rootless daemon refuses every `docker cp` into or out of a
 container with a read-only bind whose source filesystem is mounted

@@ -7,7 +7,9 @@ Analysed 2026-11-09 against `main` at `c6de4733c`; tasks 1 and 3 acted on
 ([evidence](../../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10));
 tasks 1 and 2 re-checked and task 4 found on 2026-11-11 against `main` at
 `498b68766`
-([evidence](../../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)).
+([evidence](../../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11));
+task 4 acted on the same day
+([evidence](../../development/container-qualification.md#backend-chosen-host-ports-on-rootless-docker-2026-11-11)).
 Found by the retired to-do 0109's task 5, the rootless re-run on a
 freshly built image
 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
@@ -17,7 +19,7 @@ freshly built image
 1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open. Not reproduced on beelink (kernel 7.1.8) on either image store (2026-11-10, again on the containerd store 2026-11-11); the next step is the probe on beelink2 (kernel 7.2.15), the one host that failed, and the delivery change waits for its result.
 3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries).
-4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: open (measured 2026-11-11; the recommended fix changes how containers are created and is not built yet).
+4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: done 2026-11-11 (on a rootless daemon the backend chooses automatic host ports itself; qualified on a disposable rootless daemon).
 
 ### 1. `docker cp` refused when a read-only bind's source is `nosuid`/`nodev`
 
@@ -299,10 +301,37 @@ ports, the Docker 29.9 behaviour the start path already handles.
 Steps:
 
 1. Done 2026-11-11: what each retry draws (above).
-2. Build the chosen fix and a unit test for it; qualify it on a disposable
-   rootless daemon with host listeners holding the next automatic ports.
+2. Done 2026-11-11: built the recommended fix (below) with unit tests, and
+   qualified it on a disposable rootless daemon with host listeners holding
+   the next automatic ports.
+
+What was built (see "Assumptions and decisions"): when the daemon is
+rootless, container creation (`commands-containers.ts`) passes every
+automatic loopback mapping through `chooseBackendHostPorts`
+(`container-host-ports.ts`), which binds `127.0.0.1:0` on the host for each,
+keeps them all bound until every port is chosen, releases them and
+publishes them as fixed ports, with the `orkestrator-backend-host-ports`
+label on the container that owns the namespace (the gateway when there is
+one). `startDockerContainer` reads the label: a collision on a labelled
+port is retried on the same port after 1, 2 and 4 s
+(`PORT_HOLD_RETRY_DELAYS_MS`); a port the user fixed is still never
+retried, and Docker's own automatic ports keep the fresh-port retry.
+`container-host-ports.test.ts` and `container-start.test.ts` cover the
+choice, the label and both retry kinds. Live, on a disposable rootless
+daemon: with the seven ports after Docker's next automatic port held, a
+container with Docker's automatic mapping failed past the retries while the
+same container with a backend-chosen port started first time, and a start
+whose chosen port was held retried it after a pause and started once the
+holder went (`container-start-docker.test.ts`, 4 runs). The daemon-restart
+case of `container-live-egress-conditions.test.ts`, which failed on task 4
+earlier that day, passed 3/3 and now asserts that a rootless gateway
+publishes only backend-chosen ports and keeps them across both restarts.
 
 **Decisions.**
+
+Done 2026-11-11: the recommended option, with a label telling
+backend-chosen ports from ports the user fixed and a same-port retry after a
+pause instead of recreating the container.
 
 - **How should a start avoid ports that loopback churn holds?**
   - **On a rootless daemon, have the backend choose each automatic host port itself (a host `bind` to port 0) and publish it explicitly, marked as backend-chosen (recommended).**
@@ -337,18 +366,17 @@ Steps:
 - Copies into a created container work on beelink (kernel 7.1.8) on both
   image stores (again on 2026-11-11 on the containerd store); beelink2
   (kernel 7.2.15, containerd store) refused them (task 2).
-- Right after a rootless daemon restart on a busy host, an automatic-port
-  start can still fail with `port-conflict` after three retries (task 4).
+- On a rootless daemon, runtimes and gateways created from now on publish
+  host ports the backend chose; they keep them across starts and daemon
+  restarts, and a start that finds one held waits for it a few seconds
+  (task 4). Containers created earlier keep Docker's automatic ports, and
+  with them the collisions past three retries, until they are rebuilt.
 
 ## Outstanding work
 
 - Task 2: reproduce `device or resource busy` on a host that fails
   (beelink2), on both image stores, then build the delivery fix and its
   live case.
-- Task 4: build the fix (recommended: on a rootless daemon the backend
-  chooses each automatic host port itself), its unit test, and a
-  qualification on a disposable rootless daemon with host listeners holding
-  the next automatic ports.
 
 ## Assumptions and decisions
 
@@ -397,6 +425,32 @@ copied into an overlay2 instance.
 Chose: record the collision past the retries as task 4 here rather than a
 new to-do. Why: it is task 3's retry path failing under a condition task 3
 did not see, and this file already holds that evidence and decision.
+
+### The backend chooses ports only on rootless daemons (task 4)
+
+Chose: choose host ports on the host only when `detectDockerTopology`
+reports rootless; rootful daemons keep `127.0.0.1::<port>`. Why: a rootful
+daemon allocates in the host's own namespace and already skips ports host
+sockets hold, so the change would only move the choice without fixing
+anything there.
+
+### A held backend-chosen port is retried on the same port after a pause, never recreated (task 4)
+
+Chose: retry the same port after 1, 2 and 4 s within the existing three
+retries. Why: the observed holders are short-lived loopback connections,
+and the chosen ports are odd, which outbound `connect` avoids, so a held
+chosen port should be rare and brief. Recreating the container with a new
+port would be a lifecycle operation of its own (durable operation records,
+storage, the gateway's workload), far larger than the failure it covers.
+Alternative: fail at once with `port-conflict`, which would turn a hold of a
+second into a failed start.
+
+### The label marks the backend's ports so the start path can tell them from the user's (task 4)
+
+Chose: the `orkestrator-backend-host-ports` label lists the chosen ports,
+and a labelled port the bindings do not fix is ignored. Why: once published
+they look exactly like ports the user fixed, which the start path must keep
+refusing to retry.
 
 ## Related
 

@@ -293,6 +293,52 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Backend-chosen host ports on rootless Docker (2026-11-11)
+
+To-do [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4, run in worktree `orkestrator-v2-20261111-021109-288b6a679fea`
+(branch `rootless-docker-fixes-288b6a679fea-r1`, from `main` at
+`498b68766`), after the fix: on a rootless daemon the backend chooses each
+automatic host port itself (`container-host-ports.ts`) and labels it
+`orkestrator-backend-host-ports`, and the start path retries a collision on
+a labelled port on the same port after a pause.
+
+- **Host:** beelink (kernel 7.1.8-arch1-3), other pipelines running tests at
+  the same time (about 880 TCP sockets in `TIME-WAIT`).
+- **Daemon:** `mise run docker:disposable -- start --name p7549 --image
+  oven/bun:1.4.4` (host rootless Engine 29.9.2, slirp4netns, containerd
+  image store, `live-restore` off), with
+  `orkestrator-v2:dev-3cfac2b2466a` added by `load-image` for the restart
+  case. Suites ran with its `env` variables, the `docker-qualification-bin`
+  shim first on `PATH`, `TMPDIR` on the worktree's btrfs and
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`.
+- **`container-start-docker.test.ts`, new case "the backend's ports start
+  where Docker's next automatic ports are held": passed 4 times** (three
+  whole-file runs, 4 pass and 1 skip each, the skip being the opt-in mount
+  case; and the case alone right after a daemon `restart`). It finds the
+  daemon's next automatic port, holds the next seven (more than the three
+  retries) with host listeners, and shows that a container with Docker's
+  automatic mapping fails with `address already in use` past the retries,
+  while the same container with a backend-chosen port starts on the first
+  attempt with no `start.port-collision-retrying`, publishes that exact
+  port and answers on it. Then, with the container stopped and a listener
+  on its chosen port, a start retries that port after one 1 s pause (the
+  listener closed during it) and publishes the same port again.
+- **`container-live-egress-conditions.test.ts -t "Docker daemon restart"`:
+  passed 3/3** (32 to 44 s each), on the `stopped` branch. The case now
+  asserts that a rootless gateway created by the backend publishes only
+  backend-chosen ports (7, matching the label), and that it keeps exactly
+  those ports across both daemon restarts. This is the case whose first
+  run failed on four collisions earlier the same day (task 4).
+- **What the host chooses.** Forty ports chosen in five batches of eight
+  were all odd, between 32883 and 46819: Linux hands `bind` odd ports and
+  `connect` even ones, so the host's own outbound loopback churn rarely
+  lands on a chosen port later.
+- **Cleanup.** The tests removed their own labelled containers and networks
+  (the daemon listed no container, network or volume afterwards); the
+  daemon was stopped with `docker:disposable -- stop`, then its tools cache
+  and the scratch `TMPDIR` were removed.
+
 ## Rootless daemon restart with `live-restore` and on gvisor-tap-vsock, and the 7549 re-checks (2026-11-11)
 
 To-dos [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)
@@ -376,7 +422,8 @@ mise run test:logged -- --name l7390-restart -- bun test --cwd apps/backend --pr
   connections in `TIME-WAIT` on even ports from 32772 upward (Linux
   prefers even ports for outbound connections), and a restarted rootless
   daemon hands out automatic ports again from the bottom of the range. The
-  rerun a minute later passed. Recorded as 7549 task 4.
+  rerun a minute later passed. Recorded as 7549 task 4, fixed the same day
+  ([evidence](#backend-chosen-host-ports-on-rootless-docker-2026-11-11)).
 - **What a retry draws.** On `l7390`, with host listeners holding the 14
   ports after the daemon's next automatic port, a container publishing
   three automatic ports on a labelled test network failed 14 starts in a

@@ -31,6 +31,8 @@ import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
+import { parseBackendHostPortsLabel } from "../src/core/container-host-ports";
+import { DOCKER_LABEL_BACKEND_HOST_PORTS } from "../src/core/constants";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -728,6 +730,32 @@ async function assertEnforced(containerId: string, gateway: string): Promise<voi
   expect([6, 7]).toContain(await curl("https://example.com/"));
 }
 
+/**
+ * The gateway's published host ports and its backend-chosen port label. On a
+ * rootless daemon every automatic mapping is a port the backend chose
+ * (to-do 7549 task 4), so the two match and survive a daemon restart.
+ */
+async function publishedHostPorts(
+  gateway: string,
+): Promise<{ published: number[]; label: number[] }> {
+  const bindings = JSON.parse(
+    await docker(["inspect", "-f", "{{json .HostConfig.PortBindings}}", gateway]),
+  ) as Record<string, Array<{ HostPort?: string }> | null> | null;
+  const published = Object.values(bindings ?? {})
+    .flatMap((list) => list ?? [])
+    .map((binding) => Number(binding.HostPort ?? ""))
+    .sort((a, b) => a - b);
+  const label = parseBackendHostPortsLabel(
+    await docker([
+      "inspect",
+      "-f",
+      `{{ index .Config.Labels "${DOCKER_LABEL_BACKEND_HOST_PORTS}" }}`,
+      gateway,
+    ]),
+  ).sort((a, b) => a - b);
+  return { published, label };
+}
+
 describe("Docker daemon restart", () => {
   liveRestart(
     "stopped and running gateway runtimes restart in order with their policy, and never start on their own",
@@ -738,6 +766,13 @@ describe("Docker daemon restart", () => {
         "name=rootless",
       );
       const { containerId, gateway } = await createRestricted("restart", ["registry.npmjs.org"]);
+      const hostPorts = await publishedHostPorts(gateway);
+      if (rootless) {
+        expect(hostPorts.label.length).toBeGreaterThan(0);
+        expect(hostPorts.published).toEqual(hostPorts.label);
+      } else {
+        expect(hostPorts.label).toEqual([]);
+      }
       await startRuntime(containerId);
       await assertEnforced(containerId, gateway);
 
@@ -813,9 +848,12 @@ describe("Docker daemon restart", () => {
         await startRuntime(containerId);
         await assertEnforced(containerId, gateway);
       }
+      // The backend-chosen ports are the gateway's own across both restarts.
+      expect(await publishedHostPorts(gateway)).toEqual(hostPorts);
       await evidence("daemon-restart", {
         liveRestore,
         rootless,
+        backendHostPorts: hostPorts.label.length,
         branch: liveRestore ? (rootless ? "rootless-live-restore" : "live-restore") : "stopped",
         passed: true,
       });

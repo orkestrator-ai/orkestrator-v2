@@ -65,7 +65,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "availability.probe-failed":
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":
-        "An automatic host port collided on start, so it is retried (up to three times) with fresh ports.",
+        "An automatic host port collided on start, so it is retried (up to three times): with fresh ports, or, when `backendChosen`, on the same backend-chosen port after a pause.",
       "writer-lease.lost": {
         description:
           "This backend lost the registry writer lease, for the fixed `reason` given. Schedules stop and container changes are refused until it restarts.",

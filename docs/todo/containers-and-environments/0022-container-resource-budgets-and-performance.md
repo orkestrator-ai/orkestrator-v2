@@ -88,7 +88,7 @@ The first run is on beelink (16 CPUs) at `5616f272`. Its full table is in [conta
 - no long tasks and no frame stalls over 50 ms;
 - the sidebar trailed lifecycle replies by about 60 ms in every phase.
 
-The backend slowed: the `get_environments` round trip went from 12–13 ms to 18.7 ms (median) and `start_environment` from 4.2–4.3 s to 5.4 s. `<main>` settle times varied more between the two idle phases than between idle and busy. Every stop took about 10.5–11.6 s, which [2150](2150-container-environment-stop-takes-ten-seconds.md) follows up.
+The backend slowed: the `get_environments` round trip went from 12–13 ms to 18.7 ms (median) and `start_environment` from 4.2–4.3 s to 5.4 s. `<main>` settle times varied more between the two idle phases than between idle and busy. Every stop took about 10.5–11.6 s. To-do 2150 (retired 2026-11-11) traced that to the drain waiting on the setup terminal's shell and fixed it; the probe's stops then took 1.25–1.92 s ([Stop through the UI after the drain change](../../development/container-qualification.md#stop-through-the-ui-after-the-drain-change-2026-11-11)).
 
 **Decisions.**
 
@@ -589,7 +589,7 @@ probe now sends one every 100 ms.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Resource
   budgets and usage", "Built-in default" and "Bounded logs".
 - [0729-container-benchmark-target-misses.md](0729-container-benchmark-target-misses.md): the CI benchmark misses (Docker calls, x64 warm start and fresh-to-ready) and the arm64 figures
-- [2150-container-environment-stop-takes-ten-seconds.md](2150-container-environment-stop-takes-ten-seconds.md): the 10 s stops the UI probe measured
+- 2150 (retired 2026-11-11): the 10 s stops the UI probe measured; its evidence is in [Stop attribution](../../development/container-qualification.md#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02) and [Stop through the UI after the drain change](../../development/container-qualification.md#stop-through-the-ui-after-the-drain-change-2026-11-11)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4) moved there on 2026-11-10.
 
 ## Replaces

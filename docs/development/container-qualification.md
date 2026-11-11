@@ -291,6 +291,106 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Stop through the UI after the drain change (2026-11-11)
+
+To-do 2150 task 3 (the file is retired with this run): the
+[UI probe](#ui-response-under-multi-environment-load) of the
+[2026-11-01 run](#ui-response-under-multi-environment-load-first-run-on-a-busy-host-2026-11-01),
+repeated on an image that carries the drain change
+([Stop attribution](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)),
+and the live lifecycle suite and full benchmark on that image.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs, 62 GiB),
+  Docker Engine 29.9.2. Other agents' container work kept the load average
+  at 33–56 and the host CPU 97–99% busy throughout.
+- **Image:** `orkestrator-v2:dev-a8114303dc70` (`be94a74fcf9b`), the
+  workspace image `dev:test` built from `main` at `498b68766`. Its
+  `/usr/local/bin/orkestrator-drain.sh` is byte-identical to the checkout's
+  (SHA-256 `2dba9c72…`).
+- **Profile:** `dev:test --profile p2150-ui-load --fixture
+  --fixture-environments container --no-agent-credentials --agent-platforms
+  claude --headless`, with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` and the
+  qualification Docker shim on `PATH`. No provider turns and no logins. The
+  probe ran with its default options. `ui-load-target` had the setup
+  terminal's `zsh -l` open on `pts/0` during the stop cycles, the case that
+  took 10 s before.
+
+`stop_environment` round trip, three cycles per phase, against the
+2026-11-01 run on the released image:
+
+| Phase | 2026-11-01, median (p95) | 2026-11-11, median (min–max) |
+| --- | --- | --- |
+| Idle 1 | 10.9 s (11.2 s) | 1.32 s (1.25–1.89 s) |
+| Busy | 11.1 s (11.6 s) | 1.71 s (1.66–1.92 s) |
+| Idle 2 | 10.7 s (11.5 s) | 1.28 s (1.27–1.30 s) |
+
+The sidebar trailed each stop reply by 61–67 ms (median), as before.
+`start_environment` took 4.8, 6.3 and 4.9 s (medians), no cycle failed, and
+the frame interval stayed at 16.7 ms with no long tasks in any phase. The
+only dialog dismissed was "Claude Code Is Not Logged In".
+
+The first attempt failed before any measurement: that dialog opened after the
+app shell had loaded, and its overlay took the first sidebar click for 30 s.
+The probe dismissed dialogs only while waiting for the shell. It now
+dismisses them before each measured click and lifecycle command as well
+(`dismissDialogs`, covered by `multi-environment-ui-perf.integration.test.ts`).
+
+On a disposable rootless daemon (`mise run docker:disposable -- start --name
+q2150 --host-loopback`, slirp4netns) loaded with the same image:
+
+- **Live lifecycle** (`container-live-qualification.test.ts`, C09, C11, C12,
+  C20): 8/8 in 31.3 s.
+- **Benchmark** (`container-benchmarks.test.ts`, both tests, with
+  `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED` from one unauthenticated read of
+  `api.github.com/meta`, `TMPDIR` on the home filesystem and
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=3600000`, because the benchmark
+  prints nothing until its report and the runner's default five-minute
+  silence limit stopped the first attempt): 2/2 in 421.5 s after a harness
+  fix. The run before the fix failed the baseline test when a rebuild
+  candidate's bare `docker start` collided on an automatic host port
+  (`RootlessKit PortManager.AddPort(): … 127.0.0.1:33187: bind: address
+  already in use`). `bootRuntime` now starts runtimes through
+  `startDockerContainer`, the production start that retries that collision,
+  instead of a bare `docker start`.
+
+The same benchmark then ran on the host's rootful daemon through the
+qualification shim, to tell rootless effects from host load: 2/2 in
+410.2 s. Medians (min–max); bold marks a miss against
+[Benchmarks](#benchmarks):
+
+| Measure (target) | Rootless, `bmwbiwps3` | Rootful, `bmwbj730g` |
+| --- | --- | --- |
+| Fresh restricted to ready (≤ 3 s) | **6.66 s** (5.99–7.66) | **6.11 s** (5.29–10.56) |
+| Docker calls per fresh environment (≤ 27) | 18 (18–24) | 18 (17–25) |
+| Three concurrent, slowdown (≤ 1.5×) | 0.93× | 1.11× |
+| Warm stop (≤ 1 s) | 385 ms (307–520) | 329 ms (247–363) |
+| `stop_environment` idle (n=3) | 1,376 ms (936–1,407) | 1,396 ms (1,303–1,412) |
+| `stop_environment` with a login shell open (≤ 1.5 s, n=5) | 1,473 ms (1,281–1,584) | 1,364 ms (1,266–1,460) |
+| Drain exec, login shell open | 241 ms (216–439) | 258 ms (230–272) |
+| Gateway `docker stop`, login shell open | 848 ms (728–898) | 725 ms (697–773) |
+| Warm start (≤ 2 s) | 1.86 s (1.75–1.94) | 1.78 s (1.69–1.83) |
+| Rebuild copy and verify, 5,000 files (≤ 20 s) | **29.1 s** (29.0–29.6) | **28.8 s** (28.8–29.4) |
+| Calls per minute, view open (≤ 36) | 24 | 24 |
+| Followers after grace (0) | 0 | 0 |
+
+The stop path meets its targets on both daemons. With a terminal open, the
+drain now takes about a quarter of a second, against 9.5 s before the change
+(2026-11-02). The egress gateway's `docker stop` is now the largest step. The
+two misses are the same on both daemons, so they are not rootless effects,
+and neither path is touched by the drain: the targets were set on a quiet
+12-CPU host, and this one ran at a load average of 33–66. Judging them needs
+the quiet reference-host run that
+[0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+already tracks.
+
+- **Cleanup.** The probe deleted its environments; `dev:stop` and `dev:reset`
+  removed the profile (2 containers, 2 volumes, 1 network) and its state.
+  The killed first benchmark attempt's owner-labelled containers, volumes and
+  networks were removed by label. Every other run's `afterAll` removed its
+  own, and the disposable daemon was stopped with `docker:disposable --
+  stop`, which removed its data. Nothing else on the host daemon was
+  touched.
+
 ## Egress name checks on rootless Docker (2026-11-10)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -1601,7 +1701,8 @@ networks, which `afterAll` removed and listed again as empty.
 
 ## Stop attribution: the drain waited on interactive shells (2026-11-02)
 
-Todo [2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md).
+To-do 2150 (retired 2026-11-11; the confirming UI run is
+[Stop through the UI after the drain change](#stop-through-the-ui-after-the-drain-change-2026-11-11)).
 The roughly 10 s `stop_environment` was not Docker's stop grace. PID 1's
 chain (`docker-init` → `sudo` → `sleep infinity`) exits on SIGTERM. The time
 went to `orkestrator-drain.sh`, which waited its whole 10 s grace for the
@@ -1697,9 +1798,8 @@ rose 1.4–1.5× (p95 1.7–2.1×) and `start_environment` 1.24–1.27×. `<main
 more between the two idle phases (589 against 317 ms) than between idle and
 busy, so this sample cannot attribute them to the load. Every stop took
 10.5–11.6 s with or without load, against 0.1–0.6 s for the benchmark's bare
-`docker stop`; that is recorded in
-[2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md),
-which traced it to the drain waiting on the setup terminal's shell
+`docker stop`; to-do 2150 (retired 2026-11-11) traced it to the drain
+waiting on the setup terminal's shell
 ([Stop attribution](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)).
 
 ## Egress gateway conditions on Linux Engine (2026-10-31)
@@ -2717,8 +2817,11 @@ mise run dev:stop --profile ui-load && mise run dev:reset --profile ui-load
 
 It adds `--environments` container environments (`ui-load-busy-N`) and a
 `ui-load-target` to the fixture project, and signs a headless Chromium in
-through `dev:login`. Startup dialogs such as "Claude Code Is Not Logged In"
-are dismissed for that page only. In each `busy` phase, every
+through `dev:login`. Dialogs such as "Claude Code Is Not Logged In" are
+dismissed for that page only, at startup and again before each measured
+click or lifecycle command (outside the measured time), because one can open
+over the workspace at any point and its overlay takes every click; the report
+lists their titles. In each `busy` phase, every
 `ui-load-busy-N` container runs a load through `docker exec`, and only after
 its `environment-id` label has been checked. The load is `--workers` shell
 spin loops (one CPU each), a workspace file rewritten every second, and an

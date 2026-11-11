@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
   buildDropHostClaudeLoginCommand,
+  buildMergeContainerClaudeCredentialCommand,
   buildRestrictContainerClaudeCredentialCommand,
   claudeOwnedLoginsFile,
   syncContainerAgentAccountsOnStart,
@@ -51,15 +53,17 @@ let environment: Environment;
 let context: CommandContext;
 let runtime: BackendRuntime;
 
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+
 function fakeRunners() {
-  const calls: Array<{ kind: "exec" | "pipe"; command: string }> = [];
+  const calls: Array<{ kind: "exec" | "pipe"; command: string; stdin?: string }> = [];
   const runners: ContainerRunners = {
     exec: async (_id, command) => {
       calls.push({ kind: "exec", command });
       return "";
     },
-    pipe: async (_id, command) => {
-      calls.push({ kind: "pipe", command });
+    pipe: async (_id, command, stdin) => {
+      calls.push({ kind: "pipe", command, stdin });
     },
     label: async () => "revision-1",
   };
@@ -125,7 +129,29 @@ describe.skipIf(process.platform === "darwin")(
       const commands = fake.calls.map((call) => call.command);
       expect(commands).toContain(buildDropHostClaudeLoginCommand());
       expect(commands).not.toContain(buildRestrictContainerClaudeCredentialCommand());
-      expect(fake.calls.some((call) => call.kind === "pipe")).toBe(false);
+      // The drop is handed digests of the host tokens seen, and nothing else.
+      const pipes = fake.calls.filter((call) => call.kind === "pipe");
+      expect(pipes.map((call) => call.command)).toEqual([buildDropHostClaudeLoginCommand()]);
+      expect(JSON.parse(pipes[0]!.stdin!)).toEqual({ hostTokens: {} });
+    });
+
+    test("the drop is told which tokens the host held before it signed out", async () => {
+      runtime.accounts.hostClaudeTokenDigests.remember(
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "HOST-ACCESS", refreshToken: "HOST-REFRESH" },
+          mcpOAuth: { linear: { accessToken: "HOST-MCP" } },
+        }),
+      );
+      const fake = fakeRunners();
+      await start(fake);
+      const drop = fake.calls.find((call) => call.command === buildDropHostClaudeLoginCommand());
+      expect(JSON.parse(drop!.stdin!)).toEqual({
+        hostTokens: {
+          claudeAiOauth: [sha256("HOST-ACCESS"), sha256("HOST-REFRESH")],
+          "mcpOAuth/linear": [sha256("HOST-MCP")],
+        },
+      });
+      expect(JSON.stringify(fake.calls)).not.toContain("HOST-");
     });
 
     test("a credential file left with no login counts as signed out too", async () => {
@@ -187,7 +213,7 @@ describe.skipIf(process.platform === "darwin")(
 describe.skipIf(!hasFlock)("the drop command inside a container", () => {
   let file: string;
   let bin: string;
-  async function shell(command: string): Promise<number | null> {
+  async function shell(command: string, input = ""): Promise<number | null> {
     await fs.mkdir(bin, { recursive: true });
     if (!Bun.which("node")) {
       await fs.writeFile(path.join(bin, "node"), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`, {
@@ -196,12 +222,24 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
     }
     return spawnSync("bash", ["-c", command], {
       env: { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      input,
       encoding: "utf8",
     }).status;
   }
-  const run = () => shell(buildDropHostClaudeLoginCommand(file));
-  const restrict = () => shell(buildRestrictContainerClaudeCredentialCommand(file));
+  const hostTokensInput = (hostTokens: Record<string, string[]>) => JSON.stringify({ hostTokens });
+  const run = (hostTokens: Record<string, string[]> = {}) =>
+    shell(buildDropHostClaudeLoginCommand(file), hostTokensInput(hostTokens));
+  const restrict = (hostTokens: Record<string, string[]> = {}) =>
+    shell(buildRestrictContainerClaudeCredentialCommand(file), hostTokensInput(hostTokens));
+  const merge = (login: unknown, hostTokens: Record<string, string[]> = {}) =>
+    shell(
+      buildMergeContainerClaudeCredentialCommand(file),
+      JSON.stringify({ login, hostMcpRefresh: {}, hostTokens }),
+    );
   const read = async () => JSON.parse(await fs.readFile(file, "utf8"));
+  const readOwned = async () => JSON.parse(await fs.readFile(claudeOwnedLoginsFile(file), "utf8"));
+  /** A container some pass has touched since ownership records began. */
+  const tracked = () => fs.writeFile(claudeOwnedLoginsFile(file), "{}");
   beforeEach(async () => {
     file = path.join(root, "container", ".claude", ".credentials.json");
     bin = path.join(root, "bin");
@@ -209,6 +247,7 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
   });
 
   test("removes the subscription login and host MCP copies, keeping the container's own", async () => {
+    await tracked();
     await fs.writeFile(
       file,
       JSON.stringify({
@@ -229,6 +268,7 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
   });
 
   test("repeated starts keep the container's own logins and drop every host copy", async () => {
+    await tracked();
     await fs.writeFile(
       file,
       JSON.stringify({
@@ -256,6 +296,7 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
   });
 
   test("a login the restrict command already stripped is still the container's own", async () => {
+    await tracked();
     await fs.writeFile(
       file,
       JSON.stringify({
@@ -290,7 +331,8 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
     );
     expect(await run()).toBe(0);
     await expect(fs.stat(file)).rejects.toThrow();
-    await expect(fs.stat(claudeOwnedLoginsFile(file))).rejects.toThrow();
+    // The emptied record stays, marking the container as tracked.
+    expect(await readOwned()).toEqual({});
   });
 
   test("a subscription login made in the container keeps its access token", async () => {
@@ -303,6 +345,7 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
   });
 
   test("when the locked pass cannot run it strips in place instead of deleting", async () => {
+    await tracked();
     await fs.mkdir(bin, { recursive: true });
     await fs.writeFile(path.join(bin, "flock"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     await fs.writeFile(
@@ -324,10 +367,118 @@ describe.skipIf(!hasFlock)("the drop command inside a container", () => {
   });
 
   test("removes a file left with no login, or one it cannot read", async () => {
+    await tracked();
     await fs.writeFile(file, JSON.stringify({ claudeAiOauth: { accessToken: "host-access" } }));
     expect(await run()).toBe(0);
     await expect(fs.stat(file)).rejects.toThrow();
     await fs.writeFile(file, "not json");
+    expect(await run()).toBe(0);
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  test("a container not yet tracked keeps logins an older strip left unrecorded", async () => {
+    // What the start and keeper strips before ownership records left behind.
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "own-subscription" },
+        mcpOAuth: { notion: { accessToken: "own-mcp" } },
+      }),
+    );
+    const expected = {
+      claudeAiOauth: { accessToken: "own-subscription" },
+      mcpOAuth: { notion: { accessToken: "own-mcp" } },
+    };
+    for (let pass = 0; pass < 2; pass++) {
+      expect(await run()).toBe(0);
+      expect(await read()).toEqual(expected);
+    }
+    expect(await readOwned()).toEqual({
+      claudeAiOauth: sha256("own-subscription"),
+      "mcpOAuth/notion": sha256("own-mcp"),
+    });
+  });
+
+  test("a restrict in a container not yet tracked records the unrecorded logins too", async () => {
+    await fs.writeFile(file, JSON.stringify({ mcpOAuth: { notion: { accessToken: "own-mcp" } } }));
+    expect(await restrict()).toBe(0);
+    expect(await readOwned()).toEqual({ "mcpOAuth/notion": sha256("own-mcp") });
+    expect(await run()).toBe(0);
+    expect(await read()).toEqual({ mcpOAuth: { notion: { accessToken: "own-mcp" } } });
+  });
+
+  test("a copy carrying a token the host held goes, refresh token or not", async () => {
+    // Imported before containers were access-only, or through a host mount.
+    const legacy = {
+      claudeAiOauth: { accessToken: "host-access", refreshToken: "HOST-REFRESH" },
+      mcpOAuth: {
+        linear: { accessToken: "host-mcp", refreshToken: "HOST-MCP-REFRESH" },
+        notion: { accessToken: "own", refreshToken: "CONTAINER-MCP" },
+        figma: { accessToken: "host-figma" },
+      },
+    };
+    const hostTokens = {
+      claudeAiOauth: [sha256("host-access"), sha256("HOST-REFRESH")],
+      "mcpOAuth/linear": [sha256("HOST-MCP-REFRESH")],
+      "mcpOAuth/figma": [sha256("host-figma")],
+    };
+    // In a container not yet tracked, too.
+    await fs.writeFile(file, JSON.stringify(legacy));
+    expect(await run(hostTokens)).toBe(0);
+    expect(await read()).toEqual({ mcpOAuth: { notion: { accessToken: "own" } } });
+    expect(await readOwned()).toEqual({ "mcpOAuth/notion": sha256("own") });
+
+    // A restrict never records a host copy as the container's own, so a drop
+    // after a backend restart (which forgets the host's tokens) still drops it.
+    await fs.rm(claudeOwnedLoginsFile(file));
+    await tracked();
+    await fs.writeFile(file, JSON.stringify(legacy));
+    expect(await restrict(hostTokens)).toBe(0);
+    expect(await readOwned()).toEqual({ "mcpOAuth/notion": sha256("own") });
+    expect(await run()).toBe(0);
+    expect(await read()).toEqual({ mcpOAuth: { notion: { accessToken: "own" } } });
+  });
+
+  test("a host push between drops keeps the container's recorded logins", async () => {
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        mcpOAuth: {
+          notion: { accessToken: "own", refreshToken: "CONTAINER-MCP" },
+          figma: { accessToken: "own-figma", refreshToken: "CONTAINER-FIGMA" },
+        },
+      }),
+    );
+    expect(await run()).toBe(0);
+    // The host signs in again and the next start pushes its login. The host
+    // has a figma login of its own, which takes that server's place.
+    expect(
+      await merge({
+        claudeAiOauth: { accessToken: "host-access" },
+        mcpOAuth: { linear: { accessToken: "host-mcp" }, figma: { accessToken: "host-figma" } },
+      }),
+    ).toBe(0);
+    expect(await read()).toEqual({
+      claudeAiOauth: { accessToken: "host-access" },
+      mcpOAuth: {
+        linear: { accessToken: "host-mcp" },
+        figma: { accessToken: "host-figma" },
+        notion: { accessToken: "own" },
+      },
+    });
+    expect(await readOwned()).toEqual({ "mcpOAuth/notion": sha256("own") });
+    // Signed out again: only the container's own login is left.
+    expect(await run()).toBe(0);
+    expect(await read()).toEqual({ mcpOAuth: { notion: { accessToken: "own" } } });
+  });
+
+  test("a push marks a container as tracked, so the next drop is exact", async () => {
+    await fs.writeFile(
+      file,
+      JSON.stringify({ mcpOAuth: { notion: { accessToken: "unrecorded" } } }),
+    );
+    expect(await merge({ claudeAiOauth: { accessToken: "host-access" } })).toBe(0);
+    expect(await readOwned()).toEqual({});
     expect(await run()).toBe(0);
     await expect(fs.stat(file)).rejects.toThrow();
   });

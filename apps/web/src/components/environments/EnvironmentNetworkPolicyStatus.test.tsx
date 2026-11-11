@@ -498,6 +498,57 @@ describe("environment network policy status", () => {
       expect(screen.getByText(/saved allowlist is the one this container enforces/)).toBeTruthy();
     });
 
+    test("a refresh that comes due while an apply is in flight waits for the next interval", async () => {
+      const controlled = startClock();
+      const pending: EnvironmentNetworkPolicy = {
+        ...counted(1, 0),
+        domains: "pending",
+        configured: { ...base.configured, domainsRevision: "bbbbbbbbbbbbbbbb" },
+      };
+      let releaseApply: (() => void) | null = null;
+      let policyReads = 0;
+      invokeMock.mockClear();
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_environment_network_policy") {
+          policyReads += 1;
+          return policyReads === 1 ? pending : { ...counted(6, 1), domains: "applied" };
+        }
+        if (command === "apply_environment_allowed_domains") {
+          // A slow apply: the refresh comes due before it answers.
+          await new Promise<void>((resolve) => {
+            releaseApply = resolve;
+          });
+          return { kind: "applied", policy: { ...pending, domains: "applied" } };
+        }
+        return undefined;
+      });
+      render(
+        <EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={REFRESH_MS} />,
+      );
+      const button = await screen.findByRole("button", { name: "Apply now" });
+      await armed(controlled);
+      fireEvent.click(button);
+      await waitFor(() => expect(releaseApply).toBeTruthy());
+
+      // The due refresh does not read while the apply runs; it only re-arms.
+      tick(controlled);
+      expect(reads()).toBe(1);
+      expect(controlled.pendingCount()).toBe(1);
+      await settle();
+      expect(reads()).toBe(1);
+
+      releaseApply!();
+      await screen.findByText(/saved allowlist is the one this container enforces/);
+      expect(screen.getByText(/refused 1 connection and 0 DNS queries/)).toBeTruthy();
+      expect(reads()).toBe(1);
+
+      // The next interval, after the apply settled, reads again.
+      tick(controlled);
+      await screen.findByText(/refused 6 connections and 1 DNS query\./);
+      expect(reads()).toBe(2);
+      await armed(controlled);
+    });
+
     test("switching environments neither shows nor refreshes the old counts while the new load is slow", async () => {
       const controlled = startClock();
       const releases = new Map<string, (policy: EnvironmentNetworkPolicy) => void>();

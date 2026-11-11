@@ -163,6 +163,8 @@ const VIRTUOSO_STYLE = { height: "100%" };
 const EMPTY_SEARCH_TEXT = () => "";
 const SEARCH_CONTENT_SELECTOR = "[data-agent-chat-search-content]";
 const ROW_SELECTOR = "[data-chat-message-index]";
+/** Keys held as part of a press (shift-click, meta-click); they do not end it. */
+const PRESS_MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
 
 /**
  * Virtuoso's `firstItemIndex` starts here and decreases by the number of
@@ -669,6 +671,11 @@ export function VirtualizedMessageList<TMessage>({
         if (key !== undefined) protectFocus(key);
       }, 0);
     };
+    // A modifier held for a shift- or meta-click is part of the press itself.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || PRESS_MODIFIER_KEYS.has(event.key)) return;
+      onPointerEnd();
+    };
     // Focus that moves outside a press supersedes one a press left pending.
     const cancelPressedFocus = () => {
       pressedFocusKey = undefined;
@@ -699,6 +706,14 @@ export function VirtualizedMessageList<TMessage>({
     root.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
     view.addEventListener("pointerup", onPointerEnd, { capture: true, passive: true });
     view.addEventListener("pointercancel", onPointerEnd, { capture: true, passive: true });
+    // Some presses never deliver a pointerup here: a native context menu can
+    // swallow it, and the window can lose focus mid-press. Without an end the
+    // press would defer every later focus, keyboard focus included, until the
+    // next pointer release, so each of these also ends it.
+    view.addEventListener("keydown", onKeyDown, { capture: true, passive: true });
+    view.addEventListener("contextmenu", onPointerEnd, { capture: true, passive: true });
+    view.addEventListener("dragstart", onPointerEnd, { capture: true, passive: true });
+    view.addEventListener("blur", onPointerEnd, { passive: true });
     return () => {
       ownerDocument.removeEventListener("selectionchange", onSelectionChange);
       root.removeEventListener("focusin", onFocusIn);
@@ -706,6 +721,10 @@ export function VirtualizedMessageList<TMessage>({
       root.removeEventListener("pointerdown", onPointerDown, { capture: true });
       view.removeEventListener("pointerup", onPointerEnd, { capture: true });
       view.removeEventListener("pointercancel", onPointerEnd, { capture: true });
+      view.removeEventListener("keydown", onKeyDown, { capture: true });
+      view.removeEventListener("contextmenu", onPointerEnd, { capture: true });
+      view.removeEventListener("dragstart", onPointerEnd, { capture: true });
+      view.removeEventListener("blur", onPointerEnd);
       cancelPressedFocus();
     };
   }, []);

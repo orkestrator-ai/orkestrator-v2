@@ -96,3 +96,20 @@ Base `51456e887` (`main`), branch `fix-flaky-tests-400972eda2c6-r1`.
   passed 32 of 32, and the 1,500-call bounded-viewport case 16 of 16, in
   the run recorded in
   [0793](0793-live-tool-group-overscan.md#resolution-2026-11-11).
+
+## Review follow-up (2026-11-11)
+
+- **Committed browser regression:** `a reader released just above the end
+  opens a long group with one click` (`e2e/ToolGroupFold.spec.ts`,
+  `mobile-chromium` only; desktop pulls a reader 60 px from the end back to
+  it). It releases the reader by a 60 px wheel, waits until the reader has
+  settled, clicks `Show 1500 tool calls` once and asserts the group opens
+  with entries rendered. Against the pre-fix `VirtualizedMessageList.tsx`:
+  12 of 12 failed (`--repeat-each=12 --workers=4`, the inner viewport never
+  appeared). With the fix: 12 of 12 passed.
+- **Press without a release:** a press now also ends at a non-modifier key,
+  a context menu, a native drag or the window losing focus, so a missing
+  `pointerup` cannot defer later keyboard focus. Unit tests in
+  `VirtualizedMessageList.keep-mounted.test.tsx` cover these ends,
+  `pointercancel`, focus that supersedes a pending protection, and a second
+  press that begins before the first's protection runs.

@@ -204,6 +204,11 @@ function scrollTo(startIndex: number) {
   }
 }
 
+/** Lets the task after a pointer release run, where deferred focus protection lands. */
+async function settleTask() {
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+}
+
 beforeEach(() => {
   visible = { startIndex: 0, endIndex: 2 };
 });
@@ -285,6 +290,105 @@ describe("VirtualizedMessageList keep-mounted protection", () => {
     scrollTo(9);
     expect(document.activeElement).toBe(button);
     expect(rowElement("m-5")?.contains(button)).toBe(true);
+  });
+
+  test("a cancelled press protects its row once it ends, like a released one", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    const button = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(button);
+      button.focus();
+    });
+    act(() => {
+      fireEvent.pointerCancel(button);
+    });
+    expect(rowElement("m-2") === null).toBe(true);
+    await settleTask();
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    scrollTo(9);
+    expect(rowElement("m-5")?.contains(button)).toBe(true);
+  });
+
+  test("focus that moves outside a press supersedes the protection the press left pending", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    act(() => scrollVirtuoso?.({ startIndex: 4, endIndex: 14 }));
+    const pressed = screen.getByRole("button", { name: "Action m-14" });
+    const typed = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(pressed);
+      pressed.focus();
+      fireEvent.pointerUp(pressed);
+    });
+    // Keyboard focus lands before the deferred protection runs.
+    act(() => typed.focus());
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    await settleTask();
+    scrollTo(0);
+    expect(document.activeElement).toBe(typed);
+    expect(rowElement("m-5")?.contains(typed)).toBe(true);
+    expect(rowElement("m-14") === null).toBe(true);
+  });
+
+  test("a second press that begins before the first's protection runs defers it to its own end", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    act(() => scrollVirtuoso?.({ startIndex: 4, endIndex: 14 }));
+    const first = screen.getByRole("button", { name: "Action m-14" });
+    const second = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(first);
+      first.focus();
+      fireEvent.pointerUp(first);
+      fireEvent.pointerDown(second);
+      second.focus();
+    });
+    // The first press's task runs while the second is still held: nothing mounts.
+    await settleTask();
+    expect(rowElement("m-2") === null).toBe(true);
+    act(() => {
+      fireEvent.pointerUp(second);
+    });
+    await settleTask();
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    scrollTo(0);
+    expect(rowElement("m-5")?.contains(second)).toBe(true);
+    expect(rowElement("m-14") === null).toBe(true);
+  });
+
+  test.each([
+    [
+      "a key that is not a modifier",
+      (target: HTMLElement) => fireEvent.keyDown(target, { key: "Tab" }),
+    ],
+    ["a context menu", (target: HTMLElement) => fireEvent.contextMenu(target)],
+    ["a native drag", (target: HTMLElement) => fireEvent.dragStart(target)],
+    ["the window losing focus", () => fireEvent.blur(window)],
+  ])("a press that never sees its pointerup ends at %s", async (_name, end) => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    const button = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(button);
+      button.focus();
+    });
+    // A modifier held for a shift-click is part of the press, not its end.
+    act(() => {
+      fireEvent.keyDown(button, { key: "Shift" });
+    });
+    await settleTask();
+    expect(rowElement("m-2") === null).toBe(true);
+    act(() => {
+      end(button);
+    });
+    await settleTask();
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    // Later keyboard focus is protected at once again, without a pointer release.
+    const next = screen.getByRole("button", { name: "Action m-6" });
+    act(() => next.focus());
+    scrollTo(10);
+    expect(rowElement("m-6")?.contains(next)).toBe(true);
   });
 
   test("a follower's press protects its row at once, before the click grows the list", () => {

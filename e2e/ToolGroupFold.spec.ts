@@ -410,6 +410,42 @@ test("a 1,500-call group opens in a bounded viewport that owns its own scrolling
   expect(await viewport.locator("[data-transcript-part-id]").count()).toBeLessThan(60);
 });
 
+// Flake 9980. Pressing the head line focuses its button at pointerdown, and
+// focus protection used to grow the overscan at once. For a reader who has
+// stopped following just above the end, measuring the rows that mounted
+// clamped the list and moved the button before pointerup, so the one click
+// landed elsewhere and the group never opened (mobile lost it 12 of 12 times
+// at 60 px before the fix). Desktop pulls a reader this close back to the
+// end, so only the phone layout reaches the released state.
+test("a reader released just above the end opens a long group with one click", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "desktop re-follows at this gap");
+  await page.goto("/streaming-transcript?long=1&bigGroup=1500");
+  const scroller = page.locator(scrollerSelector);
+  const show = page.getByRole("button", { name: /^Show 1500 tool calls:/ });
+  await expect(show).toBeVisible();
+  await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
+  await scrollQuiet(scroller);
+  const box = (await scroller.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.wheel(0, -60);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(20);
+  await readerSettled(scroller);
+  expect(await bottomGap(page)).toBeGreaterThan(20);
+
+  // One physical press and release; Playwright does not retry it. The head
+  // line sits at the scroller's lower edge, so the click first scrolls it in,
+  // as the owning tests' clicks do.
+  await show.click();
+
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  await expect(viewport).toBeVisible();
+  await expect
+    .poll(() => viewport.locator("[data-tool-group-entry-index]").count())
+    .toBeGreaterThan(2);
+});
+
 test("a selection inside a long group's viewport survives nearby inner scrolling", async ({
   page,
 }) => {

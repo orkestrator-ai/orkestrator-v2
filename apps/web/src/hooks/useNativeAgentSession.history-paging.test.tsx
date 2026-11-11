@@ -425,6 +425,64 @@ describe("useNativeAgentSession history paging", () => {
     expect(syncCache()?.historyCursor).toBe("cursor-epoch-2");
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
   });
+
+  test("a page that outlives a poll which found the session gone is discarded", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    transcriptUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+    stateUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    expect(result.current.projection).toBeNull();
+
+    await release();
+
+    // The late page must not reinstall the projection the poll removed.
+    expect(result.current.projection).toBeNull();
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().projections.get(SESSION_KEY) ?? null,
+    ).toBeNull();
+    expect(syncCache()?.historyMessages ?? []).toEqual([]);
+  });
+
+  test("a row a poll revised while an overlapping page was in flight keeps its revision", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    // m3 ages out of the live tail and is held; the direct cursor now points at
+    // the tail's head, so the next page overlaps the held row.
+    transcriptUpdates = [
+      () => tail("transcript-2", [message("m4"), message("m5")], { cursor: "cursor-before-m4" }),
+    ];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    expect(ids(result.current.projection)).toEqual(["m3", "m4", "m5"]);
+
+    // The page was read before the revision below and carries the old copy.
+    const release = await holdPage(result, [message("m2"), message("m3", "running")]);
+    const revisedTail = () =>
+      tail("transcript-3", [message("m4"), message("m5")], {
+        cursor: "cursor-before-m4",
+        revisedMessages: [message("m3", "completed")],
+      });
+    transcriptUpdates = [revisedTail];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    const textOf = (id: string) =>
+      result.current.projection?.messages.find((row) => row.id === id)?.text;
+    expect(textOf("m3")).toBe("completed");
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m2", "m3", "m4", "m5"]);
+    expect(textOf("m3")).toBe("completed");
+    // A later unchanged poll keeps it too.
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    expect(textOf("m3")).toBe("completed");
+  });
 });
 
 describe("useNativeAgentSession history client budgets", () => {

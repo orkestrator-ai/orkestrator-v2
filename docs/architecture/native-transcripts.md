@@ -135,9 +135,11 @@ viewport. It pages only from a direct cursor
 (`canLoadEarlierAutomatically`), so a joined mint or joined page, each a
 whole-transcript read, still needs the button. A background poll that lands
 while a page is in flight does not retire it: the page merges into the live
-tail current when it lands, and is dropped only when a mutation, a later page
-or a read that replaced its cursor (a rotated history, a collapse to the live
-tail) superseded it. A page that leaves the head where it was (superseded, or
+tail current when it lands, and is dropped only when a mutation, a later page,
+a read that replaced its cursor (a rotated history, a collapse to the live
+tail) or a read that found the session gone superseded it. A held row that a
+poll revised while the page was in flight keeps the poll's copy; the page
+refreshes only held rows still as it found them. A page that leaves the head where it was (superseded, or
 failed) is retried once; after a second
 it stops until the head moves some other way. Those two pages per head count
 for the whole session, even if the head moved in between, so a transcript that

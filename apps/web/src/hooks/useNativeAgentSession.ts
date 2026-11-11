@@ -2391,6 +2391,15 @@ export function useNativeAgentSession<TMessage = unknown>({
           stateMissing &&
           establishingSessionRef.current === 0
         ) {
+          /*
+           * The session is gone, so is the history a page in flight was
+           * fetched behind. A history page survives an ordinary poll, so this
+           * read has to retire it explicitly: invalidate the page and forget
+           * the paging state it would otherwise merge into, or its late answer
+           * reinstalls the projection this read just removed.
+           */
+          historyPageSequenceRef.current += 1;
+          resetSyncState();
           applyProjection(null);
           markTranscriptAvailability("unavailable");
           setTranscriptRefreshing(false);
@@ -2445,6 +2454,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identity,
       markSessionStateAvailability,
       markTranscriptAvailability,
+      resetSyncState,
       setIsRefreshing,
       setSessionStateRefreshing,
       updateProgressiveCache,
@@ -3344,6 +3354,13 @@ export function useNativeAgentSession<TMessage = unknown>({
       // A read already in flight answers for the tail before this page; drop it
       // and let the next poll read the tail afresh.
       refreshSequenceRef.current += 1;
+      const rowIdentity = (message: TMessage): unknown => (message as { id?: unknown }).id;
+      // The held rows as this page found them. A poll that lands while the page
+      // is in flight can revise one of them (`revisedMessages`); that copy is
+      // newer than the page's, which was read before it.
+      const heldAtStart = new Map(
+        historyMessagesRef.current.map((message) => [rowIdentity(message), message]),
+      );
       const page = await backendForScope(scope).getNativeAgentMessagePage<TMessage>({
         ...identity,
         syncVersion: 1,
@@ -3424,6 +3441,9 @@ export function useNativeAgentSession<TMessage = unknown>({
           newMessages.push(message);
           continue;
         }
+        // Revised (or first held) while the page was in flight: the held copy
+        // is the newer one, as `reconcileHeldHistory` also rules.
+        if (heldAtStart.get(id) !== heldCopy) continue;
         const merged = preferCompleteLiveHead([heldCopy], [message]).messages[0]!;
         if (merged !== heldCopy && JSON.stringify(merged) !== JSON.stringify(heldCopy)) {
           refreshed.set(id, merged);

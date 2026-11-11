@@ -3,7 +3,7 @@
 - **ID:** 0901
 - **Status:** resolved
 - **Date observed:** 2026-10-25
-- **File:** `e2e/agent-testing/cli-ui.spec.ts:268`
+- **File:** `e2e/agent-testing/cli-ui.spec.ts:342` (line at 2026-11-11; 268 when first observed)
 - **Test:** `a CLI-initialized project and its cascade removal reach an open renderer`.
 - **Revision:** `db35fb35f` plus the interaction review fixes, macOS arm64, Bun 1.4.4.
 - **Original command:** `mise run test:logged -- --name browser-smoke -- mise run test:agent:browser:isolated --no-agent-credentials --agent-platforms codex`.

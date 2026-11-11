@@ -16,6 +16,7 @@
  */
 import type { Options, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import {
+  appendNativeAgentPolicyNote,
   nativeAgentDeniedCapabilities,
   nativeAgentPolicyForBridge,
   nativeAgentUserMcpGrant,
@@ -99,21 +100,41 @@ export function readOnlyTurnPolicy(
 }
 
 /**
+ * Why a Linux provider-sandbox session with full network still cannot reach
+ * this machine's loopback directly. The CLI runs each Linux command under
+ * bubblewrap in its own network namespace whose only way out is the CLI's
+ * proxy, and that proxy's `NO_PROXY` names loopback, so ordinary tools send
+ * `localhost` requests straight into the empty namespace.
+ * `network.allowLocalBinding` is "macOS only" in the SDK's types. Verified
+ * with the pinned CLI by `claude-provider-sandbox.live.test.ts`
+ * (`directLoopbackWithFullNetwork: false` on Linux), which fails on the bump
+ * that changes it, so this note can be removed then.
+ */
+export const CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE =
+  "On Linux, Claude's command sandbox gives each command its own network namespace: commands reach other hosts through the sandbox's proxy, but cannot connect directly to services on this machine's loopback (localhost), such as a dev server or local database.";
+
+/**
  * The policy Agent Info should describe now. While a `readOnly` turn runs it
  * is that turn's policy, not the session's: reporting the session's would
  * understate what the running turn may do. `commandDiscoveryInputs` records
  * the inputs of the query the running turn started, and
  * `readOnlyCommandSandboxOff` whether its commands run without the sandbox.
+ *
+ * A Linux provider sandbox with full network carries
+ * `CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE`: the network axis stays `full`, which
+ * is true for every host but loopback, and the note names the exception.
  */
 export function claudeReportedPolicy(
   session: Pick<
     SessionState,
     "executionPolicy" | "status" | "commandDiscoveryInputs" | "readOnlyCommandSandboxOff"
   >,
+  platform: NodeJS.Platform = process.platform,
 ): NativeAgentExecutionPolicy | undefined {
   if (session.status === "running" && session.commandDiscoveryInputs?.readOnly === true) {
     const turnPolicy = claudeTurnPolicy(session.executionPolicy, true);
     if (turnPolicy) {
+      // Always restricted network, so the loopback note never applies.
       return readOnlyTurnReportedPolicy(
         turnPolicy,
         session.readOnlyCommandSandboxOff === undefined
@@ -122,7 +143,18 @@ export function claudeReportedPolicy(
       );
     }
   }
-  return session.executionPolicy;
+  return session.executionPolicy && withLinuxLoopbackNote(session.executionPolicy, platform);
+}
+
+function withLinuxLoopbackNote(
+  policy: NativeAgentExecutionPolicy,
+  platform: NodeJS.Platform,
+): NativeAgentExecutionPolicy {
+  if (platform !== "linux" || policy.sandbox !== "provider" || policy.networkAccess !== "full") {
+    return policy;
+  }
+  if (policy.note?.includes(CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE)) return policy;
+  return appendNativeAgentPolicyNote(policy, CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE);
 }
 
 /**

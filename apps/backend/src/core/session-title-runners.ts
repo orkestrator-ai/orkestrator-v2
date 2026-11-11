@@ -48,7 +48,12 @@ export interface SessionTitleRunInput {
   temporaryRoot?: string;
 }
 
-const DISABLED_CODEX_TITLE_FEATURES = [
+/**
+ * Every tool-bearing Codex feature, switched off for a one-shot run. Also used
+ * by the panel-value evaluation's Codex consolidation driver
+ * (`scripts/multi-review-evaluation-drivers.ts`).
+ */
+export const DISABLED_CODEX_TITLE_FEATURES = [
   "apps",
   "browser_use",
   "browser_use_external",
@@ -77,7 +82,7 @@ const DISABLED_CODEX_TITLE_FEATURES = [
  * the model would otherwise be told about every skill in the user's home and
  * be offered `request_user_input`.
  */
-const CODEX_TITLE_CONFIG_OVERRIDES = [
+export const CODEX_TITLE_CONFIG_OVERRIDES = [
   "skills.include_instructions=false",
   "tools.experimental_request_user_input.enabled=false",
   "include_permissions_instructions=false",

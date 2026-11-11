@@ -187,7 +187,7 @@ export function ActionsPanel({
   useEffect(() => {
     if (docked || !expanded || searching) return;
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || menuEscapes.has(event)) return;
       suppressed.current = true;
       setExpanded(false);
     };
@@ -357,7 +357,8 @@ export function ActionsPanel({
           }
         }}
         onKeyDown={(event) => {
-          if (docked || event.key !== "Escape") return;
+          // Escape that closed a card's menu closes only the menu.
+          if (docked || event.key !== "Escape" || menuEscapes.has(event.nativeEvent)) return;
           event.stopPropagation();
           cancel();
           suppressed.current = true;
@@ -496,6 +497,13 @@ export function ActionsPanel({
 const ACTION_MENU_SELECTOR = "[data-coordinator-action-menu]";
 
 /**
+ * Escape key presses a card's context menu used to close itself. The menu
+ * listens on the document in the capture phase, so the same event still
+ * reaches the narrow overlay's own Escape handlers afterwards; they skip it.
+ */
+const menuEscapes = new WeakSet<Event>();
+
+/**
  * One action card. With `onMarkDone` it carries the card's context menu: "Mark
  * done" on an open card, "Mark not done" on a card only the user marked, and a
  * disabled note on a card the conversation itself finished (a manual mark
@@ -564,6 +572,9 @@ function ActionCardButton({
       <ContextMenuContent
         data-coordinator-action-menu=""
         aria-label={`Actions for ${card.title}`}
+        onEscapeKeyDown={(event) => {
+          menuEscapes.add(event);
+        }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           if (button.current?.isConnected) button.current.focus({ preventScroll: true });

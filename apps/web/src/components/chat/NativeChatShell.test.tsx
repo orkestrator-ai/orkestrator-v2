@@ -2,7 +2,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { createRef } from "react";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInAppCommandScope,
+  renderInNodeScope,
+} from "@/test/render-in-node-scope";
+import { COORDINATOR_ACTION_MARK_LIMITS } from "@orkestrator/protocol/coordinator-action-marks";
+import { useCoordinatorActionMarking } from "@/components/projects/useCoordinatorActionMarking";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type {
   NativeAgentActivityPart,
@@ -285,6 +293,126 @@ describe("NativeChatShell", () => {
     expect(useConversationScrollTargetStore.getState().targets.size).toBe(0);
     resetConversationScrollTargets();
     cleanup();
+  });
+
+  describe("manual action marks", () => {
+    const question = (id: string, title: string): NativeMessage => ({
+      id,
+      role: "assistant",
+      content: "",
+      createdAt: "2026-11-09",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "orkestrator_mark_question",
+          toolState: "success",
+          toolArgs: { title },
+        },
+      ],
+    });
+    // "Answered" is finished by the user's reply; "Waiting" is still open.
+    const messages: NativeMessage[] = [
+      question("row-0", "Answered"),
+      { id: "reply", role: "user", content: "Yes", createdAt: "2026-11-09", parts: [] },
+      question("row-1", "Waiting"),
+    ];
+
+    /** The shell as the coordinator tab's controller wires it. */
+    function CoordinatorShell() {
+      const marking = useCoordinatorActionMarking("p", "c1");
+      return (
+        <NativeChatShell
+          {...shellProps()}
+          messages={messages}
+          coordinatorNavigate={() => {}}
+          coordinatorMarkedActions={marking.marked}
+          onMarkCoordinatorAction={marking.onMark}
+        />
+      );
+    }
+
+    function marksBackend(initial: string[]) {
+      let cardIds = initial;
+      let revision = 1;
+      let refuse = false;
+      const answer = () => ({ projectId: "p", conversationId: "c1", revision, cardIds });
+      const client = new FakeNodeClient({
+        invoke: {
+          get_coordinator_action_marks: answer,
+          set_coordinator_action_mark: (args: Readonly<Record<string, unknown>>) => {
+            const cardId = String(args.cardId);
+            if (refuse) throw new Error("Storage is read-only");
+            if (
+              args.done &&
+              cardIds.length >= COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation
+            ) {
+              throw new Error("This conversation has too many actions marked done");
+            }
+            cardIds = args.done
+              ? [...cardIds.filter((id) => id !== cardId), cardId]
+              : cardIds.filter((id) => id !== cardId);
+            revision += 1;
+            return answer();
+          },
+        },
+      });
+      return {
+        client,
+        cardIds: () => cardIds,
+        refuseWrites: () => {
+          refuse = true;
+        },
+      };
+    }
+
+    const openMenu = async (name: string) => {
+      fireEvent.focus(screen.getByRole("button", { name: /Actions, \d+ waiting/ }));
+      // The menu appears once the stored marks have been read.
+      await waitFor(() => {
+        fireEvent.contextMenu(screen.getByRole("button", { name }));
+        expect(screen.getByRole("menuitem", { name: "Mark done" })).toBeTruthy();
+      });
+    };
+
+    afterEach(() => cleanupNodeScopes());
+
+    test("a mark chosen in the panel is saved for the conversation and shown", async () => {
+      const backend = marksBackend([]);
+      renderInNodeScope(<CoordinatorShell />, { client: backend.client });
+      await openMenu("Waiting");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Mark done" }));
+      await waitFor(() => expect(backend.cardIds()).toEqual(["row-1:0"]));
+      expect(await screen.findByRole("button", { name: "Done: Waiting" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /Actions, 0 waiting/ })).toBeTruthy();
+    });
+
+    test("a full conversation clears marks the transcript made redundant to fit a new one", async () => {
+      const limit = COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation;
+      // "Answered" was marked by hand before the user replied; the rest are other cards.
+      const stored = ["row-0:0", ...Array.from({ length: limit - 1 }, (_, i) => `other-${i}`)];
+      const backend = marksBackend(stored);
+      renderInNodeScope(<CoordinatorShell />, { client: backend.client });
+      await openMenu("Waiting");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Mark done" }));
+      await waitFor(() => expect(backend.cardIds().at(-1)).toBe("row-1:0"));
+      expect(backend.cardIds()).not.toContain("row-0:0");
+      expect(backend.cardIds()).toHaveLength(limit);
+      expect(mockToastError).not.toHaveBeenCalled();
+      // The finished card stays done without its mark.
+      expect(screen.getByRole("button", { name: "Done: Answered" })).toBeTruthy();
+    });
+
+    test("a save the backend refuses is undone and reported", async () => {
+      const backend = marksBackend([]);
+      renderInNodeScope(<CoordinatorShell />, { client: backend.client });
+      await openMenu("Waiting");
+      backend.refuseWrites();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Mark done" }));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
+      expect(String(mockToastError.mock.calls[0]?.[0])).toContain("Storage is read-only");
+      expect(await screen.findByRole("button", { name: "Waiting" })).toBeTruthy();
+    });
   });
 
   test("mounts the prompt rail only with a controller and an uncentered composer, using dock measurements", () => {

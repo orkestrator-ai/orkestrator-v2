@@ -183,6 +183,35 @@ describe("Mark done", () => {
   });
 });
 
+describe("Mark done in the narrow overlay", () => {
+  test("Escape closes only the card's menu and gives focus back to the visible card", async () => {
+    render(
+      <ActionsPanel docked={false} cards={cards} onNavigate={() => {}} onMarkDone={() => {}} />,
+    );
+    const icon = screen.getByRole("button", { name: "Actions, 1 waiting" });
+    fireEvent.focus(icon);
+    expect(icon.getAttribute("aria-expanded")).toBe("true");
+    const card = screen.getByRole("button", { name: "Which option?" });
+    act(() => card.focus());
+
+    fireEvent.keyDown(card, { key: "F10", shiftKey: true });
+    const item = screen.getByRole("menuitem", { name: "Mark done" });
+    await waitFor(() => expect(document.activeElement).toBe(item));
+    fireEvent.keyDown(item, { key: "Escape" });
+    await menuClosed();
+
+    expect(icon.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("region", { name: "Actions" }).getAttribute("aria-hidden")).toBe(
+      "false",
+    );
+    expect(document.activeElement).toBe(card);
+
+    // A second Escape, with no menu open, folds the overlay as before.
+    fireEvent.keyDown(card, { key: "Escape" });
+    await waitFor(() => expect(icon.getAttribute("aria-expanded")).toBe("false"));
+  });
+});
+
 /** The panel as a coordinator conversation renders it, over the node's stored marks. */
 function StoredPanel({ conversationId }: { conversationId: string }) {
   const marks = useCoordinatorActionMarks("p", conversationId);

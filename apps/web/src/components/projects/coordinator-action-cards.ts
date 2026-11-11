@@ -36,6 +36,19 @@ export function applyCoordinatorActionMarks(
   );
 }
 
+/**
+ * Marked cards the transcript has since finished, so their marks change
+ * nothing: the marks a full conversation can clear to make room without
+ * reopening anything. Takes the derived cards, before marks are applied.
+ */
+export function redundantCoordinatorActionMarks(
+  derivedCards: readonly CoordinatorActionCard[],
+  marked: ReadonlySet<string>,
+): string[] {
+  if (marked.size === 0) return [];
+  return derivedCards.filter((card) => card.done && marked.has(card.id)).map((card) => card.id);
+}
+
 /** Provider spellings of this server only; foreign MCP tools cannot create marks. */
 export function coordinatorToolName(name?: string): string | undefined {
   if (!name) return undefined;

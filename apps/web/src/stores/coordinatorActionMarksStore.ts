@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo } from "react";
-import type { CoordinatorActionMarks } from "@orkestrator/protocol/coordinator-action-marks";
+import {
+  COORDINATOR_ACTION_MARK_LIMITS,
+  type CoordinatorActionMarks,
+} from "@orkestrator/protocol/coordinator-action-marks";
 import { scopeBackendClient } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
@@ -15,8 +18,12 @@ import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/re
 export type CoordinatorActionMarksStatus = "loading" | "ready" | "unavailable";
 
 export interface CoordinatorActionMarksEntry {
+  /**
+   * What the panel shows: the newest confirmed backend marks with this
+   * client's unanswered changes laid over them.
+   */
   cardIds: readonly string[];
-  /** The backend revision `cardIds` was read at; a local change waits on its answer. */
+  /** The backend revision of the confirmed marks under `cardIds`. */
   revision: number;
   status: CoordinatorActionMarksStatus;
 }
@@ -27,14 +34,20 @@ export interface CoordinatorActionMarksState {
   /** Reads a conversation's marks; called when its Actions panel mounts. */
   hydrate: (projectId: string, conversationId: string) => Promise<void>;
   /**
-   * Applies a mark at once and saves it. Rejects when the backend refused it,
-   * after the stored marks have been read again.
+   * Applies a mark at once and saves it. Rejects when the backend refused it
+   * or could not be reached; the change is then dropped and the stored marks
+   * read again.
+   *
+   * `reclaimable` names marked cards the transcript has since finished: their
+   * marks change nothing on screen. When the conversation is at its mark limit,
+   * some of them are cleared first so a new mark still fits.
    */
   setMark: (
     projectId: string,
     conversationId: string,
     cardId: string,
     done: boolean,
+    reclaimable?: readonly string[],
   ) => Promise<void>;
   /** Stops subscriptions and forgets every conversation; scope dispose and tests. */
   reset: () => void;
@@ -44,8 +57,26 @@ export function coordinatorActionMarksKey(projectId: string, conversationId: str
   return `${projectId}\u0000${conversationId}`;
 }
 
+/** Redundant marks cleared at once when a conversation is full. */
+export const COORDINATOR_ACTION_MARK_RECLAIM_BATCH = 25;
+
 function marksApi(scope: NodeScope) {
   return createCoordinatorApi(scopeBackendClient(scope));
+}
+
+interface ConfirmedMarks {
+  cardIds: readonly string[];
+  revision: number;
+}
+
+/** A change this client sent and has not had answered; `seq` names the latest send. */
+interface PendingMark {
+  done: boolean;
+  seq: number;
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 /**
@@ -53,18 +84,26 @@ function marksApi(scope: NodeScope) {
  * node, mirrored from the backend (`get/set_coordinator_action_mark(s)`), so
  * every window and client showing a conversation agrees.
  *
- * A mark applies here at once and is saved in the background; while a save is
- * out, reads do not overwrite it. Changes from other clients arrive as
- * `coordinator-action-marks` hints and through the resync and periodic safety
- * check, which also read again a conversation whose first read failed.
+ * Two layers are kept apart. `confirmed` is the newest snapshot the backend
+ * gave (from a read or a save's answer, whichever has the higher revision);
+ * `pending` holds this client's unanswered changes, one per card. What the
+ * panel shows is `pending` laid over `confirmed`, so a snapshot that arrives
+ * during a save is kept rather than dropped, answers that arrive out of order
+ * cannot roll a mark back, and a save that fails simply drops its change:
+ * nothing unconfirmed outlives its own request.
+ *
+ * Changes from other clients arrive as `coordinator-action-marks` hints and
+ * through the resync and periodic safety check, which also read again a
+ * conversation whose first read failed.
  */
 export const coordinatorActionMarksStore = defineScopedStore<CoordinatorActionMarksState>(
   "coordinator-action-marks",
   (scope) => (set, get) => {
     let stopSubscriptions: Array<() => void> | null = null;
     const hydrating = new Map<string, Promise<void>>();
-    /** Local saves not yet answered, per conversation. */
-    const inFlight = new Map<string, number>();
+    const confirmed = new Map<string, ConfirmedMarks>();
+    const pending = new Map<string, Map<string, PendingMark>>();
+    let sequence = 0;
     const scopes = new Map<string, { projectId: string; conversationId: string }>();
     /** Bumped by `reset` and dispose, so a late answer writes nothing. */
     let generation = 0;
@@ -77,15 +116,43 @@ export const coordinatorActionMarksStore = defineScopedStore<CoordinatorActionMa
         return { entries: { ...state.entries, [key]: { ...current, ...next } } };
       });
 
-    /** `force`: replace a local change the backend did not take, whatever its revision. */
-    const adopt = (key: string, marks: CoordinatorActionMarks, force = false) => {
-      if ((inFlight.get(key) ?? 0) > 0) return;
+    /** Publishes `pending` over `confirmed`; keeps `cardIds` when nothing moved. */
+    const render = (key: string) => {
+      const base = confirmed.get(key);
+      if (!base) return;
+      const local = pending.get(key);
+      let cardIds: readonly string[] = base.cardIds;
+      if (local?.size) {
+        const shown = base.cardIds.filter((id) => local.get(id)?.done !== false);
+        for (const [id, mark] of local) if (mark.done && !shown.includes(id)) shown.push(id);
+        cardIds = shown;
+      }
       const current = get().entries[key];
-      if (!force && current?.status === "ready" && marks.revision <= current.revision) return;
-      patch(key, { cardIds: marks.cardIds, revision: marks.revision, status: "ready" });
+      if (
+        current?.status === "ready" &&
+        current.revision === base.revision &&
+        sameIds(current.cardIds, cardIds)
+      ) {
+        return;
+      }
+      patch(key, {
+        cardIds:
+          current && sameIds(current.cardIds, cardIds) ? current.cardIds : Array.from(cardIds),
+        revision: base.revision,
+        status: "ready",
+      });
     };
 
-    const refresh = async (key: string, force = false) => {
+    /** Keeps the newer of the held and the answered snapshot. */
+    const adopt = (key: string, marks: CoordinatorActionMarks) => {
+      const held = confirmed.get(key);
+      if (!held || marks.revision >= held.revision) {
+        confirmed.set(key, { cardIds: marks.cardIds, revision: marks.revision });
+      }
+      render(key);
+    };
+
+    const refresh = async (key: string) => {
       const target = scopes.get(key);
       if (!target) return;
       const started = generation;
@@ -95,18 +162,59 @@ export const coordinatorActionMarksStore = defineScopedStore<CoordinatorActionMa
           target.conversationId,
         );
         if (!live(started)) return;
-        if (marks) adopt(key, marks, force);
-        else if (get().entries[key]?.status !== "ready") patch(key, { status: "unavailable" });
+        if (marks) adopt(key, marks);
+        else if (!confirmed.has(key)) patch(key, { status: "unavailable" });
       } catch {
         // Kept as it was; the next hint or resync reads again.
-        if (live(started) && get().entries[key]?.status !== "ready") {
-          patch(key, { status: "unavailable" });
-        }
+        if (live(started) && !confirmed.has(key)) patch(key, { status: "unavailable" });
       }
     };
 
     const reconcileAll = async () => {
       await Promise.all(Array.from(scopes.keys()).map((key) => refresh(key)));
+    };
+
+    /** Sends one change; resolves with the failure, if any, once it is settled here. */
+    const save = async (
+      key: string,
+      projectId: string,
+      conversationId: string,
+      cardId: string,
+      done: boolean,
+    ): Promise<unknown> => {
+      const seq = (sequence += 1);
+      const local = pending.get(key) ?? new Map<string, PendingMark>();
+      pending.set(key, local);
+      local.set(cardId, { done, seq });
+      render(key);
+      const started = generation;
+      let answer: CoordinatorActionMarks | null = null;
+      let failure: unknown = null;
+      try {
+        answer = await marksApi(scope).setCoordinatorActionMark(
+          projectId,
+          conversationId,
+          cardId,
+          done,
+        );
+      } catch (error) {
+        failure = error;
+      }
+      if (!live(started)) return failure;
+      // A later change to the same card stays in front until its own answer.
+      if (pending.get(key)?.get(cardId)?.seq === seq) {
+        local.delete(cardId);
+        if (local.size === 0 && pending.get(key) === local) pending.delete(key);
+      }
+      if (answer) {
+        adopt(key, answer);
+        return null;
+      }
+      // Refused, unreachable or unreadable: the change is gone from the view
+      // at once, and whatever the backend did keep is read again.
+      render(key);
+      await refresh(key);
+      return failure ?? new Error("Could not save the mark");
     };
 
     const subscribe = () => {
@@ -152,52 +260,30 @@ export const coordinatorActionMarksStore = defineScopedStore<CoordinatorActionMa
         hydrating.set(key, read);
         return read;
       },
-      setMark: async (projectId, conversationId, cardId, done) => {
+      setMark: async (projectId, conversationId, cardId, done, reclaimable = []) => {
         const key = coordinatorActionMarksKey(projectId, conversationId);
         const current = get().entries[key];
         if (current?.status !== "ready") throw new Error("Action marks are not available");
-        const has = current.cardIds.includes(cardId);
-        if (has === done) return;
-        patch(key, {
-          cardIds: done
-            ? [...current.cardIds, cardId]
-            : current.cardIds.filter((id) => id !== cardId),
-        });
-        const started = generation;
-        inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
-        let answer: CoordinatorActionMarks | null = null;
-        let failure: unknown = null;
-        try {
-          answer = await marksApi(scope).setCoordinatorActionMark(
-            projectId,
-            conversationId,
-            cardId,
-            done,
-          );
-        } catch (error) {
-          failure = error;
+        if (current.cardIds.includes(cardId) === done) return;
+        if (done && current.cardIds.length >= COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation) {
+          // Oldest first, as stored. Only marks that change nothing on screen
+          // are cleared, so no card the user marked reopens.
+          const redundant = new Set(reclaimable);
+          const release = current.cardIds
+            .filter((id) => id !== cardId && redundant.has(id))
+            .slice(0, COORDINATOR_ACTION_MARK_RECLAIM_BATCH);
+          await Promise.all(release.map((id) => save(key, projectId, conversationId, id, false)));
         }
-        if (!live(started)) return;
-        const remaining = (inFlight.get(key) ?? 1) - 1;
-        if (remaining > 0) inFlight.set(key, remaining);
-        else inFlight.delete(key);
-        if (remaining === 0) {
-          const held = get().entries[key];
-          if (answer && answer.revision >= (held?.revision ?? 0)) {
-            patch(key, { cardIds: answer.cardIds, revision: answer.revision, status: "ready" });
-          } else {
-            // Refused, or no readable answer: the stored marks replace the
-            // local change.
-            await refresh(key, true);
-          }
-        }
-        if (failure)
+        const failure = await save(key, projectId, conversationId, cardId, done);
+        if (failure) {
           throw failure instanceof Error ? failure : new Error("Could not save the mark");
+        }
       },
       reset: () => {
         unsubscribe();
         hydrating.clear();
-        inFlight.clear();
+        confirmed.clear();
+        pending.clear();
         scopes.clear();
         set({ entries: {} });
       },
@@ -217,7 +303,8 @@ export interface CoordinatorActionMarksBinding {
   /** Whether marks can be read and changed for this conversation. */
   available: boolean;
   marked: ReadonlySet<string>;
-  setMark: (cardId: string, done: boolean) => Promise<void>;
+  /** See {@link CoordinatorActionMarksState.setMark} for `reclaimable`. */
+  setMark: (cardId: string, done: boolean, reclaimable?: readonly string[]) => Promise<void>;
 }
 
 /**
@@ -239,14 +326,14 @@ export function useCoordinatorActionMarks(
   const cardIds = entry?.cardIds;
   const marked = useMemo(() => (cardIds?.length ? new Set(cardIds) : NO_MARKS), [cardIds]);
   const setMark = useCallback(
-    (cardId: string, done: boolean) => {
+    (cardId: string, done: boolean, reclaimable?: readonly string[]) => {
       if (!projectId || !conversationId) {
         return Promise.reject(new Error("Not a coordinator conversation"));
       }
       return scope
         .store(coordinatorActionMarksStore)
         .getState()
-        .setMark(projectId, conversationId, cardId, done);
+        .setMark(projectId, conversationId, cardId, done, reclaimable);
     },
     [scope, projectId, conversationId],
   );

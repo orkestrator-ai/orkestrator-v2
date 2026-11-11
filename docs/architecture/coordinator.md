@@ -4166,7 +4166,9 @@ When the user has dealt with an action outside the transcript, they can
 right-click its card (or press the context-menu key or Shift+F10 on a focused
 card) and choose **Mark done**. The menu is the app's shared context menu
 (`components/ui/context-menu.tsx`); it gives focus back to the card when it
-closes, and a narrow overlay stays open while it is used.
+closes, and a narrow overlay stays open while it is used. Escape that closes
+the menu closes only the menu: the overlay's own Escape handlers skip a key
+press the menu used.
 
 - A mark is an override on top of the derived state: a card is done when the
   transcript says so or when the user marked it
@@ -4185,12 +4187,25 @@ closes, and a narrow overlay stays open while it is used.
   read and change them; the set is idempotent and refuses a mark beyond 500
   per conversation rather than evicting one. Each change announces
   `coordinator-action-marks` (id: the conversation id, with its `projectId`).
-- The renderer mirrors them per node scope (`coordinatorActionMarksStore`):
-  a mark applies at once and is saved in the background, refreshes follow the
-  hint, resyncs and the periodic safety check, and a refused save is replaced
-  by the stored marks with an error toast. Every window and client showing the
+- A mark stays stored when the transcript later finishes its card, where it
+  changes nothing. So a full conversation does not stay full: when a new mark
+  would exceed the limit, the renderer first clears up to 25 of the oldest
+  marks on cards the transcript has finished (the chat shell passes them as
+  `reclaimable`, from `redundantCoordinatorActionMarks`). Those cards stay
+  done, and no mark on an open card is ever cleared to make room.
+- The renderer mirrors them per node scope (`coordinatorActionMarksStore`).
+  It keeps the newest backend snapshot (by revision, from a read or a save's
+  answer) apart from this client's unanswered changes, and shows the changes
+  laid over the snapshot. A mark applies at once and is saved in the
+  background; a snapshot read while a save is out is kept, an older answer
+  arriving after a newer one changes nothing, and a save that fails (refused,
+  or the node unreachable) drops its change at once with an error toast,
+  whether or not the follow-up read succeeds. Refreshes follow the hint,
+  resyncs and the periodic safety check. Every window and client showing the
   conversation reads the same marks, after a reload or restart too. Against a
   backend without the commands the read fails and cards offer no menu.
+  `useCoordinatorActionMarking` is the hook the tab controller hands to the
+  chat shell.
 - The coordinator's own `mark_topic` and `mark_question` tools are unrelated
   and unchanged: they create cards, never manual marks.
 

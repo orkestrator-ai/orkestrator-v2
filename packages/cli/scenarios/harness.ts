@@ -60,6 +60,11 @@ export interface ManifestEntry {
     resolved: string | null;
     readError?: string;
   };
+  /**
+   * Turns the scenario backend's usage report counted straight after this
+   * stage, before any other read of the session could record them.
+   */
+  settledUsage?: { turns: number; readError?: string };
 }
 
 /** Private, bounded record of what a run did (IDs and codes only). */
@@ -78,7 +83,7 @@ export class RunManifest {
   async annotate(
     scenario: string,
     stage: string,
-    fields: Pick<ManifestEntry, "model" | "ids">,
+    fields: Pick<ManifestEntry, "model" | "ids" | "settledUsage">,
   ): Promise<boolean> {
     const entry = this.entries.findLast(
       (candidate) => candidate.scenario === scenario && candidate.stage === stage,

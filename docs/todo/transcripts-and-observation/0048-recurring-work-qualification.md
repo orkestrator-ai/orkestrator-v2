@@ -50,7 +50,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 and 2026-11-11 runs were on Linux; the physical-device run moved to 7568 on 2026-11-10).
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
-12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (only the two PR candidates are left, blocked (waits on 7568: 0048 task 5)) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to [7745](7745-tmux-interactive-capture-orphans.md), decision C5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (only the two PR candidates are left, blocked (waits on 7568: 0048 task 5)) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to to-do 7745, decision C5, which leased the terminal and observed the orphan and its end live on 2026-11-11 before it was retired; see [recurring-work.md](../../architecture/recurring-work.md) row B19) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open for `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, whose wait on 0049 ended on 2026-11-11 (0049 finished and was retired); the `feature-planning` and `build-pipeline` rollback drivers and the switch itself still wait for task 5's live GitHub run (7568: 0048 task 5) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
@@ -504,8 +504,8 @@ cost it actually pays; numbers in
   `docker exec` (about 50 ms wall, 60 to 70 ms CPU) in a container. Demand
   gating is needed for terminals nobody detached, not for attached views: a
   reload or a closed window leaves the loop running until the environment's
-  tmux cleanup. Moved to [7745](7745-tmux-interactive-capture-orphans.md)
-  (decision C5).
+  tmux cleanup. Moved to to-do 7745 (decision C5; retired 2026-11-11: the
+  client lease, row B19 of [recurring-work.md](../../architecture/recurring-work.md)).
 - B20: the 500 ms tick costs under 0.1 ms; splitting the liveness write would
   save about half of that. Kept (decision C6).
 
@@ -1724,8 +1724,10 @@ What each pays at its cadence, from the rows above:
   stops only on an explicit detach, the environment's tmux cleanup or backend
   shutdown; the client detaches on unmount, which a reload, a closed window
   or a lost connection never runs (read from `tmux-interactive.ts`,
-  `tmux-commands.ts` and `ClaudeTmuxInteractiveTerminal.tsx`; not observed
-  live, 7745 task 2).
+  `tmux-commands.ts` and `ClaudeTmuxInteractiveTerminal.tsx`). Observed live
+  on 2026-11-11 (to-do 7745 task 2, retired): one orphaned terminal in a
+  container added 57.5 `docker exec` captures a minute, and a leased one
+  nobody renewed added none once its 45 s lease had passed.
 - B20: two ticks a second, about 0.15 ms of CPU a second for a 20-command
   run; the split would save about 0.07 ms a second.
 
@@ -1843,8 +1845,8 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 - ~~The validation reader's in-environment `bun` spawn per poll.~~ Decided
   2026-11-11: kept (decision C4).
 - ~~Demand gating for interactive tmux capture (B19, `tmux-interactive.ts`).~~
-  Decided 2026-11-11: needed only for terminals no client detached, in
-  [7745](7745-tmux-interactive-capture-orphans.md) (decision C5).
+  Decided 2026-11-11: needed only for terminals no client detached, done by
+  to-do 7745 (decision C5; retired 2026-11-11, the client lease).
 - ~~Splitting the validation worker's 500 ms liveness write from changed-result
   writes (B20, `review-validation-worker.ts`), only with cross-process
   crash-recovery and cancellation proof.~~ Decided 2026-11-11: kept (decision
@@ -2687,9 +2689,9 @@ collide with other tasks' decisions.
 ## Related
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 5, 9, 16 and 17, and the device run of task 8) moved there on 2026-11-10.
-- [7745-tmux-interactive-capture-orphans.md](7745-tmux-interactive-capture-orphans.md):
-  an interactive tmux terminal no client detached keeps capturing (task 12,
-  decision C5).
+- 7745 (retired 2026-11-11): an interactive tmux terminal no client detached
+  kept capturing (task 12, decision C5); now leased, row B19 of
+  [recurring-work.md](../../architecture/recurring-work.md).
 - [7202-busy-profile-follow-ups.md](7202-busy-profile-follow-ups.md): what
   task 1's busy profile found (approving from the CLI, one unexplained
   review stall).
@@ -2908,11 +2910,12 @@ Numbered Cn so they do not collide with other tasks' decisions. Numbers are in
   window, a lost connection), found by reading the code. Options: slow the
   idle cadence for containers; gate the loop on a client lease or the owning
   connection; or keep it. Chosen: keep the cadence for attached views and
-  stop orphaned loops, in [7745](7745-tmux-interactive-capture-orphans.md)
-  (task 1 there). Pros: the user watching a pane keeps its 1 s freshness, and
+  stop orphaned loops, in to-do 7745 (task 1 there; retired 2026-11-11). Pros: the user watching a pane keeps its 1 s freshness, and
   the unbounded part of the cost is removed. Cons: the fix needs a client
   signal the backend does not have today (a contract change), so it is its
-  own change; the orphan has not been observed live (7745 task 2).
+  own change (made by 7745: a client lease, 45 s after the last 15 s
+  renewal); the orphan was observed live on 2026-11-11 (7745 task 2), and so
+  was its end under the lease.
 - **C6 Split B20's liveness write from result writes?** In the worktree's
   filesystem a tick costs 63 to 84 µs of CPU; a heartbeat-only write would
   cost 29 to 48 µs, saving under 0.01 % of a core. Options: split it, with the

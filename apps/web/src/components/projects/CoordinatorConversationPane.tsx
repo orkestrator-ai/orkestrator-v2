@@ -255,6 +255,7 @@ export function CoordinatorConversationPane({
               ownsGlobalShortcuts={paneFocused}
               executionPolicy="coordinator-read-only"
               coordinatorProjectId={projectId}
+              coordinatorConversationId={conversation.id}
               coordinatorWorkspacePath={snapshot.projectPath}
               availablePlatforms={availablePlatforms}
               platformNotes={platformNotes}

@@ -266,8 +266,8 @@ What that shows:
   btrfs root, `--profile-prefix q7562calls`, a nearly idle host at a load
   average of 1 to 3) had fewer and shorter stalls (1.0 to 2.8 s: other
   builds' disk traffic lengthens the waits, and 66 of its 70 rounds idled
-  60 s on the driver's burst rescan wait,
-  [7765](../transcripts-and-observation/7765-busy-driver-burst-rescan-timeouts.md)), but every stall line counted
+  60 s on the driver's burst rescan wait, a driver mismatch since fixed: to-do
+  7765 (retired 2026-11-11; [testing guide](../../development/testing-guide.md#live-idle-ab))), but every stall line counted
   SQLite calls on the main database covering the whole stall
   (`storageMainCallMs` 1,096 to 2,951 ms for stalls of 1,049 to 2,844 ms;
   the ledger 0 to 82 ms), and the calls in a stall grew with the run: 850, 1,277,
@@ -340,7 +340,7 @@ against 7.9 s of backend CPU a minute) with no stall; its queued prompt
 dispatch peaked at 2.7 s (4.8 s before) and the public API listed approvals
 within 77 ms (1.6 s before). Its `burst-backend` row timed out 3 times in
 60 rounds against 27 in 40 before
-([7765](../transcripts-and-observation/7765-busy-driver-burst-rescan-timeouts.md)).
+(7765, retired 2026-11-11; [testing guide](../../development/testing-guide.md#live-idle-ab)).
 Backend disk writes per minute were not compared: the change-tracking
 ledger's writes (70 to 320 MiB a minute) swamp the main database's.
 
@@ -357,4 +357,4 @@ ledger's writes (70 to 320 MiB a minute) swamp the main database's.
 - [0741](0741-backend-responsiveness-under-load.md)
 - [7560](7560-large-ignored-trees-in-the-worktree-watch.md)
 - [0048 recurring work qualification](../transcripts-and-observation/0048-recurring-work-qualification.md)
-- [7765](../transcripts-and-observation/7765-busy-driver-burst-rescan-timeouts.md): the busy driver's burst rescan timeouts these runs found.
+- 7765 (retired 2026-11-11): the busy driver's burst rescan timeouts these runs found. The held turn's 2,500 removed files and the next burst's 2,500 new ones read as the same diff stats in one scan, so the `diff-scan` changed counter moved one short; the driver now waits for the removal to be rescanned (`turn-clear-backend`, [testing guide](../../development/testing-guide.md#live-idle-ab)).

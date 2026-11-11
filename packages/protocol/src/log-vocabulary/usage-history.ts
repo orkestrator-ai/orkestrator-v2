@@ -6,6 +6,10 @@ export const USAGE_HISTORY_LOG_AREAS = defineLogAreas({
     events: {
       "record.failed": "Agent usage could not be recorded; a later read counts it.",
       "prune.failed": "Pruning recorded usage failed; the next prune retries.",
+      "settled-read.failed":
+        "Reading a settled turn's usage failed; the session's next outcome or state read retries it.",
+      "settled-read.abandoned":
+        "A settled turn's usage was given up after repeated failed reads or a full retry queue; only a later projection can still count it.",
     },
   },
 });

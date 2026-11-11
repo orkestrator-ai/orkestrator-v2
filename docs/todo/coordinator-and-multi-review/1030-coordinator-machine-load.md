@@ -19,7 +19,7 @@ Analysed 2026-10-31 against `main` at `931e55417`. Tasks 3 and 4 rechecked
 
 **Problem.** A coordinator picked a node knowing nothing about how busy it was or what it ran. `list_nodes` gave only id, name, availability, connection state, mode and whether the node had the project.
 
-**Context.** The behaviour and its reasons are in [coordinator.md](../../architecture/coordinator.md#choosing-a-machine); cadence and cost are row B29 of [recurring-work.md](../../architecture/recurring-work.md). The code is `apps/backend/src/core/machine-load.ts`, `control-mcp-machine-load.ts` and `packages/protocol/src/machine-load.ts`.
+**Context.** The behaviour and its reasons are in [coordinator.md](../../architecture/coordinator.md#choosing-a-machine); cadence and cost are row B29 of [recurring-work.md](../../architecture/recurring-work.md). The code is `apps/backend/src/core/machine-load.ts`, `control-mcp/machine-load.ts` and `packages/protocol/src/machine-load.ts`.
 
 **Investigation.** See [Assumptions and decisions](#assumptions-and-decisions).
 
@@ -128,7 +128,7 @@ No real release has carried it yet.
 
 **Context.** Moved from to-do 4840 (deleted 2026-11-06). `buildCommit` is in
 `packages/protocol/src/backend-profile.ts` and reported by
-`apps/backend/src/core/control-mcp-nodes.ts`; release builds set
+`apps/backend/src/core/control-mcp/nodes.ts`; release builds set
 `ORKESTRATOR_BUILD_COMMIT` (`mise.toml`), and the rules are in
 [`releasing.md`](../../development/releasing.md). Task 2's two-machine run can
 take this check at the same time.

@@ -58,10 +58,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("terminals, files and claude-tmux definitions", () => {
-  it("define 25, 28 and 28 commands, each since version 1 of its domain", () => {
+  it("define 25, 28 and 29 commands, each since version 1 of its domain", () => {
     expect(TERMINALS_COMMANDS).toHaveLength(25);
     expect(FILES_COMMANDS).toHaveLength(28);
-    expect(CLAUDE_TMUX_COMMANDS).toHaveLength(28);
+    expect(CLAUDE_TMUX_COMMANDS).toHaveLength(29);
     expect(new Set(ALL.map((def) => def.name)).size).toBe(ALL.length);
     for (const def of ALL) {
       expect(def.since).toBe(1);

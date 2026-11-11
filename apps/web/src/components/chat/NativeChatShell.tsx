@@ -1,8 +1,11 @@
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { CoordinatorActionsPanel } from "@/components/projects/CoordinatorActionsPanel";
 import {
+  applyCoordinatorActionMarks,
   coordinatorActionCards,
+  redundantCoordinatorActionMarks,
   visibleCoordinatorCards,
+  type CoordinatorActionCard,
 } from "@/components/projects/coordinator-action-cards";
 import {
   Children,
@@ -101,6 +104,18 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   coordinatorActionHistory?: readonly NativeMessageType[];
   coordinatorInteractions?: readonly AgentInteractionRequest[];
   coordinatorNavigate?: (anchorId: string) => void;
+  /** Action card ids the user marked done by hand in this coordinator conversation. */
+  coordinatorMarkedActions?: ReadonlySet<string>;
+  /**
+   * Marks an action card done by hand or clears the mark; absent while marks
+   * are unavailable. `reclaimable` lists marked cards the transcript has since
+   * finished, which a full conversation may clear to make room.
+   */
+  onMarkCoordinatorAction?: (
+    card: CoordinatorActionCard,
+    done: boolean,
+    reclaimable: readonly string[],
+  ) => void;
   messages: TMessage[];
   isLoading: boolean;
   /**
@@ -257,11 +272,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   coordinatorNavigate,
   coordinatorActionHistory,
   coordinatorInteractions,
+  coordinatorMarkedActions,
+  onMarkCoordinatorAction,
   conversationHighlight = null,
 }: NativeChatShellProps<TMessage>) {
   const [visibleEnd, setVisibleEnd] = useState<number | null>(null);
   const loadedIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages]);
-  const actionCards = useMemo(
+  const derivedActionCards = useMemo(
     () =>
       coordinatorNavigate
         ? coordinatorActionCards(
@@ -284,6 +301,28 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       coordinatorActionHistory,
       coordinatorInteractions,
     ],
+  );
+  // Manual marks only ever add "done"; the derived state is computed as before.
+  const actionCards = useMemo(
+    () =>
+      coordinatorMarkedActions
+        ? applyCoordinatorActionMarks(derivedActionCards, coordinatorMarkedActions)
+        : derivedActionCards,
+    [derivedActionCards, coordinatorMarkedActions],
+  );
+  const markCoordinatorAction = useMemo(
+    () =>
+      onMarkCoordinatorAction
+        ? (card: CoordinatorActionCard, done: boolean) =>
+            onMarkCoordinatorAction(
+              card,
+              done,
+              coordinatorMarkedActions
+                ? redundantCoordinatorActionMarks(derivedActionCards, coordinatorMarkedActions)
+                : [],
+            )
+        : undefined,
+    [onMarkCoordinatorAction, derivedActionCards, coordinatorMarkedActions],
   );
   const [showLog, setShowLog] = useState(false);
   // A coordinator's docked Actions panel can move the column left to fit.
@@ -677,6 +716,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
             )}
             searchCards={actionCards}
             onNavigate={coordinatorNavigate}
+            onMarkDone={markCoordinatorAction}
           />
         )}
         <VirtualizedMessageList

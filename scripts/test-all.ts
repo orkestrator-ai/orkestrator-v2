@@ -160,8 +160,12 @@ export interface FailingFile {
   file: string;
 }
 
-/** Bun's per-file header, printed before that file's failures: `src/a.test.ts:`. */
-const BUN_FILE_HEADER = /^(\S(?:.*\S)?\.(?:test|spec)\.[cm]?[jt]sx?):$/;
+/**
+ * Bun's per-file header, printed before that file's failures: `src/a.test.ts:`.
+ * Under GitHub Actions Bun wraps each file in a log group and prints the header
+ * as `::group::src/a.test.ts:`; the marker is not part of the path.
+ */
+const BUN_FILE_HEADER = /^(?:::group::)?(\S(?:.*\S)?\.(?:test|spec)\.[cm]?[jt]sx?):$/;
 
 export class FailureReportCollector {
   readonly reports: string[] = [];

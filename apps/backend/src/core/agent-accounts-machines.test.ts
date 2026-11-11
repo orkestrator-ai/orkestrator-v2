@@ -3,7 +3,10 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+
 import type { CommandContext } from "./commands-context.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
 import { NodeUnavailableError } from "./nodes/node-link.js";
 import { StorageService } from "./storage.js";
@@ -110,6 +113,39 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
   ]);
   expect(result.machines[0]?.nodeId).toBe("node-self");
   expect(result.machines[1]?.snapshot).toEqual(LEAF_SNAPSHOT);
+});
+
+test("a machine past its deadline has both routed reads aborted", async () => {
+  const signals = new Map<string, AbortSignal | undefined>();
+  const result = await listMachineAgentAccounts(
+    context({
+      nodes: {
+        selfIdentity: async () => "node-self",
+        isLeaf: () => false,
+        listNodes: async () => ({
+          nodes: [{ nodeId: "node-slow", displayName: "Slow", enabled: true }],
+        }),
+      } as never,
+      nodePortal: {
+        invokeOnNode: (args: { command: string }, options?: { signal?: AbortSignal }) => {
+          signals.set(args.command, options?.signal);
+          return new Promise(() => undefined);
+        },
+      } as never,
+    }),
+    { timeoutMs: 20, readSignIns },
+  );
+  expect(result.machines.map((machine) => machine.state)).toEqual(["ok", "unavailable"]);
+  expect([...signals.keys()].sort()).toEqual(["list_agent_accounts", "read_host_agent_sign_ins"]);
+  expect(signals.get("list_agent_accounts")?.aborted).toBe(true);
+  // The sign-in read has its own deadline; it is aborted once that passes.
+  const signIns = signals.get("read_host_agent_sign_ins")!;
+  if (!signIns.aborted) {
+    await new Promise<void>((resolve) =>
+      signIns.addEventListener("abort", () => resolve(), { once: true }),
+    );
+  }
+  expect(signIns.aborted).toBe(true);
 });
 
 test("a malformed peer row becomes an error cell instead of reaching Settings", async () => {
@@ -238,4 +274,40 @@ test("keeps a preferred login per platform on the machine asking and reports it"
   await setPreferredAgentIdentity(ctx, "codex", null);
   expect(await storage.agentAccounts.loadAgentAccounts()).not.toHaveProperty("preferred");
   expect((await listMachineAgentAccounts(ctx, { readSignIns })).preferred).toBeUndefined();
+});
+
+test("a machine that predates the sign-in read still lists its accounts, and is counted", async () => {
+  const id = "host-agent-sign-ins.older-node";
+  const count = () => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
+  const before = count();
+  const run = (signIns: () => unknown) =>
+    listMachineAgentAccounts(
+      context({
+        nodes: {
+          selfIdentity: async () => "self",
+          isLeaf: () => false,
+          listNodes: async () => ({
+            nodes: [{ nodeId: "older", displayName: "Older", enabled: true }],
+          }),
+        } as never,
+        nodePortal: {
+          invokeOnNode: async ({ command }: { command: string }) =>
+            command === "read_host_agent_sign_ins"
+              ? signIns()
+              : { outcome: "ok", result: LEAF_SNAPSHOT },
+        } as never,
+      }),
+      { timeoutMs: 1_000, readSignIns },
+    );
+  const older = await run(() => {
+    throw new Error(unknownBackendCommandMessage("read_host_agent_sign_ins"));
+  });
+  expect(older.machines[1]).toMatchObject({ state: "ok", snapshot: LEAF_SNAPSHOT });
+  expect(older.machines[1]).not.toHaveProperty("signIns");
+  expect(count()).toBe(before + 1);
+  // Any other failure is not an older machine.
+  await run(() => {
+    throw new NodeUnavailableError("offline");
+  });
+  expect(count()).toBe(before + 1);
 });

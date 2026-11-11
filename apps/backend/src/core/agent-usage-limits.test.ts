@@ -7,7 +7,7 @@ import {
   turnOutcomeFailureKind,
 } from "./agent-usage-limits.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { resumeAfterSwitch } from "./control-mcp-account-tools.js";
+import { resumeAfterSwitch } from "./control-mcp/account-tools.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");

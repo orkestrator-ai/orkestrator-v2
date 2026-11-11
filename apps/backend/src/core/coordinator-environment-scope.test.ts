@@ -27,10 +27,10 @@ import {
   COORDINATOR_ENVIRONMENT_CHECKED_BY_COMMAND,
   COORDINATOR_ENVIRONMENT_READS,
   COORDINATOR_ENVIRONMENT_USER_APPROVED,
-} from "./control-mcp-coordinator-environment-scope.js";
-import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
-import { rpc } from "./control-mcp-server-test-support.js";
-import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
+} from "./control-mcp/coordinator-environment-scope.js";
+import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp/server.js";
+import { rpc } from "./control-mcp/server-test-support.js";
+import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp/tools.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { graphRunFixture } from "./graph-run-test-support.js";
 

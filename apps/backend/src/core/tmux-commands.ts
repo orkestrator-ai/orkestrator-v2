@@ -3,6 +3,7 @@ import {
   claudeTmuxAnswerSelectionPromptCommand,
   claudeTmuxCreateInteractiveTerminalCommand,
   claudeTmuxDetachInteractiveTerminalCommand,
+  claudeTmuxRenewInteractiveTerminalCommand,
   claudeTmuxHoldHookCommand,
   claudeTmuxInterruptCommand,
   claudeTmuxListPreviousSessionsCommand,
@@ -724,7 +725,7 @@ export function registerTmuxBackendCommands(
   );
   register(
     claudeTmuxCreateInteractiveTerminalCommand,
-    async ({ tabId: tab, environmentId: envId, cols, rows }, context) => {
+    async ({ tabId: tab, environmentId: envId, cols, rows, leased }, context) => {
       const session = requireSession(context, envId, tab);
       if (!(await session.tmuxAlive())) throw new Error("tmux session not running");
       context.runtime.environments.fence.assertNotMoving(envId);
@@ -736,6 +737,7 @@ export function registerTmuxBackendCommands(
         session,
         asPositiveInt(cols, "cols"),
         asPositiveInt(rows, "rows"),
+        { leased: leased === true },
       );
     },
     ASYNC_HANDLER,
@@ -758,6 +760,9 @@ export function registerTmuxBackendCommands(
   register(claudeTmuxDetachInteractiveTerminalCommand, ({ terminalSessionId }, context) => {
     context.runtime.tmux.interactiveTerminals.detach(terminalSessionId);
   });
+  register(claudeTmuxRenewInteractiveTerminalCommand, ({ terminalSessionId }, context) => ({
+    renewed: context.runtime.tmux.interactiveTerminals.renew(terminalSessionId),
+  }));
 }
 
 export function requireSession(

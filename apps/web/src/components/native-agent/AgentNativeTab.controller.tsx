@@ -1,4 +1,5 @@
 import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
+import { useCoordinatorActionMarking } from "@/components/projects/useCoordinatorActionMarking";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -336,6 +337,7 @@ export function SharedNativeAgentController({
   refreshRequestId = 0,
   executionPolicy,
   coordinatorProjectId,
+  coordinatorConversationId,
   coordinatorWorkspacePath,
   hiddenByLayout = false,
   beforeSend,
@@ -3346,6 +3348,10 @@ export function SharedNativeAgentController({
     platform,
     projection?.sessionId,
   );
+  const coordinatorActionMarking = useCoordinatorActionMarking(
+    coordinatorProjectId,
+    coordinatorConversationId,
+  );
   const transcriptInteractions = useMemo(
     () =>
       allInteractions.filter(
@@ -4039,6 +4045,8 @@ export function SharedNativeAgentController({
       coordinatorActionHistory={coordinatorActionHistory}
       coordinatorInteractions={allInteractions}
       coordinatorNavigate={coordinatorProjectId ? requestActionNavigation : undefined}
+      coordinatorMarkedActions={coordinatorActionMarking.marked}
+      onMarkCoordinatorAction={coordinatorActionMarking.onMark}
       messages={messages}
       agentActivityAnnouncement={agentActivityAnnouncement}
       resolveModelLabel={resolveModelLabel}

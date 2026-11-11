@@ -133,11 +133,11 @@ better served by a `voice` or `custom` credential.
 
 - **Tier 0, voice core:** `overview`, `resolve_target`, `read_session`,
   `prompt_session`, `steer_session`, `stop_session`, `answer_question`,
-  `start_work` (`control-mcp-voice.ts`). A core tool may compose several reads;
+  `start_work` (`control-mcp/voice.ts`). A core tool may compose several reads;
   every mutation is exactly one public action under the caller's `requestId`.
   Beside it, the **agent voice chat** tools `agent_voice_chat_say`,
   `agent_voice_chat_listen`, `agent_voice_chat_end` and
-  `agent_voice_chat_interrupt` (`control-mcp-agent-voice-chat.ts`), listed for
+  `agent_voice_chat_interrupt` (`control-mcp/agent-voice-chat.ts`), listed for
   every operator credential that may run `session.prompt` and
   `session.transcript` (the interrupt also needs `session.steer` and
   `session.stop`); see [control-mcp-voice.md](control-mcp-voice.md#agent-voice-chat).
@@ -146,7 +146,7 @@ better served by a `voice` or `custom` credential.
   `describe_action(action)` (input JSON Schema, up to two examples, wait
   conditions, CLI equivalent), `run_action(action, input, requestId?,
   confirmToken?)` and `run_status(operationId | requestId, action?,
-  waitSeconds?)` (`control-mcp-gateway.ts`). `run_action` accepts only
+  waitSeconds?)` (`control-mcp/gateway.ts`). `run_action` accepts only
   `PUBLIC_ACTIONS` names and enters through `public_action`; it never reaches a
   raw registry command. `requestId` is required for mutations and refused for
   reads.
@@ -155,7 +155,7 @@ better served by a `voice` or `custom` credential.
   `session_prompt`), with the action's input schema plus `requestId` and, where
   the action can need it, `confirmToken`. They are generated from the protocol
   schemas with the SDK's `fromJsonSchema` and compiled once per process
-  (`control-mcp-direct-tools.ts`).
+  (`control-mcp/direct-tools.ts`).
 
 The other tools' inputs (projects, environments, tickets, mail, the
 coordinator's tools, and the agent tools server's) are Effect Schemas,
@@ -281,7 +281,7 @@ Operator credentials also get, under the names a coordinator already uses:
 
 - `list_nodes` (`node.list`): this machine and the leaf nodes it controls. A
   coordinator's `list_nodes` is a different tool with the same name
-  (`control-mcp-nodes.ts`), and it also reports each machine's OS and load: see
+  (`control-mcp/nodes.ts`), and it also reports each machine's OS and load: see
   [coordinator.md](coordinator.md#choosing-a-machine).
 - `launch_multi_review` (and `start_multi_review`, the same action for an
   operator), `list_multi_reviews`, `get_multi_review`, `open_multi_review`,
@@ -369,7 +369,7 @@ one public action (`actions-pull-requests.ts`), so it has the standard arguments
 ### Operator tools over public actions
 
 For operator credentials the original mutation tools are adapters over one
-public action each (`control-mcp-operator-tools.ts`): `launch_environment` →
+public action each (`control-mcp/operator-tools.ts`): `launch_environment` →
 `environment.launch`, `launch_job` → `session.start`, `send_prompt_to_tab` →
 `session.prompt`, `create_ticket`/`update_ticket`/`add_ticket_comment` →
 `ticket.*`, `list_ticket_labels` → `ticket.labels`, `create_ticket_label` →
@@ -572,7 +572,7 @@ needs no approval because the backend does the switching (see
 [agent-accounts.md](agent-accounts.md#automatic-switching)).
 
 **Saved graphs** (item 214, capability `graphs`, main role only;
-`control-mcp-graph-tools.ts`, commands in `coordinator-graph-actions.ts`):
+`control-mcp/graph-tools.ts`, commands in `coordinator-graph-actions.ts`):
 
 - `list_graph_templates {ref?, environmentId?}`: the project's templates with
   trust and launchability, or with `ref` one template's launch options (roles

@@ -152,8 +152,12 @@ limit found on the way: the backend records usage only when it refreshes a
 session's projection, which a later prompt dispatch does but `session start`'s
 own completion and every public read do not, so a run whose last turn is a
 `session start` records nothing for it; `live-session` ends with prompts, so
-its count is whole. That backend gap is to-do
-[7815](7815-cli-session-start-usage-unrecorded.md). The paid run that reads a
+its count is whole. That backend gap was to-do 7815 (retired), fixed on
+2026-11-11: the backend now records a turn's usage when it records the turn's
+outcome and on every session-state read. `live-session` now also reads the
+usage report straight after `session start --wait`, before any other read of
+the session, records the count on that stage's manifest entry
+(`settledUsage`) and fails when it is 0. The paid run that reads a
 real provider's cost stays on the checklist (7568: 0014 task 4).
 
 ### 5. Fresh Linux evidence
@@ -310,7 +314,11 @@ a success signal.
   input staging reads the staged files, not the host's (not yet exercised by
   a container run). `CURSOR_API_KEY`,
   `XAI_API_KEY` and the `GROK_AUTH_*` overrides are cleared for every other
-  run.
+  run. Since 2026-11-11 `HOME` itself is the disposable home, so readers
+  of other `~/.<tool>` paths (the shared `~/.agents/skills` first of all)
+  find nothing of the operator's; Git, gh, mise, Docker, GnuPG, Bun and
+  `XDG_CACHE_HOME` keep the operator's settings through explicit overrides
+  (7816, retired).
 - Each isolated backend also starts with a decoy parent agent tool connection
   (`INHERITED_AGENT_TOOL_ENV`). The startup regression checks both the login
   shell and a catalogue probe cannot see it. The backend drops any inherited `ORKESTRATOR_AGENT_MCP_URL`
@@ -474,7 +482,7 @@ model).
     `session config get`, `session get` and `session commands` the report still
     counted 0 turns; after the follow-up it counted 2 turns, 246 input, 90
     output, 336 total, all unpriced (`costUsd` 0), one session, model
-    `pi/orkfake/fake-1`. Filed as 7815.
+    `pi/orkfake/fake-1`. Filed as 7815 (retired; fixed 2026-11-11).
   - Not run: a paid live run (7568: 0014 task 4) and Pi, Cursor or Grok
     qualification (task 1).
 
@@ -945,11 +953,11 @@ model).
 
 ## Related
 
-- [7815-cli-session-start-usage-unrecorded.md](7815-cli-session-start-usage-unrecorded.md):
-  the usage a `session start` turn never records (found by task 4).
-- [7816-cli-scenario-host-shared-skills.md](7816-cli-scenario-host-shared-skills.md):
-  scenario backends read the operator's `~/.agents/skills` (found by 0015's
-  2026-11-11 run).
+- 7815 (retired): the usage a `session start` turn never recorded (found by
+  task 4, fixed 2026-11-11).
+- 7816 (retired): scenario backends read the operator's `~/.agents/skills`
+  (found by 0015's 2026-11-11 run; scenario backends now run with a
+  disposable `HOME`).
 - [agent-engines.md](../../architecture/agent-engines.md#opencode): how OpenCode
   attachments are labelled since the `--attach` failure found by this file's
   2026-10-25 run (todo 0166, retired on 2026-10-29).

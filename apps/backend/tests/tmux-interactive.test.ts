@@ -10,7 +10,10 @@ import {
 } from "../src/core/tmux";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
 import { deferred, waitFor } from "./tmux-test-harness.js";
+
+const LEASE_MS = 45_000;
 
 describe("interactive tmux terminal snapshots", () => {
   test("emits line patches and falls back for resize-shaped redraws", () => {
@@ -95,7 +98,9 @@ describe("interactive tmux terminal snapshots", () => {
   function createInteractiveHarness(
     captures: Array<string | Promise<string>>,
     resizes: Array<void | Promise<void>> = [],
+    options: { leased?: boolean; metrics?: RecurringWorkMetrics } = {},
   ) {
+    let now = 1_000_000;
     const scheduled: Array<{ callback: () => void; delayMs: number; timer: object }> = [];
     const cancelled = new Set<unknown>();
     const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -129,8 +134,11 @@ describe("interactive tmux terminal snapshots", () => {
       cancel: (timer) => {
         cancelled.add(timer);
       },
+      now: () => now,
+      leaseMs: LEASE_MS,
+      ...(options.metrics ? { metrics: options.metrics } : {}),
     });
-    const id = manager.create(tmux as never, 120, 40);
+    const id = manager.create(tmux as never, 120, 40, { leased: options.leased });
     const context = {
       emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
       runtime: new BackendRuntime({ emit: () => undefined }),
@@ -145,6 +153,10 @@ describe("interactive tmux terminal snapshots", () => {
       resizeCalls,
       captureCount: () => captureIndex,
       writeCount: () => writes,
+      tmux,
+      advance: (ms: number) => {
+        now += ms;
+      },
     };
   }
 
@@ -350,5 +362,119 @@ describe("interactive tmux terminal snapshots", () => {
     await expect(harness.manager.resize(harness.id, 80, 20)).rejects.toThrow();
     expect(harness.captureCount()).toBe(1);
     expect(harness.emitted).toHaveLength(1);
+  });
+  test("an unleased terminal keeps capturing without renewals (older clients)", async () => {
+    const harness = createInteractiveHarness(["initial", "same"]);
+    await harness.manager.start(harness.id, harness.context);
+    harness.advance(LEASE_MS * 10);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.scheduled.length === 2);
+    expect(harness.captureCount()).toBe(2);
+    expect(harness.manager.size()).toBe(1);
+  });
+
+  test("a leased terminal no client renewed stops capturing at its next tick", async () => {
+    // A reload, a closed window or a cut link sends no detach (to-do 7745, retired).
+    const harness = createInteractiveHarness(["initial"], [], { leased: true });
+    await harness.manager.start(harness.id, harness.context);
+    harness.advance(LEASE_MS);
+
+    harness.scheduled[0]!.callback();
+    await delay(0);
+    expect(harness.captureCount()).toBe(1);
+    expect(harness.scheduled).toHaveLength(1);
+    expect(harness.manager.size()).toBe(0);
+    expect(harness.manager.renew(harness.id)).toBe(false);
+    await expect(harness.manager.start(harness.id, harness.context)).rejects.toThrow(
+      "tmux interactive terminal session not found",
+    );
+  });
+
+  test("a write or resize on a lapsed but still-held terminal detaches it and refuses", async () => {
+    // The lease ran out between two capture ticks, so the terminal is still
+    // in the map when a late write or resize reaches it.
+    for (const operation of ["write", "resize"] as const) {
+      const harness = createInteractiveHarness(["initial"], [], { leased: true });
+      await harness.manager.start(harness.id, harness.context);
+      const resizesBefore = harness.resizeCalls.length;
+      harness.advance(LEASE_MS);
+      expect(harness.manager.size()).toBe(1);
+
+      const late =
+        operation === "write"
+          ? harness.manager.write(harness.id, "ls\r", harness.context)
+          : harness.manager.resize(harness.id, 80, 20);
+      await expect(late).rejects.toThrow("tmux interactive terminal session not found");
+
+      expect(harness.manager.size()).toBe(0);
+      expect(harness.cancelled).toContain(harness.scheduled[0]!.timer);
+      expect(harness.writeCount()).toBe(0);
+      expect(harness.resizeCalls).toHaveLength(resizesBefore);
+      expect(harness.manager.renew(harness.id)).toBe(false);
+    }
+  });
+
+  test("renewals keep a leased terminal capturing", async () => {
+    const harness = createInteractiveHarness(["initial", "next", "again"], [], { leased: true });
+    await harness.manager.start(harness.id, harness.context);
+    for (const tick of [0, 1]) {
+      // Each renewal lands just before the previous lease runs out.
+      harness.advance(LEASE_MS - 10);
+      expect(harness.manager.renew(harness.id)).toBe(true);
+      harness.advance(5);
+      harness.scheduled[tick]!.callback();
+      await waitFor(() => harness.scheduled.length === tick + 2);
+    }
+    expect(harness.captureCount()).toBe(3);
+    expect(harness.manager.size()).toBe(1);
+  });
+
+  test("a renewal after the lease lapsed answers false so the client re-creates", async () => {
+    // A sleeping laptop or a throttled hidden page renews late.
+    const harness = createInteractiveHarness(["initial"], [], { leased: true });
+    await harness.manager.start(harness.id, harness.context);
+    harness.advance(LEASE_MS + 5_000);
+
+    expect(harness.manager.renew(harness.id)).toBe(false);
+    expect(harness.manager.size()).toBe(0);
+    expect(harness.cancelled).toContain(harness.scheduled[0]!.timer);
+  });
+
+  test("creating a terminal sweeps a lapsed one that was never started", () => {
+    const harness = createInteractiveHarness([], [], { leased: true });
+    harness.advance(LEASE_MS);
+    const next = harness.manager.create(harness.tmux as never, 80, 24, { leased: true });
+    expect(harness.manager.size()).toBe(1);
+    expect(harness.manager.renew(harness.id)).toBe(false);
+    expect(harness.manager.renew(next)).toBe(true);
+  });
+
+  test("renewing arms a lease on a terminal created without one", async () => {
+    const harness = createInteractiveHarness(["initial"]);
+    await harness.manager.start(harness.id, harness.context);
+    expect(harness.manager.renew(harness.id)).toBe(true);
+    harness.advance(LEASE_MS);
+    harness.scheduled[0]!.callback();
+    await delay(0);
+    expect(harness.manager.size()).toBe(0);
+  });
+
+  test("counts each timer capture as a tmux-interactive-capture attempt", async () => {
+    const metrics = new RecurringWorkMetrics({ enabled: true });
+    const harness = createInteractiveHarness(["initial", "initial", "changed"], [], {
+      metrics,
+    });
+    await harness.manager.start(harness.id, harness.context);
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.scheduled.length === 2);
+    harness.scheduled[1]!.callback();
+    await waitFor(() => harness.scheduled.length === 3);
+
+    const kind = metrics.snapshot().kinds["tmux-interactive-capture"]!;
+    // The start's forced repaint is not a timer attempt.
+    expect(kind.started).toBe(2);
+    expect(kind.changed).toBe(1);
+    expect(kind.unchanged).toBe(1);
   });
 });

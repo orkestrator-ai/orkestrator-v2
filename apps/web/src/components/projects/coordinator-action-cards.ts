@@ -12,6 +12,41 @@ export interface CoordinatorActionCard {
   completeOnUser?: boolean;
   /** When the action was raised, where the transcript records it. */
   createdAt?: string | number;
+  /**
+   * Done only because the user marked it done by hand (the Actions panel's
+   * "Mark done"); the transcript still has it open. Set by
+   * {@link applyCoordinatorActionMarks}, never by the transcript replay.
+   */
+  markedDone?: boolean;
+}
+
+/**
+ * Lays the conversation's manual marks over the derived cards: a card is done
+ * when the transcript says so or when it is marked. A mark on a card the
+ * transcript already finished changes nothing, so clearing it can never
+ * reopen that card. Returns `cards` itself when no mark applies.
+ */
+export function applyCoordinatorActionMarks(
+  cards: readonly CoordinatorActionCard[],
+  marked: ReadonlySet<string>,
+): readonly CoordinatorActionCard[] {
+  if (marked.size === 0 || !cards.some((card) => !card.done && marked.has(card.id))) return cards;
+  return cards.map((card) =>
+    !card.done && marked.has(card.id) ? { ...card, done: true, markedDone: true } : card,
+  );
+}
+
+/**
+ * Marked cards the transcript has since finished, so their marks change
+ * nothing: the marks a full conversation can clear to make room without
+ * reopening anything. Takes the derived cards, before marks are applied.
+ */
+export function redundantCoordinatorActionMarks(
+  derivedCards: readonly CoordinatorActionCard[],
+  marked: ReadonlySet<string>,
+): string[] {
+  if (marked.size === 0) return [];
+  return derivedCards.filter((card) => card.done && marked.has(card.id)).map((card) => card.id);
 }
 
 /** Provider spellings of this server only; foreign MCP tools cannot create marks. */

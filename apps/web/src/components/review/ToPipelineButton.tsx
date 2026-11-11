@@ -12,7 +12,7 @@ import { getAllLeaves, usePaneLayoutStore } from "@/stores";
  * visible. The read is backend storage and in-memory activity only: it never
  * starts or contacts a bridge (`AutoPipelineService.sources`).
  */
-const POLL_MS = 2000;
+export const TO_PIPELINE_POLL_MS = 2000;
 
 /** The id of the active tab of the environment's active pane, or null. */
 function useActiveTabId(environmentId: string): string | null {
@@ -70,7 +70,7 @@ function useAutoPipelineSource(environmentId: string, tabId: string | null) {
       if (document.visibilityState !== "hidden") refresh();
     };
     poll();
-    const timer = setInterval(poll, POLL_MS);
+    const timer = setInterval(poll, TO_PIPELINE_POLL_MS);
     document.addEventListener("visibilitychange", poll);
     return () => {
       disposed = true;

@@ -401,3 +401,76 @@ test; it does not touch this file or anything under `apps/web/`.
   `NODE_ENV=production` from the agent session. React's production build then
   failed every case of this file with `React.act is not a function`; that is
   the environment, not this flake, which is why the runs above unset it.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `da475cb5e`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes only `apps/backend` MCP
+evidence, provider-read and transcript-artifact code, their tests and docs;
+it does not touch this file or the transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name address-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, host
+  load average about 60.
+- **Suite counts:** backend 18,578 passed and 3 failed (flakes 9963 and 9978);
+  web 14,572 passed and 7 failed (flake 9932); protocol, desktop, web-public,
+  toolchain, CLI, root, bridge and lockfile groups passed.
+- **Failure:** seven cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them
+  `control: an append while following publishes the queued follow` (40.2 ms)
+  and both `restored snapshot transitions from hidden to visible (cancel=%s)`
+  cases.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent on another
+  file, so it did not rerun this one. Three manual runs of
+  `NODE_ENV=test mise run test:logged -- --name rerun-virtuoso-alone-N -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
+  at a load average of about 59 failed 9, 6 and 9 of 14 cases with the same
+  assertion, matching the earlier loaded solo failures. (Without
+  `NODE_ENV=test` every case fails instead with `React.act is not a function`,
+  because React's production build loads; that is an invocation error, not
+  this flake.)
+
+Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `b307c086f`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes no `apps/web` code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, with
+  the shared host queueing behind other worktrees' runs.
+- **Suite counts:** backend 18,593 passed and 1 failed (flake 9963); web 14,570
+  passed and 9 failed (this case); root, bridge and lockfile groups passed.
+- **Failure:** nine cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them
+  `control: without cancellation the library retries the index target after a refresh`
+  (148.9 ms) and both `restored snapshot transitions from hidden to visible (cancel=%s)`
+  cases.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent before it
+  reached this file. Two manual runs of
+  `NODE_ENV=test mise run test:logged -- --name virtuoso-alone-test-env-N -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
+  passed (14 of 14, load average about 11 after the suite finished).
+
+Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (provisional captures review repairs)
+
+Observed 2026-11-11 on `provisional-captures-510c8fc4900c-r1` (head `e188947f2`), base commit `963ffa6ab70bcc7e412e9748078cdbc0333a7ad1`
+(`mise run flaky:recurrence 9932 --base 963ffa6ab…` answered "open. Record
+the failure as a recurrence"). The branch changes only backend change-tracking code, the worktree watcher, a benchmark script and documentation; it touches nothing under `apps/web/` and no container code.
+
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  on beelink (Linux x86_64, 16 cores); the guard stage was skipped because of
+  an unrelated `main` finding in `ToPipelineButton.test.tsx`. Host load
+  average about 35 to 42 at the end of the run.
+- **Failure:** one case, `restored snapshot transitions from hidden to visible
+  (cancel=%s)`, Expected 0, Received 1.
+- **Suite counts:** web 14,637 pass and 1 fail; backend 18,020 pass and 1 fail
+  ([9963](../environments-and-containers/9963-rootful-create-logs-owned-port-listing.md));
+  desktop, protocol, toolchain, web-public, root, bridge and lockfile groups
+  passed.
+- **Isolated rerun:** the runner's own rerun reported `PASSED ALONE (790ms)`.

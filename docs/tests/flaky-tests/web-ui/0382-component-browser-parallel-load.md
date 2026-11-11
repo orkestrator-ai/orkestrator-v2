@@ -740,3 +740,7 @@ mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts
 ```
 
 Every failing case also failed in earlier branches' browser runs that did not carry the change (see this file and 1012, 0793, 0483, 1602). The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `487e2aa4e`, base `14df96544` (`mise run flaky:recurrence -- 0382 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes no `apps/web` or `e2e` code. A second `mise run test:logged -- --name browser -- mise run test:browser` on that branch: 9 failed, 153 skipped, 1706 passed (21.3 m), all in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602, 0793 and this case). Both desktop-chromium `native: paging folds a visible short group during held-place restoration` cases (`e2e/TranscriptPaging.spec.ts:264`) failed `toHaveAttribute("false")` with the element not found. The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone-2 -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` passed (exit 0, 295.5 s). Status stays open; no assertion, timeout or skip changed.

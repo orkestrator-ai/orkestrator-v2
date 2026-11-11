@@ -18,12 +18,12 @@
 | apps/web/src/components/native-agent/AgentNativeTab.render-count.test.tsx | a launch published after mount previews its prompt and leaves dispatch to the backend | expected zero commits, received one, 495.48 ms |
 | apps/web/src/components/terminal/FileViewerTab.test.tsx | opens a local HTML file on its rendered view, with Raw one click away | waitFor failure, 1105.44 ms |
 | apps/web/src/components/terminal/TerminalContainer.notes.test.tsx | Notes activation creates and renders a real pane tab, and reopening reuses it | waitFor failure, 1946.64 ms |
-| apps/backend/src/core/control-mcp-voice.test.ts | every public action an MCP credential can hold is reachable through run_action | ECONNRESET followed by 5000 ms timeout, 5062.58 ms |
-| apps/backend/src/core/control-mcp-agent-voice-chat.test.ts | are listed for credentials that may prompt sessions, and only for them | 5000 ms timeout, 5181.17 ms |
+| apps/backend/src/core/control-mcp/voice.test.ts | every public action an MCP credential can hold is reachable through run_action | ECONNRESET followed by 5000 ms timeout, 5062.58 ms |
+| apps/backend/src/core/control-mcp/agent-voice-chat.test.ts | are listed for credentials that may prompt sessions, and only for them | 5000 ms timeout, 5181.17 ms |
 
 The complete four web owners passed with `NODE_ENV=test mise run test:logged -- --name recorded-web-failures-test-env -- bun test --cwd apps/web ./src/components/projects/CoordinatorPanel.outcome.test.tsx ./src/components/native-agent/AgentNativeTab.render-count.test.tsx ./src/components/terminal/FileViewerTab.test.tsx ./src/components/terminal/TerminalContainer.notes.test.tsx --parallel=1 --only-failures` (30.6 s). Each file runs in an isolated worker. Passing output was deleted by the runner, so test totals are unavailable.
 
-Both backend owners passed with `mise run test:logged -- --name recorded-backend-failures -- bun test --cwd apps/backend ./src/core/control-mcp-voice.test.ts ./src/core/control-mcp-agent-voice-chat.test.ts --parallel=1 --only-failures` (11.7 s). The voice owner also passed alone with `NODE_ENV=test mise run test:logged -- --name recorded-backend-voice-owner -- bun test --cwd apps/backend ./src/core/control-mcp-voice.test.ts --parallel=1 --only-failures` (10.3 s).
+Both backend owners passed with `mise run test:logged -- --name recorded-backend-failures -- bun test --cwd apps/backend ./src/core/control-mcp/voice.test.ts ./src/core/control-mcp/agent-voice-chat.test.ts --parallel=1 --only-failures` (11.7 s). The voice owner also passed alone with `NODE_ENV=test mise run test:logged -- --name recorded-backend-voice-owner -- bun test --cwd apps/backend ./src/core/control-mcp/voice.test.ts --parallel=1 --only-failures` (10.3 s).
 
 A subsequent agent-voice owner run passed the original failing test but failed a different test, `a slow reply is heard later with listen`, with `finish is not a function` at line 324 (16 passed, 1 failed, 6.22 s; artifact `/tmp/orkestrator-test-run.pNGWpR`). This additional observation is not classified as flaky from that run alone.
 

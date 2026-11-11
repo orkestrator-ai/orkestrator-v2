@@ -5,6 +5,7 @@ import {
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { abortableSleep } from "../abortable-timing.js";
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { BridgeConnection } from "../agent-provider-contract.js";
 import { bridgeEventStreamFetch } from "./transport.js";
 
@@ -186,6 +187,7 @@ export class HttpBridgeObservationStream {
     if (event === "connected") {
       if (!frame.data?.includes('"observe":true')) {
         // An older bridge would stream every full payload to this observer.
+        compatibilityPathUsage.record("bridge-observation.full-stream");
         this.unsupported = true;
         this.close();
         return;

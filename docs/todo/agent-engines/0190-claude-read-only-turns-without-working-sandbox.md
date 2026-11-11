@@ -555,8 +555,9 @@ Made 2026-10-28 while implementing.
 
 - [0145-claude-linux-sandbox-apparmor-nested-userns.md](0145-claude-linux-sandbox-apparmor-nested-userns.md):
   the probe and the refusal this would reuse.
-- [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md):
-  the read-only hook and the `unavailable` coordinator path.
+- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+  (to-do 0026, retired 2026-11-11): the read-only hook and the `unavailable`
+  coordinator path.
 - 7565 (retired 2026-11-11): found by task 3, read-only turns ignored the
   user settings' model connection; fixed here (A20), described in
   [credentials-and-models.md](../../development/credentials-and-models.md).

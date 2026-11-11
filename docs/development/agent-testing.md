@@ -2770,8 +2770,9 @@ status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
 (`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
 coordinator once (`goal`), that plain requests naming no workflow start the right
-one (`routing`), that each tool from the coordinator gap review works against a
-real worker (`gap-tools`), and that peer mail between two ordinary environments wakes
+one (`routing`), that a coordinator under the default research setting reaches
+its research MCP server (`research`), that each tool from the coordinator gap
+review works against a real worker (`gap-tools`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -3100,6 +3101,31 @@ counts each case's workflow calls by tool (`build:start_build_pipeline`, …). T
 prompts and verdict are in `coordinator-live-routing.ts`;
 `coordinator-live-routing-orchestration.test.ts` runs the orchestration over a
 scripted command transport.
+
+The `research` case (formerly to-do 0026 task 3) checks that a platform's
+exact-name allowlist admits its research server's tools. Before the
+conversation's agent starts it writes the shipped research defaults (**Web
+search and research servers**, with Context7), since a bridge reads the
+setting at launch, then sends one build-mode turn asking the coordinator to
+resolve React's Context7 library ID with the server's own tool and end with one
+`COORDINATOR_LIVE_RESEARCH` line:
+
+```bash
+mise run test:agent:coordinator --credential-source pi --scenario research
+```
+
+A model can answer from memory, so the answer proves nothing: the case passes
+only when a tool row is attributed to the research server under the platform's
+own naming (`RESEARCH_TOOL_NAMING`: `mcp__context7__…` on Claude and Cursor,
+the `context7:…` title on Codex, `mcp_context7_…` on Pi, `context7_…` on
+OpenCode), at least one such row succeeded, the reported ID is a `/org/project`
+ID, no page fetch completed, the checkout digest is unchanged and no approval
+or question reached the harness. Grok, which loads no research servers, is
+skipped with that reason before any turn is spent. The summary records tool
+names and states only, never the prompt, the answer or the ID. The prompt and
+verdict are in `coordinator-live-research.ts`;
+`coordinator-live-research.test.ts` runs the orchestration over a scripted
+command transport.
 
 The `gap-tools` case (to-do 1021 (retired) task 1) calls each tool from the coordinator
 gap review once against one worker the coordinator launches, in seven harness

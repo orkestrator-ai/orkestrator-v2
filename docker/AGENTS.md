@@ -125,7 +125,10 @@ Users and isolation:
   host user is not uid 1000 (GitHub's runners). The root entrypoint relays
   each one `node` cannot read into `node`'s own
   `/run/orkestrator-inputs` before dropping privileges
-  (`relay_staged_inputs`). `entrypoint.sh` reads a relayed copy in place of
+  (`relay_staged_inputs`). It leaves a copy alone when the digest root kept
+  of that mount in its own `/run/orkestrator-relay-state` still matches;
+  take that digest from the read-only mount only, never from the copy,
+  which `node` owns, and remove or replace a copy as `node`. `entrypoint.sh` reads a relayed copy in place of
   its mount (the copy helpers resolve their source root inline, and
   `staged_input_path` elsewhere); `workspace-setup.sh` uses `project_input`.
   Keep `STAGED_INPUT_MOUNTS` in step with the backend's mount targets

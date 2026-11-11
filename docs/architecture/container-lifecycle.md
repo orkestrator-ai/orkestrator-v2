@@ -795,9 +795,19 @@ as links, within the revision bounds). `entrypoint.sh` and
 `workspace-setup.sh` read a relayed copy in place of its mount
 (`staged_input_path`), and the Claude key file is read from either. Nothing is
 widened on the host or for another user, and nothing is relayed on a rootful
-daemon, where `node` reads the mounts directly. The relay is rebuilt from the
-mounts on every boot, and revocation also removes the provider's relayed
-copies from the running container (`stagedInputRelayPaths`). On a rootless
+daemon, where `node` reads the mounts directly. Each boot checks the copies
+against the mounts: root keeps a digest of every mount it relayed (paths,
+types, modes, sizes, link targets and content, read from the read-only mount,
+never from `node`'s copy) in its own `0700` `/run/orkestrator-relay-state`, and
+a mount whose digest is unchanged and whose copy is still there is left as it
+is. Every other copy is removed and relayed again (or not at all, once the
+mount is readable, gone or over the bounds), and with no copy kept the whole
+relay directory is rebuilt, as it was before. So the backend's rewrite of a
+login or a revocation's scrub reaches the copy at the next start, and
+revocation also removes the provider's relayed copies from the running
+container (`stagedInputRelayPaths`), which the next start relays again only if
+the mount still holds them. `node` owns its copy, so editing it changes only
+its own input, as editing its home does. On a rootless
 daemon an older image gets nothing readable: the backend logs it at creation
 and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 `imageRelaysStagedInputs`).
@@ -1022,9 +1032,14 @@ full copy's, apart from the removal below.
   binds the same either way, so there is no gate to check.
 
 The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
-relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
-applies. Timings are in
-to-do 1202, task 15 (retired 2026-11-10).
+relay in `network-policy-entrypoint.sh` skips an unchanged mount the same way
+(see the relay above), and `copy_agent_directory` answers its entry bound, link
+check and size bound (allocated blocks, what `du -sk` sums) and the stamp's
+listing from one `find` walk, so a first start costs about five processes per
+copied directory rather than about fifteen. Timings are in
+[4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
+and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
+tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 

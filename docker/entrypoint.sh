@@ -684,7 +684,7 @@ copy_agent_directory_entries() {
     done < <(find -P "$source_path" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
 
-# Copying an unchanged input again costs a dozen processes per skill and rewrites
+# Copying an unchanged input again costs a few processes per skill and rewrites
 # the container's layer on every start, so each non-login input is stamped.
 #
 # The stamp is not what makes skipping safe. The backend rewrites a revision in

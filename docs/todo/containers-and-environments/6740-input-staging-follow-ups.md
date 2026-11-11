@@ -12,7 +12,7 @@ What E25 (DK-14, report part `0490`) left after the host staging copy learned to
 2. **A cold first start from a reflinked revision**: decide whether the slower first start matters. Status: done (2026-11-11, left as it is).
 3. **The in-container first start of a many-file home**: find what the 5–6 s for 5,202 files is spent on. Status: done (2026-11-11).
 4. Input sizes of real homes: moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
-5. **Fewer processes per copied directory**: cut the per-unit cost task 3 found. Status: open.
+5. **Fewer processes per copied directory**: cut the per-unit cost task 3 found. Status: done (2026-11-11).
 
 ### 1. Reflinks on macOS
 
@@ -82,14 +82,29 @@ So the time goes on processes, about 15 per directory unit: `copy_agent_director
 
 **Context.** `copy_agent_directory` and `copy_agent_directory_entries` in `docker/entrypoint.sh` enforce the entry and size bounds, refuse links in the source and the destination, then `cp -R`; `agent_input_record_copy` lists what was copied for the stamp. These checks are what keep a planted link or an oversized tree out of the home, and `docker/AGENTS.md` governs changes to the entrypoint. The entrypoint runs as `node`, after root's part.
 
-**Investigation.** Not built in this pass: it rewrites the bounded copy helpers, which needs the entrypoint's existing link and bound tests (`docker/tests/`), an image build and a rerun of task 3's profile. The checks per unit are independent of each other, so one walk can answer all of them.
+**Investigation.** Built 2026-11-11 (rework round 2) on the recommended option, with allocated blocks instead of apparent sizes. `copy_agent_directory` now runs one `find -P` from the source root that prints a line per entry (its type and its 512-byte blocks, `%y %b`) into `awk`, which counts the entries below the directory, notes any link and sums the blocks, and exits after `max_entries + 1` entries so a pathological tree is not walked in full. When the input stamp is recording, the same walk writes the stamp's listing (`-fprintf … '%y%p\0'`), which is appended with one `cat` after `cp` succeeds; `agent_input_record_copy` is gone, and `copy_agent_file` records its one line with the shell's own `printf`. The destination is searched for links only when it already existed: a directory the call has just created is empty. The bounds, warnings and refusals are unchanged; `du` and `head` are no longer used. A directory now starts five programs (`find`, `awk`, `mkdir`, `cp`, `cat`), plus one subshell, where it started about fifteen processes.
+
+Tests: in `tests/unit/runtime-env-wiring.test.ts`, a new case counts the programs three skill directories start through `copy_agent_directory_entries` (16: the walker's `find` and five per directory, no `du`, `head`, `wc` or external `printf`) and checks the recorded listing; another checks that a destination that already existed is still searched for links; the bounded-walk case's fake `find` prints the walk's lines; and the inspection-failure case now fails `awk` (status and four malformed summaries) where it failed `du`. The stamps, shared-skills, user-extension and relay suites pass unchanged apart from dropping the removed helper from their extracted function lists. Live: as in [4580](4580-input-stamp-follow-ups.md) task 3, both stamps suites passed on the host daemon and on a disposable rootless daemon against an image built from this branch.
+
+Task 3's profile rerun on the same image with the base commit's entrypoint (`498b68766`) and this branch's (load average 53–79, so compare within a row):
+
+| Daemon | Fixture | Import before | Import after | Processes before | Processes after |
+| --- | --- | --- | --- | --- | --- |
+| Rootful, uid 1000 | `medium` | 15.4 s | 8.9 s | 9,071 | 4,376 |
+| Rootful, owner 12345 | `medium` | 15.3 s | 8.5 s | 9,062 | 4,347 |
+| Rootless | `medium` | 15.7 s | 8.2 s | 9,095 | 4,324 |
+| Rootful, uid 1000 | `plugins` | 3.1 s | 2.5 s | 1,156 | 684 |
+| Rootful, owner 12345 | `plugins` | 2.1 s | 1.5 s | 1,080 | 606 |
+| Rootless | `plugins` | 2.3 s | 1.4 s | 1,100 | 597 |
+
+Every start imported the expected 7 inputs, and restarts still copied nothing.
 
 **Decisions.**
 
 - **How to cut the processes?**
-  - **One `find -P` per unit printing type, size and path, read by the shell to get the entry count, any link and the byte total together, then `cp -R`, with the copy's listing taken from that same walk (recommended).**
-    - Pros: about 3 processes per unit instead of 15; keeps the same rules and the same `cp`.
-    - Cons: the total comes from apparent sizes rather than `du -sk`'s blocks, so the size bound changes meaning slightly and its tests need updating.
+  - **One `find -P` per unit printing type, size and path, read by the shell to get the entry count, any link and the byte total together, then `cp -R`, with the copy's listing taken from that same walk (recommended, built with blocks rather than apparent sizes).**
+    - Pros: about 5 processes per unit instead of 15; keeps the same rules and the same `cp`.
+    - Cons: a hard-linked file counts once per name, where `du -sk` counted it once, so the size bound is slightly stricter on such trees.
   - **Walk a parent directory (for example all of `skills`) once and decide per child from that listing.**
     - Pros: the largest saving for many small skills.
     - Cons: a child changed between the walk and its copy is checked on stale data, which the per-unit check closes today.
@@ -106,6 +121,10 @@ The recommended option was to leave the cold first start alone. Task 3's profile
 ### Task 3: profiled with a bind-mounted entrypoint
 
 An image built from this branch's base (`498b68766`) was already on the host with entrypoints byte-identical to the branch's, so the profiled copy was bind-mounted over it in throwaway containers instead of building a profiled image; the containers were removed by ID afterwards. The wrappers run each helper inside `||`, which turns off `set -e` within it; the helpers already handle their own failures, and every start imported the expected 7 inputs.
+
+### Task 5: blocks, not apparent sizes
+
+The recommended design summed apparent sizes, which would have changed what the size bound means. Summing find's `%b` (allocated 512-byte blocks) keeps `du -sk`'s meaning, so a sparse file is bounded as before and the existing size tests stand. The summary is read by `awk` rather than by a shell loop, because bash reads a pipe one byte at a time; `awk` is already in the image and used by the root entrypoint. Skipping the link search of a destination the call itself created relies on nothing else writing the home during the entrypoint, which runs before the workload; a destination that already existed is searched as before.
 
 ## Related
 

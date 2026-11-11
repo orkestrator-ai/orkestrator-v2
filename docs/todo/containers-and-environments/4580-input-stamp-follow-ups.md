@@ -10,7 +10,7 @@ What the input stamps (to-do 1202 task 15 (retired 2026-11-10), DK-14) left. See
 
 1. **A Claude copy the backend pushed after a host sign-out**: remove it at the next start rather than stripping it. Status: done (2026-11-11).
 2. **The relay still copies on every boot**: measure what it costs. Status: done (2026-11-11).
-3. **Skip relaying an unchanged mount**: the measurement in task 2 shows a cost, so build the skip. Status: open.
+3. **Skip relaying an unchanged mount**: the measurement in task 2 shows a cost, so build the skip. Status: done (2026-11-11).
 4. **The macOS half of task 1's sign-out reading**: confirm `security`'s exit status on a Mac. Status: open.
 
 ### 1. A Claude copy the backend pushed after a host sign-out
@@ -62,12 +62,25 @@ The relay takes about as long as the whole stamped import, or longer, on every r
 
 **Context.** `relay_staged_inputs` in `docker/network-policy-entrypoint.sh` runs as root, removes `/run/orkestrator-inputs` and re-extracts each unreadable mount as `node`. The rules for root reading or deciding on anything `node` can write are in [`docker/AGENTS.md`](../../../docker/AGENTS.md). The backend rewrites a revision in place before every start (the logins) and on a revocation's scrub, and the revocation also deletes the relayed paths in a running container (`stagedInputRelayPaths`).
 
-**Investigation.** Not built in this pass: it changes root's entrypoint, so it needs a root-boundary review, an image build and a rootless and non-1000 live run of `portable-inputs-stamps-docker.test.ts` (forced relay) plus the revocation cases. The digest has to come from the read-only source mount, never from the relayed copy, which `node` owns.
+**Investigation.** Built 2026-11-11 (rework round 2) on the recommended option. `relay_staged_inputs` now hashes each mount it would relay (`staged_input_digest`: one NUL-separated listing of type, mode, size, path and link target from `find -P`, then `sha256sum` of every regular file, all through one `sha256sum`) and compares it with the digest it wrote after that mount's last successful relay, in root's own `0700` `/run/orkestrator-relay-state`. An equal digest with the copy still present (checked as `node`) keeps the copy. Every other copy is removed as `node` (its digest first), and when nothing is kept the relay and state directories are rebuilt as before, so a mount that changed, emptied, disappeared, became readable or went over the bounds is relayed or removed as it was. Without GNU `find -printf` or `sha256sum` the digest fails and every mount is relayed in full. Root never reads the relayed copy.
+
+Tests: six new cases in `apps/backend/tests/staged-input-relay.test.ts` (an unchanged second boot keeps the copy's inodes and a rewritten login re-relays that mount alone; a mode, a rename and a link target each count as a change; a copy or a digest that is gone, or a wrong digest, relays again; a removed or now-readable mount loses its copy while another is kept, and with nothing kept both directories go; an over-bound mount loses its copy and digest; a linked state directory is replaced). Live, against an image built from this branch (`orkestrator-v2:qual-relay-skip-f5e2b1ed`, `f5e2b1edb`; removed afterwards): `portable-inputs-stamps-docker.test.ts` (both forced-relay variants) and `staged-input-relay-docker.test.ts` passed 3/3 (1 skip, the old-image case) on the host daemon through the qualification shim, and again on a disposable rootless daemon (`mise run docker:disposable`, stopped and removed afterwards with its tools).
+
+Measured with task 2's method on the same image, the base commit's entrypoints (`498b68766`) against this branch's, bind-mounted in turn (load average 53–79, so compare within a row). Restarts 1–3; "kept" is how many of the three relayed top-level copies kept their inode:
+
+| Daemon | Fixture | Relay before | Relay after | Kept after | Restart before | Restart after |
+| --- | --- | --- | --- | --- | --- | --- |
+| Rootful, owner 12345 | `medium` | 700–1,051 ms | 237–332 ms | 3 of 3 | 3,036–3,975 ms | 2,641–3,163 ms |
+| Rootful, owner 12345 | `plugins` | 896–1,000 ms | 257–434 ms | 3 of 3 | 3,038–7,315 ms | 2,372–3,374 ms |
+| Rootless | `medium` | 643–998 ms | 277–294 ms | 3 of 3 | 2,137–2,821 ms | 1,715–2,075 ms |
+| Rootless | `plugins` | 805–1,293 ms | 321–430 ms | 3 of 3 | 2,600–2,994 ms | 1,755–2,542 ms |
+
+What remains is root reading and hashing every byte of each mount, as the decision below expected. A first start pays the hash on top of the relay (897–1,447 ms before, 1,145–1,713 ms after on these runs). On a uid-1000 rootful daemon nothing is relayed or hashed (19–54 ms either way).
 
 **Decisions.**
 
 - **How to tell that a mount is unchanged?**
-  - **Root hashes the source mount (paths, types, modes and content digests, as `agent_input_manifest` does) and compares it with a digest root kept from the last relay, in a root-only file outside `node`'s reach; equal and the relayed directory still present means skip that mount (recommended).**
+  - **Root hashes the source mount (paths, types, modes and content digests, as `agent_input_manifest` does) and compares it with a digest root kept from the last relay, in a root-only file outside `node`'s reach; equal and the relayed directory still present means skip that mount (recommended, built).**
     - Pros: root reads only the backend-staged, read-only mount, as `tar` already does; a mount that changed, emptied or disappeared is relayed or removed as now; a `node` that edits its relayed copy only feeds itself different input, which the home stamps then copy.
     - Cons: still reads every byte of the mount; saves the write and the `node`-side extraction, not the read.
   - **Compare metadata only (inode, size, nanosecond mtime).**
@@ -111,9 +124,12 @@ The first version deleted `claudeAiOauth` unconditionally, stripped refresh toke
 
 The non-1000 rootful case was reproduced by chowning the staged revision to 12345 around each start, the method the live stamps test already uses, rather than running a second host user. The rootless case used the disposable daemon, which was stopped and removed afterwards with its downloaded tools.
 
+### Task 3: what the relay skip keeps and trusts
+
+Built as the recommended option. The digest includes sizes and link targets as well as the manifest's fields, because the relay copies links as links. A copy is kept only while its digest file exists: the digest is removed before a relay and written after it succeeds, so an interrupted relay is redone. With no copy kept the relay keeps its old full rebuild (`rm -rf` of both directories as root), so the uid-1000 path and an image whose last boot relayed nothing behave exactly as before. A kept copy is no longer reset to the mount at each boot, so `node`'s own edits to it persist across restarts; `node` could already write the same content into its home, so this widens nothing, and the revision's own changes still reach it.
+
 ## Needs verification
 
-- Task 3's saving, once built, on the same fixtures and daemons as task 2.
 - The live stamps test (`apps/backend/tests/portable-inputs-stamps-docker.test.ts`) on the "Container live qualification" workflow's runner, whose host user is not uid 1000.
 
 ## Related

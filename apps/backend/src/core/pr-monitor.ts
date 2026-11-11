@@ -90,7 +90,7 @@ import {
  * | ---------------------------------- | ------------------------------------------------ | ----------------------------------- |
  * | Environment PR fields              | environment `prUrl`/`prState` (`persistPr`)      | same value rewritten; retried by re-detection while `persistencePending` |
  * | Linked task → done (merged only)   | task `status`, `prMergeDoneUrl`                  | once per PR (`kanban-merge-closure.ts`) |
- * | Linked task → backlog (closed only) | task `status`, `lifecycleStatus`                | before the PR link is recorded; skipped when moved by hand |
+ * | Linked task → backlog (closed only) | task `status`, `prClosedReturnUrl`              | once per PR, only for the build that raised it; skipped when moved by hand |
  * | Linked task PR link                | task `prUrl`/`prState`, `prMergeCommented:false` | compared before writing             |
  * | Linked task terminal comment       | task comment text (URL-specific)                 | exact text check                    |
  * | Linked task completion flag        | task `prMergeCommented:true` for that URL/state  | durable marker                      |
@@ -1707,11 +1707,11 @@ export class PrMonitorService {
         progress.add("status");
       }
       if (terminalState === "closed" && !progress.has("status")) {
-        // Once the task links this closed pull request the return was
-        // applied; a later build may have moved the ticket since, and an
-        // observation replayed after a restart must not undo that.
-        if (!taskMetadataMatchesDetection)
-          await this.options.effects.returnTaskForClosedPr?.(task.taskId, detection.url);
+        // The store decides each closed pull request once (`prClosedReturnUrl`)
+        // and only for the build that raised it, so a replay after a restart
+        // keeps a later move, and closed metadata a build recorded first (a
+        // conflict resolution's re-detection) does not skip the return.
+        await this.options.effects.returnTaskForClosedPr?.(task.taskId, detection.url);
         if (!this.isCurrent(entry, generation)) return false;
         progress.add("status");
       }

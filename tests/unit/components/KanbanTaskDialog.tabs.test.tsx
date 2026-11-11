@@ -4,6 +4,7 @@ import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 import type { KanbanTask } from "@/stores/kanbanStore";
+import { mockToastError as toastErrorMock } from "../../mocks/sonner";
 
 /**
  * The ticket view's tabs (`KanbanTaskDialog`, `ticket-view/`): which tab a
@@ -131,6 +132,7 @@ describe("the ticket view's tabs", () => {
     startBuildMock.mockClear();
     navigateToBuildMock.mockClear();
     mergeEnvironmentPrMock.mockClear();
+    toastErrorMock.mockClear();
     appCommandStore(kanbanStore).setState({ ...initialKanbanState, tasks: [] });
     appCommandStore(environmentStore).setState({ ...initialEnvironmentState, environments: [] });
     appCommandStore(buildPipelineStore).setState({
@@ -190,7 +192,7 @@ describe("the ticket view's tabs", () => {
       />,
     );
     expect(tab("Ticket").getAttribute("aria-selected")).toBe("true");
-    expect(screen.queryByTestId("ticket-notes-tab")).toBeNull();
+    expect(screen.queryByTestId("ticket-notes-tab") === null).toBe(true);
     // Radix tabs select on mouse down; keyboard users arrow across the list.
     fireEvent.mouseDown(tab("Notes"), { button: 0 });
     expect(tab("Notes").getAttribute("aria-selected")).toBe("true");
@@ -242,7 +244,7 @@ describe("the ticket view's tabs", () => {
     // One column: every section is in it, none beside another.
     const flow = screen.getByTestId("ticket-document-column");
     expect(flow.className).toContain("flex-col");
-    expect(screen.queryByTestId("ticket-sections-grid")).toBeNull();
+    expect(screen.queryByTestId("ticket-sections-grid") === null).toBe(true);
     expect(flow.contains(screen.getByTestId("ticket-tile-acceptanceCriteria"))).toBe(true);
   });
 
@@ -324,6 +326,81 @@ describe("the ticket view's tabs", () => {
     });
     await waitFor(() =>
       expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+    );
+  });
+
+  test("clicking the title on Notes edits on the Ticket tab, where Save and Cancel are", () => {
+    withNotes();
+    renderInAppCommandScope(
+      <KanbanTaskDialog
+        task={makeTask({ status: "review", buildPipelineId: "pipeline-1" })}
+        open
+        onOpenChange={() => {}}
+        openedFrom="review"
+      />,
+    );
+    expect(tab("Notes").getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("heading", { name: "Tabbed ticket" }));
+    expect(tab("Ticket").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByLabelText("Ticket title")).toBeTruthy();
+    expect(screen.getByLabelText("Ticket text")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  test("a merge that fails says so, and the PR is left for another try", async () => {
+    withNotes();
+    withPullRequest(true);
+    mergeEnvironmentPrMock.mockImplementationOnce(async () => {
+      throw new Error("Base branch was modified");
+    });
+    renderInAppCommandScope(
+      <KanbanTaskDialog
+        task={makeTask({ status: "review", environmentId: "env-1" })}
+        open
+        onOpenChange={() => {}}
+        openedFrom="review"
+      />,
+    );
+    const bar = screen.getByRole("toolbar", { name: "Pull request actions" });
+    fireEvent.click(within(bar).getByRole("button", { name: "Merge" }));
+    const confirm = screen.getByRole("alertdialog", { name: "Merge pull request" });
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Merge" }));
+    });
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("The pull request could not be merged", {
+        description: "Base branch was modified",
+      }),
+    );
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({ level: "error", area: "web.kanban", event: "pr.merge-failed" }),
+    );
+    await waitFor(() =>
+      expect(
+        (within(bar).getByRole("button", { name: "Merge" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+  });
+
+  test("Merge says why it is disabled when the build's environment is not on this machine", () => {
+    withNotes();
+    renderInAppCommandScope(
+      <KanbanTaskDialog
+        task={makeTask({ status: "review", buildPipelineId: "pipeline-1" })}
+        open
+        onOpenChange={() => {}}
+        openedFrom="review"
+      />,
+    );
+    const bar = screen.getByRole("toolbar", { name: "Pull request actions" });
+    const merge = within(bar).getByRole("button", { name: "Merge" }) as HTMLButtonElement;
+    expect(merge.disabled).toBe(true);
+    expect(merge.getAttribute("aria-description")).toBe(
+      "The build's environment is not on this machine",
+    );
+    expect(merge.parentElement?.getAttribute("title")).toBe(
+      "The build's environment is not on this machine",
     );
   });
 });

@@ -521,6 +521,11 @@ export class BuildPipelineRecovery {
       detection.state === "open" ? update : { ...update, status: undefined },
     );
     if (detection.state === "merged") await this.closeTicketForMerge(pipeline, detection.url);
+    // Closed without merging, found by the build itself (a conflict
+    // resolution's re-detection): the same return the PR monitor applies,
+    // decided once per pull request, so the monitor seeing the closed link
+    // later neither skips it nor repeats it.
+    if (detection.state === "closed") await this.returnTicketForClosedPr(pipeline, detection.url);
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
       mode: "normal",
@@ -750,11 +755,20 @@ export class BuildPipelineRecovery {
     await this.ctx.invoke("close_kanban_task_for_merged_pr", { taskId, prUrl });
   }
 
+  /** Returns the pipeline's ticket to the backlog for its closed pull request (`kanban-merge-closure.ts`). */
+  private async returnTicketForClosedPr(pipeline: BuildPipeline, prUrl: string): Promise<void> {
+    const taskId = pipeline.source?.type === "kanban" ? pipeline.source.taskId : undefined;
+    if (!taskId) return;
+    await this.ctx.storage.kanban.returnKanbanTaskForClosedPullRequest(taskId, prUrl);
+  }
+
   /**
    * The column a ticket moves to when its build ends, or undefined to leave
    * it. A build that ends after its pull request merged closes the ticket
    * (`kanban-merge-closure.ts`) instead of moving it back to review or
-   * backlog, and a ticket already done is never reopened by a build ending.
+   * backlog, one that ends after its pull request closed without merging
+   * sends it to the backlog (there is nothing left to review), and a ticket
+   * already done is never reopened by a build ending.
    */
   private async terminalTicketStatus(
     pipeline: BuildPipeline,
@@ -772,7 +786,9 @@ export class BuildPipelineRecovery {
       });
       return undefined;
     }
-    return task.status === "done" ? undefined : status;
+    if (task.status === "done") return undefined;
+    if (environment?.prState === "closed" && environment.prUrl) return "backlog";
+    return status;
   }
 
   async configureEnvironment(pipeline: BuildPipeline): Promise<void> {

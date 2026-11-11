@@ -278,7 +278,8 @@ pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
 | The build completes with Notes (open PR, `commit-only` or `push-no-pr`) | Review | `reconcileTerminalState` (`complete`) |
 | The build fails or is cancelled | Backlog | `reconcileTerminalState` (`failed`) |
 | The pull request merges | Done | PR monitor, a build ending, startup sweep (below) |
-| The pull request closes without merging | Backlog, unless moved by hand since the build | PR monitor (below) |
+| The pull request closes without merging | Backlog, unless moved by hand since the build or a newer build owns the ticket | PR monitor, or `persistPullRequest` when the build finds it closed (below) |
+| The build ends after its pull request closed | Backlog | `reconcileTerminalState` |
 | The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline-kanban-environment-deleted.ts` |
 | The build's environment is deleted after its PR merged | Done | the same |
 
@@ -288,9 +289,13 @@ option `lifecycle`), checked under the same mutation lease as the write, so a
 writer that read before the monitor closed the ticket cannot reopen it. A move
 by the user is kept until the next lifecycle event, which moves the ticket
 again. Each lifecycle move records its column on the ticket
-(`lifecycleStatus`, local to the machine that wrote it); a status that differs
-from it means someone moved the ticket by hand since, which is what a closed
-pull request respects. A ticket's PR state, checks and conflicts are not
+(`lifecycleStatus`, local to the machine that wrote it), and any other status
+change clears it: a move by hand on this machine, a command node's snapshot
+that changes the column, and one that keeps the column under a newer status
+revision (moved away and back between two pulls). A leaf's own lifecycle move
+coming back from the command node is told apart by `lifecycleEcho`. So a
+ticket moved away and back is still one the user placed, which is what a
+closed pull request respects. A ticket's PR state, checks and conflicts are not
 columns: they are shown on the ticket's Notes tab.
 
 **On another machine.** A build started on a leaf from the command node's
@@ -349,12 +354,20 @@ done afterwards stays where they put it, until a different pull request merges.
 ### Closed pull requests return the ticket
 
 When the PR monitor sees the build's pull request close without merging, it
-asks `KanbanRepository.returnKanbanTaskForClosedPullRequest` once, before it
-links the closed pull request on the ticket (so a restart does not ask again).
-The ticket goes back to the backlog only when it is not done, that pull
-request never merged it, and its column is still the one the lifecycle set
-(`kanbanTaskReturnsForClosedPullRequest`). A ticket the user moved by hand
-since, or one no build ever moved, keeps its place.
+asks `KanbanRepository.returnKanbanTaskForClosedPullRequest`; so does the build
+itself when a re-detection (a conflict resolution) finds the pull request
+closed (`persistPullRequest`), because the closed link it records first would
+otherwise look like work already done. The store decides each closed pull
+request once (`prClosedReturnUrl`), moved or not, so the other writer, a
+replay or a restarted monitor never moves the ticket again. The ticket goes
+back to the backlog only when it is not done, that pull request never merged
+it, its column is still the one the lifecycle set, and the build that set it
+raised this pull request (`lifecyclePrUrl`, set by `pr-raised` and cleared
+when a build starts) (`kanbanTaskReturnsForClosedPullRequest`). A ticket the
+user moved by hand since, one a newer build owns (an older environment's pull
+request closing), or one no build ever moved keeps its place. A build that
+ends after its pull request closed sends the ticket to the backlog rather than
+Review: there is nothing left to review.
 
 ## Views
 

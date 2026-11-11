@@ -16,6 +16,8 @@ import {
 } from "./build-pipeline-kanban-transitions-test-support.js";
 import { StorageService } from "./storage.js";
 
+const PR_B_URL = "https://github.com/acme/repo/pull/8";
+
 /**
  * The ticket state machine for a build (docs/architecture/tickets.md,
  * "Build lifecycle"), driven through the real recovery and storage on one
@@ -183,6 +185,77 @@ describe("a pull request closed without merging", () => {
     expect((await read(id))?.status).toBe("in-progress");
   });
 
+  test("leaves a ticket the user moved away and back to its build's column", async () => {
+    const { storage, life, ticket, read } = await machine();
+    const id = await ticket();
+    const pipeline = life.pipeline(id);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    await storage.kanban.updateKanbanTask(id, { status: "backlog" });
+    await storage.kanban.updateKanbanTask(id, { status: "review" });
+    expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
+    expect((await read(id))?.status).toBe("review");
+  });
+
+  test("of an older build leaves the ticket of a newer build where it is", async () => {
+    const { storage, life, ticket, read } = await machine();
+    const newer = await lifecycleMachine(storage, "env-2", "project-1");
+    const id = await ticket();
+    const first = life.pipeline(id);
+    await life.started(first);
+    await life.prDetected(first, "open");
+    await life.ended(first, "failed");
+    // A second build of the same ticket, in another environment.
+    const second = newer.pipeline(id, { id: `pipeline-${id}-2`, environmentId: "env-2" });
+    await newer.started(second);
+    // In progress with no pull request of its own yet.
+    expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
+    expect((await read(id))?.status).toBe("in-progress");
+    await newer.prDetected(second, "open", PR_B_URL);
+    expect((await read(id))?.status).toBe("review");
+    // The first build's pull request closing, through the monitor of its
+    // environment, is not the newer build's to act on.
+    expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
+    expect((await read(id))?.status).toBe("review");
+    // The newer build's own pull request closing still returns it.
+    expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_B_URL)).toBe(true);
+    expect((await read(id))?.status).toBe("backlog");
+  });
+
+  test("found by the build itself returns the ticket, once, before the monitor sees it", async () => {
+    const { storage, life, ticket, read } = await machine();
+    const id = await ticket();
+    const pipeline = life.pipeline(id);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    // A conflict resolution re-detects the pull request, now closed: the
+    // closed link is recorded and the ticket returns in the same step.
+    await life.prDetected(pipeline, "closed");
+    expect(await read(id)).toMatchObject({
+      status: "backlog",
+      prUrl: PR_URL,
+      prState: "closed",
+      prClosedReturnUrl: PR_URL,
+    });
+    // The user picks it up again; the monitor's observation of the same
+    // closure (or a replay after a restart) keeps that move.
+    await storage.kanban.updateKanbanTask(id, { status: "review" });
+    expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
+    expect((await read(id))?.status).toBe("review");
+  });
+
+  test("and a build that then completes sends the ticket to the backlog, not review", async () => {
+    const { storage, life, ticket, read } = await machine();
+    const id = await ticket();
+    const pipeline = life.pipeline(id);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    await life.prDetected(pipeline, "closed");
+    await life.ended(pipeline, "complete");
+    expect((await read(id))?.status).toBe("backlog");
+    expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
+  });
+
   test("never touches a done ticket, or one no build has moved", async () => {
     const { storage, ticket, read } = await machine();
     const untouched = await ticket();
@@ -205,7 +278,9 @@ describe("a manual move", () => {
     const pipeline = life.pipeline(id);
     await life.started(pipeline);
     await storage.kanban.updateKanbanTask(id, { status: "backlog" });
-    expect(await read(id)).toMatchObject({ status: "backlog", lifecycleStatus: "in-progress" });
+    expect((await read(id))?.status).toBe("backlog");
+    // The hand move clears the lifecycle's claim on the column.
+    expect((await read(id))?.lifecycleStatus).toBeUndefined();
     await life.prDetected(pipeline, "open");
     expect(await read(id)).toMatchObject({ status: "review", lifecycleStatus: "review" });
   });

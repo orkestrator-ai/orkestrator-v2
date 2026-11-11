@@ -18,7 +18,9 @@
  * A build's pull request that closes without merging sends its ticket back to
  * the backlog (`kanbanTaskReturnsForClosedPullRequest`), through
  * `KanbanRepository.returnKanbanTaskForClosedPullRequest`, called by the PR
- * monitor.
+ * monitor and by a build that detects the closure itself
+ * (`build-pipeline-service-recovery.ts`, `persistPullRequest`). Each closed
+ * pull request is decided once (`prClosedReturnUrl`).
  */
 import type { KanbanTask } from "./storage-shared.js";
 
@@ -95,15 +97,34 @@ export function pendingMergeClosures(tasks: readonly KanbanTask[]): KanbanMergeC
 /**
  * Whether a ticket goes back to the backlog because its build's pull request
  * `prUrl` closed without merging: it is not done, that pull request never
- * merged it, and the build lifecycle put it in the column it is in now (a
- * ticket the user moved by hand since keeps its place, and so does one no
- * build ever moved).
+ * merged it, its closure was not decided once already, and the build that
+ * raised `prUrl` is the one that put the ticket in the column it is in now.
+ * A ticket the user moved by hand since keeps its place, even one moved away
+ * and back (any other status change clears `lifecycleStatus`), and so does one
+ * a newer build owns (`lifecyclePrUrl` names that build's pull request).
  */
 export function kanbanTaskReturnsForClosedPullRequest(
-  task: Pick<KanbanTask, "status" | "lifecycleStatus" | "prMergeDoneUrl">,
+  task: Pick<
+    KanbanTask,
+    "status" | "lifecycleStatus" | "lifecyclePrUrl" | "prMergeDoneUrl" | "prClosedReturnUrl"
+  >,
   prUrl: string,
 ): boolean {
   if (task.status === "done" || task.status === "backlog") return false;
-  if (task.prMergeDoneUrl === prUrl) return false;
+  if (task.prMergeDoneUrl === prUrl || task.prClosedReturnUrl === prUrl) return false;
+  if (task.lifecyclePrUrl !== prUrl) return false;
   return task.lifecycleStatus === task.status;
+}
+
+/**
+ * Clears the build lifecycle's claim on a ticket's column: called for every
+ * status change that is not a lifecycle write (by hand here, or applied from
+ * another machine), so the next lifecycle event has to establish it afresh.
+ */
+export function clearKanbanLifecycleOwnership(
+  task: Pick<KanbanTask, "lifecycleStatus" | "lifecyclePrUrl" | "lifecycleEcho">,
+): void {
+  delete task.lifecycleStatus;
+  delete task.lifecyclePrUrl;
+  delete task.lifecycleEcho;
 }

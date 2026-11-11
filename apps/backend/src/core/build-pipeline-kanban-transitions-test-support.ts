@@ -20,8 +20,12 @@ export interface LifecycleMachine {
   pipeline(taskId: string, overrides?: Partial<BuildPipeline>): BuildPipeline;
   /** Build start (also a restart): `startStage("build")` and the supervisor's reactivation. */
   started(pipeline: BuildPipeline): Promise<void>;
-  /** Ship found the pull request in `state`. */
-  prDetected(pipeline: BuildPipeline, state: "open" | "merged"): Promise<void>;
+  /** Ship (or a conflict resolution) found the pull request `url` (default `PR_URL`) in `state`. */
+  prDetected(
+    pipeline: BuildPipeline,
+    state: "open" | "merged" | "closed",
+    url?: string,
+  ): Promise<void>;
   /** The run ended: `complete` (with Notes) or `failed` (also a cancel). */
   ended(pipeline: BuildPipeline, phase: "complete" | "failed"): Promise<void>;
 }
@@ -102,11 +106,11 @@ export async function lifecycleMachine(
       }) as unknown as BuildPipeline,
     started: (pipeline) =>
       recovery.updateKanbanLifecycle(pipeline, buildPipelineKanbanUpdate("build-started")),
-    prDetected: async (pipeline, state) => {
+    prDetected: async (pipeline, state, url = PR_URL) => {
       // Ship opened it: `pipelineReachedPullRequestStage`.
       pipeline.sessions.push({ phase: "pr", label: "PR Session", status: "idle" } as never);
       await recovery.persistPullRequest(pipeline, {
-        url: PR_URL,
+        url,
         state,
         hasMergeConflicts: false,
       });

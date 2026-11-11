@@ -38,6 +38,7 @@ export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
 import {
   kanbanTaskAwaitsMergeClosure,
+  clearKanbanLifecycleOwnership,
   kanbanTaskReturnsForClosedPullRequest,
   pendingMergeClosures,
   type KanbanMergeClosure,
@@ -309,9 +310,19 @@ export class KanbanRepository {
         const { status: _status, ...remaining } = updates;
         updates = remaining;
       }
-      // The marker is the lifecycle's alone, whatever a caller sends.
-      const { lifecycleStatus: _marker, ...withoutMarker } = updates as typeof updates & {
+      // The markers are the lifecycle's and the closure's alone, whatever a
+      // caller sends.
+      const {
+        lifecycleStatus: _marker,
+        lifecyclePrUrl: _owner,
+        lifecycleEcho: _echo,
+        prClosedReturnUrl: _closed,
+        ...withoutMarker
+      } = updates as typeof updates & {
         lifecycleStatus?: unknown;
+        lifecyclePrUrl?: unknown;
+        lifecycleEcho?: unknown;
+        prClosedReturnUrl?: unknown;
       };
       updates = withoutMarker;
       const before = normalizeKanbanTask(structuredClone(task));
@@ -358,7 +369,19 @@ export class KanbanRepository {
               .map((candidate) => candidate.order),
           ) + 1;
       }
-      if (lifecycle && updates.status) task.lifecycleStatus = updates.status;
+      if (lifecycle && updates.status) {
+        task.lifecycleStatus = updates.status;
+        // The build that raises a pull request owns the column with it; a
+        // build starting owns it with none yet, so an older build's pull
+        // request closing leaves the ticket alone.
+        if (updates.prUrl) task.lifecyclePrUrl = updates.prUrl;
+        else if (updates.status === "in-progress") delete task.lifecyclePrUrl;
+        // A command node's ticket: the move comes back from the command node
+        // with a new status revision, which is not a hand move there.
+        if (updates.status !== oldStatus && task.sync?.replica) task.lifecycleEcho = true;
+      } else if (updates.status !== undefined && updates.status !== oldStatus) {
+        clearKanbanLifecycleOwnership(task);
+      }
       await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       const updated = normalizeKanbanTask(task);
@@ -441,6 +464,7 @@ export class KanbanRepository {
             ) + 1;
           task.status = "done";
           task.lifecycleStatus = "done";
+          if (task.sync?.replica) task.lifecycleEcho = true;
         }
         task.prMergeDoneUrl = prUrl;
         changes.push({ before, stored: task });
@@ -457,15 +481,23 @@ export class KanbanRepository {
   /**
    * A ticket whose build's pull request closed without merging goes back to
    * the backlog (`kanbanTaskReturnsForClosedPullRequest`), unless the user
-   * moved it by hand since the build last moved it, it is done, or that pull
-   * request merged once already. Returns whether it moved.
+   * moved it by hand since the build last moved it, a newer build owns it, it
+   * is done, or that pull request merged once already. Each closed pull
+   * request is decided once (`prClosedReturnUrl`), so a replay, from the
+   * monitor or the build, never moves it again. Returns whether it moved.
    */
   async returnKanbanTaskForClosedPullRequest(taskId: string, prUrl: string): Promise<boolean> {
     return this.board.enqueue(async () => {
       const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
-      if (!task || !kanbanTaskReturnsForClosedPullRequest(task, prUrl)) return false;
+      if (!task || task.prClosedReturnUrl === prUrl) return false;
       const before = normalizeKanbanTask(structuredClone(task));
+      const returns = kanbanTaskReturnsForClosedPullRequest(task, prUrl);
+      task.prClosedReturnUrl = prUrl;
+      if (!returns) {
+        await this.board.commit(tasks, [{ before, stored: task }]);
+        return false;
+      }
       task.order =
         Math.max(
           -1,
@@ -480,6 +512,7 @@ export class KanbanRepository {
         ) + 1;
       task.status = "backlog";
       task.lifecycleStatus = "backlog";
+      if (task.sync?.replica) task.lifecycleEcho = true;
       await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       return true;

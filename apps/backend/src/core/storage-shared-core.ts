@@ -197,9 +197,30 @@ export type KanbanTask = {
    * (`build-pipeline-kanban-lifecycle.ts`). A status different from it means
    * someone moved the ticket by hand since, which a closed pull request
    * respects. Local to this machine: it is where the build and its pull
-   * request monitor run that reads it.
+   * request monitor run that reads it. Any other status change (by hand,
+   * here or on another machine through ticket sync) clears it, so a ticket
+   * moved away and back is still one the user placed.
    */
   lifecycleStatus?: KanbanStatus;
+  /**
+   * The pull request of the build that set `lifecycleStatus`: set when the
+   * build raises it, cleared when a build starts. Only that pull request
+   * closing returns the ticket to the backlog, so an older build's PR
+   * closing never moves a newer build's ticket. Local, like `lifecycleStatus`.
+   */
+  lifecyclePrUrl?: string;
+  /**
+   * On a leaf, a lifecycle status change sent to the command node and not yet
+   * seen back. The command node's next status revision is that change
+   * returning, not someone moving the ticket there.
+   */
+  lifecycleEcho?: true;
+  /**
+   * The closed pull request whose backlog return was already decided
+   * (`returnKanbanTaskForClosedPullRequest`), moved or not. Its closure is
+   * never applied again, so a replay after a restart keeps a later move.
+   */
+  prClosedReturnUrl?: string;
   /**
    * Sync with other machines: this node's change sequence and field
    * revisions, and on a leaf's copy of a command node's ticket, that ticket's

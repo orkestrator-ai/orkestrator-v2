@@ -633,6 +633,9 @@ export function KanbanTaskDialog({
       setEditKind(content.kind);
       setEditMarkdown(originalMarkdown || ticketMarkdownTemplate(content.kind));
     }
+    // The editor and its Save and Cancel live on the Ticket tab; editing from
+    // the shared header (the title) on Notes switches there with it.
+    if (task) setChosenTab({ taskId: task.id, tab: "ticket" });
     setIsEditing(true);
   };
 

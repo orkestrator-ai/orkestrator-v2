@@ -98,6 +98,49 @@ describe("a build on a leaf moves the command node's ticket", () => {
     expect((await board())?.status).toBe("in-progress");
   });
 
+  test("but a ticket moved away and back on the command node stays where the user put it", async () => {
+    const f = await fleet();
+    const { ticket, life, pipeline, board } = await leafBuild(f);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    // The leaf's own move, seen back from the command node, is still the build's.
+    expect((await board())?.status).toBe("review");
+    expect((await f.leafTicket(ticket.id))?.lifecycleStatus).toBe("review");
+    await f.command.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
+    await f.sync.sync(LEAF_ID);
+    await f.command.kanban.updateKanbanTask(ticket.id, { status: "review" });
+    await f.sync.sync(LEAF_ID);
+    expect(await f.leaf.kanban.returnKanbanTaskForClosedPullRequest(ticket.id, PR_URL)).toBe(false);
+    expect((await board())?.status).toBe("review");
+  });
+
+  test("even when the leaf pulls only after the ticket is back in its column", async () => {
+    const f = await fleet();
+    const { ticket, life, pipeline, board } = await leafBuild(f);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    await board();
+    await f.command.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
+    await f.command.kanban.updateKanbanTask(ticket.id, { status: "review" });
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.lifecycleStatus).toBeUndefined();
+    expect(await f.leaf.kanban.returnKanbanTaskForClosedPullRequest(ticket.id, PR_URL)).toBe(false);
+    expect((await board())?.status).toBe("review");
+  });
+
+  test("and a ticket moved away and back on the leaf stays where the user put it", async () => {
+    const f = await fleet();
+    const { ticket, life, pipeline, board } = await leafBuild(f);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    await board();
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "review" });
+    await board();
+    expect(await f.leaf.kanban.returnKanbanTaskForClosedPullRequest(ticket.id, PR_URL)).toBe(false);
+    expect((await board())?.status).toBe("review");
+  });
+
   test("back to the backlog when the leaf deletes the environment mid-build", async () => {
     const f = await fleet();
     const { life, pipeline, board } = await leafBuild(f);

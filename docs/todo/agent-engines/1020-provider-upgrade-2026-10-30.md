@@ -14,7 +14,7 @@ Analysed 2026-10-30 against main at `6ce02251b`.
 6. **Adopt-later and not-relevant calls**: every other change in the changelogs. Status: done (adopt-later items moved to 0007's Candidates).
 7. **Capacity and overload findings**: recorded for the retry-with-backoff work. Status: done (record only; no retry built here).
 8. **OpenCode 2.x gate**: whether anything in 2.x changed 0008's gate. Status: done (unchanged).
-9. **Live evidence at the new pins**: the checks the fixture and fake-model suites did not make that need no login: the Linux Claude sandbox probe, `claude-host-login-refresh.ts` in a container with a fake login, and `scripts/qualify-opencode-seeded-data.sh` with the OpenCode UI and build-pipeline smoke tests against a built image. Status: open (the signed-in checks moved to 7568 on 2026-11-10).
+9. **Live evidence at the new pins**: the checks the fixture and fake-model suites did not make that need no login: the Linux Claude sandbox probe, `claude-host-login-refresh.ts` in a container with a fake login, and `scripts/qualify-opencode-seeded-data.sh` with the OpenCode UI and build-pipeline smoke tests against a built image. Status: open for the two Claude checks (the signed-in checks moved to 7568 on 2026-11-10). The OpenCode check is done (obsolete: OpenCode 1.x and its seeded-data script were retired on 2026-11-11, see [0008](0008-opencode-v2.md) "OpenCode 1.x retired (2026-11-11)"; OpenCode 2's container qualification is 0008 task 7).
 
 ### 1. Upgrade decision for each provider
 
@@ -213,7 +213,7 @@ Analysed 2026-10-30 against main at `6ce02251b`.
 
 - Claude: the billed coordinator-skills probe; the Linux sandbox probe (Linux host); `claude-host-login-refresh.ts` (container with a fake login); a local and a container native session (streaming, questions, abort, resume, model discovery, background task).
 - Codex: the steer, MCP-approval and web-search canaries (billed); the rollout user-segment scan of real rollouts.
-- OpenCode: `scripts/qualify-opencode-seeded-data.sh` against a built image; UI and build-pipeline smoke tests.
+- OpenCode: `scripts/qualify-opencode-seeded-data.sh` against a built image; UI and build-pipeline smoke tests. (Obsolete since 2026-11-11: the script went with OpenCode 1.x, `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`.)
 - Cursor: sign-in through `--login`, a turn with tools and a diff, model and effort switch, cancel, sub-agent cards; the real order of `summary` and `summary-completed`.
 - Grok: a signed-in `session/new`, an edit without an approval card, a `use_tool` match, `/compact` over ACP, `session_info_update`.
 - Every provider: slash-command re-qualification (only the Codex disabled-skills probe re-ran) and the inactive-environment path.
@@ -362,7 +362,8 @@ its test were added. This is not evidence for a different runtime build.
   disk-report deadline and its isolated pass are recorded in flake 0259.
 - Preparation's failed `mise run verify:codex:protocol` passed (0.8 s) with
   `CODEX_PROTOCOL_BINARY=/private/tmp/ork-bin/codex/codex`; its failed
-  `mise run verify:opencode:live` passed (6.3 s) with
+  `verify:opencode:live` (a mise task removed with OpenCode 1.x on
+  2026-11-11) passed (6.3 s) with
   `OPENCODE_CLI_PATH=/private/tmp/ork-bin/opencode/opencode`. The failures
   came from resolving an old or absent host executable, not pin drift.
 - The first full browser repeat overlapped an owning-file browser run on its
@@ -384,8 +385,9 @@ and `dev:reset` commands after qualification. Sanitized evidence under
 ### Release qualification still open
 
 The successful checks above do not close task 9. Linux sandbox and container
-sessions, host-login refresh and the OpenCode seeded-data and build-pipeline
-matrix still require evidence (task 9). The Claude background output check
+sessions and host-login refresh still require evidence (task 9); the OpenCode
+seeded-data and build-pipeline matrix is obsolete since OpenCode 1.x was
+retired on 2026-11-11. The Claude background output check
 passed at the 2026-11-06 pins
 ([1031](1031-provider-upgrade-2026-11-06.md) task 9). The signed-in Grok
 cases, Cursor's independently reproduced UI resume failure, the remaining

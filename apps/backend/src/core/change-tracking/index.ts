@@ -3,6 +3,7 @@
 // reviewable. The storage layer imports ledger-schema.js directly: routing it
 // through here would close a runtime import cycle with storage.
 export { createBackendChangeTracking } from "./backend-wiring.js";
+export { removeOpenCodeCommandChangeJournals } from "./legacy-import.js";
 export { legacyCompatibilityCounts, measureLegacyPayload } from "./legacy-payload.js";
 export type { ChangeTrackingService, EvidenceSource } from "./service.js";
 export {

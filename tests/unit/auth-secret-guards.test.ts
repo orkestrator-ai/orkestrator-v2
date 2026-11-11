@@ -145,8 +145,8 @@ describe("auth-secret canary coverage", () => {
   test.each([
     // The bridge-answer parser for every HTTP bridge.
     ["apps/backend/src/core/http-bridge/catalog.ts", "authStatus()"],
-    // OpenCode answers from its SDK, not a bridge.
-    ["apps/backend/src/core/opencode-capabilities.ts", "authStatus()"],
+    // OpenCode answers from its own server's provider list, not a bridge.
+    ["apps/backend/src/core/opencode2/credentials.ts", "openCode2AuthStatus("],
   ])("%s keeps a canary test beside it", (relative, marker) => {
     const source = path.join(root, relative);
     expect(readFileSync(source, "utf8")).toContain(marker);
@@ -156,7 +156,7 @@ describe("auth-secret canary coverage", () => {
     ).filter((file) => {
       const text = readFileSync(file, "utf8");
       return relative.includes("opencode")
-        ? text.includes("OpenCodeCapabilities")
+        ? text.includes("openCode2AuthStatus")
         : text.includes("beginSignIn");
     });
     expect(tests, `${relative} has no auth-secret canary test`).not.toHaveLength(0);

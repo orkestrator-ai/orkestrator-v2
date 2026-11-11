@@ -298,7 +298,8 @@ describe("C22 environment networks and narrow host access", () => {
       // A full-access sibling proves the listener itself answers.
       expect(await probe(siblingId, "http://127.0.0.1:8080/")).toBe(0);
 
-      // Ingress through a published port still works.
+      // Ingress through a published port still works (OpenCode's, which no
+      // server holds here).
       await docker([
         "exec",
         "-d",
@@ -307,9 +308,9 @@ describe("C22 environment networks and narrow host access", () => {
         containerId,
         "bun",
         "-e",
-        'Bun.serve({ hostname: "0.0.0.0", port: 4096, fetch: () => new Response("ingress-ok") })',
+        'Bun.serve({ hostname: "0.0.0.0", port: 4102, fetch: () => new Response("ingress-ok") })',
       ]);
-      const published = await docker(["port", firewall, "4096/tcp"]);
+      const published = await docker(["port", firewall, "4102/tcp"]);
       const hostPort = published.split("\n")[0]!.split(":").at(-1)!;
       let ingress = "";
       for (let attempt = 0; attempt < 20 && ingress !== "ingress-ok"; attempt += 1) {

@@ -4,18 +4,17 @@ import {
   ProviderSessionFailedError,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
+  type ProviderCommonDependencies,
 } from "./agent-provider-contract.js";
 import { HttpBridgeProvider, type HttpBridgeProviderDependencies } from "./http-bridge/index.js";
 import type { AppConfig } from "./models.js";
-import type { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
-import type { OpenCodeListenerRecheck } from "./opencode-listener-recheck.js";
 import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
-import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
-import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
+import { createHash } from "node:crypto";
 import {
-  OpenCodeRoutingProvider,
-  type OpenCodeRoutingDependencies,
-} from "./opencode2/routing-provider.js";
+  OpenCodeEnvironmentProvider,
+  type OpenCodeEnvironmentDependencies,
+} from "./opencode2/environment-provider.js";
+import { OPENCODE2_CONTAINER_DIRECTORY } from "./opencode2/container-server.js";
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";
@@ -50,21 +49,6 @@ export interface NativeAgentProviderEnvironment {
    * snapshot reports a sign-in problem.
    */
   signInGuidance?: (agent: string) => Promise<string | undefined>;
-  /**
-   * The backend's OpenCode coordinator research registrations
-   * (`runtime.localServers.openCodeAgentTools.research`). Absent without a
-   * backend, which then grants a coordinator no research tools.
-   */
-  openCodeCoordinatorResearch?: Pick<
-    OpenCodeCoordinatorResearch,
-    "ensure" | "invalidate" | "toolIds"
-  >;
-  /**
-   * Which socket listens on the environment's container OpenCode port, against
-   * the one recorded at launch (`opencode-listener-recheck.ts`). Absent for a
-   * local environment and without a backend.
-   */
-  openCodeListenerRecheck?: OpenCodeListenerRecheck;
 }
 
 /**
@@ -100,7 +84,7 @@ function applySignInGuidance(
 }
 
 export type ProviderDependencies = HttpBridgeProviderDependencies &
-  OpenCodeProviderDependencies & {
+  Pick<ProviderCommonDependencies, "onObservationHint"> & {
     workflowResults?: WorkflowResultReader;
     /** Stable bridge identity shared by all workflow owners, even after URL replacement. */
     bridgeEnvironmentId?: string;
@@ -111,18 +95,41 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
     /** Automatic account switching, which turns a workflow's weekly-limit stop into a resend. */
     usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop" | "noteUnresentStop">;
     /**
-     * Route OpenCode sessions per session between 1.x and the 2.x preview
-     * (`opencode2/routing-provider.ts`). The interactive native-agent
-     * service passes it for one environment.
+     * The environment's OpenCode server (`opencode2/environment-provider.ts`).
+     * The interactive native-agent service passes it for one environment.
      */
-    openCode2?: OpenCodeRoutingDependencies;
+    openCode?: OpenCodeEnvironmentDependencies;
     /**
-     * The same routing for a workflow provider (build pipelines, Multi Review,
-     * graphs), built for its `bridgeEnvironmentId`; it chooses and records the
-     * line of each session it creates (`openCodeWorkflowRoutingDependencies`).
+     * The same for a workflow provider (build pipelines, Multi Review,
+     * graphs), built for its `bridgeEnvironmentId`
+     * (`openCodeWorkflowDependencies`).
      */
-    openCode2Workflow?: (environmentId: string) => OpenCodeRoutingDependencies | undefined;
+    openCodeWorkflow?: (environmentId: string) => OpenCodeEnvironmentDependencies | undefined;
   };
+
+/**
+ * The OpenCode server a bridge connection names, for a caller that passes no
+ * {@link ProviderDependencies.openCode}: `start_*_opencode_server` answers
+ * the environment's OpenCode server, whose password is the connection's token.
+ * Its generation is derived from a hash of that token, never the token
+ * itself, so a replaced server (new password) is a new generation.
+ * Exported for its tests.
+ */
+export function openCodeServerFromConnection(
+  connection: BridgeConnection,
+): OpenCodeEnvironmentDependencies {
+  const tag = createHash("sha256")
+    .update(connection.authToken ?? "")
+    .digest("hex")
+    .slice(0, 12);
+  const server = {
+    baseUrl: connection.baseUrl,
+    password: connection.authToken ?? "",
+    directory: connection.directory ?? OPENCODE2_CONTAINER_DIRECTORY,
+    generation: `${connection.baseUrl}#${tag}`,
+  };
+  return { connection: async () => server };
+}
 
 /** A workflow polls its turns every few seconds; one not looked at for this long is not counted. */
 const RUNNING_TURN_SEEN_MS = 2 * 60_000;
@@ -200,16 +207,18 @@ export function createNativeAgentProvider(
   dependencies: ProviderDependencies = {},
 ): NativeAgentRuntimeProvider {
   const openCode = (): NativeAgentRuntimeProvider => {
-    const legacy = new OpenCodeProvider(connection, {
-      ...openCodeEnvironmentDependencies(dependencies.environment),
-      ...dependencies,
-    });
     const environmentId =
       dependencies.bridgeEnvironmentId ?? dependencies.environment?.environmentId;
-    const routing =
-      dependencies.openCode2 ??
-      (environmentId ? dependencies.openCode2Workflow?.(environmentId) : undefined);
-    return routing ? new OpenCodeRoutingProvider(legacy, routing) : legacy;
+    const server =
+      dependencies.openCode ??
+      (environmentId ? dependencies.openCodeWorkflow?.(environmentId) : undefined) ??
+      openCodeServerFromConnection(connection);
+    // A pipeline step's configured model travels on its connection.
+    const defaults =
+      connection.model && connection.model !== "default"
+        ? { model: connection.model, ...(connection.effort ? { effort: connection.effort } : {}) }
+        : undefined;
+    return new OpenCodeEnvironmentProvider(defaults ? { ...server, defaults } : server);
   };
   const provider: NativeAgentRuntimeProvider =
     connection.agent === "opencode"

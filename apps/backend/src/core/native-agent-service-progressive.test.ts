@@ -2,7 +2,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import { openCodeContextUsage } from "./opencode-usage.js";
+import { openCode2ContextUsage } from "./opencode2/usage.js";
 import {
   createProviderStub,
   waitForCondition,
@@ -2416,24 +2416,17 @@ describe("native agent progressive remainder", () => {
   });
 
   test("returns unchanged for an OpenCode state read whose transcript is stable", async () => {
-    const messages = [
-      {
-        info: {
-          id: "assistant-1",
-          role: "assistant",
-          providerID: "anthropic",
-          modelID: "claude-sonnet",
-          tokens: { input: 7, output: 3, cache: { read: 1, write: 0 } },
-          time: { created: 1, completed: 2 },
-        },
-        parts: [],
-      },
-    ];
+    // The session's lifetime ledger, as OpenCode 2 reports it.
+    const session = {
+      tokens: { input: 7, output: 3, reasoning: 0, cache: { read: 1, write: 0 } },
+      cost: 0,
+      time: { created: 1, updated: 2 },
+    } as Parameters<typeof openCode2ContextUsage>[0];
     const stub = createProviderStub("opencode", {
       sessionStateSnapshot: async () => ({
         status: "idle" as const,
         phase: "idle" as const,
-        contextUsage: openCodeContextUsage(messages),
+        contextUsage: openCode2ContextUsage(session),
       }),
     });
     await withService(

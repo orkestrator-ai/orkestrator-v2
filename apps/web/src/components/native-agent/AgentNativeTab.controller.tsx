@@ -705,8 +705,7 @@ export function SharedNativeAgentController({
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
-  // The session's own capabilities once its projection arrives: one platform
-  // can serve sessions that differ (an OpenCode 1.x and a 2.x tab), and the
+  // The session's own capabilities once its projection arrives: the
   // projection is the platform table narrowed by what this session offers.
   const attachmentCapabilities =
     projection?.capabilities?.attachments ?? adapter.capabilities.attachments;

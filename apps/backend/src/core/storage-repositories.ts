@@ -18,7 +18,6 @@ import { SuborksRepository } from "./storage-suborks.js";
 import { ClientStateRepository } from "./storage-client-state.js";
 import { SetupApprovalsRepository } from "./storage-setup-approvals.js";
 import { WatchedPullRequestsRepository } from "./storage-watched-pull-requests.js";
-import { OpenCode2SessionsRepository } from "./storage-opencode2-sessions.js";
 import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
 import { KanbanBoardStore } from "./storage-kanban-board.js";
@@ -85,7 +84,6 @@ export class StorageRepositories {
   readonly clientState: ClientStateRepository;
   readonly setupApprovals: SetupApprovalsRepository;
   readonly watchedPullRequests: WatchedPullRequestsRepository;
-  readonly openCode2Sessions: OpenCode2SessionsRepository;
 
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
@@ -125,6 +123,5 @@ export class StorageRepositories {
     this.clientState = new ClientStateRepository(context);
     this.setupApprovals = new SetupApprovalsRepository(context);
     this.watchedPullRequests = new WatchedPullRequestsRepository(context);
-    this.openCode2Sessions = new OpenCode2SessionsRepository(context);
   }
 }

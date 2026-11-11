@@ -1,7 +1,7 @@
 /**
  * Orkestrator's own system-level instructions, delivered to every agent
  * provider through its native channel: Claude's appended system prompt, Codex
- * developer instructions, OpenCode's per-prompt `system`, Pi's appended system
+ * developer instructions, an instruction entry on each OpenCode session, Pi's appended system
  * prompt, Grok's `--rules`, and a system-instructions frame on Cursor prompts
  * (Cursor has no channel that adds to its system prompt).
  *

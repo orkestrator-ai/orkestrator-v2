@@ -40,12 +40,62 @@ import {
   type ProviderTranscriptSnapshot,
 } from "../agent-provider-contract.js";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
-import { openCodeDisplayBytes } from "../opencode-snapshots.js";
+import { inlineFileContentLabel, inlineFileUrlDisposition } from "../native-agent-inline-files.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import type { OpenCode2Event } from "./events.js";
 import { normalizeOpenCode2Group, normalizeOpenCode2Groups } from "./transcript.js";
 import { openCode2RevertMarker } from "./revert.js";
 import type { OpenCode2Message } from "./types.js";
+
+/** Stands in for a deferred body: the projection's 32-character detail reference. */
+const DETAIL_REFERENCE = "0".repeat(32);
+
+/**
+ * A row's size once the native projection has moved its heavy bodies behind
+ * detail references (`projectionPart`): tool output and error, diff bodies,
+ * and the inline data URLs it defers. That is what a window or page costs on
+ * screen, and measuring the inline bodies instead would let one large tool
+ * result shrink a window to a single message. A replacer skips those strings
+ * rather than copying them, so the measure stays cheap on every poll.
+ *
+ * An inline payload the projection keeps — a PDF, or an image too large for
+ * the detail cache — is counted in full. Counting it as a reference let a
+ * window outgrow the live view, which then dropped the head the cursor named.
+ */
+function openCodeDisplayBytes(row: unknown): number {
+  try {
+    const serialized = JSON.stringify(row, (key, value: unknown) => {
+      if (key === "toolOutput" || key === "toolError") return DETAIL_REFERENCE;
+      if (key === "toolDiff") {
+        const diff = asRecord(value);
+        return diff
+          ? {
+              filePath: diff.filePath,
+              additions: diff.additions,
+              deletions: diff.deletions,
+              deferred: true,
+            }
+          : value;
+      }
+      const part = asRecord(value);
+      const disposition = part ? inlineFileUrlDisposition(part) : undefined;
+      if (part && disposition) {
+        const { fileUrl, ...rest } = part;
+        const label = inlineFileContentLabel(part);
+        return {
+          ...rest,
+          ...(label === undefined ? {} : { content: label }),
+          ...(disposition === "defer" ? { detailRef: DETAIL_REFERENCE } : {}),
+          ...(disposition === "inline" ? { fileUrl } : {}),
+        };
+      }
+      return value;
+    });
+    return Buffer.byteLength(serialized ?? "");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
 
 /**
  * Most rows in one window or page. Each read asks for one row more, to tell a

@@ -1,5 +1,3 @@
-import { Database } from "bun:sqlite";
-import { ORKESTRATOR_OPENCODE_DB_FILE } from "./opencode-host-database.js";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -11,7 +9,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
-import { openCodeSdkFetch } from "./http-bridge/transport.js";
+import { FakeOpenCode2Server, fakeOpenCode2Model } from "./opencode2/fake-server.test-support.js";
 import { spawnCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
@@ -169,27 +167,15 @@ describe("host model catalogue refresh", () => {
         fetchAcpModels: mock(async () => [
           { platform: "grok", id: "grok-4", label: "Grok 4" },
         ]) as never,
-        createOpenCodeClient: mock(() => ({
-          provider: {
-            list: async () => ({
-              data: {
-                all: [{ id: "openai", name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
-                connected: [],
-              },
-            }),
-          },
-        })) as never,
-        runCommand: mock(async () => ({ stdout: "", stderr: "" })) as never,
       });
 
       await refresh(context(), "claude");
       await refresh(context(), "codex");
       await refresh(context(), "grok");
-      await refresh(context(), "opencode");
 
-      expect(spawns).toHaveLength(4);
+      expect(spawns).toHaveLength(3);
       expect(spawns.map((spawned) => spawned.env.ORKESTRATOR_BRIDGE_DEBUG)).toEqual(
-        Array.from({ length: 4 }, () => (enabled ? "1" : "0")),
+        Array.from({ length: 3 }, () => (enabled ? "1" : "0")),
       );
     },
   );
@@ -327,202 +313,138 @@ describe("host model catalogue refresh", () => {
     expect(spawns[0]?.env.ACP_PROVIDER).toBeUndefined();
   });
 
-  test("normalizes an OpenCode catalogue with a bounded provider request", async () => {
-    const providerList = mock(async (_parameters, options: { signal?: AbortSignal }) => {
-      expect(options.signal).toBeInstanceOf(AbortSignal);
-      return {
-        data: {
-          all: [{ id: "openai", name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
-          connected: [],
-        },
-      };
-    });
-    const run = mock(async () => ({ stdout: "", stderr: "" }));
-    stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
-    const createClient = mock(() => ({ provider: { list: providerList } }));
-    const refresh = refreshTesting.createHostModelCatalogRefresher({
-      createOpenCodeClient: createClient as never,
-      runCommand: run as never,
-    });
-
-    const result = await refresh(context(), "opencode");
-
-    expect(result.agent).toBe("opencode");
-    if (result.agent !== "opencode") throw new Error("Expected an OpenCode catalogue");
-    expect(result.models.map((model) => model.id)).toContain("openai/gpt-5");
-    expect(providerList).toHaveBeenCalledTimes(1);
-    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: openCodeSdkFetch }));
-    expect(run).toHaveBeenCalledWith(
-      "opencode",
-      ["models", "--refresh"],
-      expect.objectContaining({ timeoutMs: 45_000 }),
-    );
-    expect(children[0]?.exited).toBe(true);
-  });
-
-  test("isolates both the models command and catalogue server from an incompatible database", async () => {
-    const previousDataHome = process.env.XDG_DATA_HOME;
-    const previousDatabase = process.env.OPENCODE_DB;
-    process.env.XDG_DATA_HOME = path.join(appRoot, "xdg");
-    delete process.env.OPENCODE_DB;
+  test("reads the OpenCode catalogue from a 2.x server, allowlisted providers first", async () => {
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, openCodeModelProviders: ["opencode-go"] });
+    const fake = new FakeOpenCode2Server();
     try {
-      const directory = path.join(process.env.XDG_DATA_HOME, "opencode");
-      await fs.mkdir(directory, { recursive: true });
-      const database = new Database(path.join(directory, "opencode.db"), { create: true });
-      database.run("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)");
-      database.close();
-      const run = mock(async () => ({ stdout: "", stderr: "" }));
-      stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
-      const refresh = refreshTesting.createHostModelCatalogRefresher({
-        runCommand: run as never,
-        createOpenCodeClient: (() => ({
-          provider: {
-            list: async () => ({
-              data: {
-                all: [{ id: "openai", name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
-                connected: [],
-              },
-            }),
-          },
-        })) as never,
-      });
-      await refresh(context(), "opencode");
-      expect(run).toHaveBeenCalledWith(
-        "opencode",
-        ["models", "--refresh"],
-        expect.objectContaining({
-          env: expect.objectContaining({ OPENCODE_DB: ORKESTRATOR_OPENCODE_DB_FILE }),
-        }),
+      fake.models = [
+        fakeOpenCode2Model("openai", "gpt-5", ["low", "high"]),
+        fakeOpenCode2Model("opencode-go", "beam", []),
+      ];
+      const signals: Array<AbortSignal | undefined> = [];
+      const withOpenCode2Server = mock(
+        async (_context: unknown, use: (client: never) => unknown) => {
+          const client = fake.client();
+          return use({
+            api: (
+              method: string,
+              path: string,
+              operation: string,
+              options: { signal?: AbortSignal },
+            ) => {
+              signals.push(options.signal);
+              return client.api(method, path, operation, options as never);
+            },
+          } as never);
+        },
       );
-      expect(spawns).toHaveLength(1);
-      expect(spawns[0]?.env.OPENCODE_DB).toBe(ORKESTRATOR_OPENCODE_DB_FILE);
-      expect(children[0]?.exited).toBe(true);
-      expect(process.env.OPENCODE_DB).toBeUndefined();
+      const refresh = refreshTesting.createHostModelCatalogRefresher({
+        withOpenCode2Server: withOpenCode2Server as never,
+      });
+
+      const result = await refresh(context(), "opencode");
+
+      expect(result.agent).toBe("opencode");
+      if (result.agent !== "opencode") throw new Error("Expected an OpenCode catalogue");
+      // Not narrowed by the allowlist: the durable cache serves a later change.
+      expect(result.models.map((model) => model.id)).toEqual(["opencode-go/beam", "openai/gpt-5"]);
+      expect(result.models[1]!.reasoning?.map((option) => option.id)).toEqual([
+        "default",
+        "low",
+        "high",
+      ]);
+      expect(withOpenCode2Server).toHaveBeenCalledTimes(1);
+      expect(signals.length).toBeGreaterThan(0);
+      for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
+      // No 1.x process is started for it.
+      expect(spawns).toEqual([]);
     } finally {
-      if (previousDataHome === undefined) delete process.env.XDG_DATA_HOME;
-      else process.env.XDG_DATA_HOME = previousDataHome;
-      if (previousDatabase === undefined) delete process.env.OPENCODE_DB;
-      else process.env.OPENCODE_DB = previousDatabase;
+      fake.stop();
     }
   });
 
-  test("aborts a stalled OpenCode provider request and releases the child", async () => {
-    stubBridgeSpawn((spawned) =>
-      listenAsBridge(Number(spawned.env.PORT), (url) => url.startsWith("/provider")),
-    );
+  test("an empty OpenCode catalogue is a failed refresh", async () => {
+    const fake = new FakeOpenCode2Server();
+    try {
+      fake.models = [];
+      const refresh = refreshTesting.createHostModelCatalogRefresher({
+        withOpenCode2Server: (async (_context: unknown, use: (client: never) => unknown) =>
+          use(fake.client() as never)) as never,
+      });
+      await expect(refresh(context(), "opencode")).rejects.toThrow(
+        "OpenCode returned an empty model catalogue",
+      );
+    } finally {
+      fake.stop();
+    }
+  });
+
+  test("aborts a stalled OpenCode model request", async () => {
     const refresh = refreshTesting.createHostModelCatalogRefresher({
-      openCodeProviderListTimeoutMs: 25,
-      runCommand: mock(async () => ({ stdout: "", stderr: "" })) as never,
+      openCodeModelListTimeoutMs: 25,
+      withOpenCode2Server: (async (_context: unknown, use: (client: never) => unknown) =>
+        use({
+          api: (
+            _method: string,
+            _path: string,
+            _operation: string,
+            options: { signal?: AbortSignal },
+          ) =>
+            new Promise((_resolve, reject) => {
+              options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+                once: true,
+              });
+            }),
+        } as never)) as never,
     });
 
     await expect(refresh(context(), "opencode")).rejects.toThrow();
-    expect(children[0]?.exited).toBe(true);
-    expect(runtime.localServers.processCount()).toBe(0);
   });
 });
 
-describe("OpenCode probe host-start ownership", () => {
-  test.each(["catalog-refresh", "provider-sign-in"] as const)(
-    "%s releases its turn when spawn throws",
-    async (purpose) => {
-      spawnImpl = () => {
-        throw new Error("spawn refused");
-      };
-      await expect(
-        withShortLivedBridge(
-          runtime.localServers,
-          {
-            kind: "opencode",
-            purpose,
-            command: "opencode",
-            args: [],
-            cwd: appRoot,
-            env: {},
-            token: "fixture-token",
-            headers: {},
-          },
-          async () => undefined,
-        ),
-      ).rejects.toThrow("spawn refused");
-      const release = await runtime.localServers.openCodeHostStart.acquire();
-      release();
-      expect(runtime.localServers.processCount()).toBe(0);
-    },
-  );
+describe("short-lived probe ownership", () => {
+  const probe = (args: string[] | (() => string[]) = []) => ({
+    kind: "codex" as const,
+    command: "codex-bridge",
+    args,
+    cwd: appRoot,
+    env: {},
+    token: "fixture-token",
+    headers: {},
+  });
 
-  test.each(["catalog-refresh", "provider-sign-in"] as const)(
-    "%s releases its turn and child when shutdown begins during spawn",
-    async (purpose) => {
-      stubBridgeSpawn(() => runtime.localServers.closeAdmission());
-      const read = mock(async () => undefined);
-      await expect(
-        withShortLivedBridge(
-          runtime.localServers,
-          {
-            kind: "opencode",
-            purpose,
-            command: "opencode",
-            args: [],
-            cwd: appRoot,
-            env: {},
-            token: "fixture-token",
-            headers: {},
-          },
-          read,
-        ),
-      ).rejects.toThrow("shutting down");
-      expect(spawns).toHaveLength(1);
-      expect(children[0]?.exited).toBe(true);
-      expect(read).not.toHaveBeenCalled();
-      expect(runtime.localServers.processCount()).toBe(0);
-      const release = await runtime.localServers.openCodeHostStart.acquire();
-      release();
-    },
-  );
+  test("a probe whose spawn throws leaves nothing owned", async () => {
+    spawnImpl = () => {
+      throw new Error("spawn refused");
+    };
+    await expect(
+      withShortLivedBridge(runtime.localServers, probe(), async () => undefined),
+    ).rejects.toThrow("spawn refused");
+    expect(runtime.localServers.processCount()).toBe(0);
+  });
 
-  test.each(["catalog-refresh", "provider-sign-in"] as const)(
-    "%s refuses a spawn and releases its queued turn after shutdown",
-    async (purpose) => {
-      const release = await runtime.localServers.openCodeHostStart.acquire();
-      let queued = false;
-      const spawn = mock(() => {
-        throw new Error("must not spawn");
-      });
-      spawnImpl = spawn;
-      const read = mock(async () => undefined);
-      const probe = withShortLivedBridge(
-        runtime.localServers,
-        {
-          kind: "opencode",
-          purpose,
-          command: "opencode",
-          args: () => {
-            queued = true;
-            return [];
-          },
-          cwd: appRoot,
-          env: {},
-          token: "fixture-token",
-          headers: {},
-        },
-        read,
-      );
-      const outcome = probe.catch((error: unknown) => error);
-      try {
-        for (let attempt = 0; !queued; attempt += 1) {
-          if (attempt === 100) throw new Error("Probe did not reach the host queue");
-          await Bun.sleep(5);
-        }
-        runtime.localServers.closeAdmission();
-      } finally {
-        release();
-      }
-      expect(((await outcome) as Error).message).toContain("shutting down");
-      expect(spawn).not.toHaveBeenCalled();
-      expect(read).not.toHaveBeenCalled();
-      const releaseNext = await runtime.localServers.openCodeHostStart.acquire();
-      releaseNext();
-      expect(runtime.localServers.processCount()).toBe(0);
-    },
-  );
+  test("a probe stops its child when shutdown begins during spawn", async () => {
+    stubBridgeSpawn(() => runtime.localServers.closeAdmission());
+    const read = mock(async () => undefined);
+    await expect(withShortLivedBridge(runtime.localServers, probe(), read)).rejects.toThrow(
+      "shutting down",
+    );
+    expect(spawns).toHaveLength(1);
+    expect(children[0]?.exited).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    expect(runtime.localServers.processCount()).toBe(0);
+  });
+
+  test("a probe refuses to spawn once shutdown has begun", async () => {
+    const spawn = mock(() => {
+      throw new Error("must not spawn");
+    });
+    spawnImpl = spawn;
+    runtime.localServers.closeAdmission();
+    await expect(
+      withShortLivedBridge(runtime.localServers, probe(), async () => undefined),
+    ).rejects.toThrow("shutting down");
+    expect(spawn).not.toHaveBeenCalled();
+  });
 });

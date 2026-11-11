@@ -146,8 +146,13 @@ function fakeRunners(revision: string | null) {
 }
 
 /** A credential write, not the `.claude.json` identity update that follows a switch. */
+/** A pipe that writes a login: not the identity update, nor the restrict or drop digests. */
 function isCredentialPipe(call: { kind: string; command: string }): boolean {
-  return call.kind === "pipe" && !call.command.includes('/.claude.json"');
+  return (
+    call.kind === "pipe" &&
+    !call.command.includes('/.claude.json"') &&
+    !call.command.includes("claude_host_tokens")
+  );
 }
 
 async function stage(): Promise<string> {
@@ -1882,6 +1887,12 @@ describe("access-only Claude logins", () => {
       // Only a digest of the host's MCP refresh token, so the container can
       // tell a stale copy of it from a login of its own.
       hostMcpRefresh: { linear: [sha256("HOST-MCP-REFRESH")] },
+      // Digests of every host token per slot, so a later drop can name a copy
+      // of the host's login however it reached the container.
+      hostTokens: {
+        claudeAiOauth: [sha256("host-access"), sha256("HOST-SINGLE-USE")],
+        "mcpOAuth/linear": [sha256("mcp"), sha256("HOST-MCP-REFRESH")],
+      },
     });
     expect(JSON.stringify(fake.calls)).not.toContain("HOST-");
   });
@@ -1976,10 +1987,14 @@ describe("access-only Claude logins", () => {
       { enabledAgentPlatforms: ["claude", "codex"] } as never,
       fake.runners,
     );
-    expect(fake.calls.some((call) => call.kind === "pipe")).toBe(false);
-    expect(fake.calls.map((call) => call.command)).toContain(
-      buildRestrictContainerClaudeCredentialCommand(),
+    expect(fake.calls.some(isCredentialPipe)).toBe(false);
+    const restrict = fake.calls.find(
+      (call) => call.command === buildRestrictContainerClaudeCredentialCommand(),
     );
+    expect(restrict?.kind).toBe("pipe");
+    // Only digests of host tokens the backend saw, never a token.
+    expect(Object.keys(JSON.parse(restrict!.stdin!))).toEqual(["hostTokens"]);
+    expect(JSON.stringify(fake.calls)).not.toContain("HOST-");
   });
 
   test("an added account's restaged login is access-only", async () => {

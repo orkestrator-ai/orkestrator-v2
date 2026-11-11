@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "domain": "claude-tmux",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "claude_tmux_answer_pre_tool_use": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5b98271acb724cc23534fd41b0bab0f1ab87580cb7380b4d69deb8e85cc9af17",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_answer_selection_prompt": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedGeneration", "expectedPromptFingerprint", "expectedRevision"],
+      "argsDigest": "sha256:91a282014e222052eb0ab305377a783650339a43c6693eb364d6f3a7bc84c3e6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_create_interactive_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b0c38d7045cd8abe558e67a47362c40fe653d0aa082e4b7130e55f248d400399",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "claude_tmux_detach_interactive_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_hold_hook": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:11dcf234438a22d9217239be0cbee57d932e5431b84ec4320663e00b6594ad28",
+      "resultDigest": "sha256:11928d6b1ddb6613529bd914764a68c83832a85f184a29367662ee4e0a5f58c4"
+    },
+    "claude_tmux_interrupt": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_list_previous_sessions": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:0232320b0bd72f08cec33e2579dc26be6a4aff4bd5eca2bfdb3d7b3255f1def1"
+    },
+    "claude_tmux_pending_hooks": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:546076374af18f306374eca053a140d063857a0d9ad9586ceeed518c741a8178"
+    },
+    "claude_tmux_reconcile_orphans": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:691e4c6f1b2858ee182fded4e35f62d0ac3342823392eb7df96eea7c1d942d01"
+    },
+    "claude_tmux_renew_interactive_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:a74434be5ffcad928221e020a53ef3c32d02c641af6a9b2ba7ceae76b8915ba1"
+    },
+    "claude_tmux_reply_hook": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:074730405c3af9011ee1531e7108aca1ffa3c6b65c32b1ec851cea178436921f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_resize": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0250bafd36aa815f589364caf84e9dd8d64a031206a6681691fef73b44b7e2c8",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_resize_interactive_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b5c283dba64ce072b309c85480bb1f429363548ce7a6b8048ec0c398308ba2eb",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_send_keys": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0afa6798442e9bfe01586ec925d346b5a4e5216815c8322e3317749f788135c3",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_send_text": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:80319c3c449e8adf0871943a3ff68329a477983ee3d0dff65cd2a17ed878b030",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_start": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:76094aaab78cfcbbd8a93d66d3a6d7bb8668875663b331100db2051e9a7373cd",
+      "resultDigest": "sha256:9e4f62bd96afcb0ed6254e5bafa9c751a9d11e77edbd94e67fea9dba2d9642b5"
+    },
+    "claude_tmux_start_interactive_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:60d7684068a98f7e15881d4aa9fc3bcb150d93b49943d684dc933be6184cec19",
+      "resultDigest": "sha256:f1841b66426632380a40d9dd2c398ff63b80db582e8b55a47481fc73eafb018f"
+    },
+    "claude_tmux_stop": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_submit": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:80319c3c449e8adf0871943a3ff68329a477983ee3d0dff65cd2a17ed878b030",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_submit_queued": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:80319c3c449e8adf0871943a3ff68329a477983ee3d0dff65cd2a17ed878b030",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_switch_effort": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:cc1a7cd11bc4f56d5d3f5ff9ba7780d86f90eee248d83cb39c4950bf1e678456",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_switch_fast_mode": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:32962694966d841f5c0117393b523453631d908bf5c6edad9a35f2c58c86bc5d",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_switch_model": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c422d46f850925ac9a055f067060877ce228458c03a34d9b287c2cc6ed7e4db",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "claude_tmux_switch_plan_mode": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1120ff6a91cf661f1f1e5a87781dce5271615974d3b36860d722133d977e259a",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "claude_tmux_tasks": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:44b2d736d390555ab200dc75ec1ba82daff651843e39ab7548ff2cf0d1261b37"
+    },
+    "claude_tmux_transcript": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:42b6129755161f1c9e531f14ae9d45f7d8631071db2a53e209276db84e2283fe",
+      "resultDigest": "sha256:5e8c672adbccfbb66fca92d86287a00d3f6a128bca9b97cd933dfb239f79de0d"
+    },
+    "claude_tmux_write_interactive_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7721dc4d47dbbd4c956d29ebcf49d2e532f80c689f35d5ea7a77168445d3c919",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "reconcile_claude_state_polling": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    }
+  }
+}

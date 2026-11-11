@@ -1,6 +1,6 @@
 # Multi Review graph auto-PR pending case times out under load
 
-- **ID:** 9937
+- **ID:** 9948
 - **Status:** open
 - **Date observed:** 2026-11-11
 

@@ -96,3 +96,22 @@ at `:119`. That is close to the 4 of 57 rate recorded above on detached
 `TranscriptPaging`, `StreamingTranscript`, three workers) failed only the
 mobile byte-bounded index case, 79 passed. No assertion, skip or timeout
 changed; root cause remains unconfirmed.
+
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 0483 --base 498b68766` reported `open`.
+The owning spec and its implementation are unchanged on the branch.
+
+In the one-worker two-owner rerun
+
+```sh
+NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flake-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts --workers=1 e2e/TranscriptPaging.spec.ts e2e/DataSavingGateway.spec.ts
+```
+
+the mobile `native: paging before prose in a byte-bounded view holds the
+original tool position` case kept prepend index 1 at
+`e2e/TranscriptPaging.spec.ts:138` (expected greater than 1); 40 passed, one
+skipped, one failed in 6.3 m. It was not among the failures of the preparation's
+nine-worker browser suite, which passed it. Root cause remains unconfirmed.
+Status stays open. No assertion, timeout or skip changed.

@@ -27,6 +27,7 @@
  */
 import path from "node:path";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
+import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 
 /** The profile's global OpenCode configuration file. */
 export function profileOpenCodeConfigFile(dataDir: string): string {
@@ -135,5 +136,31 @@ export async function allowOpenCodeFakeProvider(
         ? { patch: { openCodeModelProviders: original } }
         : { patch: {}, unset: ["openCodeModelProviders"] },
     );
+  };
+}
+
+/**
+ * Put new OpenCode sessions on `protocol` (`openCodeProtocol`, the 2.x
+ * preview switch; `docs/todo/agent-engines/0008-opencode-v2.md`) for the run,
+ * through the same `patch_global_config`, and return the undo. The setting
+ * only picks the line for sessions created afterwards, so call it before the
+ * environment's first session. `legacy`, or a profile already on `protocol`,
+ * changes nothing.
+ *
+ * The undo writes the earlier value back, or `legacy` when there was none:
+ * the backend keeps a stored `openCodeProtocol` through a patch that unsets
+ * it (`commitGlobalConfig`, so an older renderer's save cannot drop it), and
+ * an absent setting already means `legacy` (`resolveOpenCodeProtocol`).
+ */
+export async function useOpenCodeProtocol(
+  invoke: Invoke,
+  protocol: "legacy" | "v2",
+): Promise<() => Promise<void>> {
+  const config = await invoke<{ global?: Record<string, unknown> }>("get_config");
+  const original = resolveOpenCodeProtocol(config?.global?.openCodeProtocol);
+  if (protocol === "legacy" || original === protocol) return async () => undefined;
+  await invoke("patch_global_config", { patch: { openCodeProtocol: protocol } });
+  return async () => {
+    await invoke("patch_global_config", { patch: { openCodeProtocol: original } });
   };
 }

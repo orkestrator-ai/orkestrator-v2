@@ -263,7 +263,24 @@ export async function installContainerFakeClaude(containerId: string): Promise<F
       throw new Error("the container's loopback model never answered");
     },
   });
-  return { origin: `container loopback :${CONTAINER_FAKE_PORT}`, stop: async () => undo() };
+  return {
+    origin: `container loopback :${CONTAINER_FAKE_PORT}`,
+    stop: async () => {
+      // The spec deletes its environment before the fakes stop. The model and
+      // the settings it changed lived only in that container, so once the
+      // container is gone there is nothing left to undo, and an exec into it
+      // would only fail the cleanup.
+      if (!containerExists(containerId)) return;
+      await undo();
+    },
+  };
+}
+
+/** Whether Docker still knows `containerId` (any state). */
+function containerExists(containerId: string): boolean {
+  return (
+    spawnSync("docker", ["container", "inspect", containerId], { timeout: 15_000 }).status === 0
+  );
 }
 
 /** Read a file inside a container as its `node` user; undefined when unreadable. */

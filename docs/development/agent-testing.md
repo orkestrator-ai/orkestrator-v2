@@ -1032,13 +1032,64 @@ scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
 overrides the list). Start the profile with `--fixture --no-agent-credentials
 --agent-platforms opencode --headless`.
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
-container environment from the profile's development image. Providers run in parallel with `--workers=4
+container environment from the profile's development image. On a host whose
+firewall drops container traffic to the profile (beelink's ufw, to-do
+[7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
+run that profile and the spec on `mise run docker:disposable -- start
+--host-loopback` with its `DOCKER_HOST` exported for both, and build the
+image inside that daemon. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
+puts the run's OpenCode sessions on the 2.x preview, the only OpenCode line
+whose shell can background a command. The `detach` case waits each
+provider's own idle window: 630 s for the 10 min bridges, and up to 35.5 min
+for Codex (30 min without a touch, found by a 5 min sweep), which it waits
+with the renderer closed, because Codex's tab reads refresh the thread's
+idle clock. Run Codex's under `test:logged` with
+`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS` above 40 minutes (the default group
+deadline is 30). Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
 because another environment's announcement also recovers a view (stamp gap).
 Each provider writes
-`output/agent-testing/<run>/idle-observation-live/<platform>.json`. The
-recorded run and its credential setup are in
-[0049-native-agent-idle-observation.md](../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#live-qualification-record-2026-10-21).
+`output/agent-testing/<run>/idle-observation-live/<platform>.json`.
+
+What the spec has qualified live is recorded in the retired to-dos 0049 and
+7380, which hold every run, its exact commands and the per-case figures
+(`git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`
+and `git show 498b68766:docs/todo/transcripts-and-observation/7380-codex-idle-detach-observation.md`;
+the 2026-11-11 runs below came after them). In short, every run since
+2026-11-06 used loopback fake models, with no login and nothing billed, and
+each is one sample, not a p95:
+
+- Claude, Codex, Pi and OpenCode (2026-11-06 to 2026-11-10, local
+  environments): every case each provider can exercise passed, including the
+  bridge restart while backed off, approvals, sub-agents, the async question,
+  reconnect, a hidden document, completion with no renderer, the background
+  shell (Claude through the task's output file) and Claude's and Pi's full
+  630 s detach wait. A missed final event is recovered inside the 17.5 s
+  lost-announcement bound, though often above the 3 s budget.
+- OpenCode's background shell (2026-11-11): on the 2.x preview
+  (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`) the `shell` call
+  returns at once, and when the command ends 2.x resumes the idle session with
+  its output, which the idle page shows without a turn from the test. The
+  first runs overstated this: the check matched the marker in the prompt and
+  in the command line, and the tab showed only the command. Since the
+  transcript shows a finished background shell's output and the check counts
+  only a non-user row that arrived after the turn settled, the rerun
+  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` cannot background a command, so
+  on the default line the case is `not-exercised` (rerun `oc2-bgfix-legacy1`).
+- Claude in a container (2026-11-11, beelink2, on a disposable rootless daemon
+  with host loopback, because the host's firewall drops the profile's port):
+  `missed-final`, `background` and `no-renderer` passed on a current image.
+  On an image built from `b9522a871`, before the bridges gained observation
+  mode (#1182), the backend read the idle group on every sweep (17 of 17, none
+  skipped) and the page kept reading every 1.5 s or so (largest gap 2.9 s), so
+  an older bridge keeps the baseline cadence on both sides.
+- Codex's full detach wait (2026-11-11): with no renderer, the thread read
+  `attached` before the wait and `detached` 34.9 min into it, and a turn sent
+  from outside the view then re-attached it on the same session.
+
+Grok and Cursor need a real login (no loopback model reaches them); their
+runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the

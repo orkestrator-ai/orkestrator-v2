@@ -14,9 +14,11 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * ends the turn with the reply. OpenCode reaches the same endpoint through a
  * custom provider (`idle-observation-fake-models.ts`, todo 0049 task 6); its
  * `bash` tool also takes a description, which the call adds when the offered
- * schema names one. OpenCode 2 names the same tool `shell` (todo 0008 task 7),
- * so the call uses whichever of the two the request offers. Pi has no sub-agent, background or question
- * tool, so those steps reply in text. It keeps no request body and logs
+ * schema names one. OpenCode 2.x names the same tool `shell` (todo 0008 task 7),
+ * so the call uses whichever of the two the request offers, and its schema
+ * offers `background`, which a background step sets (todo 0049 task 8). Pi has no sub-agent,
+ * background or question tool, so those steps reply in text or run in the
+ * foreground. It keeps no request body and logs
  * nothing.
  */
 import { finalReply, scriptedStep } from "./idle-observation-fake-claude";
@@ -66,7 +68,12 @@ export function piAssistantMessage(
   const shell = (body.tools ?? []).find((tool) => SHELL_TOOLS.includes(tool.function?.name ?? ""));
   if (step.kind === "shell" && shell) {
     // OpenCode's shell tool also requires a description; Pi's takes the command alone.
-    const describe = Boolean(shell.function?.parameters?.properties?.description);
+    const properties = shell.function?.parameters?.properties;
+    const describe = Boolean(properties?.description);
+    // OpenCode 2.x's `shell` backgrounds a command itself (`background: true`);
+    // Pi's and OpenCode 1.19.5's `bash` offer no such parameter, so they run
+    // it in the foreground (todo 0049 task 8).
+    const background = step.background && Boolean(properties?.background);
     return {
       content: null,
       toolCall: {
@@ -75,6 +82,7 @@ export function piAssistantMessage(
         arguments: JSON.stringify({
           command: step.command,
           ...(describe ? { description: "Run the requested command" } : {}),
+          ...(background ? { background: true } : {}),
         }),
       },
     };

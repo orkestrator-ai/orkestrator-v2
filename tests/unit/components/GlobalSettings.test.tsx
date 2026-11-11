@@ -2988,7 +2988,7 @@ describe("GlobalSettings", () => {
     });
   });
 
-  test("offers the direct transport only in a local desktop window, off by default", async () => {
+  test("offers the direct transport only in a local desktop window, on by default", async () => {
     const name = "Use the direct transport for new windows";
     const original = window.orkestrator;
     const originalGateway = window.orkestratorGateway;
@@ -3007,15 +3007,39 @@ describe("GlobalSettings", () => {
       window.orkestratorGateway = undefined;
       renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
       const toggle = screen.getByRole("switch", { name });
-      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      // Unset is on (to-do 4501 task 2); turning it off stores an explicit `false`.
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
       fireEvent.click(toggle);
       await flushAutoSave();
       await waitFor(() => {
         expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
-          expect.objectContaining({ localWindowGatewayTransport: true }),
+          expect.objectContaining({ localWindowGatewayTransport: false }),
           SAVE_OPTIONS,
         );
       });
+    } finally {
+      window.orkestrator = original;
+      window.orkestratorGateway = originalGateway;
+    }
+  });
+
+  test("keeps a stored explicit false off for the direct transport", async () => {
+    const original = window.orkestrator;
+    const originalGateway = window.orkestratorGateway;
+    try {
+      window.orkestrator = { ...original, isolatedViewState: true } as NonNullable<typeof original>;
+      window.orkestratorGateway = undefined;
+      appCommandStore(configStore).setState((state) => ({
+        config: {
+          ...state.config,
+          global: { ...state.config.global, localWindowGatewayTransport: false },
+        },
+      }));
+      renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
+      const toggle = screen.getByRole("switch", {
+        name: "Use the direct transport for new windows",
+      });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
     } finally {
       window.orkestrator = original;
       window.orkestratorGateway = originalGateway;

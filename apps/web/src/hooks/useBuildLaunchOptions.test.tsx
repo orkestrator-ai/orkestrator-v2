@@ -21,11 +21,15 @@ const getCachedOpenCodeModelCatalogMock = mock(
   async (_projectId: string): Promise<unknown> => null,
 );
 const getOpencodeModelPreferencesMock = mock(async (): Promise<unknown> => undefined);
+const getProjectSetupRequirementsMock = mock(
+  async (_projectId: string): Promise<{ rootSteps: number | null }> => ({ rootSteps: 0 }),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getCachedOpenCodeModelCatalog: getCachedOpenCodeModelCatalogMock,
   getOpencodeModelPreferences: getOpencodeModelPreferencesMock,
+  getProjectSetupRequirements: getProjectSetupRequirementsMock,
 }));
 
 const { useBuildLaunchOptions } = await import("./useBuildLaunchOptions");
@@ -47,6 +51,8 @@ describe("useBuildLaunchOptions", () => {
     getOpencodeModelPreferencesMock.mockReset();
     getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
     getOpencodeModelPreferencesMock.mockImplementation(async () => undefined);
+    getProjectSetupRequirementsMock.mockReset();
+    getProjectSetupRequirementsMock.mockImplementation(async () => ({ rootSteps: 0 }));
     appCommandStore(configStore).setState({ config: baseConfig });
     appCommandStore(agentModelCatalogStore).setState({
       cursorModels: [],
@@ -95,6 +101,34 @@ describe("useBuildLaunchOptions", () => {
     expect(getCachedOpenCodeModelCatalogMock).not.toHaveBeenCalled();
     expect(getOpencodeModelPreferencesMock).not.toHaveBeenCalled();
     expect(result.current.favoriteOpenCodeModelIds).toEqual([]);
+  });
+
+  test("passes the project's root setup steps to the launcher", async () => {
+    getProjectSetupRequirementsMock.mockImplementation(async () => ({ rootSteps: 2 }));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
+    expect(result.current.defaults.rootSetupSteps).toBeNull();
+    await flushPromises();
+
+    expect(getProjectSetupRequirementsMock).toHaveBeenCalledWith("project-1");
+    expect(result.current.defaults.rootSetupSteps).toBe(2);
+  });
+
+  test("a machine that cannot answer leaves the root setup steps unknown", async () => {
+    getProjectSetupRequirementsMock.mockImplementation(async () => {
+      throw new Error("Unknown backend command: get_project_setup_requirements");
+    });
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
+    await flushPromises();
+
+    expect(result.current.defaults.rootSetupSteps).toBeNull();
+  });
+
+  test("does not read setup requirements while disabled", async () => {
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", false));
+    await flushPromises();
+
+    expect(getProjectSetupRequirementsMock).not.toHaveBeenCalled();
+    expect(result.current.defaults.rootSetupSteps).toBeNull();
   });
 
   test("loads preferences without a project but skips the project catalog", async () => {

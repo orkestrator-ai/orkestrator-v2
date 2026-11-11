@@ -49,6 +49,7 @@ import {
   Plus,
   Shield,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
@@ -118,6 +119,7 @@ import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentMo
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useProjectRootSetupSteps } from "@/hooks/useBuildLaunchOptions";
 
 const log = createLogger("web.environment");
 
@@ -539,6 +541,11 @@ export function CreateEnvironmentDialog({
 
   const [environmentType, setEnvironmentType] = useState<EnvironmentType>(
     effectiveDefaultEnvironmentType,
+  );
+  // Root setup steps run only with full network access; warn under Restricted.
+  const rootSetupSteps = useProjectRootSetupSteps(
+    projectId ?? "",
+    open && environmentType === "containerized",
   );
   const [environmentName, setEnvironmentName] = useState("");
   const [worktreeBaseDir, setWorktreeBaseDir] = useState<string | null>(null);
@@ -1855,11 +1862,21 @@ export function CreateEnvironmentDialog({
                         Full access
                       </button>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      {networkAccessMode === "restricted"
-                        ? "Only GitHub, npm, and agent APIs"
-                        : "Unrestricted internet access"}
-                    </p>
+                    {networkAccessMode === "restricted" && (rootSetupSteps ?? 0) > 0 ? (
+                      <p role="status" className="flex items-start gap-1.5 text-xs text-amber-300">
+                        <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span>
+                          orkestrator-ai.json has root setup steps. They run only with Full access,
+                          because root could get round the restriction, so setup will stop there.
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        {networkAccessMode === "restricted"
+                          ? "Only GitHub, npm, and agent APIs"
+                          : "Unrestricted internet access"}
+                      </p>
+                    )}
                   </div>
                 </div>
               </TabsContent>

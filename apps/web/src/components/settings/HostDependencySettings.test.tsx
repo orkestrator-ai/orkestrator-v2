@@ -76,6 +76,27 @@ test("lists environments still on an older image and pulls the release image", a
   await waitFor(() => expect(pull).toHaveBeenCalledTimes(1));
 });
 
+test("an image older than this Orkestrator says what it was built for and offers the pull", () => {
+  const older = hostMaintenanceSnapshotFixture({
+    image: {
+      name: "orkestrator-v2:latest",
+      present: true,
+      compatible: true,
+      builtForVersion: "2.19.0",
+      olderThanBackend: true,
+      reason: "Built for Orkestrator 2.19.0; this is 2.21.1.",
+      releaseReference: "ghcr.io/orkestrator-ai/orkestrator-v2:2.21.1",
+      outdatedEnvironments: [],
+    },
+  });
+  render(<HostDependencySettings client={client} snapshot={older} accept={() => undefined} />);
+  expect(screen.getByText(/older than this Orkestrator \(built for 2\.19\.0\)/)).toBeTruthy();
+  expect(screen.getByText("Built for Orkestrator 2.19.0; this is 2.21.1.")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Pull ghcr.io/orkestrator-ai/orkestrator-v2:2.21.1" }),
+  ).toBeTruthy();
+});
+
 test("each outdated environment opens its own rebuild when the host can reach it", () => {
   const rebuild = mock(() => undefined);
   render(

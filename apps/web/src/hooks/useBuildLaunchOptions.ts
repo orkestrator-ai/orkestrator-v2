@@ -180,6 +180,42 @@ export function useReviewModelCatalog(projectId: string, enabled: boolean) {
   );
 }
 
+/**
+ * How many `root` setup steps the project's default branch names, as the
+ * project's machine reads them (`get_project_setup_requirements`). Root steps
+ * run only in containers with full network access, so the build launcher
+ * warns when Restricted is chosen. `null` while loading, when the machine
+ * cannot tell, or when it predates the command: no warning rather than a
+ * guessed one.
+ */
+export function useProjectRootSetupSteps(projectId: string, enabled: boolean): number | null {
+  const nodeBackend = useScopeBackend();
+  const [loaded, setLoaded] = useState<{ projectId: string; rootSteps: number | null } | null>(
+    null,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    if (!enabled || !projectId)
+      return () => {
+        cancelled = true;
+      };
+    // Any failure, a synchronous one included, means "cannot tell".
+    void Promise.resolve()
+      .then(() => nodeBackend.getProjectSetupRequirements(projectId))
+      .then(({ rootSteps }) => {
+        if (!cancelled) setLoaded({ projectId, rootSteps });
+      })
+      .catch((error: unknown) => {
+        log.debug("setup-requirements.load-failed", { projectId, error: formatLogError(error) });
+        if (!cancelled) setLoaded({ projectId, rootSteps: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, projectId, nodeBackend]);
+  return enabled && loaded?.projectId === projectId ? loaded.rootSteps : null;
+}
+
 /** Shared defaults and repository-scoped model catalog for every build launcher. */
 export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
   const nodeBackend = useScopeBackend();
@@ -195,6 +231,7 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     }),
     [config, projectHasLocalPath, projectId],
   );
+  const rootSetupSteps = useProjectRootSetupSteps(projectId, enabled);
   const projectCatalog = useProjectModelCatalog(projectId, enabled);
   const catalog = useMemo(() => {
     const allowedProviders = normalizeOpenCodeModelProviders(config.global.openCodeModelProviders);
@@ -264,5 +301,10 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     return ids;
   }, [openCodeModelPreferences.favorite]);
 
-  return { catalog, defaults, favoriteOpenCodeModelIds };
+  const launchDefaults = useMemo(
+    () => ({ ...defaults, rootSetupSteps }),
+    [defaults, rootSetupSteps],
+  );
+
+  return { catalog, defaults: launchDefaults, favoriteOpenCodeModelIds };
 }

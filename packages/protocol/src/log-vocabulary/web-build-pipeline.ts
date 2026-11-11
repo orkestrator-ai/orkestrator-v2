@@ -16,6 +16,8 @@ export const WEB_BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
       "model-catalog.hydrate-failed":
         "A node's cached model lists could not be loaded for a launcher.",
       "opencode-preferences.load-failed": "OpenCode model preferences could not be loaded.",
+      "setup-requirements.load-failed":
+        "A project's root setup steps could not be read for a launcher; it shows no warning.",
     },
   },
 });

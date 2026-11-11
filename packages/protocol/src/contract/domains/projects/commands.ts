@@ -416,6 +416,24 @@ export const useHttpsGitRemoteCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * What the project's `orkestrator-ai.json` asks of a new container, so a
+ * launcher can warn before it creates one that cannot finish setup:
+ * `rootSteps` counts the default branch's `root` steps (which run only with
+ * full network access), read from this machine's checkout without fetching.
+ * `null` when the machine cannot tell. Advisory; setup itself decides.
+ */
+export const getProjectSetupRequirementsCommand = defineCommand({
+  domain: projectsDomain,
+  name: "get_project_setup_requirements",
+  since: 2,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({ projectId: Schema.String }),
+  result: Schema.Struct({ rootSteps: Schema.NullOr(Schema.Number) }),
+  critical: [],
+});
+
 /** Every `projects` command definition. */
 export const PROJECTS_COMMANDS = [
   getProjectsCommand,
@@ -444,4 +462,5 @@ export const PROJECTS_COMMANDS = [
   readProjectAgentsMdSectionCommand,
   openProjectAgentsMdPrCommand,
   useHttpsGitRemoteCommand,
+  getProjectSetupRequirementsCommand,
 ] as const;

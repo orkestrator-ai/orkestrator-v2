@@ -197,6 +197,19 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   }
 
   /**
+   * How many `root` setup steps the project's default branch names, read by
+   * the machine from its checkout (`null` when it cannot tell). Root steps run
+   * only with full network access, so launchers warn before a restricted
+   * container is created. A machine without the command answers
+   * `unknown-command`; callers treat any failure as "cannot tell".
+   */
+  async function getProjectSetupRequirements(
+    projectId: string,
+  ): Promise<{ rootSteps: number | null }> {
+    return projects().get_project_setup_requirements({ projectId });
+  }
+
+  /**
    * Persists a sidebar arrangement: the full project order plus any folder
    * memberships that changed, applied as one backend mutation.
    */
@@ -518,6 +531,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     reorderProjects,
     updateProject,
     switchProjectRemoteToHttps,
+    getProjectSetupRequirements,
     arrangeProjects,
     arrangeProjectsByIntent,
     getEnvironments,
@@ -569,6 +583,7 @@ export const {
   reorderProjects,
   updateProject,
   switchProjectRemoteToHttps,
+  getProjectSetupRequirements,
   arrangeProjects,
   arrangeProjectsByIntent,
   getEnvironments,

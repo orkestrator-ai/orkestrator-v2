@@ -9,7 +9,11 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PtyProcess } from "./pty.js";
 import { GitHubCliSelection } from "./github-cli-binary.js";
-import { readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
+import {
+  imageOlderThanBackend,
+  readRestartImpact,
+  readToolStatus,
+} from "./host-maintenance-readers.js";
 
 let root: string;
 
@@ -192,4 +196,17 @@ test("gh-latest reports its actual installed version, and unknown layouts never 
   expect(
     (await readToolStatus(context, "latest")).find((tool) => tool.name === "gh")?.installedVersion,
   ).toBeNull();
+});
+
+test("an image built from an older release is older than the backend", () => {
+  expect(imageOlderThanBackend("2.34.4-beta", "2.37.6-beta")).toBe(true);
+  expect(imageOlderThanBackend("2.37.6-beta", "2.37.6")).toBe(true);
+  expect(imageOlderThanBackend("2.37.6-beta", "2.37.6-beta")).toBe(false);
+  expect(imageOlderThanBackend("2.38.0-beta", "2.37.6-beta")).toBe(false);
+});
+
+test("an image whose version is unknown is never called older", () => {
+  expect(imageOlderThanBackend(null, "2.37.6-beta")).toBe(false);
+  expect(imageOlderThanBackend("unknown", "2.37.6-beta")).toBe(false);
+  expect(imageOlderThanBackend("2.34.4-beta", "dev")).toBe(false);
 });

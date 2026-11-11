@@ -115,17 +115,17 @@ const readConfigBlob: GitBlobReader = async (projectPath, ref) => {
 };
 
 /**
- * The default branch's `setupLocal`, read from the project's checkout without
- * fetching: the remote-tracking ref first (what a remote project's
- * environments start from), then the local branch (a `project init` project
- * has no remote). `null` when neither exists or the file does not parse, so
- * the default branch is no trust source at all rather than an empty one.
+ * The default branch's `orkestrator-ai.json` text, read from the project's
+ * checkout without fetching: the remote-tracking ref first (what a remote
+ * project's environments start from), then the local branch (a `project init`
+ * project has no remote). `""` when the branch has no such file; `null` when
+ * neither ref exists, the branch name is invalid or the file is over budget.
  */
-export async function readDefaultBranchSetupCommands(
+export async function readDefaultBranchConfigText(
   projectPath: string,
   defaultBranch: string,
   readBlob: GitBlobReader = readConfigBlob,
-): Promise<string[] | null> {
+): Promise<string | null> {
   let branch: string;
   try {
     branch = validateGitRefName(defaultBranch, "default branch");
@@ -136,14 +136,29 @@ export async function readDefaultBranchSetupCommands(
     const blob = await readBlob(projectPath, ref);
     if (blob === null) continue;
     if (blob.length > MAX_PROJECT_CONFIG_BYTES) return null;
-    if (!blob.trim()) return [];
-    try {
-      return parseSetupLocalCommands(blob);
-    } catch {
-      return null;
-    }
+    return blob;
   }
   return null;
+}
+
+/**
+ * The default branch's `setupLocal` (see {@link readDefaultBranchConfigText}).
+ * `null` when there is no such branch or the file does not parse, so the
+ * default branch is no trust source at all rather than an empty one.
+ */
+export async function readDefaultBranchSetupCommands(
+  projectPath: string,
+  defaultBranch: string,
+  readBlob: GitBlobReader = readConfigBlob,
+): Promise<string[] | null> {
+  const blob = await readDefaultBranchConfigText(projectPath, defaultBranch, readBlob);
+  if (blob === null) return null;
+  if (!blob.trim()) return [];
+  try {
+    return parseSetupLocalCommands(blob);
+  } catch {
+    return null;
+  }
 }
 
 export type SetupTrust =

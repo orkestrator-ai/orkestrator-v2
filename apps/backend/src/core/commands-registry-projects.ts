@@ -35,6 +35,7 @@ import {
   createProjectFromScratchCommand,
   getGitRemoteUrlCommand,
   getProjectCommand,
+  getProjectSetupRequirementsCommand,
   getProjectsCommand,
   listGitHubCloneAccountsCommand,
   listGitHubCloneRepositoriesCommand,
@@ -45,6 +46,7 @@ import {
   validateGitUrlCommand,
 } from "@orkestrator/protocol/contract/domains/projects";
 import { switchOriginToHttps } from "./git-ssh-transport.js";
+import { readProjectSetupRequirements } from "./project-setup-requirements.js";
 import {
   getConfigCommand,
   getDesktopConnectionsCommand,
@@ -588,6 +590,9 @@ export function registerProjectCommands(
     }
     return switchOriginToHttps(project.localPath);
   });
+  register(getProjectSetupRequirementsCommand, ({ projectId }, context) =>
+    readProjectSetupRequirements(projectId, context),
+  );
 
   register(getConfigCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "config", async () =>

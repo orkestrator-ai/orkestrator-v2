@@ -17,6 +17,22 @@ const DAEMON_UNREACHABLE =
   /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect|failed to connect to the docker api|connect: no such file or directory/i;
 
 /**
+ * An attached `docker run` lost the daemon while it waited for its container:
+ * the daemon stopped or restarted underneath it. Engine 29.9 prints "Error
+ * waiting for container: Canceled: grpc: the client connection is closing:
+ * context canceled" for a daemon that shuts down gracefully and "error
+ * waiting for container: unexpected EOF" for one that is killed, both with
+ * exit 125 and no output from the container's command. Only connection-loss
+ * wording counts; a daemon that answered (`Error response from daemon: …`) is
+ * not an outage. Without this, a copy helper cut off by a `systemctl restart
+ * docker` read as files that failed verification: by the time the outage was
+ * probed, systemd's socket activation held the probe until the new daemon
+ * answered it (live C15 on GitHub's runners).
+ */
+const DAEMON_LOST_WHILE_WAITING =
+  /error waiting for container: .*\b(?:unexpected EOF|context canceled|client connection is closing|connection reset by peer|connection refused|broken pipe)\b/i;
+
+/**
  * Only the daemon's own answer that a container path does not exist. A CLI
  * that reached no daemon also says "no such file or directory", so a looser
  * match would read a daemon outage as "nothing there".
@@ -37,8 +53,9 @@ export function isDockerCopyRemountRefused(text: string): boolean {
   return ARCHIVE_REMOUNT_REFUSED.test(text);
 }
 
+/** The CLI reached no daemon, or lost the one it was waiting on. */
 export function isDockerDaemonUnreachable(text: string): boolean {
-  return DAEMON_UNREACHABLE.test(text);
+  return DAEMON_UNREACHABLE.test(text) || DAEMON_LOST_WHILE_WAITING.test(text);
 }
 
 export function isDockerPathNotFound(text: string): boolean {

@@ -9,6 +9,14 @@ import { processAlive, signalProcess, waitForStopped } from "../process-cleanup"
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
 
+// The runner's `screenshot: "only-on-failure"` captures every page of a
+// closing context before Playwright sends the close. The fixture's window is
+// never shown, and on Linux and Windows that capture does not return, so the
+// close never reached `app.quit()` and `before-quit` never ran: the bounded
+// kill fired first and the spec failed 5/5 in native-application-menu.yml.
+// macOS answers the capture. There is nothing to see in this window anyway.
+test.use({ screenshot: "off" });
+
 test("bounded cleanup stops a real Electron close blocked by before-quit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "electron-close-regression-"));
   const fixture = path.join(directory, "main.cjs");

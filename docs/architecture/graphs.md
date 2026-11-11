@@ -47,7 +47,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Run view (211) | `run-view.ts` | `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts` | `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` |
 | Designer (110, 212) | | | `components/graph-designer/`, `stores/graphDesignerStore.ts` |
 | Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands-registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
-| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp-graph-tools.ts`, `coordinator-graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
+| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator-graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
@@ -1349,7 +1349,7 @@ defaults). `graph_run_launch` launches as `user`.
   ([public-cli.md](public-cli.md#graphs)), launched as `cli` with a `requestId`
   derived from the public request key.
 - **The coordinator** (D6): Control MCP `list_graph_templates`, `launch_graph`,
-  `get_graph_run` and `cancel_graph_run` (`control-mcp-graph-tools.ts`,
+  `get_graph_run` and `cancel_graph_run` (`control-mcp/graph-tools.ts`,
   `coordinator-graph-actions.ts`), launched as `coordinator`. No tool creates,
   saves, edits, duplicates, imports or describes a template. A launch reserves
   a `graph-run` workflow association before it acts; the status wake

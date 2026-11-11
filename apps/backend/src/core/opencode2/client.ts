@@ -349,8 +349,8 @@ export class OpenCode2Client {
   // ── MCP (location-scoped; `/api/experimental/mcp/*` is guarded by the exact pin) ──
 
   /** The location's MCP servers and their connection status. */
-  async listMcpServers(): Promise<OpenCode2McpServer[]> {
-    const data = await this.request<unknown>("GET", "/api/mcp", "OpenCode MCP list");
+  async listMcpServers(signal?: AbortSignal): Promise<OpenCode2McpServer[]> {
+    const data = await this.request<unknown>("GET", "/api/mcp", "OpenCode MCP list", { signal });
     if (!Array.isArray(data)) throw new ProviderUnavailableError("OpenCode MCP list is malformed");
     if (
       !data.every(

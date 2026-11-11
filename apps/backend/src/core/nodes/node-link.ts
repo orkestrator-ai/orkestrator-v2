@@ -569,6 +569,9 @@ export class NodeLink {
     args: Record<string, unknown>,
     options: { timeoutMs?: number; signal?: AbortSignal; envelope?: ContractEnvelope } = {},
   ): Promise<T> {
+    // Nothing has been sent yet, so a caller that already gave up gets its
+    // own reason rather than a request the listener below would never stop.
+    options.signal?.throwIfAborted();
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),

@@ -1563,6 +1563,29 @@ describe("rerunning failing test files alone", () => {
     ]);
   });
 
+  test("the collector reads Bun's GitHub Actions group header as the file, not a path", () => {
+    const BACKEND = "@orkestrator/backend:test:workspace: ";
+    const collector = new FailureReportCollector();
+    collector.push(
+      Buffer.from(
+        [
+          `${BACKEND}::group::tests/a.test.ts:`,
+          `${BACKEND}error: expect(received).toBe(expected)`,
+          `${BACKEND}(fail) a > one [1.00ms]`,
+          `${BACKEND}::endgroup::`,
+          "::group::tests/unit/b.test.ts:",
+          "(fail) b > one [1.00ms]",
+          "",
+        ].join("\n"),
+      ),
+    );
+    collector.finish();
+    expect(collector.failingFiles).toEqual([
+      { taskPrefix: BACKEND, file: "tests/a.test.ts" },
+      { taskPrefix: "", file: "tests/unit/b.test.ts" },
+    ]);
+  });
+
   test("a package's flags keep its preloads and drop worker counts and timings", () => {
     expect(
       rerunFlags(

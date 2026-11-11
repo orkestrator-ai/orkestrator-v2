@@ -229,8 +229,13 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return portal(context).summaries(args.nodeIds, args.includeSelf);
   });
 
-  register(invokeOnNodeCommand, async (args, context) => {
-    return portal(context).invokeOnNode(args);
+  // The caller's signal (a bounded wait, or the client going away) aborts a
+  // routed read, which the node in turn sees as its own client leaving. A
+  // routed write runs to its answer (`routeToNode`).
+  register(invokeOnNodeCommand, async (args, context, invocation) => {
+    return invocation?.signal
+      ? portal(context).invokeOnNode(args, { signal: invocation.signal })
+      : portal(context).invokeOnNode(args);
   });
 
   register(watchNodeEventsCommand, async (args, context) => {
@@ -402,7 +407,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   // A coordinator's account switch under the user's standing permission
-  // (`control-mcp-account-tools.ts`); this machine's permission, never another's.
+  // (`control-mcp/account-tools.ts`); this machine's permission, never another's.
   register(runGrantedAgentAccountSwitchCommand, async (args, context) => {
     return runGrantedAccountSwitch(
       {

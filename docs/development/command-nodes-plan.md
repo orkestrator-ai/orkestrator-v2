@@ -340,7 +340,7 @@ Grants and the relay refuse:
 
 ### Cross-node coordinator tools (command node only)
 
-Built as a separate, node-qualified tool family (`control-mcp-nodes.ts`)
+Built as a separate, node-qualified tool family (`control-mcp/nodes.ts`)
 rather than a `nodeId` argument on every existing tool: the existing tools
 keep their exact local behaviour, and each node tool checks the node's mode,
 the node's copy of the coordinator's project (by repository identity) and
@@ -610,15 +610,15 @@ Test names include the requirement ID (for example
 | UP-01 | Every attached command node subscribes to the leaf's event stream. | 2 | `NodeReadModel` | `node-portal.test.ts` PT-01/PT-02/UP-01 (two command nodes each hold a stream) | Done |
 | UP-02 | Single-destination updates go to the originating command node. | 3 | Origin on thread and environment | `node-mail.test.ts` UP-02/UP-03 (origin, thread); `node-coordination.test.ts` CO-05/UP-02 (real mail store, both directions) | Done |
 | UP-03 | Otherwise they go to the most recent controller. | 3 | Outbox routing | `node-mail.test.ts` UP-02/UP-03 (most recent controller; detached origin falls back) | Done |
-| UP-04 | If that controller is unreachable, the update waits in the outbox; never dropped or rerouted. | 3 | `node-outbox.ts` | `node-mail.test.ts` UP-04 (ordered, kept until acknowledged, refused when full); `control-mcp-nodes.test.ts` UP-02/UP-04 (failed delivery stays on the leaf) | Done |
+| UP-04 | If that controller is unreachable, the update waits in the outbox; never dropped or rerouted. | 3 | `node-outbox.ts` | `node-mail.test.ts` UP-04 (ordered, kept until acknowledged, refused when full); `control-mcp/nodes.test.ts` UP-02/UP-04 (failed delivery stays on the leaf) | Done |
 
 ### Leaf mode
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| LM-01 | Coordinator context says the node is in leaf mode and names the controller. | 3 | `<orkestrator-node-mode>` | `control-mcp-nodes.test.ts` LM-01/LM-03 (`coordinatorNodeContext`, injected by `trustedSessionInput`) | Done |
-| LM-02 | Cross-node tools are unavailable in leaf mode. | 3 | Control MCP gating | `control-mcp-nodes.test.ts` CO-01/LM-02 (every node tool refuses in leaf mode) | Done |
-| LM-03 | An incoming message is handled as a leaf agent would. | 3 | Context and gating | `control-mcp-nodes.test.ts` LM-01/LM-03 (context says to act as an agent on this node) | Done |
+| LM-01 | Coordinator context says the node is in leaf mode and names the controller. | 3 | `<orkestrator-node-mode>` | `control-mcp/nodes.test.ts` LM-01/LM-03 (`coordinatorNodeContext`, injected by `trustedSessionInput`) | Done |
+| LM-02 | Cross-node tools are unavailable in leaf mode. | 3 | Control MCP gating | `control-mcp/nodes.test.ts` CO-01/LM-02 (every node tool refuses in leaf mode) | Done |
+| LM-03 | An incoming message is handled as a leaf agent would. | 3 | Context and gating | `control-mcp/nodes.test.ts` LM-01/LM-03 (context says to act as an agent on this node) | Done |
 | LM-04 | Coordinator conversations are kept, hidden by default, and openable behind a warning naming the controller. | 3 | Renderer | `leaf-mode-coordinator-gate.test.tsx` LM-04 | Done |
 | LM-05 | Detaching from all controllers restores command mode and tools. | 1, 3 | `node-mode.ts` | `node-service.test.ts` RM-03/LM-05 (links resume); node tools check the mode on every call, so command mode restores them | Done |
 
@@ -640,7 +640,7 @@ Test names include the requirement ID (for example
 | DP-02 | Grants are short-lived, revocable, not the gateway token, and exclude administration. | 2 | `ClientGrantService` | `node-portal.test.ts` DP-01/DP-02 (15-minute cap, hash-only, revoked on close and detach, attached controllers only); `gateway-command-nodes.test.ts` DP-02 (client API only) | Done |
 | DP-03 | When the leaf is unreachable, the workspace relays through the command node. | 2 | `node-relay.ts` | `gateway-command-nodes.test.ts` DP-03 (HTTP and terminal WebSocket relayed with the node's credential); `federation-ui.test.tsx` DP-01/DP-03/CR-03; desktop uses the command node's loopback route | Done |
 | DP-04 | The info panel shows the path (direct or relay), the route and the node. | 2 | `AgentRuntimePanel` | `connection-path.test.tsx` DP-04 | Done |
-| DP-05 | The command node can read leaf chat read-only; the portal shows attention. | 2, 3 | Summaries, `read_environment` | Portal attention from summaries (`FederationEffects`); `control-mcp-nodes.test.ts` (read_node_environment reads state, tabs and transcript) | Done |
+| DP-05 | The command node can read leaf chat read-only; the portal shows attention. | 2, 3 | Summaries, `read_environment` | Portal attention from summaries (`FederationEffects`); `control-mcp/nodes.test.ts` (read_node_environment reads state, tabs and transcript) | Done |
 | DP-06 | The leaf arbitrates its own approvals. | 2 | Unchanged leaf | Approvals stay in the leaf's own workspace UI (nothing relays or answers them on the command node) | Done |
 | DP-07 | Grants narrowed to one environment and one stream. | — | | | Deferred (deviation 2) |
 
@@ -648,13 +648,13 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| CO-01 | Cross-node coordination runs only on a top-level command node. | 3 | Mode gating | `control-mcp-nodes.test.ts` CO-01/LM-02 | Done |
-| CO-02 | Environments are created on this node by default, or on a named node when asked. | 3 | `launch_environment nodeId` | `control-mcp-nodes.test.ts` CO-02/CO-06 (launch_node_environment on the node's matched project; launch_environment stays local and is the default in the context line) | Done |
-| CO-03 | Coordinators start, stop, prompt and answer environments on every connected node, including command nodes in leaf mode. | 3 | Control tools with `nodeId` | `control-mcp-nodes.test.ts` (start/stop/prompt tools route with ownership checks); answering a pending question stays with the user in the leaf workspace (DP-06) | Done |
-| CO-04 | Deletion happens only on user request, with a confirmation naming node and environment. | 3 | Action requests | `control-mcp-nodes.test.ts` CO-04 (request only); `node-mail.test.ts` CO-04 (approve executes once, reject/expiry never); `node-action-requests.test.tsx` CO-04 (dialog names node and environment) | Done |
-| CO-05 | Node-qualified mail to and from agents on every node; replies are collected. | 3 | Node mail, outbox | `control-mcp-nodes.test.ts` CO-05; `node-coordination.test.ts` CO-05/UP-02 (both directions over the real mail store) | Done |
-| CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | `control-mcp-nodes.test.ts` CO-02/CO-06; `node-files.test.ts` CO-06 (git status and diff, a text file and pipeline state via `read_environment_details`, read-only) | Done |
-| CO-07 | File transfer through the framework. | 4 | `transfer_files` | `control-mcp-node-files.test.ts` CO-07/FL-01 (transfer_files returns a receipt only); `qa-command-nodes.ts` FL-01 | Done |
+| CO-01 | Cross-node coordination runs only on a top-level command node. | 3 | Mode gating | `control-mcp/nodes.test.ts` CO-01/LM-02 | Done |
+| CO-02 | Environments are created on this node by default, or on a named node when asked. | 3 | `launch_environment nodeId` | `control-mcp/nodes.test.ts` CO-02/CO-06 (launch_node_environment on the node's matched project; launch_environment stays local and is the default in the context line) | Done |
+| CO-03 | Coordinators start, stop, prompt and answer environments on every connected node, including command nodes in leaf mode. | 3 | Control tools with `nodeId` | `control-mcp/nodes.test.ts` (start/stop/prompt tools route with ownership checks); answering a pending question stays with the user in the leaf workspace (DP-06) | Done |
+| CO-04 | Deletion happens only on user request, with a confirmation naming node and environment. | 3 | Action requests | `control-mcp/nodes.test.ts` CO-04 (request only); `node-mail.test.ts` CO-04 (approve executes once, reject/expiry never); `node-action-requests.test.tsx` CO-04 (dialog names node and environment) | Done |
+| CO-05 | Node-qualified mail to and from agents on every node; replies are collected. | 3 | Node mail, outbox | `control-mcp/nodes.test.ts` CO-05; `node-coordination.test.ts` CO-05/UP-02 (both directions over the real mail store) | Done |
+| CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | `control-mcp/nodes.test.ts` CO-02/CO-06; `node-files.test.ts` CO-06 (git status and diff, a text file and pipeline state via `read_environment_details`, read-only) | Done |
+| CO-07 | File transfer through the framework. | 4 | `transfer_files` | `control-mcp/node-files.test.ts` CO-07/FL-01 (transfer_files returns a receipt only); `qa-command-nodes.ts` FL-01 | Done |
 | CO-08 | Existing per-project ownership and the read-only checkout boundary are kept. | 3 | Unchanged policy | Node tools act only on the coordinator's project (matched by repository) and refuse the node's project checkout; `resolve_node_action_request` denied to coordinator credentials | Done |
 
 ### Files and projects
@@ -662,13 +662,13 @@ Test names include the requirement ID (for example
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | FL-01 | Transfers are bounded and audited, with no content in logs, receipts or transcripts. | 4 | `NodeFileTransfer` | `node-files.test.ts` FL-01 (chunked, verified, atomic, no overwrite unless asked, confined paths, content-free receipt); `qa-command-nodes.ts` FL-01 | Done |
-| FL-02 | A project is created on a leaf only after user approval stating the location. | 4 | `create-project` request | `control-mcp-node-files.test.ts` FL-02 (request names node, remote and absolute location); executor `executeCreateProject` runs `add_project` on the node only after approval | Done |
+| FL-02 | A project is created on a leaf only after user approval stating the location. | 4 | `create-project` request | `control-mcp/node-files.test.ts` FL-02 (request names node, remote and absolute location); executor `executeCreateProject` runs `add_project` on the node only after approval | Done |
 | FL-03 | A leaf environment gets `.env` and selected files from the leaf's project root. | 4 | Existing copy | `node-seed-worktree.test.ts` FL-03/FL-04/FL-05 (own files copied) | Done |
 | FL-04 | Files missing on the leaf are copied from the command node's project root during setup. | 4 | Seed staging | `node-project-files.test.ts` FL-04/FL-05 (only missing files staged); `node-seed-worktree.test.ts` (seed fills gaps); routed `create_environment` triggers seeding | Done |
 | FL-05 | The leaf's copy wins. | 4 | Copy order | `node-seed-worktree.test.ts` and `node-project-files.test.ts` (leaf's own copy wins) | Done |
 | FL-06 | Compare reports missing or extra files and `.env` keys added, removed or changed, with values only as same or differs. | 4 | `project-file-compare.ts` | `node-project-files.test.ts` FL-06; `node-files.test.ts` FL-06 (one-time HMAC key); `qa-command-nodes.ts` FL-06 (no values in the result) | Done |
-| FL-07 | Plain-text values are shown only on explicit user request. | 4 | `reveal-env-value` request | `node-project-files.test.ts` FL-08/FL-07 (value mailed to the conversation only, not stored in the request); `control-mcp-node-files.test.ts` (request only) | Done |
-| FL-08 | Update pushes chosen files or keys node to node, not through the model, after an approval listing nodes and files. | 4 | `update-project-files` | `node-project-files.test.ts` FL-08 (keys and whole files node to node); `control-mcp-node-files.test.ts` (request lists nodes and files) | Done |
+| FL-07 | Plain-text values are shown only on explicit user request. | 4 | `reveal-env-value` request | `node-project-files.test.ts` FL-08/FL-07 (value mailed to the conversation only, not stored in the request); `control-mcp/node-files.test.ts` (request only) | Done |
+| FL-08 | Update pushes chosen files or keys node to node, not through the model, after an approval listing nodes and files. | 4 | `update-project-files` | `node-project-files.test.ts` FL-08 (keys and whole files node to node); `control-mcp/node-files.test.ts` (request lists nodes and files) | Done |
 
 ### Security
 

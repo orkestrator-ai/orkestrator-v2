@@ -12,7 +12,7 @@ import { publicActionHandlers } from "./registry.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import { commitFile, headCommit, type PublicApiHarness } from "./test-support.js";
 import { runCommand } from "../shell.js";
-import { rpc } from "../control-mcp-test-support.js";
+import { rpc } from "../control-mcp/test-support.js";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 
 /**

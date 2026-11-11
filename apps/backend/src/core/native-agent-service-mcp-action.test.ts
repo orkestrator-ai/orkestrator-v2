@@ -211,9 +211,13 @@ describe("native agent MCP server actions", () => {
 
   test("return a sign-in URL by the short deadline and ignore late inventory", async () => {
     const inventory = Promise.withResolvers<NativeAgentMcpServer[]>();
+    let inventorySignal: AbortSignal | undefined;
     const stub = createProviderStub("claude");
     Object.assign(stub.provider, {
-      mcpServers: () => inventory.promise,
+      mcpServers: (_sessionId: string, options?: { signal?: AbortSignal }) => {
+        inventorySignal = options?.signal;
+        return inventory.promise;
+      },
       mcpServerAction: async () => ({ url: "https://example.test/login" }),
     });
     await withService(
@@ -229,6 +233,8 @@ describe("native agent MCP server actions", () => {
         });
         expect(result.url).toBe("https://example.test/login");
         expect(Date.now() - started).toBeLessThan(4_000);
+        // The deadline ended the inventory request, not only the wait for it.
+        expect(inventorySignal?.aborted).toBe(true);
         expect(announced).toHaveBeenCalledWith("env-1", "mcp-action", expect.anything());
         inventory.resolve([server("late", "connected")]);
         await new Promise((resolve) => setTimeout(resolve, 0));

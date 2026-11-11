@@ -33,6 +33,7 @@ describe("Electron tmux MCP config and session start", () => {
       "claude_tmux_write_interactive_terminal",
       "claude_tmux_resize_interactive_terminal",
       "claude_tmux_detach_interactive_terminal",
+      "claude_tmux_renew_interactive_terminal",
       "claude_tmux_send_text",
       "claude_tmux_send_keys",
       "claude_tmux_answer_selection_prompt",
@@ -369,6 +370,9 @@ describe("Electron tmux MCP config and session start", () => {
     await expect(
       invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId: "missing" }),
     ).resolves.toBeUndefined();
+    await expect(
+      invoke(handlers, "claude_tmux_renew_interactive_terminal", { terminalSessionId: "missing" }),
+    ).resolves.toEqual({ renewed: false });
   });
 
   test("names generated tab ids without tmux session collisions", () => {

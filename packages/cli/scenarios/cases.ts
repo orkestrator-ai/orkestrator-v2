@@ -18,6 +18,7 @@ import {
   type CliResult,
   type ScenarioContext,
 } from "./harness.js";
+import { readRunUsage } from "./usage.js";
 
 /**
  * The credential-free scenario matrix plus opt-in live/container cases.
@@ -1018,6 +1019,10 @@ export const SCENARIOS: ScenarioDefinition[] = [
         { stage: "session start --wait", timeoutMs: 9 * 60_000 },
       );
       const receipt = started.envelope?.receipt as PublicReceipt;
+      // Read before anything else touches the session (`session config get`
+      // below is a state read that records usage too), so the count proves
+      // the settle of `--wait` itself recorded the turn (to-do 7815).
+      const settledUsage = await recordSettledStartUsage(context, "session start --wait");
       // Recorded before the outcome is judged, so a failed run still says
       // which model it ran on.
       await recordResolvedModel(
@@ -1031,6 +1036,12 @@ export const SCENARIOS: ScenarioDefinition[] = [
         `live run ended ${receipt?.state} (${started.envelope && !started.envelope.ok ? started.envelope.error.code : "ok"}): ${
           receipt?.error?.message ?? ""
         } ${receipt?.execution?.error ?? receipt?.execution?.reason ?? ""}`.trim(),
+      );
+      expectThat(
+        settledUsage.turns > 0,
+        `the session start --wait turn is missing from the usage report${
+          settledUsage.readError ? ` (${settledUsage.readError})` : ""
+        }`,
       );
       const cat = await context.cli.run(
         [
@@ -1086,6 +1097,26 @@ export const SCENARIOS: ScenarioDefinition[] = [
     },
   },
 ];
+
+/**
+ * Reads the scenario backend's usage report right after `stage` and records
+ * how many turns it counted on that stage's manifest entry. Called straight
+ * after `session start --wait`, before any other read of the session, it
+ * shows whether settling the turn recorded its usage. Never throws: a failed
+ * read is recorded as `readError` and counts 0 turns.
+ */
+export async function recordSettledStartUsage(
+  context: Pick<ScenarioContext, "name" | "backend" | "manifest">,
+  stage: string,
+  read: (backend: ScenarioContext["backend"]) => ReturnType<typeof readRunUsage> = readRunUsage,
+): Promise<{ turns: number; readError?: string }> {
+  const record = await read(context.backend);
+  const settledUsage = record.usage
+    ? { turns: record.usage.turns }
+    : { turns: 0, readError: record.readError };
+  await context.manifest.annotate(context.name, stage, { settledUsage });
+  return settledUsage;
+}
 
 /**
  * Reads the model the session reports in force (`session config get`) and

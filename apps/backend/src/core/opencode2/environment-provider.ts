@@ -49,6 +49,7 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderNativeAgentSessionAction,
   type ProviderPrepareDispatchOptions,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
@@ -288,6 +289,12 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
     return provider ? provider.refreshUsage(sessionId) : undefined;
   }
 
+  /** Every recent response's usage, for a settled turn; never starts a server. */
+  async recentTurnUsage(sessionId: string): Promise<NativeAgentContextUsage | undefined> {
+    const provider = await this.observed();
+    return provider ? provider.recentTurnUsage(sessionId) : undefined;
+  }
+
   async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
     // Health is optional: never start a server for it.
     const provider = await this.observed();
@@ -406,9 +413,9 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   }
 
   /** A catalogue read never starts the server. */
-  async mcpServers(_sessionId: string) {
+  async mcpServers(sessionId: string, options?: ProviderReadOptions) {
     const provider = await this.observed();
-    return provider ? provider.mcpServers() : [];
+    return provider ? provider.mcpServers(sessionId, options) : [];
   }
 
   async mcpServerAction(...args: Parameters<OpenCode2Provider["mcpServerAction"]>) {

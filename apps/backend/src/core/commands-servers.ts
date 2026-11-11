@@ -117,13 +117,13 @@ import {
   prepareOpenCodeHostLaunch,
   recordOpenCodeHostServer,
   type PreparedOpenCodeHostLaunch,
-} from "./opencode2/host-launch.js";
+} from "./opencode2/index.js";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,

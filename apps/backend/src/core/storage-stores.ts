@@ -26,7 +26,7 @@ import {
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
 import { HEALTH_SUMMARY_STORE_LAYOUTS } from "./health-summary-layout.js";
 import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
-import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/layout.js";
+import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/index.js";
 import {
   TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
   TRANSCRIPT_ARTIFACT_STORE_LAYOUT,
@@ -133,6 +133,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "coordinator-upstream-declines": { kind: "record", owner: ownerField("projectId") },
   "coordinator-upstream-auto-merge": { kind: "record", owner: ownerField("projectId") },
   "notice-dismissals": { kind: "record" },
+  // Coordinator action cards marked done by hand: one row per conversation,
+  // owned by its project.
+  "coordinator-action-marks": { kind: "record", owner: ownerField("projectId") },
   // Setup commands the user approved, one row per project (`setup-approval.ts`).
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).

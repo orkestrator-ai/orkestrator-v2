@@ -171,14 +171,24 @@ export class GatewayHandlers {
       ),
     );
 
+    // The call's own cancellation: a client that goes away before the answer
+    // (a node link whose caller stopped waiting aborts its request) aborts it.
+    // Handlers may honour it; the answer is still written to a closed socket
+    // harmlessly when they do not.
+    const cancel = new AbortController();
+    const onClose = () => {
+      if (!response.writableFinished) cancel.abort(new Error("The client went away."));
+    };
+    response.once("close", onClose);
     try {
       const invokeArgs =
         command === "public_action" && options.controllerId
           ? withRelayController(safeArgs, options.controllerId)
           : safeArgs;
-      const result = await (invocation === undefined
-        ? this.ctx.backend.invoke(command, invokeArgs)
-        : this.ctx.backend.invoke(command, invokeArgs, invocation));
+      const result = await this.ctx.backend.invoke(command, invokeArgs, {
+        ...invocation,
+        signal: cancel.signal,
+      });
       // A transcript answer's rows were each encoded already to size and hash
       // them; splice those encodings in rather than serializing them again.
       // Either way the body is encoded to bytes once, here, and its length
@@ -222,6 +232,8 @@ export class GatewayHandlers {
         false,
       );
       serializedJsonResponse(response, 500, responseBody);
+    } finally {
+      response.off("close", onClose);
     }
   }
 

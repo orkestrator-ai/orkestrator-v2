@@ -5,15 +5,18 @@
 // the rest of the suite is unaffected.
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { listen } from "@/lib/native/events";
 
 const calls: Array<{ cmd: string; args: unknown }> = [];
 let invokeResult: unknown;
+let invokeError: unknown;
 const listenMock = listen as ReturnType<typeof mock>;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock(async (cmd: string, args?: unknown) => {
     calls.push({ cmd, args });
+    if (invokeError !== undefined) throw invokeError;
     return invokeResult;
   }),
   Resource: class Resource {
@@ -37,6 +40,7 @@ afterAll(() => {
 beforeEach(() => {
   calls.length = 0;
   invokeResult = undefined;
+  invokeError = undefined;
   listenMock.mockClear();
   listenMock.mockImplementation(async () => () => undefined);
 });
@@ -47,6 +51,7 @@ import {
   answerPreToolUse,
   createInteractiveTerminal,
   detachInteractiveTerminal,
+  renewInteractiveTerminal,
   getPendingHooks,
   getStatus,
   getTaskList,
@@ -304,12 +309,27 @@ describe("claude-tmux-client invoke wrappers", () => {
       "claude_tmux_detach_interactive_terminal",
     ]);
     expect(calls.map((call) => call.args)).toEqual([
-      { tabId: "tab-1", environmentId: "env-1", cols: 120, rows: 40 },
+      { tabId: "tab-1", environmentId: "env-1", cols: 120, rows: 40, leased: true },
       { terminalSessionId: "pty-1" },
       { terminalSessionId: "pty-1", data: "abc" },
       { terminalSessionId: "pty-1", cols: 140, rows: 45 },
       { terminalSessionId: "pty-1" },
     ]);
+  });
+
+  test("renewInteractiveTerminal reads renewed, lapsed and an older backend", async () => {
+    invokeResult = { renewed: true };
+    expect(await renewInteractiveTerminal("pty-1")).toBe("renewed");
+    expect(calls.at(-1)).toEqual({
+      cmd: "claude_tmux_renew_interactive_terminal",
+      args: { terminalSessionId: "pty-1" },
+    });
+    invokeResult = { renewed: false };
+    expect(await renewInteractiveTerminal("pty-1")).toBe("lapsed");
+    invokeError = new Error(unknownBackendCommandMessage("claude_tmux_renew_interactive_terminal"));
+    expect(await renewInteractiveTerminal("pty-1")).toBe("unsupported");
+    invokeError = new Error("gateway unavailable");
+    await expect(renewInteractiveTerminal("pty-1")).rejects.toThrow("gateway unavailable");
   });
 
   test("answerPreToolUse forwards decision and optional reason", async () => {

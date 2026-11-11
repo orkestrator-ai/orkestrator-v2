@@ -26,7 +26,7 @@ import type { LocalServerKind, LocalServerRuntime } from "./local-server-runtime
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
-import { readOpenCode2ModelCatalogue } from "./opencode2/models.js";
+import { readOpenCode2ModelCatalogue } from "./opencode2/index.js";
 import {
   probeWorkingDirectory,
   withOpenCode2HostDatabaseServer,

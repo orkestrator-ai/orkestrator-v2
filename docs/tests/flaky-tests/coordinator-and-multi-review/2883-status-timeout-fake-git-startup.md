@@ -8,7 +8,7 @@
 
 ## Observation
 
-An unintended package-wide run selected by `mise run test:logged -- --name mail-focused -- bun --cwd apps/backend test ./src/core/coordinator-node-coordinator-mail.test.ts ./src/core/control-mcp-coordinator-node-mail.test.ts ./src/core/nodes/node-mail.test.ts --parallel=2 --only-failures` failed this unchanged test at 544.32 ms. Expected two fake-Git calls; only the fallback with `core.fsmonitor=false` was recorded. The package script appended `src tests`, so this was broader than intended. It was stopped after 399.8 seconds (exit 143); no completed suite totals are available. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.573vpq/mail-focused.log.gz`.
+An unintended package-wide run selected by `mise run test:logged -- --name mail-focused -- bun --cwd apps/backend test ./src/core/coordinator-node-coordinator-mail.test.ts ./src/core/control-mcp/coordinator-node-mail.test.ts ./src/core/nodes/node-mail.test.ts --parallel=2 --only-failures` failed this unchanged test at 544.32 ms. Expected two fake-Git calls; only the fallback with `core.fsmonitor=false` was recorded. The package script appended `src tests`, so this was broader than intended. It was stopped after 399.8 seconds (exit 143); no completed suite totals are available. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.573vpq/mail-focused.log.gz`.
 
 ## Isolated verification
 

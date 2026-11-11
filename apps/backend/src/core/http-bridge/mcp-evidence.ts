@@ -18,11 +18,13 @@ export async function readBridgeMcpConfigEvidence(options: {
   fetchImpl: typeof fetch;
   agent: string;
   sessionId: string;
+  /** Aborts the read; it then rejects, which the scheduler counts as no evidence. */
+  signal?: AbortSignal | undefined;
 }): Promise<ProviderMcpConfigReport> {
   const response = await bridgeFetch(
     options.connection,
     `/session/${encodeURIComponent(options.sessionId)}/runtime-health`,
-    {},
+    options.signal ? { signal: options.signal } : {},
     options.fetchImpl,
   );
   if (!response.ok) {

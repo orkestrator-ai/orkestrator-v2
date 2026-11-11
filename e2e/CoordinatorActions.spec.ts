@@ -44,6 +44,83 @@ test("wide actions dock below mail with reduced motion", async ({ page }) => {
   });
 });
 
+test("a card's context menu marks it done and back, from the pointer and the keyboard", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/coordinator-actions");
+  const header = page.getByRole("button", { name: "Collapse actions" });
+  await expect(header).toContainText("1 waiting");
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-done-before.png"),
+  });
+
+  await page.getByRole("button", { name: "Which option?", exact: true }).click({ button: "right" });
+  const markDone = page.getByRole("menuitem", { name: "Mark done" });
+  await expect(markDone).toBeVisible();
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-done-menu.png"),
+  });
+  await markDone.click();
+  const marked = page.getByRole("button", { name: "Done: Which option?", exact: true });
+  await expect(marked).toBeVisible();
+  await expect(marked).toContainText("Marked done");
+  await expect(header).toContainText("0 waiting");
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-done-after.png"),
+  });
+
+  // From the keyboard: Shift+F10 on the focused card opens its menu.
+  await marked.focus();
+  await page.keyboard.press("Shift+F10");
+  const markNotDone = page.getByRole("menuitem", { name: "Mark not done" });
+  await expect(markNotDone).toBeFocused();
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-not-done-menu.png"),
+  });
+  await page.keyboard.press("Enter");
+  const reopened = page.getByRole("button", { name: "Which option?", exact: true });
+  await expect(reopened).toBeVisible();
+  await expect(reopened).toBeFocused();
+  await expect(header).toContainText("1 waiting");
+
+  // A card the conversation finished cannot be reopened.
+  await page.getByRole("button", { name: /Done: #42 Improve search and filters/ }).click({
+    button: "right",
+  });
+  await expect(page.getByRole("menuitem", { name: "Done in the conversation" })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: "Mark not done" })).toHaveCount(0);
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-done-finished-menu.png"),
+  });
+});
+
+test("the narrow overlay's card menu marks a card done", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/coordinator-actions");
+  const icon = page.getByRole("button", { name: "Actions, 1 waiting" });
+  await icon.focus();
+  await expect(icon).toHaveAttribute("aria-expanded", "true");
+  const card = page.getByRole("button", { name: "Which option?", exact: true });
+  await card.focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Mark done" })).toBeFocused();
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-done-menu-narrow.png"),
+  });
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "Done: Which option?", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Actions, 0 waiting" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-mark-done-after-narrow.png"),
+  });
+});
+
 test("real shell measures viewport cutoff, excludes overscan, navigates and resolves live questions", async ({
   page,
 }) => {

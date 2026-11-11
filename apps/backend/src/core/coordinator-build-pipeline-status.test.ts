@@ -15,7 +15,7 @@ import {
   multiReviewStatus,
   renderCoordinatorStatusNotice,
 } from "./coordinator-status-wakes.js";
-import { resumeRefusal } from "./control-mcp-coordinator-tools.js";
+import { resumeRefusal } from "./control-mcp/coordinator-tools.js";
 import { workflowSummary } from "./control-workflow-summary.js";
 
 const CANCELLED_AT = "2026-11-10T01:00:00.000Z";

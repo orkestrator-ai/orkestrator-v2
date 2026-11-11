@@ -29,7 +29,7 @@ import {
 } from "./bug-report-runtime.js";
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { createSelfImprovementService } from "./commands-registry-self-improvement.js";
-import type { SelfImprovementService } from "./self-improvement/service.js";
+import type { SelfImprovementService } from "./self-improvement/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -213,7 +213,7 @@ import {
   type ControlMcpEndpointState,
   type ControlMcpInfo,
   type ControlMcpSettings,
-} from "./control-mcp-server.js";
+} from "./control-mcp/index.js";
 import { isDefaultDataDir } from "../data-dir.js";
 import { installStorageEventFanout } from "./backend-event-fanout.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
@@ -226,7 +226,7 @@ import {
 } from "./native-agent-service.js";
 import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
 import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
-import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
+import { openCode2WorkerMailbox } from "./opencode2/index.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 import {
   createSessionTitleService,
@@ -644,21 +644,28 @@ export class OrkestratorBackend {
       : undefined;
     this.controlMcp =
       options.controlMcp ??
-      new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed for the installed app's default data directory; ephemeral for
-        // tests, agent-test backends and every other data directory.
-        port: controlMcpPortOverride(
-          options.runtimeFlavor,
-          process.env,
-          isDefaultDataDir(options.dataDir),
-        ),
-        agentVoiceChatReply: (input) => {
-          if (!this.agentVoiceChatReplier) {
-            return Promise.reject(new Error("Agent voice chat replies are unavailable"));
-          }
-          return this.agentVoiceChatReplier.reply(input);
+      new ControlMcpServer(
+        options.dataDir,
+        (command, args, invokeOptions) =>
+          invokeOptions?.signal
+            ? this.invoke(command, args, { signal: invokeOptions.signal })
+            : this.invoke(command, args),
+        {
+          // Fixed for the installed app's default data directory; ephemeral for
+          // tests, agent-test backends and every other data directory.
+          port: controlMcpPortOverride(
+            options.runtimeFlavor,
+            process.env,
+            isDefaultDataDir(options.dataDir),
+          ),
+          agentVoiceChatReply: (input) => {
+            if (!this.agentVoiceChatReplier) {
+              return Promise.reject(new Error("Agent voice chat replies are unavailable"));
+            }
+            return this.agentVoiceChatReplier.reply(input);
+          },
         },
-      });
+      );
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.applicationLogging = options.applicationLogging ?? null;

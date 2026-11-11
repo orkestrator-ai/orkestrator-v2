@@ -15,6 +15,10 @@ import {
   type CoordinatorLaunchOverridesSnapshot,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  parseCoordinatorActionMarks,
+  type CoordinatorActionMarks,
+} from "@orkestrator/protocol/coordinator-action-marks";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { coordinatorApi as coordinatorDomainApi } from "@/lib/node-scope/domains/coordinator";
 import { commandBackendClient, type BackendClient } from "./client";
@@ -184,7 +188,32 @@ export function createCoordinatorApi(client: BackendClient) {
       source,
     }) as Promise<CoordinatorPullRequestWatchResult>;
 
+  /**
+   * A conversation's manual action marks ("Mark done" in its Actions panel).
+   * An unreadable answer is null. Older backends answer "Unknown backend command".
+   */
+  const getCoordinatorActionMarks = (
+    projectId: string,
+    conversationId: string,
+  ): Promise<CoordinatorActionMarks | null> =>
+    domain()
+      .get_coordinator_action_marks({ projectId, conversationId })
+      .then(parseCoordinatorActionMarks);
+
+  /** Marks a card done by hand, or clears that mark; answers the conversation's marks. */
+  const setCoordinatorActionMark = (
+    projectId: string,
+    conversationId: string,
+    cardId: string,
+    done: boolean,
+  ): Promise<CoordinatorActionMarks | null> =>
+    domain()
+      .set_coordinator_action_mark({ projectId, conversationId, cardId, done })
+      .then(parseCoordinatorActionMarks);
+
   return {
+    getCoordinatorActionMarks,
+    setCoordinatorActionMark,
     ensureProjectCoordinator,
     retryCoordinatorConversation,
     getProjectCoordinatorView,
@@ -211,6 +240,8 @@ export type CoordinatorApi = ReturnType<typeof createCoordinatorApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
+  getCoordinatorActionMarks,
+  setCoordinatorActionMark,
   ensureProjectCoordinator,
   retryCoordinatorConversation,
   getProjectCoordinatorView,

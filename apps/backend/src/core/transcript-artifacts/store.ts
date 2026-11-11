@@ -377,20 +377,32 @@ export class TranscriptArtifactStore {
     }
   }
 
-  /** Reads and verifies an asset; a missing or mismatched file is `storage_corrupt`. */
-  async readAsset(environmentId: string, sha256: string, byteLength: number): Promise<Buffer> {
+  /**
+   * Reads and verifies an asset; a missing or mismatched file is
+   * `storage_corrupt`. `options.signal` stops the read: it then rejects with
+   * the signal's reason, which says nothing about the stored bytes.
+   */
+  async readAsset(
+    environmentId: string,
+    sha256: string,
+    byteLength: number,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<Buffer> {
+    const { signal } = options;
     let bytes: Buffer;
     try {
+      signal?.throwIfAborted();
       const handle = await open(this.assetPath(environmentId, sha256), "r");
       try {
         const stat = await handle.stat();
         if (!stat.isFile() || stat.size !== byteLength) throw new Error("size");
-        bytes = await handle.readFile();
+        bytes = await handle.readFile(signal ? { signal } : {});
       } finally {
         await handle.close();
       }
     } catch (error) {
       if (error instanceof ArtifactFailure) throw error;
+      if (signal?.aborted) throw signal.reason;
       throw storageCorrupt();
     }
     if (bytes.byteLength !== byteLength || sha256Hex(bytes) !== sha256) throw storageCorrupt();

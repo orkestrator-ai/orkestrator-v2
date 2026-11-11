@@ -334,8 +334,7 @@ page) lists the new file, so the change is proven to have landed while the
 environment was not shown. The hidden-document step is a negative check and
 stays a timed window, sized from the timings the spec runs with: three page
 polls, and two polls past the container tree cache. To keep that window short
-the spec sets two test-only timings (to-do
-[7569](../todo/cross-cutting/7569-docker-fixture-wall-clock-waits.md)):
+the spec sets two test-only timings (from to-do 7569, retired 2026-11-11):
 
 - **Page poll.** `window.orkestratorAgentTestTiming = { filesPanelPollMs }`
   from an init script (`apps/web/src/lib/agent-test-timing.ts`). Only a Vite dev

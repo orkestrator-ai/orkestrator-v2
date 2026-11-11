@@ -1,5 +1,5 @@
 /**
- * Test-only shortening of the Files panel's page poll (to-do 7569, task 2),
+ * Test-only shortening of the Files panel's page poll (to-do 7569 (retired), task 2),
  * so a Docker fixture spec can prove the poll pauses while the document is
  * hidden in a few seconds instead of three 5 s intervals.
  *

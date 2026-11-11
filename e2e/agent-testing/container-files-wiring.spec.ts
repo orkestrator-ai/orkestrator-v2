@@ -122,7 +122,7 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       `rm -f ${files.join(" ")}; git checkout -- README.md 2>/dev/null; true`,
     );
 
-  // The hidden-document window is sized from these (to-do 7569, task 2):
+  // The hidden-document window is sized from these (to-do 7569 (retired), task 2):
   // a 1 s page poll and a 3 s container tree cache, the shortest the tree
   // bound gets while it also follows the 3 s file-list bound. Both are
   // honoured only by an agent-test profile.
@@ -212,7 +212,7 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       inContainer(containerId, `echo hidden > ${hiddenTreeFile}`);
       // Three poll intervals, and past the container tree's cache by two
       // more: a page that kept polling would have read the new tree by now.
-      // A negative check, so a timed window (to-do 7569, task 2): 5 s with
+      // A negative check, so a timed window (to-do 7569 (retired), task 2): 5 s with
       // this test's 1 s poll and 3 s cache, 20 s with the production 5 s and
       // 10 s.
       const hiddenWindowMs = Math.max(3 * pollMs, treeCacheMs + 2 * pollMs);

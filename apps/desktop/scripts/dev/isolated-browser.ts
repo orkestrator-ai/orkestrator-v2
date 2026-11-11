@@ -149,13 +149,14 @@ const IMAGE_QUALIFICATION_TIMEOUT_MS = 420_000;
  * after another against a profile nothing else touches. Within one profile
  * the specs share that fixture and must stay serial.
  *
- * The split balances measured run time on the Linux host. To-do 7569 took
- * the fixed waits out of the Files panel, annotation evidence and coordinator
- * view specs (2026-11-11: shard 1 395 s, shard 2 240 s before this split), so
- * the rebuild cycle, draft attachments, design export and root terminal specs
- * (about 85 s together) moved to the second shard. A spec that gains a
- * `Docker fixture` test must be added to one shard; `isolated-browser.test.ts`
- * fails while one is in no shard or in two.
+ * The split balances measured run time on the Linux host. To-do 7569
+ * (retired) took the fixed waits out of the Files panel, annotation evidence
+ * and coordinator view specs (2026-11-11: shard 1 395 s, shard 2 240 s before
+ * this split), so the rebuild cycle, draft attachments, design export and root
+ * terminal specs (about 85 s together) moved to the second shard: 310 s and
+ * 242 s after it. Rebalance once a shard drifts by more than a minute. A spec
+ * that gains a `Docker fixture` test must be added to one shard;
+ * `isolated-browser.test.ts` fails while one is in no shard or in two.
  */
 export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
   [

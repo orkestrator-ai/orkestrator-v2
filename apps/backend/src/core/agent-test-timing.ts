@@ -3,7 +3,7 @@ import path from "node:path";
 import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
 
 /**
- * Test-only shortening of three backend periods (to-do 7569, tasks 2 to 4),
+ * Test-only shortening of three backend periods (to-do 7569 (retired), tasks 2 to 4),
  * so a Docker fixture spec does not wait out a production period whose
  * length it is not testing:
  *

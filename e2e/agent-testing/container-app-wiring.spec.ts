@@ -459,7 +459,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
 }, testInfo) => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
   test.setTimeout(8 * 60_000);
-  // Durations of the phases outside a `test.step` (to-do 7569, task 4); the
+  // Durations of the phases outside a `test.step` (to-do 7569 (retired), task 4); the
   // steps' own durations are in the JSON report.
   let phaseStarted = Date.now();
   const phaseDone = (phase: string) => {
@@ -471,7 +471,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
   const local = await fixtureEnvironment(localName);
   expect(container.environmentType).toBe("containerized");
   // A stopped worker's delegation closes on the coordinator repair pass,
-  // every 60 s in production; this test shortens it to 5 s (to-do 7569,
+  // every 60 s in production; this test shortens it to 5 s (to-do 7569 (retired),
   // task 4). The pass already scheduled when the file is written keeps its
   // delay, so the sweep budget below still allows one full production period.
   const dataDir = profileStatus().dataDir;
@@ -593,7 +593,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await expect(page.locator("#project-panel-coordinator")).toHaveCount(0);
       expect((await delegate(container.id, "container")).opened).toBe(true);
       // The backend's record has it while the coordinator view is not shown
-      // (to-do 7569, task 4: was a fixed 3 s sleep).
+      // (to-do 7569 (retired), task 4: was a fixed 3 s sleep).
       await awaiting(baseline + 1);
       panel = await openCoordinator(page);
       await awaiting(baseline + 1);

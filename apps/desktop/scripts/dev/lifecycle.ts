@@ -512,7 +512,7 @@ export type ProfileSeedDependencies = {
  * production backend or build shell that set `NODE_ENV=production`; Vite then
  * serves the source with `import.meta.env.DEV` false, which silently turns
  * off every dev-renderer gate, including the agent-test harnesses (plan item
- * 2013, to-do 7569). The backend launcher drops it for the same reason
+ * 2013, to-do 7569 (retired)). The backend launcher drops it for the same reason
  * (`apps/desktop/electron/backend-process.ts`).
  */
 export function rendererDevServerEnv(

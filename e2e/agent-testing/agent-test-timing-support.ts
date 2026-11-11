@@ -3,7 +3,7 @@ import path from "node:path";
 import type { BrowserContext } from "@playwright/test";
 
 /**
- * Test-only timing overrides for an agent-test profile (to-do 7569), so a
+ * Test-only timing overrides for an agent-test profile (to-do 7569 (retired)), so a
  * Docker fixture spec does not wait out a production period whose length it
  * is not testing.
  *

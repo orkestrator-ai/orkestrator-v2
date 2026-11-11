@@ -856,7 +856,7 @@ test("Docker fixture writes annotation evidence inside the container, checks pat
   test.skip(!DOCKER, "Docker fixture profile required");
   // Settled-evidence cleanup runs on the reconciler's garbage-collection pass
   // (every 100 ticks of 3 s in production). This test shortens the period
-  // through the profile's timing override (to-do 7569, task 3), so the real
+  // through the profile's timing override (to-do 7569 (retired), task 3), so the real
   // pass still runs on its real trigger, just every two ticks.
   testInfo.setTimeout(4 * 60_000);
   const status = profileStatus();

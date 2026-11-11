@@ -34,6 +34,13 @@
  * setting up and running. It records the platforms, models, tail latency,
  * peak RSS and peak concurrency in `scale.json` beside the case's output.
  *
+ * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1` runs the scale case
+ * with no login and nothing billed: the panel defaults to Pi, and every slot
+ * runs on the profile's real Pi bridge against the scripted loopback model
+ * `auto-pipeline-fake-model.ts`, named in the profile's isolated Pi
+ * `models.json` (never `~/.pi`) for the case alone. Start the profile with
+ * `--no-agent-credentials --agent-platforms pi`.
+ *
  * Models default to the cheapest each platform offers; override the picker
  * labels with `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL` and
  * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL`. The scale case reads
@@ -44,9 +51,10 @@
  * without the opt-in. Prompts and transcripts never reach test output.
  */
 import { expect, test, type Page } from "./browser-test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { openSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
@@ -61,8 +69,11 @@ import {
   parseScalePlatforms,
   pickScaleModel,
   profileRssMiB,
+  SCALE_FAKE_PI_MODEL_REF,
+  SCALE_FAKE_PLATFORMS,
   scaleModelVariable,
   scalePanelPlatforms,
+  writeScaleFakePiModels,
 } from "./multi-review-scale-support";
 import { devTestRestartArgs } from "./profile-restart-args";
 
@@ -96,6 +107,7 @@ const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW === "1"
 const CLAUDE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL ?? "Haiku 4.5";
 const CODEX_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL ?? "GPT-6-Luna";
 const SCALE_REVIEWERS = Number(process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE ?? "0");
+const SCALE_FAKE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL === "1";
 /** `DEFAULT_REVIEW_ADMISSION_CONCURRENCY` and `DEFAULT_REVIEW_PROVIDER_CONCURRENCY`. */
 const SCALE_ADMISSION_CAP = 4;
 const SCALE_PROVIDER_CAP = 4;
@@ -107,6 +119,26 @@ test.describe.configure({ mode: "serial" });
 // A multi-minute live trace outgrows the artifact sanitizer's 16 MiB bound, and
 // an unsanitized trace may not be kept; failure screenshots still are.
 test.use({ trace: "off" });
+
+/** The scale case's loopback model; its own handle stops it. Counts only, never content. */
+async function startScaleFakeModel(): Promise<{ origin: string; child: ChildProcess }> {
+  const child = spawn("bun", [path.join(import.meta.dirname, "auto-pipeline-fake-model.ts")], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const origin = await new Promise<string>((resolve, reject) => {
+    createInterface({ input: child.stdout! }).once("line", resolve);
+    child.once("exit", () => reject(new Error("the fake model exited before it listened")));
+  });
+  return { origin, child };
+}
+
+function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve());
+    child.kill("SIGTERM");
+  });
+}
 
 function profileStatus(): Status {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -946,13 +978,22 @@ test.describe("live Multi Review inactive-environment cycle", () => {
     page.setDefaultTimeout(15_000);
     const platforms = parseScalePlatforms(
       process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS,
+      SCALE_FAKE_MODEL ? SCALE_FAKE_PLATFORMS : undefined,
     );
+    if (SCALE_FAKE_MODEL) expect(platforms, "the fake model serves Pi only").toEqual(["pi"]);
     const cycle = new MultiReviewCycle(page, `scale${SCALE_REVIEWERS}`);
     const status = readyStatus();
     expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
     const statsDirectory = path.join(status.dataDir!, FANOUT_STATS_DIR);
     const statsMarker = path.join(statsDirectory, FANOUT_STATS_MARKER_NAME);
+    let fakeModel: { origin: string; child: ChildProcess } | undefined;
+    let restorePiModels: (() => void) | undefined;
     try {
+      if (SCALE_FAKE_MODEL) {
+        // Named before the review environment's Pi bridge starts, so it reads it.
+        fakeModel = await startScaleFakeModel();
+        restorePiModels = writeScaleFakePiModels(status.dataDir!, `${fakeModel.origin}/v1`);
+      }
       await cycle.open();
       const environmentId = cycle.environments[0]!.id;
       const catalog = await cycle.invoke<AgentModel[]>("get_native_agent_model_catalog", {
@@ -962,7 +1003,12 @@ test.describe("live Multi Review inactive-environment cycle", () => {
         platforms.map((platform) => {
           const label =
             process.env[scaleModelVariable(platform)] ?? DEFAULT_SCALE_MODEL_LABELS[platform];
-          const model = pickScaleModel(catalog, platform, label);
+          // A credential-free profile lists no Pi catalogue
+          // (`pi-model-catalog-seeding.ts`), so the fake is named by its ref,
+          // as the Auto-pipeline spec does.
+          const model = SCALE_FAKE_MODEL
+            ? { id: SCALE_FAKE_PI_MODEL_REF, platform, label: "loopback fake" }
+            : pickScaleModel(catalog, platform, label);
           expect(
             model,
             `no ${platform} model${label ? ` labelled ${label}` : ""}; is ${platform} enabled in the profile?`,
@@ -1053,8 +1099,21 @@ test.describe("live Multi Review inactive-environment cycle", () => {
           return [platform, own.length ? Math.max(...own) : null];
         }),
       );
+      const fakeCalls = fakeModel
+        ? ((await (await fetch(`${fakeModel.origin}/__calls`)).json()) as {
+            completions: number;
+            submissions: Record<string, number>;
+          })
+        : undefined;
       const result = {
         reviewers: SCALE_REVIEWERS,
+        fakeModel: SCALE_FAKE_MODEL,
+        ...(fakeCalls
+          ? {
+              fakeModelCompletions: fakeCalls.completions,
+              fakeModelSubmissions: fakeCalls.submissions,
+            }
+          : {}),
         platforms,
         models: Object.fromEntries(
           Array.from(selections, ([platform, selection]) => [platform, selection.model]),
@@ -1109,6 +1168,8 @@ test.describe("live Multi Review inactive-environment cycle", () => {
     } finally {
       await fs.rm(statsMarker, { force: true });
       await cycle.cleanup();
+      restorePiModels?.();
+      if (fakeModel) await stopChild(fakeModel.child);
     }
   });
 });

@@ -831,8 +831,11 @@ reviewer IDs.
   cannot make its workflow unreadable.
 - **Cache reads.** Reviewer records keep `cacheReadTokens` beside
   `tokenCount`, and Build Pipeline reviewer sessions mirror it once the
-  reviewer settles. Claude, Codex and OpenCode report a session total. Pi and
-  Cursor report their latest turn, so the record keeps the largest value seen.
+  reviewer settles. Claude, Codex and OpenCode report a session total. Pi,
+  Cursor and Grok report their latest turn, so the record keeps the largest
+  value seen. (Grok's is the ACP bridge's merge of the up to three carriers
+  Grok announces per turn, summed over a turn's continued attempts:
+  `recordTurnUsage` in `bridges/acp-bridge/src/acp-session.ts`.)
   Each reviewer's tool loop rereads its own context from the cache on every
   model call, so cache reads are mostly that context, not the prefix shared
   across the panel. Compare reviewers 2..N against reviewer 1 on the same
@@ -840,7 +843,12 @@ reviewer IDs.
   Measured through the Claude CLI (2026-10-23), a separate session reads a
   prompt from cache only when it is byte-identical up to a message boundary
   and runs in the same working directory. A prompt that shares only its
-  opening instructions got no cache hit. See
+  opening instructions got no cache hit. The reviewers of one review do share
+  a working directory: they run on the review environment's bridge for their
+  platform (`MultiReviewService.providerInstance`; the Build Pipeline fan-out's
+  `provider(pipeline, agent)`), every bridge runs its sessions in that one
+  process-wide workspace (for example `claudeWorkspaceCwd` in the Claude
+  bridge), and no reviewer session is given a directory of its own. See
   [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification).
 - **Evaluation corpus.**
   [`multi-review-evaluation-corpus.ts`](../../apps/backend/src/core/multi-review-evaluation-corpus.ts)
@@ -865,9 +873,13 @@ sizes. `score <case> <answer.json>` scores one model answer. `panel
 panel's overlap and cache-read shares. A Multi Review stored before
 `consolidationOverlap` existed is summarised from its report's model labels
 (`overlapFromModelLabels`), but only when every reviewer label is distinct.
-`live` sends selected cases to the Claude CLI already signed in on the host,
-with no tools and the report schema enforced. It saves the answers under
-`output/multi-review-evaluation/live/` and prints scores and token usage. Keep
+`live` sends selected cases to a CLI already signed in on the host, with no
+tools and the report schema enforced: `--provider claude` (the default,
+`claude -p --json-schema`) or `--provider codex` (`codex exec --output-schema`,
+ephemeral, read-only, with the session-title runner's tool-free feature
+profile; drivers in `scripts/multi-review-evaluation-drivers.ts`). It saves
+the answers under `output/multi-review-evaluation/live/<provider>/` and prints
+scores and token usage. Keep
 model answers and exported records out of the repository and CI logs.
 
 On the corpus, the compact evidence is 81–93% of the full evidence for two to

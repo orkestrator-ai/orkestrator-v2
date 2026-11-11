@@ -6,7 +6,10 @@
  * process tree holds (the backend plus the bridges and agent CLIs it started).
  */
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { piProviderConfig, profilePiAgentDirectory } from "../../scripts/pi-fake-model-shared";
 
 /** Platforms the scale panel uses when none are named. */
 export const DEFAULT_SCALE_PLATFORMS: readonly AgentPlatform[] = ["claude", "codex"];
@@ -22,9 +25,12 @@ export const DEFAULT_SCALE_MODEL_LABELS: Partial<Record<AgentPlatform, string>> 
  * separated). Throws on an unknown or repeated platform, so a typo cannot
  * shrink the panel silently.
  */
-export function parseScalePlatforms(value: string | undefined): AgentPlatform[] {
+export function parseScalePlatforms(
+  value: string | undefined,
+  fallback: readonly AgentPlatform[] = DEFAULT_SCALE_PLATFORMS,
+): AgentPlatform[] {
   const trimmed = value?.trim();
-  if (!trimmed) return [...DEFAULT_SCALE_PLATFORMS];
+  if (!trimmed) return [...fallback];
   const platforms = trimmed.split(",").map((entry) => entry.trim());
   for (const platform of platforms) {
     if (!(AGENT_PLATFORMS as readonly string[]).includes(platform)) {
@@ -141,4 +147,74 @@ export interface FanoutStats {
   passes: number;
   maxAdmission: number;
   maxByPlatform: Partial<Record<AgentPlatform, number>>;
+}
+
+/**
+ * The credential-free mode (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1`):
+ * every reviewer, preparation, consolidation and Fix runs on the profile's
+ * real Pi bridge and Pi SDK against the scripted loopback model
+ * `auto-pipeline-fake-model.ts`, which answers each Multi Review result tool
+ * with a fixed, finding-free result. No login and nothing billed; it measures
+ * the control plane (caps, latency, memory), not review quality.
+ */
+export const SCALE_FAKE_PLATFORMS: readonly AgentPlatform[] = ["pi"];
+export const SCALE_FAKE_PI_PROVIDER = "scale-fake";
+/** `FAKE_MODEL_ID` in `auto-pipeline-fake-model.ts`, which cannot be imported: it listens on load. */
+export const SCALE_FAKE_PI_MODEL = "autopipe-1";
+/** The fake model's display name in `models.json`. */
+export const SCALE_FAKE_MODEL_LABEL = "Scale fake 1";
+/** `provider/modelId`, how a Pi model is selected. */
+export const SCALE_FAKE_PI_MODEL_REF = `${SCALE_FAKE_PI_PROVIDER}/${SCALE_FAKE_PI_MODEL}`;
+
+/** The Pi `models.json` naming the fake provider; its key is a literal placeholder. */
+export function scaleFakePiModelsConfig(baseUrl: string) {
+  const config = piProviderConfig({
+    provider: SCALE_FAKE_PI_PROVIDER,
+    providerName: "Scale fake",
+    baseUrl,
+    apiKey: "scale-fake-not-a-key",
+    model: SCALE_FAKE_PI_MODEL,
+    modelName: SCALE_FAKE_MODEL_LABEL,
+  });
+  const provider = config.providers[SCALE_FAKE_PI_PROVIDER]!;
+  // Large, so a reviewer prompt carrying the review package never makes Pi
+  // compact first, which would be another model call per reviewer.
+  provider.models = provider.models.map((model) => ({
+    ...model,
+    contextWindow: 1_000_000,
+    maxTokens: 4_096,
+  }));
+  return config;
+}
+
+/**
+ * Writes the fake provider into the profile's own isolated Pi `models.json`
+ * (never `~/.pi`) and returns the restore, which puts back what was there.
+ * Refuses a file that already names another provider: it belongs to someone.
+ */
+export function writeScaleFakePiModels(dataDir: string, baseUrl: string): () => void {
+  const root = path.resolve(dataDir);
+  const directory = profilePiAgentDirectory(root);
+  const file = path.join(directory, "models.json");
+  if (!file.startsWith(`${root}${path.sep}`)) throw new Error("models.json escapes the profile");
+  const previous = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  if (previous !== undefined) {
+    const providers = Object.keys(
+      (JSON.parse(previous) as { providers?: Record<string, unknown> }).providers ?? {},
+    );
+    if (providers.some((provider) => provider !== SCALE_FAKE_PI_PROVIDER)) {
+      throw new Error("The profile's Pi models.json already names other providers");
+    }
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const write = (content: string) => {
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, content, { mode: 0o600 });
+    renameSync(temporary, file);
+  };
+  write(`${JSON.stringify(scaleFakePiModelsConfig(baseUrl), null, 2)}\n`);
+  return () => {
+    if (previous === undefined) rmSync(file, { force: true });
+    else write(previous);
+  };
 }

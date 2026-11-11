@@ -1019,12 +1019,42 @@ mise run dev:stop --profile qa-multi-review
 mise run dev:reset --profile qa-multi-review
 ```
 
-`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case. It
-starts an n-reviewer panel alternating Claude and Codex through
-`start_multi_review`, samples the backend's RSS and the reviewers setting up and
-running once a second, fails if more than four were ever seen setting up, and
-writes reviewer latency (p50, p95, max) and peak RSS to `scale.json` in the
-case's output folder. Run it with `-g scale`.
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case,
+run with `-g scale`. It starts an n-reviewer panel through
+`start_multi_review`, round-robin over
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS` (comma separated, default
+`claude,codex`; each must be enabled and signed in on the profile), with each
+platform's model from `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_<PLATFORM>_MODEL` (a
+picker label prefix) or its catalogue's first entry. It arms the backend's
+agent-test fan-out stats recorder (`agent-test-fanout-stats.ts`, a marker file
+under the profile's data directory, honoured only by an agent-test backend), so
+the scheduler's own per-pass peaks are asserted against the admission and
+per-provider caps (4 each), not sampled. Once a second it samples the
+backend's RSS, the RSS of the backend's whole process tree (bridges and agent
+CLIs included, read-only `ps`), and the reviewers setting up and running. It
+writes the platforms, models, reviewer latency (p50, p95, max, and the max per
+platform), peak RSS of both kinds and the recorded peaks to `scale.json` in
+the case's output folder.
+
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1` runs the same case with
+no login and nothing billed. The panel defaults to Pi, and every slot
+(preparation, reviewers, consolidation) runs on the profile's real Pi bridge
+and Pi SDK against the scripted loopback model `auto-pipeline-fake-model.ts`,
+which answers each Multi Review result tool with a fixed, finding-free result.
+The case names it in the profile's isolated Pi `models.json` (never `~/.pi`)
+and restores that file afterwards. It measures the control plane (caps,
+latency, memory), not review quality:
+
+```bash
+mise run dev:test --profile qa-mr-scale-fake --fixture --headless --no-agent-credentials --agent-platforms pi
+# In a second terminal, for n in 8, 16 and 32:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mr-scale-fake ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 \
+  ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n> ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1 \
+  mise run test:logged -- --name multi-review-scale-fake -- mise run test:agent:browser -- \
+  e2e/agent-testing/multi-review-live.spec.ts -g scale
+mise run dev:stop --profile qa-mr-scale-fake
+mise run dev:reset --profile qa-mr-scale-fake
+```
 
 Every case writes a small change into a fresh environment. The other cases
 launch the review through the launcher: it right-clicks **Multi Review**, picks each row's

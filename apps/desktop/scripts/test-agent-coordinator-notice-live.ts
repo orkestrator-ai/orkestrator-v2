@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -31,34 +32,40 @@ if (args.length > 0)
 
 /** The loopback provider, started before either profile so both read usage from it. */
 async function startProvider(): Promise<{ origin: string; stop(): Promise<void> }> {
-  const child = Bun.spawn(
-    [
-      process.execPath,
-      path.resolve(import.meta.dir, "../../../e2e/agent-testing/coordinator-notice-fake-model.ts"),
-    ],
-    { stdout: "pipe", stderr: "inherit", stdin: "ignore" },
+  const child = spawn(
+    process.execPath,
+    [path.resolve(import.meta.dir, "../../../e2e/agent-testing/coordinator-notice-fake-model.ts")],
+    { stdio: ["ignore", "pipe", "inherit"] },
   );
-  const lines = createInterface({ input: child.stdout as unknown as NodeJS.ReadableStream });
-  const origin = await Promise.race([
-    new Promise<string>((resolve) => lines.once("line", resolve)),
-    child.exited.then((code) => {
-      throw new Error(`the loopback provider exited (${code}) before it listened`);
-    }),
-  ]);
-  lines.close();
-  return {
-    origin,
-    stop: async () => {
-      if (child.exitCode === null) child.kill("SIGTERM");
-      await child.exited;
-    },
-  };
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const lines = createInterface({ input: child.stdout! });
+  try {
+    const origin = await Promise.race([
+      new Promise<string>((resolve) => lines.once("line", resolve)),
+      exited.then(() => {
+        throw new Error("the loopback provider exited before it listened");
+      }),
+    ]);
+    return {
+      origin,
+      stop: async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+        await exited;
+      },
+    };
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    throw error;
+  } finally {
+    lines.close();
+  }
 }
 
 if (supervised) {
   const owner = ownerAbortSignal();
-  const provider = await startProvider();
+  let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
   try {
+    provider = await startProvider();
     const run = randomUUID().slice(0, 8);
     const profile = `qa-notice-desk-${run}`;
     const leaf = `qa-notice-leaf-${run}`;
@@ -90,7 +97,7 @@ if (supervised) {
     console.log(`[coordinator-notice-live] exit ${code}`);
     process.exitCode = code;
   } finally {
-    await provider.stop();
+    await provider?.stop();
     owner.release();
   }
 } else {

@@ -400,6 +400,14 @@
                   "!**/opencode2/container-credentials.js"
                 ],
                 "message": "Import the opencode2 domain through opencode2/index.js."
+              },
+              {
+                "group": [
+                  "**/control-mcp/*",
+                  "!**/control-mcp/index.js",
+                  "!**/control-mcp/tools.js"
+                ],
+                "message": "Import the control-mcp domain through control-mcp/index.js."
               }
             ]
           }
@@ -509,6 +517,13 @@
                   "!**/backend/src/core/opencode2/index.js"
                 ],
                 "message": "Import the opencode2 domain through opencode2/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/control-mcp/*",
+                  "!**/backend/src/core/control-mcp/index.js"
+                ],
+                "message": "Import the control-mcp domain through control-mcp/index.js."
               }
             ]
           }
@@ -518,7 +533,7 @@
     {
       "files": [
         "apps/backend/src/core/bridge-session-close.ts",
-        "apps/backend/src/core/control-mcp-server.ts",
+        "apps/backend/src/core/control-mcp/server.ts",
         "apps/backend/src/core/coordinator-service.ts",
         "apps/backend/src/core/extension-discovery.ts",
         "apps/backend/src/core/http-bridge/claude-runtime.ts",

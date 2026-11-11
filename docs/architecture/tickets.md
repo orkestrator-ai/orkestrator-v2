@@ -652,7 +652,7 @@ issue it already made.
 
 **Coordinator tools.** `list_linear_issues`, `get_linear_issue`,
 `create_linear_issue`, `update_linear_issue`, `add_linear_comment` and
-`list_linear_board_options` (`control-mcp-linear-tools.ts`) are offered to
+`list_linear_board_options` (`control-mcp/linear-tools.ts`) are offered to
 coordinators, not to operator credentials. They run on the coordinator's own
 machine with its own key; with a `nodeId` they act on the coordinator's
 project on that machine through `invoke_on_node`. On another machine every

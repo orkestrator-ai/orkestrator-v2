@@ -243,7 +243,7 @@ new.
   - Backend domain folders under `apps/backend/src/core/` (`design/`,
     `nodes/`, `change-tracking/`, `transcript-artifacts/`, `scheduled-jobs/`,
     `mcp-management/`, `public-api/`, `http-bridge/`, `web-annotations/`,
-    `permission-rules/`, `self-improvement/`, `opencode2/`)
+    `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`)
     are reached only through their `index.ts`, which re-exports by name (never
     `export *`). A new domain folder starts with an `index.ts` and a pattern in
     both the `apps/backend/src/**` and the `tests/unit/**` overrides. Where

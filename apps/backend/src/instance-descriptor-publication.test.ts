@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ControlMcpServer } from "./core/control-mcp-server.js";
+import { ControlMcpServer } from "./core/control-mcp/server.js";
 import { deferred } from "./core/recurring-test-support.js";
 import { instanceDescriptorPath, publishInstanceDescriptor } from "./instance-descriptor.js";
 import { createInstanceDescriptorPublication } from "./instance-descriptor-publication.js";

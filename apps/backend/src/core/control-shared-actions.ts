@@ -5,7 +5,7 @@
  * Both transports call these through a command invoker, so they see the same
  * registry commands, the same summaries, and the same validation. Transport-
  * specific concerns stay with each adapter: MCP result formatting, tool
- * annotations and coordinator scope live in `control-mcp-server.ts`; public
+ * annotations and coordinator scope live in `control-mcp/server.ts`; public
  * envelopes, receipts and error codes live in `public-api/`.
  */
 import {

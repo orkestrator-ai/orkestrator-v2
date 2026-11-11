@@ -123,7 +123,7 @@ import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,

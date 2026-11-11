@@ -16,7 +16,7 @@ import type {
   ControlMcpSettings,
   CoordinatorControlConnection,
   CoordinatorControlScope,
-} from "./control-mcp-server.js";
+} from "./control-mcp/index.js";
 import type { CoordinatorService } from "./coordinator-service.js";
 import type { ProjectGitService } from "./project-git-service.js";
 
@@ -117,7 +117,7 @@ export type CommandContext = {
     getSettings(): ControlMcpSettings;
     rotateToken(): Promise<ControlMcpSettings>;
     createCredential(
-      input: import("./control-mcp-credentials.js").CreateControlMcpCredentialInput,
+      input: import("./control-mcp/index.js").CreateControlMcpCredentialInput,
     ): Promise<ControlMcpSettings>;
     rotateCredential(credentialId: string): Promise<ControlMcpSettings>;
     revokeCredential(credentialId: string): Promise<ControlMcpSettings>;

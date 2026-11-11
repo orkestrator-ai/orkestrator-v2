@@ -542,7 +542,7 @@ having a working mailbox.
 
 ### Control MCP — operator
 
-`apps/backend/src/core/control-mcp-server.ts`, documented in
+`apps/backend/src/core/control-mcp/server.ts`, documented in
 [`control-mcp.md`](./control-mcp.md).
 
 An operator credential with the `mail` capability can `list_mailboxes` and
@@ -822,7 +822,7 @@ capability row says so.
 | Native inject / presence | `apps/backend/src/core/native-agent-service.ts` |
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
-| Control MCP mail | `apps/backend/src/core/control-mcp-server.ts` |
+| Control MCP mail | `apps/backend/src/core/control-mcp/server.ts` |
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |

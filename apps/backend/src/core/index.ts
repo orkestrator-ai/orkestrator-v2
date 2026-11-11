@@ -213,7 +213,7 @@ import {
   type ControlMcpEndpointState,
   type ControlMcpInfo,
   type ControlMcpSettings,
-} from "./control-mcp-server.js";
+} from "./control-mcp/index.js";
 import { isDefaultDataDir } from "../data-dir.js";
 import { installStorageEventFanout } from "./backend-event-fanout.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";

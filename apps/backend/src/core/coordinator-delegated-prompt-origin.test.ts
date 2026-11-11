@@ -8,7 +8,7 @@ import {
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { coordinatorScopeTurnOrigin } from "./control-mcp-tools-shared.js";
+import { coordinatorScopeTurnOrigin } from "./control-mcp/tools-shared.js";
 import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import { NativeAgentService } from "./native-agent-service.js";
 import { createProviderStub } from "./native-agent-service-projection-test-support.js";
@@ -16,8 +16,8 @@ import { MailWorld } from "./agent-mail-world-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { ControlMcpServer } from "./control-mcp-server.js";
-import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
+import { ControlMcpServer } from "./control-mcp/server.js";
+import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp/tools.js";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
 
 /**

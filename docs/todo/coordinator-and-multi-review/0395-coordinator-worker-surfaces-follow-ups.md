@@ -71,11 +71,11 @@ node's coordinator can call them.
 
 **Investigation.** Four tools take no `nodeId`:
 `launch_terminal`, `open_worker_browser` and `edit_worker_tab` in
-`apps/backend/src/core/control-mcp-coordinator-surfaces.ts`;
+`apps/backend/src/core/control-mcp/coordinator-surfaces.ts`;
 `custom_fix_multi_review` in
-`apps/backend/src/core/control-mcp-review-actions.ts:289-319`.
+`apps/backend/src/core/control-mcp/review-actions.ts:289-319`.
 `open_multi_review` does take `nodeId`, but refuses it together with
-`reviewerId` (`control-mcp-review-actions.ts:261-262`: "Reviewer tabs open on
+`reviewerId` (`control-mcp/review-actions.ts:261-262`: "Reviewer tabs open on
 this node only"). `create_pr` shows the shape a remote surface needs: the
 command node validates the worker on the leaf (`remote.environment`), admits
 its own receipt, and derives the leaf's request ID from the receipt key, so a
@@ -118,7 +118,7 @@ and `git apply` (`apply_project_root_changes`, described in
 the user's approval of the `apply-root-changes` node action request runs it.
 
 **Investigation.** The tool takes no `nodeId`
-(`control-mcp-coordinator-surfaces.ts:156-185`). The changes live in the
+(`control-mcp/coordinator-surfaces.ts:156-185`). The changes live in the
 command node's checkout, so the leaf's own copy of the project does not have
 them: using the leaf's checkout as the source (the alternative the file named)
 would copy whatever is uncommitted there, which is not what the user asked
@@ -177,7 +177,7 @@ Status wakes react to `multi-review`, `build-pipeline` and `graph-run`
 resource changes (`apps/backend/src/core/coordinator-status-wakes.ts:863`).
 
 **Investigation.** The feature-plan tool returns `NO_STATUS_WAKE`
-(`control-mcp-coordinator-surfaces.ts`), which tells the coordinator to
+(`control-mcp/coordinator-surfaces.ts`), which tells the coordinator to
 schedule a check with `create_schedule`. Its receipts are stored
 (`coordinator-surface-actions.ts`), but no association is written.
 
@@ -284,7 +284,7 @@ The billed Claude run is on the
 closes, nothing else can receive its status.
 
 **Context.** `adopt_workflow` takes an `associationId`
-(`apps/backend/src/core/control-mcp-coordinator-tools.ts:170-191`), so only
+(`apps/backend/src/core/control-mcp/coordinator-tools.ts:170-191`), so only
 associated workflows can be adopted.
 
 **Investigation.** Without task 3 there is nothing to adopt. With it, adoption

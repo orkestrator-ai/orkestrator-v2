@@ -263,7 +263,7 @@ declaration:
 | `packages/protocol/src/node/command-capture.ts` | `commandInvocations`, `commandObservers`, `commandCaptureMetrics` | Count this process's own subprocesses for benchmarks and recurring-work metrics; `runCommand` has no backend in reach. |
 | `transcript-artifacts/preview-supervisor.ts` | `backendStartIdentity` | The start identity of this process, which names the preview scratch it owns. |
 | `transcript-artifacts/dependency-manifest.ts` | `cache` | Verified bytes of a pinned bundle file, keyed by bundle and directory. |
-| `control-mcp-direct-tools.ts` | `compiled` | Schemas compiled from constants. |
+| `control-mcp/direct-tools.ts` | `compiled` | Schemas compiled from constants. |
 
 `public-api/reconciler.ts` (`reconcilers`) is a registry of functions filled
 at module load, the same for every backend: code wiring, not state.

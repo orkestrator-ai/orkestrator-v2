@@ -455,6 +455,61 @@ copy_agent_file() {
     fi
 }
 
+# Walks one directory below the current directory for copy_agent_directory:
+# prints "<entries> <links> <blocks>", a newline, then "<walk>:<count>" exit
+# statuses. Each entry is one line holding its type and its allocated
+# 512-byte blocks, which is what `du -sk` sums, so a name holding a newline
+# cannot be miscounted; a walk that listed nothing counts -1 entries. The
+# count stops reading after `limit` entries below the directory, which closes the pipe, so find stops walking a pathological
+# tree instead of scanning and buffering it in full. With a listing path, the
+# same walk writes the input stamp's `%y%p\0` listing there.
+agent_input_directory_walk() {
+    local relative_path="$1" limit="$2" listing="$3"
+    local record=() status
+    if [ "${AGENT_COPY_PORTABLE_WALK:-}" != 1 ]; then
+        [ -z "$listing" ] || record=(-fprintf "$listing" '%y%p\0')
+        find -P "$relative_path" "${record[@]}" -printf '%y %b\n' 2>/dev/null |
+            awk -v limit="$limit" '
+                { if ($1 == "l") links = 1; blocks += $2; if (NR - 1 >= limit) exit }
+                END { printf "%d %d %.0f", NR - 1, links, blocks }'
+        status=("${PIPESTATUS[@]}")
+        printf '\n%s:%s' "${status[0]}" "${status[1]:-1}"
+        return 0
+    fi
+    # Without GNU find's -printf (BSD find, as on macOS): find lists NUL-ended
+    # names and builtin tests classify each one, so counting, the link check
+    # and the listing are still one walk. The blocks come from one du -sk,
+    # run only for a tree within its bounds and free of links.
+    [ -z "$listing" ] || : > "$listing" 2>/dev/null || { printf '\n1:0'; return 0; }
+    find -P "$relative_path" -print0 2>/dev/null | {
+        entries=-1 links=0 kib=0
+        while IFS= read -r -d '' entry; do
+            entries=$((entries + 1))
+            if [ -L "$entry" ]; then type=l links=1
+            elif [ -d "$entry" ]; then type=d
+            elif [ -f "$entry" ]; then type=f
+            elif [ -p "$entry" ]; then type=p
+            elif [ -S "$entry" ]; then type=s
+            elif [ -c "$entry" ]; then type=c
+            elif [ -b "$entry" ]; then type=b
+            else type=U
+            fi
+            if [ -n "$listing" ]; then
+                printf '%s%s\0' "$type" "$entry" >> "$listing" 2>/dev/null || exit 1
+            fi
+            [ "$entries" -lt "$limit" ] || break
+        done
+        if [ "$entries" -ge 0 ] && [ "$entries" -lt "$limit" ] && [ "$links" = 0 ]; then
+            kib="$(du -sk -- "$relative_path" 2>/dev/null)" || exit 1
+            kib="${kib%%[[:space:]]*}"
+        fi
+        case "$kib" in ''|*[!0-9]*) exit 1 ;; esac
+        printf '%d %d %d' "$entries" "$links" "$((kib * 2))"
+    }
+    status=("${PIPESTATUS[@]}")
+    printf '\n%s:%s' "${status[0]}" "${status[1]:-1}"
+}
+
 copy_agent_directory() {
     local source_root="$1"
     # A relayed copy of a staged mount stands in for it (staged_input_path).
@@ -480,7 +535,7 @@ copy_agent_directory() {
     local walk_status
     local walk_summary
     local walk_listing=""
-    local walk_record=()
+    local walk_attempt
     local find_status
     local awk_status
     local entry_count
@@ -520,31 +575,32 @@ copy_agent_directory() {
     # One walk answers the entry bound, the link check and the size bound, and
     # lists the directory for the input stamp when one is recording. Starting a
     # dozen processes per directory was most of a many-skill first start
-    # (to-do 6740 task 3). Each entry is one line holding its type and its
-    # allocated 512-byte blocks, which is what `du -sk` sums, so a name holding
-    # a newline cannot be miscounted. awk stops reading after max_entries + 1
-    # entries below the directory, which closes the pipe, so find stops walking
-    # a pathological tree instead of scanning and buffering it in full. find's
-    # failure is expected once the cap is exceeded, but otherwise fails closed.
+    # (to-do 6740 task 3). find's failure is expected once the cap is exceeded,
+    # but otherwise fails closed.
     if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
         walk_listing="$AGENT_INPUT_COPIED_PATHS.unit"
-        walk_record=(-fprintf "$walk_listing" '%y%p\0')
     fi
-    walk="$(
-        set +e
-        cd "$source_root" 2>/dev/null || { printf '\n1:0'; exit 0; }
-        find -P "$relative_path" "${walk_record[@]}" -printf '%y %b\n' 2>/dev/null |
-            awk -v limit="$((max_entries + 1))" '
-                { entries = NR - 1; if ($1 == "l") links = 1; blocks += $2; if (entries >= limit) exit }
-                END { printf "%d %d %.0f", entries, links, blocks }'
-        walk_pipeline_status=("${PIPESTATUS[@]}")
-        printf '\n%s:%s' "${walk_pipeline_status[0]}" "${walk_pipeline_status[1]:-1}"
-    )"
-    walk_status="${walk##*$'\n'}"
-    walk_summary="${walk%$'\n'*}"
-    find_status="${walk_status%%:*}"
-    awk_status="${walk_status#*:}"
-    read -r entry_count found_links directory_blocks <<< "$walk_summary" || true
+    for walk_attempt in 1 2; do
+        walk="$(
+            set +e
+            cd "$source_root" 2>/dev/null || { printf '\n1:0'; exit 0; }
+            agent_input_directory_walk "$relative_path" "$((max_entries + 1))" "$walk_listing"
+        )"
+        walk_status="${walk##*$'\n'}"
+        walk_summary="${walk%$'\n'*}"
+        find_status="${walk_status%%:*}"
+        awk_status="${walk_status#*:}"
+        entry_count="" found_links="" directory_blocks=""
+        read -r entry_count found_links directory_blocks <<< "$walk_summary" || true
+        # find lists at least the directory itself, so a walk that listed
+        # nothing never started: this find has no -printf. The rest of this
+        # boot uses the portable walk.
+        if [ "$entry_count" = -1 ] && [ "${AGENT_COPY_PORTABLE_WALK:-}" != 1 ]; then
+            AGENT_COPY_PORTABLE_WALK=1
+            continue
+        fi
+        break
+    done
     case "${entry_count:-x}${found_links:-x}${directory_blocks:-x}" in
         *[!0-9]*) awk_status=1 ;;
     esac

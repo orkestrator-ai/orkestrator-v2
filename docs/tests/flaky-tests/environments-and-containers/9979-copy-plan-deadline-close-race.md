@@ -22,6 +22,15 @@
     deadline fails the step"`: passed three times in three runs.
   - The implementation-stage run of `apps/backend/tests` (`--parallel=4`)
     on the same branch also failed it once; it passed when rerun alone.
+  - After the review fixes (commit `97684d00e`), `mise run test:full` failed
+    it again (103.04 ms), and the aggregate runner's single rerun of the file
+    alone failed too. The file alone then passed in five of six runs on the
+    same host: `bun test --cwd apps/backend --preload
+    ../../tests/setup-node.ts ./tests/container-replacement.test.ts` twice
+    (32 pass), with `--parallel=1` once of twice (the other: 31 pass, 1 fail,
+    this test, 105.49 ms), and through `mise run test:logged` twice (PASS,
+    about 17.5 s). Every subset of the `copy plan` tests that includes it
+    passed.
 - **Failure:** `expect(result).toEqual({ absent: false, output: "",
   producerFailed: true, daemonUnavailable: false })` received the same object
   with `refused: false` added.

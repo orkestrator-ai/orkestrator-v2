@@ -299,7 +299,8 @@ describe("the ticket view's tabs", () => {
     expect((within(bar).getByRole("button", { name: "Merge" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(within(bar).getByRole("button", { name: /Integrate/ })).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Auto-merge" })).toBeTruthy();
+    expect(within(bar).queryByRole("button", { name: /Integrate/ }) === null).toBe(true);
     expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
   });
 

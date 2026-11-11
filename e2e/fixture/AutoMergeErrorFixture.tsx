@@ -15,7 +15,11 @@ const MESSAGES = {
 };
 
 /** The toolbar renders without its background answers, which stay pending. */
-function installFixture(message: string) {
+function installFixture(
+  message: string | undefined,
+  hasMergeConflicts: boolean | null,
+  autoMerge: boolean,
+) {
   delete window.orkestrator;
   window.orkestrator = {
     listen: () => () => {},
@@ -50,8 +54,8 @@ function installFixture(message: string) {
         worktreePath: "/fixture/auto-merge-project/worktree",
         prUrl: "https://github.com/fixture/project/pull/7",
         prState: "open",
-        hasMergeConflicts: false,
-        autoMerge: true,
+        hasMergeConflicts,
+        autoMerge,
         autoMergeError: message,
         networkAccessMode: "restricted",
         createdAt: "2026-11-04T00:00:00.000Z",
@@ -61,11 +65,19 @@ function installFixture(message: string) {
   return true;
 }
 
-/** `?message=short|typical|long` picks the failure, `?presentation=grid` the phone toolbar. */
+/**
+ * `?message=short|typical|long|none` picks the failure, `?presentation=grid`
+ * the phone toolbar, `?mergeable=yes|conflicts|checking` the PR's
+ * mergeability and `?autoMerge=off` turns auto-merge off.
+ */
 export function AutoMergeErrorFixture() {
   const params = new URLSearchParams(window.location.search);
-  const message = MESSAGES[(params.get("message") ?? "typical") as keyof typeof MESSAGES];
-  useState(() => installFixture(message));
+  const messageKey = params.get("message") ?? "typical";
+  const message = messageKey === "none" ? undefined : MESSAGES[messageKey as keyof typeof MESSAGES];
+  const mergeable = params.get("mergeable") ?? "yes";
+  const hasMergeConflicts =
+    mergeable === "conflicts" ? true : mergeable === "checking" ? null : false;
+  useState(() => installFixture(message, hasMergeConflicts, params.get("autoMerge") !== "off"));
   return (
     <TerminalProvider>
       <div className="h-screen bg-background text-foreground">

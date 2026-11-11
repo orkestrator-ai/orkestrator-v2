@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 
 import { KeyInformationDocument } from "@/components/build-pipeline/PipelineKeyInformationTab";
-import { PipelineIntegrateButton } from "@/components/build-pipeline/PipelineIntegrateButton";
 import { PipelineNeedsALook } from "@/components/build-pipeline/PipelineNeedsALook";
+import { AutoMergeToggleButton } from "@/components/layout/AutoMergeToggleButton";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,9 +45,9 @@ const TONE: Record<TicketPrTone, string> = {
  * what needs a look), laid out as the full-tab Notes page lays them out but in
  * one column, under a bar that stays put while they scroll. The bar says
  * where the pull request stands and offers Merge, enabled only when GitHub
- * reports it ready, and Integrate (the pipeline's own button: auto-merge,
- * launching Resolve when conflicts or the base need it). Nothing merges
- * without a click.
+ * reports it ready, and the auto-merge toggle (the same switch as the action
+ * bar's: merges when ready, launching Resolve when conflicts need it).
+ * Nothing merges without a click.
  */
 export function TicketNotesTab({ pipeline }: { pipeline: BuildPipeline }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -190,7 +190,7 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
           Merge
         </Button>
       </span>
-      <PipelineIntegrateButton environmentId={environmentId} />
+      <AutoMergeToggleButton environmentId={environmentId} />
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>
           <AlertDialogHeader>

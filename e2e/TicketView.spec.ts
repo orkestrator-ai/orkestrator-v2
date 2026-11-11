@@ -57,8 +57,8 @@ test.describe("the ticket view", () => {
     );
     const bar = dialog.getByRole("toolbar", { name: "Pull request actions" });
     await expect(bar.getByTestId("ticket-pr-state")).toHaveText("Checks running");
-    await expect(bar.getByRole("button", { name: "Merge" })).toBeDisabled();
-    await expect(bar.getByRole("button", { name: /Integrate/ })).toBeEnabled();
+    await expect(bar.getByRole("button", { name: "Merge", exact: true })).toBeDisabled();
+    await expect(bar.getByRole("button", { name: "Auto-merge" })).toBeEnabled();
     await preview(page, testInfo, "notes-tab-review");
 
     await dialog.getByTestId("ticket-notes-scroll").evaluate((node) => {
@@ -74,9 +74,9 @@ test.describe("the ticket view", () => {
     await page.goto("/ticket-view?column=review&ready");
     const bar = page.getByRole("toolbar", { name: "Pull request actions" });
     await expect(bar.getByTestId("ticket-pr-state")).toHaveText("Ready to merge");
-    await expect(bar.getByRole("button", { name: "Merge" })).toBeEnabled();
+    await expect(bar.getByRole("button", { name: "Merge", exact: true })).toBeEnabled();
     await preview(page, testInfo, "notes-tab-ready");
-    await bar.getByRole("button", { name: "Merge" }).click();
+    await bar.getByRole("button", { name: "Merge", exact: true }).click();
     await expect(page.getByRole("alertdialog", { name: "Merge pull request" })).toBeVisible();
   });
 

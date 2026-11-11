@@ -140,10 +140,38 @@ opens is also watched for status changes until it settles, read through
 repository metadata is readable); see
 [Watched pull requests](coordinator.md#watched-pull-requests).
 
-## The Resolve button
+## The Merge PR button
 
-The action bar's Resolve button, its configure dialog and the `⌘⇧U` shortcut all
-call `launch_native_agent_job` with `tabReuse`. The backend, not the renderer,
+While the pull request is open the action bar shows one **Merge PR** button
+beside the separate **Auto-merge** toggle. Its label never changes (except
+"Merging..." while a merge runs); its colour says where the PR stands:
+
+- **Green**: GitHub reports the PR can be merged.
+- **Green with a spinner**: GitHub is still computing mergeability
+  (`hasMergeConflicts` is `null`). The button stays clickable.
+- **Red**: the PR has merge conflicts.
+
+A click opens the Merge PR dialog (`MergePrDialog`), which holds every way to
+end the PR:
+
+- **Merge PR** and **Merge & Cleanup** merge now. Both are disabled, with the
+  reason shown, while GitHub is still checking, when the PR has conflicts, while
+  the environment is not running, or during a merge.
+- **Resolve** launches conflict resolution with the action default (below);
+  **Choose agent…** opens its configure dialog. Resolve is disabled once GitHub
+  reports no conflicts.
+- **Auto-merge & Cleanup** is always offered: it arms auto-merge with cleanup
+  (see [Auto-merge](#auto-merge)), so the PR merges when ready, conflicts are
+  resolved as needed, and the environment is deleted afterwards.
+
+Right-click, long-press or `⌘⇧U` on the button still opens the Resolve
+configure dialog directly while conflicts are possible (conflicts or still
+checking). There is no separate Resolve or "Checking mergeability" button.
+
+## Resolve launches
+
+The Merge PR dialog's Resolve option, the Resolve configure dialog and the
+`⌘⇧U` shortcut all call `launch_native_agent_job` with `tabReuse`. The backend, not the renderer,
 chooses the tab (`native-agent-job-tab-reuse.ts`), because it owns the layout, the
 session and the queue:
 
@@ -320,9 +348,10 @@ or question). Under forced colours the sweep is removed. The row's
 
 ## Auto-merge
 
-The **Integrate** button in pipeline key information and the **Auto-merge**
-toggle in the action bar's PR section (shown while the PR is open) set the environment's durable `autoMerge` flag through
-`set_environment_auto_merge`. While the flag is on, the sidebar row shows a
+The **Auto-merge** toggle in the action bar's PR section (shown while the PR
+is open; the ticket view's pull request bar has the same toggle) and the
+**Auto-merge & Cleanup** option of the Merge PR dialog set the environment's
+durable `autoMerge` flag through `set_environment_auto_merge`. While the flag is on, the sidebar row shows a
 white merge icon to the right of the environment name. Turning it off stores an
 explicit `false`, because renderers merge environment records field by field.
 
@@ -341,13 +370,13 @@ to a minute for the next throttled read. `decideAutoMerge` uses
 (`isPrReadingConfirmedByMonitor`):
 
 - **Ready**: it runs `merge_environment_pr` exactly as the Merge PR button does
-  (squash, delete the branch). The key-information Integrate dialog also
+  (squash, delete the branch). The Merge PR dialog also
   offers Auto-merge & Cleanup, which deletes the environment after confirmed
   merge (including a merge performed externally). Closed PRs do not trigger cleanup.
   Automatic cleanup stays in `autoMergeCleanup` until confirmation, then
   becomes `cleanupAfterMergeRequestedAt` for recovery; failed or pending
-  attempts do not create a manual cleanup request. Turning integration off or
-  selecting plain Auto-merge withdraws automatic cleanup. Independent manual
+  attempts do not create a manual cleanup request. Turning auto-merge off or
+  turning plain Auto-merge on with the toggle withdraws automatic cleanup. Independent manual
   Merge & Cleanup requests remain durable. Options cannot change during a merge.
 - **Conflicts**: it launches the Resolve agent through `launch_native_agent_job`
   with the `resolve` action default, the PR's base branch, and the
@@ -356,21 +385,21 @@ to a minute for the next throttled read. `decideAutoMerge` uses
   clears only once GitHub stops reporting conflicts. While it is armed no
   second Resolve is launched. A confirmed automatic completion records a
   durable completion time; only a newer successful conflict reading permits
-  another attempt. Three completed attempts with conflicts stop integration
-  and record an actionable error (shown by the Integrate tooltip). Re-enabling
+  another attempt. Three completed attempts with conflicts turn auto-merge off
+  and record an actionable error (shown beside the auto-merge toggle). Re-enabling
   resets the attempt budget. Manual and unconfirmed Resolve jobs stay armed.
 - **Anything else** (stale, mergeability unknown, draft, blocked, behind,
   no merge permission, and checks pending or failing when checks are
   required): it waits for the next reading.
 
-The Integrate button names what auto-merge is waiting for, evaluated by the
-same rule (`describeAutoMergeHold` in `apps/web/src/lib/pr-merge-readiness.ts`):
-its tooltip always, and, when the wait will not end without someone acting
-(failed checks while checks are required, blocked, behind, draft, no merge
-permission), a warning icon on the button, a note in the Integrate dialog
-before the user chooses, and a warning toast instead of the success toast
-after. Waits that end on their own (checks running, GitHub still computing,
-Resolve fixing conflicts) stay in the tooltip.
+The auto-merge toggle names what auto-merge is waiting for, evaluated by the
+same rule (`describeAutoMergeHold` in `apps/web/src/lib/pr-merge-readiness.ts`),
+in its tooltip. When the wait will not end without someone acting (failed
+checks while checks are required, blocked, behind, draft, no merge
+permission), the Merge PR dialog also shows a note under Auto-merge & Cleanup
+before the user chooses, and choosing it shows a warning toast instead of the
+success toast. Waits that end on their own (checks running, GitHub still
+computing, Resolve fixing conflicts) stay in the tooltip.
 
 Settings → Version control → Auto-merge → **Require checks to pass**
 (`global.autoMergeRequireChecks`, on when absent) decides whether checks

@@ -6,9 +6,9 @@ import { create } from "zustand";
  *
  * The row selects the environment and records the request; the action bar,
  * which owns the merge dialog and its handler, opens the dialog for it, so the
- * menu item behaves exactly like the action bar's green Merge PR button. The
- * action bar drops a request it cannot honour (another environment selected,
- * or the button not pressable), so a stale request never opens a dialog later.
+ * menu item behaves exactly like the action bar's Merge PR button. The action
+ * bar drops a request it cannot honour (another environment selected, or the
+ * PR not mergeable now), so a stale request never opens a dialog later.
  *
  * Renderer-only view state: it carries a node and environment ID and nothing
  * else. The action bar honours only a request for its own node.

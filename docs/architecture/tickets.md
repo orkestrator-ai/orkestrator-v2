@@ -391,8 +391,9 @@ side.
   shows the pull request's state (open, draft, checks running or failed,
   conflicts, ready to merge, merged, closed) from the same readiness rule as
   the environment name and auto-merge, a Merge button enabled only when that
-  rule says ready (and confirmed before it merges), and the pipeline's
-  Integrate button, which arms auto-merge and launches Resolve for conflicts.
+  rule says ready (and confirmed before it merges), and the auto-merge
+  toggle (the action bar's switch), which merges when ready and launches
+  Resolve for conflicts.
   Nothing merges without a click. The tab is disabled, with the reason shown,
   when the ticket has no build here with Notes; a ticket built on another
   machine says which.

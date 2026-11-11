@@ -48,6 +48,13 @@ and the per-round durations and recurring rates in the four result files
 that ran them). The diff service's coalescing and its watcher path on Linux
 were not read.
 
+Later runs for 7562 task 2 on 2026-11-11 (beelink2): 27 timeouts in 40
+rounds at `2a502c28b` (load average 6 to 33), then 3 in 60 rounds at
+`a88bac986` (load average 25 to 30), which commits lease rows without a sync
+and stores public operation records one row each. Fewer main-database syncs
+may matter here; two runs do not show it. The last 7562 run was stopped
+before it printed its rows, so it has no count.
+
 **Decisions.**
 
 - **How to settle it?**

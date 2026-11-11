@@ -596,8 +596,9 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
         leafAccounts.restore();
         deskAccounts.restore();
       });
-      const restoreDeskConfig = await configure(desk.invoke);
-      const restoreLeafConfig = await configure(leaf.invoke);
+      // Late-bound: task 4 restarts both profiles, which signs them in again.
+      const restoreDeskConfig = await configure((command, args) => desk.invoke(command, args));
+      const restoreLeafConfig = await configure((command, args) => leaf.invoke(command, args));
       cleanup.push(
         () => restoreDeskConfig(),
         () => restoreLeafConfig(),

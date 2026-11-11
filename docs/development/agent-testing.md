@@ -1628,6 +1628,21 @@ A spec that restarts a profile builds the launcher's arguments with
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
 
+### Loopback plan-usage origin
+
+A spec that scripts Claude or Codex account usage on a separate-process
+profile (to-do
+[7542](../todo/coordinator-and-multi-review/7542-coordinator-notice-hierarchy-live-checks.md)
+task 1) starts the profile with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN=http://127.0.0.1:<port>`. The launcher
+passes it to the isolated backend, which then reads `/api/oauth/usage`
+(Claude) and `/backend-api/codex/usage` (Codex) from that origin instead of
+the providers' hosts, so fixture tokens never leave the machine. The backend
+honours it only with flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`,
+a non-default data directory and a bare loopback origin
+(`agentTestUsageOrigin` in `apps/backend/src/core/agent-test-fixtures.ts`);
+anything else reads the real endpoints.
+
 ### Multi-client, restarts and an older backend (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless

@@ -1,0 +1,176 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
+import { AGENT_TEST_USAGE_ORIGIN_ENV, agentTestUsageOrigin } from "./agent-test-fixtures.js";
+import type { CommandContext } from "./commands-context.js";
+import { defaultDataDir } from "../data-dir.js";
+import {
+  CLAUDE_USAGE_URL,
+  CODEX_USAGE_URL,
+  createPlanUsageReader,
+  planUsageUrl,
+  readAgentAccountPlanUsage,
+} from "./plan-usage.js";
+
+/**
+ * To-do 7542 task 1: an isolated agent-test profile's backend reads Claude
+ * and Codex plan usage from a loopback server, and nothing else ever does.
+ */
+
+const directories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
+
+async function profileDir(): Promise<string> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ork-usage-origin-"));
+  directories.push(directory);
+  return directory;
+}
+
+const ORIGIN = "http://127.0.0.1:43123";
+
+/** An isolated agent-test environment; `null` sets no usage origin. */
+function isolatedEnv(origin: string | null = ORIGIN): NodeJS.ProcessEnv {
+  return {
+    ORKESTRATOR_AGENT_TEST_ISOLATED: "1",
+    ...(origin === null ? {} : { [AGENT_TEST_USAGE_ORIGIN_ENV]: origin }),
+  };
+}
+
+function context(
+  dataDir: string,
+  runtimeFlavor: CommandContext["runtimeFlavor"] = "agent-test",
+): CommandContext {
+  return {
+    runtimeFlavor,
+    storage: {
+      loadConfig: async () => ({ global: {} }),
+      getDataDir: () => dataDir,
+      agentAccounts: { load: async () => ({ version: 1, accounts: [], active: {} }) },
+    },
+    runtime: { accounts: new AgentAccountsRuntime() },
+  } as unknown as CommandContext;
+}
+
+describe("agentTestUsageOrigin", () => {
+  test("answers the origin in an isolated agent-test profile", async () => {
+    const dataDir = await profileDir();
+    expect(
+      agentTestUsageOrigin({
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: isolatedEnv(),
+      }),
+    ).toBe(ORIGIN);
+    expect(
+      agentTestUsageOrigin({
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: isolatedEnv("http://localhost:9/"),
+      }),
+    ).toBe("http://localhost:9");
+  });
+
+  test("is refused outside an isolated agent-test profile", async () => {
+    const dataDir = await profileDir();
+    for (const runtimeFlavor of ["production", "development", undefined]) {
+      expect(
+        agentTestUsageOrigin({ runtimeFlavor, dataDir: () => dataDir, env: isolatedEnv() }),
+      ).toBeUndefined();
+    }
+    expect(
+      agentTestUsageOrigin({
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: { [AGENT_TEST_USAGE_ORIGIN_ENV]: ORIGIN },
+      }),
+    ).toBeUndefined();
+    // The default data directory is the user's own, whatever the flavor says.
+    expect(
+      agentTestUsageOrigin({
+        runtimeFlavor: "agent-test",
+        dataDir: () => defaultDataDir(),
+        env: isolatedEnv(),
+      }),
+    ).toBeUndefined();
+  });
+
+  test("accepts only a bare loopback origin", async () => {
+    const dataDir = await profileDir();
+    for (const origin of [
+      "",
+      "not a url",
+      "http://example.com",
+      "http://10.0.0.5:4000",
+      "http://127.0.0.1.example.com",
+      "file:///tmp/usage",
+      "http://user:pass@127.0.0.1:4000",
+      "http://127.0.0.1:4000/elsewhere",
+      "http://127.0.0.1:4000/?x=1",
+      "http://127.0.0.1:4000/#x",
+    ]) {
+      expect(
+        agentTestUsageOrigin({
+          runtimeFlavor: "agent-test",
+          dataDir: () => dataDir,
+          env: isolatedEnv(origin),
+        }),
+      ).toBeUndefined();
+    }
+  });
+});
+
+describe("plan usage reads in an agent-test profile", () => {
+  test("keep the provider's path on the loopback origin", async () => {
+    const dataDir = await profileDir();
+    expect(planUsageUrl(context(dataDir), "claude", isolatedEnv())).toBe(
+      `${ORIGIN}/api/oauth/usage`,
+    );
+    expect(planUsageUrl(context(dataDir), "codex", isolatedEnv())).toBe(
+      `${ORIGIN}/backend-api/codex/usage`,
+    );
+  });
+
+  test("a production backend reads the real endpoints even with the variables set", async () => {
+    const dataDir = await profileDir();
+    expect(planUsageUrl(context(dataDir, "production"), "claude", isolatedEnv())).toBe(
+      CLAUDE_USAGE_URL,
+    );
+    expect(planUsageUrl(context(dataDir, "production"), "codex", isolatedEnv())).toBe(
+      CODEX_USAGE_URL,
+    );
+    expect(planUsageUrl(context(dataDir), "claude", isolatedEnv(null))).toBe(CLAUDE_USAGE_URL);
+  });
+
+  test("the settings reader and the per-account read both go to the loopback server", async () => {
+    const dataDir = await profileDir();
+    const seen: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      seen.push(String(input));
+      return new Response(JSON.stringify({ five_hour: { utilization: 40 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      env: isolatedEnv(),
+      credentials: { claude: async () => "fixture-token" },
+    });
+    expect((await reader(context(dataDir), "claude")).status).toBe("ok");
+    const { snapshot } = await readAgentAccountPlanUsage(
+      context(dataDir),
+      "claude",
+      "fixture-token",
+      { fetchImpl, env: isolatedEnv() },
+    );
+    expect(snapshot.status).toBe("ok");
+    expect(seen).toEqual([`${ORIGIN}/api/oauth/usage`, `${ORIGIN}/api/oauth/usage`]);
+  });
+});

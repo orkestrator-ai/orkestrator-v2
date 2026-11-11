@@ -98,6 +98,14 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
       string,
       { attempt: number; timer: ReturnType<typeof setTimeout> | null }
     >();
+    /**
+     * Bumped by `reset` and scope dispose. A read, save or retry started under
+     * an earlier generation finds it changed when it resumes and stops there,
+     * so a late answer can neither write state nor schedule another read.
+     */
+    let generation = 0;
+    let disposed = false;
+    const live = (started: number) => !disposed && started === generation;
 
     const entry = (projectId: string): LayoutEntry | undefined => get().entries[projectId];
     const patch = (projectId: string, next: Partial<LayoutEntry>) =>
@@ -189,7 +197,9 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
     };
 
     /** The read failed before anything was known: stay not ready and read again later. */
-    const readFailed = (projectId: string) => {
+    const readFailed = (projectId: string, started: number) => {
+      // Reset or disposed while the read was out: its owner has stopped.
+      if (!live(started)) return;
       if (entry(projectId)?.ready) return;
       patch(projectId, { failed: true });
       const retry = retries.get(projectId) ?? { attempt: 0, timer: null };
@@ -200,16 +210,18 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
       retry.attempt += 1;
       retry.timer = setTimeout(() => {
         retry.timer = null;
-        void hydrate(projectId);
+        if (live(started)) void hydrate(projectId);
       }, delay);
     };
 
     const refresh = async (projectId: string) => {
+      const started = generation;
       try {
-        adopt(projectId, await layoutApi(scope).getCoordinatorPaneLayout(projectId));
+        const record = await layoutApi(scope).getCoordinatorPaneLayout(projectId);
+        if (live(started)) adopt(projectId, record);
       } catch {
         // Kept as is; the next hint or resync reads again.
-        readFailed(projectId);
+        readFailed(projectId, started);
       }
     };
 
@@ -242,14 +254,19 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
       ];
     };
     const unsubscribe = () => {
+      generation += 1;
       for (const stop of stopSubscriptions ?? []) stop();
       stopSubscriptions = null;
       for (const projectId of Array.from(retries.keys())) stopRetrying(projectId);
     };
-    scope.onDispose("coordinator-pane-layout", unsubscribe);
+    scope.onDispose("coordinator-pane-layout", () => {
+      disposed = true;
+      unsubscribe();
+    });
 
     const flush = async (projectId: string) => {
-      if (saving.has(projectId)) return;
+      if (saving.has(projectId) || !live(generation)) return;
+      const started = generation;
       saving.add(projectId);
       try {
         for (;;) {
@@ -259,6 +276,8 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
           const result = await layoutApi(scope)
             .saveCoordinatorPaneLayout(projectId, layout, entry(projectId)?.revision ?? 0)
             .catch(() => null);
+          // Reset or disposed meanwhile: the answer belongs to state that is gone.
+          if (!live(started)) return;
           if (!result) {
             // Unsaved, not abandoned: the next change or resync sends the latest.
             if (!pending.has(projectId)) pending.set(projectId, layout);
@@ -277,7 +296,7 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
           });
         }
       } finally {
-        saving.delete(projectId);
+        if (started === generation) saving.delete(projectId);
       }
     };
 
@@ -286,10 +305,11 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
      * revision of its layout, so they are saved over whatever it holds now. The
      * import cannot carry them: revision 0 never replaces a stored layout.
      */
-    const sendUnconfirmedEdits = async () => {
+    const sendUnconfirmedEdits = async (started: number) => {
       for (const [projectId, layout] of Array.from(unconfirmedEdits)) {
         try {
           const record = await layoutApi(scope).getCoordinatorPaneLayout(projectId);
+          if (!live(started)) return;
           patch(projectId, { revision: record?.revision ?? 0 });
         } catch {
           continue; // Still unconfirmed; the next mount or reconnect tries again.
@@ -300,16 +320,17 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
       }
     };
 
-    const readStored = async (projectId: string) => {
+    const readStored = async (projectId: string, started: number) => {
       let capabilities: ClientStateCapabilities;
       try {
         capabilities = await clientStateCapabilities(scope);
       } catch {
         // Nothing is known about the backend yet, so nothing is known about
         // the layout either: not ready, and read again later.
-        readFailed(projectId);
+        readFailed(projectId, started);
         return;
       }
+      if (!live(started)) return;
       if (!capabilities.coordinatorPaneLayouts) {
         mode = "legacy";
         unconfirmedEdits.clear();
@@ -326,13 +347,15 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
       }
       mode = "backend";
       await migrate();
+      if (!live(started)) return;
       if (entry(projectId)?.ready) {
         await refresh(projectId);
-        await sendUnconfirmedEdits();
+        await sendUnconfirmedEdits(started);
         return;
       }
       try {
         const record = await layoutApi(scope).getCoordinatorPaneLayout(projectId);
+        if (!live(started)) return;
         patch(projectId, {
           layout: unconfirmedEdits.get(projectId) ?? record?.layout ?? entry(projectId)?.layout,
           revision: record?.revision ?? 0,
@@ -341,21 +364,26 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
         });
         stopRetrying(projectId);
       } catch {
-        readFailed(projectId);
+        readFailed(projectId, started);
         return;
       }
-      await sendUnconfirmedEdits();
-      if (pending.has(projectId)) void flush(projectId);
+      await sendUnconfirmedEdits(started);
+      if (live(started) && pending.has(projectId)) void flush(projectId);
     };
 
     /** One read per project at a time; a mount, a retry and a resync share it. */
     const hydrate = (projectId: string): Promise<void> => {
+      // A disposed scope reads nothing and subscribes to nothing again.
+      if (disposed) return Promise.resolve();
       const running = hydrating.get(projectId);
       if (running) return running;
       if (!entry(projectId)) patch(projectId, {});
       // Resyncs and safety checks also read again a project whose read failed.
       subscribe();
-      const read = readStored(projectId).finally(() => hydrating.delete(projectId));
+      const read: Promise<void> = readStored(projectId, generation).finally(() => {
+        // A reset may have let a newer read start for the same project.
+        if (hydrating.get(projectId) === read) hydrating.delete(projectId);
+      });
       hydrating.set(projectId, read);
       return read;
     };

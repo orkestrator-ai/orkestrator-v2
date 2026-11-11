@@ -3,7 +3,8 @@
 ## Task analysis
 
 Analysed 2026-11-07 against `main` at `413bd6219`; re-analysed 2026-11-11
-against `main` at `498b68766`.
+against `main` at `498b68766`, and updated the same day after the
+usage-endpoint seam (task 1, item 1) was built.
 
 The notice hierarchy (one routing rule for status, pull request, auto-switch
 and usage-limit stop notices; session creation for a notice with no main
@@ -17,7 +18,7 @@ deleted with the rest of `docs/reports/` on 2026-11-07; read it with
 
 ### Tasks
 
-1. **A two-backend harness with scripted provider accounts**: two linked `dev:test` profiles whose Claude or Codex accounts are fixtures and whose model and usage endpoints are loopback servers. Status: open.
+1. **A two-backend harness with scripted provider accounts**: two linked `dev:test` profiles whose Claude or Codex accounts are fixtures and whose model and usage endpoints are loopback servers. Status: open (item 1, the loopback usage endpoints, done 2026-11-11; items 2 to 5 open).
 2. **A leaf's usage-limit stops reach the command node's coordinator, once and grouped**: criteria AC2, AC8 and AC9 on two real backends. Status: open (depends on 1).
 3. **A command node's coordinator on the limited login moves first**: criterion AC13 across two machines' account entries. Status: open (depends on 2).
 4. **A stop raised while the link is down arrives once after a leaf restart**: criteria AC11 and AC12 on two real backends. Status: open (depends on 2).
@@ -42,21 +43,29 @@ the repository can do that today, so none of them can be run as written.
   model (`ANTHROPIC_BASE_URL`, Codex `openai_base_url` and `chatgpt_base_url`)
   and scripted usage readings. It runs one in-process `OrkestratorBackend`
   under a throwaway HOME and answers the usage reads by replacing the global
-  `fetch`, because `plan-usage.ts` hard-codes `CLAUDE_USAGE_URL` and
-  `CODEX_USAGE_URL`.
+  `fetch`. Until 2026-11-11 that was the only way: `plan-usage.ts` always read
+  `CLAUDE_USAGE_URL` and `CODEX_USAGE_URL`.
 
 **Investigation.** Checked 2026-11-11. Every file the tasks below name still
 exists on `main`, and the in-process evidence still holds:
 `coordinator-notice-hierarchy.test.ts`, `coordinator-notice-sources.test.ts`
 and `coordinator-usage-limit-account-routing.test.ts` pass (84 tests). A
 `dev:test` backend is a separate process, so the stack's `fetch` replacement
-cannot reach it; started with fixture accounts as it is, its usage reads would
-go to the real Anthropic and OpenAI hosts with fixture tokens, which these runs
-must not do. What the harness needs:
+cannot reach it; started with fixture accounts and no usage origin, its usage
+reads would go to the real Anthropic and OpenAI hosts with fixture tokens,
+which these runs must not do. What the harness needs:
 
-1. A way for an agent-test profile's backend to read usage from a loopback
-   origin. Refused outside agent-test profiles, so a production backend can
-   never be pointed elsewhere.
+1. **Done 2026-11-11.** A way for an agent-test profile's backend to read usage
+   from a loopback origin. Start the profile with
+   `ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN=http://127.0.0.1:<port>` (the desktop
+   launcher passes it through to the isolated backend); `planUsageUrl` in
+   `plan-usage.ts` then reads `/api/oauth/usage` (Claude) and
+   `/backend-api/codex/usage` (Codex) from that origin, for both the settings
+   card and the per-account reads the auto-switcher makes.
+   `agentTestUsageOrigin` (`agent-test-fixtures.ts`) honours it only with
+   flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`, a non-default
+   data directory and a bare loopback origin; anything else reads the real
+   endpoints. Tests: `plan-usage-agent-test-origin.test.ts`.
 2. Each profile's Claude (or Codex) configuration, in its isolated credential
    home and never `~/.claude` or `~/.codex`, naming the loopback model, with
    two fixture accounts on the leaf (one limited) and, for task 3, the same
@@ -71,7 +80,7 @@ must not do. What the harness needs:
 
 **Decisions.**
 
-- **Where should the usage endpoints come from on a profile?**
+- **Where should the usage endpoints come from on a profile?** Implemented 2026-11-11 as the recommended option.
   - **An agent-test-only override read at backend start (recommended).** The `dev:test` launcher passes a loopback origin, and the backend honours it only when the profile is an agent-test profile.
     - Pros: tests the real separate-process backends the tasks ask for; the same seam serves any later two-node account check.
     - Cons: a production code path, however gated, that needs its own test proving it is refused outside agent-test profiles.
@@ -192,12 +201,26 @@ Confirm the command node's coordinator gets the notice exactly once.
 Ticket "To-dos 5000 + 7542" asked for every task an agent can finish on this
 machine. Tasks 2 to 4 cannot be run without new harness code: the only
 two-backend harness drives Pi, which has no accounts, and the only scripted
-account stack is in-process. Building that harness is a feature of its own, so
-it is recorded here as task 1 with what it needs, and the file stays
-`backlog`: an agent can start task 1 now, and nothing in it needs the user. No
-item was added to the manual-test checklist, because the scripted run proves
-the routing and grouping, and the real provider's refusal is already there
-from retired to-do 1250.
+account stack is in-process. The harness is recorded here as task 1 with what
+it needs. The file stays `backlog`: nothing in it waits on the user or on
+another to-do. No item was added to the manual-test checklist, because the
+scripted run proves the routing and grouping, and the real provider's refusal
+is already there from retired to-do 1250.
+
+### Task 1: the usage-endpoint seam built; items 2 to 5 left open (2026-11-11)
+
+Review of that ticket asked for the harness to be built. Item 1, the one
+production code path the harness needs, was built and tested in the same
+branch: it is small, deterministic to test, and the refusal outside
+agent-test profiles is what makes the rest safe to build. Items 2 to 5 were
+not: they are a scripted Anthropic model that streams tool-use turns
+(`launch_environment`) through the pinned Claude CLI, fixture account homes
+and a pipeline started on the leaf, and a two-profile Playwright spec reusing
+`coordinator-node-mail-fake.spec.ts`'s link setup. That is new real-stack
+harness code (`e2e/agent-testing/**`), whose runs take many minutes each, in a
+branch whose change is a renderer fix, so it is left for its own pipeline
+rather than appended to this one. Tasks 2 to 4 therefore still have no live
+evidence.
 
 ## Constraints and rationale
 

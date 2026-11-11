@@ -133,6 +133,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "NO_COLOR",
   "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH",
   "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY",
+  // A loopback origin for Claude and Codex plan-usage reads (to-do 7542), so a
+  // two-backend spec can script fixture accounts' usage. The backend honours it
+  // only in an isolated agent-test profile, for a loopback origin
+  // (`agentTestUsageOrigin`). An address, never a credential.
+  "ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",
   // `off` skips the startup container-to-host probe, as other disposable test

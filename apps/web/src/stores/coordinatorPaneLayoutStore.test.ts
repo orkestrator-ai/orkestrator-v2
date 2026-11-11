@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ClientStateCapabilities } from "@orkestrator/protocol/client-state";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type {
   CoordinatorPaneLayout,
   CoordinatorPaneLayoutRecord,
@@ -23,7 +24,13 @@ import {
   splitCoordinatorPaneAtEdge,
 } from "@/lib/coordinator-pane-layout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { dispatchResourceChange, requestResourceResync } from "@/lib/resource-sync";
+import {
+  dispatchResourceChange,
+  requestResourceResync,
+  requestViewSafetyChecks,
+} from "@/lib/resource-sync";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 const key = LEGACY_COORDINATOR_LAYOUT_KEY;
@@ -47,6 +54,33 @@ async function flushPromises() {
 
 /** Resource hints are coalesced for a short window before delivery. */
 const hintDelivered = () => new Promise((resolve) => setTimeout(resolve, 70));
+
+const RETRY_DELAYS: ReadonlySet<number> = new Set(COORDINATOR_LAYOUT_RETRY_DELAYS_MS);
+
+/**
+ * Captures the store's retry timers (by their delays) without running them;
+ * every other timer runs as usual. `restore` puts the real timers back.
+ */
+function captureRetryTimers() {
+  const realSetTimeout = globalThis.setTimeout;
+  const captured: Array<{ delay: number; run: () => void }> = [];
+  globalThis.setTimeout = ((run: () => void, delay?: number) => {
+    if (delay !== undefined && RETRY_DELAYS.has(delay)) {
+      captured.push({ delay, run });
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }
+    return realSetTimeout(run, delay);
+  }) as typeof setTimeout;
+  return {
+    get scheduled() {
+      return captured.map((timer) => timer.delay);
+    },
+    run: (index: number) => captured[index]!.run(),
+    restore: () => {
+      globalThis.setTimeout = realSetTimeout;
+    },
+  };
+}
 
 /** A stand-in for the backend store: compare-and-swap on one record per project. */
 function fakeBackend() {
@@ -355,6 +389,191 @@ describe("against a backend that owns coordinator layouts", () => {
       expect(server.saves).toEqual([]);
     } finally {
       globalThis.setTimeout = realSetTimeout;
+    }
+  });
+
+  test("a read that fails after a reset schedules no retry and changes nothing", async () => {
+    fakeBackend();
+    const healthy = invokeMock.getMockImplementation()!;
+    let rejectRead: (error: Error) => void = () => undefined;
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_coordinator_pane_layout") {
+        return new Promise((_, reject) => {
+          rejectRead = reject;
+        });
+      }
+      return healthy(command, args);
+    });
+    const retryTimers = captureRetryTimers();
+    try {
+      const read = appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+      await flushPromises();
+      appCommandStore(coordinatorPaneLayoutStore).getState().reset();
+      const callsAtReset = invokeMock.mock.calls.length;
+      rejectRead(new Error("transport closed"));
+      await read;
+      await flushPromises();
+      expect(retryTimers.scheduled).toEqual([]);
+      expect(appCommandStore(coordinatorPaneLayoutStore).getState().entries).toEqual({});
+      expect(invokeMock.mock.calls.length).toBe(callsAtReset);
+    } finally {
+      retryTimers.restore();
+    }
+  });
+
+  test("a read that fails after its scope is disposed schedules no retry and reads nothing", async () => {
+    const windowScope = new WindowScope();
+    let rejectRead: (error: Error) => void = () => undefined;
+    const client = new FakeNodeClient({
+      nodeId: "bk_pane-layout-dispose" as BackendId,
+      invoke: {
+        get_client_state_capabilities: capabilities(true),
+        get_coordinator_pane_layout: () =>
+          new Promise((_, reject) => {
+            rejectRead = reject;
+          }),
+      },
+    });
+    const scope = windowScope.open({ role: "leaf", client });
+    const store = scope.store(coordinatorPaneLayoutStore);
+    const retryTimers = captureRetryTimers();
+    try {
+      const read = store.getState().hydrate("p");
+      await flushPromises();
+      expect(client.calls("get_coordinator_pane_layout")).toHaveLength(1);
+      windowScope.dispose();
+      const callsAtDispose = client.invocations.length;
+      rejectRead(new Error("transport closed"));
+      // Resolves rather than throwing against the disposed scope.
+      await read;
+      await flushPromises();
+      expect(retryTimers.scheduled).toEqual([]);
+      expect(store.getState().entries.p?.failed).toBe(false);
+      // A late mount or Retry on the disposed scope reads nothing either.
+      await store.getState().retry("p");
+      expect(client.invocations.length).toBe(callsAtDispose);
+      expect(retryTimers.scheduled).toEqual([]);
+    } finally {
+      retryTimers.restore();
+      windowScope.dispose();
+    }
+  });
+
+  test("a mount, a Retry and a resync during one read share it, per project", async () => {
+    const server = fakeBackend();
+    server.remoteSave("p", single());
+    server.remoteSave("q", single());
+    const healthy = invokeMock.getMockImplementation()!;
+    const held: Array<() => void> = [];
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_coordinator_pane_layout") {
+        await new Promise<void>((resolve) => held.push(resolve));
+      }
+      return healthy(command, args);
+    });
+    const reads = (projectId: string) =>
+      invokeMock.mock.calls.filter(
+        ([command, args]) =>
+          command === "get_coordinator_pane_layout" &&
+          (args as Record<string, unknown>)?.projectId === projectId,
+      ).length;
+    const state = () => appCommandStore(coordinatorPaneLayoutStore).getState();
+
+    const first = state().hydrate("p");
+    await flushPromises();
+    const second = state().hydrate("p");
+    const retried = state().retry("p");
+    requestResourceResync();
+    const other = state().hydrate("q");
+    await flushPromises();
+    expect(reads("p")).toBe(1);
+    expect(reads("q")).toBe(1);
+    expect(selectCoordinatorPaneLayoutStatus("p")(state())).toBe("loading");
+
+    for (const release of held.splice(0)) release();
+    await Promise.all([first, second, retried, other]);
+    await flushPromises();
+    expect(selectCoordinatorPaneLayoutStatus("p")(state())).toBe("ready");
+    expect(selectCoordinatorPaneLayoutStatus("q")(state())).toBe("ready");
+    expect(selectCoordinatorPaneLayout("p")(state())).toEqual(server.records.get("p")!.layout);
+    expect(server.saves).toEqual([]);
+
+    // Once settled, the next mount reads again rather than reusing the old read.
+    const again = state().hydrate("p");
+    await flushPromises();
+    for (const release of held.splice(0)) release();
+    await again;
+    expect(reads("p")).toBe(2);
+  });
+
+  test("a ready project stays ready when a later read fails, with no retries", async () => {
+    const server = fakeBackend();
+    server.remoteSave("p", single());
+    const healthy = invokeMock.getMockImplementation()!;
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    const layout = selectCoordinatorPaneLayout("p")(
+      appCommandStore(coordinatorPaneLayoutStore).getState(),
+    );
+    expect(layout).toEqual(server.records.get("p")!.layout);
+
+    const retryTimers = captureRetryTimers();
+    try {
+      // A remount whose layout read fails.
+      invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_coordinator_pane_layout") throw new Error("transport closed");
+        return healthy(command, args);
+      });
+      await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+      // A remount after a reconnect, whose capability read fails.
+      resetClientStateCapabilitiesForTests();
+      invokeMock.mockImplementation(async () => {
+        throw new Error("transport closed");
+      });
+      await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+      await flushPromises();
+
+      const state = appCommandStore(coordinatorPaneLayoutStore).getState();
+      expect(selectCoordinatorPaneLayoutStatus("p")(state)).toBe("ready");
+      expect(selectCoordinatorPaneLayout("p")(state)).toBe(layout);
+      expect(retryTimers.scheduled).toEqual([]);
+      expect(server.saves).toEqual([]);
+    } finally {
+      retryTimers.restore();
+    }
+  });
+
+  test("the periodic safety check recovers a project once its timed retries are spent", async () => {
+    const server = fakeBackend();
+    server.remoteSave("p", single());
+    const healthy = invokeMock.getMockImplementation()!;
+    const retryTimers = captureRetryTimers();
+    try {
+      invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_coordinator_pane_layout") throw new Error("transport closed");
+        return healthy(command, args);
+      });
+      await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+      for (let index = 0; index < 5 && retryTimers.scheduled.length > index; index += 1) {
+        retryTimers.run(index);
+        await flushPromises();
+      }
+      expect(retryTimers.scheduled).toEqual([...COORDINATOR_LAYOUT_RETRY_DELAYS_MS]);
+      expect(
+        selectCoordinatorPaneLayoutStatus("p")(
+          appCommandStore(coordinatorPaneLayoutStore).getState(),
+        ),
+      ).toBe("failed");
+
+      invokeMock.mockImplementation(healthy);
+      requestViewSafetyChecks("interval");
+      await flushPromises();
+      const state = appCommandStore(coordinatorPaneLayoutStore).getState();
+      expect(selectCoordinatorPaneLayoutStatus("p")(state)).toBe("ready");
+      expect(selectCoordinatorPaneLayout("p")(state)).toEqual(server.records.get("p")!.layout);
+      expect(server.saves).toEqual([]);
+      expect(retryTimers.scheduled).toHaveLength(COORDINATOR_LAYOUT_RETRY_DELAYS_MS.length);
+    } finally {
+      retryTimers.restore();
     }
   });
 });

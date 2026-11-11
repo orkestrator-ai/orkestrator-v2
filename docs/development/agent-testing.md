@@ -2696,6 +2696,52 @@ ORKESTRATOR_AGENT_TEST_COORDINATOR_GAP_TOOLS_FAKE=1` to `bunx playwright test
 It attaches the leaf, adds projects and changes both profiles' Pi settings, so
 reset both afterwards.
 
+### Coordinator pipeline step restart after a usage limit (fake model)
+
+`mise run test:agent:coordinator:restart-fake` qualifies
+`restart_build_pipeline_step` on a step a usage limit stopped, on this node and
+on a connected node, with no login and nothing billed (4680 (retired) task 2). It
+starts two disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profiles, the second as a companion profile and the
+first's leaf, with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-restart-fake.spec.ts`, then stops and resets
+both.
+
+Each profile's isolated Pi `models.json` and `settings.json` (never `~/.pi`)
+name `coordinator-restart-fake-model.ts` (one loopback server, base paths
+`/desk/v1` and `/leaf/v1`; script in
+`coordinator-restart-fake-model-script.ts`). The fake answers every build
+worker with HTTP 429 and a plan-limit message that Pi's SDK does not retry
+(`insufficient_quota`) and Orkestrator classifies as a usage limit, so the
+step fails the way a real limit fails it when there is no account to move to.
+A Pi main coordinator then runs one case on the command node's fixture project
+and one on a shared repository built on the leaf (`start_build_pipeline` with
+`nodeId`):
+
+- the coordinator is woken with the build `failed`, the usage limit in the
+  notice and `restart_build_pipeline_step` offered (with the leaf's `nodeId`
+  for the leaf's build);
+- it restarts the failed step with `stepId` omitted; the pipeline records one
+  coordinator restart and supersedes the failed build session;
+- the restarted step stops on the limit again, and the reopened follow wakes
+  the coordinator a second time;
+- it retries the restart under the same `requestId`; nothing restarts twice
+  (still one recorded restart and two build sessions) and no third wake comes.
+
+The fake counts facts about each wake and each restart answer, never their
+text. A pass proves the product's plumbing on real backends, a real node link
+and a real Pi SDK; it does not prove a real provider's limit text is
+classified or that a real model restarts on the notice, which need a billed
+run (on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md), 4680 (retired) task 2). The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-restart-fake/summary.json`.
+To run the spec against two profiles you started yourself, start both with the
+same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_RESTART_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_RESTART_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-restart-fake.config.ts`. It
+attaches the leaf, adds projects, starts builds and changes both profiles' Pi
+settings, so reset both afterwards.
+
 ### Coordinator checkout sync with a slow remote (fake model)
 
 `mise run test:agent:coordinator-slow-remote` qualifies the coordinator's

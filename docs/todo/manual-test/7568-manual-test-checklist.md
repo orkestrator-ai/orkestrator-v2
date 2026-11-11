@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (297 items): run each check under
+1. **Manual tests and live checks** (298 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -33,8 +33,8 @@ do, and ends with what to record. Items whose source to-do was retired on
 `NNNN (retired)` and link the durable document that now describes the
 behaviour; the old file is in Git history at `53340356c`. Sources retired
 later say so where they are cited: 1021 was retired on 2026-11-11, once its
-fake-model qualification passed, and 0018 was retired the same day; both are
-in Git history at `498b68766`.
+fake-model qualification passed, and 0018 and 4680 were retired the same
+day; all three are in Git history at `498b68766`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -76,13 +76,13 @@ agent can apply it.
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 24 | 9 |
-| Coordinator and Multi Review | 78 | 6 |
+| Coordinator and Multi Review | 79 | 6 |
 | Cross-cutting | 73 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 24 | 3 |
-| **Total** | 297 | 53 |
+| **Total** | 298 | 53 |
 
 ## Outstanding work
 
@@ -445,6 +445,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **6560 (retired) task 1: a real provider's history after its platform is turned back on** (behaviour: [Reading while paused, after a failed start, or with its platform unavailable](../../architecture/coordinator.md#reading-while-paused-after-a-failed-start-or-with-its-platform-unavailable)). On a signed-in `dev:test` profile, run one coordinator turn on a platform, turn that platform off in settings, then on again. Record: whether the conversation's real transcript came back (not an empty conversation) and the normal composer returned, to the coordinator.
 - [ ] **6560 (retired) task 2: a turn running when its platform goes off.** On the same profile, start a long coordinator turn and turn its platform off while it runs. Record: whether the turn kept running, whether the held pane showed it as running rather than idle, and whether Stop ended it without starting a provider, to the coordinator.
 - [ ] **[7401](../coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md) task 1: run the Grok read probe signed in.** The probe now has a `data-dir-reads` variant: the bridge's coordinator launch (read-only profile, `--disable-web-search`, `--no-leader`), asked to read, list and search a fixture data directory beside its workspace, with permission requests answered `reject_once` as the bridge does. Sign in to Grok, then from a shell outside any Orkestrator data directory run `GROK_BIN=<the pinned grok> bun scripts/coordinator-probes/grok-web-tools-probe.mjs data-dir-reads` (four billed prompts, each in its own session; it creates and removes its own temporary fixture and prints fixture-labelled paths only, never a reply from the data directory). Record: the printed `version`, `summary` and `finding`, and for each step its `outcome`, `permissionRequests` (kind, paths, answer), `clientReads` and `leaked`, in 7401 task 1.
+- [ ] **4680 (retired) task 2: a real coordinator restarts a step a real usage limit stopped** (behaviour: [Restarting a failed pipeline step](../../architecture/coordinator.md#restarting-a-failed-pipeline-step)). The fake-model run (`mise run test:agent:coordinator:restart-fake`, passed 2026-11-11) already proves the restart, the reopened follow's second wake and the same-`requestId` replay on this node and on a leaf; what it cannot prove is a real provider's limit text and a real model's choice. When a build pipeline on a signed-in profile (or your own install) next fails at a step on a real usage limit (Claude 5-hour limit, Codex plan limit) with a main coordinator following it, and on a leaf the coordinator started it on if you have one: let the coordinator handle the failed status wake without prompting it. Record, to the coordinator: the provider and its limit, whether the wake named the usage limit and offered `restart_build_pipeline_step`, whether the coordinator called it (now, or by scheduling it for after the window resets) and whether the restarted step ran, and whether the next status wake arrived.
 
 #### Cross-cutting
 

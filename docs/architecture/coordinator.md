@@ -2723,6 +2723,16 @@ lock).
   coordinator as usual. The result says whether a follow exists and tells
   the coordinator to finish its turn. A step that fails again at once comes
   back in the result as `phase: "failed"` with the error.
+- **Live qualification.** `mise run test:agent:coordinator:restart-fake`
+  runs the incident's shape on two real backends joined by a real node link,
+  with real Pi bridges and a loopback model that refuses every build worker
+  with a usage limit (see
+  [agent-testing.md](../development/agent-testing.md#coordinator-pipeline-step-restart-after-a-usage-limit-fake-model)).
+  On this node and on a leaf, the coordinator is woken with the build
+  failed and the restart offered, restarts with `stepId` omitted, is woken
+  again when the restarted step stops, and a same-`requestId` retry replays
+  without restarting twice. A real provider's limit text and a real model
+  choosing to restart are on the manual-test checklist (4680 task 2).
 
 `resume_build_pipeline` resumes a paused pipeline only. On any other phase
 it refuses, naming the phase. Failed pipelines get restart guidance; active
@@ -3913,7 +3923,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
   refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
-  (`coordinator-pipeline-step-actions.test.ts`)
+  (`coordinator-pipeline-step-actions.test.ts`); the fake model's script
+  (`e2e/agent-testing/coordinator-restart-fake-model.test.ts`) and, on demand,
+  the two-profile run (`e2e/agent-testing/coordinator-restart-fake.spec.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a

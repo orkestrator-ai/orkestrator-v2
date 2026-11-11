@@ -289,8 +289,11 @@ export async function routeToNode<T>(input: {
         : "That node is not connected, so changes to it are disabled.",
     );
   }
+  const signal = read ? input.signal : undefined;
+  // A read cancelled before it is sent is not sent: the link only listens for
+  // a future abort, so an already-aborted signal would never stop it.
+  signal?.throwIfAborted();
   try {
-    const signal = read ? input.signal : undefined;
     const options = {
       ...(input.envelope ? { envelope: input.envelope } : {}),
       ...(signal ? { signal } : {}),

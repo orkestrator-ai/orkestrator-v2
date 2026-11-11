@@ -8,6 +8,8 @@ import { collaborators, projectionInternals } from "./native-agent-service-test-
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { seedCoordinator } from "./public-api/test-coordinator.js";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
+import { operatorNode } from "./control-mcp-operator-tools.js";
+import type { ControlMcpCaller } from "./control-mcp-caller.js";
 import { cleanupSessionHarnesses, setActivity } from "./public-api/test-provider.js";
 
 /**
@@ -642,4 +644,57 @@ describe("operator tools over public actions", () => {
     );
     expect(harness.stub.sends).toHaveLength(0);
   });
+});
+
+test("a routed operator read passes the call's signal to invoke_on_node", async () => {
+  const calls: Array<{ command: string; args: Record<string, unknown>; options?: unknown }> = [];
+  const invoke = async <T>(
+    command: string,
+    args: Record<string, unknown> = {},
+    options?: { signal?: AbortSignal },
+  ): Promise<T> => {
+    calls.push(options ? { command, args, options } : { command, args });
+    if (command === "invoke_on_node") return { outcome: "ok", result: { load: 1 } } as T;
+    return {
+      ok: true,
+      result: {
+        items: [
+          { nodeId: "bk_self", name: "Here", self: true, available: true, publicActions: true },
+          {
+            nodeId: "bk_leaf",
+            name: "Leaf",
+            self: false,
+            available: true,
+            publicActions: true,
+            state: "connected",
+          },
+        ],
+        total: 2,
+        mode: "command",
+        controlledBy: [],
+      },
+    } as T;
+  };
+  // Only what operatorNode reads: the raw invoker and the authority node.list runs under.
+  const caller = { invoke, authority: {} } as unknown as ControlMcpCaller;
+  const node = await operatorNode(caller, "bk_leaf");
+  const controller = new AbortController();
+  expect(await node.invoke("get_machine_load", { a: 1 }, { signal: controller.signal })).toEqual({
+    load: 1,
+  });
+  expect(await node.invoke("get_machine_load", { a: 2 })).toEqual({ load: 1 });
+  const routed = calls.filter((call) => call.command === "invoke_on_node");
+  expect(routed).toEqual([
+    {
+      command: "invoke_on_node",
+      args: { nodeId: "bk_leaf", command: "get_machine_load", args: { a: 1 } },
+      options: { signal: controller.signal },
+    },
+    {
+      command: "invoke_on_node",
+      args: { nodeId: "bk_leaf", command: "get_machine_load", args: { a: 2 } },
+    },
+  ]);
+  // The routed reader is the one the caller's legacy reads use too.
+  expect(node.caller.readInvoke).toBe(node.invoke);
 });

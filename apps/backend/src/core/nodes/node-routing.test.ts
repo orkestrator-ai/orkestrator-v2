@@ -169,3 +169,20 @@ test("a routed write is not given the caller's signal, so it runs to its answer"
   expect(routed).toEqual({ outcome: "ok", result: "created" });
   expect(calls).toEqual([["create_environment", { projectId: "p" }]]);
 });
+
+test("a read whose signal is already aborted is never sent to the node", async () => {
+  const invoke = mock(async () => "answer");
+  const caller = new AbortController();
+  caller.abort(new Error("caller left"));
+  await expect(
+    routeToNode({
+      nodeId: "bk_leaf" as never,
+      link: { connected: true, invoke: async <T>() => (await invoke()) as T },
+      command: "get_machine_load",
+      args: {},
+      outcomes: new NodeOutcomeLedger(),
+      signal: caller.signal,
+    }),
+  ).rejects.toThrow("caller left");
+  expect(invoke).not.toHaveBeenCalled();
+});

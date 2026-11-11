@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -118,6 +118,88 @@ describe("--agent-tools-port auto", () => {
       expect(port).toBeGreaterThanOrEqual(first);
       expect(port).toBeLessThan(first + profiles.length);
     }
+  });
+
+  test("launchers replacing the same stale claims at the same time each get a different port", async () => {
+    const s = await setup();
+    const { last } = AGENT_TEST_AGENT_TOOLS_PORT_RANGE;
+    // Every port carries a claim from an earlier run whose launcher is gone.
+    for (let port = first; port <= last; port += 1) {
+      await chooseAgentToolsPort({ ...s.base(`old${port}`), range: { first: port, last: port } });
+      s.dead.add(`old${port}`);
+    }
+    const profiles = ["p1", "p2", "p3", "p4", "p5", "p6"];
+    const ports = await Promise.all(profiles.map((name) => chooseAgentToolsPort(s.base(name))));
+    expect(new Set(ports).size).toBe(profiles.length);
+    // Each launcher holds exactly the port it was given, no other claim names
+    // it, and no temporary or retired file is left behind.
+    const directory = agentToolsPortClaimsDir(s.developmentRoot);
+    const names = (await readdir(directory)).sort();
+    expect(names.every((name) => /^\d+\.json$/.test(name))).toBe(true);
+    const holders = new Map<string, number[]>();
+    for (const name of names) {
+      const claim = JSON.parse(await readFile(path.join(directory, name), "utf8"));
+      holders.set(claim.profile, [...(holders.get(claim.profile) ?? []), claim.port]);
+    }
+    profiles.forEach((name, index) => expect(holders.get(name)).toEqual([ports[index]!]));
+  });
+
+  // Another launcher's retire moves a fresh claim aside, finds it is not the
+  // stale claim it read, and links it back. A launcher re-reading its claim in
+  // between finds no file.
+  async function moveClaimAside(file: string): Promise<() => Promise<void>> {
+    const aside = `${file}.test.retired`;
+    await rename(file, aside);
+    return async () => {
+      await link(aside, file).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+      await rm(aside, { force: true });
+    };
+  }
+
+  test("a claim moved aside during the check and put back is kept", async () => {
+    const s = await setup();
+    let putBack: Promise<void> | undefined;
+    const port = await chooseAgentToolsPort({
+      ...s.base("a"),
+      checkFree: async (port) => {
+        s.checked.push(port);
+        if (s.checked.length > 1) return;
+        const restore = await moveClaimAside(s.claimFile(port));
+        putBack = new Promise((resolve) => setTimeout(resolve, 20)).then(restore);
+      },
+    });
+    await putBack;
+    expect(port).toBe(first);
+    expect(s.checked).toEqual([first]);
+    expect(await readdir(agentToolsPortClaimsDir(s.developmentRoot))).toEqual([`${first}.json`]);
+    expect(JSON.parse(await readFile(s.claimFile(first), "utf8")).profile).toBe("a");
+  });
+
+  test("a claim moved aside and put back only later is published again, not stranded", async () => {
+    const s = await setup();
+    let restore: (() => Promise<void>) | undefined;
+    const checkFree = async (port: number) => {
+      s.checked.push(port);
+      if (restore) {
+        // The other launcher's link-back arrives after this one gave up waiting.
+        await restore();
+        restore = undefined;
+        return;
+      }
+      if (s.checked.length === 1) restore = await moveClaimAside(s.claimFile(port));
+    };
+    expect(await chooseAgentToolsPort({ ...s.base("a"), checkFree })).toBe(first);
+    expect(await readdir(agentToolsPortClaimsDir(s.developmentRoot))).toEqual([`${first}.json`]);
+    expect(JSON.parse(await readFile(s.claimFile(first), "utf8")).profile).toBe("a");
+
+    // An exact port is kept the same way instead of being refused.
+    s.checked.length = 0;
+    expect(await claimAgentToolsPort({ ...s.base("b"), port: first + 3, checkFree })).toBe(
+      first + 3,
+    );
+    expect(JSON.parse(await readFile(s.claimFile(first + 3), "utf8")).profile).toBe("b");
   });
 
   test("the default liveness check follows the launcher's PID and start time", async () => {

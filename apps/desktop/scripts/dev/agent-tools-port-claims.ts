@@ -22,7 +22,8 @@ import { assertAgentToolsPortFree, processMatches } from "./profile-io.js";
  * The bind check still runs after the claim, for whatever else listens on the
  * port. Two launchers that replace the same stale claim at the same instant
  * can still both proceed; the second backend's bind then fails the start, as
- * it did before claims existed.
+ * it did before claims existed. A launcher that gives a port up never leaves
+ * its own claim on it.
  */
 
 export type AgentToolsPortOwner = {
@@ -51,6 +52,9 @@ type ClaimOutcome =
 
 const CLAIM_BYTES_LIMIT = 4096;
 const CLAIM_ATTEMPTS = 3;
+/** How long a missing claim is re-read for before it counts as gone (about 100 ms). */
+const SETTLE_READS = 20;
+const SETTLE_INTERVAL_MS = 5;
 
 export function agentToolsPortClaimsDir(developmentRoot: string): string {
   return path.join(developmentRoot, "agent-tools-port-claims");
@@ -185,13 +189,35 @@ async function tryClaim(options: AgentToolsPortClaimOptions, port: number): Prom
     }
     // A launcher replacing the same stale claim at the same moment may have
     // replaced this one; whoever's claim is on disk now keeps the port.
-    const after = await readClaim(file);
-    if (after?.raw !== contents) {
-      return { ok: false, reason: "claimed", by: after?.claim?.profile ?? "another launcher" };
+    const after = await settledClaim(file);
+    // Nothing on disk: another launcher's retire moved this claim aside, saw
+    // it was not the stale one and has not put it back, or never will. Giving
+    // up here would leave the claim to be restored later, holding a port this
+    // launcher no longer uses, so publish it again instead.
+    if (after === null) continue;
+    if (after.raw !== contents) {
+      return { ok: false, reason: "claimed", by: after.claim?.profile ?? "another launcher" };
     }
     return { ok: true };
   }
+  // Out of attempts: whatever this launcher left published must not outlive
+  // the decision to give the port up.
+  await releaseIfOwned(file, contents);
   return { ok: false, reason: "claimed", by: "another launcher" };
+}
+
+/**
+ * Reads a claim, waiting briefly when the file is missing: a concurrent
+ * {@link retire} moves a claim aside before deciding whether to put it back,
+ * so a missing file is often a claim in flight rather than none at all.
+ * `null` once the file has stayed missing for the whole wait.
+ */
+async function settledClaim(file: string): Promise<{ raw: string; claim: Claim | null } | null> {
+  for (let wait = 0; ; wait += 1) {
+    const current = await readClaim(file);
+    if (current || wait >= SETTLE_READS) return current;
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_INTERVAL_MS));
+  }
 }
 
 async function readClaim(file: string): Promise<{ raw: string; claim: Claim | null } | null> {

@@ -13,12 +13,15 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
  * Electron specs for the shipping binary security smoke and inspect-enabled
  * packaged-test design journey, rather than the dev bundle and Vite. Kept
  * apart from playwright.electron.config.ts because they need that build first.
+ * The native-shortcut spec skips unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`,
+ * which belongs only on a disposable X display (it sends real key presses).
  */
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "design-canvas-packaged-electron.spec.ts",
     "log-controls-packaged-electron.spec.ts",
+    "packaged-native-shortcuts-electron.spec.ts",
     "packaged-security-electron.spec.ts",
     "watcher-packaged-electron.spec.ts",
   ],

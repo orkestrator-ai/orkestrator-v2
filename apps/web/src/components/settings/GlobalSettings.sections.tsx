@@ -2545,7 +2545,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <SettingsRow
               label="Direct transport for new windows"
               htmlFor="local-window-gateway-transport"
-              description="A window opened after you turn this on sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one."
+              description="On by default. A new window sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one, which then goes through the main process."
             >
               <Switch
                 id="local-window-gateway-transport"

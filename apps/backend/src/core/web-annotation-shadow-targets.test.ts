@@ -1,5 +1,5 @@
 /**
- * Targets inside open shadow roots (todo 0047 task 5, todo 2580 task 2): the
+ * Targets inside open shadow roots (todo 0047 task 5, todo 2580 (retired) task 2): the
  * backend advertises `operations.shadowTargets`, stores the root path as
  * captured, refuses an unbounded one, and names the host components in the brief.
  */

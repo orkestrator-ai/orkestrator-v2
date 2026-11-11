@@ -129,7 +129,7 @@ type WireGaugeInternals = {
 /**
  * Every gauge the Phase 1 exit criteria name, read from the gateway's own
  * state: compressor leases, event and terminal sockets, channels, and the bytes
- * queued on each (todo 0052, task 4).
+ * queued on each (to-do 0052 (retired), task 4; docs/development/remote-bandwidth.md).
  */
 function wireGauges(gateway: OrkestratorGateway) {
   const internals = gateway as unknown as WireGaugeInternals;
@@ -1130,7 +1130,7 @@ describe("gateway terminal WebSocket", () => {
     await stopped;
   });
 
-  // Phase 1 exit criterion (todo 0052, task 4): no compressor lease, socket,
+  // Phase 1 exit criterion (to-do 0052 (retired), task 4): no compressor lease, socket,
   // channel, timer or queued byte survives credential rotation or gateway stop.
   test("returns compressor count and queued bytes to zero after credential rotation and gateway stop", async () => {
     let releaseWrite: () => void = () => undefined;

@@ -10,7 +10,9 @@
  * `routing` (plain requests routed to the right workflow, see
  * `coordinator-live-routing.ts`), `research` (a research MCP server call
  * under the default research setting, attributed to that server in the
- * transcript, see `coordinator-live-research.ts`) and `peer`. Every
+ * transcript, see `coordinator-live-research.ts`), `gap-tools` (each
+ * gap-review tool called once against one worker, see
+ * `coordinator-live-gap-tools.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -122,7 +124,9 @@ import {
   RESEARCH_SCENARIO_SETTINGS,
   researchApplies,
 } from "../../apps/desktop/scripts/dev/coordinator-live-research";
+import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
+import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
 import {
   coordinatorTurn,
   deliverAsyncReport,
@@ -984,6 +988,36 @@ async function routingCase(input: {
 }
 
 /**
+ * The gap-tools scenario: one worker, and each tool from the coordinator gap
+ * review called once against it (changes split at HEAD, a fork, a stopped
+ * turn, a slash command, schedule edits, and the PR and question tools
+ * refusing a worker with neither).
+ */
+async function gapToolsCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, watch, mail } = await runGapToolsScenario(input);
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the gap-tools scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1257,6 +1291,37 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await routingCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("gap-tools")) {
+      test(`gap tools on ${platform}: changes split at HEAD, a fork, a stopped turn, a slash command, schedule edits, and conflicts and question answers refused for a worker with neither`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests["gap-tools"]);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "gap-tools", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            // The schedule tools are offered only while scheduling, an
+            // experimental setting that is off by default, is on.
+            settings: { experimentalScheduling: true },
+            skip,
+            cleanup,
+          });
+          if (platform === "pi") {
+            // Pi refuses /compact on a session shorter than keepRecentTokens,
+            // and the worker's is a few short turns: keep almost nothing, in
+            // this profile's own Pi settings, so the command really compacts.
+            const dataDir = profileStatus().dataDir;
+            if (!dataDir) throw new Error("dev:status reported no data directory");
+            const restore = keepRecentTokensForShortSessions(dataDir);
+            cleanup.push(async () => restore());
+          }
+          await gapToolsCase({ coordinator, summary, cleanup });
         });
       });
     }

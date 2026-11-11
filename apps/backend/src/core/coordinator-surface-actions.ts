@@ -47,7 +47,7 @@ import {
 } from "./worker-surface-runs.js";
 
 /**
- * Backend commands behind the coordinator's worker surfaces (todo 0142):
+ * Backend commands behind the coordinator's worker surfaces (coordinator.md, "Worker surfaces"):
  * terminal and tmux launch, browser preview launch and navigation, tab
  * editing, the PR and Resolve tabs, feature-plan launch, and the request
  * to copy the checkout's uncommitted changes into a worker.

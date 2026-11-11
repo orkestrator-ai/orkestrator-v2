@@ -37,9 +37,9 @@
  * Writes a content-free summary to
  * `output/agent-testing/<run>/coordinator-node-mail-fake/summary.json`.
  */
-import { expect, test, type Page } from "./browser-test";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { expect, test } from "./browser-test";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import {
@@ -47,19 +47,19 @@ import {
   coordinatorRuntimeId,
   type CoordinatorSnapshot,
 } from "@orkestrator/protocol/coordinator";
-import { snapshotFixtureFiles } from "./codex-fixture-files";
+import {
+  attachLeaf,
+  pointPiAt,
+  sharedProject,
+  signIn,
+  until,
+} from "./coordinator-two-node-support";
 import {
   qaPrompt,
   type CarrierFacts,
   type QaMode,
 } from "./coordinator-node-mail-fake-model-script";
-import {
-  authenticatedInvoke,
-  profileStatus,
-  repositoryRoot,
-  type Invoke,
-  type Status,
-} from "./slash-command-live-support";
+import { repositoryRoot, type Invoke } from "./slash-command-live-support";
 
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE === "1";
 const deskProfile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "qa-node-mail-desk";
@@ -70,6 +70,14 @@ const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? deskProfile;
 const PI_PROVIDER = "node-mail-fake";
 const PI_MODEL = "node-mail-1";
 const MODEL_REF = `${PI_PROVIDER}/${PI_MODEL}`;
+const PI = {
+  id: PI_PROVIDER,
+  name: "Coordinator node mail fake",
+  model: PI_MODEL,
+  modelName: "Node mail 1",
+  apiKey: "node-mail-fake-not-a-key",
+};
+const CHECKOUT = "node-mail-qa";
 /** The same repository on both profiles, which is how each finds the other's copy. */
 const SHARED_GIT_URL = "https://github.com/orkestrator-qa/node-mail.git";
 const BUDGET = 3;
@@ -98,7 +106,6 @@ type Coordinator = {
   tabId: string;
   logicalSessionKey: string;
 };
-type Profile = { name: string; status: Status & { authFile?: string }; invoke: Invoke };
 
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off" });
@@ -130,70 +137,6 @@ async function calls(origin: string): Promise<Calls> {
   return (await (await fetch(`${origin}/__calls`)).json()) as Calls;
 }
 
-/**
- * Names the fake provider in a profile's isolated Pi `models.json` and makes it
- * Pi's saved default there (never `~/.pi`); returns the restore. The key is a
- * literal placeholder.
- */
-function pointPiAt(status: Status, baseUrl: string): () => void {
-  const root = path.resolve(status.dataDir!);
-  const directory = path.join(root, "agent-credentials", "home", ".pi", "agent");
-  const models = path.join(directory, "models.json");
-  const settings = path.join(directory, "settings.json");
-  for (const file of [models, settings]) {
-    if (!file.startsWith(`${root}${path.sep}`)) throw new Error("Pi settings escape the profile");
-  }
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const restore = snapshotFixtureFiles([models, settings]);
-  const read = (file: string) =>
-    existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>) : {};
-  const existing = read(models) as { providers?: Record<string, unknown> };
-  writeFileSync(
-    models,
-    `${JSON.stringify(
-      {
-        ...existing,
-        providers: {
-          ...existing.providers,
-          [PI_PROVIDER]: {
-            name: "Coordinator node mail fake",
-            baseUrl,
-            api: "openai-completions",
-            apiKey: "node-mail-fake-not-a-key",
-            compat: {
-              supportsStore: false,
-              supportsDeveloperRole: false,
-              supportsReasoningEffort: false,
-              supportsUsageInStreaming: true,
-              maxTokensField: "max_tokens",
-            },
-            models: [
-              {
-                id: PI_MODEL,
-                name: "Node mail 1",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_000_000,
-                maxTokens: 4_096,
-              },
-            ],
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    settings,
-    `${JSON.stringify({ ...read(settings), defaultProvider: PI_PROVIDER, defaultModel: PI_MODEL }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  return restore;
-}
-
 /** Pi as the coordinator's agent on the fake model, and the unattended budget lowered. */
 async function configure(invoke: Invoke): Promise<() => Promise<void>> {
   const config = await invoke<{ global: Record<string, unknown> }>("get_config");
@@ -220,43 +163,6 @@ async function configure(invoke: Invoke): Promise<() => Promise<void>> {
     const current = await invoke<{ global: Record<string, unknown> }>("get_config");
     await invoke("update_global_config", { global: { ...current.global, ...previous } });
   };
-}
-
-function git(cwd: string, ...args: string[]) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`git ${args[0]} failed in the QA checkout`);
-}
-
-/** A checkout of the shared repository, added as a project of this profile. */
-async function sharedProject(profile: Profile): Promise<string> {
-  const fixtureDir = path.dirname(profile.status.testProject!);
-  const checkout = path.join(fixtureDir, "node-mail-qa");
-  if (!existsSync(path.join(checkout, ".git"))) {
-    mkdirSync(checkout, { recursive: true });
-    git(checkout, "init", "-q", "-b", "main");
-    writeFileSync(path.join(checkout, "README.md"), "# Node mail QA\n");
-    git(checkout, "add", "README.md");
-    git(
-      checkout,
-      "-c",
-      "user.email=qa@example.com",
-      "-c",
-      "user.name=QA",
-      "commit",
-      "-q",
-      "-m",
-      "init",
-    );
-  }
-  const projects =
-    await profile.invoke<Array<{ id: string; localPath: string | null }>>("get_projects");
-  const existing = projects.find((project) => project.localPath === checkout);
-  if (existing) return existing.id;
-  const created = await profile.invoke<{ id: string }>("add_project", {
-    gitUrl: SHARED_GIT_URL,
-    localPath: checkout,
-  });
-  return created.id;
 }
 
 /** A fresh Pi main coordinator conversation with its session started. */
@@ -318,29 +224,6 @@ async function prompt(coordinator: Coordinator, mode: QaMode, nodeId: string) {
   });
 }
 
-async function until<T>(
-  label: string,
-  read: () => Promise<T>,
-  ok: (value: T) => boolean,
-  timeoutMs = 180_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let last: T | undefined;
-  let lastError = "";
-  while (Date.now() < deadline) {
-    try {
-      last = await read();
-      if (ok(last)) return last;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message.slice(0, 300) : String(error);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  throw new Error(
-    `Timed out waiting for ${label}${lastError ? ` (last error: ${lastError})` : ""}`,
-  );
-}
-
 /** Waits until neither profile's Pi has called the model for 15 s; returns the counts. */
 async function settle(origin: string): Promise<Calls> {
   let settled = await calls(origin);
@@ -379,14 +262,6 @@ function writeSummary(summary: Record<string, unknown>): void {
   writeFileSync(path.join(directory, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
 }
 
-async function signIn(page: Page, name: string): Promise<Profile> {
-  const status = profileStatus(name) as Profile["status"];
-  expect(status.status, `profile "${name}" is not running`).toBe("ready");
-  expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
-  expect(status.testProject, "the profile has no fixture").toBeTruthy();
-  return { name, status, invoke: await authenticatedInvoke(page, status, name) };
-}
-
 test.describe("coordinator node mail between two profiles on a fake model", () => {
   test.skip(
     !LIVE,
@@ -416,54 +291,20 @@ test.describe("coordinator node mail between two profiles on a fake model", () =
     let fake: Calls | undefined;
     try {
       // Named before any Pi bridge starts, so the first one reads it.
-      const restoreDesk = pointPiAt(desk.status, `${model.origin}/desk/v1`);
-      const restoreLeaf = pointPiAt(leaf.status, `${model.origin}/leaf/v1`);
+      const restoreDesk = pointPiAt(desk.status, `${model.origin}/desk/v1`, PI);
+      const restoreLeaf = pointPiAt(leaf.status, `${model.origin}/leaf/v1`, PI);
       cleanup.push(
         async () => restoreDesk(),
         async () => restoreLeaf(),
       );
       cleanup.push(await configure(desk.invoke), await configure(leaf.invoke));
 
-      const deskProjectId = await sharedProject(desk);
-      const leafProjectId = await sharedProject(leaf);
+      const deskProjectId = (await sharedProject(desk, CHECKOUT, SHARED_GIT_URL)).id;
+      const leafProjectId = (await sharedProject(leaf, CHECKOUT, SHARED_GIT_URL)).id;
 
-      // The desk attaches the leaf over the leaf's real gateway. The token is
-      // read in memory and handed to the product, never printed.
-      const leafToken = (
-        JSON.parse(readFileSync(leaf.status.authFile!, "utf8")) as { token?: unknown }
-      ).token;
-      expect(typeof leafToken, "the leaf's auth file has no token").toBe("string");
-      const attached = await desk.invoke<{ nodeId: string; connection: { state: string } }>(
-        "add_node",
-        {
-          routes: [
-            {
-              id: "loopback",
-              kind: "https",
-              enabled: true,
-              origin: new URL(leaf.status.browserUrl!).origin,
-            },
-          ],
-          token: leafToken,
-          displayName: "Leaf profile",
-        },
-      );
-      const nodeId = attached.nodeId;
-      cleanup.push(() => desk.invoke("forget_node", { nodeId }));
-      await until(
-        "the leaf to be connected and in leaf mode",
-        async () => ({
-          nodes: await desk.invoke<{
-            nodes: Array<{ nodeId: string; connection: { state: string } }>;
-          }>("list_nodes"),
-          leafStatus: await leaf.invoke<{ mode: string }>("get_node_status"),
-        }),
-        ({ nodes, leafStatus }) =>
-          leafStatus.mode === "leaf" &&
-          nodes.nodes.some(
-            (node) => node.nodeId === nodeId && node.connection.state === "connected",
-          ),
-        90_000,
+      // The desk attaches the leaf over the leaf's real gateway.
+      const nodeId = await attachLeaf(desk, leaf, (attached) =>
+        cleanup.push(() => desk.invoke("forget_node", { nodeId: attached })),
       );
       summary.attached = true;
 

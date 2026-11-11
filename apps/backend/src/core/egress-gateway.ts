@@ -111,7 +111,10 @@ export interface EgressGatewaySpec {
   owner: string;
   image: string;
   network: string;
-  /** `-p` arguments: the gateway owns the namespace, so it publishes. */
+  /**
+   * `-p` arguments, and the backend-chosen host port label when there is one:
+   * the gateway owns the namespace, so it publishes.
+   */
   publishArguments: readonly string[];
   /** Linux Engine's `host.docker.internal` alias; the workload shares /etc/hosts. */
   addHostGateway: boolean;

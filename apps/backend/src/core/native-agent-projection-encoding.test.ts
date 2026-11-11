@@ -10,7 +10,8 @@ import {
   markSpliceableResult,
   reuseUnchangedMessages,
   sameEncoding,
-  spliceEncodedJson,
+  spliceEncodedJsonBytes,
+  splicePlaceholderForTests,
   tailDeletions,
   updateHashWithFingerprints,
   valueFingerprint,
@@ -196,8 +197,61 @@ describe("spliced responses", () => {
       7,
       null,
     ];
-    for (const value of values) expect(spliceEncodedJson(value)).toBe(JSON.stringify(value));
-    expect(spliceEncodedJson(undefined)).toBeUndefined();
+    for (const value of values) {
+      expect(spliceEncodedJsonBytes(value)?.toString("utf8")).toBe(JSON.stringify(value));
+    }
+    expect(spliceEncodedJsonBytes(undefined)).toBeUndefined();
+    expect(spliceEncodedJsonBytes(() => 1)).toBeUndefined();
+  });
+
+  test("size the body exactly when rows and other fields hold multi-byte text", () => {
+    const rows = [
+      { id: "a", content: "é ü — 漢字 🙂", parts: [{ type: "text", content: "\ud83d lone" }] },
+      { id: "b", content: "plain" },
+      { id: "c", content: "\u2028 line separator, \u0000 nul, \\ backslash" },
+    ];
+    for (const row of rows) encodedValue(row);
+    const result = {
+      status: "snapshot",
+      token: "tök 🙂",
+      value: {
+        title: "Ünïcode 漢字",
+        // oxlint-disable-next-line no-sparse-arrays -- a hole between rows serializes as null
+        messages: [rows[0], , rows[1], { id: "fresh", content: "não memoizado" }, rows[2]],
+        revisedMessages: [rows[2]],
+      },
+    };
+    const body = spliceEncodedJsonBytes({ result });
+    const expected = Buffer.from(JSON.stringify({ result }));
+    expect(body?.byteLength).toBe(expected.byteLength);
+    expect(body?.equals(expected)).toBe(true);
+  });
+
+  test("leave the result and its arrays untouched", () => {
+    const row = { id: "m", content: "x" };
+    encodedValue(row);
+    const messages = [row, { id: "n" }];
+    const value = { messages, nested: { messages } };
+    spliceEncodedJsonBytes(value);
+    expect(value.messages).toBe(messages);
+    expect(value.nested.messages).toBe(messages);
+    expect(messages).toEqual([row, { id: "n" }]);
+  });
+
+  test("serialize whole when a field already holds the placeholder text", () => {
+    const row = { id: "m", content: "original" };
+    encodedValue(row);
+    row.content = "changed";
+    const forged = `${splicePlaceholderForTests()}0`;
+    // A field that spells a placeholder can never be mistaken for a row: the
+    // body falls back to serializing the value as it is now.
+    for (const value of [
+      { before: forged, messages: [row] },
+      { messages: [row], after: forged },
+      { [forged]: 1, messages: [row] },
+    ]) {
+      expect(spliceEncodedJsonBytes(value)?.toString("utf8")).toBe(JSON.stringify(value));
+    }
   });
 
   test("copy an encoded row from its memo, and leave the result a plain object", () => {
@@ -205,7 +259,7 @@ describe("spliced responses", () => {
     encodedValue(row);
     // Never done in production: shows the row is not serialized again.
     row.content = "changed";
-    expect(spliceEncodedJson({ messages: [row] })).toBe(
+    expect(spliceEncodedJsonBytes({ messages: [row] })?.toString("utf8")).toBe(
       '{"messages":[{"id":"m","content":"original"}]}',
     );
     const result = { status: "delta", delta: { messageUpserts: [row] } };

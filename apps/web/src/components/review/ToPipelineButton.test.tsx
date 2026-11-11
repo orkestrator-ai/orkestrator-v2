@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "bun:test";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import { readCoordinatorFor } from "@/lib/read-coordinator";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { ToPipelineButton } from "./ToPipelineButton";
@@ -113,6 +114,27 @@ test("a running tab explains why it is disabled, and enables when the turn finis
   );
   node.respond("auto_pipeline_sources", { available: true, sources: [original] });
   await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false), { timeout: 4000 });
+});
+
+test("stops reading while the node's connection is down, and reads again when it returns", async () => {
+  const node = client();
+  const view = render(node, () => true);
+  await screen.findByRole("button", { name: "To pipeline" });
+  const coordinator = readCoordinatorFor(view.scope);
+  act(() => coordinator.setDisconnected(true));
+  const whileDown = node.calls("auto_pipeline_sources").length;
+  // Longer than one poll interval: a timer of its own kept reading through an
+  // outage, which the live client-outage spec counts as a read while paused.
+  await act(() => new Promise((resolve) => setTimeout(resolve, 2_500)));
+  expect(node.calls("auto_pipeline_sources")).toHaveLength(whileDown);
+  act(() => coordinator.setDisconnected(false));
+  // An auxiliary read resumes within the coalescing window plus its spread (1.55 s).
+  await waitFor(
+    () => expect(node.calls("auto_pipeline_sources").length).toBeGreaterThan(whileDown),
+    { timeout: 4_000 },
+  );
+  // The last answer stays on screen through the outage.
+  expect(screen.getByRole("button", { name: "To pipeline" })).toBeTruthy();
 });
 
 test("a tab that cannot open, such as at the tab limit, starts no drafting", async () => {

@@ -121,6 +121,31 @@ describe("outage link", () => {
     expect(JSON.stringify(outage.requests)).not.toContain("never-kept");
   });
 
+  test("a page document goes to the gateway; assets go to the renderer", async () => {
+    const gateway = await serve((_request, response) => response.end("gateway"));
+    const renderer = await serve((_request, response) => response.end("renderer"));
+    const outage = await startOutageLink({
+      owner: "test",
+      gatewayUrl: gateway.url,
+      rendererUrl: renderer.url,
+    });
+    closers.push(() => outage.close());
+    // A reload of a lapsed tab has to meet the gateway's login gate
+    // (docs/development/agent-testing.md#live-client-outage).
+    const reload = await fetch(`${outage.url}/`, { headers: { "sec-fetch-dest": "document" } });
+    expect(await reload.text()).toBe("gateway");
+    const module = await fetch(`${outage.url}/src/main.tsx`, {
+      headers: { "sec-fetch-dest": "script" },
+    });
+    expect(await module.text()).toBe("renderer");
+    expect(await (await fetch(`${outage.url}/`)).text()).toBe("renderer");
+    // Documents are not API traffic: nothing recorded, and outage modes pass them.
+    outage.setMode("reset");
+    const during = await fetch(`${outage.url}/`, { headers: { "sec-fetch-dest": "document" } });
+    expect(await during.text()).toBe("gateway");
+    expect(outage.requests).toHaveLength(0);
+  });
+
   test("reset refuses new requests and ends an open stream", async () => {
     const gateway = await serve((_request, response) => {
       response.writeHead(200, { "content-type": "text/event-stream" });

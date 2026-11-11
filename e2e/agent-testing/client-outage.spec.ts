@@ -399,6 +399,7 @@ async function openTab(
     rendererUrl: options.status.rendererUrl!,
   });
   const page = await context.newPage();
+  watchPage(page);
   page.setDefaultTimeout(20_000);
   const sessions = new Set<string>();
   page.on("response", (response: PageResponse) => {
@@ -510,6 +511,85 @@ const firstAnswered = (link: OutageLink, kind: LinkRequestKind, since: number): 
 /** Equal jitter on the event ladder: delay n sits in [base/2, base], base 2, 4, 8, 16 s. */
 const eventJitterWindowMs = (rung: number) =>
   Math.min(EVENT_RECONNECT_CAP_MS, EVENT_RECONNECT_FIRST_MS * 2 ** rung) / 2;
+
+/** At most this many of a link's latest requests, or a page's errors, go into failure evidence. */
+const TIMELINE_REQUESTS = 120;
+
+const pageNavigations = new WeakMap<Page, Array<{ at: number; path: string }>>();
+const pageConsoleErrors = new WeakMap<Page, Array<{ at: number; status: number | null }>>();
+
+/**
+ * Keeps a page's main-frame navigations (path only: a login link's query
+ * carries a bootstrap code) and the HTTP status of each failed resource the
+ * console reports (never the message), for failure evidence.
+ */
+function watchPage(page: Page): void {
+  const navigations: Array<{ at: number; path: string }> = [];
+  const errors: Array<{ at: number; status: number | null }> = [];
+  pageNavigations.set(page, navigations);
+  pageConsoleErrors.set(page, errors);
+  page.on("framenavigated", (frame) => {
+    if (frame !== page.mainFrame()) return;
+    navigations.push({ at: Date.now(), path: new URL(frame.url()).pathname });
+  });
+  page.on("console", (message) => {
+    if (message.type() !== "error" || errors.length >= TIMELINE_REQUESTS) return;
+    const status = /status of (\d{3})/.exec(message.text())?.[1];
+    errors.push({ at: Date.now(), status: status ? Number(status) : null });
+  });
+}
+
+/** Content-free: a watched page's navigations and console errors from `since`. */
+function pageTimeline(page: Page, since: number) {
+  return {
+    pageClosed: page.isClosed(),
+    navigations: (pageNavigations.get(page) ?? [])
+      .filter((entry) => entry.at >= since - 60_000)
+      .map((entry) => ({ path: entry.path, atMs: entry.at - since })),
+    consoleErrors: (pageConsoleErrors.get(page) ?? [])
+      .filter((entry) => entry.at >= since - 60_000)
+      .map((entry) => ({ status: entry.status, atMs: entry.at - since })),
+  };
+}
+
+/**
+ * Content-free: what one link saw from `since` (kind, timing, status, and an
+ * invoke's command name), for evidence when a restart case fails.
+ */
+function linkTimeline(link: OutageLink, since: number) {
+  return link.requests
+    .filter((request) => request.at >= since)
+    .slice(-TIMELINE_REQUESTS)
+    .map((request) => ({
+      kind: request.kind,
+      atMs: request.at - since,
+      answeredAfterMs: request.answeredAt === undefined ? null : request.answeredAt - request.at,
+      status: request.status ?? null,
+      dropped: request.dropped === true,
+      ...(request.command ? { command: request.command } : {}),
+    }));
+}
+
+/**
+ * Runs `body`; when it throws, writes `collect()` as `<name>-failure.json`
+ * before rethrowing, so a failed case keeps what its clients saw.
+ */
+async function withFailureEvidence<T>(
+  testInfo: TestInfo,
+  name: string,
+  collect: () => Promise<unknown>,
+  body: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await body();
+  } catch (error) {
+    const evidence = await collect().catch((reason: unknown) => ({
+      collectFailed: reason instanceof Error ? reason.message : String(reason),
+    }));
+    writeEvidence(testInfo, `${name}-failure`, evidence);
+    throw error;
+  }
+}
 
 function writeEvidence(testInfo: TestInfo, name: string, evidence: unknown): void {
   const body = JSON.stringify(evidence, null, 2);
@@ -960,9 +1040,18 @@ async function startDirectClient(
   link: OutageLink,
   options: { token: string; sessionIds: string[]; transport: Transport; expectedOutput?: string },
 ): Promise<void> {
+  watchPage(page);
   await page.goto(new URL(BLANK_PATH, link.url).href);
   await page.evaluate(
     async ({ baseUrl, token, sessionIds, transport, expectedOutput }) => {
+      // Loading the module installs the page's own cookie-session gateway
+      // unless the page already has one. This blank page holds no live
+      // session, so that gateway's session probe got 401 and reloaded the
+      // page, taking this client with it about 150 ms after it started
+      // (docs/development/agent-testing.md#live-client-outage). The page is a
+      // bearer client only, so it claims the slot first.
+      const page = window as unknown as { orkestrator?: object };
+      page.orkestrator ??= {};
       const modulePath = "/src/lib/native/web-gateway.ts";
       const { createBrowserGatewayApi } = await import(/* @vite-ignore */ modulePath);
       const api = createBrowserGatewayApi({ baseUrl, token, terminalTransport: transport });
@@ -1052,6 +1141,31 @@ async function startDirectClient(
   );
 }
 
+/** Content-free failure evidence for direct clients: link timelines and stream states. */
+async function directClientsEvidence(
+  clients: ReadonlyArray<{ page: Page; link: OutageLink }>,
+  stoppedAt: number,
+  listeningAt: number,
+): Promise<unknown> {
+  return {
+    listeningAfterStopMs: listeningAt - stoppedAt,
+    clients: await Promise.all(
+      clients.map(async ({ page, link }) => {
+        const report = await page.evaluate(() => window.directClient.report()).catch(() => null);
+        return {
+          owner: link.owner,
+          clientPresent: report !== null,
+          ...pageTimeline(page, stoppedAt),
+          states: report?.states
+            .filter((entry) => entry.at >= stoppedAt)
+            .map((entry) => ({ state: entry.state, afterStopMs: entry.at - stoppedAt })),
+          requests: linkTimeline(link, stoppedAt),
+        };
+      }),
+    ),
+  };
+}
+
 for (const transport of ["http-sse", "websocket"] as const) {
   test(`backend restart, direct clients on ${transport}: spread retries, terminals return with the stream`, async ({
     context,
@@ -1124,18 +1238,25 @@ for (const transport of ["http-sse", "websocket"] as const) {
 
       const terminalKind: LinkRequestKind =
         transport === "websocket" ? "terminal-socket" : "terminal-stream";
-      for (const client of clients) {
-        await expect
-          .poll(() => firstAnswered(client.link, "main-stream", listeningAt - 1_000), {
-            timeout: RECONNECT_BUDGET_MS * 2,
-          })
-          .not.toBeNull();
-        await expect
-          .poll(() => terminalBackAt(client.link, listeningAt - 1_000), {
-            timeout: RECONNECT_BUDGET_MS * 2,
-          })
-          .not.toBeNull();
-      }
+      await withFailureEvidence(
+        testInfo,
+        `backend-restart-${transport}`,
+        () => directClientsEvidence(clients, stoppedAt, listeningAt),
+        async () => {
+          for (const client of clients) {
+            await expect
+              .poll(() => firstAnswered(client.link, "main-stream", listeningAt - 1_000), {
+                timeout: RECONNECT_BUDGET_MS * 2,
+              })
+              .not.toBeNull();
+            await expect
+              .poll(() => terminalBackAt(client.link, listeningAt - 1_000), {
+                timeout: RECONNECT_BUDGET_MS * 2,
+              })
+              .not.toBeNull();
+          }
+        },
+      );
       for (const { page } of clients) {
         await expect
           .poll(
@@ -1259,13 +1380,20 @@ test("quick backend restarts: first reconnect against the banner's delay", async
       await stopBackend(status);
       await startBackend(status);
       const listeningAt = Date.now();
-      for (const { link } of clients) {
-        await expect
-          .poll(() => firstAnswered(link, "main-stream", stoppedAt), {
-            timeout: RECONNECT_BUDGET_MS * 2,
-          })
-          .not.toBeNull();
-      }
+      await withFailureEvidence(
+        testInfo,
+        `quick-restart-${round}`,
+        () => directClientsEvidence(clients, stoppedAt, listeningAt),
+        async () => {
+          for (const { link } of clients) {
+            await expect
+              .poll(() => firstAnswered(link, "main-stream", stoppedAt), {
+                timeout: RECONNECT_BUDGET_MS * 2,
+              })
+              .not.toBeNull();
+          }
+        },
+      );
       samples.push({
         backendDownMs: listeningAt - stoppedAt,
         firstReconnectMs: clients
@@ -1318,16 +1446,33 @@ test("backend restart, real UI: banner during the outage, login page on the laps
     // The session lapsed with the old backend. Whatever notices first, the tab
     // must not sit on a stale screen behind a "Reconnecting" banner: it reloads
     // and the gateway answers with its login form.
-    await expect
-      .poll(
-        () =>
-          tab!.page
-            .locator('form[action="/__orkestrator/login"]')
-            .count()
-            .catch(() => 0),
-        { timeout: LAPSE_BUDGET_MS },
-      )
-      .toBe(1);
+    await withFailureEvidence(
+      testInfo,
+      "backend-restart-ui",
+      async () => ({
+        listeningAfterStopMs: listeningAt - stoppedAt,
+        path: new URL(tab!.page.url()).pathname,
+        probe: await snapshotOf(tab!.page)
+          .then((snapshot) => ({
+            banners: snapshot.banners.map((entry) => ({ ...entry, at: entry.at - stoppedAt })),
+            readsStarted: snapshot.readsStarted,
+          }))
+          .catch(() => null),
+        ...pageTimeline(tab!.page, stoppedAt),
+        requests: linkTimeline(tab!.link, stoppedAt),
+      }),
+      () =>
+        expect
+          .poll(
+            () =>
+              tab!.page
+                .locator('form[action="/__orkestrator/login"]')
+                .count()
+                .catch(() => 0),
+            { timeout: LAPSE_BUDGET_MS },
+          )
+          .toBe(1),
+    );
     const loginAt = Date.now();
 
     await tab.page.goto(new URL(mintLoginPath(), tab.link.url).href, {

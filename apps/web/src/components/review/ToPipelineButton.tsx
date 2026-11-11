@@ -1,16 +1,19 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import type { AutoPipelineSource } from "@orkestrator/protocol/build-pipeline";
 import { PipeIcon } from "@/components/icons/PipeIcon";
 import { Button } from "@/components/ui/button";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { readCoordinatorFor } from "@/lib/read-coordinator";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores";
 
 /**
  * How often the active tab's eligibility is re-read while the window is
- * visible. The read is backend storage and in-memory activity only: it never
- * starts or contacts a bridge (`AutoPipelineService.sources`).
+ * visible and connected. The read is backend storage and in-memory activity
+ * only: it never starts or contacts a bridge (`AutoPipelineService.sources`).
  */
 const POLL_MS = 2000;
 
@@ -28,56 +31,41 @@ function useActiveTabId(environmentId: string): string | null {
 
 /**
  * The source the backend offers for `tabId`, or null while the tab is not an
- * open interactive agent tab of a prompt environment. Polls only while a tab is
- * active and the window is visible, reads again when it becomes visible, and
- * stops when unmounted.
+ * open interactive agent tab of a prompt environment. Reads through the node's
+ * read coordinator only while a tab is active, so polling pauses while the
+ * window is hidden or the node's connection is down, catches up once when
+ * either returns, and stops when unmounted.
  */
 function useAutoPipelineSource(environmentId: string, tabId: string | null) {
   const backend = useScopeBackend();
+  // This node's own coordinator: its transport is the one whose outage pauses it.
+  const coordinator = readCoordinatorFor(useScopesWithCommandFallback().scope);
   // Keyed by tab so a read for the previous tab is never shown for this one.
   const [found, setFound] = useState<{
     tabId: string;
     source: AutoPipelineSource | null;
   } | null>(null);
-  useEffect(() => {
-    if (!tabId) return;
-    let disposed = false;
-    let refreshing = false;
-    const refresh = () => {
-      if (refreshing || disposed) return;
-      refreshing = true;
-      void backend
-        .autoPipelineSources(environmentId)
-        .then(
-          (value) => {
-            if (!disposed)
-              setFound({
-                tabId,
-                source:
-                  (value.available && value.sources.find((entry) => entry.tabId === tabId)) || null,
-              });
-          },
-          () => {
-            if (!disposed) setFound({ tabId, source: null });
-          },
-        )
-        .finally(() => {
-          refreshing = false;
+  useCoordinatedRead({
+    key: { resource: "auto-pipeline-sources", target: environmentId, view: tabId ?? "" },
+    enabled: tabId !== null,
+    retainOnDispose: false,
+    coordinator,
+    demand: { intervalMs: POLL_MS, priority: "auxiliary" },
+    read: () => backend.autoPipelineSources(environmentId),
+    onState: (state) => {
+      if (!tabId) return;
+      if (state.status === "current") {
+        const value = state.value;
+        setFound({
+          tabId,
+          source:
+            (value?.available && value.sources.find((entry) => entry.tabId === tabId)) || null,
         });
-    };
-    // A hidden window shows no button, so it reads nothing until it is shown.
-    const poll = () => {
-      if (document.visibilityState !== "hidden") refresh();
-    };
-    poll();
-    const timer = setInterval(poll, POLL_MS);
-    document.addEventListener("visibilitychange", poll);
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
-    };
-  }, [backend, environmentId, tabId]);
+      } else if (state.status === "error" || state.status === "unsupported") {
+        setFound({ tabId, source: null });
+      }
+    },
+  });
   return tabId && found?.tabId === tabId ? found.source : null;
 }
 

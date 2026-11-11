@@ -1647,11 +1647,21 @@ mise run dev:stop --profile qa-outage
 mise run dev:reset --profile qa-outage
 ```
 
-Each case records content-free timings as an annotation in `results.json`.
-On beelink2 on 2026-11-11 the four backend-restart cases failed in two runs
-while the other seven passed; that is
-[7835](../todo/cross-cutting/7835-client-outage-restart-cases-fail-on-beelink2.md). The
-Electron half (a remote backend really restarted, then a silent link) is
+Each case records content-free timings as an annotation in `results.json`. A
+backend-restart case that fails first writes `<name>-failure.json`: each
+client's page navigations (paths only), the HTTP status of each failed load, its
+stream states and its link's request timeline from the stop. The replacement
+backend's own output is in the test log (the Playwright worker relays it), not in
+the profile's `data/logs`.
+
+Two rules keep the link faithful (see the 2026-11-11 run below). Page documents
+go through the gateway, so a tab whose session lapsed reloads into the login
+form; scripts, styles and Vite's HMR socket still go straight to Vite. And a
+direct (bearer) client's blank page claims `window.orkestrator` before it
+imports `web-gateway.ts`, whose module load otherwise installs the page's own
+cookie-session gateway; with no session, that gateway reloads the page.
+
+The Electron half (a remote backend really restarted, then a silent link) is
 `connection-outage-electron.spec.ts`, in `mise run test:agent:electron`. The Codex
 breaker against a real binary is gated separately, and needs only the pinned
 `codex`, which a profile's `data/toolchains/codex` holds if the host does not:
@@ -1690,6 +1700,44 @@ real Codex breaker cases passed in 39.6 s on 0.166.0. Still open: a real
 two-machine link drop, a real PR's stale marker and a background tab's timer
 throttling. These are tasks 16 to 18 of
 [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
+
+#### Recorded run (2026-11-11)
+
+On beelink2 (Linux), `main` at `963ffa6ab`, on a disposable
+`--no-agent-credentials --agent-platforms codex --headless` profile at load
+averages from 4.6 to 43.7. The four restart cases had failed 4 of 4 in every run
+that day (to-do 7835, retired 2026-11-11). Two faults in the spec's harness
+caused it, not the reconnect paths:
+
+- **Direct clients were gone before the restart.** Importing `web-gateway.ts`
+  installs the page's own cookie-session gateway. Since the session-cookie
+  change of 2026-11-03, a session probe that gets 401 reloads the page, and
+  the direct clients' blank page holds no session. So about 150 ms after each
+  client started, its page reloaded and the client went with it. No request
+  reached any link after the stop.
+- **The lapsed UI tab reloaded in a loop.** The link sent every non-API path,
+  the page document included, straight to Vite. A tab whose session lapsed
+  reloaded into the app rather than the gateway's login form, got 401 again,
+  and reloaded every 650 ms.
+
+After the fixes the four restart cases passed together in 336.5 s (backend down
+0.9 to 1.3 s). The login page appeared 1.9 s after the backend listened, and 19
+of 20 quick-restart first reconnects landed inside the 4 s banner delay (1059
+to 4802 ms). Every direct client recovered the missed terminal output on both
+transports, and no retry rung had two clients in step.
+
+The first whole-spec run then failed both dropped-link cases. A tab read
+`auto_pipeline_sources` 19 times while its link was down: the "To pipeline"
+toolbar button, added that day, polled on a timer of its own. It now reads
+through the node's read coordinator, which pauses while the connection is
+down.
+
+The last whole-spec run passed 10 of 11 in 13.0 min. The quick-restart rule
+failed at load average 28 to 34 (8 of 20 under the delay, backend down 1.7 to
+2.2 s) and passed alone straight after (11 of 20). That is flake
+[9965](../tests/flaky-tests/previews-annotations-and-gateway/9965-client-outage-quick-restart-ratio-under-load.md).
+In that run the lapsed tab reached the login page 6.0 s after the backend
+listened.
 
 ### Live cold restart
 

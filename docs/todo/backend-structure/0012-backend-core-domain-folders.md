@@ -202,7 +202,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 - Done (to-do 7800, retired 2026-11-11, against `main` at `963ffa6ab`):
   `core/permission-rules/`, `core/self-improvement/` and `core/opencode2/`
   each have an `index.ts` and both lint patterns, and production importers
-  outside each folder go through it (11, 4 and 20 files). The four root
+  outside each folder go through it (11, 4 and 18 of 20 files; the other two
+  are the exception below). The four root
   `opencode2-*.ts` files import `opencode2/index.js` like any other caller.
   One leaf module is a named exception in the `apps/backend/src/**` pattern:
   `opencode2/container-credentials.js`, imported directly by

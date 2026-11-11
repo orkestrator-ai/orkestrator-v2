@@ -15,11 +15,12 @@
 // own. Credential-free: every CLI runs in a temporary HOME and
 // CLAUDE_CONFIG_DIR with non-essential traffic off, and no prompt is ever
 // sent, so no model request is made. Exit status: 1 when a replaced process
-// outlived the replacement (the bug), 0 when none did, 2 on an error.
+// outlived the replacement (the bug), 0 when none did, 2 on an error or when
+// interrupted (SIGTERM/SIGINT close the CLIs and remove the temporary roots).
 // The last stdout line is `REPLACE_LINGER_RESULT <json>`.
 import { query, type McpServerConfig, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +53,39 @@ export interface ReplaceLingerResult {
 const SELF = fileURLToPath(import.meta.url);
 const READY_TIMEOUT_MS = 20_000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Scenarios still running, so a SIGTERM or SIGINT (the live test's deadline
+ * kill, or Ctrl-C) can close their CLIs and remove their temporary roots: an
+ * exit on a signal never reaches `runScenario`'s `finally`.
+ */
+const active = new Set<ScenarioCleanup>();
+interface ScenarioCleanup {
+  root: string;
+  close: () => void;
+  /** Settles when the scenario's CLI has exited. */
+  exited: () => Promise<void>;
+}
+/** How long an interrupted run waits for its CLIs to exit before removing their roots. */
+const INTERRUPT_EXIT_WAIT_MS = 5_000;
+
+async function cleanUpInterrupted(): Promise<void> {
+  const entries = Array.from(active);
+  for (const entry of entries) {
+    try {
+      entry.close();
+    } catch {
+      // Keep cleaning up the rest.
+    }
+  }
+  // A closing CLI still writes its MCP logs into the scenario's HOME, so
+  // removing the root before it exits would leave a fresh copy behind.
+  await Promise.race([
+    Promise.all(entries.map((entry) => entry.exited())),
+    sleep(INTERRUPT_EXIT_WAIT_MS),
+  ]);
+  for (const entry of entries) rmSync(entry.root, { recursive: true, force: true });
+}
 
 function isAlive(pid: number): boolean {
   try {
@@ -115,6 +149,9 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
   const configDir = join(home, ".claude");
   const cwd = join(root, "project");
   const markers = join(root, "markers.log");
+  let exited: Promise<void> = Promise.resolve();
+  const scenarioCleanup: ScenarioCleanup = { root, close: () => {}, exited: () => exited };
+  active.add(scenarioCleanup);
   mkdirSync(configDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
   appendFileSync(markers, "");
@@ -145,7 +182,6 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
       },
     }),
   };
-  let exited: Promise<void> = Promise.resolve();
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
   const control = query({
     prompt,
@@ -178,6 +214,7 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
       },
     },
   });
+  scenarioCleanup.close = () => control.close();
   const starts = () =>
     readFileSync(markers, "utf8")
       .split("\n")
@@ -229,6 +266,7 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
     control.close();
     await exited;
     await rm(root, { recursive: true, force: true });
+    active.delete(scenarioCleanup);
   }
 }
 
@@ -264,6 +302,11 @@ if (import.meta.main) {
   if (flag === "--server" && markerFile) {
     serveFixture(name, version, markerFile);
   } else {
+    for (const signal of ["SIGTERM", "SIGINT"] as const) {
+      process.once(signal, () => {
+        void cleanUpInterrupted().finally(() => process.exit(2));
+      });
+    }
     try {
       const result = await runReplaceLingerProbe();
       console.log(describe(result));

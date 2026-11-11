@@ -882,6 +882,29 @@ Before any 2.x pin reaches production:
 - The GitHub-token plugin is ported to `@opencode/plugin`.
 - Background test: run a turn, switch environments, let it progress, and check
   that it rehydrates correctly on return.
+- Background shell (from 0049 task 8, retired 2026-11-11; summary in
+  [agent-testing.md](../../development/agent-testing.md)): done 2026-11-11 on a loopback model. 2.2.6 names its shell tool
+  `shell`, which takes `background: true` ("run the command in the
+  background and return immediately"); 1.19.5's `bash` has no such
+  parameter (only `task` runs in the background). With
+  `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` the idle-observation
+  spec's `background` case runs on a 2.x session and the fake sends
+  `background: true`: the call settled `success` at once, no card was left
+  running, the turn went idle, and when the 20 s command ended 2.x resumed
+  the idle session by itself (a `synthetic` row, then an assistant reply).
+  That first record overstated it: the spec matched the marker in the
+  case's own prompt and in the command line, because Orkestrator showed only
+  the synthetic row's description (the command) and dropped its text, which
+  wraps the output in `<shell …>`. The review caught it; the transcript now
+  shows a finished background shell as `Background command <state>:
+  <command>` followed by its output (`backgroundShellNotice` in
+  `apps/backend/src/core/opencode2/transcript.ts`), and the spec counts only
+  a non-user row that arrived after the turn settled and shows the marker
+  as output. Rerun on 2026-11-11 (`oc2-bgfix-bg3`, loopback model): passed,
+  the output row on the idle page 13 ms after the check began; on the
+  previous mapping the same run fails. 2.x has no background-task surface
+  (no running-task indicator), so nothing on the page says the command is
+  still running during those 20 s.
 - Replay tests cover subscribe-before-snapshot, SSE overflow
   (`SubscriberOverflowError`) and bounded memory.
 - Capability flags match 2.x (share, todos and LSP off).

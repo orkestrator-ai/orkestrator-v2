@@ -8,8 +8,10 @@ Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
 What is still missing — mainly provider parity and live qualification — lives in
-[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md) and
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md);
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md)
+and the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+why each platform holds the read-only boundary the way it does is in
+[`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
 OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
 worker-surface follow-ups (root changes on other nodes, adopting feature
@@ -953,6 +955,11 @@ capability profile is rated by exactly the same rules as a coordinator.
 | `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (1.x and the OpenCode 2 preview alike; see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
+The decisions behind each platform's tier, with the options weighed, are in
+[`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
+the facts they rest on are re-checked on every pin bump
+([Re-check coordinator tier decisions](../development/upgrade-agents.md#re-check-coordinator-tier-decisions)).
+
 **Settings → Coordinator → Coordinator safety level** chooses the weakest
 tier this installation will offer. It defaults to `provider-configured`:
 `enforced` and `provider-configured` platforms are offered, and `advisory`
@@ -1127,9 +1134,12 @@ same session a fixed continuation saying the call was refused and must not be
 retried (`POLICY_DENIAL_CONTINUATION`, `acp-prompt.ts`). The continuation
 counts as part of the same turn, and a turn gets at most eight. Without it, a
 Grok coordinator stopped at its first refused tool and never answered.
-Grok's own reading tools are among those that never ask, so nothing keeps a
-Grok coordinator out of the data directory; the bridge's `fs/read_text_file`
-is confined to the workspace already
+Nothing keeps a Grok coordinator's own reading tools out of the data
+directory; the bridge's `fs/read_text_file` is confined to the workspace
+already. Whether those tools ask permission first, which would let the bridge
+refuse a data-directory read in its answer, has not been observed: the
+`data-dir-reads` variant of `scripts/coordinator-probes/grok-web-tools-probe.mjs`
+answers it in one signed-in run
 ([7401](../todo/coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md)).
 
 The coordinator policy names operations, not one provider's tool strings:
@@ -1378,6 +1388,19 @@ The boundary is shown, not silent:
   container" and that bubblewrap and socat are not in the container's image;
   only a host is told to install the packages, since nobody installs into an
   environment's image.
+
+A read-only turn also loads no settings file, which dropped the model
+connection a user sets in the user settings `env` (a gateway's base URL and
+token, Bedrock or Vertex), so every reviewer answered "Not logged in". The
+bridge now passes that file's connection entries, and nothing else from it,
+to the turn's process environment (`read-only-connection-env.ts`; see
+[credentials-and-models.md](../development/credentials-and-models.md)).
+`apiKeyHelper` is not run: it is a command outside the hook. For the same
+reason `AWS_PROFILE` is not taken, and a Bedrock connection that would make
+the CLI resolve AWS profiles (whose `credential_process` is a command) is
+withheld. A coordinator itself gets nothing from the file: its bridge's
+`CLAUDE_CONFIG_DIR` is the coordinator's private, empty Claude home, and it
+connects with the account token the backend hands it.
 
 Without the sandbox the hook refuses every Git command, because a
 repository's Git configuration can run helpers (an external diff, a
@@ -2700,6 +2723,16 @@ lock).
   coordinator as usual. The result says whether a follow exists and tells
   the coordinator to finish its turn. A step that fails again at once comes
   back in the result as `phase: "failed"` with the error.
+- **Live qualification.** `mise run test:agent:coordinator:restart-fake`
+  runs the incident's shape on two real backends joined by a real node link,
+  with real Pi bridges and a loopback model that refuses every build worker
+  with a usage limit (see
+  [agent-testing.md](../development/agent-testing.md#coordinator-pipeline-step-restart-after-a-usage-limit-fake-model)).
+  On this node and on a leaf, the coordinator is woken with the build
+  failed and the restart offered, restarts with `stepId` omitted, is woken
+  again when the restarted step stops, and a same-`requestId` retry replays
+  without restarting twice. A real provider's limit text and a real model
+  choosing to restart are on the manual-test checklist (4680 task 2).
 
 `resume_build_pipeline` resumes a paused pipeline only. On any other phase
 it refuses, naming the phase. Failed pipelines get restart guidance; active
@@ -3900,7 +3933,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
   refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
-  (`coordinator-pipeline-step-actions.test.ts`)
+  (`coordinator-pipeline-step-actions.test.ts`); the fake model's script
+  (`e2e/agent-testing/coordinator-restart-fake-model.test.ts`) and, on demand,
+  the two-profile run (`e2e/agent-testing/coordinator-restart-fake.spec.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a
@@ -3986,7 +4021,10 @@ guarantee, not by one end-to-end scenario replayed per platform:
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no
   coordinator involved. `goal` has a coordinator set a worker a two-turn goal with a
-  claim, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
+  claim, then checks one wake and its read of the result. `research` runs one
+  turn under the default research setting and passes only on a transcript row
+  attributed to the research server (Context7), never on the answer alone;
+  Grok, which loads no research servers, is skipped. Every scenario with mail also runs the renderer's
   carrier parser over each echoed carrier row and requires one toned tile per
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in

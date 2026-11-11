@@ -20,6 +20,8 @@
  * - `synthetic`, `system`, `skill`, `agent-switched`, `model-switched` →
  *   compact status rows. A `system` row is OpenCode reloading its
  *   instructions; only its description is shown, never the instruction text.
+ *   A `synthetic` row that reports a finished background shell shows the
+ *   command and the output it emitted (`backgroundShellNotice`).
  * - `location-switched` → dropped (no user-facing content).
  *
  * A kind the table does not name (a newer server) is dropped and reported
@@ -63,6 +65,31 @@ function isoTime(value: unknown): string | undefined {
 
 function clip(value: string, limit = MAX_NOTICE_CHARS): string {
   return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+/**
+ * A finished background shell, as 2.x reports it: a `synthetic` row whose
+ * metadata names `source: "shell"`, whose description is the command line
+ * and whose text wraps the command's output in a `<shell …>` element (2.2.6).
+ * The output is what the command emitted, so the row shows it under the
+ * command rather than the command alone; null when the row is not one.
+ */
+function backgroundShellNotice(
+  metadata: unknown,
+  description: string | null | undefined,
+  text: string,
+): string | null {
+  const meta = asRecord(metadata);
+  if (meta?.source !== "shell") return null;
+  // Attributes are quoted, and a quoted command may itself contain `>`.
+  const wrapped = /^\s*<shell\b(?:[^>"]|"[^"]*")*>\r?\n?([\s\S]*?)<\/shell>\s*$/.exec(text);
+  if (!wrapped) return null;
+  const state = nonEmptyString(meta.state) ?? "finished";
+  const exit = typeof meta.exit === "number" && meta.exit !== 0 ? ` (exit ${meta.exit})` : "";
+  const heading = `Background command ${state}${exit}${description ? `: ${description}` : ""}`;
+  const output = (wrapped[1] ?? "").replace(/\s+$/, "");
+  const truncated = meta.truncated === true ? "\n(output truncated)" : "";
+  return output ? `${heading}\n${output}${truncated}` : heading;
 }
 
 function modelRef(value: unknown): { modelId?: string; reasoningId?: string } {
@@ -299,6 +326,8 @@ export function normalizeOpenCode2Group(
     case "synthetic": {
       const description = nonEmptyString(row.description);
       const text = typeof row.text === "string" ? row.text : "";
+      const shell = backgroundShellNotice(row.metadata, description, text);
+      if (shell) return [statusRow(id, createdAt, shell)];
       return [statusRow(id, createdAt, description ?? (text || "OpenCode added a note"))];
     }
     case "system":

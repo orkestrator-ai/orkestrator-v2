@@ -15,6 +15,7 @@
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createHash } from "node:crypto";
 import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
+import { connectionEnvFingerprint, withReadOnlyConnectionEnv } from "./read-only-connection-env.js";
 import type {
   CanUseTool,
   HookCallback,
@@ -193,7 +194,11 @@ export function effectiveClaudeContext1m(options: PromptOptions | undefined): bo
   );
 }
 
-/** Hash only managed credential fields; never retain their values in the profile. */
+/**
+ * Hash only credential fields (the managed GitHub token and the model
+ * connection a read-only turn takes from the user settings); never retain
+ * their values in the profile.
+ */
 export function claudeLaunchResourceProfile(
   plugins: readonly { path: string }[],
   environment: NodeJS.ProcessEnv,
@@ -206,6 +211,7 @@ export function claudeLaunchResourceProfile(
       environment.GH_TOKEN ?? null,
       environment.GITHUB_TOKEN ?? null,
       environment.GITHUB_PERSONAL_ACCESS_TOKEN ?? null,
+      connectionEnvFingerprint(environment),
     ]),
   };
 }
@@ -295,7 +301,9 @@ export async function assertClaudeRuntimeAccepts(
     const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
     const [{ plugins }, environment] = await Promise.all([
       resolveClaudeTurnPlugins(request.cwd, policy, claudeTurnSettingSources(session, options)),
-      runtimeEnvironmentForSessionQuery(policy),
+      runtimeEnvironmentForSessionQuery(policy).then((environment) =>
+        withReadOnlyConnectionEnv(policy, environment),
+      ),
     ]);
     resources = claudeLaunchResourceProfile(plugins, environment);
   }

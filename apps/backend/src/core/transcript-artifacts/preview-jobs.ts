@@ -24,7 +24,12 @@ import { chromium, type Browser, type BrowserServer, type Page } from "playwrigh
 
 import { designBootstrap } from "@orkestrator/protocol/design-runtime";
 import { ARTIFACT_FRAME_CHANNEL } from "@orkestrator/protocol/artifact-frame-channel";
-import { INTERACTIVE_HTML_POLICY, MERMAID_POLICY } from "@orkestrator/protocol/rich-content-policy";
+import {
+  INTERACTIVE_HTML_POLICY,
+  MERMAID_POLICY,
+  STATIC_PRESENTATION_POLICY,
+} from "@orkestrator/protocol/rich-content-policy";
+import { staticHtmlDocumentText } from "@orkestrator/protocol/static-html-document-text";
 import type { ArtifactDiagnostic } from "@orkestrator/protocol/transcript-artifacts";
 
 import { RENDERER_BUNDLES, loadPinnedBundle } from "./dependency-manifest.js";
@@ -252,6 +257,17 @@ async function runStatic(
   )) as string;
   result.sanitizer = outcome.report.removed;
   result.elementCount = outcome.report.elementCount;
+  // The text Find searches before the document is ever shown, read from the
+  // bytes just serialized with the presentation frame's own walk. Losing it
+  // loses only that: the frame still reports the text once it renders.
+  try {
+    result.searchText = await page.evaluate(staticHtmlDocumentText, {
+      html: result.effectiveHtml,
+      maxCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
+    });
+  } catch {
+    // Not a verification failure, and nothing the author can act on.
+  }
   result.ok = true;
 }
 

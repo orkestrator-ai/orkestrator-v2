@@ -31,7 +31,8 @@ export type ArtifactCounter =
   | "gc_assets_removed"
   | "gc_staging_removed"
   | "gc_drafts_expired"
-  | "late_completions_discarded";
+  | "late_completions_discarded"
+  | "search_text_unstored";
 
 function segment(value: string): string {
   return LABEL.test(value) ? value : "other";

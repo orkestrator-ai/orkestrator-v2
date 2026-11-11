@@ -173,8 +173,9 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
       await this.host.assertFence();
       const tokenCount =
         reported === undefined ? branch.tokenCount : Math.max(branch.tokenCount ?? 0, reported);
-      // Pi and Cursor report cache reads for their latest turn only, so the
-      // largest value seen is kept rather than the latest.
+      // Pi, Cursor and Grok (the ACP bridge's `usage.turn`) report cache reads
+      // for their latest turn only, so the largest value seen is kept rather
+      // than the latest.
       const cacheReadTokens =
         cacheReads === undefined
           ? branch.cacheReadTokens

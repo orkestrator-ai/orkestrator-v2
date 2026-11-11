@@ -30,4 +30,4 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: running the spec with a real Claude login) moved there on 2026-11-10.
 - to-do 1202 task 4 (retired 2026-11-10)
-- [0049 native agent idle observation](0049-native-agent-idle-observation.md)
+- 0049 native agent idle observation (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`)

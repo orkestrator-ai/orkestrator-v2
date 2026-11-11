@@ -8,10 +8,13 @@
  * `coordinator-live-deliver-now.ts`), `goal` (a worker's goal runs to a passing
  * check and wakes the coordinator once, see `coordinator-live-goal.ts`),
  * `routing` (plain requests routed to the right workflow, see
- * `coordinator-live-routing.ts`), `surfaces` (each worker-surface tool once and
- * the root-changes approval accepted in its dialog, Claude only, see
- * `coordinator-live-surfaces.ts`), `gap-tools` (each gap-review tool called once
- * against one worker, see `coordinator-live-gap-tools.ts`) and `peer`. Every
+ * `coordinator-live-routing.ts`), `research` (a research MCP server call
+ * under the default research setting, attributed to that server in the
+ * transcript, see `coordinator-live-research.ts`), `surfaces` (each
+ * worker-surface tool once and the root-changes approval accepted in its
+ * dialog, Claude only, see `coordinator-live-surfaces.ts`), `gap-tools` (each
+ * gap-review tool called once against one worker, see
+ * `coordinator-live-gap-tools.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -123,6 +126,11 @@ import {
   type RootChangesApproval,
 } from "../../apps/desktop/scripts/dev/coordinator-live-surfaces-orchestration";
 import { surfacesApplies } from "../../apps/desktop/scripts/dev/coordinator-live-surfaces";
+import { runResearchScenario } from "../../apps/desktop/scripts/dev/coordinator-live-research-orchestration";
+import {
+  RESEARCH_SCENARIO_SETTINGS,
+  researchApplies,
+} from "../../apps/desktop/scripts/dev/coordinator-live-research";
 import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
@@ -1124,6 +1132,31 @@ async function peerCase(input: {
   expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
 }
 
+/**
+ * The research scenario: under the default research setting, one turn asks
+ * for React's Context7 library ID, and passes only when a transcript row is
+ * attributed to the research server. Grok, which loads no research servers,
+ * is skipped with the reason before any turn is spent. Why each platform
+ * attributes the call as it does: `docs/architecture/coordinator-read-only-decisions.md`.
+ */
+async function researchCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const { checks, observed } = await runResearchScenario({
+    invoke: coordinator.invoke,
+    identity: coordinator.identity,
+    checkout: coordinator.checkout,
+    summary,
+    timeoutMs: TURN_TIMEOUT_MS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
+  const failures = recordChecks(summary, checks, observed);
+  expect(failures, `${platform}: the research scenario`).toEqual([]);
+}
+
 test.describe("live coordinator", () => {
   test.skip(
     !LIVE,
@@ -1164,6 +1197,30 @@ test.describe("live coordinator", () => {
             skip,
             cleanup,
           });
+        });
+      });
+    }
+
+    if (scenarios.includes("research")) {
+      test(`research on ${platform}: under the default research setting a coordinator calls the research MCP server, and the row is attributed to it`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.research);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "research", async ({ summary, skip, cleanup }) => {
+          const applies = researchApplies(platform);
+          if (!applies.applies) skip(applies.reason);
+          // The bridge reads the research setting at launch, so it is set
+          // before the conversation's agent starts.
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: { ...RESEARCH_SCENARIO_SETTINGS },
+            skip,
+            cleanup,
+          });
+          await researchCase({ coordinator, summary });
         });
       });
     }

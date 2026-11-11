@@ -144,6 +144,12 @@ export type PreviewJobResult =
         executableUrls: number;
       };
       elementCount: number;
+      /**
+       * The document's text for Find, read from `effectiveHtml` with the
+       * presentation frame's walk. Absent when the worker predates it or could
+       * not read it; never longer than `maxSearchTextCharacters`.
+       */
+      searchText?: string;
     })
   | (PreviewJobSuccessBase & {
       kind: "html-interactive";

@@ -1,6 +1,6 @@
 # Gateway terminal socket: agent-test session expiry closed before the test listened
 
-- **ID:** 9937
+- **ID:** 9975
 - **Status:** open
 - **Date observed:** 2026-11-11
 
@@ -48,3 +48,30 @@ No budget, assertion or retry was changed for this record.
 If it recurs, attach the close listener before awaiting `ready` (or derive
 the deadline from the moment the socket authenticated) and check whether the
 socket had already closed when the listener was added.
+
+## Same run: unnumbered web observation
+
+The same aggregate also failed one web test once. Its pipeline's ticket
+reserved a single flake number (this case's), so that observation is kept
+here rather than as a case of its own. Give it its own number in the
+native-agents-and-transcripts group if it recurs.
+
+- **Test:** `useConversationScrollTarget > a repeat jump to the same message restarts the highlight; another moves it`
+  in `apps/web/src/components/native-agent/useConversationScrollTarget.test.tsx`.
+  No index entry matched this test or file, so it is not a counted
+  recurrence of anything.
+- **Failure:** line 88, `expect(result.current?.messageId).toBe("u-2")`
+  received `undefined` (396.98 ms). The branch's changes do not reach the
+  test's import graph.
+- **Counts:** web 14,468 passed, 10 skipped, 1 failed; 14,479 tests across
+  1,001 files in 478.67 s, same evidence log as above.
+- **Isolated rerun:** the aggregate runner's automatic rerun of the unchanged
+  owner passed alone: 11 pass, 0 fail, 2.17 s (one worker).
+- **Hypothesis, unconfirmed:** the test runs a 200 ms highlight on wall-clock
+  time. After the repeat jump it waits for the new generation and then sleeps
+  a fixed 120 ms before checking the highlight is still shown; on a loaded
+  host the `waitFor` plus the sleep can overrun the restarted 200 ms period.
+  Nothing in the test was changed.
+- **Next evidence:** if it recurs, drive the highlight timer with
+  `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`) instead
+  of fixed sleeps, as the `sleep-before-negative-assertion` guard advises.

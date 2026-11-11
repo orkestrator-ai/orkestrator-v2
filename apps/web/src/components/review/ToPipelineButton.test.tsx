@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
@@ -156,16 +156,35 @@ test("reads nothing while the window is hidden and reads again once it is shown"
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
     document.dispatchEvent(new Event("visibilitychange"));
   };
+  // The component's 2 s poll, captured so the test can run its ticks while
+  // hidden instead of sleeping past them.
+  const realSetInterval = globalThis.setInterval;
+  const polls: Array<() => void> = [];
+  const intervals = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    delay?: number,
+  ) => {
+    if (delay === 2000) polls.push(callback);
+    return realSetInterval(callback, delay);
+  }) as typeof setInterval);
   try {
     setVisibility("hidden");
     const node = client();
     render(node, () => true);
-    await new Promise((resolve) => setTimeout(resolve, 2300));
+    expect(polls).toHaveLength(1);
+    act(() => {
+      polls[0]!();
+      polls[0]!();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(node.calls("auto_pipeline_sources")).toHaveLength(0);
     act(() => setVisibility("visible"));
     expect(await screen.findByRole("button", { name: "To pipeline" })).toBeTruthy();
     expect(node.calls("auto_pipeline_sources")).toHaveLength(1);
   } finally {
+    intervals.mockRestore();
     if (visibility) Object.defineProperty(document, "visibilityState", visibility);
     else delete (document as { visibilityState?: unknown }).visibilityState;
   }

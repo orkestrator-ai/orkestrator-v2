@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { AgentsMdPrResult } from "./agents-md-pr.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
@@ -23,8 +22,6 @@ import {
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import type { Environment, Project } from "./models.js";
-import { fixtureMcpServer } from "./opencode-coordinator-research-test-support.js";
-import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
 import {
   ensureProjectHomeEnvironment,
   type EnsureProjectHomeResult,
@@ -323,58 +320,6 @@ describe("two BackendRuntimes in one process (todo 1070)", () => {
     expect(second.recordReadFailure("run-1\0checks")).toBe(1);
     first.forgetReadFailures("run-1\0checks");
     expect(first.recordReadFailure("run-1\0checks")).toBe(1);
-  });
-
-  test("OpenCode coordinator research registrations are per backend and forgotten only with it", async () => {
-    const first = createRuntime();
-    const second = createRuntime();
-    const research = fixtureMcpServer(["query-docs"]);
-    // Stands in for the coordinator's `opencode serve`: the research server connects.
-    const openCode = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch: () => Response.json({ context7: { status: "connected" } }),
-    });
-    const runtimeId = coordinatorRuntimeId("workspace-1", "conversation-1");
-    const serverKey = `local:${runtimeId}`;
-    try {
-      const firstResearch = first.localServers.openCodeAgentTools.research;
-      const secondResearch = second.localServers.openCodeAgentTools.research;
-      expect(
-        await firstResearch.configure({
-          serverKey,
-          port: openCode.port!,
-          password: "fixture",
-          directory: "/fixture",
-          servers: [{ name: "context7", url: `${research.url.origin}/mcp` }],
-        }),
-      ).toEqual(["context7_query-docs"]);
-      expect(secondResearch.toolIds(serverKey)).toEqual([]);
-
-      // A coordinator provider reads the registrations of the backend that serves it.
-      const toolIds = (runtime: BackendRuntime) =>
-        openCodeEnvironmentDependencies({
-          environmentId: runtimeId,
-          openCodeCoordinatorResearch: runtime.localServers.openCodeAgentTools.research,
-        }).coordinatorResearchToolIds?.();
-      expect(toolIds(first)).toEqual(["context7_query-docs"]);
-      expect(toolIds(second)).toEqual([]);
-
-      // The other backend's shutdown forgets only its own launches.
-      for (const runtime of [first, second]) {
-        runtime.localServers.openCodeAgentTools.recordLaunchConnection(serverKey, {
-          url: "http://127.0.0.1:1/mcp",
-          token: "fixture",
-        });
-      }
-      second.localServers.openCodeAgentTools.cancelAll();
-      expect(firstResearch.toolIds(serverKey)).toEqual(["context7_query-docs"]);
-      first.localServers.openCodeAgentTools.cancelAll();
-      expect(firstResearch.toolIds(serverKey)).toEqual([]);
-    } finally {
-      openCode.stop(true);
-      research.stop();
-    }
   });
 
   test("worker tab close admission is per backend", () => {

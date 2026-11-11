@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-13
 - **Test:** `environment quotas through the service > the request count quota refuses a send with usage totals and reserves nothing`.
-- **Owning file:** `apps/backend/src/core/web-annotation-quotas.test.ts`.
+- **Owning file:** `apps/backend/src/core/web-annotations/quotas.test.ts`.
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`,
   with the documented macOS GNU-tool PATH.
 - **Worker configuration:** workspace packages `--parallel=1`, two package
@@ -14,7 +14,7 @@
 - **Backend suite:** 5,875 passed, 15 skipped, 27 failed across 329 files in
   442.53 seconds; 22 failures reproduced as tmux cleanup errors on this host.
 - **Isolated rerun:** with the same PATH,
-  `mise run test:logged -- --name quotas-rerun -- bun --cwd=apps/backend test ./src/core/web-annotation-quotas.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name quotas-rerun -- bun --cwd=apps/backend test ./src/core/web-annotations/quotas.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
   passed unchanged (exit 0) in 5.1 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
@@ -29,9 +29,9 @@ or skips were changed.
 - **Date observed:** 2026-10-13
 - **Original command:** `mise run test:logged -- --name fix-full-suite -- mise run test`
 - **Worker configuration:** normal aggregate allocation; backend used one Bun worker while root and bridge groups and component/isolated browser validation ran on the host.
-- **Failure:** `environment quotas through the service > the request count quota refuses a send with usage totals and reserves nothing` in `apps/backend/src/core/web-annotation-quotas.test.ts` exhausted a beforeEach/afterEach hook timeout at 10005.53 ms.
+- **Failure:** `environment quotas through the service > the request count quota refuses a send with usage totals and reserves nothing` in `apps/backend/src/core/web-annotations/quotas.test.ts` exhausted a beforeEach/afterEach hook timeout at 10005.53 ms.
 - **Suite counts:** backend reported 5877 passed, 15 skipped and 25 failed; 22 failures were environment-move cleanup errors and two were keyed-scheduling timeouts.
-- **Isolated rerun:** `mise run test:logged -- --name fix-quotas-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/web-annotation-quotas.test.ts --parallel=1 --only-failures` passed (exit 0, 2.4 seconds).
+- **Isolated rerun:** `mise run test:logged -- --name fix-quotas-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/web-annotations/quotas.test.ts --parallel=1 --only-failures` passed (exit 0, 2.4 seconds).
 - **Evidence:** `/tmp/orkestrator-test-run.Pv387k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** fixture lifecycle work exceeded its deadline under aggregate load or shared backend activity. The owning test and backend were unchanged; the cause is unconfirmed. No test was skipped or timeout raised.
 
@@ -72,7 +72,7 @@ or skips were changed.
   - Alone: the case took 0.154 s; the file passed 15/15 in 385 ms.
     Per phase: fixture mutate 77–97 ms, restart 20–22 ms, create 26–31 ms,
     refused send 20–25 ms, cleanup 2–3 ms.
-  - `bun test --preload ../../tests/setup-node.ts ./src/core/web-annotation-quotas.test.ts --rerun-each 20`:
+  - `bun test --preload ../../tests/setup-node.ts ./src/core/web-annotations/quotas.test.ts --rerun-each 20`:
     300/300 passed in 6.71 s; the case took 0.159–0.197 s (median 0.177 s).
   - Same command under CPU stress (36 `yes` busy loops on 18 cores):
     300/300 passed in 31.2 s; the case took 0.74–1.49 s (median 1.18 s).

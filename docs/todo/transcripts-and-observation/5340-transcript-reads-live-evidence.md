@@ -28,7 +28,7 @@ The fake counts row JSON, not the HTTP envelope, compression or the bridge's own
 **Decisions.**
 
 - **How to get live numbers?**
-  - **Run 1202 task 1's method for these reads with the loopback-model profile spec of [6680](6680-conditional-reads-and-deltas-measured.md) task 1 (`e2e/agent-testing/conditional-reads-live.spec.ts`), on both commits (recommended).**
+  - **Run 1202 task 1's method for these reads with the loopback-model profile spec from 6680 (retired 2026-11-11) task 1 (`e2e/agent-testing/conditional-reads-live.spec.ts`, [Live conditional reads](../../development/agent-testing.md#live-conditional-reads-loopback-models)), on both commits (recommended).**
     - Pros: the profile's own renderer, gateway, backend, bridge and CLI, with no billed turn; both commits are known.
     - Cons: the fake model's rows and filler text are not a real turn's sizes or compressibility; a billed real-provider run for those is on the manual-test checklist (7568: 5340 task 1).
   - **Run 1202 task 1's method on a real provider turn.**

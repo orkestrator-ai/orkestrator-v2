@@ -23,6 +23,8 @@ export interface FakeModelOptions {
 export interface FakeModel {
   origin: string;
   conversationCalls(): number;
+  /** Characters streamed so far in conversation responses. */
+  streamedChars(): number;
   stop(): Promise<void>;
 }
 
@@ -114,6 +116,7 @@ async function streamRound(
   options: FakeModelOptions,
   body: MessagesBody,
   id: number,
+  onStreamed: (chars: number) => void,
 ) {
   const round = toolResults(body);
   const tool = (body.tools ?? []).map((entry) => entry.name).find((name) => name === "Glob");
@@ -150,6 +153,7 @@ async function streamRound(
       index: 0,
       delta: { type: "text_delta", text: text.slice(0, options.deltaChars) },
     });
+    onStreamed(options.deltaChars);
     await sleep(options.deltaMs);
   }
   event(response, { type: "content_block_stop", index: 0 });
@@ -178,6 +182,7 @@ async function streamRound(
 export async function startFakeModel(options: FakeModelOptions): Promise<FakeModel> {
   let sequence = 0;
   let conversation = 0;
+  let streamed = 0;
   const server = createServer((request, response) => {
     void (async () => {
       sequence += 1;
@@ -201,7 +206,7 @@ export async function startFakeModel(options: FakeModelOptions): Promise<FakeMod
         return;
       }
       conversation += 1;
-      await streamRound(response, options, body, sequence);
+      await streamRound(response, options, body, sequence, (chars) => (streamed += chars));
     })().catch(() => response.destroy());
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -210,6 +215,7 @@ export async function startFakeModel(options: FakeModelOptions): Promise<FakeMod
   return {
     origin: `http://127.0.0.1:${address.port}`,
     conversationCalls: () => conversation,
+    streamedChars: () => streamed,
     stop: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();

@@ -15,13 +15,12 @@ import {
   reviewerHistoryDigest,
   reviewerHistoryKey,
 } from "./multi-review-reviewer-transcript.js";
-import { OpenCodeStreamState } from "./opencode-stream-state.js";
-import { openCodeHistoryServer, openCodeMessageId } from "./opencode-history-test-support.js";
+import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
 import {
-  openCodeTranscriptSource,
-  openCodeTranscriptSnapshot,
-  openCodeTranscriptPage,
-} from "./opencode-snapshots.js";
+  OpenCode2TranscriptState,
+  openCode2TranscriptPage,
+  openCode2TranscriptSnapshot,
+} from "./opencode2/transcript-snapshot.js";
 import { encodeDirectHistoryCursor } from "./native-agent-direct-history.js";
 
 function bytes(value: unknown): number {
@@ -740,14 +739,29 @@ describe("reviewer history pages", () => {
   });
 });
 
-test("Multi Review adopts inline OpenCode cursors and pages beyond the retained cache", async () => {
-  const server = openCodeHistoryServer(220);
-  const stream = new OpenCodeStreamState();
-  stream.replaceMessages("owned-session", server.read(64), undefined, 64);
-  const source = openCodeTranscriptSource(stream, "owned-session", {
-    readMessages: async (limit, before) => server.read(limit, before),
-    recordUnknown: () => undefined,
-  });
+/** An OpenCode 2 session of `rows` alternating user and assistant rows, read as a reviewer would. */
+async function openCodeReviewerSession(rows: number, text: (index: number) => string = String) {
+  const server = new FakeOpenCode2Server();
+  const client = server.client();
+  const sessionId = (await client.createSession({})).id;
+  const ids: string[] = [];
+  for (let index = 0; index < rows; index += 1) {
+    ids.push(
+      server.pushRow(sessionId, {
+        type: index % 2 === 0 ? "user" : "assistant",
+        ...(index % 2 === 0
+          ? { text: `u${index}:${text(index)}` }
+          : { content: [{ type: "text", text: `a${index}:${text(index)}` }] }),
+        time: { created: 1_000 + index },
+      }),
+    );
+  }
+  const state = new OpenCode2TranscriptState(() => true);
+  return { server, client, sessionId, ids, state };
+}
+
+test("Multi Review adopts OpenCode cursors and pages beyond the window", async () => {
+  const { server, client, sessionId, ids, state } = await openCodeReviewerSession(220);
   let pages = 0;
   const provider = {
     agent: "opencode",
@@ -756,30 +770,33 @@ test("Multi Review adopts inline OpenCode cursors and pages beyond the retained 
     },
     transcriptSnapshot: async (
       _id: string,
-      options: Parameters<typeof openCodeTranscriptSnapshot>[1],
-    ) => openCodeTranscriptSnapshot(source, options),
-    transcriptPage: async (_id: string, options: Parameters<typeof openCodeTranscriptPage>[1]) => {
+      options: Parameters<typeof openCode2TranscriptSnapshot>[3],
+    ) => openCode2TranscriptSnapshot(client, state, sessionId, options),
+    transcriptPage: async (_id: string, options: Parameters<typeof openCode2TranscriptPage>[3]) => {
       pages++;
-      return openCodeTranscriptPage(source, options);
+      return openCode2TranscriptPage(client, state, sessionId, options);
     },
   } as unknown as BuildPipelineProvider;
-  const owner = { sessionKey: "reviewer", providerSessionId: "owned-session" };
-  const read = await readReviewerTranscript(provider, owner.providerSessionId, undefined, {
-    key: owner.sessionKey,
-  });
-  if (read.kind !== "snapshot") throw new Error("expected snapshot");
-  const held = [...read.messages];
-  let cursor = read.historyCursor;
-  for (let guard = 0; cursor && guard < 10; guard++) {
-    const page = await readReviewerHistoryPage(provider, owner, cursor, { limit: 50 });
-    if (page.kind !== "page") throw new Error("expected page");
-    expect(page.fallback).toBe(false);
-    held.unshift(...page.messages);
-    cursor = page.nextCursor;
+  try {
+    const owner = { sessionKey: "reviewer", providerSessionId: sessionId };
+    const read = await readReviewerTranscript(provider, owner.providerSessionId, undefined, {
+      key: owner.sessionKey,
+    });
+    if (read.kind !== "snapshot") throw new Error("expected snapshot");
+    const held = [...read.messages];
+    let cursor = read.historyCursor;
+    for (let guard = 0; cursor && guard < 10; guard++) {
+      const page = await readReviewerHistoryPage(provider, owner, cursor, { limit: 50 });
+      if (page.kind !== "page") throw new Error("expected page");
+      expect(page.fallback).toBe(false);
+      held.unshift(...page.messages);
+      cursor = page.nextCursor;
+    }
+    expect(pages).toBeGreaterThan(0);
+    expect(held.map((row) => (row as { id: string }).id)).toEqual(ids);
+  } finally {
+    server.stop();
   }
-  expect(pages).toBeGreaterThan(0);
-  expect((held[0] as { id: string }).id).toBe(openCodeMessageId(0));
-  expect(held).toHaveLength(220);
 });
 
 test.each([1.2, 3.8])(
@@ -865,36 +882,38 @@ test.each([1.2, 3.8])(
   },
 );
 
-test("OpenCode revised inline steps outside a byte-bounded reviewer tail retain display identities", async () => {
-  const server = openCodeHistoryServer(64, () => "x".repeat(80 * 1024));
-  const stream = new OpenCodeStreamState();
-  stream.replaceMessages("owned-session", server.read(64), undefined, 64);
-  const id = openCodeMessageId(1);
-  const part = server.messages[1]!.parts[0]!;
-  stream.apply({
-    type: "message.part.updated",
-    properties: { sessionID: "owned-session", part: { ...part, text: "settled late" } },
-  } as never);
-  const source = openCodeTranscriptSource(stream, "owned-session", {
-    readMessages: async (limit, before) => server.read(limit, before),
-    recordUnknown: () => undefined,
-  });
+test("an OpenCode row revised outside a byte-bounded reviewer tail keeps its display identity", async () => {
+  const { server, client, sessionId, ids, state } = await openCodeReviewerSession(64, () =>
+    "x".repeat(80 * 1024),
+  );
   const provider = {
     agent: "opencode",
     messages: async () => [],
     transcriptSnapshot: async (
       _id: string,
-      options: Parameters<typeof openCodeTranscriptSnapshot>[1],
-    ) => openCodeTranscriptSnapshot(source, options),
+      options: Parameters<typeof openCode2TranscriptSnapshot>[3],
+    ) => openCode2TranscriptSnapshot(client, state, sessionId, options),
   } as unknown as BuildPipelineProvider;
-  const read = await readReviewerTranscript(provider, "owned-session", undefined);
-  if (read.kind !== "snapshot") throw new Error("expected snapshot");
-  expect(read.messages.some((row) => (row as { id: string }).id === id)).toBe(false);
-  expect(read.revisedMessages).toEqual([
-    expect.objectContaining({
-      id,
-      content: "settled late",
-      parts: [expect.objectContaining({ type: "text", content: "settled late" })],
-    }),
-  ]);
+  try {
+    await readReviewerTranscript(provider, sessionId, undefined);
+    // A late tool result lands on an old response.
+    const id = ids[1]!;
+    server.reviseRow(sessionId, id, { content: [{ type: "text", text: "settled late" }] });
+    state.observe(sessionId, {
+      type: "session.tool.success",
+      data: { sessionID: sessionId, assistantMessageID: id },
+    });
+    const read = await readReviewerTranscript(provider, sessionId, undefined);
+    if (read.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(read.messages.some((row) => (row as { id: string }).id === id)).toBe(false);
+    expect(read.revisedMessages).toEqual([
+      expect.objectContaining({
+        id,
+        content: "settled late",
+        parts: [expect.objectContaining({ type: "text", content: "settled late" })],
+      }),
+    ]);
+  } finally {
+    server.stop();
+  }
 });

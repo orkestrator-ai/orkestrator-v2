@@ -57,6 +57,7 @@ import {
 import { DesignLibraryIndex, summarizeRecord, type DesignSummary } from "./library.js";
 import * as sessionLinks from "./session-links.js";
 import type {
+  DesignArchivedSessionLookup,
   DesignNativeSessionLookup,
   DesignSessionLinkInput,
   DesignSessionResumer,
@@ -1847,8 +1848,9 @@ export class DesignService {
     environmentId: string,
     canvasId: string,
     lookup: DesignNativeSessionLookup,
+    archived?: DesignArchivedSessionLookup,
   ): Promise<DesignSessionLinkStates> {
-    return sessionLinks.sessionLinkStates(this, environmentId, canvasId, lookup);
+    return sessionLinks.sessionLinkStates(this, environmentId, canvasId, lookup, archived);
   }
 
   recordTabSession(input: {
@@ -1863,7 +1865,7 @@ export class DesignService {
   resumeSessionLink(
     environmentId: string,
     canvasId: string,
-    input: { linkId: string; expectedTabId: string; tabId: string },
+    input: { linkId: string; expectedTabId: string; tabId: string; restoreArchived?: boolean },
     resumer: DesignSessionResumer,
   ): Promise<DesignSessionResumeResult> {
     return sessionLinks.resumeSessionLink(this, environmentId, canvasId, input, resumer);

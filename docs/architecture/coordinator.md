@@ -653,6 +653,11 @@ optional `nodeId` (`coordinator-node-tickets.ts`):
 | `list_tickets`, `get_ticket` | The leaf's board: this board's copies (`syncedFromCommandNode`) and tickets made only there. Disconnected: this board, with a note. | The leaf's board. Disconnected: refused. |
 | `update_ticket`, `add_ticket_comment` | A ticket of this board is changed here and synced; a ticket made only on the leaf is changed there. | Changed on the leaf. Disconnected: refused. |
 
+The Linear tools (`list_linear_issues` and the rest, [tickets.md](tickets.md#linear))
+act on the project's linked Linear board with this machine's own key; with a
+`nodeId` they run on the coordinator's project on that machine through
+`invoke_on_node`, which reads the same board with that machine's key.
+
 The label tools (`list_ticket_labels`, `create_ticket_label`, `set_ticket_label`)
 take no `nodeId`: they act on this board, whose labels sync with the tickets.
 To label a ticket that exists only on a leaf, pass `labels` to `update_ticket`
@@ -952,7 +957,7 @@ capability profile is rated by exactly the same rules as a coordinator.
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
 | `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can run commands (macOS; Linux whose bubblewrap can nest a user namespace, with `socat` on `PATH`); Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (1.x and the OpenCode 2 preview alike; see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 The decisions behind each platform's tier, with the options weighed, are in
@@ -1040,58 +1045,35 @@ What each enforced platform actually does:
   no shell, so this covers every built-in read; it is a tool-level check, not an
   OS boundary, which is why Pi stays `provider-configured`.
 
-OpenCode denies through its own permission rules and runs its `plan` agent, but
-always loads the checkout's project configuration, including any MCP servers it
-declares. Its rules also keep a coordinator out of the data directory: nothing
-in them allows `external_directory`, and the data directory is never inside the
-checkout. OpenCode judges that from the path as written, so a link in the
-checkout pointing into the data directory was read; the coordinator's server
-therefore loads `orkestrator-coordinator-read-boundary.js`
-(`opencode-read-boundary-plugin.ts`) from the host configuration directory,
-which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
-`tool.execute.before`. It is inert in every other server. When the user sets
-their own `OPENCODE_CONFIG_DIR`, OpenCode honours only that one directory, so
-the launcher keeps it and adds the plugins as `file://` entries of
-`OPENCODE_CONFIG_CONTENT`'s `plugin` list, which 1.19.5 appends to every other
-source's plugins (`installHostOpenCodePlugins`); a coordinator's server is
-refused when the user's own `OPENCODE_CONFIG_CONTENT` cannot be extended
-(unparseable, not an object, or a `plugin` value that is not a list of
-strings); any other server then starts without the plugins, as before. The
-credential plugin rides along, since it too is self-contained. Qualified on the
-pinned binary beside a user directory, with a control showing that directory
-alone reads through the link.
-Both layers are qualified on the pinned binary with a loopback model
-(`opencode-coordinator-read-boundary-live.test.ts`).
-
-Under the OpenCode 2 preview (Settings → OpenCode, "Use OpenCode 2 for new
-sessions") a coordinator conversation started from then on runs on OpenCode
-2.x; one started earlier stays on 1.x (`opencode2/coordinator.ts`). Its 2.x
-server is its own process, keyed by the conversation's runtime id, so the
-boundary is held by that process's launch rather than by any session record:
+OpenCode denies through its own permission rules and runs its `plan` agent
+(`opencode2/coordinator.ts`). A coordinator conversation's OpenCode server is
+its own process, keyed by the conversation's runtime id, so the boundary is
+held by that process's launch rather than by any session record:
 
 - It is launched with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
   the data directory, the research setting of the moment, and
   `OPENCODE_DISABLE_PROJECT_CONFIG=1`, so the checkout's `opencode.json`,
-  `.opencode/` agents, commands, plugins and MCP servers never load. This is
-  the axis 1.x cannot honour; a changed research setting replaces an idle
-  server, as it replaces the 1.x one.
+  `.opencode/` agents, commands, plugins and MCP servers never load. A changed
+  research setting replaces an idle server.
 - Its configuration directory (`opencode2/coordinator-config` under the data
   directory, never the ordinary one) holds the coordinator guard plugin
-  (`coordinator-plugin.ts`). In the server process, on every tool call a
-  sub-agent's included, it refuses any tool outside the read-only set, the
-  conversation's control tools and the research servers named at launch,
+  (`opencode2/coordinator-plugin.ts`). In the server process, on every tool
+  call a sub-agent's included, it refuses any tool outside the read-only set,
+  the conversation's control tools and the research servers named at launch,
   whatever a session's stored rules say, and refuses a `read`, `grep`, `glob`
-  or `list` that would reach the data directory, resolving links (2.2.6, like
-  1.x, judges `external_directory` from the path as written). The checkout and
-  the conversation's attachment directory stay readable.
+  or `list` that would reach the data directory, resolving links (OpenCode
+  judges `external_directory` from the path as written, so a link in the
+  checkout pointing into the data directory would otherwise be read). The
+  checkout and the conversation's attachment directory stay readable.
 - The backend keeps the launch's policy beside the process. The provider built
   for that server ignores a request's policy and a session's stored base:
   create, resume, policy synchronization and every turn write the coordinator
-  rules (1.x's, translated) and read them back before the prompt, pin the
-  `plan` agent, and refuse provider commands (2.x does not say which agent a
-  command runs as). The conversation's Control MCP credential, the one its 1.x
-  server was launched with, is registered as the location's `orkestrator`
-  server, and the research servers as theirs.
+  rules (`opencode2/policy-rules.ts`, translated by `opencode2/permissions.ts`)
+  and read them back before the prompt, pin the `plan` agent, and refuse
+  provider commands (OpenCode 2 does not say which agent a command runs as).
+  The conversation's Control MCP credential, the one its server was launched
+  with, is registered as the location's `orkestrator` server, and the
+  research servers as theirs.
 
 This is qualified against the pinned 2.2.6 binary with a scripted model
 (`opencode2-coordinator.live.test.ts`): no write, no command, no read of the
@@ -1100,10 +1082,12 @@ research tools reached, a session widened behind the backend's back refused
 by the server and restated by the next turn, and the project configuration
 not loaded where a server without the switch loads it. The tier stays
 `provider-configured`: the live coordinator suite has not been run against
-OpenCode 2 with a real model, the table rates one tier per platform while
-earlier conversations remain on 1.x, and the server process itself runs
-unsandboxed (its boundary is OpenCode's rules plus the in-process gate, not an
-OS sandbox).
+OpenCode 2 with a real model, and the server process itself runs unsandboxed
+(its boundary is OpenCode's rules plus the in-process gate, not an OS
+sandbox). Before 2026-11-11 a coordinator could also run on OpenCode 1.x,
+which always loaded the checkout's project configuration and held the data
+directory with a read-boundary plugin (`git show
+5f4e27b1c:apps/backend/src/core/opencode-read-boundary-plugin.ts`).
 
 Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
@@ -1187,7 +1171,7 @@ Orkestrator injects each one itself, never from a file the checkout can edit.
 | --- | --- | --- | --- |
 | Codex | `web_search = "cached"` when allowed, else `"disabled"`; `features.standalone_web_search = false`. The engine reads the mode back through `config/read` once per app-server generation and refuses the thread on any other value. `cached` serves pages only from OpenAI's index: a live run had it refuse a fresh URL with "Cache miss" while `live` opened it. | No separate tool; `live` mode is never used | Process `-c mcp_servers.<name>` overrides, tools approved |
 | Claude | WebSearch on the allowlist when allowed, else in `disallowedTools` and refused by the hook | WebFetch denied by name and by the hook | Added to the inline MCP set, `mcp__<name>__*` on the allowlist and the hook |
-| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Registered on the coordinator's own `opencode serve` at launch (`POST /mcp`, replacing any project entry of the same name), before the conversation is ready. OpenCode 1.19.4 lists no MCP tools over HTTP, so the backend lists each server's tools itself and allows exactly `<name>_<tool>`, leaving out an id a project server named `<name>_…` could also produce (`opencode-coordinator-research.ts`) |
+| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Registered on the coordinator's own OpenCode server before its first turn (`PUT /api/experimental/mcp/<name>`); a server that does not connect is left out. The backend lists each server's tools itself and allows exactly `<name>_<tool>`, leaving out an id another listed server named `<name>_…` could also produce (`opencode2/research-tools.ts`, called from `opencode2/coordinator.ts`) |
 | Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Hosted in-process as `<name>__<tool>` custom tools beside Orkestrator's, because a sandboxed read-only attach cannot call an HTTP MCP server; published under their own server name (`hostResearchCustomTools`) |
 | Grok | Off. On 1.0.67 the hosted `web_search` carries `open_page` and `open_page_with_find`, which open any URL, and neither the agent profile nor `--disallowed-tools` removes them (`scripts/coordinator-probes/grok-web-tools-probe.mjs`), so search there is fetch. `--disable-web-search` removes all three; `GROK_WEB_FETCH=0` removes only the client `web_fetch`. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | None |
 | Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Connected by the bridge-owned MCP client in a coordinator process only (`research` scope, reserved like `orkestrator` so a `mcp.json` entry cannot stand in), and admitted by the gate by exact registered name |
@@ -1296,7 +1280,7 @@ runs in a skill stays inside that platform's read-only boundary.
 | --- | --- | --- | --- |
 | Codex | The account's `CODEX_HOME/skills`, which the launcher names in `ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR` because the coordinator's own `CODEX_HOME` is private, added with `skills/extraRoots/set` once per app-server generation; `~/.agents/skills`, which Codex lists from HOME | `.agents/skills` and `.codex/skills`, no longer disabled for a coordinator process (`codexLoadsProjectSkills`); `.claude/skills` as an extra root. The checkout stays pinned untrusted, so its config, hooks and MCP servers stay out | A Codex skill grants nothing; what it asks for runs as a command under the permission profile (no write, no network). The profile reads each user skill root and each skill it links to (`codexCoordinatorSkillReadRoots`): a link target is granted only when it holds a `SKILL.md` and is not HOME, `/` or an ancestor, and the checkout's own links are never followed. `features.skill_mcp_dependency_install` and `skill_env_var_dependency_prompt` are off. Proved by `live-coordinator-skills.test.ts` (no credits): the skills are listed and offered, a user skill is readable from a command, and a neighbouring file, the skill and the checkout stay unreadable or unwritable |
 | Cursor | `~/.cursor`, `~/.agents`, `~/.claude`, `~/.codex` and `~/.grok` skills, Cursor's own list | The same five directories under the checkout | The SDK has no skills-only switch (the `user` layer also brings `~/.cursor/mcp.json`), so the bridge hosts one read-only tool, `orkestrator-skills__load` (`coordinator-skills.ts`), beside the Orkestrator and research tools: its description lists the skills, and a call returns a `SKILL.md` or a file inside that skill. A directory counts as a skill only with a `SKILL.md` and not as HOME, `/` or an ancestor; a file outside the skill's own directory is refused. The allowlist and sandbox are unchanged. The list is read at attach |
-| OpenCode | OpenCode's own, `~/.claude` and `~/.agents` skills | `.opencode`, `.claude` and `.agents` skills | OpenCode discovers them itself; the `skill` permission is now allowed. On 1.19.4 it only returns the `SKILL.md` and a file list, and a shipped script still needs the denied `bash` |
+| OpenCode | OpenCode's own, `~/.claude` and `~/.agents` skills | `.opencode`, `.claude` and `.agents` skills | OpenCode discovers them itself; the `skill` permission is allowed. On 1.19.4 it only returned the `SKILL.md` and a file list, and a shipped script still needs the denied shell. Not rechecked on 2.x, including which project skill directories `OPENCODE_DISABLE_PROJECT_CONFIG=1` leaves out |
 | Pi | `~/.pi/agent/skills` and `~/.agents/skills` (`noSkills: false` in a coordinator process) | `.pi/skills`, `.agents/skills` and `.claude/skills` as `additionalSkillPaths`, with the project still untrusted, so `.pi/` settings and extensions stay out | A Pi skill is markdown the model reads with `read`; extensions stay off and the read-only gate admits no tool that could run what a skill ships. `coordinator-skills.test.ts` (pi-bridge) runs it against the real SDK |
 | Grok | Loaded from `~/.grok`, `~/.claude` and installed plugins; the coordinator has no private home | Gap: only through Grok's own folder trust, which also loads the checkout's hooks and MCP servers. The per-process overlay (`GROK_CONFIG`) applies `models` but drops a `skills` section, so `skills.paths` can be set only in the user's own `~/.grok/config.toml` (probed on 1.0.67) | Advisory tier. A checkout the user trusted in Grok already loads its hooks and MCP servers in the coordinator, a gap that predates skills |
 
@@ -2494,11 +2478,12 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
     reviewers and consolidation alike) gets its worker's identity from
     `BuildPipelineContext.workerMailTurn`. A bridge agent's turn connects
     with a credential scoped to the worker's mailbox
-    (`resolveWorkerToolConnection`). OpenCode keeps its environment-wide
-    `orkestrator` connection, so the turn's trusted system instruction
-    carries the worker's mail capability (`workerMail`,
-    `openCodeWorkerMailInstruction`), and every mail tool on that connection
-    takes it as `mailCapability`. The capability names exactly one worker
+    (`resolveWorkerToolConnection`). An OpenCode turn gets the same scoped
+    connection, registered as the session's tab server
+    (`opencode2/turn-connections.ts`). The agent tools server still accepts a
+    worker's mail capability (`workerMail`) on an environment-wide
+    connection, where every mail tool takes it as `mailCapability`; OpenCode
+    1.x, retired on 2026-11-11, was its caller. The capability names exactly one worker
     mailbox and project, is signed by the workflow-result service's durable
     identity (domain-separated, so it survives a restart), is never a bearer
     credential, and stops working when its worker ends and loses its
@@ -3954,7 +3939,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   ended-worker refusals, restart): `agent-tools-pipeline-worker-mail.test.ts`;
   stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
   reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
-  and OpenCode's system field (`opencode-provider-dispatch.test.ts`)
+  and OpenCode's per-turn worker connection (`opencode2/turn-connections.test.ts`)
 - tool contract and poll guard: `control-mcp-server-reads.test.ts` and
   `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and
@@ -3982,16 +3967,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   model: the default sandbox writes the working directory, the coordinator
   sandbox refuses it and still reads, and the hook refuses `uniq in out`:
   `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
-- research servers on the pinned OpenCode, with a real `opencode serve` and a
-  local MCP server: `opencode-coordinator-research-live.test.ts`
-- a coordinator on the OpenCode 2 preview, against the pinned 2.x binary with a
-  scripted model (`RUN_LIVE_OPENCODE2=1`): no write, command or data-directory
-  read, control and research tools reached, a widened session refused by the
+- a coordinator on OpenCode, against the pinned 2.x binary with a scripted
+  model (`RUN_LIVE_OPENCODE2=1`): no write, command or data-directory read,
+  control and research tools reached, a widened session refused by the
   server's guard and restated, project configuration off:
   `opencode2-coordinator.live.test.ts`; the guard's source in
-  `coordinator-plugin.test.ts`, the rules, launch and routing in
-  `coordinator.test.ts`, `opencode2-host-server.test.ts` and
-  `native-agent-opencode-protocol.test.ts`
+  `coordinator-plugin.test.ts`, the research tool ids in
+  `research-tools.test.ts`, the rules and launch in `coordinator.test.ts` and
+  `opencode2-host-server.test.ts`
 - coordinator skills on Codex against the real pinned app-server with a
   loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
   (codex-bridge); the extra roots, read grants and project-skill rule in

@@ -17,7 +17,6 @@ import {
   type EvidenceInput,
 } from "@orkestrator/protocol/node/change-tracking/evidence-builders";
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
-import { OpenCodeChangeEvidence } from "../opencode-change-evidence.js";
 import { formatCount } from "./handoff.js";
 import {
   operationIdFor,
@@ -107,121 +106,6 @@ async function startTurn(
 function finishTurn(h: Harness, logical: string, requestId: string) {
   return h.service.finalizeTurn({ environmentId: "env-1", logicalSessionKey: logical, requestId });
 }
-
-// OpenCode 1.19 edit metadata shape, but with the patch only on `metadata.diff`
-// (no `filediff` at all). The second hunk adds a source line that begins with
-// `++`, which a header-prefix parser would mistake for a `+++` file header.
-const OPENCODE_DIFF_ONLY_PATCH = [
-  "Index: /repo/src/a.ts",
-  "===================================================================",
-  "--- /repo/src/a.ts",
-  "+++ /repo/src/a.ts",
-  "@@ -1,3 +1,4 @@",
-  " keep",
-  "-old",
-  "+new",
-  "+added",
-  " tail",
-  "@@ -10,2 +11,2 @@",
-  " ctx",
-  "-gone",
-  "+++counter;",
-  "",
-].join("\n");
-
-describe("C03: a patch delivered only in OpenCode metadata.diff", () => {
-  test("C03: badge counters and the diff body come from the same parsed patch", async () => {
-    const h = harness();
-    const adapter = new OpenCodeChangeEvidence({ location: "host" });
-    adapter.observeScoped(
-      {
-        type: "message.part.updated",
-        properties: {
-          sessionID: "session-1",
-          part: {
-            id: "part-call-1",
-            sessionID: "session-1",
-            messageID: "assistant-1",
-            type: "tool",
-            callID: "call-1",
-            tool: "edit",
-            state: {
-              status: "completed",
-              // The proposal differs from the applied patch so a body built
-              // from the input (+2/−1) cannot accidentally agree.
-              input: { filePath: "/repo/src/a.ts", oldString: "old", newString: "new\nadded" },
-              title: "src/a.ts",
-              metadata: { diff: OPENCODE_DIFF_ONLY_PATCH },
-            },
-          },
-        },
-      },
-      new Set(["session-1"]),
-    );
-    await h.service.pullEvidence(adapter.evidenceSource("env-1", "opencode:c03"));
-
-    const tools = h.service.getToolPresentations({
-      environmentId: "env-1",
-      provider: "opencode",
-      conversationId: "session-1",
-      callIds: ["call-1"],
-    });
-    const presentation = tools.presentations["call-1"]!;
-    expect(presentation.changes.map((c) => [c.role, c.prominence])).toEqual([
-      ["effect", "primary"],
-      ["payload", "secondary"],
-    ]);
-    const effectKey = presentation.changes[0]!.resourceKey;
-    // The summary delivered with the presentation and the full view agree.
-    const badge = tools.projections[effectKey]!;
-    const projection = view(h, effectKey);
-    expect(badge.measurementId).toBe(projection.measurementId);
-    expect(projection.counters).toEqual({
-      additions: { value: 3, quality: "complete", bound: "exact" },
-      deletions: { value: 2, quality: "complete", bound: "exact" },
-      changedFiles: 1,
-    });
-    expect(projection.provenanceLabelKey).toBe("changes.provenance.provider-reported");
-    expect(projection.badge).toEqual({ visible: true, mode: "counts" });
-
-    // The body is rendered from the very evidence revision the badge counted.
-    const measurement = selected(h, effectKey);
-    expect(measurement.evidenceRefs).toHaveLength(1);
-    const evidenceRow = h.service.ledger.evidenceRevision(
-      measurement.evidenceRefs[0]!.evidenceId,
-      measurement.evidenceRefs[0]!.evidenceRevision,
-    )!;
-    expect(evidenceRow.kind).toBe("patch");
-    expect(evidenceRow.evidence_key).toBe("result:patch");
-
-    const body = await h.service.diffBodies.getDiff({
-      diffIdentityId: projection.detail!.diffIdentityId,
-    });
-    if (body.kind !== "body") throw new Error("body expected");
-    expect(body.measurement?.measurementId).toBe(projection.measurementId!);
-    expect(body.files).toHaveLength(1);
-    const lines = body.files[0]!.hunks.flatMap((hunk) => hunk.lines);
-    expect(body.files[0]!.hunks).toHaveLength(2);
-    expect(lines.filter((line) => line.type === "add").length).toBe(
-      projection.counters.additions.value!,
-    );
-    expect(lines.filter((line) => line.type === "remove").length).toBe(
-      projection.counters.deletions.value!,
-    );
-    expect(lines.filter((line) => line.type === "add").map((line) => line.text)).toContain(
-      "++counter;",
-    );
-    // The file row of the projection names the same file with the same counts.
-    const row = projection.filePage!.rows[0]!;
-    expect(row.newPathDisplay).toBe(body.files[0]!.newPathDisplay);
-    expect([row.additions.value, row.deletions.value]).toEqual([3, 2]);
-
-    // The proposal stays a separate, secondary resource with its own counts.
-    const payload = view(h, presentation.changes[1]!.resourceKey);
-    expect(payload.provenanceLabelKey).toBe("changes.provenance.proposal");
-    expect(payload.measurementId).not.toBe(projection.measurementId);
-  });
-});
 
 describe("C06: two actual attempts with identical input", () => {
   async function volumeOf(

@@ -11,6 +11,7 @@ import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinato
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { boundedWait, boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
@@ -199,7 +200,8 @@ export function isOrkestratorMailTool(state: SessionState, toolName: string): bo
     ((AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (AGENT_GOAL_TOOL_NAMES as readonly string[]).includes(toolName) ||
-      (AGENT_SUBORK_TOOL_NAMES as readonly string[]).includes(toolName))
+      (AGENT_SUBORK_TOOL_NAMES as readonly string[]).includes(toolName) ||
+      (AGENT_AUTO_PIPELINE_TOOL_NAMES as readonly string[]).includes(toolName))
   );
 }
 

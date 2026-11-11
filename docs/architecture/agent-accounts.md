@@ -486,43 +486,76 @@ hand to bridges:
 ## OpenCode provider sign-in
 
 OpenCode has no accounts. It keeps one login per model provider (OpenCode Go,
-OpenAI, …) in the host's own store, `~/.local/share/opencode/auth.json` for
-the bundled 1.x, which every local environment's server shares. Settings →
-OpenCode → Provider Sign-in lists the providers and signs each in, replaces its
-login or signs it out (`OpenCodeProvidersSection`).
+OpenAI, …) in the host OpenCode database under Orkestrator's data directory
+(`<data>/opencode2/`, `openCode2HostPaths`), which every local environment's
+server shares and reads per use. Settings → OpenCode → Provider Sign-in lists
+the providers and signs each in, replaces its login or signs it out
+(`OpenCodeProvidersSection`).
 
-Each operation starts a private server from the bundled binary in the
-model-catalogue probe directory (`withHostOpenCodeServer`) and calls its own
-auth routes (`opencode-provider-login.ts`):
+Each operation runs against a server on that database
+(`withOpenCode2HostDatabaseServer`, `opencode2-host-database-server.ts`): a
+running host server for the short requests, a private one for an OAuth
+sign-in, whose attempt and callback listener live in the server that started
+it. It calls OpenCode 2's integration and credential routes
+(`opencode-provider-login.ts`, `opencode2/credentials.ts`):
 
-- **List:** `provider.list` and `provider.auth`, read field by field. A
-  provider without sign-in methods takes an API key. `storedLogin` means the
-  login is in OpenCode's store (`source` `api`, or `custom` for a plugin's
-  OAuth login); one from an environment variable or configuration cannot be
-  signed out here.
-- **API key:** `auth.set` with `{ type: "api", key }`. The key goes straight
-  through; nothing in Orkestrator stores, returns or logs it. A method's
-  prompts (an account id, say) are sent as `metadata`.
-- **OAuth:** `provider.oauth.authorize` returns the link and OpenCode's
-  instruction text (a device code is lifted out of it for a copy button).
-  `auto` methods then wait in `provider.oauth.callback` until the user
-  approves; `code` methods wait for the pasted code first. The renderer polls
-  `get_opencode_provider_login`, like the account sign-in. One sign-in runs at
-  a time and is given 16 minutes. The callback is sent without Bun's
-  five-minute fetch idle timeout, and the private server lives until it
-  settles. A browser method whose callback is a loopback (ChatGPT's browser
-  sign-in) only completes when the browser is on the backend's machine; the
-  headless method works from anywhere.
-- **Sign out:** `auth.remove`.
+- **List:** `GET /api/integration` and `GET /api/provider`, read field by
+  field (provider rows carry their settings, API keys included, so only id,
+  name and activation are read). `storedLogin` means OpenCode reports a stored
+  credential connection for the provider; a provider enabled only by the
+  user's own configuration cannot be signed out here.
+- **API key:** `POST /api/integration/:id/connect/key`. The key goes straight
+  through; nothing in Orkestrator stores, returns or logs it.
+- **OAuth:** `POST /api/integration/:id/connect/oauth` returns the link and
+  OpenCode's instruction text (a device code is lifted out of it for a copy
+  button). `code` methods wait for the pasted code and send it to
+  `…/connect/oauth/:attempt/complete`; every method then polls the attempt
+  until it is complete, failed or expired, and a stopped sign-in deletes the
+  attempt. The renderer polls `get_opencode_provider_login`, like the account
+  sign-in. One sign-in runs at a time and is given 16 minutes. A browser
+  method whose callback is a loopback (ChatGPT's browser sign-in) only
+  completes when the browser is on the backend's machine; the headless method
+  works from anywhere.
+- **Sign out:** the provider's credentials are removed through
+  `/api/credential`.
 
-OpenCode reads a provider's credentials once per directory instance and keeps
-them until the instance is disposed: a key replaced in the store is not used by
-a running server, though a newly connected provider is listed. After every
-change, `markLocalBridgesForLoginRefresh(context, "opencode")` flags each live
-local OpenCode server. These refresh flags live in `LocalServerRuntime`, and
-`localBridgeIsOnActiveAccount` has the next `start_local_opencode_server_cmd`
-replace it once idle, as for a renewed Claude login. A container copies
-`auth.json` in when it starts, so it needs a restart.
+Because every host server reads credentials from the database per use, nothing
+has to be restarted after a change. Containers are handed the host's logins
+from OpenCode's `auth.json`
+(`~/.local/share/opencode/auth.json`), which is now only that hand-off copy:
+after each change the provider's entry there is brought in step with the
+database (`exportOpenCode2Logins`), and while a host server runs, a login
+OpenCode has refreshed replaces the file's older copy of the same login
+(`exportOpenCode2Refreshes`). A container copies `auth.json` in when it
+starts, so it needs a restart.
+
+Development profiles have their own databases and can share the user's
+`auth.json`, so a refresh is exported only onto an entry provably of the same
+login: where both name an account (and an enterprise host) those must match;
+otherwise the entry's refresh token must be one this database has held. That
+lineage is kept as one-way SHA-256 fingerprints in
+`<data>/opencode2/refresh-lineage.json` (mode 0600, never the tokens), and a
+sign-in export and each pass add to it. Another profile's login is left alone
+whichever expires later.
+
+A database that existed before OpenCode 1.x was retired (the preview's) is
+reconciled with `auth.json` once, at its first use after the upgrade
+(`opencode2/credential-upgrade.ts`): an environment's host server start, or
+the server that Settings sign-in and the host model catalogue use
+(`opencode2-host-database-server.ts`), so a user who only runs containers is
+reconciled too. It takes the file's logins, as the old per-start reconcile
+did, except an OAuth login it holds newer than the file's copy of the same
+login, which it keeps; a login the file cannot hold (`external`) stays. A
+marker, `<data>/opencode2/legacy-credentials-reconciled`, keeps it to once;
+concurrent first users share one run, and a failed attempt is retried at the
+next use.
+
+Host work with no session (sign-in, the host model catalogue) may borrow a
+running environment's host server, but always as the probe location
+(`<data>/model-catalog-probe`), never the environment's worktree: 2.x resolves
+configuration per location, so a project's own `opencode.json` providers and
+restrictions must not reach the host catalogue. A coordinator's server is
+never borrowed.
 
 An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
 auth error that says so) gets the failed provider's sign-in inside its error
@@ -530,9 +563,11 @@ row (`OpenCodeAuthRecoveryAction`). The inline error row carries the failed
 message's `providerID/modelID` as `modelId` for this
 (`openCodeCredentialFailureProvider`).
 
-The CLI on the user's PATH is not used: it may be OpenCode 2.x, which keeps
-its logins in its database and never writes `auth.json`. See
-[0008-opencode-v2.md](../todo/agent-engines/0008-opencode-v2.md) for what moves with 2.x.
+The CLI on the user's PATH is not used, and its own database is not read:
+Orkestrator's servers run the managed `opencode2` binary on their own
+database. Until 2026-11-11 sign-in ran on OpenCode 1.x's auth routes with
+`auth.json` as the store; see "OpenCode 1.x retired (2026-11-11)" in
+[0008-opencode-v2.md](../todo/agent-engines/0008-opencode-v2.md).
 
 ## Credentials in auth answers
 
@@ -548,7 +583,8 @@ device login.
   the provider reported, and the backend parses it the same way again
   (`HttpBridgeCatalog.authStatus` / `beginSignIn`), so a bridge that starts
   passing through a provider object cannot reach the renderer. OpenCode is
-  read the same way in `OpenCodeCapabilities.authStatus`.
+  read the same way in `OpenCode2SessionFeatures.authStatus`
+  (`opencode2/features.ts`).
 - **Logs.** Auth paths log fixed text or a redacted reason only. The Codex
   bridge redacts its route-failure line (`app.onError`) and its account-read
   warnings with `redactSecrets`. Hono's default handler would otherwise print

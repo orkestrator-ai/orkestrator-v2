@@ -48,6 +48,7 @@ import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import { LeafTicketImageWants } from "./node-ticket-images.js";
 import { NodeTicketSync } from "./node-ticket-sync.js";
+import { NodeLinearSync } from "./node-linear-sync.js";
 import {
   coordinatorContactKey,
   describeCommandCoordinatorMail,
@@ -193,6 +194,8 @@ export class NodeCoordination {
   readonly collector: NodeMailCollector;
   /** Kanban sync with the leaves (command node) and the outbox announcements (leaf). */
   readonly ticketSync: NodeTicketSync;
+  /** Linear board links and disconnects with the leaves (command node). */
+  readonly linearSync: NodeLinearSync;
   /** Leaf: images on synced tickets that this machine waits for its command node to deliver. */
   readonly ticketImages: LeafTicketImageWants;
   readonly actions: NodeActionRequests;
@@ -291,6 +294,7 @@ export class NodeCoordination {
     this.ticketSyncTimer = setInterval(() => {
       if (this.options.nodes.mode() === "command") {
         void this.ticketSync.syncAll().catch(() => undefined);
+        void this.linearSync.syncAll().catch(() => undefined);
         // A collect also tells each leaf which repositories this node has now.
         void this.options.nodes
           .listNodes()
@@ -334,6 +338,7 @@ export class NodeCoordination {
     this.unsubscribeProjects?.();
     this.collector.dispose();
     this.ticketSync.dispose();
+    this.linearSync.dispose();
     this.ticketImages.dispose();
     this.connectListeners.clear();
   }
@@ -451,17 +456,33 @@ export class NodeCoordination {
       localImage: (imageId) => storage.kanban.getKanbanImageData(imageId).catch(() => null),
       emit: options.emit,
     });
+    this.linearSync = new NodeLinearSync({
+      selfId: () => nodes.selfIdentity(),
+      link: (nodeId) => (isBackendId(nodeId) ? nodes.link(nodeId) : null),
+      nodes: async () =>
+        (await portal.summaries()).nodes.map((node) => ({
+          nodeId: node.nodeId,
+          displayName: node.view.displayName,
+          available: node.available,
+        })),
+      storage,
+      isCommandNode: () => nodes.mode?.() === "command",
+    });
     this.ticketImages = new LeafTicketImageWants({
       announce: (controllerId) => options.emit(ticketSyncOutboxReadyEvent, { controllerId }),
     });
     portal.readModel.onNodeEvent((event, payload, nodeId) => {
       this.collector.handleNodeEvent(event, payload, nodeId);
       this.ticketSync.handleNodeEvent(event, payload, nodeId);
+      this.linearSync.handleNodeEvent(event, payload, nodeId);
     });
     // A leaf's project list read (its first after attaching, or a new copy
     // there) is what pairs boards: sync then, not at the next reconcile.
     this.unsubscribeProjects = portal.readModel.onProjectsChanged?.((nodeId) => {
-      if (nodes.mode?.() === "command") void this.ticketSync.sync(nodeId);
+      if (nodes.mode?.() === "command") {
+        void this.ticketSync.sync(nodeId);
+        void this.linearSync.sync(nodeId);
+      }
     });
     // A board change here goes to the leaves with the project (command node);
     // a change queued for a command node is announced to it (leaf). Test

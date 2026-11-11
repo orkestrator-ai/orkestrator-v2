@@ -562,6 +562,14 @@ export async function createCommandFixtures() {
           updateKanbanTask: mock(async () => undefined),
           addKanbanComment: mock(async () => undefined),
         },
+        // No Linear board links and no disconnects recorded.
+        linear: {
+          listLinearBoardLinks: mock(async () => []),
+          getLinearBoardLink: mock(async () => null),
+          listLinearRevocations: mock(async () => []),
+          mergeLinearRevocations: mock(() => 0),
+          mergeLinearBoardLinks: mock(() => 0),
+        },
         loadConfig: mock(async () => config),
         // No added agent accounts: every launch uses the host login.
         agentAccounts: {

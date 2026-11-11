@@ -2,8 +2,8 @@
  * The native `/` picker against real providers in a `dev:test --fixture`
  * profile: source groups, keyboard order, a command file edited on disk
  * reaching the picker after a refresh, and the new row surviving a reload
- * (docs/todo/cli-and-slash-commands/0016-slash-command-catalogue.md,
- * "Qualification").
+ * (docs/development/agent-testing.md, "Live slash-command picker"; the
+ * qualification record is in docs/architecture/native-agent-commands.md).
  *
  * Opt-in only (`ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1`): it opens provider
  * sessions on the host's credentials. `ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`

@@ -12,6 +12,7 @@ import {
   startIsolatedBackend,
   type ScenarioContext,
 } from "../scenarios/harness.js";
+import { formatRunUsage, readRunUsage, type RunUsageRecord } from "../scenarios/usage.js";
 
 /**
  * Run targeted CLI scenarios against isolated backends started through the
@@ -96,6 +97,8 @@ interface ScenarioDependencies {
   startIsolatedBackend: typeof startIsolatedBackend;
   removeTree: typeof removeTree;
   now: () => number;
+  /** Reads a live scenario's recorded usage; defaults to {@link readRunUsage}. */
+  readRunUsage?: typeof readRunUsage;
 }
 
 const defaultDependencies: ScenarioDependencies = {
@@ -103,6 +106,7 @@ const defaultDependencies: ScenarioDependencies = {
   startIsolatedBackend,
   removeTree,
   now: Date.now,
+  readRunUsage,
 };
 
 export async function runOne(
@@ -118,6 +122,11 @@ export async function runOne(
   backendReadyMs: number | null;
   error?: string;
   cleanupErrors: string[];
+  /**
+   * A live scenario's recorded token usage, read from its backend before it
+   * stopped (a failed run included); absent for credential-free scenarios.
+   */
+  usage?: RunUsageRecord;
 }> {
   const started = dependencies.now();
   let backendReadyMs: number | null = null;
@@ -126,6 +135,7 @@ export async function runOne(
   let passed = false;
   let error: string | undefined;
   let context: ScenarioContext | undefined;
+  let usage: RunUsageRecord | undefined;
   try {
     const backend = await dependencies.startIsolatedBackend({
       root,
@@ -160,6 +170,13 @@ export async function runOne(
         ? caught.message
         : String(caught);
   } finally {
+    // A live run's cost, passed or failed, read while its backend still runs.
+    // Recorded usage outlives the environments cleanup deletes, but the
+    // backend does not outlive `stop()` below.
+    if (context && definition.live) {
+      usage = await (dependencies.readRunUsage ?? readRunUsage)(context.backend);
+      console.log(`${definition.name}: ${formatRunUsage(usage)}`);
+    }
     // Owned cleanup always runs; its failures are reported separately from
     // the scenario's own result.
     for (const step of context?.cleanup ?? []) {
@@ -192,6 +209,7 @@ export async function runOne(
     backendReadyMs,
     ...(error ? { error } : {}),
     cleanupErrors,
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -235,12 +253,13 @@ export async function runScenarios(
     run: id,
     provider: options.provider ?? null,
     environmentType: options.environmentType,
-    results: results.map(({ name, passed, durationMs, backendReadyMs, cleanupErrors }) => ({
+    results: results.map(({ name, passed, durationMs, backendReadyMs, cleanupErrors, usage }) => ({
       name,
       passed,
       durationMs,
       backendReadyMs,
       cleanupErrors,
+      ...(usage ? { usage } : {}),
     })),
   });
   console.log(`manifest: ${manifest.file}`);

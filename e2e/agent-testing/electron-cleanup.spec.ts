@@ -6,8 +6,21 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { closeElectronWithin, electronProcessTree } from "./design-electron-cleanup";
 import { processAlive, signalProcess, waitForStopped } from "../process-cleanup";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+
+// The runner's `screenshot: "only-on-failure"` captures every page of a
+// closing context before Playwright sends the close. The fixture's window is
+// never shown, and on Linux and Windows that capture does not return, so the
+// close never reached `app.quit()` and `before-quit` never ran: the bounded
+// kill fired first and the spec failed 5/5 in native-application-menu.yml.
+// macOS answers the capture. There is nothing to see in this window anyway.
+test.use({ screenshot: "off" });
 
 test("bounded cleanup stops a real Electron close blocked by before-quit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "electron-close-regression-"));
@@ -36,15 +49,23 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
       app.whenReady().then(() => new BrowserWindow({ show: false }).loadURL("about:blank"));
     `,
     );
+    // HEADLESS_CAPABLE_ELECTRON_SPECS lists this spec, so it must honour the
+    // opt-in: without it a Linux run with no display falls back to the
+    // session's Ozone platform (Wayland on a Wayland desktop) and exits at
+    // launch.
+    const headless = headlessElectronRequested();
     const app = await electron.launch({
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
         "--no-sandbox",
         `--user-data-dir=${path.join(directory, "profile")}`,
         fixture,
       ],
-      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
+      env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
+        ELECTRON_RUN_AS_NODE: undefined,
+      }),
     });
     owned = electronProcessTree(app);
     const helper = Number(await readFile(helperFile, "utf8"));

@@ -1,20 +1,19 @@
 /**
- * What the backend holds about the host OpenCode 2.x servers it started
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 3): one per
- * local environment, under the process key `opencode2:<environmentId>` in
- * `LocalServerRuntime`'s owned processes, so backend shutdown stops them with
- * every other local server.
+ * What the backend holds about the host OpenCode servers it started: one per
+ * local environment or coordinator runtime, under the process key
+ * `opencode:<environmentId>` in `LocalServerRuntime`'s owned processes, so
+ * backend shutdown stops them with every other local server.
  *
- * The password is minted per server and lives only here, in process memory:
- * it is never written to the environment record, logged or sent to a
- * renderer. Starts are serialized per environment by the environment
- * operation queue, and host-wide by {@link OpenCode2HostServerState.startGate},
- * because every host 2.x server shares one `OPENCODE_DB` and 2.x migrates it
- * on start.
+ * The password is minted per server and lives only in process memory (here
+ * and as the bridge token): it is never written to the environment record,
+ * logged or sent to a renderer. Starts are serialized per environment by the
+ * environment operation queue, and host-wide by
+ * {@link OpenCode2HostServerState.startGate}, because every host server
+ * shares one `OPENCODE_DB` and OpenCode migrates it on start.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { OpenCodeHostStartGate } from "../opencode-host-start.js";
 import type { OpenCode2CoordinatorAuthority } from "./coordinator.js";
+import type { OpenCode2McpConnection } from "./mcp.js";
 
 export interface OpenCode2HostServerRecord {
   child: ChildProcessWithoutNullStreams;
@@ -23,19 +22,44 @@ export interface OpenCode2HostServerRecord {
   directory: string;
   /**
    * A coordinator's server only: the policy and research it was launched
-   * with (`opencode2/coordinator.ts`). Process authority, held here beside
-   * the process rather than in any session record.
+   * with (`opencode2/coordinator.ts`), and the Control MCP credential the
+   * launch issued, which its exit revokes. Process authority, held here
+   * beside the process rather than in any session record or environment.
    */
-  coordinator?: Omit<OpenCode2CoordinatorAuthority, "controlConnection">;
+  coordinator?: Omit<OpenCode2CoordinatorAuthority, "controlConnection"> & {
+    control?: OpenCode2McpConnection;
+  };
 }
 
 export function openCode2ServerKey(environmentId: string): string {
-  return `opencode2:${environmentId}`;
+  return `opencode:${environmentId}`;
+}
+
+/** One host start at a time; a start holds the turn until healthy or failed. */
+export class OpenCode2StartGate {
+  private tail: Promise<void> = Promise.resolve();
+
+  /** Wait for this host's turn. The returned release is safe to call more than once. */
+  async acquire(): Promise<() => void> {
+    const previous = this.tail;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.tail = previous.then(() => current);
+    await previous;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+  }
 }
 
 export class OpenCode2HostServerState {
-  /** One 2.x start at a time on this host. */
-  readonly startGate = new OpenCodeHostStartGate([]);
+  /** One OpenCode start at a time on this host. */
+  readonly startGate = new OpenCode2StartGate();
   private readonly servers = new Map<string, OpenCode2HostServerRecord>();
 
   /** The healthy record for this environment's live child, if any. */

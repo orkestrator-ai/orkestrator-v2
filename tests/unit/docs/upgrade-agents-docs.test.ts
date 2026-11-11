@@ -147,11 +147,11 @@ describe("agent upgrade runbook contracts", () => {
     expect(codexSyncComment).toContain("generated app-server protocol");
     expect(codexSyncComment).not.toContain("@openai/codex-sdk");
 
-    // The Codex line was corrected while the line directly below it kept naming
-    // a dependency the root manifest does not have.
-    const opencodeSyncComment = dockerfile.match(/^#   OPENCODE_CLI_VERSION.*$/m)?.[0];
-    // The backend is the only workspace that pins the SDK.
-    expect(opencodeSyncComment).toContain("apps/backend/package.json");
-    expect(opencodeSyncComment).not.toContain("apps/web/package.json");
+    // OpenCode is 2.x only: its line names the toolchain pin, and no line is
+    // left for the retired 1.x binary or its SDK.
+    const opencodeSyncComment = dockerfile.match(/^#   OPENCODE2_CLI_VERSION.*$/m)?.[0];
+    expect(opencodeSyncComment).toContain("PINNED_TOOLCHAIN_VERSIONS.opencode2");
+    expect(dockerfile).not.toMatch(/^#   OPENCODE_CLI_VERSION/m);
+    expect(opencodeSyncComment).not.toContain("@opencode-ai/sdk");
   });
 });

@@ -11,7 +11,14 @@ const EMPTY_ROUTE: RouteTotals = {
 };
 const empty = (): Counters => ({
   routes: {},
-  delta: { snapshots: 0, snapshotBytes: 0, estimatedDeltaBytes: 0, changedRows: 0, rows: 0 },
+  delta: {
+    snapshots: 0,
+    snapshotBytes: 0,
+    estimatedDeltaBytes: 0,
+    changedRows: 0,
+    rows: 0,
+    trimmedHeads: 0,
+  },
 });
 
 /** Response completion timestamps use the same wall clock and half-open window as renderer answers. */
@@ -64,7 +71,11 @@ export function assertWindowEvidence(
   viewers: readonly string[],
   streaming: boolean,
 ) {
-  if (!(window.bridge.routes["GET /session/:id"]?.count > 0))
+  // Claude's bridge answers state on `/session/:id`, Codex's on `/session/:id/status`.
+  if (
+    !(window.bridge.routes["GET /session/:id"]?.count > 0) &&
+    !(window.bridge.routes["GET /session/:id/status"]?.count > 0)
+  )
     throw new Error("Missing bridge state observations");
   const transcripts = Object.entries(window.bridge.routes).filter(([label]) =>
     label.startsWith("GET /session/:id/transcript?"),

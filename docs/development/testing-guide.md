@@ -904,8 +904,12 @@ mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-l
 ```
 
 The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
-reported model — no prompts or tokens) is written to
-`output/cli-scenarios/<run>/manifest.json`. Record live results in the
+reported model; for a live scenario also the token counts and priced spend its
+backend recorded, in `results[].usage` — no prompts, credentials or
+environment names) is written to `output/cli-scenarios/<run>/manifest.json`.
+Usage is counted only for turns the backend has read back; a run whose last
+turn is a `session start` under-reports it
+([7815](../todo/cli-and-slash-commands/7815-cli-session-start-usage-unrecorded.md)). Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
@@ -1568,7 +1572,7 @@ orkestrator-v2 (Electron)
       └─ agent CLI → shell → mise run test  your test run
 ```
 
-The production backend, bridges, agent CLIs, and `opencode serve` processes
+The production backend, bridges, agent CLIs, and OpenCode server processes
 have the same executable names and similar command lines to the ones tests
 start. Killing any of them stops every local agent session on the host, including
 the one running the tests. On 2026-10-26 the production backend received

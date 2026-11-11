@@ -1,6 +1,7 @@
 import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";
 import { DesignLaunchButton } from "@/components/design/DesignLaunchButton";
 import { RunGraphButton } from "@/components/graph-launch/RunGraphButton";
+import { ToPipelineButton } from "@/components/review/ToPipelineButton";
 import {
   cloneElement,
   createContext,
@@ -1080,6 +1081,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     </Button>
                   </ToolbarTooltipTrigger>
 
+                  {selectedEnvironment && (
+                    <ToPipelineButton
+                      environmentId={selectedEnvironment.id}
+                      createTab={createTab}
+                      showLabel={isGrid}
+                    />
+                  )}
+
                   {graphsEnabled && (
                     <>
                       <ToolbarTooltipTrigger
@@ -1622,12 +1631,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         onConfirm={handleConfiguredReview}
       />
       <MultiReviewLaunchDialog
-        autoPipelineEnvironmentId={selectedEnvironment?.id}
-        onOpenAutoPipelineTab={
-          createTab
-            ? (autoPipeline) => Boolean(createTab("auto-pipeline", { autoPipeline }))
-            : undefined
-        }
         open={multiReviewDialogOpen}
         onOpenChange={(open) => {
           if (!multiReviewLaunchInFlightRef.current) setMultiReviewDialogOpen(open);

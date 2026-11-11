@@ -465,7 +465,7 @@ describe("verify-toolchain-artifacts", () => {
         sha256: createHash("sha256").update(contents).digest("hex"),
       });
       const artifact = testArtifact({
-        name: "opencode",
+        name: "opencode2",
         platform: "darwin",
         architecture: "arm64",
         archive: {
@@ -475,7 +475,7 @@ describe("verify-toolchain-artifacts", () => {
           allowedHosts: ["downloads.example.test"],
           ...digest(archive),
         },
-        executable: { fileName: "opencode", ...digest(executable) },
+        executable: { fileName: "opencode2", ...digest(executable) },
       });
 
       // `unzip -p` rather than `tar -xOzf`: the archive is not a tarball.
@@ -719,7 +719,7 @@ describe("verify-toolchain-artifacts", () => {
       return [
         testArtifact({ name: "codex", platform: "darwin", architecture: "arm64" }),
         testArtifact({ name: "codex", platform: "linux", architecture: "x64" }),
-        testArtifact({ name: "opencode", platform: "darwin", architecture: "arm64" }),
+        testArtifact({ name: "opencode2", platform: "darwin", architecture: "arm64" }),
       ];
     }
 
@@ -727,13 +727,15 @@ describe("verify-toolchain-artifacts", () => {
       const artifacts = fixtureArtifacts();
 
       expect(selectArtifacts({}, artifacts)).toHaveLength(3);
-      expect(selectArtifacts({ tool: "opencode" }, artifacts)).toHaveLength(1);
+      expect(selectArtifacts({ tool: "opencode2" }, artifacts)).toHaveLength(1);
       expect(selectArtifacts({ platform: "darwin" }, artifacts)).toHaveLength(2);
       expect(selectArtifacts({ architecture: "x64" }, artifacts)).toHaveLength(1);
       expect(
         selectArtifacts({ tool: "codex", platform: "darwin", architecture: "arm64" }, artifacts),
       ).toHaveLength(1);
-      expect(selectArtifacts({ tool: "opencode", architecture: "x64" }, artifacts)).toHaveLength(0);
+      expect(selectArtifacts({ tool: "opencode2", architecture: "x64" }, artifacts)).toHaveLength(
+        0,
+      );
     });
 
     test("verifies every selected artifact into one scratch root and cleans it up", async () => {
@@ -853,7 +855,7 @@ describe("verify-toolchain-artifacts", () => {
       // Guards the pairing between parseFilters' accepted values and the shipped
       // manifest: a tool/platform/arch the CLI accepts but the manifest lacks
       // would only surface as "No artifacts matched the filters" at upgrade time.
-      for (const tool of ["claude", "codex", "opencode"] as const) {
+      for (const tool of ["claude", "codex", "opencode2"] as const) {
         for (const platform of ["darwin", "linux"] as const) {
           for (const architecture of ["arm64", "x64"] as const) {
             expect(

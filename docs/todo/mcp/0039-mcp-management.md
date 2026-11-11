@@ -532,7 +532,7 @@ two-machine run, so it is not dropped. The stale "every container target
 **Outcome (2026-11-06).** Both recommended options taken. Neither needed new product code, because each keeps what already ships; building them meant checking that the shipped behaviour matches the decision, closing the open items and recording the decisions where a maintainer will meet them.
 
 - **No "restart OpenCode to apply" button.** User-file saves keep `restart-required` with the guidance "OpenCode keeps its user configuration until its server restarts; stop and start the environment to load the change." (`OPENCODE_USER_RESTART` in `apply.ts`). The re-check is already wired to each bump: step 6 of the OpenCode upgrade in `docs/development/upgrade-agents.md` runs `verify:opencode:mcp-live` and says what to do if the user file starts being reloaded. The open question is closed, and `docs/architecture/mcp-management.md` now says the button is deliberately absent and why.
-- **CLI route for OpenCode MCP sign-in.** A `needs-auth` row carries `OPENCODE_MCP_SIGN_IN_GUIDANCE` (`packages/protocol/src/native-agent.ts`), and the backend refuses a sign-in request with the same text (`opencode-capabilities.ts`); no code calls `mcp.auth.authenticate`. The "Needs verification" item is dropped, and the architecture doc gives the reason not to drive it from the panel.
+- **CLI route for OpenCode MCP sign-in.** A `needs-auth` row carries `OPENCODE_MCP_SIGN_IN_GUIDANCE` (`packages/protocol/src/native-agent.ts`), and the backend refused a sign-in request with the same text (`opencode-capabilities.ts`, removed with OpenCode 1.x on 2026-11-11; the guidance now reaches the panel through `apps/backend/src/core/mcp-management/providers.ts`); no code calls `mcp.auth.authenticate`. The "Needs verification" item is dropped, and the architecture doc gives the reason not to drive it from the panel.
 - Nothing found while doing this gave a reason to take the other options. The pin is still 1.19.5, so the cache evidence above is current.
 
 ### 12. Agent-account homes
@@ -757,12 +757,16 @@ collects the live evidence the shipped behaviour has never had.
   rebuilt instance's `mcp.status` lists the change; the user files in
   `$XDG_CONFIG_HOME/opencode` and container servers stay `restart-required`,
   because OpenCode 1.19.4 caches the user files for the server's lifetime.
+  Since OpenCode 1.x was retired (2026-11-11) the rebuild is OpenCode 2's
+  `POST /api/location/reload`, answered `busy` while any session works
+  (`reloadMcpConfiguration` in `apps/backend/src/core/opencode2/environment-provider.ts`).
   Grok is `restart-required`, then `applied` once the bridge process is
   replaced. The live record below confirms the Claude, Codex, OpenCode and
   Cursor strategies of 2026-10-18 on real providers; the new Codex turn
   evidence and OpenCode reload have unit tests, and the OpenCode reload's
-  mechanism is proven on the pinned binary (`mise run
-  verify:opencode:mcp-live`), not yet with a model in a live session. Pi's
+  mechanism was proven on the pinned 1.x binary (`verify:opencode:mcp-live`,
+  a mise task removed with OpenCode 1.x on 2026-11-11), not yet with a model
+  in a live session. Pi's
   strategy was seen live on 2026-10-22 (`pending-next-turn`, then `applied`
   per probed tab), but its user-scope probes failed; a fake-model rerun on
   2026-11-06 passed both scopes, so the runtime side is shown, not a real
@@ -892,7 +896,9 @@ collects the live evidence the shipped behaviour has never had.
    `commands-registry-mcp.test.ts` ("OpenCode reload probe"),
    `opencode-capabilities.test.ts` ("OpenCode MCP sign-in"), and
    `apps/backend/tests/opencode-mcp-reload-live.test.ts` on the real pinned
-   1.19.4 (`mise run verify:opencode:mcp-live`, 2 passed, 3.4 s): a project
+   1.19.4 (`verify:opencode:mcp-live`, 2 passed, 3.4 s; both tests and the
+   task were removed with OpenCode 1.x on 2026-11-11,
+   `git show 5f4e27b1c:apps/backend/tests/opencode-mcp-reload-live.test.ts`): a project
    file edit is not seen until `instance.dispose`, then the rebuilt instance
    lists only the renamed server, the old server's process and the
    runtime-added server are gone, and a stored session survives; a user-file
@@ -923,8 +929,9 @@ collects the live evidence the shipped behaviour has never had.
    init statuses and layers (`mcp-runtime-status.ts`; test in
    `session-manager-catalog-transport.test.ts`); the count-only tiles are gone
    whenever the server list is reported (`AgentInfoButton.test.tsx`); every
-   bridge's error text is redacted (tests in `opencode-capabilities.test.ts`
-   and `http-bridge-mcp-inventory.test.ts`).
+   bridge's error text is redacted (tests in `opencode-capabilities.test.ts`,
+   removed with OpenCode 1.x on 2026-11-11, and
+   `http-bridge-mcp-inventory.test.ts`).
 7. ~~**Unmodelled layers.**~~ Decided 2026-10-25, per layer. No passive reader
    exists for Cursor plugins and team settings (held by Cursor's service),
    OpenCode remote configuration (fetched from `<url>/.well-known/opencode`
@@ -1044,7 +1051,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 Read from the JavaScript embedded in the pinned binary
 (`toolchains/opencode/1.19.4/darwin-arm64/opencode`, `Config.loadInstanceState`
 and `ConfigPaths`), and checked live where it matters for apply
-(`mise run verify:opencode:mcp-live`). Later layers win; `mcp` entries are
+(`verify:opencode:mcp-live`, removed with OpenCode 1.x on 2026-11-11). Later layers win; `mcp` entries are
 deep-merged.
 
 | Order | Layer | Re-read on `instance.dispose`? |
@@ -1573,8 +1580,11 @@ directory and were deleted with it.
   servers, so the running-CLI sync cannot rely on it either.
 - Mirrored merge and acceptance rules must be re-traced on every pin upgrade.
   For Pi the two parity tests fail when either side moves; for OpenCode,
-  `verify:opencode:mcp-live` fails when the user-file cache or the in-place
-  reload changes; Claude's running-CLI behaviour has `verify:claude:mcp-live`;
+  `verify:opencode:mcp-live` failed when the 1.x user-file cache or the
+  in-place reload changed (removed with OpenCode 1.x on 2026-11-11; OpenCode
+  2's MCP routes and user configuration are guarded by
+  `opencode2/opencode2-mcp.live.test.ts` and
+  `opencode2/opencode2-user-config.live.test.ts`, `mise run verify:opencode2:live`); Claude's running-CLI behaviour has `verify:claude:mcp-live`;
   Codex and Grok have `verify:codex:mcp-live` and `verify:grok:mcp-live`
   (since 2026-10-31).
 - Terminal sessions get guidance only; no command is injected.
@@ -1643,8 +1653,9 @@ directory and were deleted with it.
   to apply" for the user files. A server restart drops every pending question
   and permission in the environment, which is a bigger step than apply has
   taken so far; user-file saves keep `restart-required` with guidance, and
-  the OpenCode upgrade step reruns `verify:opencode:mcp-live`, which fails if
-  a bump stops caching the user files.
+  the OpenCode upgrade step reran `verify:opencode:mcp-live`, which failed if
+  a bump stopped caching the user files (removed with OpenCode 1.x on
+  2026-11-11).
 
 ## Needs verification
 

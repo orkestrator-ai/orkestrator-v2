@@ -1,6 +1,7 @@
 import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import {
   AGENT_MAIL_TOOL_NAMES,
   ORKESTRATOR_MCP_SERVER_NAME,
@@ -730,6 +731,7 @@ const ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES: readonly string[] = [
   ...AGENT_MAIL_TOOL_NAMES,
   ...AGENT_GOAL_TOOL_NAMES,
   ...AGENT_SUBORK_TOOL_NAMES,
+  ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
   ...WEB_ANNOTATION_TOOL_NAMES,
   ...ARTIFACT_TOOL_NAMES,
 ];

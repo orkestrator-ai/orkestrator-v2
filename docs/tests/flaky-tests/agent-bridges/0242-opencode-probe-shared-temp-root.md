@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `runOpenCodeLiveCompatibility > a deadline while the CLI version is read leaves nothing to create later`
-- **Owning file:** `scripts/opencode-live-compatibility-probe.test.ts:432`
+- **Owning file:** `scripts/opencode-live-compatibility-probe.test.ts:432` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:scripts/opencode-live-compatibility-probe.test.ts`)
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`
   on `vh-multireview-fence-checks-14f5158f73c9`, merging `origin/main` at
   `d087e44f` into `acb1807e`.
@@ -137,3 +137,8 @@ The separate iOS command did not reach compilation or tests: `simctl list device
   runs passed, 31 pass, 0 fail.
 - **Stress:** the five private-directory runs above under the churners
   (31 of 31 each).
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

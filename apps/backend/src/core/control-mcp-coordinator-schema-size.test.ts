@@ -15,7 +15,10 @@ import { rpc, useControlMcpServerHarness } from "./control-mcp-server-test-suppo
 // and start_multi_review were removed, 82 tools and 115,114 bytes after.
 // 2026-11-07: 85 tools and 118,361 bytes with the three ticket label tools.
 // Two conversation mark tools added for the Actions panel.
-const MAX_TOOLS = 87;
+// 2026-11-11: 93 tools and 124,994 bytes with the six Linear board tools
+// (docs/architecture/tickets.md, "Linear"); their descriptions were trimmed to
+// stay under the byte bound.
+const MAX_TOOLS = 93;
 const MAX_SCHEMA_BYTES = 125_000;
 
 const harness = useControlMcpServerHarness();

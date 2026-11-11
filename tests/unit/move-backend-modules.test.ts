@@ -199,6 +199,50 @@ describe("move-backend-modules CLI", () => {
     expect(await read(root, "untracked.md")).toBe(oldPath);
   }, 20_000);
 
+  test("leaves paths in Git <revision>:<path> expressions under their old name", async () => {
+    const oldPath = `${core}/design-service.ts`;
+    const newPath = `${core}/design/service.ts`;
+    const oldJs = oldPath.replace(/\.ts$/, ".js");
+    const historical = [
+      `git show 0d254a3a^:${oldPath} | wc -l`,
+      `\`ff4026b4e^:${oldPath}:72-110\``,
+      `(ff4026b4e^:${oldPath}:705-715 and`,
+      `git show 3cdfd98d2:${oldPath}`,
+      `git show 0123456789abcdef0123456789abcdef01234567~2^2:${oldJs}`,
+      `git show HEAD~1:${oldPath} and ORIG_HEAD:${oldPath}`,
+      `git show main:${oldPath}, master^:${oldPath} and origin/release/v2:${oldPath}`,
+      `git show refs/tags/v2.36.5-beta:${oldPath} or v2.36.5-beta:${oldPath}`,
+      "git show 0d254a3a^:core/design-service.ts",
+    ];
+    const living = [
+      `see:${oldPath}`,
+      `domain:${oldPath}`,
+      `[${oldPath}](${oldPath})`,
+      `git show 0d254a3a^:${oldPath} was renamed to ${oldPath}`,
+    ];
+    const root = await fixture({
+      [oldPath]: "export {};\n",
+      "docs/history.md": [...historical, ...living, ""].join("\n"),
+      [`bridges/example/src/http.test.ts`]: `// Ported from \`ff4026b4e^:${oldPath}\`.\nexport {};\n`,
+    });
+
+    move(root);
+
+    expect(await read(root, "docs/history.md")).toBe(
+      [
+        ...historical,
+        `see:${newPath}`,
+        `domain:${newPath}`,
+        `[${newPath}](${newPath})`,
+        `git show 0d254a3a^:${oldPath} was renamed to ${newPath}`,
+        "",
+      ].join("\n"),
+    );
+    expect(await read(root, "bridges/example/src/http.test.ts")).toBe(
+      `// Ported from \`ff4026b4e^:${oldPath}\`.\nexport {};\n`,
+    );
+  }, 20_000);
+
   test("honors repository formatter exclusions while rewriting tracked references", async () => {
     const oldPath = `${core}/design-service.ts`;
     const newPath = `${core}/design/service.ts`;

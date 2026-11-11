@@ -1020,13 +1020,11 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
 (the profile setup is in the spec's header).
-`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
-OpenCode 2: it turns the profile's preview setting on for the run and back off
-afterwards, and adds a `steer` case (a prompt queued from the composer while a
+OpenCode also runs a `steer` case (a prompt queued from the composer while a
 turn runs is steered into it from its queue strip, then checked again after a
 reload) that every other platform records as skipped. `mise run
-verify:opencode2:real-stack` runs exactly that against the running profile
-named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+verify:opencode2:real-stack` runs the OpenCode cases against the running
+profile named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, with
 scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
 overrides the list). Start the profile with `--fixture --no-agent-credentials
@@ -1037,9 +1035,8 @@ firewall drops container traffic to the profile (beelink's ufw, to-do
 [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
 run that profile and the spec on `mise run docker:disposable -- start
 --host-loopback` with its `DOCKER_HOST` exported for both, and build the
-image inside that daemon. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
-puts the run's OpenCode sessions on the 2.x preview, the only OpenCode line
-whose shell can background a command. The `detach` case waits each
+image inside that daemon. OpenCode's `shell` can background a command, so
+`background` exercises OpenCode too. The `detach` case waits each
 provider's own idle window: 630 s for the 10 min bridges, and up to 35.5 min
 for Codex (30 min without a touch, found by a 5 min sweep), which it waits
 with the renderer closed, because Codex's tab reads refresh the thread's
@@ -1066,16 +1063,18 @@ each is one sample, not a p95:
   shell (Claude through the task's output file) and Claude's and Pi's full
   630 s detach wait. A missed final event is recovered inside the 17.5 s
   lost-announcement bound, though often above the 3 s budget.
-- OpenCode's background shell (2026-11-11): on the 2.x preview
-  (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`) the `shell` call
+- OpenCode's background shell (2026-11-11): on the 2.x line (then opted
+  into with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`, retired with
+  OpenCode 1.x the same day) the `shell` call
   returns at once, and when the command ends 2.x resumes the idle session with
   its output, which the idle page shows without a turn from the test. The
   first runs overstated this: the check matched the marker in the prompt and
   in the command line, and the tab showed only the command. Since the
   transcript shows a finished background shell's output and the check counts
   only a non-user row that arrived after the turn settled, the rerun
-  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` cannot background a command, so
-  on the default line the case is `not-exercised` (rerun `oc2-bgfix-legacy1`).
+  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` could not background a command,
+  so on that line, then the default, the case was `not-exercised` (rerun
+  `oc2-bgfix-legacy1`).
 - Claude in a container (2026-11-11, beelink2, on a disposable rootless daemon
   with host loopback, because the host's firewall drops the profile's port):
   `missed-final`, `background` and `no-renderer` passed on a current image.
@@ -1798,6 +1797,51 @@ A spec that restarts a profile builds the launcher's arguments with
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
 
+### Live conditional reads (loopback models)
+
+`e2e/agent-testing/conditional-reads-live.spec.ts` measures what a streaming
+native tab costs the bridge and the renderer (efficiency batch E10, and the
+part-trimmed head of E11): requests, bytes and handler time per bridge route,
+whether state bodies repeat, what a transcript delta would have carried, and
+the renderer's answers by outcome. It is opt-in
+(`ORKESTRATOR_AGENT_TEST_E10_BASELINE=1`) and makes no billed turn. Start a
+credential-free profile (add `codex` to the platforms for the Codex runs):
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile e10-qa \
+  --fixture --headless --no-agent-credentials --agent-platforms claude,codex
+ORKESTRATOR_AGENT_TEST_PROFILE=e10-qa ORKESTRATOR_AGENT_TEST_RUN_ID=e10-qa \
+  ORKESTRATOR_AGENT_TEST_E10_BASELINE=1 E10_SCENARIO=large-window \
+  mise run test:logged -- --name e10 -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts conditional-reads-live.spec.ts
+```
+
+For Claude the spec writes an `env` block into the profile's own Claude
+`settings.json` that points the real CLI at `conditional-reads-fake-model.ts`.
+For Codex (`E10_PLATFORM=codex`) it writes a made-up API key and an
+`openai_base_url` into the profile's own Codex home, pointing it at
+`conditional-reads-codex-model.ts`, a Bun loopback Responses WebSocket. A
+`bun` wrapper in the profile's toolchain directory preloads
+`conditional-reads-bridge-counter.ts` into every bridge the backend starts.
+All of these are removed or restored at the end. `E10_SCENARIO` picks the
+scripted turn:
+
+| Scenario | Turn | Measured from |
+| --- | --- | --- |
+| `baseline` (default) | 18 rounds of 5 s at 1.2 KB/s | 5 s after it starts |
+| `large-window` | 26 rounds of 30 KB | ten rounds in, when the window is near 512 KiB |
+| `trimmed-head` | one 150 s response at 20 KB/s | 600,000 characters (`E10_READY_CHARS` moves it) |
+
+Each run measures 20 s with one viewer, 20 s with a second page on the same
+tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
+token or session id) to
+`output/agent-testing/<run id>/conditional-reads[-codex][-<scenario>].json`.
+Non-baseline scenarios add the whole turn's bridge totals and the exact
+head-row recovery reads (`/messages`); `trimmed-head` also captures the first
+viewer to `output/visual-previews/`. Stop and reset the profile afterwards.
+The latest figures are in
+[native-transcripts.md](../architecture/native-transcripts.md#one-request-per-round).
+
 ### Loopback plan-usage origin
 
 A spec that scripts Claude or Codex account usage on a separate-process
@@ -2481,8 +2525,8 @@ session writes.
 
 ### Auto-pipeline flow (fake model)
 
-`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline launch
-end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
+`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline flow
+(the toolbar's **To pipeline** button) end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
 disposable `dev:test --fixture --headless --no-agent-credentials
 --agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
 then stops and resets the profile. The real backend, Pi bridge, Pi SDK
@@ -2491,18 +2535,22 @@ fake. The spec points the profile's isolated Pi `models.json` at a loopback
 model (`auto-pipeline-fake-model.ts`, script in
 `auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
 defaults as Pi on that model with one reviewer. The fake answers each stage's
-result tool with a fixed, valid, finding-free result, keeps only counts, and
-parks Verify until the spec releases it.
+result tool with a fixed, valid, finding-free result, answers the drafting
+request by calling `convert_to_pipeline` with a fixed draft, keeps only counts,
+and parks Verify until the spec releases it.
 
 The one case walks the user's path: an interactive Pi tab writes a file and
-goes idle; in the browser the user right-clicks **Multi Review**, chooses
-**Auto-pipeline**, edits the drafted title, adds a criterion and confirms. It
+goes idle; in the browser the user clicks **To pipeline**, which sends that
+tab the drafting request, and the tab's own agent submits the draft. The user
+edits the drafted title, adds a criterion and confirms. It
 then checks the ticket, the promotion commit and its trailer, and the adopted
 Build; sets the ticket's delivery to commit-only while Verify is parked;
 switches to another environment, releases Verify, and waits for the pipeline
 to finish unwatched. Back on the environment, and again after a reload and at
 a 390 px viewport, the graph must show the commit-only completion from backend
-state, and the source tab must have received no further turn. Screenshots go to
+state. The drafting request is the only turn the source tab receives: it
+grows the transcript once, and confirming and the pipeline add nothing.
+Screenshots go to
 `output/visual-previews/auto-pipeline-live-*.png`.
 
 To run the spec against a profile you started yourself, start it with the same

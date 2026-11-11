@@ -18,6 +18,14 @@ import {
 } from "./linear.js";
 import { asString, requireLinearApiKey } from "./commands-helpers.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import {
+  noteLinearChange,
+  registerLinearBoardCommands,
+  requireIssueOnProjectBoard,
+  requireProjectLinearBoard,
+} from "./commands-registry-linear-boards.js";
+import { linearKeyFingerprint } from "./linear-boards.js";
+import { nowIso } from "./storage-shared-core.js";
 
 /**
  * The machine's Linear connection and issue reads, in the `kanban` domain
@@ -33,16 +41,27 @@ export function registerLinearCommands(
     async (_args, context) => {
       const auth = await context.storage.kanban.getLinearAuth();
       if (!auth?.apiKey) return { connected: false, hasToken: false };
+      const keyFingerprint = linearKeyFingerprint(auth.apiKey);
       try {
         const viewer = await verifyLinearConnection(auth.apiKey);
-        await context.storage.kanban.saveLinearAuth(auth.apiKey, viewer);
-        return { connected: true, hasToken: true, viewer };
+        // Keeps `connectedAt`: a refreshed viewer is not a new connection, so a
+        // disconnect made elsewhere since still applies here.
+        await context.storage.kanban.saveLinearAuth(auth.apiKey, viewer, auth.connectedAt);
+        return {
+          connected: true,
+          hasToken: true,
+          viewer,
+          keyFingerprint,
+          connectedAt: auth.connectedAt,
+        };
       } catch (error) {
         return {
           connected: false,
           hasToken: true,
           viewer: auth.viewer,
           error: sanitizeLinearError(error, auth.apiKey),
+          keyFingerprint,
+          connectedAt: auth.connectedAt,
         };
       }
     },
@@ -55,8 +74,15 @@ export function registerLinearCommands(
       if (!token) throw new Error("Linear API key is required");
       try {
         const viewer = await verifyLinearConnection(token);
-        await context.storage.kanban.saveLinearAuth(token, viewer);
-        return { connected: true, hasToken: true, viewer };
+        const auth = await context.storage.kanban.saveLinearAuth(token, viewer);
+        noteLinearChange(context);
+        return {
+          connected: true,
+          hasToken: true,
+          viewer,
+          keyFingerprint: linearKeyFingerprint(token),
+          connectedAt: auth.connectedAt,
+        };
       } catch (error) {
         throw new Error(sanitizeLinearError(error, token));
       }
@@ -65,18 +91,31 @@ export function registerLinearCommands(
   );
   register(
     disconnectLinearCommand,
-    async (_args, { storage }) => {
+    async (_args, context) => {
+      const { storage } = context;
+      const auth = await storage.kanban.getLinearAuth();
+      // Every machine holding the same key disconnects too, including ones
+      // offline now: the disconnect syncs by the key's fingerprint.
+      if (auth?.apiKey) {
+        storage.linear.mergeLinearRevocations([
+          { keyFingerprint: linearKeyFingerprint(auth.apiKey), revokedAt: nowIso() },
+        ]);
+      }
       await storage.kanban.clearLinearAuth();
+      noteLinearChange(context);
       return { connected: false, hasToken: false };
     },
     ASYNC_HANDLER,
   );
   register(
     getLinearIssuesCommand,
-    async (_args, context) => {
+    async ({ projectId }, context) => {
+      const board = projectId
+        ? (await requireProjectLinearBoard(context, projectId)).board
+        : undefined;
       const apiKey = await requireLinearApiKey(context);
       try {
-        return await listLinearIssues(apiKey);
+        return await listLinearIssues(apiKey, board);
       } catch (error) {
         throw new Error(sanitizeLinearError(error, apiKey));
       }
@@ -85,9 +124,10 @@ export function registerLinearCommands(
   );
   register(
     getLinearIssueCommand,
-    async ({ issueId }, context) => {
+    async ({ issueId, projectId }, context) => {
       const apiKey = await requireLinearApiKey(context);
       try {
+        if (projectId) await requireIssueOnProjectBoard(context, apiKey, projectId, issueId);
         return await getLinearIssue(apiKey, asString(issueId, "issueId"));
       } catch (error) {
         throw new Error(sanitizeLinearError(error, apiKey));
@@ -97,11 +137,14 @@ export function registerLinearCommands(
   );
   register(
     postLinearIssueCommentCommand,
-    async ({ issueId, body }, context) => {
+    async ({ issueId, body, projectId }, context) => {
       const targetIssueId = asString(issueId, "issueId");
       const commentBody = asString(body, "body");
       const apiKey = await requireLinearApiKey(context);
       try {
+        if (projectId) {
+          await requireIssueOnProjectBoard(context, apiKey, projectId, targetIssueId);
+        }
         return await postLinearIssueComment(apiKey, {
           issueId: targetIssueId,
           body: commentBody,
@@ -157,4 +200,5 @@ export function registerLinearCommands(
     },
     ASYNC_HANDLER,
   );
+  registerLinearBoardCommands(register);
 }

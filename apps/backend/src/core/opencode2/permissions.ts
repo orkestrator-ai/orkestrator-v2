@@ -34,8 +34,8 @@ import {
   openCodePermissionRules,
   openCodeReviewPermissionRules,
   openCodeWorkflowResultPermissionRules,
-} from "../opencode-provider-helpers.js";
-import { openCodeUserMcpRules } from "../opencode-user-mcp.js";
+  openCodeUserMcpRules,
+} from "./policy-rules.js";
 import type { OpenCode2PermissionRule } from "./types.js";
 
 /** Prefix of every per-tab Orkestrator MCP server on a 2.x server. */
@@ -173,9 +173,9 @@ export function openCode2IsolationRules(sessionId: string): OpenCode2PermissionR
 
 /**
  * The base rules of a session created with a backend execution policy.
- * `configuredMcpServers` (the location's user servers) adds 1.x's per-server
- * denies for a policy that selects its user MCP servers (`opencode-user-mcp.ts`);
- * 2.x names a server's tools `<server>_<tool>` with the same namespace rule.
+ * `configuredMcpServers` (the location's user servers) adds per-server denies
+ * for a policy that selects its user MCP servers (`policy-rules.ts`); OpenCode
+ * names a server's tools `<server>_<tool>`.
  */
 export function openCode2PolicyRules(
   policy: NativeAgentExecutionPolicy | undefined,

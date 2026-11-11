@@ -5,6 +5,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createCommandFixtures } from "./command-fixtures";
 import type { CommandContext } from "./command-fixtures";
 import { installStandaloneBackendLogging } from "../src/standalone-logging";
+import { LOCAL_SERVER_HEALTHY_REUSE_MS } from "../src/core/local-server-runtime";
 import {
   createProviderStub,
   withService,
@@ -46,24 +47,32 @@ function markLocalServerLastFailureAt(
 
 /**
  * A bridge whose health answer the test controls: `/fail?n=N` makes the next
- * N health probes answer 503, `/stall` fails every probe until `/recover`.
+ * N health probes answer 503, `/stall` fails every probe until `/recover`,
+ * and `/health-probes` answers how many health probes it has served.
  * A 503 fails a probe immediately, so these tests never wait out a timeout.
  */
 const CONTROLLABLE_BRIDGE = `
   const http = require("node:http");
   let failRemaining = 0;
   let stalled = false;
+  let healthProbes = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     if (url.pathname === "/fail") failRemaining = Number(url.searchParams.get("n"));
     else if (url.pathname === "/stall") stalled = true;
     else if (url.pathname === "/recover") stalled = false;
+    else if (url.pathname === "/health-probes") {
+      res.writeHead(200);
+      res.end(String(healthProbes));
+      return;
+    }
     else if (url.pathname === "/supervision") {
       res.writeHead(200);
       res.end(process.env.ORKESTRATOR_DESKTOP_SUPERVISED || "unset");
       return;
     }
     else if (url.pathname === "/global/health") {
+      healthProbes += 1;
       const healthy = !stalled && failRemaining === 0;
       if (failRemaining > 0) failRemaining -= 1;
       res.writeHead(healthy ? 200 : 503);
@@ -111,7 +120,57 @@ async function startControllableBridge(
   return { commands, context, environmentId, first, hasObservedLiveWork };
 }
 
+function healthProbes(port: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    http
+      .get(`http://127.0.0.1:${port}/health-probes`, (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => (body += chunk));
+        response.on("end", () => resolve(Number(body)));
+      })
+      .on("error", reject);
+  });
+}
+
 describe("local bridge reuse under load", () => {
+  test("a passed health check stands for the next starts inside its window", async () => {
+    // Every native-agent read resolves its provider through the start command,
+    // two per live-update poll (to-do 6680, retired, task 6).
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-bridge-reuse-recent-health",
+      () => false,
+    );
+    const start = () =>
+      commands.get("start_local_codex_server_cmd")?.(
+        { environmentId },
+        context,
+      ) as Promise<Started>;
+    const key = `codex:${environmentId}`;
+    const before = await healthProbes(first.port);
+
+    await expect(start()).resolves.toMatchObject({ wasRunning: true, pid: first.pid });
+    expect(await healthProbes(first.port)).toBe(before + 1);
+    for (let read = 0; read < 4; read += 1) {
+      await expect(start()).resolves.toMatchObject({ wasRunning: true, pid: first.pid });
+    }
+    expect(await healthProbes(first.port)).toBe(before + 1);
+
+    // Past the window the next start probes again, and finds the stall.
+    const { localServers } = context.runtime;
+    const child = localServers.process(key)!;
+    localServers.recordHealthy(key, {
+      child,
+      port: first.port,
+      authToken: first.authToken,
+      at: Date.now() - LOCAL_SERVER_HEALTHY_REUSE_MS,
+    });
+    await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    const replacement = await start();
+    expect(replacement.wasRunning).toBe(false);
+    expect(replacement.pid).not.toBe(first.pid);
+  });
+
   test("does not pass desktop supervision to a spawned bridge", async () => {
     const previous = process.env.ORKESTRATOR_DESKTOP_SUPERVISED;
     process.env.ORKESTRATOR_DESKTOP_SUPERVISED = "1";

@@ -8,6 +8,7 @@ import { describe, expect, it } from "bun:test";
 import * as Schema from "effect/Schema";
 import { isNodeReadCommand } from "../../../command-nodes.js";
 import { initialContainerHostReachability } from "../../../container-host-reachability.js";
+import { isImageCapability, RETIRED_IMAGE_CAPABILITIES } from "../../../image-manifest.js";
 import type { NegotiatedDomains } from "../../../node-client.js";
 import { createDomainClient, type ContractEnvelopeFields } from "../../client.js";
 import { DOMAIN_CLIENTS } from "../../client-adapters.js";
@@ -139,6 +140,32 @@ describe("docker commands", () => {
     const close = DOCKER_COMMANDS.find((def) => def.name === "close_container_logs")!;
     expect(decodeCommandResult(close, null)._tag).toBe("Success");
     expect(decodeCommandResult(close, undefined)._tag).toBe("Success");
+  });
+
+  it("decodes an image status naming a retired capability from an older backend", () => {
+    const status = DOCKER_COMMANDS.find((def) => def.name === "get_docker_image_status")!;
+    const answer = (missingCapabilities: string[]) => ({
+      state: "incompatible",
+      imageRef: "orkestrator-v2:latest",
+      imageId: null,
+      registryDigest: null,
+      architecture: null,
+      manifest: null,
+      missingCapabilities,
+      remediation: null,
+    });
+    // A backend from before OpenCode 1.x was retired still requires and
+    // reports `opencode-launch`; it is in the Docker domain's support window.
+    for (const retired of RETIRED_IMAGE_CAPABILITIES) {
+      expect(decodeCommandResult(status, answer([retired, "opencode2-launch"]))._tag).toBe(
+        "Success",
+      );
+    }
+    expect(decodeCommandResult(status, answer(["not-a-capability"]))._tag).toBe("Failure");
+    // Retired names stay out of what images are checked for.
+    for (const retired of RETIRED_IMAGE_CAPABILITIES) {
+      expect(isImageCapability(retired)).toBe(false);
+    }
   });
 });
 

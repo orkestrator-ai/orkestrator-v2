@@ -16,13 +16,11 @@ starts the bridge writes `CODEX_HOME/rules/orkestrator-read-only.rules`,
 whose `allow` rules let a fixed set of reading programs run without asking,
 and it declines every approval the turn asks for at once, MCP tool approvals
 included (`refuseApproval`; "Codex read-only turns in a container" in
-`docs/architecture/coordinator.md`). Every runtime test of that path uses a
-scripted app-server, and the rules file was checked with the pinned Codex's
-own `codex execpolicy check`, not in a turn. Not proved in a real container
-turn: that `cat`, `grep`, `head` and `git status` run without asking and
-without the namespace error on a clean `CODEX_HOME`, that `rg`, `git diff`, a
-mutating command, shell redirection and `apply_patch` are declined and leave
-a sentinel file unchanged, and that the reviewer can still call its
+`docs/architecture/coordinator.md`). The bridge's runtime tests use a
+scripted app-server; the rules are proved against the real pinned
+app-server outside a container (see Investigation). Not proved in a real container
+turn: that reads run without the namespace error on a clean `CODEX_HOME`,
+that `apply_patch` is declined, and that the reviewer can still call its
 `orkestrator` submit tool under `untrusted`.
 
 **Context.** The Multi Review review on 2026-11-12 recorded this as a coverage
@@ -50,7 +48,14 @@ script that cannot be split is evaluated whole and matches no rule. The
 pinned `codex execpolicy check` accepted the generated file and matched
 `cat a.txt`, `head -n 5 x`, `grep -rn foo .` and `git status --short`, and
 matched nothing for `git diff HEAD`, `rg foo`, `sed -n 1p x`, `rm -rf build`,
-`git -c core.pager=x status` and `/bin/cat x`. The submit tool should not
+`git -c core.pager=x status` and `/bin/cat x`. Against the real pinned
+app-server on a loopback model (not in a container),
+`bridges/codex-bridge/src/app-server/live-read-only-exec-rules.test.ts`
+(`RUN_LIVE_CODEX_APP_SERVER=1`, no credits) passed 4/4 on 2026-11-12: a
+chained `cat | head && grep` ran without asking with the rules and asked and
+was declined without them; `echo changed > sentinel.txt` and `sed -n 1p`
+asked and were declined with the rules, and the sentinel was unchanged. What
+is left for this task is the container and the reviewer's submit call. The submit tool should not
 be asked about: in `core/src/mcp_tool_call.rs` (0.167.0)
 `maybe_request_mcp_tool_approval` returns before any elicitation when
 `requires_mcp_tool_approval_for_mode` is false, which it always is for an

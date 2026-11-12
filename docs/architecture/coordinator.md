@@ -1517,9 +1517,13 @@ firewall is the network boundary.
 `git status` can run helpers named in the checkout's local `.git/config`
 (`core.fsmonitor`) and refreshes the index's stat cache. That is acceptable
 only because the fallback is limited to containers, where every other turn
-already runs with full access and the container is the boundary. The pinned
-Codex's own checker (`codex execpolicy check`) accepts the file and matches
-it as described; a full Codex turn in a container has not run yet (to-do
+already runs with full access and the container is the boundary. Against
+the real pinned app-server on a loopback model,
+`live-read-only-exec-rules.test.ts` (`RUN_LIVE_CODEX_APP_SERVER=1`, no
+credits) shows a chained `cat | head && grep` run without asking only when
+the rules are in place, and a redirection and `sed` ask and are declined
+with the sentinel file unchanged. A full reviewer turn in a container has
+not run yet (to-do
 [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
 A Linux host, macOS and a coordinator (which runs under its launcher's
 permission profile) keep Codex's sandbox. A Linux host whose policy refuses

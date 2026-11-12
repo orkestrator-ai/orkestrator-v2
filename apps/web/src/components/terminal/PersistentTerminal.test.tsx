@@ -2603,6 +2603,96 @@ describe("PersistentTerminal", () => {
         timer.restore();
       }
     });
+
+    // A backend restart clears a launched tab's session id, and the renderer may
+    // not create a shell for such a tab itself.
+    const LAUNCHED_SHELL_RESTART_MS = 1_250;
+    const launchCalls = () =>
+      invokeMock.mock.calls.filter(([command]) => command === "launch_terminal_job");
+
+    it("gives a launched tab whose shell is gone a new shell without a notice", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installControlledTimeout(LAUNCHED_SHELL_RESTART_MS, {
+        label: "PersistentTerminal launched shell restart",
+      });
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        useTerminalSessionId = null;
+        invokeMock.mockImplementation(async (command: string) =>
+          command === "launch_terminal_job"
+            ? {
+                jobId: "job-1",
+                environmentId: "env-1",
+                tabId: "tab-1",
+                tabType: "plain",
+                sessionId: "replacement-session",
+                status: "started",
+              }
+            : undefined,
+        );
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+          />,
+        );
+
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+
+        expect(launchCalls()).toHaveLength(1);
+        const [, args] = launchCalls()[0]!;
+        expect(args).toMatchObject({ environmentId: "env-1", tabId: "tab-1", tabType: "plain" });
+        // A new shell, not a second run of the tab's original command.
+        expect(args).not.toHaveProperty("data");
+        // Once per dead target: no further automatic attempt is queued.
+        expect(restart.pendingCount()).toBe(0);
+        expect(screen.queryByRole("status") === null).toBe(true);
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("shows the notice once a launched tab's new shell cannot be started", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installControlledTimeout(LAUNCHED_SHELL_RESTART_MS, {
+        label: "PersistentTerminal launched shell restart",
+      });
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        useTerminalSessionId = null;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command === "launch_terminal_job") {
+            throw new Error("Environment is not running with setup complete");
+          }
+          return undefined;
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+          />,
+        );
+
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        // The notice waits while the automatic start is in flight.
+        await advanceClock(restart);
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+
+        expect(launchCalls()).toHaveLength(1);
+        expect(restart.pendingCount()).toBe(0);
+        expect(screen.getByRole("status").textContent).toContain(
+          "Reconnect starts a new shell in this tab",
+        );
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
   });
 
   it("preserves xterm parser state and discards a truncated tail when no durable history exists", async () => {

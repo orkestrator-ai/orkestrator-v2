@@ -59,6 +59,8 @@ import {
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
 import { TerminalDisconnectedBanner } from "@/components/terminal/TerminalDisconnectedBanner";
+import { toast } from "sonner";
+import { restartLaunchedTerminal } from "./restart-launched-terminal";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
@@ -92,6 +94,8 @@ const TERMINAL_CONNECT_RETRY_BASE_MS = 250;
 // user types. Say so — but only once the connection machinery has stopped
 // trying, so an ordinary slow attach does not flash a failure at the user.
 const TERMINAL_DISCONNECTED_NOTICE_DELAY_MS = 3000;
+/** Quiet period before a launched tab with no live shell gets a new one. */
+const LAUNCHED_TERMINAL_RESTART_DELAY_MS = 1_250;
 // Backoff for re-listing an environment's persisted sessions. Retrying rather
 // than falling open matters: proceeding without an authoritative snapshot would
 // create a duplicate persistent session for a tab that already has one.
@@ -2023,8 +2027,86 @@ export function PersistentTerminal({
   // out; it therefore appears only once nothing is still trying to attach.
   const [disconnectedNoticeVisible, setDisconnectedNoticeVisible] = useState(false);
   const [disconnectedNoticeDismissed, setDisconnectedNoticeDismissed] = useState(false);
+
+  // A launched tab (Run Commands, an agent CLI tab) may not create its own
+  // shell, so one whose shell went away, most often with a backend restart that
+  // cleared the tab's session id, stayed dead until the user asked. Ordinary
+  // tabs replace a missing shell silently whenever they connect; this does the
+  // same, once per dead target, so the banner below is only for a start that
+  // failed. The short wait spares a tab whose launch is still publishing its
+  // session a needless call; a race would converge anyway, because both calls
+  // resolve to the tab's one stable backend session.
+  const [launchedShellRestarting, setLaunchedShellRestarting] = useState(false);
+  const launchedShellRestartTargetRef = useRef<string | null>(null);
+  const launchedShellRestartAttemptRef = useRef(0);
+  const launchedShellTarget = `${environmentId}\0${tabId}\0${existingSessionId ?? ""}`;
+  const currentLaunchedShellTargetRef = useRef(launchedShellTarget);
+  const reconnectRef = useRef(reconnect);
   useEffect(() => {
-    if (!terminalIsOpened || isConnected || isConnecting) {
+    currentLaunchedShellTargetRef.current = launchedShellTarget;
+    reconnectRef.current = reconnect;
+  }, [launchedShellTarget, reconnect]);
+  useEffect(() => {
+    if (!backendManagedTerminal || isBackendManagedSetupTab) return;
+    if (!terminalIsOpened || isConnected || isConnecting) return;
+    const target = launchedShellTarget;
+    if (launchedShellRestartTargetRef.current === target) return;
+    const timer = setTimeout(() => {
+      launchedShellRestartTargetRef.current = target;
+      const attempt = ++launchedShellRestartAttemptRef.current;
+      setLaunchedShellRestarting(true);
+      void Promise.resolve()
+        .then(() =>
+          restartLaunchedTerminal({
+            backend: backendForScope(backendScope),
+            environmentId,
+            tabId,
+            tabType,
+            existingSessionId,
+          }),
+        )
+        .then(async (outcome) => {
+          if (outcome.kind === "failed") {
+            log.warn("reconnect.new-shell-failed", { tabId, error: outcome.message });
+            return;
+          }
+          // A new session id arrives through the pane snapshot and connects on
+          // its own; only an unchanged id needs an explicit attach, and only
+          // while this tab still points at the shell that was restarted.
+          if (
+            outcome.kind === "restarted" &&
+            outcome.sessionId === existingSessionId &&
+            currentLaunchedShellTargetRef.current === target
+          ) {
+            await reconnectRef.current();
+          }
+        })
+        .catch((error) => {
+          log.warn("reconnect.new-shell-failed", { tabId, error: formatLogError(error) });
+        })
+        .finally(() => {
+          if (launchedShellRestartAttemptRef.current === attempt) {
+            setLaunchedShellRestarting(false);
+          }
+        });
+    }, LAUNCHED_TERMINAL_RESTART_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [
+    backendManagedTerminal,
+    backendScope,
+    environmentId,
+    existingSessionId,
+    isBackendManagedSetupTab,
+    isConnected,
+    isConnecting,
+    launchedShellTarget,
+    tabId,
+    tabType,
+    terminalIsOpened,
+  ]);
+
+  useEffect(() => {
+    if (!terminalIsOpened || isConnected || isConnecting || launchedShellRestarting) {
       setDisconnectedNoticeVisible(false);
       return;
     }
@@ -2037,6 +2119,7 @@ export function PersistentTerminal({
     terminalIsOpened,
     isConnected,
     isConnecting,
+    launchedShellRestarting,
     connectionAttemptSettledRevision,
     connectionAttemptTarget,
   ]);
@@ -2075,14 +2158,41 @@ export function PersistentTerminal({
         return;
       }
     }
+    if (backendManagedTerminal) {
+      void restartLaunchedTerminal({
+        backend: backendForScope(backendScope),
+        environmentId,
+        tabId,
+        tabType,
+        existingSessionId,
+      })
+        .then(async (outcome) => {
+          if (outcome.kind === "failed") {
+            toast.error("Could not start a new shell", { description: outcome.message });
+            return;
+          }
+          // A new session id reaches this tab through the pane snapshot, and
+          // that new target connects on its own. Only an unchanged id (the old
+          // shell exited while the backend kept running) needs an explicit attach.
+          if (outcome.kind === "attach" || outcome.sessionId === existingSessionId) {
+            await reconnect();
+          }
+        })
+        .finally(() => terminal.focus());
+      return;
+    }
     void reconnect().finally(() => terminal.focus());
   }, [
+    backendManagedTerminal,
+    backendScope,
     containerId,
     environmentId,
+    existingSessionId,
     isBackendManagedSetupTab,
     reconnect,
     retireSetupTabMarker,
     tabId,
+    tabType,
     terminal,
     terminalData.serializeAddon,
     terminalSessions,
@@ -2135,9 +2245,11 @@ export function PersistentTerminal({
       {showDisconnectedNotice && (
         <TerminalDisconnectedBanner
           message={
-            attachExistingOnly && !existingSessionId
-              ? "This terminal's shell is no longer running, so it cannot accept input."
-              : "This terminal is disconnected and is not accepting input."
+            backendManagedTerminal && !existingSessionId
+              ? "This terminal's shell is no longer running. Reconnect starts a new shell in this tab."
+              : attachExistingOnly && !existingSessionId
+                ? "This terminal's shell is no longer running, so it cannot accept input."
+                : "This terminal is disconnected and is not accepting input."
           }
           onReconnect={handleReconnect}
           onDismiss={handleDismissDisconnectedNotice}

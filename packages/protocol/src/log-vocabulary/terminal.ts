@@ -65,6 +65,8 @@ export const TERMINAL_LOG_AREAS = defineLogAreas({
       "reconnect.setup-marker-found": "A reconnected tab's buffer already held the setup marker.",
       "reconnect.setup-marker-absent": "A reconnected first tab's buffer lacked the setup marker.",
       "reconnect.completed": "A terminal tab finished reconnecting to its session.",
+      "reconnect.new-shell-failed":
+        "A launched tab whose shell was gone could not get a new one automatically.",
       "restore.setup-marker-found": "A restored tab's buffer already held the setup marker.",
       "persistent-sessions.load-failed": "Listing an environment's saved sessions failed.",
       "persistent-session.restoring": "A tab began restoring from its saved session.",

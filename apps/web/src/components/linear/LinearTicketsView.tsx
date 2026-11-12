@@ -653,17 +653,43 @@ export function LinearTicketsViewContent({
             </h2>
             {issueForHeader && <IssueMetadata issue={issueForHeader} />}
           </div>
-          {issueForHeader?.url && (
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button
+              ref={buildLaunchTriggerRef}
               variant="outline"
               size="sm"
-              className="ml-auto"
-              onClick={() => void openInBrowser(issueForHeader.url!)}
+              disabled={!detail || isBuildStarting || hasActiveBuild}
+              onClick={() => setBuildDialogOpen(true)}
             >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open
+              {isBuildStarting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Hammer className="h-3.5 w-3.5" />
+              )}
+              Build…
             </Button>
-          )}
+            {selectedPipeline?.environmentId && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void navigateToPipeline(selectedPipeline)}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                View Build
+                <span className="text-xs text-muted-foreground">({selectedPipeline.phase})</span>
+              </Button>
+            )}
+            {issueForHeader?.url && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void openInBrowser(issueForHeader.url!)}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open
+              </Button>
+            )}
+          </div>
         </div>
 
         <ScrollArea className="min-h-0 flex-1">
@@ -813,85 +839,65 @@ export function LinearTicketsViewContent({
                   </div>
                 </div>
 
-                <Separator />
+                {/* The build controls live in the header beside Open; this row
+                    only reports the build's Linear completion comment. */}
+                {selectedPipeline?.completionCommentStatus && (
+                  <>
+                    <Separator />
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    ref={buildLaunchTriggerRef}
-                    variant="outline"
-                    size="sm"
-                    disabled={isBuildStarting || hasActiveBuild}
-                    onClick={() => setBuildDialogOpen(true)}
-                  >
-                    {isBuildStarting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Hammer className="h-3.5 w-3.5" />
-                    )}
-                    Build…
-                  </Button>
-                  {selectedPipeline?.environmentId && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void navigateToPipeline(selectedPipeline)}
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      View Build
-                      <span className="text-xs text-muted-foreground">
-                        ({selectedPipeline.phase})
-                      </span>
-                    </Button>
-                  )}
-                  {selectedPipeline?.completionCommentStatus === "failed" && (
-                    <>
-                      <span className="text-xs text-destructive">
-                        Linear comment failed: {selectedPipeline.completionCommentError}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={retryingCompletionComment}
-                        onClick={async () => {
-                          if (retryingCompletionComment) return;
-                          setRetryingCompletionComment(true);
-                          try {
-                            replacePipeline(
-                              await nodeBackend.retryBuildPipelineCompletionComment(
-                                selectedPipeline.id,
-                              ),
-                            );
-                          } catch (error) {
-                            toast.error("Failed to retry Linear completion comment", {
-                              description: error instanceof Error ? error.message : String(error),
-                            });
-                          } finally {
-                            setRetryingCompletionComment(false);
-                          }
-                        }}
-                      >
-                        {retryingCompletionComment ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        )}
-                        {retryingCompletionComment ? "Retrying…" : "Retry comment"}
-                      </Button>
-                    </>
-                  )}
-                  {selectedPipeline?.completionCommentStatus === "posting" && (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Posting Linear comment
-                    </span>
-                  )}
-                  {selectedPipeline?.completionCommentStatus === "posted" && (
-                    <span className="inline-flex items-center gap-1 text-xs text-green-500">
-                      <Check className="h-3 w-3" />
-                      Linear comment posted
-                    </span>
-                  )}
-                </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedPipeline?.completionCommentStatus === "failed" && (
+                        <>
+                          <span className="text-xs text-destructive">
+                            Linear comment failed: {selectedPipeline.completionCommentError}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={retryingCompletionComment}
+                            onClick={async () => {
+                              if (retryingCompletionComment) return;
+                              setRetryingCompletionComment(true);
+                              try {
+                                replacePipeline(
+                                  await nodeBackend.retryBuildPipelineCompletionComment(
+                                    selectedPipeline.id,
+                                  ),
+                                );
+                              } catch (error) {
+                                toast.error("Failed to retry Linear completion comment", {
+                                  description:
+                                    error instanceof Error ? error.message : String(error),
+                                });
+                              } finally {
+                                setRetryingCompletionComment(false);
+                              }
+                            }}
+                          >
+                            {retryingCompletionComment ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            )}
+                            {retryingCompletionComment ? "Retrying…" : "Retry comment"}
+                          </Button>
+                        </>
+                      )}
+                      {selectedPipeline?.completionCommentStatus === "posting" && (
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Posting Linear comment
+                        </span>
+                      )}
+                      {selectedPipeline?.completionCommentStatus === "posted" && (
+                        <span className="inline-flex items-center gap-1 text-xs text-green-500">
+                          <Check className="h-3 w-3" />
+                          Linear comment posted
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>

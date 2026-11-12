@@ -1112,6 +1112,32 @@ describe("LinearTicketsView", () => {
     );
   });
 
+  test("puts the Build button in the ticket header beside Open", async () => {
+    let resolveDetail: (detail: LinearIssueDetail) => void = () => undefined;
+    getLinearIssueMock.mockImplementationOnce(
+      () =>
+        new Promise<LinearIssueDetail>((resolve) => {
+          resolveDetail = resolve;
+        }),
+    );
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    // The header shows Build while the ticket is still loading, but it cannot
+    // launch a build until the details it builds from have arrived.
+    const buildButton = await screen.findByRole("button", { name: /^build/i });
+    expect((buildButton as HTMLButtonElement).disabled).toBe(true);
+
+    resolveDetail(issueDetail);
+    expect(await screen.findByText("Build Linear support")).toBeTruthy();
+    await waitFor(() => expect((buildButton as HTMLButtonElement).disabled).toBe(false));
+
+    const openButton = screen.getByRole("button", { name: "Open" });
+    expect(openButton.parentElement).toBe(buildButton.parentElement);
+    expect(screen.getAllByRole("button", { name: /^build/i })).toHaveLength(1);
+  });
+
   test("shows an empty state when the ticket has no comments", async () => {
     getLinearIssueMock.mockResolvedValue({ ...issueDetail, comments: [] });
     renderLinearTicketsView();

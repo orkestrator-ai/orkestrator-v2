@@ -1303,11 +1303,21 @@ describe("LinearTicketsView", () => {
     fireEvent.click(await screen.findByText("Add Linear integration"));
     expect(await screen.findByText("Linear detail unavailable")).toBeTruthy();
 
+    // The header keeps Build visible after a failed load, but it cannot launch
+    // a build without the details it builds from.
+    const buildButton = screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement;
+    expect(buildButton.disabled).toBe(true);
+
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Build Linear support")).toBeTruthy();
     });
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
   });
 
   test("clears failed completion comment state when retrying from ticket details", async () => {

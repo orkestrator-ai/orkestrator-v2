@@ -305,6 +305,8 @@ export async function harness(
     watchRolloutFile?: WatchRolloutFile;
     /** Defaults to "the sandbox can run", whatever host runs the test. */
     readOnlyCommandSandboxOff?: (config: EngineTurnConfig) => string | undefined;
+    /** Defaults to writing the rules into this test's own `codexHome`. */
+    ensureReadOnlyExecRules?: () => Promise<void>;
     notificationQueueMaxDepth?: number;
   } = {},
 ): Promise<Harness> {
@@ -409,6 +411,9 @@ export async function harness(
     ...(options.changeEvidence ? { changeEvidence: options.changeEvidence } : {}),
     ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),
     readOnlyCommandSandboxOff: options.readOnlyCommandSandboxOff ?? (() => undefined),
+    ...(options.ensureReadOnlyExecRules
+      ? { ensureReadOnlyExecRules: options.ensureReadOnlyExecRules }
+      : {}),
   });
   runtimes.add(runtime);
   if (options.deferStart !== true) await runtime.start();

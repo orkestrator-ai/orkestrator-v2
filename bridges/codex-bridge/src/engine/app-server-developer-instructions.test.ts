@@ -14,6 +14,7 @@ import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-inst
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { BUILD, harness, thread } from "./app-server-engine-test-harness.js";
 import type { EngineTurnConfig } from "./types.js";
+import { codexReadOnlyExecRulesInstructions } from "../codex-read-only-exec-rules.js";
 
 function policy(overrides: Partial<NativeAgentExecutionPolicy> = {}): NativeAgentExecutionPolicy {
   return {
@@ -166,7 +167,7 @@ describe("the repository's AGENTS.md on Codex threads", () => {
     expect(await instructionsFor({ projectResources: true })).toBe(agentSystemInstructions());
   });
 
-  test("a read-only turn without Codex's sandbox excludes them on start and resume, an ordinary one restores them", async () => {
+  test("a read-only turn without Codex's sandbox excludes them and names its allowed commands on start and resume, an ordinary one restores them", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
       "thread/resume": () => ({ thread: thread("t1") }),
@@ -192,9 +193,15 @@ describe("the repository's AGENTS.md on Codex threads", () => {
       await h.engine.startThread({ config: sandboxOff });
       await h.engine.resumeThread("t1", { config: sandboxOff });
       await h.engine.resumeThread("t1", { config: ordinary });
-      expect(instructions("thread/start", 0)).toBe(agentSystemInstructions());
-      expect(instructions("thread/resume", 0)).toBe(agentSystemInstructions());
+      for (const sent of [instructions("thread/start", 0), instructions("thread/resume", 0)]) {
+        expect(sent).toStartWith(agentSystemInstructions());
+        expect(sent).not.toContain("Always show visual changes as images.");
+        // The model is told which commands the bridge's exec-policy rules let
+        // run, so it does not spend the turn on commands that are declined.
+        expect(sent).toContain(codexReadOnlyExecRulesInstructions());
+      }
       expect(instructions("thread/resume", 1)).toContain("Always show visual changes as images.");
+      expect(instructions("thread/resume", 1)).not.toContain(codexReadOnlyExecRulesInstructions());
     } finally {
       await h.engine.stop();
     }

@@ -216,6 +216,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "The backend that launched this bridge has gone; stopping turns and shutting down.",
       "queue.overflow": "The notification queue passed a bound and dropped its backlog.",
       "queue.task-failed": "A task on a per-thread queue failed.",
+      "read-only-rules.write-failed":
+        "Writing the read-only exec-policy rules failed; the turn's reads are declined instead.",
       "recorder.notice":
         "The notification recorder needs attention: it is on, or was asked for without its confirmation.",
       "recorder.threw": "The notification recorder threw.",

@@ -11,18 +11,19 @@ Analysed 2026-11-12 against `main` at `dc8803a8c`.
 ### 1. Run a real Codex read-only turn in a container and check what it may do
 
 **Problem.** A Codex `readOnly` turn in a container now runs without Codex's
-command sandbox (`danger-full-access` under `untrusted`), and the bridge
-declines every approval the turn asks for at once, MCP tool approvals
+command sandbox (`danger-full-access` under `untrusted`). Before its thread
+starts the bridge writes `CODEX_HOME/rules/orkestrator-read-only.rules`,
+whose `allow` rules let a fixed set of reading programs run without asking,
+and it declines every approval the turn asks for at once, MCP tool approvals
 included (`refuseApproval`; "Codex read-only turns in a container" in
-`docs/architecture/coordinator.md`). The design relies on Codex running the
-commands it classes as safe reads without asking. Every test of that path
-uses a scripted app-server: it proves the parameters the bridge sends and
-how it answers approvals, not what a real Codex does with them. Not proved:
-that reads (`cat`, `rg`, `git diff`, `git show`) run without asking and
-without the namespace error on a clean `CODEX_HOME`, that a mutating
-command, shell redirection or `apply_patch` cannot change a sentinel file,
-and that the reviewer can still call its `orkestrator` submit tool under
-`untrusted`.
+`docs/architecture/coordinator.md`). Every runtime test of that path uses a
+scripted app-server, and the rules file was checked with the pinned Codex's
+own `codex execpolicy check`, not in a turn. Not proved in a real container
+turn: that `cat`, `grep`, `head` and `git status` run without asking and
+without the namespace error on a clean `CODEX_HOME`, that `rg`, `git diff`, a
+mutating command, shell redirection and `apply_patch` are declined and leave
+a sentinel file unchanged, and that the reviewer can still call its
+`orkestrator` submit tool under `untrusted`.
 
 **Context.** The Multi Review review on 2026-11-12 recorded this as a coverage
 gap. Two models exist for a credential-free container check:
@@ -33,19 +34,29 @@ that no write reached the checkout) and
 Codex included, runs a real turn against a fake provider on the runtime's
 loopback). Neither drives a Codex `readOnly` turn through the bridge.
 
-**Investigation.** Not started. A round 1 review of the pinned Codex 0.167.0
-source (`codex-rs/core/src/exec_policy.rs`, and `exec_policy_tests.rs`
-expecting `git status` to need approval without an allow rule) read it as
-asking before every command no exec-policy rule allows, reads included. If
-that holds in a real turn, every read is declined and the reviewer reports
-itself blocked, as before the fix, with the sandbox-off warning beside it.
-Round 2 of the pipeline built a bridge-side classifier that approved proven
-reads (`git show 7f949b384:bridges/codex-bridge/src/codex-read-only-commands.ts`),
-then removed it in round 3 because the ticket requires every approval to be
-declined. Also unknown: whether an MCP elicitation for the submit tool can
-arrive under `untrusted` despite `default_tools_approval_mode: "approve"`.
-If one did, the refusal would decline it, and the reviewer could not
-submit; the canary should check that the submit call succeeds.
+**Investigation.** Done for the rule mechanism, not for a full turn. The
+pinned Codex 0.167.0 source has no list of safe commands: under
+`UnlessTrusted` a command no exec-policy rule matches always asks
+(`render_decision_for_unmatched_command_for_platform` in
+`codex-rs/core/src/exec_policy.rs`), so without rules every read was declined
+and a reviewer read nothing (Multi Review finding, 2026-11-12). An `allow`
+match yields `ExecApprovalRequirement::Skip`. Rules are loaded from
+`<config folder>/rules/*.rules` for each config layer, the user layer being
+`CODEX_HOME`, whenever a session starts (`ExecPolicyManager::load` in
+`Session::new`, `core/src/session/mod.rs`); a file that does not parse fails
+the thread start (`failed to load rules`). `bash -lc` scripts are split into
+plain commands (`parse_shell_lc_plain_commands`) and each must be allowed; a
+script that cannot be split is evaluated whole and matches no rule. The
+pinned `codex execpolicy check` accepted the generated file and matched
+`cat a.txt`, `head -n 5 x`, `grep -rn foo .` and `git status --short`, and
+matched nothing for `git diff HEAD`, `rg foo`, `sed -n 1p x`, `rm -rf build`,
+`git -c core.pager=x status` and `/bin/cat x`. The submit tool should not
+be asked about: in `core/src/mcp_tool_call.rs` (0.167.0)
+`maybe_request_mcp_tool_approval` returns before any elicitation when
+`requires_mcp_tool_approval_for_mode` is false, which it always is for an
+`approve`-mode tool, unless strict auto-review is on; read-only turns use the
+`user` reviewer. The canary should still check that the submit call succeeds,
+because the refusal would decline an elicitation if one arrived.
 
 **Decisions.**
 
@@ -68,19 +79,36 @@ submit; the canary should check that the submit call succeeds.
     - Cons: costs turns, depends on the model choosing the probing commands,
       and cannot run in CI.
 
-- **If the canary shows Codex asking before reads under `untrusted`, how
-  should the bridge let them run?**
-  - **Restore the bridge-side read classifier from `7f949b384` behind the
-    router's refusal check (recommended).**
-    - Pros: already written and tested (77 classifier cases); no Codex
-      configuration or rule files.
-    - Cons: a second reading-program allowlist beside the Claude bridge's;
-      changes the ticket's "decline every approval" contract, so it needs
-      a ticket of its own.
-  - **Turn-scoped exec-policy allow rules.**
-    - Pros: Codex enforces them.
-    - Cons: needs files in `CODEX_HOME` or amendments app-server cannot list
-      or remove, which `bridges/codex-bridge/AGENTS.md` forbids.
+- **How does a sandbox-off read-only turn read, given that the pinned
+  Codex asks for every command no rule allows?** Decided and built (see
+  Assumptions and decisions).
+  - **A bridge-owned exec-policy rules file of reading programs, every
+    approval still declined (recommended, built).**
+    - Pros: Codex enforces it; the bridge still never approves anything, so
+      the ticket's decline-every-approval contract holds; checked with the
+      pinned Codex's own rule checker.
+    - Cons: a prefix rule admits any arguments, so tools with a writing or
+      program-running option (`rg`, `sed`, `find`, `git diff`/`show`/`log`)
+      stay declined; other Codex sessions on the same `CODEX_HOME` also run
+      the listed programs without asking.
+  - **Restore the bridge-side read classifier from `7f949b384`.**
+    - Pros: handles flags per argument, so `git diff` and `sed -n` could run.
+    - Cons: the bridge approves commands, which the ticket forbids; a second
+      reading-program allowlist beside the Claude bridge's.
+
+## Assumptions and decisions
+
+### Exec-policy rules instead of a bridge-side classifier (task 1, decision 2)
+
+Chosen in the Multi Review fix round of 2026-11-12 after the review proved
+from the pinned source that reads were declined. The rules file keeps every
+approval declined, as the ticket requires, while Codex itself runs the
+listed reads. The allowed set is deliberately narrow: only programs none of
+whose options writes a file or runs another program, plus `git status`,
+`git rev-parse`, `git ls-files` and `git merge-base`; the developer
+instructions name them so the model reads diffs from its review package with
+`cat`. Task 1 stays open: the end-to-end canary is still the only proof that
+a real turn reads and submits.
 
 ## Related
 

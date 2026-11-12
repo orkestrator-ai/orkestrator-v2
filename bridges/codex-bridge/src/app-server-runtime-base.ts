@@ -133,6 +133,12 @@ export interface AppServerRuntimeOptions {
    * running them does not decide.
    */
   readOnlyCommandSandboxOff?: (config: EngineTurnConfig) => string | undefined;
+  /**
+   * Puts the exec-policy rules that let a sandbox-off read-only turn read in
+   * place before its thread starts (`ensureCodexReadOnlyExecRules` into
+   * `codexHome` by default). Tests observe or fail it.
+   */
+  ensureReadOnlyExecRules?: () => Promise<void>;
 }
 
 export interface OrderedRuntimeEvent {

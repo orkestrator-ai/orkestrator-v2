@@ -109,6 +109,7 @@ import {
   emptyGhConfigDir,
 } from "../github-credential-config.js";
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
+import { codexReadOnlyExecRulesInstructions } from "../codex-read-only-exec-rules.js";
 import {
   threadToolHistoryVerdict,
   type ToolHistoryVerdict,
@@ -1755,7 +1756,9 @@ export class AppServerEngine implements CodexEngine {
    * coordinator, which delegates every file it would write), then the
    * repository's AGENTS.md when the thread does not load the checkout itself
    * (project resources off pins it untrusted, which drops AGENTS.md with the
-   * rest; read-only sessions excluded), then any `developer_instructions` the user
+   * rest; read-only sessions excluded), then, for a read-only turn without
+   * Codex's command sandbox, the commands its exec-policy rules let run
+   * (`codexReadOnlyExecRulesInstructions`), then any `developer_instructions` the user
    * configured. The thread parameter replaces the configured value rather
    * than adding to it, so the configured text is read back and kept. A
    * project layer is read only when the thread loads the checkout's own
@@ -1777,6 +1780,9 @@ export class AppServerEngine implements CodexEngine {
       config.policy?.id === "coordinator-read-only"
         ? []
         : [await readRepositoryInstructions(cwd)]),
+      ...(config.readOnlyCommandSandboxOff !== undefined
+        ? [codexReadOnlyExecRulesInstructions()]
+        : []),
     ].filter((part): part is string => Boolean(part));
     // Nothing of Orkestrator's: leave the configured instructions to Codex.
     if (ours.length === 0) return undefined;

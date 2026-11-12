@@ -1,18 +1,29 @@
 /**
  * A read-only turn where Codex's command sandbox cannot run (an environment's
- * container): it runs without the sandbox under `untrusted`, every approval it
+ * container): it runs without the sandbox under `untrusted`, the bridge's
+ * exec-policy rules are in place before its thread starts, every approval it
  * asks for is declined at once, and `/session/:id/status` says so until the
- * next turn. `codex-read-only-sandbox.test.ts` covers the decision itself.
+ * next turn. `codex-read-only-sandbox.test.ts` covers the decision itself and
+ * `codex-read-only-exec-rules.test.ts` the rules file.
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
 import {
+  codexHome,
   deferredSignal,
   harness,
   type Harness,
   threadPayload,
 } from "./app-server-runtime-test-harness.js";
+import {
+  CODEX_READ_ONLY_RULES_FILENAME,
+  codexReadOnlyExecRules,
+  ensureCodexReadOnlyExecRules,
+} from "./codex-read-only-exec-rules.js";
 import {
   CODEX_READ_ONLY_APPROVAL_REFUSAL,
   CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL,
@@ -107,6 +118,99 @@ describe("read-only turn without Codex's command sandbox", () => {
     });
   });
 
+  // The pinned Codex asks under `untrusted` for every command no exec-policy
+  // rule allows, so without the rules every read was declined and a reviewer
+  // read nothing. Codex reads the rules when a thread starts or resumes.
+  test("puts the read-only exec-policy rules in place before its thread starts", async () => {
+    const rulesPath = () => join(codexHome, "rules", CODEX_READ_ONLY_RULES_FILENAME);
+    const threadStartsAtWrite: number[] = [];
+    let h: Harness | undefined;
+    h = await sandboxOffInContainer(
+      {},
+      {
+        ensureReadOnlyExecRules: async () => {
+          threadStartsAtWrite.push(
+            h!.child().requests.filter((request) => request.method === "thread/start").length,
+          );
+          await ensureCodexReadOnlyExecRules(codexHome);
+        },
+      },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+
+    expect(threadStartsAtWrite).toEqual([0]);
+    expect(readFileSync(rulesPath(), "utf8")).toBe(codexReadOnlyExecRules());
+    expect(turnStarts(h)).toHaveLength(1);
+  });
+
+  test("by default writes the rules into its CODEX_HOME, and never for other turns", async () => {
+    const rulesPath = join(codexHome, "rules", CODEX_READ_ONLY_RULES_FILENAME);
+    const sandboxed = await harness({}, { readOnlyCommandSandboxOff: () => undefined });
+    const ordinary = sandboxed.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await sandboxed.runtime.prompt(ordinary.sessionId, {
+      prompt: "Build it",
+      requestId: "build-1",
+      attachments: [],
+    });
+    await sandboxed.runtime.prompt(ordinary.sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    expect(existsSync(rulesPath)).toBe(false);
+
+    const h = await sandboxOffInContainer();
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    expect(readFileSync(rulesPath, "utf8")).toBe(codexReadOnlyExecRules());
+  });
+
+  test("a rules file it cannot write costs the reads, not the boundary", async () => {
+    const outputs: LogOutput[] = [];
+    configureLogger({ sink: (output) => void outputs.push(output) });
+    try {
+      const h = await sandboxOffInContainer(
+        {},
+        {
+          ensureReadOnlyExecRules: () => Promise.reject(new Error("read-only file system")),
+        },
+      );
+      const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Review the package",
+          requestId: "review-1",
+          attachments: [],
+          readOnly: true,
+        }),
+      ).toMatchObject({ ok: true });
+      await h.drain();
+      expect(outputs.map((output) => output.record?.event)).toContain(
+        "read-only-rules.write-failed",
+      );
+      expect(turnStarts(h)[0]!.params.approvalPolicy).toBe("untrusted");
+
+      requestCommandApproval(h, 9050, "turn-1");
+      await h.drain();
+      expect(answerTo(h, 9050)).toContain('"decision":"decline"');
+      expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+    } finally {
+      resetLogger();
+    }
+  });
+
   test("declines an approval at once instead of parking it for a person", async () => {
     const h = await sandboxOffInContainer();
     const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
@@ -139,9 +243,11 @@ describe("read-only turn without Codex's command sandbox", () => {
     expect(JSON.stringify(h.events)).toContain(CODEX_READ_ONLY_APPROVAL_REFUSAL);
   });
 
-  // Under `untrusted` Codex runs the commands it classifies as read-only
-  // without asking, so an approval is a command outside that set: the bridge
-  // declines it whatever it looks like, and never approves one itself.
+  // Under `untrusted` Codex runs without asking only what an exec-policy rule
+  // allows (the bridge's `orkestrator-read-only.rules`), so an approval is a
+  // command outside those rules, read or not (`git diff`, `sed -n`, a `cat`
+  // behind a redirection): the bridge declines it whatever it looks like, and
+  // never approves one itself.
   test("declines every command approval, whatever the command, without offering it", async () => {
     const h = await sandboxOffInContainer();
     const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });

@@ -19,6 +19,7 @@ import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engi
 import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
 import { codexLoadsProjectSkills, codexReadOnlyTurnPolicy } from "./codex-config.js";
 import { codexReadOnlyCommandSandboxOff } from "./codex-read-only-sandbox.js";
+import { ensureCodexReadOnlyExecRules } from "./codex-read-only-exec-rules.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -413,9 +414,10 @@ export class CodexRuntimePrompt {
     // reusable Fix session in build mode while applying the read-only boundary
     // and workflow-result approval only to this dispatch. Where Codex's command
     // sandbox cannot run (an environment's container), `read-only` would fail
-    // every command before it starts; such a turn runs only what Codex treats
-    // as read-only and the bridge declines everything else
-    // (`codex-read-only-sandbox.ts`).
+    // every command before it starts; such a turn runs only the reading
+    // programs the bridge's exec-policy rules allow and the bridge declines
+    // everything else (`codex-read-only-sandbox.ts`,
+    // `codex-read-only-exec-rules.ts`).
     //
     // Decided once per dispatch, not on every `promptConfig()` read: the
     // thread is started (or reloaded) and the turn dispatched from separate
@@ -428,6 +430,19 @@ export class CodexRuntimePrompt {
           session.config,
         )
       : undefined;
+    if (sandboxOff) {
+      // Codex reads its rules when a thread starts or resumes, and a
+      // sandbox-off thread is always started or reloaded under that decision
+      // (it is in the reload key), so the file is in place before the thread
+      // that needs it. A failed write costs the reads, not the boundary:
+      // every command then asks and is declined.
+      await (
+        this.ctx.options.ensureReadOnlyExecRules ??
+        (() => ensureCodexReadOnlyExecRules(this.ctx.options.codexHome))
+      )().catch((error: unknown) => {
+        log.warn("read-only-rules.write-failed", { error: formatLogError(error) });
+      });
+    }
     const promptConfig = (): EngineTurnConfig => {
       return {
         ...session.config,

@@ -11,10 +11,12 @@
  * it reported itself blocked with no findings.
  *
  * Where the sandbox cannot run, the turn runs without it, the way Claude's
- * read-only turn does (`claudeReadOnlyCommandSandbox`): Codex's `untrusted`
- * approval policy runs only commands Codex itself classifies as read-only
- * without asking, and the bridge declines every approval the turn asks for
- * at once (`approvalRefusal`, the server-request router's `refuseApproval`),
+ * read-only turn does (`claudeReadOnlyCommandSandbox`): under Codex's
+ * `untrusted` approval policy Codex runs without asking only the reading
+ * programs the bridge's exec-policy rules allow
+ * (`codex-read-only-exec-rules.ts`; the pinned Codex has no built-in list of
+ * safe commands any more), and the bridge declines every approval the turn
+ * asks for at once (`approvalRefusal`, the server-request router's `refuseApproval`),
  * MCP tool approvals included, so nothing else runs and an unattended review
  * does not wait on a card nobody will answer. The network denial and
  * the read-only policy are kept; the container firewall still holds the

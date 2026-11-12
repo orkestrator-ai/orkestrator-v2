@@ -62,7 +62,8 @@ export class CodexRuntimeApprovals {
   /**
    * Declines every approval a read-only turn without Codex's command sandbox
    * asks for. Such a turn runs Codex's `untrusted` policy, so an approval is
-   * exactly a command Codex does not treat as read-only, a file change, a
+   * exactly a command the bridge's exec-policy rules do not allow
+   * (`codex-read-only-exec-rules.ts`), a file change, a
    * permission request or an MCP tool approval; none may run, and an
    * unattended review must not wait on a card. An MCP elicitation that is a
    * server's own question, not a tool approval, routes as usual.

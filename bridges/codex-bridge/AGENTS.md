@@ -230,9 +230,13 @@ replay shows it as the card, never as a message the user typed. See
 - Never send a `readOnly` turn to Codex's `read-only` sandbox where that
   sandbox cannot run. In an environment's container bubblewrap cannot create
   its user namespace, so every command fails and a reviewer reads nothing.
-  There the turn runs `danger-full-access` under `untrusted`, so only the
-  commands Codex itself classes as read-only run without asking, and the
-  router declines every approval the turn asks for at once
+  There the turn runs `danger-full-access` under `untrusted`. Codex 0.167.0
+  asks for every command no exec-policy rule allows, so before the thread
+  starts the bridge writes `CODEX_HOME/rules/orkestrator-read-only.rules`
+  (`codex-read-only-exec-rules.ts`), allowing only programs none of whose
+  options writes a file or runs another program (a prefix rule admits any
+  arguments: never add `rg`, `sed`, `find`, `git diff`/`show`/`log` or a
+  launcher). The router declines every approval the turn asks for at once
   (`refuseApproval`), MCP tool-approval elicitations included. Never approve
   one from the bridge, and never let such a turn's approvals reach a tab or
   the default auto-approve path. Decide the sandbox once per dispatch, so
@@ -331,7 +335,10 @@ replay shows it as the card, never as a message the user typed. See
   (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`). Codex
   writes an accepted one into `CODEX_HOME/rules/`, where it applies to every
   later Codex session on the host, and app-server 0.166.0 has no method to
-  list or remove it. `approvals.ts` drops the amendments from the descriptor
+  list or remove it. The one rules file the bridge writes itself,
+  `orkestrator-read-only.rules`, is bridge-owned (rewritten whenever it
+  differs), written only for a sandbox-off read-only turn in a container, and
+  allows reads only. `approvals.ts` drops the amendments from the descriptor
   and the backend ignores `amendments` from an older bridge. The exec-policy
   prefix alone is forwarded as `proposedCommandPrefix`, a preselection hint
   for an Orkestrator rule (todo 0723) that no answer carries back.

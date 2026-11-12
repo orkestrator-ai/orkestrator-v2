@@ -209,55 +209,57 @@ for (const view of ["native", "reviewer"]) {
   });
 }
 
-// The reviewer only: the native tab's background poll (every 500–1500 ms)
-// retires a history page still in flight, so a page slow enough to move during
-// never lands there. That is the session hook's paging policy, not scrolling.
-test("reviewer: a reader who moves while a page loads is held where they moved to", async ({
-  page,
-}) => {
-  await page.goto("/transcript-paging?mixed=1&slow=1&reviewer=1");
-  const list = page.locator("[data-transcript-scroller]");
-  await expect(list).toBeVisible();
-  await list.hover();
-  const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
-  await expect
-    .poll(async () => {
-      await page.mouse.wheel(0, -4000);
-      return (await load.count()) > 0 && (await load.isVisible());
-    })
-    .toBe(true);
-  await load.click();
-  const loading = page.getByRole("button", { name: "Loading…", exact: true });
-  await expect(loading).toBeVisible();
-  // The page is held for 1.5 s. Move away from where it was requested and let
-  // the wheel settle, then hold whichever tool is now nearest the top.
-  await page.mouse.wheel(0, 360);
-  await page.waitForTimeout(400);
-  await expect(loading).toBeVisible();
-  const held = await list.evaluate((el) => {
-    const top = el.getBoundingClientRect().top;
-    const tools = Array.from(
-      el.querySelectorAll<HTMLElement>("[data-transcript-part-id^='call-']"),
-    );
-    return tools.find((tool) => tool.getBoundingClientRect().top - top >= 0)?.dataset
-      .transcriptPartId;
+// The page is held 1.5 s, longer than the native tab's 500–1500 ms background
+// poll, so in the native view a poll always lands while it is in flight and
+// must not retire it (0483, 1602).
+for (const view of ["native", "reviewer"] as const) {
+  test(`${view}: a reader who moves while a page loads is held where they moved to`, async ({
+    page,
+  }) => {
+    await page.goto(`/transcript-paging?mixed=1&slow=1${view === "reviewer" ? "&reviewer=1" : ""}`);
+    const list = page.locator("[data-transcript-scroller]");
+    await expect(list).toBeVisible();
+    await list.hover();
+    const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+    await expect
+      .poll(async () => {
+        await page.mouse.wheel(0, -4000);
+        return (await load.count()) > 0 && (await load.isVisible());
+      })
+      .toBe(true);
+    await load.click();
+    const loading = page.getByRole("button", { name: "Loading…", exact: true });
+    await expect(loading).toBeVisible();
+    // The page is held for 1.5 s. Move away from where it was requested and let
+    // the wheel settle, then hold whichever tool is now nearest the top.
+    await page.mouse.wheel(0, 360);
+    await page.waitForTimeout(400);
+    await expect(loading).toBeVisible();
+    const held = await list.evaluate((el) => {
+      const top = el.getBoundingClientRect().top;
+      const tools = Array.from(
+        el.querySelectorAll<HTMLElement>("[data-transcript-part-id^='call-']"),
+      );
+      return tools.find((tool) => tool.getBoundingClientRect().top - top >= 0)?.dataset
+        .transcriptPartId;
+    });
+    expect(held).toBeDefined();
+    expect(held).not.toBe("call-40");
+    const before = (await toolPosition(list, held!))!;
+    await startAnchorProbe(list, held!);
+    await expect(loading).toHaveCount(0, { timeout: 5_000 });
+    // Let late measurement and the restoration's own frames finish.
+    await page.waitForTimeout(800);
+    const probe = await stopAnchorProbe(list);
+    expect(probe.count).toBeGreaterThan(10);
+    expect(probe.missing).toBe(0);
+    expect(probe.maxError).toBeLessThanOrEqual(2);
+    const after = (await toolPosition(list, held!))!;
+    expect(Math.abs(after.offset - before.offset)).toBeLessThan(3);
+    // The page really did land above the reader.
+    expect(Number(after.index)).toBeGreaterThan(Number(before.index) + 40);
   });
-  expect(held).toBeDefined();
-  expect(held).not.toBe("call-40");
-  const before = (await toolPosition(list, held!))!;
-  await startAnchorProbe(list, held!);
-  await expect(loading).toHaveCount(0, { timeout: 5_000 });
-  // Let late measurement and the restoration's own frames finish.
-  await page.waitForTimeout(800);
-  const probe = await stopAnchorProbe(list);
-  expect(probe.count).toBeGreaterThan(10);
-  expect(probe.missing).toBe(0);
-  expect(probe.maxError).toBeLessThanOrEqual(2);
-  const after = (await toolPosition(list, held!))!;
-  expect(Math.abs(after.offset - before.offset)).toBeLessThan(3);
-  // The page really did land above the reader.
-  expect(Number(after.index)).toBeGreaterThan(Number(before.index) + 40);
-});
+}
 
 for (const view of ["native", "reviewer"] as const) {
   for (const reducedMotion of ["no-preference", "reduce"] as const) {
@@ -464,12 +466,17 @@ test("native: history pages in without a click, opening with a page and paging n
   await page.waitForTimeout(500);
   expect(await requests()).toEqual(["before-200"]);
 
-  // Reading towards the top keeps paging, down to the first row.
+  // Reading towards the top keeps paging, down to the first row. Each step
+  // wheels the reader all the way to the head, so every step waits only on the
+  // next automatic page landing. A fixed 4000 px step needed some twenty of the
+  // poll's one-second steps to cross the 300 rows, about 22 s of the test's
+  // 30 s before any page was slow (1602).
   await list.hover();
   await expect
     .poll(
       async () => {
-        await page.mouse.wheel(0, -4000);
+        const top = await list.evaluate((element) => element.scrollTop);
+        await page.mouse.wheel(0, -(top + 1_000));
         return list.getByText("Reached stop 0.", { exact: true }).count();
       },
       { timeout: 30_000 },

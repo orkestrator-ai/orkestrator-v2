@@ -45,7 +45,12 @@ units, and it refuses to start when it finds another Orkestrator on the host.
     before this field send only `terminals`; clients then show one count
   - each tool's pin, its source (`managed`, `path` or `missing`) and its
     managed version
-  - the container image, and the environments still on an older one
+  - the container image, and the environments still on an older one. A
+    usable image built from an older Orkestrator than the backend (its
+    manifest's `appVersion`) is reported `olderThanBackend`, with the version
+    in `builtForVersion`: capabilities change only with a contract, so an image
+    can satisfy every requirement and still carry a setup script from several
+    releases back. Settings and the machines list then offer the release image
 
   Events never carry these readings.
 - **The executor applies updates.** It reports progress through

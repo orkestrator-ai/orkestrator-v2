@@ -177,9 +177,13 @@ const IMAGE_QUALIFICATION_TIMEOUT_MS = 420_000;
  * after another against a profile nothing else touches. Within one profile
  * the specs share that fixture and must stay serial.
  *
- * The split balances measured run time (about 380 s a side on the Linux
- * host, 2026-11-10): the three ~3-minute files are kept apart. A spec that
- * gains a `Docker fixture` test must be added to one shard;
+ * The split balances measured run time on the Linux host. To-do 7569
+ * (retired) took the fixed waits out of the Files panel, annotation evidence
+ * and coordinator view specs (2026-11-11: shard 1 395 s, shard 2 240 s before
+ * this split), so the rebuild cycle, draft attachments, design export and root
+ * terminal specs (about 85 s together) moved to the second shard: 310 s and
+ * 242 s after it. Rebalance once a shard drifts by more than a minute. A spec
+ * that gains a `Docker fixture` test must be added to one shard;
  * `isolated-browser.test.ts` fails while one is in no shard or in two.
  */
 export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
@@ -187,10 +191,6 @@ export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
     "e2e/agent-testing/container-files-wiring.spec.ts",
     "e2e/agent-testing/container-fake-engines.spec.ts",
     "e2e/agent-testing/container-settings.spec.ts",
-    "e2e/agent-testing/container-rebuild-cycle.spec.ts",
-    "e2e/agent-testing/native-draft-attachments.spec.ts",
-    "e2e/agent-testing/design-container-export.spec.ts",
-    "e2e/agent-testing/container-root-terminal.spec.ts",
     "e2e/agent-testing/container-bridge-logs.spec.ts",
     "e2e/agent-testing/grok-container-login.spec.ts",
     "e2e/agent-testing/container-terminal-close.spec.ts",
@@ -199,6 +199,10 @@ export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
     "e2e/agent-testing/container-app-wiring.spec.ts",
     "e2e/agent-testing/web-annotations-gateway.spec.ts",
     "e2e/agent-testing/browser-gateway.spec.ts",
+    "e2e/agent-testing/container-rebuild-cycle.spec.ts",
+    "e2e/agent-testing/native-draft-attachments.spec.ts",
+    "e2e/agent-testing/design-container-export.spec.ts",
+    "e2e/agent-testing/container-root-terminal.spec.ts",
     "e2e/agent-testing/container-multi-review-read-only.spec.ts",
     "e2e/agent-testing/container-claude-terminal-signal.spec.ts",
     "e2e/agent-testing/container-approval-stop.spec.ts",

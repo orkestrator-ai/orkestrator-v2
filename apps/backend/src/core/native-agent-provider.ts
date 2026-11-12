@@ -13,8 +13,8 @@ import { createHash } from "node:crypto";
 import {
   OpenCodeEnvironmentProvider,
   type OpenCodeEnvironmentDependencies,
-} from "./opencode2/environment-provider.js";
-import { OPENCODE2_CONTAINER_DIRECTORY } from "./opencode2/container-server.js";
+  OPENCODE2_CONTAINER_DIRECTORY,
+} from "./opencode2/index.js";
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";

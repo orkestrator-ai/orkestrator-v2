@@ -86,7 +86,7 @@ the change journal.
 | `GraphEffectsRepository` | `storage-graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease. A mock run records `simulated` rows instead (`recordSimulatedGraphEffect`, data `{ wouldRun }`, item 213) |
 | `SuborksRepository` | `storage-suborks.ts` | `native-agent-suborks`: one row per `ask_agents` call, holding each target's branch record, its bounded answer and the delivery state ([suborks.md](suborks.md)); revision compare-and-swap inside the row's transaction; owned by the environment, deleted with it. Its transcripts share the content-addressed transcript store |
 | `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
-| `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
+| `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`); `coordinator-action-marks` (one row per coordinator conversation, owned by its project and deleted with it: the action cards the user marked done by hand, at most 500, a further mark refused; announces `coordinator-action-marks`; commands in the `coordinator` domain, [coordinator.md](coordinator.md#marking-actions-done-by-hand)). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
 | `WatchedPullRequestsRepository` | `storage-watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
 | `SetupApprovalsRepository` | `storage-setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
@@ -199,7 +199,7 @@ A store is named by the JSON path it replaced, without `.json` (`kanban`,
 | --- | --- | --- |
 | `document` | One JSON value | Small settings-like stores (catalogue, journal, accounts, auth) |
 | `array` | One row per item, keyed by `id` (or a named field), order kept | Projects, environments, sessions, Kanban, feature plans, notes, comment records |
-| `record` | One row per key | Native sessions, prompt queues, drafts, handoffs, reviews, pipelines, pane layouts |
+| `record` | One row per key | Native sessions, prompt queues, drafts, handoffs, reviews, pipelines, pane layouts, public operation namespaces |
 | `envelope` | A document plus named record collections as rows | Agent mail (mailboxes, idempotency, counterparts), coordinators, catalogue, preview services |
 
 Business code still reads and writes a store's whole logical value through
@@ -474,6 +474,15 @@ primitives above serialize their writes.
   write survives a crash, and a torn write is impossible. `StorageDatabase`
   defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
   explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
+  The one exception inside the main file is the `leases` table: a lease
+  claim, heartbeat or release commits at NORMAL (`leaseCommit`), so it appends
+  to the WAL without syncing and the next FULL commit's sync covers it. A lease
+  is coordination between live processes, so a power loss that drops one
+  loses nothing (no holder survives it, and a lost release is a stale row the
+  next waiter reclaims). Before, every leased store write cost three FULL
+  syncs, claim, write and release; on btrfs on beelink2 that was 8 ms and
+  255 KB of disk writes against 2.5 ms and 95 KB with the lease at NORMAL
+  (to-do 7562).
 - "Survives a crash" means an application or operating-system crash. Whether a
   commit also survives sudden power loss depends on the platform's sync call.
   On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0
@@ -915,6 +924,21 @@ deletes the `opencode2-sessions` store. The OpenCode 2 preview recorded there
 which workflow sessions it had put on OpenCode 2, so a router could keep them
 off OpenCode 1.x; with 1.x retired every OpenCode session is a 2.x session and
 nothing reads it. It held only environment and session ids.
+
+Version 9 (`public-operation-rows`, `storage-public-operation-rows.ts`)
+rewrites each public operation namespace (`public-operations/ns-…`) from one
+`{ version: 1, namespace, operations: [...] }` document into a `record` store,
+one row per operation keyed by its `operationId`, in admission order. Before
+it, every admission and every state change parsed, re-validated and rewrote the
+whole namespace, which takes admissions for seven days, so each FULL-synced
+commit grew with the run (to-do 7562). `PublicOperationsRepository` now writes
+one row (`updateSensitiveStoreRow`) under the public operation store lock and
+keeps each namespace's validated rows by serialized value, re-parsing only rows
+whose value changed (`loadStoreSerialized`). A namespace that is unreadable, or
+whose records cannot be keyed, is left as it was, and the reader still refuses
+admissions on it. Retirement still deletes a namespace whole under the same
+lock; `storage-writer-guards.test.ts` allows that deletion beside the leased
+row writes and nothing else.
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

@@ -198,9 +198,11 @@ export function HostDependencySettings({
               <span className="text-muted-foreground">
                 {!image.present
                   ? " · not installed"
-                  : image.compatible
-                    ? " · compatible"
-                    : " · not compatible with this backend"}
+                  : !image.compatible
+                    ? " · not compatible with this backend"
+                    : image.olderThanBackend
+                      ? ` · older than this Orkestrator (built for ${image.builtForVersion})`
+                      : " · compatible"}
               </span>
             </p>
             {image.reason && <p className="text-muted-foreground">{image.reason}</p>}
@@ -240,7 +242,11 @@ export function HostDependencySettings({
         )}
         <TaskStatus task={tasks["image-update"]} />
         <Button
-          variant="outline"
+          variant={
+            image && image.present && (!image.compatible || image.olderThanBackend)
+              ? "default"
+              : "outline"
+          }
           size="sm"
           disabled={
             starting !== null || tasks["image-update"]?.state === "running" || image === null

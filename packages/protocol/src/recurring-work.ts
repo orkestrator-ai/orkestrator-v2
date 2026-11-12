@@ -58,6 +58,7 @@ export const RECURRING_JOB_KINDS = [
   "tab-cleanup",
   "node-summary-reconcile",
   "scheduled-job-tick",
+  "public-operation-reconcile",
   // Backend: workflows.
   "build-supervisor-tick",
   "multi-review-tick",
@@ -268,6 +269,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // one snapshot (`docker exec` in a container, tmux spawns locally) plus,
   // before the transcript binds, its backed-off search. Serial per tab.
   "tmux-tab-loop": backend("B30", "interval", "progress", 250, "per-key-serial", "next-tick"),
+  // Per attached interactive terminal: 250 ms, doubling to 1 s while the pane
+  // is unchanged. A leased terminal stops when its client stops renewing
+  // (to-do 7745, retired). One timer capture is one attempt.
   "tmux-interactive-capture": backend(
     "B19",
     "completion",
@@ -275,7 +279,6 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     250,
     "per-key-serial",
     "snapshot-rehydrate",
-    false,
   ),
   "tmux-queue-drain": backend("B09", "interval", "progress", 2_000, "join", "storage-reconcile"),
   // Presence TTL is 4 s; its own fixed-rate 2 s job refreshes it (step 08).
@@ -338,6 +341,19 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     false,
   ),
   "tab-cleanup": backend("B13", "interval", "maintenance", 60_000, "join", "storage-reconcile"),
+  // One pass of the public CLI's operation reconciler: every 15 s, a startup
+  // pass, and a pass for the runs of an environment that changed. A request
+  // during a pass queues one trailing pass. A run whose turn was seen to end
+  // with a later turn in its session is skipped by the periodic pass until
+  // its record changes or the 10 min full pass comes round (to-do 7562).
+  "public-operation-reconcile": backend(
+    "B31",
+    "interval",
+    "recovery",
+    15_000,
+    "trailing-rerun",
+    "storage-reconcile",
+  ),
   // Step 08 keyed supervision: one attempt is one pipeline's pass (every
   // 1.5 s per pipeline with an obligation) or a 30 s safety discovery.
   "build-supervisor-tick": backend(

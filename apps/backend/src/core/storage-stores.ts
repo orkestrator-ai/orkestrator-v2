@@ -24,9 +24,15 @@ import {
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotations/store-layout.js";
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
+import {
+  mapNamespaceDocumentRecord,
+  PUBLIC_OPERATION_NAMESPACE_LAYOUT,
+  PUBLIC_OPERATION_NAMESPACE_STORE,
+  publicOperationRowsMigration,
+} from "./storage-public-operation-rows.js";
 import { HEALTH_SUMMARY_STORE_LAYOUTS } from "./health-summary-layout.js";
 import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
-import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/layout.js";
+import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/index.js";
 import {
   TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
   TRANSCRIPT_ARTIFACT_STORE_LAYOUT,
@@ -133,6 +139,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "coordinator-upstream-declines": { kind: "record", owner: ownerField("projectId") },
   "coordinator-upstream-auto-merge": { kind: "record", owner: ownerField("projectId") },
   "notice-dismissals": { kind: "record" },
+  // Coordinator action cards marked done by hand: one row per conversation,
+  // owned by its project.
+  "coordinator-action-marks": { kind: "record", owner: ownerField("projectId") },
   // Setup commands the user approved, one row per project (`setup-approval.ts`).
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).
@@ -163,11 +172,12 @@ const PREFIX_STORE_LAYOUTS: ReadonlyArray<readonly [string, StoreLayout]> = [
   [TRANSCRIPT_ARTIFACT_STORE_PREFIX, TRANSCRIPT_ARTIFACT_STORE_LAYOUT],
 ];
 
-const PUBLIC_OPERATION_NAMESPACE = /^public-operations\/ns-[0-9]{13}-[a-f0-9]{8}$/;
+const PUBLIC_OPERATION_NAMESPACE = PUBLIC_OPERATION_NAMESPACE_STORE;
 
 export function storeLayout(store: string): StoreLayout {
   const exact = STORE_LAYOUTS[store] ?? ENGINE_STORE_LAYOUTS[store];
   if (exact) return exact;
+  if (PUBLIC_OPERATION_NAMESPACE.test(store)) return PUBLIC_OPERATION_NAMESPACE_LAYOUT;
   for (const [prefix, layout] of PREFIX_STORE_LAYOUTS) {
     if (store.startsWith(prefix)) return layout;
   }
@@ -275,6 +285,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   buildPipelineReviewReportUpgradeMigration,
   moveChangeLedgerMigration,
   retireOpenCode2SessionsMigration,
+  publicOperationRowsMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {
@@ -574,6 +585,8 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
         : cleanup.kind === "delete-row"
           ? (copy) => {
               if (!isJsonRecord(copy)) throw new Error("Unattributable legacy backup");
+              const document = archivedNamespaceRecord(cleanup, copy, () => undefined);
+              if (document !== undefined) return document;
               const kept = { ...copy };
               delete kept[cleanup.key];
               return kept;
@@ -581,7 +594,12 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
           : cleanup.kind === "prune-row"
             ? (copy) => {
                 if (!isJsonRecord(copy)) throw new Error("Unattributable legacy backup");
-                if (!Object.hasOwn(copy, cleanup.key)) return copy;
+                if (!Object.hasOwn(copy, cleanup.key)) {
+                  const document = archivedNamespaceRecord(cleanup, copy, (record) =>
+                    pruneRemovedContent(record, cleanup.next),
+                  );
+                  return document ?? copy;
+                }
                 return {
                   ...copy,
                   [cleanup.key]: pruneRemovedContent(copy[cleanup.key], cleanup.next),
@@ -594,6 +612,22 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
   }
   database.deleteStoreInTransaction(LEGACY_CLEANUPS_STORE);
   return true;
+}
+
+/**
+ * A public operation namespace archived before it became rows is still one
+ * `{ version, namespace, operations }` document: a row cleanup finds its record
+ * in `operations` by operation id. `undefined` for every other store or shape.
+ */
+function archivedNamespaceRecord(
+  cleanup: { store: string; key: string },
+  copy: Record<string, unknown>,
+  replace: (record: Record<string, unknown>) => unknown,
+): unknown {
+  if (!PUBLIC_OPERATION_NAMESPACE.test(cleanup.store) || Object.hasOwn(copy, cleanup.key)) {
+    return undefined;
+  }
+  return mapNamespaceDocumentRecord(copy, cleanup.key, replace);
 }
 
 /** An array copy without the cleanup's item or field; other items stay as archived. */

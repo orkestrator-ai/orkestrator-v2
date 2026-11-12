@@ -2,6 +2,8 @@ import { isActiveBuildPhase, type BuildPhase } from "@orkestrator/protocol/build
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { PINNED_TOOL_VERSIONS, type ToolchainName } from "@orkestrator/toolchain/manifest";
+import { compareReleaseVersions } from "@orkestrator/protocol/fleet-currency";
+import type { ImageStatus } from "@orkestrator/protocol/image-manifest";
 import type {
   HostImageStatus,
   HostRestartImpact,
@@ -153,19 +155,65 @@ async function outdatedEnvironments(
     .slice(0, 200);
 }
 
+/**
+ * Whether a usable image was built from an older Orkestrator than this
+ * backend. Capabilities only change when a contract does, so an image can
+ * declare all the ones a backend requires and still carry a setup script
+ * from several releases back. Unknown versions (a legacy image, a version
+ * that is not a release) are never called older.
+ */
+export function imageOlderThanBackend(
+  builtForVersion: string | null | undefined,
+  backendVersion: string = APP_VERSION,
+): boolean {
+  if (!builtForVersion) return false;
+  const order = compareReleaseVersions(builtForVersion, backendVersion);
+  return order !== null && order < 0;
+}
+
+/**
+ * The user-facing reading of an image status: whether it is there, whether it
+ * suits this backend, which release built it, and the reason to show. A
+ * missing, legacy or incompatible image keeps its own remediation; only a
+ * compatible image built by an older release gets the "pull to update" reason.
+ */
+export function describeImageStatus(
+  status: Pick<ImageStatus, "state" | "manifest" | "remediation">,
+  backendVersion: string = APP_VERSION,
+): Pick<
+  HostImageStatus,
+  "present" | "compatible" | "builtForVersion" | "olderThanBackend" | "reason"
+> {
+  const present = status.state !== "missing";
+  const builtForVersion = status.manifest?.appVersion ?? null;
+  const olderThanBackend =
+    status.state === "compatible" && imageOlderThanBackend(builtForVersion, backendVersion);
+  return {
+    present,
+    compatible: present ? status.state === "compatible" : null,
+    builtForVersion,
+    olderThanBackend,
+    reason:
+      status.remediation ??
+      (olderThanBackend
+        ? `Built for Orkestrator ${builtForVersion}; this is ${backendVersion}. New containers miss the setup and container fixes since then; pull the release image to update it.`
+        : null),
+  };
+}
+
 /** The environment image, whether it suits this backend, and who still runs an older one. */
 export async function readImageStatus(context: CommandContext): Promise<HostImageStatus | null> {
   const status = await getImageStatus(context);
   if (status.state === "unavailable") return null;
-  const present = status.state !== "missing";
+  const description = describeImageStatus(status);
   return {
     name: configuredImageRef(context),
-    present,
-    compatible: present ? status.state === "compatible" : null,
-    reason: status.remediation,
+    ...description,
     releaseReference: releaseImageReference(),
     outdatedEnvironments:
-      present && status.imageId ? await outdatedEnvironments(context, status.imageId) : [],
+      description.present && status.imageId
+        ? await outdatedEnvironments(context, status.imageId)
+        : [],
   };
 }
 

@@ -297,6 +297,31 @@ describe("BuildLaunchDialog", () => {
       expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("full");
     });
 
+    test("warns under restricted when the project's setup has root steps", () => {
+      renderDialog({ rootSetupSteps: 1 });
+      const warning = screen.getByRole("status");
+      expect(warning.textContent).toContain(
+        "has a root setup step. Root steps run only with Full access, because a command running as root could get round the restriction",
+      );
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      expect(screen.queryByText(/has a root setup step\. Root steps run only/) === null).toBe(true);
+    });
+
+    test("counts several root steps in the warning", () => {
+      renderDialog({ rootSetupSteps: 3 });
+      expect(screen.getByRole("status").textContent).toContain(
+        "has 3 root setup steps. Root steps run only with Full access",
+      );
+    });
+
+    test("no warning when the project has no root steps or the machine cannot tell", () => {
+      const { unmount } = renderDialog({ rootSetupSteps: 0 });
+      expect(screen.queryByText(/root setup step/) === null).toBe(true);
+      unmount();
+      renderDialog({ rootSetupSteps: null });
+      expect(screen.queryByText(/root setup step/) === null).toBe(true);
+    });
+
     test("reopening the launcher asks again from restricted", () => {
       const { rerender } = renderDialog();
       fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));

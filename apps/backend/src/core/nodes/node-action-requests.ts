@@ -36,7 +36,7 @@ import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-mess
  *   Settings switch uses. It changes which subscription pays for every new
  *   turn there, so it needs the user unless a self-timer carries their
  *   permission or the user turned on the standing permission in Settings
- *   (see `control-mcp-account-tools.ts`). A switch under either permission is
+ *   (see `control-mcp/account-tools.ts`). A switch under either permission is
  *   recorded here as a request that ran without a decision (`authorizedBy`
  *   `"standing-grant"` or `"self-timer"`, `runUnattended`), so the user can
  *   see it afterwards; the hourly limit counts only the standing permission's.

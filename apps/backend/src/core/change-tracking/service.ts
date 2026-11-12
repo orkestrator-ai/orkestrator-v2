@@ -39,6 +39,7 @@ import { EvidenceBodyStore } from "./evidence-body-store.js";
 import { GitScopeService, isGitScope } from "./git-scopes.js";
 import { ProviderEvidenceIngress, type IngestResult } from "./evidence-ingestion.js";
 import { ChangeHandoffSerializer } from "./handoff.js";
+import type { WorktreeActivity } from "./inert-hints.js";
 import {
   operationIdFor,
   operationVolumeResourceKey,
@@ -230,7 +231,8 @@ export class ChangeTrackingService {
       registry: this.registry,
       announcer: this.publisher,
       liveBodyCoalesceMs: policy().liveBodyCoalesceMs,
-      onWorktreeActivity: (environmentId, paths) => this.noteWorktreeActivity(environmentId, paths),
+      onWorktreeActivity: (environmentId, activity) =>
+        this.noteWorktreeActivity(environmentId, activity),
     });
     this.diffBodies = new DiffBodyService({
       ledger: this.ledger,
@@ -430,7 +432,8 @@ export class ChangeTrackingService {
     this.publisher.drainOutbox();
   }
 
-  private noteWorktreeActivity(environmentId: string, paths: readonly string[] | null): void {
+  private noteWorktreeActivity(environmentId: string, activity: WorktreeActivity): void {
+    const { paths } = activity;
     void (async () => {
       const target = await this.options.environmentTarget(environmentId);
       const identity = target ? await this.registry.resolve(target) : null;
@@ -441,7 +444,11 @@ export class ChangeTrackingService {
       owner.invalidate(
         paths ? paths.map((path) => encodePath(new TextEncoder().encode(path))) : undefined,
       );
-      const keys = await this.turns.provisional(environmentId, owner);
+      // A write only to Git-ignored output (a test run, a build) cannot move
+      // the tree; checking costs one short Git process instead of a capture.
+      const keys = await this.turns.provisional(environmentId, owner, Date.now(), () =>
+        owner.hintCannotMoveTree(activity),
+      );
       if (keys.length > 0) this.publisher.drainOutbox();
     })().catch(() => undefined);
   }

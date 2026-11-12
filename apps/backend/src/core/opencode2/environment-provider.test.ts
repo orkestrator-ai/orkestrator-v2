@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   PromptRejectedError,
   ProviderUnavailableError,
@@ -115,6 +115,19 @@ describe("OpenCodeEnvironmentProvider", () => {
     expect(await router.commandCatalogue("a")).toMatchObject({ commands: [], status: "stale" });
     expect(await router.runtimeHealth("a")).toMatchObject({ authoritative: false });
     expect(connections.every((start) => start === false)).toBe(true);
+  });
+
+  test("an MCP inventory read passes the caller's signal to the session's provider", async () => {
+    const { router, created } = setup();
+    const id = await router.createSession("build", "b");
+    const provider = created.at(-1)!;
+    const read = spyOn(provider, "mcpServers").mockImplementation(async () => []);
+    const signal = new AbortController().signal;
+
+    await router.mcpServers(id, { signal });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]![0]).toBe(id);
+    expect(read.mock.calls[0]![1]?.signal).toBe(signal);
   });
 
   test("every session can be steered", async () => {

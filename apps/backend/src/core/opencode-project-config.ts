@@ -41,7 +41,7 @@ import { createLogger } from "@orkestrator/protocol/logger";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { OPENCODE2_LAUNCH_PROJECT_CONFIG } from "./agent-credential-files.js";
-import { mergeOpenCodeUserConfig } from "./opencode2/user-config.js";
+import { mergeOpenCodeUserConfig } from "./opencode2/index.js";
 import { runCommand } from "./shell.js";
 
 const log = createLogger("docker");

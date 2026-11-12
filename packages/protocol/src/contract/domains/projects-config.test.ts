@@ -48,6 +48,9 @@ const CONFIG_ADMIN = new Set([
 
 const PROJECTS_INTERNAL = new Set(["request_coordinator_agents_md_update"]);
 
+/** Commands added after version 2 shipped; a version-1 peer is never sent them. */
+const ADDED_IN_VERSION_2 = new Set(["get_project_setup_requirements"]);
+
 const PROJECT = {
   id: "p1",
   name: "Alpha",
@@ -87,7 +90,7 @@ describe("projects and config definitions", () => {
   it("defines both domains at version 2 (min 1) with every command once", () => {
     expect(projectsDomain).toMatchObject({ name: "projects", version: 2, min: 1 });
     expect(configDomain).toMatchObject({ name: "config", version: 2, min: 1 });
-    expect(PROJECTS_COMMANDS).toHaveLength(26);
+    expect(PROJECTS_COMMANDS).toHaveLength(27);
     expect(CONFIG_COMMANDS).toHaveLength(29);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],
@@ -97,7 +100,7 @@ describe("projects and config definitions", () => {
       expect(new Set(names).size).toBe(names.length);
       for (const def of commands) {
         expect(def.domain).toBe(domain);
-        expect(def.since).toBe(1);
+        expect(def.since).toBe(ADDED_IN_VERSION_2.has(def.name) ? 2 : 1);
       }
     }
   });

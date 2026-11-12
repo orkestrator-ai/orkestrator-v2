@@ -79,9 +79,11 @@ shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
 fixture networks. Docker refuses overlaps atomically; other errors propagate.
 Every other Docker call is `exec`ed straight to the real CLI, so a follower or
 exec session the backend stops is stopped itself rather than orphaned.
-The Docker scheduler profile allows ten minutes between reporter lines because
-the annotation cleanup case intentionally waits for a 100-tick, three-second
-backend garbage-collection pass (its own test deadline is nine minutes).
+The Docker scheduler profile allows ten minutes between reporter lines so a
+hung test still reaches its own deadline and reports its failure: the longest
+are eight minutes (the coordinator view, the Cursor fake-engine cell and the
+rebuild cycle). The annotation cleanup case no longer waits out a 100-tick
+garbage-collection period, so its deadline dropped from nine minutes to four.
 It changes no daemon settings and deletes no foreign resources. Without `ip`
 for the route check, automatic-pool exhaustion remains a hard failure. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.
@@ -326,6 +328,39 @@ All files tab: while hidden the page sends no Files panel read, and the new
 entry shows on return. It also checks that a tree revision announced while the
 document was hidden still shows on a local worktree after return.
 
+The inactive-environment step returns to the container only once the backend's
+change projection (`changes_get_view`, read from the test process, never the
+page) lists the new file, so the change is proven to have landed while the
+environment was not shown. The hidden-document step is a negative check and
+stays a timed window, sized from the timings the spec runs with: three page
+polls, and two polls past the container tree cache. To keep that window short
+the spec sets two test-only timings (from to-do 7569, retired 2026-11-11):
+
+- **Page poll.** `window.orkestratorAgentTestTiming = { filesPanelPollMs }`
+  from an init script (`apps/web/src/lib/agent-test-timing.ts`). Only a Vite dev
+  renderer of an agent-test profile reads it; a production build drops the
+  branch. The spec reads the interval back from that module before sizing the
+  window, so an ignored override cannot make the window shorter than one poll.
+- **Backend periods.** `<data dir>/agent-test-fixtures/timing.json`, with
+  `containerTreeMaxAgeMs` (500–10 000 ms), `webAnnotationGcEveryTicks`
+  (1–100 reconcile ticks of 3 s) and `coordinatorRepairIntervalMs`
+  (1 000–60 000 ms, the period between the passes that close a stopped
+  worker's delegation; the job checks it every second, so a new value applies
+  within a second rather than after the pass already scheduled), read by
+  `apps/backend/src/core/agent-test-timing.ts`. It exists only where the
+  dispatch hold does (a source-run backend of flavor `agent-test` with
+  `ORKESTRATOR_AGENT_TEST_ISOLATED=1` and a non-default data directory), is
+  re-read when the file changes, can only shorten a period, and ignores
+  anything malformed. Removing the file restores the production values. The
+  annotation evidence spec uses the collection period the same way, and the
+  coordinator view test the repair interval. Each time the backend reads a
+  changed file it writes what it applied to `timing-applied.json` beside it,
+  echoing the `revision` that `setBackendTiming` tags the file with. The Files
+  spec sizes its window from that acknowledged tree cache bound
+  (`appliedBackendTiming`), and from the production 10 s bound when the backend
+  has not acknowledged its revision, so an ignored override cannot make the
+  window shorter than the real cache.
+
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:
 
@@ -344,6 +379,26 @@ container UI on the same profile:
   their environments stop. Each is checked across an environment switch, a
   hidden document, a reload and a second window. The coordinator test stops
   and restarts both fixture environments.
+
+Where the coordinator view test spends its time (to-do 7569, retired, task 4):
+the test records the phases outside a `test.step` as `phase-ms` annotations,
+and the JSON report (`output/agent-testing/<run-id>/browser/results.json`)
+holds each step's duration. Measured on beelink (Linux, Docker fixture shard 2):
+
+| Run (2026-11-11) | Total | Delegations close | Everything else |
+| --- | --- | --- | --- |
+| Before the repair override | 124 s | 90 s | fixed 3 s and 6 s sleeps; set-up, login, reload, second window and fixture restart 0.6–7 s each |
+| Override armed, applied after the 60 s pass already queued (4 runs) | 44–69 s | 12–53 s | no fixed waits; same phases, 0.4–7.4 s each |
+| Override applied within a second (`ef953263b`) | 23 s | 8 s | login 2.1 s, reload 2.2 s, second window 2.7 s, fixture restart 4.1 s |
+
+Almost all of the time went on the coordinator repair pass that closes a
+stopped worker's delegation (60 s in production). The two sleeps now wait on
+the backend's delegation record, and the test shortens the repair period to
+5 s through `coordinatorRepairIntervalMs`, which the backend applies within a
+second. What is left is real work: signing in, reloading, opening a second
+window and restarting the two fixture environments. There is no other fixed
+wait to take out. In that last run the whole `test:agent:docker:isolated` task
+took 250 s (shards 195 s and 160 s; 26 passed, 5 skipped, 0 failed).
 
 Both specs' tests are named "Docker fixture", so `mise run test:agent:docker`
 runs them. Results are recorded in
@@ -650,12 +705,13 @@ On Linux an agent-test profile's Electron, and everything it starts, also runs
 with a core file size limit of 0, set by the launcher for that process tree
 only. A host whose `kernel.core_pattern` is a relative name such as `core`
 writes a crashing process's dump into its working directory, which for a
-profile is the checkout: untracked, one `git add -A` from a commit. A crash
+profile is the checkout: about a gigabyte of disk per crash (`.gitignore`
+ignores `core.<pid>`, so it cannot be committed by accident). A crash
 still shows in `electron.log` (Chromium's `FATAL` line, and
 `.../electron exited with signal SIGTRAP`), and systemd-coredump still records
 it in the journal. To keep the dumps for a diagnosis, start the profile with
 `ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1`; they then land in the checkout root as
-`core.<pid>`, so move them out before any `git add`. `headless-profile.spec.ts`
+`core.<pid>`; delete them when you are done. `headless-profile.spec.ts`
 checks the limit on each run. `mise run dev` and macOS keep their usual limit.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
@@ -3613,8 +3669,11 @@ waits for the load event, which a late font holds.
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
 owned by another profile. Its two annotation cases write evidence into the
-fixture container, check paths inside it and wait (up to about 5 minutes, one
-garbage-collection period) for settled-evidence cleanup; the live one needs
+fixture container, check paths and source hints inside it, and wait for
+settled-evidence cleanup. The cleanup case shortens the backend's
+garbage-collection period from 100 to 2 reconcile ticks through the profile's
+timing file (see [Container app wiring qualification](#container-app-wiring-qualification)),
+so it waits seconds rather than up to 5 minutes; the live one needs
 `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`.
 
 `web-annotations-approval-live.spec.ts` (opt-in

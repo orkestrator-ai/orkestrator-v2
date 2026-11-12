@@ -26,6 +26,7 @@ export {
 } from "./rollout.js";
 export { errorOutcome, rolloutError } from "./service-errors.js";
 export { WebAnnotationService } from "./service.js";
+export { WEB_ANNOTATION_GC_EVERY_TICKS } from "./service-requests.js";
 export { MAX_WORKSPACE_PATH_CHECKS, runContainerPathCheck } from "./source-checks.js";
 export { WEB_ANNOTATION_STORE_LAYOUT, WEB_ANNOTATION_STORE_PREFIX } from "./store-layout.js";
 export { WebAnnotationToolLimiter, registerWebAnnotationTools } from "./tools.js";

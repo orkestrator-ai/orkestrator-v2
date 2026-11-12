@@ -833,6 +833,8 @@ export function useNativeAgentSession<TMessage = unknown>({
     projectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
   );
   const refreshSequenceRef = useRef(0);
+  /** The newest history page request; an older one in flight is superseded. */
+  const historyPageSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
   const refreshesInFlightRef = useRef(0);
   const reconcileAfterInFlightRef = useRef(false);
@@ -2389,6 +2391,15 @@ export function useNativeAgentSession<TMessage = unknown>({
           stateMissing &&
           establishingSessionRef.current === 0
         ) {
+          /*
+           * The session is gone, so is the history a page in flight was
+           * fetched behind. A history page survives an ordinary poll, so this
+           * read has to retire it explicitly: invalidate the page and forget
+           * the paging state it would otherwise merge into, or its late answer
+           * reinstalls the projection this read just removed.
+           */
+          historyPageSequenceRef.current += 1;
+          resetSyncState();
           applyProjection(null);
           markTranscriptAvailability("unavailable");
           setTranscriptRefreshing(false);
@@ -2443,6 +2454,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identity,
       markSessionStateAvailability,
       markTranscriptAvailability,
+      resetSyncState,
       setIsRefreshing,
       setSessionStateRefreshing,
       updateProgressiveCache,
@@ -3338,7 +3350,17 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (budget.messages <= 0 || budget.bytes <= 0) {
         return retireLoadEarlierControl();
       }
-      const sequence = ++refreshSequenceRef.current;
+      const pageSequence = ++historyPageSequenceRef.current;
+      // A read already in flight answers for the tail before this page; drop it
+      // and let the next poll read the tail afresh.
+      refreshSequenceRef.current += 1;
+      const rowIdentity = (message: TMessage): unknown => (message as { id?: unknown }).id;
+      // The held rows as this page found them. A poll that lands while the page
+      // is in flight can revise one of them (`revisedMessages`); that copy is
+      // newer than the page's, which was read before it.
+      const heldAtStart = new Map(
+        historyMessagesRef.current.map((message) => [rowIdentity(message), message]),
+      );
       const page = await backendForScope(scope).getNativeAgentMessagePage<TMessage>({
         ...identity,
         syncVersion: 1,
@@ -3346,12 +3368,24 @@ export function useNativeAgentSession<TMessage = unknown>({
         limit: Math.min(budget.messages, HISTORY_PAGE_MAX_MESSAGES),
         targetBytes: budget.bytes,
       });
-      // A mutation that landed while the page was in flight owns the transcript
-      // now. Installing this page would merge history into a live tail it no
-      // longer describes.
+      /*
+       * A mutation that landed while the page was in flight owns the transcript
+       * now, and a later page supersedes this one. Installing it would merge
+       * history into a live tail it no longer describes.
+       *
+       * A poll that landed meanwhile does not retire the page. The page is
+       * merged below into whatever live tail is current, and a poll keeps the
+       * paging state while the history it describes stands; when it does not
+       * (a rotated epoch, a collapse to the live tail), the poll replaced the
+       * cursor this page was fetched behind, and that is what fences it.
+       * Retiring the page on every poll lost each page slower than the
+       * 500–1500 ms cadence, so on a busy host a click on "Load earlier
+       * messages" did nothing and automatic paging stalled (flakes 0483, 1602).
+       */
       if (
-        sequence !== refreshSequenceRef.current ||
-        requestedOperationEpoch !== projectionOperationEpochRef.current
+        pageSequence !== historyPageSequenceRef.current ||
+        requestedOperationEpoch !== projectionOperationEpochRef.current ||
+        historyCursorRef.current !== before
       ) {
         return projectionRef.current;
       }
@@ -3407,6 +3441,9 @@ export function useNativeAgentSession<TMessage = unknown>({
           newMessages.push(message);
           continue;
         }
+        // Revised (or first held) while the page was in flight: the held copy
+        // is the newer one, as `reconcileHeldHistory` also rules.
+        if (heldAtStart.get(id) !== heldCopy) continue;
         const merged = preferCompleteLiveHead([heldCopy], [message]).messages[0]!;
         if (merged !== heldCopy && JSON.stringify(merged) !== JSON.stringify(heldCopy)) {
           refreshed.set(id, merged);

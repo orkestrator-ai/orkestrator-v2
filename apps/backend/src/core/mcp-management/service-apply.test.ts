@@ -268,9 +268,11 @@ describe("runtime application", () => {
       listingStarted = resolve;
     });
     let listing = false;
-    fixture.probe.openCodeMcpServerNames = () => {
+    let listingSignal: AbortSignal | undefined;
+    fixture.probe.openCodeMcpServerNames = (_environmentId, signal) => {
       listing = true;
-      // withTimeout registers synchronously after this method returns.
+      listingSignal = signal;
+      // The deadline's timer is armed as the listing starts.
       queueMicrotask(listingStarted);
       return new Promise(() => {});
     };
@@ -294,6 +296,8 @@ describe("runtime application", () => {
       expect(expire).toBeDefined();
       expire();
       await ticking;
+      // The deadline ends the listing request, not only the wait for it.
+      expect(listingSignal?.aborted).toBe(true);
       expect(fixture.openCodeReloads).toEqual(["env-1"]);
       expect(
         (await fixture.service.getOperation({ operationId: result.operation.operationId })).apply

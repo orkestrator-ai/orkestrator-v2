@@ -119,8 +119,11 @@ function piApiKeys(contents: string): string {
  * Isolate writable provider state. Only an explicitly selected live provider
  * receives credentials: API keys for Codex/OpenCode/Pi/Cursor, Claude's access
  * token without its refresh token, or Grok's login with its refresh token
- * blanked (the rule the agent-test profiles use). HOME stays intact for host tools; XDG consumers
- * Git, gh and mise are explicitly pointed at their original settings below.
+ * blanked (the rule the agent-test profiles use). The returned `HOME` is the
+ * disposable home too, so a reader of any other `~/.<tool>` path (the shared
+ * `~/.agents/skills` above all) finds nothing of the operator's;
+ * `prepareIsolatedBackendEnvironment` points Git, gh, mise, Docker and GnuPG
+ * back at their original settings.
  */
 export async function isolateProviderHomes(
   options: ProviderHomeOptions,
@@ -129,6 +132,9 @@ export async function isolateProviderHomes(
   const hostHome = options.hostHome ?? os.homedir();
   const base = path.join(options.root, "provider-homes");
   const env: Record<string, string> = {
+    // Pi, Codex, Cursor, Grok and OpenCode list `$HOME/.agents/skills`; Pi
+    // reads `process.env.HOME` first. The directory itself is never created.
+    HOME: base,
     CLAUDE_CONFIG_DIR: path.join(base, "claude"),
     CODEX_HOME: path.join(base, "codex"),
     XDG_CONFIG_HOME: path.join(base, "xdg-config"),
@@ -276,6 +282,7 @@ export async function prepareIsolatedBackendEnvironment(
   const config = hostEnv.XDG_CONFIG_HOME?.trim() || path.join(hostHome, ".config");
   const data = hostEnv.XDG_DATA_HOME?.trim() || path.join(hostHome, ".local", "share");
   const state = hostEnv.XDG_STATE_HOME?.trim() || path.join(hostHome, ".local", "state");
+  const bunInstall = hostEnv.BUN_INSTALL || path.join(hostHome, ".bun");
   // Git reads both XDG git/config and ~/.gitconfig in this order. An include
   // file retains both and their relative include semantics after XDG changes.
   const gitConfig = path.join(options.root, "git-global-config");
@@ -290,7 +297,19 @@ export async function prepareIsolatedBackendEnvironment(
   }
   return {
     ...env,
+    // `HOME` becomes the disposable home (`isolateProviderHomes`), so every
+    // host tool a scenario relies on is pinned to the operator's own settings.
+    // SSH needs nothing: it finds its keys through the password database.
     GH_CONFIG_DIR: hostEnv.GH_CONFIG_DIR || path.join(config, "gh"),
+    DOCKER_CONFIG: hostEnv.DOCKER_CONFIG || path.join(hostHome, ".docker"),
+    GNUPGHOME: hostEnv.GNUPGHOME || path.join(hostHome, ".gnupg"),
+    // Caches are not inputs: keep the operator's, as before HOME moved. A
+    // cold copy per scenario (Bun's transpiler cache alone is hundreds of
+    // files) would slow every backend start and every fixture install.
+    XDG_CACHE_HOME: hostEnv.XDG_CACHE_HOME?.trim() || path.join(hostHome, ".cache"),
+    BUN_INSTALL: bunInstall,
+    BUN_INSTALL_CACHE_DIR:
+      hostEnv.BUN_INSTALL_CACHE_DIR || path.join(bunInstall, "install", "cache"),
     MISE_CONFIG_DIR: hostEnv.MISE_CONFIG_DIR || path.join(config, "mise"),
     MISE_DATA_DIR: hostEnv.MISE_DATA_DIR || path.join(data, "mise"),
     MISE_STATE_DIR: hostEnv.MISE_STATE_DIR || path.join(state, "mise"),

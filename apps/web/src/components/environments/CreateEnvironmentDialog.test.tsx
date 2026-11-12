@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   act,
   cleanup,
@@ -16,6 +16,7 @@ import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { appCommandStore } from "@/test/app-command-store";
+import * as backend from "@/lib/backend";
 
 const baseConfig = appCommandStore(configStore).getState().config;
 
@@ -621,4 +622,109 @@ test("local feature builds hide and clear a previously picked worktree folder", 
   fireEvent.click(screen.getByRole("button", { name: "With a prompt" }));
   expect(screen.getByRole("button", { name: "Choose worktree location" })).toBeTruthy();
   expect(screen.queryByText("Worktree in /srv/trees") === null).toBe(true);
+});
+
+describe("CreateEnvironmentDialog root setup step warning", () => {
+  const RESTRICTED_HINT = "Only GitHub, npm, and agent APIs";
+  const ROOT_WARNING = /orkestrator-ai\.json has root setup steps/;
+
+  afterEach(() => {
+    mock.restore();
+  });
+
+  function answer(rootSteps: number | null) {
+    return spyOn(backend, "getProjectSetupRequirements").mockImplementation(async () => ({
+      rootSteps,
+    }));
+  }
+
+  function renderDialog(onCreate = mock(async (_options: ClaudeOptions) => true)) {
+    renderInAppCommandScope(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={onCreate}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+    return onCreate;
+  }
+
+  test("a container under Restricted warns in place of the restricted hint", async () => {
+    const read = answer(2);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() => expect(screen.getByText(ROOT_WARNING)).toBeTruthy());
+    expect(read).toHaveBeenCalledWith("project-1");
+    expect(screen.getByText(ROOT_WARNING).closest("[role='status']")).toBeTruthy();
+    expect(screen.queryByText(RESTRICTED_HINT) === null).toBe(true);
+  });
+
+  test("Full access shows no warning", async () => {
+    const read = answer(2);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() => expect(screen.getByText(ROOT_WARNING)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Full access" }));
+    expect(screen.queryByText(ROOT_WARNING) === null).toBe(true);
+    expect(screen.getByText("Unrestricted internet access")).toBeTruthy();
+    expect(read).toHaveBeenCalled();
+  });
+
+  test("a local environment neither warns nor reads the requirements", async () => {
+    const read = answer(2);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() => expect(screen.getByText(ROOT_WARNING)).toBeTruthy());
+    read.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(ROOT_WARNING) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Restricted" }) === null).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  test("no root steps, or a machine that cannot tell, keeps the restricted hint", async () => {
+    for (const rootSteps of [0, null]) {
+      const read = answer(rootSteps);
+      renderDialog();
+      fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+      await waitFor(() => expect(read).toHaveBeenCalled());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText(RESTRICTED_HINT)).toBeTruthy();
+      expect(screen.queryByText(ROOT_WARNING) === null).toBe(true);
+      cleanup();
+      mock.restore();
+    }
+  });
+
+  test("a failed read keeps the restricted hint", async () => {
+    const read = spyOn(backend, "getProjectSetupRequirements").mockImplementation(async () => {
+      throw new Error("Unknown backend command: get_project_setup_requirements");
+    });
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText(RESTRICTED_HINT)).toBeTruthy();
+    expect(screen.queryByText(ROOT_WARNING) === null).toBe(true);
+  });
+
+  test("the warning does not change the network choice that is submitted", async () => {
+    answer(1);
+    const onCreate = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() => expect(screen.getByText(ROOT_WARNING)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0].networkAccessMode).toBe("restricted");
+  });
 });

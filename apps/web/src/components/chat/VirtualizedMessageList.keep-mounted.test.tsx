@@ -6,6 +6,7 @@ import type { ListRange } from "react-virtuoso";
 import { useRichRenderPriority } from "@/lib/chat/rich-render-priority";
 import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
 import { pinRichViewKey } from "@/stores/richContentViewStore";
+import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 
 /**
  * A Virtuoso stand-in with a real render window: it renders the visible range
@@ -121,7 +122,27 @@ function PriorityProbe({ id }: { id: string }) {
   return <span data-priority-for={id}>{priority}</span>;
 }
 
-function renderList(options: { setFollowPaused?: (reason: string, paused: boolean) => void } = {}) {
+/** A transcript controller holding only what these tests read: follow intent. */
+function fakeController(wantsFollow: boolean) {
+  return {
+    wantsFollow,
+    generation: 0,
+    currentOwner: null,
+    holdingStructure: false,
+    onLatestRequested: () => () => {},
+    subscribe: () => () => {},
+    getSnapshot: () => ({ targetKey: null }),
+    setRowIndexResolver: () => {},
+    holdPlaceAcrossOverscan: () => {},
+  } as unknown as TranscriptScrollController;
+}
+
+function renderList(
+  options: {
+    setFollowPaused?: (reason: string, paused: boolean) => void;
+    controller?: TranscriptScrollController;
+  } = {},
+) {
   const followOutput = (atBottom: boolean) => (atBottom ? ("auto" as const) : false);
   const utils = render(
     <div>
@@ -142,6 +163,7 @@ function renderList(options: { setFollowPaused?: (reason: string, paused: boolea
           atBottomThreshold: 0,
           restoreStateFrom: undefined,
           ...(options.setFollowPaused ? { setFollowPaused: options.setFollowPaused } : {}),
+          ...(options.controller ? { controller: options.controller } : {}),
         }}
         virtuosoRef={createRef()}
         find={{ isActive: true, getSearchText: (row) => row.text }}
@@ -180,6 +202,11 @@ function scrollTo(startIndex: number) {
   for (let index = current; index !== startIndex; index += step) {
     act(() => scrollVirtuoso?.({ startIndex: index + step, endIndex: index + step + 2 }));
   }
+}
+
+/** Lets the task after a pointer release run, where deferred focus protection lands. */
+async function settleTask() {
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 }
 
 beforeEach(() => {
@@ -240,6 +267,144 @@ describe("VirtualizedMessageList keep-mounted protection", () => {
     act(() => screen.getByRole("textbox", { name: "Outside" }).focus());
     act(() => scrollVirtuoso?.({ startIndex: 9, endIndex: 11 }));
     expect(rowElement("m-3") === null).toBe(true);
+  });
+
+  test("a released reader's press protects its row once it ends, so its focus cannot move the control", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    const button = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(button);
+      button.focus();
+    });
+    // Margin rows mounting mid-press are measured and can shift the control
+    // away from the pointer before it is released, losing the click.
+    expect(rowElement("m-2") === null).toBe(true);
+    act(() => {
+      fireEvent.pointerUp(button);
+    });
+    // The click is dispatched in the same task as pointerup.
+    expect(rowElement("m-2") === null).toBe(true);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    scrollTo(9);
+    expect(document.activeElement).toBe(button);
+    expect(rowElement("m-5")?.contains(button)).toBe(true);
+  });
+
+  test("a cancelled press protects its row once it ends, like a released one", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    const button = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(button);
+      button.focus();
+    });
+    act(() => {
+      fireEvent.pointerCancel(button);
+    });
+    expect(rowElement("m-2") === null).toBe(true);
+    await settleTask();
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    scrollTo(9);
+    expect(rowElement("m-5")?.contains(button)).toBe(true);
+  });
+
+  test("focus that moves outside a press supersedes the protection the press left pending", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    act(() => scrollVirtuoso?.({ startIndex: 4, endIndex: 14 }));
+    const pressed = screen.getByRole("button", { name: "Action m-14" });
+    const typed = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(pressed);
+      pressed.focus();
+      fireEvent.pointerUp(pressed);
+    });
+    // Keyboard focus lands before the deferred protection runs.
+    act(() => typed.focus());
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    await settleTask();
+    scrollTo(0);
+    expect(document.activeElement).toBe(typed);
+    expect(rowElement("m-5")?.contains(typed)).toBe(true);
+    expect(rowElement("m-14") === null).toBe(true);
+  });
+
+  test("a second press that begins before the first's protection runs defers it to its own end", async () => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    act(() => scrollVirtuoso?.({ startIndex: 4, endIndex: 14 }));
+    const first = screen.getByRole("button", { name: "Action m-14" });
+    const second = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(first);
+      first.focus();
+      fireEvent.pointerUp(first);
+      fireEvent.pointerDown(second);
+      second.focus();
+    });
+    // The first press's task runs while the second is still held: nothing mounts.
+    await settleTask();
+    expect(rowElement("m-2") === null).toBe(true);
+    act(() => {
+      fireEvent.pointerUp(second);
+    });
+    await settleTask();
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    scrollTo(0);
+    expect(rowElement("m-5")?.contains(second)).toBe(true);
+    expect(rowElement("m-14") === null).toBe(true);
+  });
+
+  test.each([
+    [
+      "a key that is not a modifier",
+      (target: HTMLElement) => fireEvent.keyDown(target, { key: "Tab" }),
+    ],
+    ["a context menu", (target: HTMLElement) => fireEvent.contextMenu(target)],
+    ["a native drag", (target: HTMLElement) => fireEvent.dragStart(target)],
+    ["the window losing focus", () => fireEvent.blur(window)],
+  ])("a press that never sees its pointerup ends at %s", async (_name, end) => {
+    renderList({ controller: fakeController(false) });
+    scrollTo(4);
+    const button = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(button);
+      button.focus();
+    });
+    // A modifier held for a shift-click is part of the press, not its end.
+    act(() => {
+      fireEvent.keyDown(button, { key: "Shift" });
+    });
+    await settleTask();
+    expect(rowElement("m-2") === null).toBe(true);
+    act(() => {
+      end(button);
+    });
+    await settleTask();
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    // Later keyboard focus is protected at once again, without a pointer release.
+    const next = screen.getByRole("button", { name: "Action m-6" });
+    act(() => next.focus());
+    scrollTo(10);
+    expect(rowElement("m-6")?.contains(next)).toBe(true);
+  });
+
+  test("a follower's press protects its row at once, before the click grows the list", () => {
+    renderList({ controller: fakeController(true) });
+    scrollTo(4);
+    const button = screen.getByRole("button", { name: "Action m-5" });
+    act(() => {
+      fireEvent.pointerDown(button);
+      button.focus();
+    });
+    expect(rowElement("m-2")?.isConnected).toBe(true);
+    act(() => {
+      fireEvent.pointerUp(button);
+    });
+    scrollTo(9);
+    expect(rowElement("m-5")?.contains(button)).toBe(true);
   });
 
   test("a selection takes precedence over focus in another row; only one row is protected", () => {

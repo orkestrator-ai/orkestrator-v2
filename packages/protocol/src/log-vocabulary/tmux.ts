@@ -34,6 +34,8 @@ export const TMUX_LOG_AREAS = defineLogAreas({
       "cli.effort-unsupported": "The claude CLI lacks --effort, so it launches without it.",
       "interactive.snapshot-failed":
         "An interactive snapshot failed; expected while a pane is closing.",
+      "interactive.lease-lapsed":
+        "No client renewed an interactive terminal for 45 seconds, so its capture loop stopped.",
       "signal.arm-failed": "The Claude state signal could not be armed.",
       "signal.degraded":
         "The Claude state signal missed a change or rang too often, so polling stays at one second until it is re-armed.",

@@ -1,7 +1,7 @@
 # Scenario provider homes: host mise warning breaks an empty-stderr assertion
 
 - **ID:** 9982
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Test:** `preserves XDG-based Git, gh and mise configuration for backend children`
 - **File:** `packages/cli/tests/scenario-provider-homes.test.ts:361`
@@ -149,3 +149,52 @@ only the XDG global config the test is about. That keeps the assertion on
 empty stderr meaningful and removes the network call. It was not changed here,
 because this branch does not otherwise touch `packages/cli/`; no test,
 timeout, assertion or skip changed.
+
+## Resolution (2026-11-11)
+
+- **Root cause:** the test's real `spawnSync(mise, ["where", "bun"])` ran
+  with the environment from `prepareIsolatedBackendEnvironment`
+  (`packages/cli/scenarios/provider-homes.ts`). That environment moves
+  `MISE_CONFIG_DIR`, `MISE_DATA_DIR` and `MISE_STATE_DIR` to the fixture, but
+  not mise's system config directory, so mise still loaded the host's
+  `/etc/mise` (`conf.d/*.toml`). With a `latest` tool there and a cold cache,
+  `mise where bun` asked that tool's remote version index for its versions
+  and waited up to mise's default 3 s `fetch_remote_versions_timeout` inside a
+  synchronous spawn. A slow index added the `Failed to resolve tool version
+  list` WARN to stderr and spent most of the 5 s test budget. The product code
+  is right to keep the system config for real backend children (it is host
+  configuration, like the XDG config the test checks), so the leak was in the
+  test, not the product.
+- **Fix:** `packages/cli/tests/scenario-provider-homes.test.ts` runs that one
+  `mise where bun` with `MISE_SYSTEM_CONFIG_DIR` set to an empty directory in
+  the fixture and `MISE_OFFLINE=1`, layered over the unchanged environment
+  under test. The assertions are unchanged: empty stderr, exit 0 and the
+  fixture's install path, so the call still proves that the backend child
+  resolves the host's XDG global config and installed runtime. The empty
+  system directory removes the host's tools; offline makes any remaining
+  remote lookup impossible rather than slow. Each alone was checked against
+  the blocked index below: the system directory alone gives empty stderr in
+  0.03 s; offline alone still prints a `no versions found` WARN per system
+  tool, so it would not have been enough on its own. No timeout, retry, skip
+  or assertion changed.
+- **Reproduced:** yes, on macOS (mise 2026.9.17, Bun 1.4.4), which has no
+  `/etc/mise`, so the host condition was built in a temporary directory: a
+  `conf.d/omarchy-tools.toml` declaring `amp = "latest"` and
+  `opencode = "latest"`, and a `MISE_BIN_PATH` wrapper that runs the real
+  mise with `MISE_SYSTEM_CONFIG_DIR` defaulting to that directory (standing
+  in for `/etc/mise`, but overridable by the caller as `/etc/mise` is) and
+  `HTTPS_PROXY`/`HTTP_PROXY` set to the unroutable `10.255.255.1:9`, so every
+  version-index request hangs. Before the fix,
+  `mise run test:logged -- --name 9982-before-blocked-index -- bash -c 'cd packages/cli && MISE_BIN_PATH=<wrapper> NODE_ENV=test bun test --preload ../../tests/setup-node.ts ./tests/scenario-provider-homes.test.ts -t "preserves XDG-based"'`
+  failed exactly as recorded: timed out at 5002.29 ms, `killed 1 dangling
+  process`, and `expect(mise.stderr).toBe("")` received
+  `mise WARN  Failed to resolve tool version list for amp: [<tmp>/etc-mise/conf.d/omarchy-tools.toml] amp@latest: timed out after 3.00s`.
+  A copy of the unfixed file run the same way with `--rerun-each=3` failed 3
+  of 3 (5002 to 5007 ms, same WARN): 4 of 4 failures before the fix. After
+  the fix, the same condition with the whole owning file and
+  `--rerun-each=10` passed (10 of 10, 9.4 s).
+- **Stress:** `mise run test:logged -- --name 9982-after-load-blocked -- bun scripts/test-under-contention.ts --burners 100 -- bash -c 'cd packages/cli && MISE_BIN_PATH=<wrapper> NODE_ENV=test bun test --preload ../../tests/setup-node.ts ./tests/scenario-provider-homes.test.ts --rerun-each=5'`
+  passed 5 of 5 (9.7 s), and the same without the wrapper (the host's real
+  mise, `9982-after-load`) passed 5 of 5 (10.8 s). On macOS the burners are
+  unpinned, the weaker condition the runner reports. The CLI typecheck
+  (`bun run typecheck` in `packages/cli`, through `test:logged`) passed.

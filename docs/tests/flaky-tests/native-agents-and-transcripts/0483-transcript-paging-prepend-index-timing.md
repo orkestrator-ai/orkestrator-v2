@@ -1,7 +1,7 @@
 # Transcript paging observes the previous row index after prepend
 
 - **ID:** 0483
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `native: paging before prose holds the original tool position` (mobile Chromium)
 - **File:** `e2e/TranscriptPaging.spec.ts:57`
@@ -178,3 +178,77 @@ mise run test:logged -- --name transcript-browser-alone -- bun scripts/loopback-
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `f799aaa14`, base `14df96544` (`mise run flaky:recurrence -- 0483 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes backend read cancellation, one desktop IPC test and docs; it changes no `apps/web` or `e2e` code. `mise run test:logged -- --name browser -- mise run test:browser`: 6 failed, 153 skipped, 1709 passed (21.9 m), all six in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602). On mobile-chromium, `native: paging before prose holds the original tool position` failed `toBeGreaterThan(1)` (received 1) and `native: a same-minute page growing row zero holds the original tool position` failed `toBeGreaterThan(500)` (received 0), both at line 42. The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` (exit 0, 283.0 s). Status stays open; no assertion, timeout or skip changed.
+
+A second browser run on the same branch (at `487e2aa4e`: 9 failed, 1706 passed) failed the same cases again; the two owners again passed together with one worker (295.5 s). See 0382 for that run.
+
+## Resolution (2026-11-11)
+
+Branch `fix-flaky-tests-400972eda2c6-r1`, base `51456e887`.
+
+- **Root cause:** a product race in `useNativeAgentSession.loadEarlierMessages`
+  (`apps/web/src/hooks/useNativeAgentSession.ts`). The history page was fenced
+  on the shared `refreshSequenceRef`, which every background read of the
+  native tab (the 500–1500 ms cadence) also increments. A poll that started
+  while a page was in flight made the page return `projectionRef.current`
+  without merging it. The fixture holds a page 150 ms; on a loaded host a
+  poll tick lands inside that window often. The click then did nothing: the
+  control came back as "Load earlier messages", nothing was prepended, the held
+  tool kept row index 1 (and in the same-minute variant the folded group never
+  grew, so its scrollTop stayed 0), while the offset poll passed because
+  nothing moved. A real reader on a slow machine had the same dead click; the
+  limitation was documented in `transcript-scroll.md` (Known limitations) and
+  is removed there.
+- **Fix:** the page has its own sequence (`historyPageSequenceRef`, so a later
+  page still supersedes it) and is dropped only when the operation epoch
+  moved (a mutation) or the cursor it was fetched behind is no longer the
+  hook's cursor (a poll that rotated the history or collapsed to the live
+  tail replaces it). A poll that leaves paging state standing no longer retires
+  it; the page merges into the live tail current when it lands, as before. The
+  page still retires a poll already in flight when it starts. New unit tests
+  in `useNativeAgentSession.history-paging.test.tsx` cover both sides (a poll
+  bringing a new live row keeps the page; a poll that rotated the history
+  discards it). `e2e/TranscriptPaging.spec.ts`'s "a reader who moves while a
+  page loads" test, reviewer-only because of this race, now also runs the
+  native view, whose 1.5 s page always overlaps a poll. Docs:
+  `docs/architecture/native-transcripts.md` (Automatic paging) and
+  `transcript-scroll.md`.
+- **Reproduced:** yes. (1) Injected delay: a temporary spec clicking **Load
+  earlier messages** in the native view of `/transcript-paging?mixed=1&slow=1`
+  (page held 1.5 s, longer than the poll cadence), desktop, two workers,
+  `--repeat-each=5`: 5 of 5 failed before the fix (the control came back, the
+  page never landed); after it `--repeat-each=10` passed 10 of 10. That
+  condition is now the native case of the spec's "reader who moves while a
+  page loads" test. (2) The new unit test "a background poll that lands while a
+  page is in flight keeps the page" failed before the fix (`m1`, `m2` missing)
+  and passes after. (3) Host load: before the fix,
+  `NODE_ENV= ORKESTRATOR_E2E_PORT=14483 mise run test:logged -- --name repro-paging-before -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts -g "native: (paging before prose|history pages in without a click)" --repeat-each=10 --workers=6 --retries=0`
+  at load average 150 to 195 from other agents failed 23 of 60 starts: one
+  desktop index-1 at `:138`, 13 of 1602's signature, three test timeouts in the
+  offset poll and seven navigations. The same command after the fix, as the
+  load fell from about 150 to 37, had no index-1, scrollTop-0 or offset failure
+  in 40 starts of this test (its 14 failures were 10 navigation and reload
+  timeouts and four of 1602's, fixed separately there).
+  The 244.5 px offset variant of 2026-10-22 did not appear before or after and
+  is not explained by this race.
+- **Stress:** `NODE_ENV= ORKESTRATOR_E2E_PORT=14483 mise run test:logged -- --name stress-paging-after -- bun scripts/test-under-contention.ts --burners 60 -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts -g "native: (paging before prose|history pages in without a click|a reader who moves)" --repeat-each=10 --workers=6 --retries=0`
+  (macOS, burners unpinned): 71 of 80 passed; no failure had this case's
+  signature. The nine were seven `expect(list).toBeVisible()` misses right
+  after the cold server's first navigations and two 30 s test timeouts. The
+  same command against a warm private fixture server (`stress-paging-warm`,
+  load about 85): 61 of 80 passed, again with no index, scrollTop or offset
+  failure. All 19 failures were in this test, which navigates twice: 13 were
+  `page.reload` running out the 30 s test budget, three were list visibility
+  misses after navigation, and three were timeouts or closed pages after one.
+  A trace showed `goto` alone taking 13.8 s and the paging check about 3 s.
+  That is the navigation cost of the Vite dev fixture under CPU starvation
+  ([0382](../web-ui/0382-component-browser-parallel-load.md),
+  [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md)),
+  not this race. The whole owner with nine workers, `--repeat-each=3`
+  (`paging-owner-9w`, load about 45), passed 118 with 3 skips. Its five
+  failures were `page.reload` timeouts in the first wave, reviewer cases
+  included. `--repeat-each=2` (`paging-owner-9w-vite`, load about 24) passed
+  completely.

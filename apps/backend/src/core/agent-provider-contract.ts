@@ -860,6 +860,15 @@ export interface AgentSessionProvider {
    */
   refreshUsage?(sessionId: string): Promise<NativeAgentContextUsage | undefined>;
   /**
+   * Usage with a per-response entry for each of the session's recent
+   * responses (the same bounded window a full projection reports), read
+   * without the transcript. For a provider whose lightweight state reads
+   * carry only the newest response (OpenCode), so a settled turn that made
+   * several model calls is counted whole. Providers whose state snapshot
+   * already lists recent turns leave it out.
+   */
+  recentTurnUsage?(sessionId: string): Promise<NativeAgentContextUsage | undefined>;
+  /**
    * Authoritative activity including input parked at the provider. Optional so
    * narrow test providers and non-interactive integrations can fall back to
    * the coarser status contract.
@@ -1047,7 +1056,7 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   commandCatalogue?(sessionId?: string): Promise<ProviderCommandCatalogue>;
   /** Explicit command refresh; reports what it actually did. */
   refreshCommands?(sessionId?: string): Promise<ProviderCommandRefreshResult>;
-  mcpServers?(sessionId: string): Promise<NativeAgentMcpServer[]>;
+  mcpServers?(sessionId: string, options?: ProviderReadOptions): Promise<NativeAgentMcpServer[]>;
   mcpServerAction?(
     sessionId: string,
     serverId: string,
@@ -1113,7 +1122,21 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * this never feeds a projection. `unsupported` is a bridge too old to
    * report; `none` is a current bridge with nothing loaded yet, or a failed read.
    */
-  mcpConfigEvidence?(sessionId: string): Promise<ProviderMcpConfigReport>;
+  mcpConfigEvidence?(
+    sessionId: string,
+    options?: ProviderReadOptions,
+  ): Promise<ProviderMcpConfigReport>;
+}
+
+/**
+ * Options for a provider read a caller bounds with a deadline. When `signal`
+ * aborts (the caller's deadline fired or it stopped waiting), a provider that
+ * honours it stops the read and releases its request; one that does not keeps
+ * reading and the caller discards the late answer. Only reads take it: a
+ * mutation's outcome is ambiguous once sent, so aborting one stops nothing.
+ */
+export interface ProviderReadOptions {
+  readonly signal?: AbortSignal;
 }
 
 /** One `/runtime-health` read, as MCP apply evidence. */

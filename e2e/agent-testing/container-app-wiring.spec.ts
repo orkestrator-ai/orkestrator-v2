@@ -18,11 +18,13 @@ import {
   localName,
   login,
   openSecondWindow,
+  profileStatus,
   reloadApp,
   selectEnvironment,
   setDocumentHidden,
   type Environment,
 } from "./container-wiring-support";
+import { setBackendTiming } from "./agent-test-timing-support";
 
 /**
  * Container app wiring in a real browser, part two (todo 0048, task 4). Same
@@ -150,8 +152,10 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
     await page.setViewportSize({ width: 1400, height: 900 });
     await login(page, testInfo);
     await test.step("the PR monitor reads the container's PR and offers the merge", async () => {
-      // Mergeability unknown, as a freshly recorded PR is: only the monitor's
-      // read through the container's `gh` can enable the merge button.
+      // Mergeability unknown, as a freshly recorded PR is. Since the single
+      // Merge PR button (#2159) the toolbar button is enabled while it shows
+      // `merge-pr-checking`; only the monitor's read through the container's
+      // `gh` settles mergeability and clears that indicator.
       await invoke("set_environment_pr", {
         environmentId: container.id,
         prUrl,
@@ -160,6 +164,9 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
       });
       await selectEnvironment(page, containerName);
       await expect(toolbarButton(page, "Merge PR")).toBeEnabled({
+        timeout: PR_MONITOR_BUDGET_MS,
+      });
+      await expect(page.getByTestId("merge-pr-checking")).toHaveCount(0, {
         timeout: PR_MONITOR_BUDGET_MS,
       });
       expect(inContainer(containerId, `cat ${FAKE_GH_DIR}/calls`)).toContain(
@@ -452,9 +459,24 @@ test("Docker fixture coordinator view follows delegations and context across swi
 }, testInfo) => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
   test.setTimeout(8 * 60_000);
+  // Durations of the phases outside a `test.step` (to-do 7569 (retired), task 4); the
+  // steps' own durations are in the JSON report.
+  let phaseStarted = Date.now();
+  const phaseDone = (phase: string) => {
+    const now = Date.now();
+    testInfo.annotations.push({ type: "phase-ms", description: `${phase}: ${now - phaseStarted}` });
+    phaseStarted = now;
+  };
   const container = await fixtureEnvironment(containerName);
   const local = await fixtureEnvironment(localName);
   expect(container.environmentType).toBe("containerized");
+  // A stopped worker's delegation closes on the coordinator repair pass,
+  // every 60 s in production; this test shortens it to 5 s (to-do 7569 (retired),
+  // task 4); the backend applies it within a second of the file being
+  // written. The sweep budget below still allows one full production period,
+  // so a backend that ignores the override makes the test slower, not red.
+  const dataDir = profileStatus().dataDir;
+  if (!dataDir) throw new Error("dev:status reported no data directory");
   const projects = await invoke<Project[]>("get_projects");
   const checkout = projects.find((project) => project.id === container.projectId)?.localPath;
   if (!checkout) throw new Error("The fixture project has no checkout");
@@ -557,17 +579,23 @@ test("Docker fixture coordinator view follows delegations and context across swi
       )
       .toBe(count + elsewhere);
 
+  phaseDone("coordinator set-up");
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
+  phaseDone("login");
+  const repairTiming = setBackendTiming(dataDir, { coordinatorRepairIntervalMs: 5_000 });
   try {
     let panel = await openCoordinator(page);
     if (baseline === 0) await awaiting(0);
+    phaseDone("first coordinator open");
 
     await test.step("a delegation survives an environment switch and the coordinator returns without a Work rail", async () => {
       await selectEnvironment(page, containerName);
       await expect(page.locator("#project-panel-coordinator")).toHaveCount(0);
       expect((await delegate(container.id, "container")).opened).toBe(true);
-      await page.waitForTimeout(3_000);
+      // The backend's record has it while the coordinator view is not shown
+      // (to-do 7569 (retired), task 4: was a fixed 3 s sleep).
+      await awaiting(baseline + 1);
       panel = await openCoordinator(page);
       await awaiting(baseline + 1);
     });
@@ -575,7 +603,8 @@ test("Docker fixture coordinator view follows delegations and context across swi
     await test.step("a delegation survives a hidden document and the coordinator remains usable", async () => {
       await setDocumentHidden(page, true);
       expect((await delegate(local.id, "local")).opened).toBe(true);
-      await page.waitForTimeout(6_000);
+      // Recorded while the document is hidden (was a fixed 6 s sleep).
+      await awaiting(baseline + 2);
       await setDocumentHidden(page, false);
       panel = await openCoordinator(page);
       await awaiting(baseline + 2);
@@ -587,8 +616,10 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await awaiting(baseline + 2);
     });
 
+    phaseStarted = Date.now();
     const second = await openSecondWindow(page.context(), testInfo);
     const secondPanel = await openCoordinator(second);
+    phaseDone("second window");
     await test.step("a repository context change shows in both windows", async () => {
       await awaiting(baseline + 2);
       const before = (
@@ -622,6 +653,8 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await second.close();
     });
   } finally {
+    repairTiming.restore();
+    phaseStarted = Date.now();
     if (git("branch", "--show-current") !== originalBranch) {
       git("checkout", "-q", originalBranch);
     }
@@ -636,5 +669,6 @@ test("Docker fixture coordinator view follows delegations and context across swi
     }
     await waitForEnvironmentStatus(localName, "running");
     await waitForEnvironmentStatus(containerName, "running", 240_000);
+    phaseDone("restart the fixture environments");
   }
 });

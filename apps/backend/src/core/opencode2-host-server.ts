@@ -33,16 +33,14 @@ import { loadCoordinatorResearch } from "./coordinator-research-context.js";
 import {
   openCode2CoordinatorSignature,
   writeOpenCode2CoordinatorConfig,
-} from "./opencode2/coordinator.js";
-import { writeOpenCode2HostConfig } from "./opencode2/server.js";
+  writeOpenCode2HostConfig,
+  openCode2ServerKey,
+  type OpenCode2HostServerRecord,
+  type OpenCode2ServerConnection,
+} from "./opencode2/index.js";
 import type { CommandContext } from "./commands-context.js";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { assertLocalServerStartAllowed, startLocalServer } from "./commands-servers.js";
-import {
-  openCode2ServerKey,
-  type OpenCode2HostServerRecord,
-} from "./opencode2/host-server-state.js";
-import type { OpenCode2ServerConnection } from "./opencode2/environment-provider.js";
 
 /** The first start imports the user's credentials and migrates an empty database. */
 export const OPENCODE2_HOST_READY_TIMEOUT_MS = 60_000;

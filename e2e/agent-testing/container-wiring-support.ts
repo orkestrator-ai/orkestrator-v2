@@ -19,7 +19,7 @@ export const localName = process.env.ORKESTRATOR_AGENT_TEST_LOCAL_ENV ?? "fixtur
 /** The Files panel poll (5 s), a read, and margin for a loaded host. */
 export const POLL_BUDGET_MS = 20_000;
 
-type Status = { browserUrl?: string; authFile?: string };
+type Status = { browserUrl?: string; authFile?: string; dataDir?: string };
 export type Environment = {
   id: string;
   name: string;
@@ -51,6 +51,36 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
   const payload = (await response.json()) as { result?: T; error?: string };
   if (!response.ok || payload.error) throw new Error(payload.error ?? `${command} failed`);
   return payload.result as T;
+}
+
+/** `environmentChangeResourceKey` in `@orkestrator/protocol/change-resources`. */
+function environmentChangeKey(environmentId: string): string {
+  return `environment-net/environment/${encodeURIComponent(environmentId)}/live`;
+}
+
+type ChangeView = {
+  kind: string;
+  projection?: {
+    filePage?: { rows: Array<{ newPathDisplay: string | null; oldPathDisplay: string | null }> };
+  };
+};
+
+/**
+ * The paths in the backend's change projection for an environment: the same
+ * view the Files panel's Changes tab shows, read with the owner token from
+ * the test process. It is not a page request, so it never counts as a Files
+ * panel poll, and the read does not scan: the projection only moves when the
+ * backend's own scan does.
+ */
+export async function backendChangedPaths(environmentId: string): Promise<string[]> {
+  const view = await invoke<ChangeView>("changes_get_view", {
+    resourceKey: environmentChangeKey(environmentId),
+    pageSize: 200,
+  });
+  if (view.kind !== "projection" && view.kind !== "reset") return [];
+  return (view.projection?.filePage?.rows ?? []).flatMap((row) =>
+    [row.newPathDisplay, row.oldPathDisplay].filter((value): value is string => Boolean(value)),
+  );
 }
 
 export async function fixtureEnvironment(name: string): Promise<Environment> {

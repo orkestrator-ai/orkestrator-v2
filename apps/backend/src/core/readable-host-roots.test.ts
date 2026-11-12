@@ -173,11 +173,12 @@ describe("readable host file roots", () => {
     const media = manager();
     await media.open({ path: path.join(customWorktree, "clip.wav") });
     const resolve = minted[0]!.resolve;
-    const opened = await resolve();
+    const signal = new AbortController().signal;
+    const opened = await resolve(signal);
     await opened.handle.close();
     // The custom worktree's environment is gone: its file is no longer readable.
     environments = [];
-    await expect(resolve()).rejects.toThrow();
+    await expect(resolve(signal)).rejects.toThrow();
   });
 
   test("without the allowlist a stream still requires an environment", async () => {

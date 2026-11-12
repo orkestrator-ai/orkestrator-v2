@@ -363,6 +363,8 @@ export function maintenanceIssues(snapshot: HostMaintenanceSnapshot): string[] {
   }
   if (snapshot.image?.present && snapshot.image.compatible === false) {
     issues.push("The container image is out of date");
+  } else if (snapshot.image?.present && snapshot.image.olderThanBackend) {
+    issues.push("The container image is older than this Orkestrator");
   }
   return issues;
 }

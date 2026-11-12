@@ -1,7 +1,7 @@
 # Virtuoso cancellation: fake-clock timer count after the deadline window
 
 - **ID:** 9932
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-10
 - **File:** `apps/web/src/lib/transcript-scroll/virtuoso-cancellation.test.tsx:95`
 
@@ -401,3 +401,127 @@ test; it does not touch this file or anything under `apps/web/`.
   `NODE_ENV=production` from the agent session. React's production build then
   failed every case of this file with `React.act is not a function`; that is
   the environment, not this flake, which is why the runs above unset it.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `da475cb5e`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes only `apps/backend` MCP
+evidence, provider-read and transcript-artifact code, their tests and docs;
+it does not touch this file or the transcript-scroll code.
+
+- **Command:** `mise run test:logged -- --name address-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, host
+  load average about 60.
+- **Suite counts:** backend 18,578 passed and 3 failed (flakes 9963 and 9978);
+  web 14,572 passed and 7 failed (flake 9932); protocol, desktop, web-public,
+  toolchain, CLI, root, bridge and lockfile groups passed.
+- **Failure:** seven cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them
+  `control: an append while following publishes the queued follow` (40.2 ms)
+  and both `restored snapshot transitions from hidden to visible (cancel=%s)`
+  cases.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent on another
+  file, so it did not rerun this one. Three manual runs of
+  `NODE_ENV=test mise run test:logged -- --name rerun-virtuoso-alone-N -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
+  at a load average of about 59 failed 9, 6 and 9 of 14 cases with the same
+  assertion, matching the earlier loaded solo failures. (Without
+  `NODE_ENV=test` every case fails instead with `React.act is not a function`,
+  because React's production build loads; that is an invocation error, not
+  this flake.)
+
+Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `b307c086f`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes no `apps/web` code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, with
+  the shared host queueing behind other worktrees' runs.
+- **Suite counts:** backend 18,593 passed and 1 failed (flake 9963); web 14,570
+  passed and 9 failed (this case); root, bridge and lockfile groups passed.
+- **Failure:** nine cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them
+  `control: without cancellation the library retries the index target after a refresh`
+  (148.9 ms) and both `restored snapshot transitions from hidden to visible (cancel=%s)`
+  cases.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent before it
+  reached this file. Two manual runs of
+  `NODE_ENV=test mise run test:logged -- --name virtuoso-alone-test-env-N -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
+  passed (14 of 14, load average about 11 after the suite finished).
+
+Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (provisional captures review repairs)
+
+Observed 2026-11-11 on `provisional-captures-510c8fc4900c-r1` (head `e188947f2`), base commit `963ffa6ab70bcc7e412e9748078cdbc0333a7ad1`
+(`mise run flaky:recurrence 9932 --base 963ffa6ab…` answered "open. Record
+the failure as a recurrence"). The branch changes only backend change-tracking code, the worktree watcher, a benchmark script and documentation; it touches nothing under `apps/web/` and no container code.
+
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  on beelink (Linux x86_64, 16 cores); the guard stage was skipped because of
+  an unrelated `main` finding in `ToPipelineButton.test.tsx`. Host load
+  average about 35 to 42 at the end of the run.
+- **Failure:** one case, `restored snapshot transitions from hidden to visible
+  (cancel=%s)`, Expected 0, Received 1.
+- **Suite counts:** web 14,637 pass and 1 fail; backend 18,020 pass and 1 fail
+  ([9963](../environments-and-containers/9963-rootful-create-logs-owned-port-listing.md));
+  desktop, protocol, toolchain, web-public, root, bridge and lockfile groups
+  passed.
+- **Isolated rerun:** the runner's own rerun reported `PASSED ALONE (790ms)`.
+
+## Resolution (2026-11-11)
+
+- **Root cause:** the timer the count saw was not a Virtuoso timer. Happy DOM's
+  `AsyncTaskManager.resolveWhenComplete` (happy-dom 21.0.4,
+  `lib/async-task-manager/AsyncTaskManager.js`) arms a 1 ms "wait until
+  complete" probe whenever the last frame or timer it tracks ends, and clears
+  it when another starts. It arms the probe through a `setTimeout` it captured
+  at load, which Bun's fake clock still fakes, so `jest.getTimerCount()`
+  counts it. The final animation frame that `elapseFakeTime` delivers can be
+  that last task. Whether the probe is still pending when the count is read
+  depends on how Happy DOM's real-immediate frames interleave with the rest
+  of the turn, and on stale entries in Happy DOM's running-timer list: Bun's
+  `jest.useRealTimers()` discards still-pending fake timers without running
+  them, so Happy DOM never records that they ended, and while a stale entry
+  remains the probe is never armed. Host load changes both. The earlier
+  bounded settle rounds could not help, because each round ended with another
+  frame that could arm the probe again.
+  Evidence: a preload that wrapped the native timer functions before Happy
+  DOM loaded recorded, for every failing assertion under load, exactly one
+  pending timer, `timeout delay=1` armed from
+  `AsyncTaskManager.resolveWhenComplete` ← `endImmediate` ←
+  `BrowserWindow.requestAnimationFrame`'s immediate. A wrapper on the global
+  timer functions (what Virtuoso, React and the test call) recorded none.
+- **Fix:** `apps/web/src/test/fake-clock-frames.ts` adds `trackPageTimers()`,
+  which counts the timers the code under test arms through the global
+  `setTimeout`/`setInterval` until they run or are cleared.
+  `virtuoso-cancellation.test.tsx` installs it with the fake clock
+  (`installFakeClock`) and `elapsePastEveryDeadline` asserts that no page
+  timer is pending (listing any that are), with no extra settle rounds.
+  Timers captured by `installControlledTimeout` stay out of the count and
+  are still checked by that helper's `assertDrained()`. `afterEach` now runs
+  out the fake clock (`jest.runAllTimers()` inside `act`) before
+  `useRealTimers()`, so Bun no longer discards a pending fake timer and
+  leaves Happy DOM's records stale for the next test. The tracker still
+  catches a real late timer: with the 1300 ms windows cut to 100 ms, the
+  assertion lists Virtuoso's pending `timeout (1200 ms)`, `(200 ms)` and
+  `(150 ms)` timers and fails.
+- **Reproduced:** yes. On macOS (18 cores) with
+  `bun scripts/test-under-contention.ts --burners 120` (unpinned, load
+  average 70 to 195), the unchanged file
+  (`git show HEAD:…` copied beside it) failed 42 of 280 and 48 of 280 tests
+  with `--rerun-each=20`, all with `Expected 0, Received 1` at
+  `elapsePastEveryDeadline`. The same condition with smaller repeats failed
+  8 of 70, 9 of 42 and 7 of 56 earlier in the session. With 40 burners it
+  passed 70 of 70, so the failure needs heavy load. After the fix, the same
+  120-burner condition passed every run.
+- **Stress:** `NODE_ENV=test mise run test:logged -- --name stress-virtuoso-9932 -- bun scripts/test-under-contention.ts --burners 120 -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --rerun-each=20`
+  passed (280 of 280). Three further runs of the same command without the
+  logged wrapper passed 280 of 280 each (1,120 of 1,120 in total), at a load
+  average up to about 195. Unloaded, `--rerun-each=10` passed 140 of 140.

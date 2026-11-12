@@ -18,6 +18,7 @@ import {
   describeStatement,
   instrumentSqliteConnection,
   MAX_SLOW_STORAGE_SERIES,
+  MAX_STORAGE_CALL_SERIES_PER_BUCKET,
   SlowStorageOperations,
   STORAGE_CALL_BUCKET_MS,
   STORAGE_CALL_BUCKETS,
@@ -309,7 +310,48 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
       storageCallMs: 150,
       storageMainCallMs: 150,
       storageLedgerCallMs: 0,
+      // The transaction changed a row, so it is a write; the reads are not.
+      storageWrites: 1,
+      // A statement that names no table counts as `other`; a transaction
+      // with no store under its slowest statement's table.
+      storageTopCaller: "main:other",
+      storageTopCallerCalls: 2,
+      storageTopCallerMs: 100,
+      storageTopCallerWrites: 0,
+      storageCallers: "main:other=2/100ms/0w main:table:stores=1/50ms/1w",
     });
+  });
+
+  test("a call is counted under the caller that named it, or its store's family", () => {
+    const { db, timing, recorder, advance } = connection();
+    logs();
+    advance(1_000);
+    // A named call outside a transaction: a lease's claim, heartbeat or release.
+    timing.nameCall("lease:public-operations");
+    db.query("INSERT INTO stores (name) VALUES (timed_value(?))").run(20);
+    // The name applies to one call only.
+    db.query("SELECT timed_value(?) FROM stores").get(5);
+    // A transaction's store is kept by family; ids are folded away.
+    timing.store = "native-agent-sessions/0123456789abcdef0123456789abcdef";
+    db.transaction(() => db.query("SELECT timed_value(?) FROM stores").get(30))();
+    // A name given inside a transaction is ignored: the transaction is the call.
+    db.transaction(() => {
+      timing.nameCall("lease:ignored");
+      db.query("SELECT timed_value(?) FROM stores").get(1);
+    })();
+    db.query("SELECT timed_value(?) FROM stores").get(2);
+    expect(recorder.stallContext({ fromMs: 1_000, toMs: 1_200 })).toMatchObject({
+      storageCalls: 5,
+      storageWrites: 1,
+      storageTopCaller: "main:native-agent-sessions",
+      storageTopCallerMs: 30,
+      storageCallers:
+        "main:native-agent-sessions=1/30ms/0w main:lease:public-operations=1/20ms/1w " +
+        "main:table:stores=3/8ms/0w",
+    });
+    expect(JSON.stringify(recorder.stallContext({ fromMs: 1_000, toMs: 1_200 }))).not.toContain(
+      "0123456789abcdef",
+    );
   });
 
   for (const throws of [false, true]) {
@@ -427,6 +469,13 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
       storageCallMs: 105,
       storageMainCallMs: 105,
       storageLedgerCallMs: 0,
+      // The two direct inserts wrote; the rolled-back and failed calls did not.
+      storageWrites: 2,
+      storageTopCaller: "main:table:stores",
+      storageTopCallerCalls: 3,
+      storageTopCallerMs: 105,
+      storageTopCallerWrites: 2,
+      storageCallers: "main:table:stores=3/105ms/2w main:table:missing_table=1/0ms/0w",
     });
     // The rollback kept only the two direct inserts (this read is a fifth call).
     expect(db.query("SELECT COUNT(*) AS rows FROM stores").get()).toEqual({ rows: 2 });
@@ -520,6 +569,13 @@ describe("SlowStorageOperations", () => {
       storageCallMs: 255,
       storageMainCallMs: 40,
       storageLedgerCallMs: 210,
+      storageWrites: 0,
+      // Calls recorded without a caller count as `other` in their database.
+      storageTopCaller: "ledger:other",
+      storageTopCallerCalls: 2,
+      storageTopCallerMs: 210,
+      storageTopCallerWrites: 0,
+      storageCallers: "ledger:other=2/210ms/0w main:other=1/40ms/0w other:other=1/5ms/0w",
     });
     // A slow operation in the window adds its own fields beside the counts.
     recorder.record(sample({ endedAtMs: 11_000, durationMs: 300 }));
@@ -529,6 +585,39 @@ describe("SlowStorageOperations", () => {
       storageLongestMs: 300,
     });
     expect(recorder.stallContext({ fromMs: 20_000, toMs: 21_000 })).toBeUndefined();
+  });
+
+  test("a stall sums each caller across its buckets and ranks them by time", () => {
+    const recorder = new SlowStorageOperations();
+    // Many short writes from one caller outweigh one longer read.
+    for (let index = 0; index < 6; index += 1) {
+      recorder.recordCall("main", 10, 10_000 + index * 300, "lease:public-operations", true);
+    }
+    recorder.recordCall("main", 45, 10_100, "native-agent-sessions");
+    recorder.recordCall("ledger", 5, 10_200, "table:file_changes", true);
+    expect(recorder.stallContext({ fromMs: 10_000, toMs: 12_000 })).toMatchObject({
+      storageCalls: 8,
+      storageWrites: 7,
+      storageTopCaller: "main:lease:public-operations",
+      storageTopCallerCalls: 6,
+      storageTopCallerMs: 60,
+      storageTopCallerWrites: 6,
+      storageCallers:
+        "main:lease:public-operations=6/60ms/6w main:native-agent-sessions=1/45ms/0w " +
+        "ledger:table:file_changes=1/5ms/1w",
+    });
+  });
+
+  test("a bucket keeps a bounded number of callers and folds the rest into other", () => {
+    const recorder = new SlowStorageOperations();
+    for (let index = 0; index < MAX_STORAGE_CALL_SERIES_PER_BUCKET + 10; index += 1) {
+      recorder.recordCall("main", 1, 1_000, `family-${index}`);
+    }
+    const context = recorder.stallContext({ fromMs: 1_000, toMs: 1_000 });
+    expect(context).toMatchObject({ storageCalls: MAX_STORAGE_CALL_SERIES_PER_BUCKET + 10 });
+    // The 33rd and later callers share one `other` series.
+    expect(context?.storageTopCaller).toBe("main:other");
+    expect(context?.storageTopCallerCalls).toBe(10);
   });
 
   test("call buckets from an older lap of the ring read as empty", () => {

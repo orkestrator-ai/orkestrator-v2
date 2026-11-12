@@ -95,7 +95,7 @@ matrix with evidence for every row are in
   `launch_node_environment`, `start_node_environment`,
   `stop_node_environment`, `send_prompt_to_node_tab`, `send_node_message`)
   were removed in favour of the `nodeId` forms.
-- **Node tools** (`control-mcp-nodes.ts`, `control-mcp-node-files.ts`):
+- **Node tools** (`control-mcp/nodes.ts`, `control-mcp/node-files.ts`):
   - `list_nodes`;
   - `read_node_environment`: state, tabs, transcript, diff, a file, and
     pipeline state (kept for the file read no `nodeId` tool makes);

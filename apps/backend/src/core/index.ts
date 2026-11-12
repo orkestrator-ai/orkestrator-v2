@@ -5,6 +5,9 @@ import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
+import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
+import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
+import { coordinatorRepairJob } from "./coordinator-repair-job.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -29,7 +32,7 @@ import {
 } from "./bug-report-runtime.js";
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { createSelfImprovementService } from "./commands-registry-self-improvement.js";
-import type { SelfImprovementService } from "./self-improvement/service.js";
+import type { SelfImprovementService } from "./self-improvement/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -156,6 +159,7 @@ import {
   WebAnnotationDispatchAdapter,
   WebAnnotationRollout,
   WebAnnotationService,
+  WEB_ANNOTATION_GC_EVERY_TICKS,
   type WebAnnotationToolHost,
 } from "./web-annotations/index.js";
 import {
@@ -213,7 +217,7 @@ import {
   type ControlMcpEndpointState,
   type ControlMcpInfo,
   type ControlMcpSettings,
-} from "./control-mcp-server.js";
+} from "./control-mcp/index.js";
 import { isDefaultDataDir } from "../data-dir.js";
 import { installStorageEventFanout } from "./backend-event-fanout.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
@@ -226,7 +230,7 @@ import {
 } from "./native-agent-service.js";
 import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
 import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
-import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
+import { openCode2WorkerMailbox } from "./opencode2/index.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 import {
   createSessionTitleService,
@@ -398,6 +402,8 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
   private uninstallDispatchHold?: () => void;
+  /** Agent-test profiles only: a spec's shortened periods (`agent-test-timing.ts`). */
+  private readonly agentTestTiming: AgentTestTiming | undefined;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
@@ -644,21 +650,28 @@ export class OrkestratorBackend {
       : undefined;
     this.controlMcp =
       options.controlMcp ??
-      new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed for the installed app's default data directory; ephemeral for
-        // tests, agent-test backends and every other data directory.
-        port: controlMcpPortOverride(
-          options.runtimeFlavor,
-          process.env,
-          isDefaultDataDir(options.dataDir),
-        ),
-        agentVoiceChatReply: (input) => {
-          if (!this.agentVoiceChatReplier) {
-            return Promise.reject(new Error("Agent voice chat replies are unavailable"));
-          }
-          return this.agentVoiceChatReplier.reply(input);
+      new ControlMcpServer(
+        options.dataDir,
+        (command, args, invokeOptions) =>
+          invokeOptions?.signal
+            ? this.invoke(command, args, { signal: invokeOptions.signal })
+            : this.invoke(command, args),
+        {
+          // Fixed for the installed app's default data directory; ephemeral for
+          // tests, agent-test backends and every other data directory.
+          port: controlMcpPortOverride(
+            options.runtimeFlavor,
+            process.env,
+            isDefaultDataDir(options.dataDir),
+          ),
+          agentVoiceChatReply: (input) => {
+            if (!this.agentVoiceChatReplier) {
+              return Promise.reject(new Error("Agent voice chat replies are unavailable"));
+            }
+            return this.agentVoiceChatReplier.reply(input);
+          },
         },
-      });
+      );
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.applicationLogging = options.applicationLogging ?? null;
@@ -669,10 +682,24 @@ export class OrkestratorBackend {
       runtimeFlavor: options.runtimeFlavor,
     });
     if (dispatchHold) this.uninstallDispatchHold = installAgentTestDispatchHold(dispatchHold);
+    // Agent-test profiles only: a spec may shorten the container tree cache
+    // and the web annotation collection period (`agent-test-timing.ts`).
+    // Undefined (the production constants) everywhere else.
+    const timing = agentTestTiming({
+      dataDir: options.dataDir,
+      runtimeFlavor: options.runtimeFlavor,
+    });
+    this.agentTestTiming = timing;
     this.runtime =
       options.runtime ??
       new BackendRuntime({
         emit,
+        ...(timing
+          ? {
+              containerTreeMaxAgeMs: () =>
+                timingValue(timing, "containerTreeMaxAgeMs", CONTAINER_TREE_MAX_AGE_MS),
+            }
+          : {}),
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
@@ -1403,6 +1430,12 @@ export class OrkestratorBackend {
       composeText: composeWebAnnotationDispatchText,
       invoke: (command, args) => this.invoke(command, args),
       resultTools: typeof annotationTools.setWebAnnotationToolHost === "function",
+      ...(timing
+        ? {
+            gcEveryTicks: () =>
+              timingValue(timing, "webAnnotationGcEveryTicks", WEB_ANNOTATION_GC_EVERY_TICKS),
+          }
+        : {}),
     });
     annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
     context.webAnnotations = this.webAnnotations;
@@ -2689,17 +2722,17 @@ export class OrkestratorBackend {
           run: () => this.agentMail.drainInjects(),
           ...jobLog("mail-injection"),
         },
-        {
-          name: "coordinator-repair",
-          kind: "coordinator-repair",
-          priority: "recovery",
+        // Agent-test profiles only: a spec may shorten the period after which
+        // a stopped worker's delegation closes (`coordinator-repair-job.ts`).
+        coordinatorRepairJob({
           intervalMs: MAINTENANCE_JOB_MS,
-          run: async () => {
+          timing: this.agentTestTiming,
+          repair: async () => {
             reconcileCoordinatorWorkflows();
             await coordinatorWorkflowReconcileInFlight;
           },
           ...jobLog("coordinator-repair"),
-        },
+        }),
         {
           name: "mail-retention",
           kind: "mail-retention",

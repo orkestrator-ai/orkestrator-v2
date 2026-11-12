@@ -103,6 +103,12 @@ export interface WebAnnotationServiceOptions {
   /** Runs a registered backend command (container reads/cleanup, migration). */
   invoke?: (command: string, args: Record<string, unknown>) => Promise<unknown>;
   reconcileIntervalMs?: number;
+  /**
+   * Reconcile ticks between garbage-collection passes, read every tick.
+   * Only an agent-test profile's timing override (`agent-test-timing.ts`)
+   * sets it; otherwise `WEB_ANNOTATION_GC_EVERY_TICKS` (100).
+   */
+  gcEveryTicks?: () => number;
   /** Advertise agent result tools (the tools server must also be wired). */
   resultTools?: boolean;
   syncDirectories?: boolean;

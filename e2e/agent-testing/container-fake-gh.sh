@@ -43,6 +43,17 @@ case "$1 $2" in
     case " $* " in *" --delete-branch "*) git push -q origin ":$branch" || exit 1 ;; esac
     rm -rf "$work"
     touch "$dir/merged" ;;
+  "api repos/"*)
+    # The merge reads the pull request's head (`loadPullRequestHead`) to
+    # decide whether the branch is the environment's own and may be deleted:
+    # the head is this repository's environment branch.
+    repository=$(printf '%s\n' "$url" | sed 's#^https://github.com/\([^/]*/[^/]*\)/pull/.*#\1#')
+    case "$2" in
+      "repos/$repository/pulls/"*)
+        printf '{"head":{"ref":"%s","sha":"%s","repo":{"full_name":"%s"}},"base":{"ref":"main","repo":{"full_name":"%s"}}}\n' \
+          "$branch" "$head_sha" "$repository" "$repository" ;;
+      *) echo "fake gh: unsupported api call: $2" >&2; exit 1 ;;
+    esac ;;
   "api --hostname")
     case "$jq_filter" in
       .permissions) echo '{"push":true}' ;;

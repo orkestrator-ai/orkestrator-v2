@@ -94,7 +94,7 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 ### Task 1: run the transport on two real backends, without the UI
 
-Chose a script, `scripts/qa-coordinator-image-mail.ts`, over two `dev:test` profiles. It follows `qa-command-nodes.ts` and shares its harness (`qa-command-nodes-support.ts`). It needs no Electron and no browser, which on beelink would open on the user's desktop, and it uses no fixed port and no real data directory. It calls the same backend commands the Control MCP tools call, with the coordinator's scope. The MCP layer on top is covered by `control-mcp-server-messaging.test.ts` and `control-mcp-node-files.test.ts`. Each backend runs with an isolated `HOME` and no toolchain, so the agent tabs the script creates can make no provider request.
+Chose a script, `scripts/qa-coordinator-image-mail.ts`, over two `dev:test` profiles. It follows `qa-command-nodes.ts` and shares its harness (`qa-command-nodes-support.ts`). It needs no Electron and no browser, which on beelink would open on the user's desktop, and it uses no fixed port and no real data directory. It calls the same backend commands the Control MCP tools call, with the coordinator's scope. The MCP layer on top is covered by `control-mcp/server-messaging.test.ts` and `control-mcp/node-files.test.ts`. Each backend runs with an isolated `HOME` and no toolchain, so the agent tabs the script creates can make no provider request.
 
 ### Task 2: a plain container, not the Docker agent suite
 

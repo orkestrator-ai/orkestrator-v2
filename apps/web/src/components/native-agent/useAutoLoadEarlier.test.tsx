@@ -110,7 +110,7 @@ describe("useAutoLoadEarlier", () => {
   });
 
   test("retries an opening page that brought nothing, once", async () => {
-    // A poll landing while the page is in flight supersedes it.
+    // A mutation or a rotated history superseded it while it was in flight.
     const { load, settle } = pages();
     render(<Harness {...baseInput({ load })} withSentinel={false} />);
     await settle();

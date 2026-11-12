@@ -68,15 +68,44 @@ export function observeRun(
   record: PublicOperationRecord,
   context: PublicActionContext,
 ): Promise<OperationPatch | null> {
-  return context.command.runtime.publicApi.observeRun(record.operationId, () =>
-    evaluateRun(record, context),
-  );
+  const reconciliations = context.command.runtime.publicApi;
+  return reconciliations.observeRun(record.operationId, async () => {
+    const seen: RunObservationNotes = { laterTurn: false };
+    const patch = await evaluateRun(record, context, seen);
+    // An ended run with a later turn in its journal observed unchanged stays
+    // so while its record and environment do: the later turn can only be
+    // appended to, and an ended observation is kept while it runs. The
+    // periodic reconciler pass skips such a run (to-do 7562, task 4).
+    if (patch === null && seen.laterTurn && executionEnded(record.execution)) {
+      reconciliations.markRunSettled(record);
+    } else {
+      reconciliations.forgetSettledRun(record.operationId);
+    }
+    return patch;
+  });
+}
+
+/** What one observation learned beyond its patch. */
+interface RunObservationNotes {
+  /** The session's journal holds a turn after this run's, or rolled it out. */
+  laterTurn: boolean;
 }
 
 function sameExecution(a: PublicExecutionState | undefined, b: PublicExecutionState): boolean {
   return (
     JSON.stringify({ ...a, observedAt: undefined }) ===
     JSON.stringify({ ...b, observedAt: undefined })
+  );
+}
+
+const TURN_ENDED_WITHOUT_OUTCOME = "The turn ended but its outcome was not recorded";
+
+/** Whether an observation said the run's turn had ended, whatever its outcome. */
+function executionEnded(execution: PublicExecutionState | undefined): boolean {
+  if (!execution) return false;
+  return (
+    execution.state === "unsupported" ||
+    (execution.state === "unknown" && execution.reason === TURN_ENDED_WITHOUT_OUTCOME)
   );
 }
 
@@ -205,6 +234,7 @@ async function evaluateQueuedRun(
 async function evaluateRun(
   record: PublicOperationRecord,
   context: PublicActionContext,
+  seen: RunObservationNotes = { laterTurn: false },
 ): Promise<OperationPatch | null> {
   if (record.stage === "staging-attachments") {
     if (record.generation === context.generation) return null;
@@ -381,6 +411,7 @@ async function evaluateRun(
     record.dispatch?.state === "unknown" ? { dispatch: { state: "accepted" as const } } : {};
   const rolledOver = position < 0;
   const laterTurn = rolledOver || position < dispatched.length - 1;
+  seen.laterTurn = laterTurn;
   const activity = native.sessionTurnActivitySnapshot(
     target.environmentId,
     target.agent,
@@ -426,6 +457,13 @@ async function evaluateRun(
   // Steering input for the running turn also joins the journal, so a later
   // ID while the session is busy does not prove this turn ended.
   const ended = activity === "idle" || (laterTurn && activity === "unknown") || rolledOver;
+  // A run already seen to end stays ended once a later turn is in the
+  // journal: that turn keeping the session busy is not this one running
+  // again. Without this, every ended run whose outcome had aged out of the
+  // session's bounded outcome list went back to `running` with each later
+  // turn and to `unknown` when it finished, a record write each way for
+  // every such run (to-do 7562).
+  if (!ended && laterTurn && executionEnded(record.execution)) return null;
   if (!ended) {
     return settle({ state: activity === "working" || laterTurn ? "running" : "pending" }, accepted);
   }
@@ -486,7 +524,7 @@ async function evaluateRun(
       {
         state: "unknown",
         evidence: "none",
-        reason: "The turn ended but its outcome was not recorded",
+        reason: TURN_ENDED_WITHOUT_OUTCOME,
       },
       { state: "unknown", ...accepted },
     );

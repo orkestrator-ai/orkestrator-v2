@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 const scrollerSelector = '[data-transcript-scroller="true"]';
@@ -61,6 +61,54 @@ async function renderedFrame(page: Page) {
     () =>
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      }),
+  );
+}
+
+/**
+ * Resolves once `scroller` has not scrolled for five consecutive rendered
+ * frames. A wheel's animation (which can restart around writes, and so end
+ * more than once) or a layout correction emits a scroll event every frame it
+ * moves the list, so quiet frames mean both are over. Counted in frames, so a
+ * slow page waits longer rather than resolving early.
+ */
+async function scrollQuiet(scroller: Locator) {
+  await scroller.evaluate(
+    (element) =>
+      new Promise<void>((resolve) => {
+        let quietFrames = 0;
+        const onScroll = () => {
+          quietFrames = 0;
+        };
+        element.addEventListener("scroll", onScroll);
+        const frame = () => {
+          if (++quietFrames < 5) {
+            requestAnimationFrame(frame);
+            return;
+          }
+          element.removeEventListener("scroll", onScroll);
+          resolve();
+        };
+        requestAnimationFrame(frame);
+      }),
+  );
+}
+
+/**
+ * The reader has stopped and is reading: the list is quiet, and the
+ * transcript's own idle timers armed by its last scroll have run (the 250 ms
+ * input window and the 150 ms reading-anchor capture that a later hold
+ * restores). Page timers run in expiry order, so a page timer armed after the
+ * last scroll for at least as long runs after them however slowly the page
+ * runs. 400 ms is the delay the test already used for this, now ordered after
+ * the scroll instead of raced against it from the runner.
+ */
+async function readerSettled(scroller: Locator) {
+  await scrollQuiet(scroller);
+  await scroller.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 400);
       }),
   );
 }
@@ -159,46 +207,38 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
       );
       await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
       const scroller = page.locator(scrollerSelector);
-      // Let the scroller attach its input listeners after the first bottom fill.
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            let frames = 0;
-            const next = () => (++frames === 8 ? resolve() : requestAnimationFrame(next));
-            requestAnimationFrame(next);
-          }),
-      );
+      // The first bottom fill has settled. A layout correction still landing
+      // would cut the wheel's animation short a few pixels from the end.
+      await scrollQuiet(scroller);
       const box = (await scroller.boundingBox())!;
       await page.mouse.move(box.x + box.width / 2, box.y + 100);
-      const scrollEnded = scroller.evaluate(
-        (element) =>
-          new Promise<void>((resolve) => {
-            element.addEventListener("scrollend", () => resolve(), { once: true });
-          }),
-      );
       await page.mouse.wheel(0, -250);
-      await scrollEnded;
       await expect.poll(() => bottomGap(page)).toBeGreaterThan(100);
-      // The reader has stopped and is reading: the wheel's animation (which can
-      // restart around writes and so end more than once) is over.
-      await page.waitForTimeout(400);
+      await readerSettled(scroller);
       const group = page.locator('[data-chat-message-key="live-fold"]');
       if (position === "above") {
-        // Bring the group into overscan immediately above a released viewport.
-        await expect
-          .poll(async () => {
-            if (await group.count()) return true;
-            await page.mouse.wheel(0, -250);
-            await page.waitForTimeout(100);
-            return false;
-          })
-          .toBe(true);
+        // Bring the group into overscan immediately above a released viewport:
+        // move up a step at a time until the list mounts it. Each step waits
+        // for rendered frames, not time, so a slow host takes longer instead of
+        // running out of steps. It sits several rows above the end.
+        await scroller.evaluate(async (element) => {
+          const frame = () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => setTimeout(resolve, 0));
+            });
+          while (!element.querySelector('[data-chat-message-key="live-fold"]')) {
+            if (element.scrollTop === 0) throw new Error("The live group never mounted");
+            element.scrollTop -= 250;
+            await frame();
+            await frame();
+          }
+        });
         await group.evaluate((element) => {
           const list = element.closest<HTMLElement>('[data-transcript-scroller="true"]')!;
           list.scrollTop +=
             element.getBoundingClientRect().bottom - list.getBoundingClientRect().top + 40;
         });
-        await page.waitForTimeout(400);
+        await readerSettled(scroller);
         const groupBox = (await group.boundingBox())!;
         expect(groupBox.y + groupBox.height).toBeLessThan(box.y);
       }
@@ -368,6 +408,42 @@ test("a 1,500-call group opens in a bounded viewport that owns its own scrolling
   expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(outerBefore, 0);
   // Still bounded after scrolling deep into it.
   expect(await viewport.locator("[data-transcript-part-id]").count()).toBeLessThan(60);
+});
+
+// Flake 9980. Pressing the head line focuses its button at pointerdown, and
+// focus protection used to grow the overscan at once. For a reader who has
+// stopped following just above the end, measuring the rows that mounted
+// clamped the list and moved the button before pointerup, so the one click
+// landed elsewhere and the group never opened (mobile lost it 12 of 12 times
+// at 60 px before the fix). Desktop pulls a reader this close back to the
+// end, so only the phone layout reaches the released state.
+test("a reader released just above the end opens a long group with one click", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "desktop re-follows at this gap");
+  await page.goto("/streaming-transcript?long=1&bigGroup=1500");
+  const scroller = page.locator(scrollerSelector);
+  const show = page.getByRole("button", { name: /^Show 1500 tool calls:/ });
+  await expect(show).toBeVisible();
+  await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
+  await scrollQuiet(scroller);
+  const box = (await scroller.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.wheel(0, -60);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(20);
+  await readerSettled(scroller);
+  expect(await bottomGap(page)).toBeGreaterThan(20);
+
+  // One physical press and release; Playwright does not retry it. The head
+  // line sits at the scroller's lower edge, so the click first scrolls it in,
+  // as the owning tests' clicks do.
+  await show.click();
+
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  await expect(viewport).toBeVisible();
+  await expect
+    .poll(() => viewport.locator("[data-tool-group-entry-index]").count())
+    .toBeGreaterThan(2);
 });
 
 test("a selection inside a long group's viewport survives nearby inner scrolling", async ({

@@ -158,6 +158,44 @@ export const COMPATIBILITY_PATH_IDS = [
   "retired-command.provider-cli-check",
   /** The retired no-op `cleanup_stale_local_servers_cmd` was called (plan item 7009). */
   "retired-command.cleanup-stale-local-servers",
+  /**
+   * `read_file_at_branch` or `read_local_file_at_branch` was called: only the
+   * diff viewer of v2.21.0 to v2.23.0 asks them (to-do 7570).
+   */
+  "retired-command.read-file-at-branch",
+  /**
+   * `get_coordinator_upstream_auto_merge` or `set_coordinator_upstream_auto_merge`
+   * was called: a renderer from before v2.36.0 asked about the retired
+   * "always merge" setting (to-do 7570).
+   */
+  "retired-command.coordinator-upstream-auto-merge",
+  /**
+   * A bridge's event stream did not confirm `"observe":true`, so the session
+   * observer closed it: the bridge predates observation mode (to-do 7570).
+   */
+  "bridge-observation.full-stream",
+  /** A bridge answered 404 or 405 on `/session/:id/human-prompts`: it predates the route. */
+  "bridge-human-prompts.missing-route",
+  /**
+   * A node answered `read_host_agent_sign_ins` as an unknown command, so the
+   * accounts overview listed its accounts without sign-ins (to-do 7570).
+   */
+  "host-agent-sign-ins.older-node",
+  /**
+   * A node answered `get_controller_worker_changes` without honouring
+   * `diffScope`, so the answer carries `diffScopeUnsupported` (to-do 7570).
+   */
+  "worker-changes.diff-scope-older-node",
+  /**
+   * A node listed its agent accounts with no automatic-switch state, so a
+   * coordinator's re-enable had no pin to end there (to-do 7570).
+   */
+  "auto-switch.older-node",
+  /**
+   * A stored Kanban row had no `kind` or `sections`, so its content was derived
+   * from its text on read: a release before v2.34.2-beta wrote it (to-do 7570).
+   */
+  "kanban.legacy-row-derived",
 ] as const;
 
 /**

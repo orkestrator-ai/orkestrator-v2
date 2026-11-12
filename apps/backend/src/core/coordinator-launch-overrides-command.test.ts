@@ -10,8 +10,8 @@ import {
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { launchDelegationRequest } from "./coordinator-delegation-request.js";
-import { ControlMcpServer } from "./control-mcp-server.js";
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { ControlMcpServer } from "./control-mcp/server.js";
+import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { cleanupSessionHarnesses, setup } from "./public-api/test-provider.js";
 import { StorageService } from "./storage.js";

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1007,
-    "defined": 1007,
+    "commands": 1011,
+    "defined": 1011,
     "untyped": 0,
     "events": 45
   },
@@ -1024,7 +1024,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:0250bafd36aa815f589364caf84e9dd8d64a031206a6681691fef73b44b7e2c8",
+      "argsDigest": "sha256:b0c38d7045cd8abe558e67a47362c40fe653d0aa082e4b7130e55f248d400399",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "claude_tmux_detach_interactive_terminal": {
@@ -1080,6 +1080,15 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:691e4c6f1b2858ee182fded4e35f62d0ac3342823392eb7df96eea7c1d942d01"
+    },
+    "claude_tmux_renew_interactive_terminal": {
+      "domain": "claude-tmux",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:a74434be5ffcad928221e020a53ef3c32d02c641af6a9b2ba7ceae76b8915ba1"
     },
     "claude_tmux_reply_hook": {
       "domain": "claude-tmux",
@@ -3012,6 +3021,15 @@
       "argsDigest": "sha256:7d2ff51773c95d156f18bf790610baf1ceeef8c9bae503cb5ced462ed4aa0386",
       "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
     },
+    "get_coordinator_action_marks": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:76e52e8acb69ca97d72bac91b227241a35ab90def4f06242aaf6d0b11f978000",
+      "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
+    },
     "get_coordinator_checkout_turn": {
       "domain": "coordinator",
       "since": 1,
@@ -4217,6 +4235,15 @@
       "critical": [],
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
       "resultDigest": "sha256:6d16f7ea4eb4c5e0bceda19c15c64552489de7d83738408e74e2b09239115842"
+    },
+    "get_project_setup_requirements": {
+      "domain": "projects",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:014a712f937f130a0091b19670a99bf5a1d62ebace0a672f192c473feea79f27"
     },
     "get_project_usage_limits": {
       "domain": "accounts",
@@ -7390,6 +7417,15 @@
       "critical": [],
       "argsDigest": "sha256:3f0014644ea7fd62ae9a15b27c06f8e533e6dea73ebe0f5eb0b54d1bf102a46e",
       "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
+    },
+    "set_coordinator_action_mark": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d585af22fe4e369406a3b609f2167d7399ac0f04d6bcfa1a50eac08104963d74",
+      "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
     },
     "set_coordinator_upstream_auto_merge": {
       "domain": "config",

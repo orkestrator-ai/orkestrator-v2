@@ -220,6 +220,19 @@ export interface HostImageStatus {
   present: boolean;
   /** Whether it provides what this backend needs; null when absent. */
   compatible: boolean | null;
+  /**
+   * The Orkestrator version the image was built from (its manifest's
+   * `appVersion`); null when absent, legacy or unreadable. Absent from older
+   * backends.
+   */
+  builtForVersion?: string | null;
+  /**
+   * Usable, but built from an older Orkestrator than this backend, so its
+   * setup and container scripts lack later fixes. Pulling
+   * `releaseReference` brings it level. Absent from older backends.
+   */
+  olderThanBackend?: boolean;
+  /** Why the image needs attention, worded for the user; null when it does not. */
   reason: string | null;
   /** The release image matching this backend's version. */
   releaseReference: string;

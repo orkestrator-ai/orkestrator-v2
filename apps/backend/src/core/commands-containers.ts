@@ -61,7 +61,7 @@ import {
   type ContainerCredentialMode,
   type ContainerScriptLaunch,
 } from "./container-bridge-credential.js";
-import { OPENCODE2_CONTAINER_LOG } from "./opencode2/container-server.js";
+import { OPENCODE2_CONTAINER_LOG } from "./opencode2/index.js";
 import { resolveAnthropicApiKey } from "./commands-validation.js";
 import { imageWithoutStagedInputsMessage, imageUnreadableMessage } from "./commands-error-text.js";
 import { quoteShell } from "./commands-agent-support.js";

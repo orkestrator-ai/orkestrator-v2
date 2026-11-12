@@ -307,18 +307,18 @@ export function dockerExecPerMinute(rates: Record<string, KindRate>): number {
 }
 
 type Status = { status?: string; dataDir?: string; browserUrl?: string; authFile?: string };
-type Environment = {
+export type Environment = {
   id: string;
   name?: string;
   environmentType?: string;
   containerId?: string | null;
   status?: string;
 };
-type TmuxStatus = { running?: boolean; busy?: boolean; session_id?: string | null };
+export type TmuxStatus = { running?: boolean; busy?: boolean; session_id?: string | null };
 
 const log = (message: string) => console.error(`[container-tmux-tab-live] ${message}`);
 
-function profileStatus(options: Options): Status {
+export function profileStatus(options: Pick<Options, "profile" | "checkout">): Status {
   const result = spawnSync("mise", ["run", "dev:status", "--profile", options.profile, "--json"], {
     encoding: "utf8",
     env: checkoutEnv(options.checkout),
@@ -331,7 +331,7 @@ function profileStatus(options: Options): Status {
  * The real Docker CLI for the container's own commands. The qualification
  * shim, when it is first on PATH, passes these through unchanged.
  */
-function docker(args: string[], input?: string, timeout = 30_000): string {
+export function docker(args: string[], input?: string, timeout = 30_000): string {
   const result = spawnSync("docker", args, { encoding: "utf8", timeout, input });
   if (result.status !== 0) throw new Error(`docker ${args[0]} ${args[1] ?? ""} failed`);
   return result.stdout.trim();
@@ -368,7 +368,10 @@ const FAKE_API_SOURCE = path.join(
   "container-fake-claude-api.ts",
 );
 
-async function installFakeModel(containerId: string, signal: AbortSignal): Promise<() => void> {
+export async function installFakeModel(
+  containerId: string,
+  signal: AbortSignal,
+): Promise<() => void> {
   return installFakeClaudeApiFixture({
     asNode: (script, input) =>
       docker(["exec", "-i", "--user", "node", containerId, "sh", "-c", script], input),
@@ -401,7 +404,7 @@ async function installFakeModel(containerId: string, signal: AbortSignal): Promi
   });
 }
 
-async function containerEnvironment(
+export async function containerEnvironment(
   gateway: ReturnType<typeof gatewayFor>,
 ): Promise<Environment | undefined> {
   for (const project of await gateway.invoke<Array<{ id: string }>>("get_projects")) {
@@ -416,7 +419,7 @@ async function containerEnvironment(
   return undefined;
 }
 
-async function waitFor<T>(
+export async function waitFor<T>(
   label: string,
   timeoutMs: number,
   probe: () => Promise<T | null | undefined | false>,

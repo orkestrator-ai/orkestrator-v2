@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PUBLIC_ACTION_NAMES, isPublicActionName } from "@orkestrator/protocol/public-api";
-import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp/server.js";
+import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
 /**

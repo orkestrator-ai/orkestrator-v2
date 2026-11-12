@@ -25,7 +25,7 @@ import type {
   EnvironmentAttentionEvent,
 } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
-import type { PermissionRuleStore } from "./permission-rules/store.js";
+import type { PermissionRuleStore } from "./permission-rules/index.js";
 import {
   reconcileRetiredLoopedReviewSessions,
   type RetirementProvider,

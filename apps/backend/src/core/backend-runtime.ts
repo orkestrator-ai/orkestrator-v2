@@ -36,6 +36,8 @@ export type BackendRuntimeOptions = {
   emit: BackendEmit;
   /** Docker-backed container worktree signal; absent in fixtures. */
   worktreeSignal?: ContainerWorktreeSignalInstaller | null;
+  /** An agent-test profile's container tree bound; absent everywhere else. */
+  containerTreeMaxAgeMs?: () => number;
   terminals?: TerminalRuntimeOptions;
   localServers?: LocalServerRuntimeOptions;
   /** The backend and command fixtures pass `scheduleMergeCleanup`; see `PrMonitorRuntimeOptions`. */
@@ -114,6 +116,9 @@ export class BackendRuntime {
       emit: options.emit,
       onScanEvent: (event) => this.changeTracking?.onDiffScanEvent(event),
       worktreeSignal: options.worktreeSignal,
+      ...(options.containerTreeMaxAgeMs
+        ? { containerTreeMaxAgeMs: options.containerTreeMaxAgeMs }
+        : {}),
     });
     this.terminals = new TerminalRuntime(options.terminals);
     this.localServers = new LocalServerRuntime(options.localServers);

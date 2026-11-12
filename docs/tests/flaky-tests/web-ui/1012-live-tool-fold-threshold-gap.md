@@ -222,6 +222,18 @@ mise run test:logged -- --name transcript-browser-alone -- bun scripts/loopback-
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
 
+## Client-outage restart review — 2026-11-11
+
+Preparation for `beelink2-restart-failure-b5978072af7f-r1` (base `963ffa6ab`, validated at `e7e25352f`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 2 failed, 153 skipped, 1719 passed (23.3 m). The branch changes the To pipeline toolbar button and its test; this spec does not render it. `mise run flaky:recurrence -- 1012 --base 963ffa6ab` answered "open. Record the failure as a recurrence". Evidence: `validation-05.stderr.txt` under `.orkestrator/review-artifacts/review-validation-63babffd-7be4-45f4-9eba-00d573593669/`. Both projects failed `expect(received).toBeLessThanOrEqual(2)` at line 122 (received 9 and 15).
+
+The case then passed alone with one worker (exit 0, 16.2 s):
+
+```sh
+mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts -g "crossing the fold threshold" --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
 ## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
 
 Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `f799aaa14`, base `14df96544` (`mise run flaky:recurrence -- 1012 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes backend read cancellation, one desktop IPC test and docs; it changes no `apps/web` or `e2e` code. `mise run test:logged -- --name browser -- mise run test:browser`: 6 failed, 153 skipped, 1709 passed (21.9 m), all six in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602). Both mobile-chromium and desktop-chromium failed `expect(received).toBeLessThanOrEqual(2)` (mobile received 8, desktop 15). The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` (exit 0, 283.0 s). Status stays open; no assertion, timeout or skip changed.

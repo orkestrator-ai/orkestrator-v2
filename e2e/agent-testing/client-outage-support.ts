@@ -18,6 +18,11 @@ import net, { type AddressInfo, type Socket } from "node:net";
  * Only `/__orkestrator` traffic crosses the link. The renderer's assets and
  * Vite's HMR socket go straight to Vite, standing in for a client whose page has
  * already loaded: a dev-only HMR reconnect must not reload the tab under test.
+ * A page document (a navigation or reload) goes to the gateway, as a real
+ * browser's does, so a tab whose session lapsed reloads into the gateway's
+ * login form rather than into the app straight from Vite, which would reload
+ * again on its next 401 (docs/development/agent-testing.md#live-client-outage).
+ * Like the assets, documents are outside the link's outage modes.
  *
  * Records hold timings, kinds, statuses and command names: never a body, a
  * header or a URL query.
@@ -51,6 +56,11 @@ function classify(url: URL, upgrade: boolean): LinkRequestKind | null {
     return url.searchParams.has("includeEvents") ? "terminal-stream" : "main-stream";
   }
   return url.pathname === `${API_PREFIX}/invoke` ? "invoke" : null;
+}
+
+/** A top-level page load, as the browser labels it; asset and API requests are not. */
+function isDocument(request: IncomingMessage): boolean {
+  return request.headers["sec-fetch-dest"] === "document";
 }
 
 function parseCommand(body: Buffer): string | undefined {
@@ -180,7 +190,7 @@ export async function startOutageLink(options: {
       return;
     }
     if (!url.pathname.startsWith(API_PREFIX)) {
-      forward(request, response, renderer, null, "other");
+      forward(request, response, isDocument(request) ? gateway : renderer, null, "other");
       return;
     }
     const kind = classify(url, false);

@@ -67,7 +67,7 @@ async function crashAndRestart(): Promise<void> {
   });
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
-  ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  ) as { credentialSources?: string[]; agentPlatforms?: string[]; hostSeedDisabled?: boolean };
   const status = profileStatus(profile) as {
     pids?: { backend?: number };
     processStartTimes?: { backend?: number };

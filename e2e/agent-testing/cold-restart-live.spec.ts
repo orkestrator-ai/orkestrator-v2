@@ -253,7 +253,7 @@ async function restartProfile(
   });
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
-  ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  ) as { credentialSources?: string[]; agentPlatforms?: string[]; hostSeedDisabled?: boolean };
   let killedAt: number | undefined;
   if (mode === "crash") {
     const backend = readyStatus().pids?.backend;

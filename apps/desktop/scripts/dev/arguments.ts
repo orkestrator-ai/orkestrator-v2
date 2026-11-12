@@ -24,6 +24,20 @@ export type DevArguments = {
    */
   useDevWorktreeFolder?: boolean;
   /**
+   * `dev:test` only (`--no-host-seed`): start without reading the host
+   * installation. A start otherwise copies pinned toolchains and model
+   * catalogues from the production data directory, and model caches from
+   * `~/.codex` and `~/.grok`, before Electron (`seedAgentTestProfileState`).
+   * With it the profile downloads its toolchains and starts with no cached
+   * model metadata, and `--use-dev-worktree-folder` (which reads the
+   * production `config.json`) is refused. Credential seeding is separate
+   * (`--no-agent-credentials`).
+   * `false` (`--host-seed`) seeds from the host again. The choice is recorded
+   * in the profile, so a later start without either flag keeps it
+   * (`resolveHostSeedDisabled`).
+   */
+  hostSeedDisabled?: boolean;
+  /**
    * `dev:test` only: `true` (`--headless`) runs Electron on Chromium's headless
    * Ozone platform with no display variables on Linux, and with every window
    * hidden and no Dock icon on macOS, so the profile opens no window in the
@@ -94,6 +108,15 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--use-dev-worktree-folder is only supported by mise run dev:test");
       }
       result.useDevWorktreeFolder = true;
+    } else if (argument === "--no-host-seed" || argument === "--host-seed") {
+      if (!options.agentTest) {
+        throw new Error(`${argument} is only supported by mise run dev:test`);
+      }
+      const disabled = argument === "--no-host-seed";
+      if (result.hostSeedDisabled === !disabled) {
+        throw new Error("--host-seed cannot be combined with --no-host-seed");
+      }
+      result.hostSeedDisabled = disabled;
     } else if (
       argument === "--headless" ||
       argument === "--headless-electron" ||
@@ -161,6 +184,13 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
   result.agentPlatforms = [...new Set(result.agentPlatforms)];
   if (result.agentCredentialsDisabled && result.credentialSources.length > 0) {
     throw new Error("--no-agent-credentials cannot be combined with --credential-source");
+  }
+  // The dev worktree folder is a setting in the production app's config.json,
+  // so honouring it would read the production data directory after all.
+  if (result.hostSeedDisabled === true && result.useDevWorktreeFolder) {
+    throw new Error(
+      "--use-dev-worktree-folder reads the production app's config.json and cannot be combined with --no-host-seed",
+    );
   }
   return result;
 }

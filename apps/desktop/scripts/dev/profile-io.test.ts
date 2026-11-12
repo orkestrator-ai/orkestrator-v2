@@ -21,6 +21,7 @@ import * as toolchainManager from "@orkestrator/toolchain/manager";
 import { parseAgentTestArguments } from "./arguments.js";
 
 import {
+  parseRuntimeProfile,
   parseRuntimeStatusManifest,
   resolveRuntimeProfile,
   statusManifestPath,
@@ -31,6 +32,7 @@ import {
   initializeProfile,
   processMatches,
   processStartTime,
+  readProfile,
   isRemovedProfileSkeleton,
   readAndValidateSentinel,
   removeProfileState,
@@ -46,9 +48,11 @@ import {
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { agentTestHostCursorCredentialPath } from "../../../backend/src/core/agent-test-cursor-credential.js";
+import { isolatedProfileArguments } from "./isolated-browser.js";
 import {
   createBoundedLogWriter,
   orphanedRuntimeProcesses,
+  resolveHostSeedDisabled,
   seedAgentTestProfileState,
   startDevelopment,
   stoppedRuntimeStatusIfUnchanged,
@@ -1518,6 +1522,140 @@ describe("development profile lifecycle primitives", () => {
       "Could not seed from the host install: grok@1.0.3",
       "Could not download managed toolchains before Electron: grok download failed with HTTP 503",
     ]);
+  });
+
+  test("--no-host-seed reads nothing from the host installation", async () => {
+    const { profile } = await toolchainFixture(["pi", "grok"]);
+    const logs: string[] = [];
+    const credentialProfiles: unknown[] = [];
+
+    await seedAgentTestProfileState(profile, "agent-test", {
+      hostSeed: false,
+      seedModelCatalogCaches: async () => {
+        throw new Error("model catalogues must not be read from the host");
+      },
+      seedProviderCredentials: async (receivedProfile) => {
+        // Credentials follow the profile's own sources, not this switch.
+        credentialProfiles.push(receivedProfile);
+        return [];
+      },
+      seedAgentToolchains: async () => {
+        throw new Error("toolchains must not be copied from the host");
+      },
+      prefetchAgentToolchains: async (_profile, platforms) => {
+        expect(platforms).toEqual(profile.agentPlatforms);
+        return { downloaded: ["pi@0.84.3", "grok@1.0.3"] };
+      },
+      log: (message) => logs.push(message),
+      warn: (message) => logs.push(`warn: ${message}`),
+    });
+
+    expect(credentialProfiles).toEqual([profile]);
+    expect(logs).toEqual([
+      "Host seeding is off (--no-host-seed): toolchains are downloaded, model caches start empty.",
+      "Downloaded managed toolchains before Electron: pi@0.84.3, grok@1.0.3",
+    ]);
+  });
+
+  test("a --no-host-seed profile keeps the opt-out when restarted without the flag", async () => {
+    const { roots, root } = await modelCacheFixture();
+    const repositoryRoot = path.join(root, "repo");
+    // The start each launch performs: resolve the choice against the stored
+    // record, write `profile.json`, then seed with throwing host seeders.
+    const launch = async (argv: string[]) => {
+      const args = parseAgentTestArguments(argv);
+      const stored = await readProfile(
+        path.join(
+          resolveRuntimeProfile({
+            repositoryRoot,
+            requestedId: "qa-seed",
+            flavor: "agent-test",
+            roots,
+          }).profileRoot,
+          "profile.json",
+        ),
+      ).catch(() => ({}));
+      const hostSeedDisabled = resolveHostSeedDisabled(args, stored, "agent-test");
+      const profile = resolveRuntimeProfile({
+        repositoryRoot,
+        requestedId: "qa-seed",
+        flavor: "agent-test",
+        credentialSources: args.credentialSources,
+        agentPlatforms: args.agentPlatforms,
+        hostSeedDisabled,
+        roots,
+      });
+      const profilePath = await initializeProfile(profile);
+      const hostReads: string[] = [];
+      await seedAgentTestProfileState(profile, "agent-test", {
+        hostSeed: !hostSeedDisabled,
+        seedModelCatalogCaches: async () => {
+          hostReads.push("model catalogues");
+          return [];
+        },
+        seedProviderCredentials: async () => [],
+        seedAgentToolchains: async () => {
+          hostReads.push("toolchains");
+          return { seeded: [], failed: [] };
+        },
+        prefetchAgentToolchains: async () => ({ downloaded: [] }),
+        log: () => {},
+        warn: () => {},
+      });
+      return { hostReads, written: await readProfile(profilePath) };
+    };
+
+    // The isolated runner's credential-free start.
+    const first = await launch(["--profile", "qa-seed", ...isolatedProfileArguments()]);
+    expect(first.hostReads).toEqual([]);
+    expect(first.written.hostSeedDisabled).toBe(true);
+
+    // A restart that rebuilds its arguments without the flag (an older
+    // restart helper, or a person who forgets it) still reads nothing.
+    const restarted = await launch([
+      "--profile",
+      "qa-seed",
+      "--no-agent-credentials",
+      "--agent-platforms",
+      "codex",
+    ]);
+    expect(restarted.hostReads).toEqual([]);
+    expect(restarted.written.hostSeedDisabled).toBe(true);
+
+    // `--host-seed` opts back in and clears the record.
+    const seeded = await launch(["--profile", "qa-seed", "--host-seed"]);
+    expect(seeded.hostReads.sort()).toEqual(["model catalogues", "toolchains"]);
+    expect(seeded.written.hostSeedDisabled).toBeUndefined();
+    const after = await launch(["--profile", "qa-seed"]);
+    expect(after.hostReads.sort()).toEqual(["model catalogues", "toolchains"]);
+  });
+
+  test("only agent-test profiles record or honour the host-seed opt-out", () => {
+    expect(resolveHostSeedDisabled({}, { hostSeedDisabled: true }, "development")).toBe(false);
+    expect(resolveHostSeedDisabled({ hostSeedDisabled: true }, {}, "development")).toBe(false);
+    expect(resolveHostSeedDisabled({}, {}, "agent-test")).toBe(false);
+    expect(
+      resolveHostSeedDisabled(
+        { hostSeedDisabled: false },
+        { hostSeedDisabled: true },
+        "agent-test",
+      ),
+    ).toBe(false);
+    const development = resolveRuntimeProfile({
+      repositoryRoot: "/tmp/ork-host-seed-repo",
+      requestedId: "qa-dev",
+      roots: {
+        developmentRoot: "/tmp/ork-host-seed/dev",
+        productionDataDir: "/tmp/ork-host-seed/production",
+        homeDir: "/tmp/ork-host-seed/home",
+      },
+    });
+    expect(() => parseRuntimeProfile({ ...development, hostSeedDisabled: true })).toThrow(
+      "only supported by agent-test profiles",
+    );
+    expect(() =>
+      parseRuntimeProfile({ ...development, flavor: "agent-test", hostSeedDisabled: false }),
+    ).toThrow("hostSeedDisabled is invalid");
   });
 
   test("downloads what the host could not seed before Electron starts", async () => {

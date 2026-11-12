@@ -25,6 +25,19 @@ describe("devTestRestartArgs", () => {
     expect(parsed.agentPlatforms).toEqual(["claude", "codex"]);
   });
 
+  test("a profile started with --no-host-seed comes back without host seeding", () => {
+    const parsed = relaunched({
+      credentialSources: [],
+      agentPlatforms: ["codex"],
+      hostSeedDisabled: true,
+    });
+    expect(parsed.hostSeedDisabled).toBe(true);
+    expect(parsed.credentialSources).toEqual([]);
+    // A seeded profile's restart passes neither flag, so the launcher keeps
+    // whatever the profile recorded.
+    expect(relaunched({ credentialSources: [] }).hostSeedDisabled).toBeUndefined();
+  });
+
   test("a record without a list keeps the launcher's default", () => {
     expect(devTestRestartArgs("qa-restart", {})).toEqual([
       "apps/desktop/scripts/dev-test.ts",

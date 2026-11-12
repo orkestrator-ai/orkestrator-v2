@@ -1,56 +1,12 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import { readCoordinatorFor, readKeyId, type ReadCoordinator } from "@/lib/read-coordinator";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
-import { TO_PIPELINE_POLL_MS, ToPipelineButton } from "./ToPipelineButton";
+import { ToPipelineButton } from "./ToPipelineButton";
 
-/**
- * Holds the button's poll interval so a test advances it by hand rather than
- * waiting on the wall clock. Only intervals at the poll delay are captured;
- * everything else (Testing Library, promises) stays on the real clock. The
- * button is the delay's only owner in this tree, so a second live interval at
- * it is reported rather than silently shared.
- */
-function controlPolling() {
-  const originalSetInterval = globalThis.setInterval;
-  const originalClearInterval = globalThis.clearInterval;
-  const live = new Map<object, () => void>();
-  globalThis.setInterval = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
-    if (typeof callback !== "function" || delay !== TO_PIPELINE_POLL_MS)
-      return originalSetInterval(callback, delay, ...args);
-    if (live.size > 0) throw new Error("controlPolling: a second poll interval was scheduled");
-    const handle = { unref: () => handle };
-    live.set(handle, () => (callback as (...callbackArgs: unknown[]) => void)(...args));
-    return handle as unknown as ReturnType<typeof setInterval>;
-  }) as typeof globalThis.setInterval;
-  globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
-    if (handle && live.delete(handle as unknown as object)) return;
-    originalClearInterval(handle);
-  }) as typeof globalThis.clearInterval;
-  return {
-    /** Fires every live poll interval once, as if the poll delay had elapsed. */
-    tick() {
-      act(() => {
-        for (const poll of Array.from(live.values())) poll();
-      });
-    },
-    liveCount: () => live.size,
-    restore() {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
-    },
-  };
-}
-
-let polling: ReturnType<typeof controlPolling>;
-beforeEach(() => {
-  polling = controlPolling();
-});
-afterEach(() => {
-  cleanupNodeScopes();
-  polling.restore();
-});
+afterEach(cleanupNodeScopes);
 
 type Source = { tabId: string; label: string; disabledReason?: string };
 const original: Source = { tabId: "original", label: "Original work" };
@@ -63,6 +19,16 @@ function client(sources: Source[] = [original], available = true) {
       draft_auto_pipeline: () => new Promise(() => undefined),
     },
   });
+}
+
+/**
+ * The toolbar's read of `tabId`'s eligibility in `coordinator`, as diagnostics
+ * report it. Undefined when nothing is subscribed (or it polls on a timer of
+ * its own, which the coordinator cannot see).
+ */
+function sourcesEntry(coordinator: ReadCoordinator, tabId = "original") {
+  const id = readKeyId({ resource: "auto-pipeline-sources", target: "env", view: tabId });
+  return coordinator.getDiagnostics().entries.find((entry) => entry.id === id);
 }
 
 /** Renders the button with `activeTabId` active in the environment's only pane. */
@@ -157,8 +123,32 @@ test("a running tab explains why it is disabled, and enables when the turn finis
     "finish",
   );
   node.respond("auto_pipeline_sources", { available: true, sources: [original] });
-  polling.tick();
-  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false), { timeout: 4000 });
+});
+
+test("stops reading while the node's connection is down, and reads again when it returns", async () => {
+  const node = client();
+  const view = render(node, () => true);
+  await screen.findByRole("button", { name: "To pipeline" });
+  const coordinator = readCoordinatorFor(view.scope);
+  // Connected, the poll holds its next read as a coordinator timer.
+  await waitFor(() => expect(sourcesEntry(coordinator)?.timerDueAt).not.toBeNull());
+  act(() => coordinator.setDisconnected(true));
+  const whileDown = node.calls("auto_pipeline_sources").length;
+  // Paused, the coordinator holds no timer for it, so nothing can read until
+  // the connection returns. A timer of its own kept reading through an
+  // outage, which the live client-outage spec counts as a read while paused.
+  expect(coordinator.getDiagnostics().paused).toBe(true);
+  expect(sourcesEntry(coordinator)).toMatchObject({ subscribers: 1, timerDueAt: null });
+  expect(node.calls("auto_pipeline_sources")).toHaveLength(whileDown);
+  act(() => coordinator.setDisconnected(false));
+  // An auxiliary read resumes within the coalescing window plus its spread (1.55 s).
+  await waitFor(
+    () => expect(node.calls("auto_pipeline_sources").length).toBeGreaterThan(whileDown),
+    { timeout: 4_000 },
+  );
+  // The last answer stays on screen through the outage.
+  expect(screen.getByRole("button", { name: "To pipeline" })).toBeTruthy();
 });
 
 test("a tab that cannot open, such as at the tab limit, starts no drafting", async () => {
@@ -190,18 +180,11 @@ test("stops polling when it unmounts", async () => {
   const node = client();
   const view = render(node, () => true);
   await screen.findByRole("button", { name: "To pipeline" });
-  const calls = node.calls("auto_pipeline_sources").length;
-  // While mounted, each elapsed poll delay reads again.
-  polling.tick();
-  await waitFor(() => expect(node.calls("auto_pipeline_sources")).toHaveLength(calls + 1));
-  expect(polling.liveCount()).toBe(1);
+  const coordinator = readCoordinatorFor(view.scope);
+  expect(sourcesEntry(coordinator)?.subscribers).toBe(1);
   view.unmount();
-  // Unmounting clears the interval and the visibility listener, so neither an
-  // elapsed delay nor the window being shown reads again.
-  expect(polling.liveCount()).toBe(0);
-  polling.tick();
-  document.dispatchEvent(new Event("visibilitychange"));
-  expect(node.calls("auto_pipeline_sources")).toHaveLength(calls + 1);
+  // The read is evicted with its last subscriber, timer and all.
+  expect(sourcesEntry(coordinator)).toBeUndefined();
 });
 
 test("reads nothing while the window is hidden and reads again once it is shown", async () => {
@@ -213,17 +196,20 @@ test("reads nothing while the window is hidden and reads again once it is shown"
   try {
     setVisibility("hidden");
     const node = client();
-    render(node, () => true);
-    // The poll is armed, yet elapsed delays read nothing while hidden. Each
-    // read is issued synchronously from the poll, so a read would already be
-    // recorded here.
-    expect(polling.liveCount()).toBe(1);
-    polling.tick();
-    polling.tick();
+    const view = render(node, () => true);
+    const coordinator = readCoordinatorFor(view.scope);
+    // Subscribed while hidden: the read is owed, but the coordinator holds no
+    // timer for it, so nothing can read until the window is shown.
+    await waitFor(() => expect(sourcesEntry(coordinator)?.subscribers).toBe(1));
+    expect(coordinator.getDiagnostics().paused).toBe(true);
+    expect(sourcesEntry(coordinator)?.timerDueAt).toBeNull();
     expect(node.calls("auto_pipeline_sources")).toHaveLength(0);
     act(() => setVisibility("visible"));
+    // An auxiliary read resumes within the coalescing window plus its spread (1.55 s).
+    await waitFor(() => expect(node.calls("auto_pipeline_sources")).toHaveLength(1), {
+      timeout: 4_000,
+    });
     expect(await screen.findByRole("button", { name: "To pipeline" })).toBeTruthy();
-    expect(node.calls("auto_pipeline_sources")).toHaveLength(1);
   } finally {
     if (visibility) Object.defineProperty(document, "visibilityState", visibility);
     else delete (document as { visibilityState?: unknown }).visibilityState;

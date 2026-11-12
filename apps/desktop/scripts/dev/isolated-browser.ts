@@ -84,8 +84,15 @@ function launch(
 const PROFILE_FLAGS = new Set([
   "--headless",
   "--no-agent-credentials",
+  "--no-host-seed",
+  "--host-seed",
   "--use-dev-worktree-folder",
 ]);
+/**
+ * Keeps `dev:test`'s copy from the host installation for a credential-free
+ * run. Forwarded, so it also clears an opt-out the profile recorded earlier.
+ */
+const HOST_SEED_FLAG = "--host-seed";
 const PROFILE_OPTIONS = new Set([
   "--credential-source",
   "--agent-platforms",
@@ -104,8 +111,23 @@ const PROFILE_OPTIONS = new Set([
  * gateway from their own browser, and the explicit flag beats whatever the
  * caller's terminal or environment says, so a sub-agent's run cannot open a
  * window on the host's desktop.
+ *
+ * A credential-free run also gets `--no-host-seed`, so it reads nothing from
+ * the production data directory or the host's agent homes: it downloads its
+ * toolchains and starts with no cached model metadata. Review preparation runs
+ * these suites for tickets that forbid reading those directories (to-do 7835's
+ * pipeline did, and its seeded run broke that rule). The profile records the
+ * choice, so a suite that restarts it keeps it. `--host-seed` keeps the
+ * faster local copy; a run that names credential sources or
+ * `--use-dev-worktree-folder` (a production `config.json` setting) already
+ * reads the host and keeps it too.
  */
-export function isolatedProfileArguments(extra: readonly string[] = []): string[] {
+export function isolatedProfileArguments(input: readonly string[] = []): string[] {
+  const extra = [...input];
+  const hostSeed = extra.includes(HOST_SEED_FLAG);
+  if (hostSeed && extra.includes("--no-host-seed")) {
+    throw new Error("--host-seed cannot be combined with --no-host-seed");
+  }
   for (let index = 0; index < extra.length; index += 1) {
     const argument = extra[index]!;
     if (PROFILE_OPTIONS.has(argument)) index += 1;
@@ -122,6 +144,12 @@ export function isolatedProfileArguments(extra: readonly string[] = []): string[
     "--fixture",
     "--headless",
     ...(credentials ? [] : ["--no-agent-credentials"]),
+    ...(hostSeed ||
+    extra.includes("--no-host-seed") ||
+    extra.includes("--credential-source") ||
+    extra.includes("--use-dev-worktree-folder")
+      ? []
+      : ["--no-host-seed"]),
     ...(extra.includes("--agent-platforms") ? [] : ["--agent-platforms", "codex"]),
     ...extra,
   ];

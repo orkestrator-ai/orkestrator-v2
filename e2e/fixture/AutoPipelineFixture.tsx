@@ -21,6 +21,21 @@ const LONG_WORK = Array.from(
     `Step ${index + 1}: updated the workspace selection store, its reload handling and the matching tests so the restored selection follows the saved preference.`,
 );
 
+const LONG_DESCRIPTION = [
+  "## Summary",
+  "Restore the selected workspace after a reload, so the picker opens where the user left it.",
+  "## Problem",
+  ...Array.from(
+    { length: 8 },
+    (_, index) =>
+      `Paragraph ${index + 1}: reloading the window drops the selected workspace and falls back to the first one in the list, so anyone who works in a later workspace has to pick it again after every reload, every restart and every update of the application.`,
+  ),
+  "## Context",
+  "- The workspace picker already saves this preference.",
+  "- Nothing reads it back when the window loads.",
+  "The last line of the description.",
+].join("\n\n");
+
 type FixtureState =
   | { phase: "idle" }
   | { phase: "drafting" }
@@ -39,8 +54,9 @@ function fixtureDraft(params: URLSearchParams, id: string) {
   return {
     id,
     title: "Remember the selected workspace",
-    description:
-      "Summary: Restore the selected workspace after reload.\n\nProblem: Reloading loses the selection.\n\nContext: The workspace picker already saves this preference.",
+    description: params.has("longDescription")
+      ? LONG_DESCRIPTION
+      : "Summary: Restore the selected workspace after reload.\n\nProblem: Reloading loses the selection.\n\nContext: The workspace picker already saves this preference.",
     acceptanceCriteria: params.has("long")
       ? LONG_CRITERIA
       : [
@@ -63,7 +79,8 @@ function fixtureDraft(params: URLSearchParams, id: string) {
 /**
  * A stand-in backend that keeps drafting and promotion state the way the real
  * one does, so the tab can be left and returned to. `?draftMs=` sets how long
- * drafting takes (default 400 ms). `?draftRefused` refuses every drafting
+ * drafting takes (default 400 ms), and `?longDescription` drafts a description
+ * taller than the page. `?draftRefused` refuses every drafting
  * request without recording a failure (a lost connection), `?saveOffline`
  * refuses every edit save, and `?locked` keeps a refused confirmation's ticket
  * as the locked `reviewed` ticket, as a part-way failed promotion does.

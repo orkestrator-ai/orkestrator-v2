@@ -22,7 +22,7 @@
  * The deterministic halves (backend lane, two simulated clients) are in
  * `session-links.test.ts`, `commands-registry-design.test.ts` and
  * `design-session-links.test.ts`
- * (docs/todo/design-canvas/0038-design-agent-conversation-links.md).
+ * (docs/architecture/design-canvas.md, "Agent context").
  *
  * A provider is skipped, with its reason, when the profile has not enabled
  * it. Real turns cost tokens; this spec runs only when asked for. Nothing at

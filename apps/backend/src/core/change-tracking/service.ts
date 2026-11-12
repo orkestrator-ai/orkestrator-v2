@@ -32,13 +32,14 @@ import type { NativeAgentChangeTrackingHooks } from "../native-agent-service-sha
 import type { StorageDatabase } from "../storage-database.js";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { encodePath } from "./capture.js";
-import { ChangeLedger } from "./change-ledger.js";
+import { ChangeLedger, TERMINAL_TURN_LIFECYCLES } from "./change-ledger.js";
 import { DiffBodyService } from "./diff-bodies.js";
 import { EnvironmentChangeProjector } from "./environment-projector.js";
 import { EvidenceBodyStore } from "./evidence-body-store.js";
 import { GitScopeService, isGitScope } from "./git-scopes.js";
 import { ProviderEvidenceIngress, type IngestResult } from "./evidence-ingestion.js";
 import { ChangeHandoffSerializer } from "./handoff.js";
+import type { WorktreeActivity } from "./inert-hints.js";
 import {
   operationIdFor,
   operationVolumeResourceKey,
@@ -230,7 +231,8 @@ export class ChangeTrackingService {
       registry: this.registry,
       announcer: this.publisher,
       liveBodyCoalesceMs: policy().liveBodyCoalesceMs,
-      onWorktreeActivity: (environmentId, paths) => this.noteWorktreeActivity(environmentId, paths),
+      onWorktreeActivity: (environmentId, activity) =>
+        this.noteWorktreeActivity(environmentId, activity),
     });
     this.diffBodies = new DiffBodyService({
       ledger: this.ledger,
@@ -430,7 +432,8 @@ export class ChangeTrackingService {
     this.publisher.drainOutbox();
   }
 
-  private noteWorktreeActivity(environmentId: string, paths: readonly string[] | null): void {
+  private noteWorktreeActivity(environmentId: string, activity: WorktreeActivity): void {
+    const { paths } = activity;
     void (async () => {
       const target = await this.options.environmentTarget(environmentId);
       const identity = target ? await this.registry.resolve(target) : null;
@@ -441,7 +444,11 @@ export class ChangeTrackingService {
       owner.invalidate(
         paths ? paths.map((path) => encodePath(new TextEncoder().encode(path))) : undefined,
       );
-      const keys = await this.turns.provisional(environmentId, owner);
+      // A write only to Git-ignored output (a test run, a build) cannot move
+      // the tree; checking costs one short Git process instead of a capture.
+      const keys = await this.turns.provisional(environmentId, owner, Date.now(), () =>
+        owner.hintCannotMoveTree(activity),
+      );
       if (keys.length > 0) this.publisher.drainOutbox();
     })().catch(() => undefined);
   }
@@ -1164,12 +1171,27 @@ export class ChangeTrackingService {
         startedAt: turn.started_at,
         finishedAt: turn.finished_at,
         turnResourceKey: keys.turnNet,
-        measurementId: this.ledger.selection(keys.turnNet)?.measurement_id ?? null,
+        measurementId: this.historyMeasurementId(turn.lifecycle, keys.turnNet),
         presentation,
       };
     });
     const next = rows.length > limit ? String(rows[limit - 1]!.ordinal) : null;
     return { kind: "page", entries, nextCursor: next };
+  }
+
+  /**
+   * The turn-net measurement a history entry names. A terminal turn commits
+   * its lifecycle before its end measurement is compared and selected, so for
+   * that window the selection still points at the provisional measurement.
+   * Naming it would pair `finalized` with a measurement restore refuses
+   * (`no-retained-endpoints`), so a terminal turn names nothing until its
+   * selection has left the provisional one; a client re-reads, as it already
+   * must while the turn runs. A running turn keeps its provisional id.
+   */
+  private historyMeasurementId(lifecycle: string, turnNetKey: string): string | null {
+    const measurementId = this.ledger.selection(turnNetKey)?.measurement_id ?? null;
+    if (!measurementId || !TERMINAL_TURN_LIFECYCLES.has(lifecycle)) return measurementId;
+    return this.ledger.measurementFinality(measurementId) === "provisional" ? null : measurementId;
   }
 
   /**

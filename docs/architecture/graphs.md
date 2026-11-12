@@ -47,12 +47,12 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Run view (211) | `run-view.ts` | `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts` | `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` |
 | Designer (110, 212) | | | `components/graph-designer/`, `stores/graphDesignerStore.ts` |
 | Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands-registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
-| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp-graph-tools.ts`, `coordinator-graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
+| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator-graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
 | Isolated branch worktrees (403) | `isolation.ts`, `testing/graph-isolation-template.ts` (fixture) | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
-| Per-node user MCP (404) | `native-agent-capabilities.ts` (`userMcpServers`) | each bridge's MCP loader, `opencode-user-mcp.ts` | `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` |
+| Per-node user MCP (404) | `native-agent-capabilities.ts` (`userMcpServers`) | each bridge's MCP loader, `opencode2/policy-rules.ts` (`openCodeUserMcpRules`) | `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` |
 | CLI (214) | `public-api-inputs-graph.ts` | `public-api/actions-graphs.ts` | `packages/cli/src/client/commands/graphs.ts` |
 
 ## The template model
@@ -476,7 +476,7 @@ How each provider loads exactly the selection (`NATIVE_AGENT_USER_MCP_SELECTION`
 | Claude | inline `mcpServers` filtered to the grant plus `strictMcpConfig: true`, so the CLI reads no MCP file and no plugin server loads; granted tools are approved up front unless the policy asks, and a read-only turn's hook admits them | ordinary and read-only turns | provider-configured |
 | Codex | `config/read` lists the effective `mcp_servers`; every other server gets `mcp_servers.<name>.enabled = false` on `thread/start`/`resume`/`fork`, a granted one `default_tools_approval_mode = "approve"` unless the policy asks; an unreadable table or an undisableable name refuses the thread | ordinary and read-only turns | provider-configured |
 | Pi | the bridge's own MCP client starts only the granted servers; the read-only gate admits their tools by exact name | ordinary and read-only turns | enforced |
-| OpenCode | one shared `opencode serve` per directory: the session's permission rules deny `<server>_*` for every server `mcp.status` lists outside the grant (re-applied when the list changes; an unreadable list refuses the session); the other servers still run | ordinary and read-only turns | provider-configured |
+| OpenCode | one shared server location per directory: the session's permission rules deny `<server>_*` for every server the location lists (`GET /api/mcp`) outside the grant (re-applied when the list changes; an unreadable list refuses the session); the other servers still run | ordinary and read-only turns | provider-configured |
 | Cursor | no settings source (each would load all its servers); the bridge reads `~/.cursor/mcp.json` (and `.cursor/mcp.json` with project resources) and passes the granted servers inline; such a session also loses the user's and project's Cursor rules and plugins | ordinary turns only | provider-configured |
 | Grok | none: Grok loads every server in its own configuration and ACP `session/new` can only add | never | advisory |
 
@@ -1137,7 +1137,7 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
   | Grok | the session's ACP child | the bridge process |
   | Codex | every command the thread runs (per-thread `shell_environment_policy`) | the shared app-server process; a stdio MCP server whose entry names the variable |
   | Pi | the session's `bash`/`powershell` and the MCP servers the bridge starts | the bridge process and the Pi extensions running in it (project resources on); a credential written literally into an `mcp.json` entry |
-  | OpenCode | nothing: one `opencode serve` per directory | every session |
+  | OpenCode | nothing: one OpenCode server per environment | every session |
   | Cursor | nothing: the SDK runs in the bridge process | every session |
 
   Everywhere, SSH keys, a container's runtime credential file and, on an image
@@ -1349,7 +1349,7 @@ defaults). `graph_run_launch` launches as `user`.
   ([public-cli.md](public-cli.md#graphs)), launched as `cli` with a `requestId`
   derived from the public request key.
 - **The coordinator** (D6): Control MCP `list_graph_templates`, `launch_graph`,
-  `get_graph_run` and `cancel_graph_run` (`control-mcp-graph-tools.ts`,
+  `get_graph_run` and `cancel_graph_run` (`control-mcp/graph-tools.ts`,
   `coordinator-graph-actions.ts`), launched as `coordinator`. No tool creates,
   saves, edits, duplicates, imports or describes a template. A launch reserves
   a `graph-run` workflow association before it acts; the status wake

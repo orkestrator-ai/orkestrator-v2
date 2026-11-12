@@ -59,6 +59,7 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpApplyState, McpRuntimeApplyEntry } from "@orkestrator/protocol/mcp-management";
 
+import { runWithTimeout } from "../abortable-timing.js";
 import type { RuntimeProbe } from "./apply.js";
 import { heldRuntimes, noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
 import type { StoredOperation } from "./operations-store.js";
@@ -243,6 +244,10 @@ export const UNREPORTED_BRIDGE_OUTCOME: { state: McpApplyState; reason: string }
     "This bridge does not report which MCP configuration it loaded. Stop and start the environment to load the change.",
 };
 
+/**
+ * Stops waiting for `promise` after `ms`. Only for the reload mutations, whose
+ * work an abort cannot stop; a read takes a signal through `runWithTimeout`.
+ */
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -371,9 +376,15 @@ export class EvidenceScheduler {
       const readKey = `${record.environmentId}\u0000${agent}\u0000${record.logicalSessionKey}`;
       let read = reads.get(readKey);
       if (!read) {
-        read = withTimeout(
-          this.deps.probe.mcpConfigEvidence(record.environmentId, agent, record.logicalSessionKey),
-          EVIDENCE_READ_TIMEOUT_MS,
+        read = runWithTimeout(
+          (signal) =>
+            this.deps.probe.mcpConfigEvidence(
+              record.environmentId,
+              agent,
+              record.logicalSessionKey,
+              signal,
+            ),
+          { timeoutMs: EVIDENCE_READ_TIMEOUT_MS },
         ).catch((): RuntimeEvidenceRead => ({ state: "none" }));
         reads.set(readKey, read);
       }

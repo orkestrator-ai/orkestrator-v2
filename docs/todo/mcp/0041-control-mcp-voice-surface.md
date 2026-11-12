@@ -15,7 +15,7 @@ Analysed 2026-11-06 against `main` at `c1724ab7`.
 
 2. **`delegate` into a coordinator turn (D13)**: an action that starts a coordinator turn from outside. Status: deferred; the recommended removal from this file, with a pointer in `control-mcp.md`, can be done now.
 3. **Stateful MCP session with `list_changed` and subscriptions (D14)**. Status: deferred; the same removal can be done now.
-4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: done (test file split 2026-11-03, D23; `control-mcp-tools.ts` split 2026-11-06 after #1664 merged, D25).
+4. **Over-limit Control MCP files**: `control-mcp/server.test.ts` (left over the limit by D17) and, newly, `control-mcp/tools.ts` exceed the 2,000-line rule. Status: done (test file split 2026-11-03, D23; `control-mcp/tools.ts` split 2026-11-06 after #1664 merged, D25).
 5. **Stale statements in this file**: D11, the profile size table and the OpenCode conformance note no longer match `main`. Status: done (2026-11-06, D26).
 
 ### 2. `delegate` into a coordinator turn (D13)
@@ -42,7 +42,7 @@ Analysed 2026-11-06 against `main` at `c1724ab7`.
 
 **Context.** D14 deferred it: the gateway reaches every action from a fixed list, and realtime voice clients fix their tool list at session start.
 
-**Investigation.** `control-mcp-server.ts` still builds a server per request (the design D5 relies on, compiling schemas once per process). Nothing on `main` depends on `list_changed`.
+**Investigation.** `control-mcp/server.ts` still builds a server per request (the design D5 relies on, compiling schemas once per process). Nothing on `main` depends on `list_changed`.
 
 **Decisions.**
 
@@ -56,13 +56,13 @@ Analysed 2026-11-06 against `main` at `c1724ab7`.
 
 ### 4. Over-limit Control MCP files
 
-**Problem.** The repository rule caps files at 2,000 lines. D17 split `control-mcp-server.ts` but left `control-mcp-server.test.ts` over the limit "for its own change", and nothing tracks that change.
+**Problem.** The repository rule caps files at 2,000 lines. D17 split `control-mcp/server.ts` but left `control-mcp/server.test.ts` over the limit "for its own change", and nothing tracks that change.
 
 **Context.** D17 recorded the test file at 2,872 lines on `main` before the split; it avoided splitting a file `main` kept changing.
 
-**Investigation.** At HEAD `apps/backend/src/core/control-mcp-server.test.ts` is 3,078 lines and still growing. New since this file: `apps/backend/src/core/control-mcp-tools.ts` is 2,002 lines, just over the limit, after #1268 added the operator workflow tools (`control-mcp-operator-workflow-tools.ts`, `control-mcp-review-actions.ts`). `control-mcp-server.ts` itself is 650 lines.
+**Investigation.** At HEAD `apps/backend/src/core/control-mcp/server.test.ts` is 3,078 lines and still growing. New since this file: `apps/backend/src/core/control-mcp/tools.ts` is 2,002 lines, just over the limit, after #1268 added the operator workflow tools (`control-mcp/operator-workflow-tools.ts`, `control-mcp/review-actions.ts`). `control-mcp/server.ts` itself is 650 lines.
 
-Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,322 lines (62 tests, 565 assertions) and `control-mcp-tools.ts` 2,272. The test file is now split by the source module each block exercises (D23); the 62 tests keep their names and assertions. `control-mcp-tools.ts` is left alone because #1664 (cross-machine ticket coordination) edits it; it should be split once #1664 merges, along the boundaries in D24, so each tools module lines up with one test file.
+Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,322 lines (62 tests, 565 assertions) and `control-mcp/tools.ts` 2,272. The test file is now split by the source module each block exercises (D23); the 62 tests keep their names and assertions. `control-mcp/tools.ts` is left alone because #1664 (cross-machine ticket coordination) edits it; it should be split once #1664 merges, along the boundaries in D24, so each tools module lines up with one test file.
 
 **Decisions.**
 
@@ -74,7 +74,7 @@ Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,3
     - Pros: no tracking overhead.
     - Cons: that is what D17 assumed, and the test file has grown by 200 lines since.
 
-**Outcome (2026-11-06).** Done. #1664 has merged, and `control-mcp-tools.ts` (2,593 lines on `main` at `c1724ab7`) is split by tool group into six files of 115 to 781 lines (D25). Every tool's name, order, description and input schema and the server instructions are byte-identical before and after, for coordinator and operator credentials alike.
+**Outcome (2026-11-06).** Done. #1664 has merged, and `control-mcp/tools.ts` (2,593 lines on `main` at `c1724ab7`) is split by tool group into six files of 115 to 781 lines (D25). Every tool's name, order, description and input schema and the server instructions are byte-identical before and after, for coordinator and operator credentials alike.
 
 ### 5. Stale statements in this file
 
@@ -146,15 +146,15 @@ What exists, by part:
     as the operator.
   - New handlers: `public-api/actions-attention.ts`, `actions-tickets.ts`,
     `actions-mail.ts`.
-  - Control MCP split: `control-mcp-server.ts` (listener, authentication,
-    credentials), `control-mcp-tools.ts` (composition; since 2026-11-06 the
-    shared tools are in `control-mcp-environment-tools.ts`,
-    `-launch-tools.ts`, `-ticket-tools.ts` and `-mail-tools.ts`, D25),
-    `control-mcp-coordinator-tools.ts` and `control-mcp-tool-support.ts`
+  - Control MCP split: `control-mcp/server.ts` (listener, authentication,
+    credentials), `control-mcp/tools.ts` (composition; since 2026-11-06 the
+    shared tools are in `control-mcp/environment-tools.ts`,
+    `launch-tools.ts`, `ticket-tools.ts` and `mail-tools.ts`, D25),
+    `control-mcp/coordinator-tools.ts` and `control-mcp/tool-support.ts`
     (was one file, 2,824 lines on `main`), plus
-    `control-mcp-credentials.ts`, `-confirm.ts`, `-caller.ts`, `-results.ts`,
-    `-gateway.ts`, `-voice.ts`, `-resolve.ts`, `-direct-tools.ts`,
-    `-operator-tools.ts` and `-lean-schema.ts`.
+    `control-mcp/credentials.ts`, `confirm.ts`, `caller.ts`, `results.ts`,
+    `gateway.ts`, `voice.ts`, `resolve.ts`, `direct-tools.ts`,
+    `operator-tools.ts` and `lean-schema.ts`.
   - Registry commands `create_control_mcp_credential`,
     `rotate_control_mcp_credential`, `revoke_control_mcp_credential`
     (`commands-registry-control.ts`); `rotate_control_mcp_token` rotates
@@ -171,7 +171,7 @@ What exists, by part:
   and gives each Copy setup for Codex, Claude Code and "Other or voice
   client", Rotate and Revoke.
 
-Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
+Measured on this branch (2026-10-24, `control-mcp/voice.test.ts` harness):
 
 | Profile | Tools | `tools/list` bytes |
 | --- | --- | --- |
@@ -195,38 +195,38 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
      in request JSON is ignored; the same request ID under two authorities
      makes two operations; `run.get` by ID and by key, `run.retry/discard/cancel`
      and `session.stop` with `expectedOperationId` refuse another authority's
-     operation as `not-found`); `control-mcp-voice.test.ts` "credentials and
+     operation as `not-found`); `control-mcp/voice.test.ts` "credentials and
      the CLI cannot read or collide with each other's operations".
 4. **Scoped credentials and profiles.** Done.
-   - Evidence: `control-mcp-credentials.test.ts` (version 1 token migrated to
+   - Evidence: `control-mcp/credentials.test.ts` (version 1 token migrated to
      `default`/`full` and still accepted, mode 0600; independent rotate and
      revoke, persisted across restarts; ungrantable capabilities, unknown
      profiles, empty custom lists and bad `deniedActions` refused; invalid
-     stored credentials dropped); `control-mcp-voice.test.ts` exact
+     stored credentials dropped); `control-mcp/voice.test.ts` exact
      `tools/list` per profile; coordinator `tools/list` filtered by capability
-     (`control-mcp-tools.ts` `filteredToolServer`; a side agent with
+     (`control-mcp/tools.ts` `filteredToolServer`; a side agent with
      `discovery` and `mail` lists no launch, ticket or pipeline tool:
-     `control-mcp-credentials.test.ts`); Settings →
+     `control-mcp/credentials.test.ts`); Settings →
      `McpSettings.test.tsx` (7 tests: list, copy each recipe, create, rotate,
      revoke, disabled, errors).
-5. **Result mapper.** Done: `control-mcp-results.ts` (`envelopeToolResult`,
+5. **Result mapper.** Done: `control-mcp/results.ts` (`envelopeToolResult`,
    `voiceText`, `nextHint`, `adapterError`). Evidence: voice text bounded to
    2 KB and `next` hints (`read_session`, `prompt_session` busy →
    `steer_session`, `run_status` → `answer_question`) in
-   `control-mcp-voice.test.ts`.
+   `control-mcp/voice.test.ts`.
 6. **Gateway tools.** Done: `find_actions`, `describe_action`, `run_action`,
-   `run_status` and confirm tokens (`control-mcp-gateway.ts`,
-   `control-mcp-caller.ts`, `control-mcp-confirm.ts`). Evidence: every action
+   `run_status` and confirm tokens (`control-mcp/gateway.ts`,
+   `control-mcp/caller.ts`, `control-mcp/confirm.ts`). Evidence: every action
    an MCP credential can hold reaches its handler through `run_action` (the
    envelope carries the backend identity); the request-key rule; ranked
    search; `describe_action` schema and CLI line; `run_status` early stop on a
    pending interaction; confirm tokens bound to credential, action, input and
-   expiry (`control-mcp-voice.test.ts`, `control-mcp-credentials.test.ts`
+   expiry (`control-mcp/voice.test.ts`, `control-mcp/credentials.test.ts`
    "confirm tokens").
 7. **Voice core tools.** Done: `overview`, `resolve_target`, `read_session`,
    `prompt_session`, `steer_session`, `stop_session`, `answer_question`,
-   `start_work` (`control-mcp-voice.ts`, `control-mcp-resolve.ts`). Evidence:
-   `control-mcp-voice.test.ts` (resolve never guesses, bounded excerpt, busy
+   `start_work` (`control-mcp/voice.ts`, `control-mcp/resolve.ts`). Evidence:
+   `control-mcp/voice.test.ts` (resolve never guesses, bounded excerpt, busy
    refusal, start and replay, approval confirmation and direct denial).
 8. **Attention feed.** Done: `attention.list`, `orkestrator attention
    [--follow --jsonl]`, `overview` uses it, reference relay
@@ -240,15 +240,16 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
      action each; `list_projects`, `list_tickets`, `get_ticket` and
      `list_mailboxes` read their public action. Behaviour differences are
      recorded in `control-mcp.md` ("Operator tools over public actions").
-     Evidence: `control-mcp-operator-tools.test.ts`.
+     Evidence: `control-mcp/operator-tools.test.ts`.
    - `ticket.*` and `mail.*` public actions and CLI commands. Evidence:
      `public-api/public-api-tickets-mail.test.ts`, the CLI test above.
    - `CommandSpec.action`. Evidence: `packages/cli/tests/command-actions.test.ts`.
 10. **Parity and budget tests.** Done; see Tests and qualification.
 11. **Docs.** Done: `control-mcp.md`, `public-cli.md`, `agent-messaging.md`,
     new `control-mcp-voice.md`, the catalog in `docs/README.md`, and a pointer
-    from the gateway constraint in
-    [`0017-cli-command-surface.md`](../cli-and-slash-commands/0017-cli-command-surface.md).
+    from the gateway constraint, now in
+    [`public-cli.md`](../../architecture/public-cli.md#rules-for-new-client-features)
+    (to-do 0017 was retired on 2026-11-11).
     The file is not fully ticked (see Remaining work), so it stays; its
     durable behaviour is already in `architecture/`.
 12. **Optional.** Deferred, not built (D13, D14): `delegate`, and a stateful
@@ -258,15 +259,15 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
 
 | Check | Status | Where |
 | --- | --- | --- |
-| Exact `tools/list` per profile | Done | `control-mcp-voice.test.ts` "each profile lists exactly its tools"; the original 18 stay first in `full` (`control-mcp-server.test.ts`) |
-| Voice budget ≤ 8,000 bytes; full size reported | Done: 7,095 and 76,374 bytes (7,757 and 209,198 on 2026-11-06, D26) | `control-mcp-voice.test.ts`; table above |
+| Exact `tools/list` per profile | Done | `control-mcp/voice.test.ts` "each profile lists exactly its tools"; the original 18 stay first in `full` (`control-mcp/server.test.ts`) |
+| Voice budget ≤ 8,000 bytes; full size reported | Done: 7,095 and 76,374 bytes (7,757 and 209,198 on 2026-11-06, D26) | `control-mcp/voice.test.ts`; table above |
 | Every action has a schema, capability and confirmation class | Done | `packages/protocol/src/public-api-inputs.test.ts`, backend `public-api/public-api-inputs.test.ts` (251 cases, including the new actions) |
-| Every action reachable through `run_action` under `full` and mapped to a CLI command | Done | `control-mcp-voice.test.ts`; `packages/cli/tests/command-actions.test.ts` |
-| Every direct and core tool names its actions | Done | `control-mcp-voice.test.ts` |
-| Confirmation token bound to credential, action, fingerprint, expiry | Done | `control-mcp-credentials.test.ts`, `control-mcp-voice.test.ts` |
-| Authority isolation | Done | `public-api-authority.test.ts`, `control-mcp-voice.test.ts` |
+| Every action reachable through `run_action` under `full` and mapped to a CLI command | Done | `control-mcp/voice.test.ts`; `packages/cli/tests/command-actions.test.ts` |
+| Every direct and core tool names its actions | Done | `control-mcp/voice.test.ts` |
+| Confirmation token bound to credential, action, fingerprint, expiry | Done | `control-mcp/credentials.test.ts`, `control-mcp/voice.test.ts` |
+| Authority isolation | Done | `public-api-authority.test.ts`, `control-mcp/voice.test.ts` |
 | Portability of every profile | Done | `mcp-tool-schema-portability.test.ts` (full, voice, read-only, custom, coordinator) |
-| Coordinator regression | Done | `control-mcp-server.test.ts`: the coordinator tests pass as they were; nine former operator tests now run under a coordinator credential (the path that keeps those implementations) and two that covered removed operator-only branches moved to `control-mcp-operator-tools.test.ts` |
+| Coordinator regression | Done | `control-mcp/server.test.ts`: the coordinator tests pass as they were; nine former operator tests now run under a coordinator credential (the path that keeps those implementations) and two that covered removed operator-only branches moved to `control-mcp/operator-tools.test.ts` |
 | `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0. Fixed since (2026-11-06 note, D26): the test asserts the shared `PINNED_TOOLCHAIN_VERSIONS.opencode` pin; `policyQualificationCli` resolves its default CLI from that manifest-pinned directory (`tests/conformance/execution-policy/vendor-cli.ts`) |
 | `mise run test` (non-iOS), 2026-10-25 branch | Fails only on unrelated cases | three failures, each passed alone: registered flakes 0785 (OpenCode research server) and 0791 (Codex command catalogue), and new flake 0935 (environment-move Cursor read failure, five-second deadline; owner 37/37 alone) |
 | Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
@@ -520,7 +521,7 @@ the choice, why, and its pros and cons.
 
 **D6. Voice and gateway schemas.**
 - Options: (a) Zod, like the original tools; (b) hand-written lean JSON
-  Schemas (`control-mcp-lean-schema.ts`); (c) generate them from the action
+  Schemas (`control-mcp/lean-schema.ts`); (c) generate them from the action
   schemas.
 - Chosen: (b), plus dropping `title` and sending only non-default annotation
   hints on those twelve tools.
@@ -658,17 +659,17 @@ the choice, why, and its pros and cons.
 - Pros: short per-command maps. Cons: a convention change touches every
   command at once (by design).
 
-**D17. Splitting `control-mcp-server.ts`.**
+**D17. Splitting `control-mcp/server.ts`.**
 - It was 2,373 lines, over the repository's 2,000-line limit, and `main`
   grew it to 2,824 (remote workflows, #1211) while this branch was open. The
-  listener, authentication and credentials stay in `control-mcp-server.ts`;
-  the shared tools are in `control-mcp-tools.ts`; the coordinator-only
-  workflow tools moved unchanged to `control-mcp-coordinator-tools.ts`, with
-  the helpers both use in `control-mcp-tool-support.ts`; each new part has its
+  listener, authentication and credentials stay in `control-mcp/server.ts`;
+  the shared tools are in `control-mcp/tools.ts`; the coordinator-only
+  workflow tools moved unchanged to `control-mcp/coordinator-tools.ts`, with
+  the helpers both use in `control-mcp/tool-support.ts`; each new part has its
   own module. Operator credentials are refused a `nodeId`, which `main` made
   coordinator-only, with `main`'s own message.
 - Pros: no source file over the limit; the rebase replayed this branch's
-  edits onto `main`'s file mechanically. Cons: `control-mcp-server.test.ts`
+  edits onto `main`'s file mechanically. Cons: `control-mcp/server.test.ts`
   (2,872 lines on `main` before this change) is still over the limit;
   splitting it would rewrite a file `main` keeps changing, so it is left for
   its own change.
@@ -738,35 +739,35 @@ the choice, why, and its pros and cons.
   meets an idle session in the approval script; a real mid-turn stop is
   covered by the runs without `--expect-approval` and by the earlier evidence.
 
-**D23. Task 4: how `control-mcp-server.test.ts` is split (2026-11-03).**
+**D23. Task 4: how `control-mcp/server.test.ts` is split (2026-11-03).**
 - Options: (a) the five areas the ticket named (server, tools, voice,
   operator workflow, review actions); (b) the source module each test block
   actually exercises; (c) equal-sized chunks in file order.
 - Chosen: (b). The file had no voice, operator-workflow or review-action
-  tests of its own; those already live in `control-mcp-voice.test.ts`,
-  `control-mcp-operator-tools.test.ts` and `control-mcp-pr-tools.test.ts`.
+  tests of its own; those already live in `control-mcp/voice.test.ts`,
+  `control-mcp/operator-tools.test.ts` and `control-mcp/pr-tools.test.ts`.
   Its 62 tests divide into:
-  - `control-mcp-server.test.ts`: credentials, the descriptor, transport,
-    transfers and the coordinator invoker guard (`control-mcp-server.ts`).
-  - `control-mcp-server-coordinator-workflows.test.ts`: worker, workflow,
-    review and schedule tools (`control-mcp-coordinator-tools.ts`,
-    `control-mcp-coordinator-worker-tools.ts`, `control-mcp-review-actions.ts`,
-    `control-mcp-account-tools.ts`).
-  - `control-mcp-server-reads.test.ts`: tool listing and instructions, and
+  - `control-mcp/server.test.ts`: credentials, the descriptor, transport,
+    transfers and the coordinator invoker guard (`control-mcp/server.ts`).
+  - `control-mcp/server-coordinator-workflows.test.ts`: worker, workflow,
+    review and schedule tools (`control-mcp/coordinator-tools.ts`,
+    `control-mcp/coordinator-worker-tools.ts`, `control-mcp/review-actions.ts`,
+    `control-mcp/account-tools.ts`).
+  - `control-mcp/server-reads.test.ts`: tool listing and instructions, and
     the project, environment, tab, prompt, ticket and node tools.
-  - `control-mcp-server-launch.test.ts`: `get_launch_options`,
+  - `control-mcp/server-launch.test.ts`: `get_launch_options`,
     `launch_environment`, `launch_job` and the coordinator launch base.
-  - `control-mcp-server-messaging.test.ts`: the agent mail tools and the
+  - `control-mcp/server-messaging.test.ts`: the agent mail tools and the
     delegation wake contract.
   The scripted invoker, `rpc`, `rpcPayload`, `BASE` and
   `coordinatorCredential` moved unchanged into
-  `control-mcp-server-test-support.ts` (`useControlMcpServerHarness`).
+  `control-mcp/server-test-support.ts` (`useControlMcpServerHarness`).
   Test bodies moved byte for byte. Each file keeps the `describe` name, so
   every test's full name is unchanged. The `for (const mode …)` loop stays
   whole in the server file, although its third test (the workflow wake
   promise) is a workflow test, because splitting a loop would change the
   file's structure, not just move it.
-- Why: the test files then match how `control-mcp-tools.ts` will be split
+- Why: the test files then match how `control-mcp/tools.ts` will be split
   (D24), which is what this task asked for.
 - Pros: each tools module will have one test file; every file is under
   1,000 lines. Cons: the reads file spans several small tool groups, and the
@@ -774,7 +775,7 @@ the choice, why, and its pros and cons.
   tools from most groups.
 - Evidence (rechecked 2026-11-03, from `apps/backend` with `NODE_ENV=test`
   and `--reporter=junit`):
-  - Before: the parent commit's `control-mcp-server.test.ts`, run alone,
+  - Before: the parent commit's `control-mcp/server.test.ts`, run alone,
     gave 62 pass, 0 fail, 565 `expect()` calls.
   - After, all five files with `--parallel=5`: 62 pass, 0 fail, 565
     `expect()` calls.
@@ -787,62 +788,62 @@ the choice, why, and its pros and cons.
     across all three runs (`diff` empty; SHA-256 `ebc3673f…89938` for
     each).
 
-**D24. Task 4: when and how `control-mcp-tools.ts` is split.**
+**D24. Task 4: when and how `control-mcp/tools.ts` is split.**
 - Options: (a) split it now, alongside the tests; (b) wait for #1664, which
   edits it, then split along the D23 boundaries.
 - Chosen: (b). Done 2026-11-06 after #1664 merged (D25).
 - Boundaries: keep `createControlMcp`'s composition, instructions, the
-  listing filter and the shared helpers in `control-mcp-tools.ts`; move the
+  listing filter and the shared helpers in `control-mcp/tools.ts`; move the
   launch tools and their launch-base helpers (tested by
-  `control-mcp-server-launch.test.ts`), the project, environment, tab, prompt
-  and ticket tools (`control-mcp-server-reads.test.ts`) and the mail tools
-  (`control-mcp-server-messaging.test.ts`) into one module each, registered
+  `control-mcp/server-launch.test.ts`), the project, environment, tab, prompt
+  and ticket tools (`control-mcp/server-reads.test.ts`) and the mail tools
+  (`control-mcp/server-messaging.test.ts`) into one module each, registered
   the way `registerCoordinatorWorkflowTools` already is.
 - Pros: no rebase conflict with #1664; one split per boundary. Cons: the
   file stays at 2,272 lines until then.
 
-**D25. Task 4: how `control-mcp-tools.ts` was split (2026-11-06).**
+**D25. Task 4: how `control-mcp/tools.ts` was split (2026-11-06).**
 - Starting point: 2,593 lines on `main` at `c1724ab7`, almost all of it one
   function, `createControlMcp`, with every shared tool registered inline.
 - Options for the module boundaries: (a) D24 exactly, with the project,
   environment, tab, prompt and ticket tools in one module; (b) D24 with the
   ticket tools in a module of their own.
 - Chosen: (b). The modules:
-  - `control-mcp-tools.ts` (461 lines): the capability map and role
+  - `control-mcp/tools.ts` (461 lines): the capability map and role
     helpers, the listing filter, `withoutWakePromise`, and
     `createControlMcp`: instructions, the node routing closures
     (`onNode`, `nodeTickets`, `environmentInvoker`) and the calls that
     register each group. Every existing export stays here, so no importer
     changed.
-  - `control-mcp-environment-tools.ts` (650): `list_projects`, the
+  - `control-mcp/environment-tools.ts` (650): `list_projects`, the
     environment, tab, agent and transcript reads, and `send_prompt_to_tab`.
-  - `control-mcp-launch-tools.ts` (781): `get_launch_options`,
+  - `control-mcp/launch-tools.ts` (781): `get_launch_options`,
     `launch_environment`, `launch_job`, the launch-base and launch-default
     helpers, and the two former closures `launchOptionsWithDefaults` and
     `selectionReport`, now built per invoker by `launchSettingsHelpers`.
-  - `control-mcp-ticket-tools.ts` (335): the five ticket tools and their
+  - `control-mcp/ticket-tools.ts` (335): the five ticket tools and their
     summary helpers.
-  - `control-mcp-mail-tools.ts` (485): the six agent mail tools and the
+  - `control-mcp/mail-tools.ts` (485): the six agent mail tools and the
     own-mailbox check, still inside their `if (messagingEnabled)`.
-  - `control-mcp-tools-shared.ts` (115): the `ControlMcpToolContext` the
+  - `control-mcp/tools-shared.ts` (115): the `ControlMcpToolContext` the
     modules receive, and the helpers more than one module uses
     (`MAX_PROMPT_LENGTH`, `COORDINATOR_WORKER_PROMPT_NOTE`,
     `asyncDelegationResult`, the two delegation openers,
-    `coordinatorNodeRefused`). They cannot stay in `control-mcp-tools.ts`:
+    `coordinatorNodeRefused`). They cannot stay in `control-mcp/tools.ts`:
     the modules would then import values from the file that imports them,
     a runtime cycle the lint rejects.
 - How: each tool's registration moved byte for byte (a script cut the
   original by line ranges); each module's function destructures the context
   names its tools use, so the bodies did not change. Registration order is
-  `tools/list` order, which `control-mcp-server-reads.test.ts` pins, so
+  `tools/list` order, which `control-mcp/server-reads.test.ts` pins, so
   `createControlMcp` calls the register functions in the original order,
   which is why launch and environment tools each have two entry points.
   One orphaned doc comment (about a mailbox fingerprint that lives in
-  `control-mcp-poll-guard.ts`) was dropped.
+  `control-mcp/poll-guard.ts`) was dropped.
 - Why (b): tickets are their own tool group with their own helpers, and
   the combined module would have been the largest (about 950 lines).
 - Pros: every file is under 800 lines; each group can change without
-  touching the composition. Cons: `control-mcp-server-reads.test.ts` now
+  touching the composition. Cons: `control-mcp/server-reads.test.ts` now
   covers two modules, not one.
 - Evidence (2026-11-06):
   - The ten `initialize` and `tools/list` answers (main and side
@@ -854,7 +855,7 @@ the choice, why, and its pros and cons.
   - A line-multiset comparison of the original against the six new files
     leaves only import lines, the five helpers that gained `export`, the
     new context and register-function scaffolding, and the dropped comment.
-  - `control-mcp-coordinator-schema-size.test.ts` and the other Control MCP
+  - `control-mcp/coordinator-schema-size.test.ts` and the other Control MCP
     and coordinator tests pass unchanged (see the stage's test record).
 
 **D26. Task 5: how the stale statements were corrected (2026-11-06).**
@@ -867,7 +868,7 @@ the choice, why, and its pros and cons.
   - The profile table: a dated note under it with the current figures
     (`voice` 7,757 bytes, `read-only` 47,827, `full` 153 tools and 209,198
     bytes), measured with `controlMcpHarness` from
-    `control-mcp-test-support.ts` on `main` at `c1724ab7`.
+    `control-mcp/test-support.ts` on `main` at `c1724ab7`.
   - The `mise run test` row: marked fixed. The investigation above said the
     test pinned `opencode: "1.19.4"`; it now asserts the shared
     `PINNED_TOOLCHAIN_VERSIONS.opencode` pin rather than a separate hardcoded

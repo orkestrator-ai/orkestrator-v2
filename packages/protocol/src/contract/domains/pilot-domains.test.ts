@@ -116,6 +116,10 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   get_ticket_sync_leaf_status: ["projectId"],
   share_tickets_with_command_node: ["projectId", "taskIds"],
   dismiss_ticket_sync_conflicts: ["projectId", "ids"],
+  // Linear board-link sync and the one user-initiated key copy (2026-11-11).
+  get_linear_sync_state: ["controllerId"],
+  apply_linear_sync_state: ["controllerId", "links", "revocations"],
+  export_linear_connection: ["controllerId"],
 };
 
 const LENIENT = [
@@ -132,7 +136,7 @@ const ALL: readonly AnyCommandDef[] = [
 ];
 
 describe("pilot definitions", () => {
-  it("cover the 24 pilot commands, the 4 lenient neighbours and the 5 ticket-sync follow-ups, each in version 1 of its domain", () => {
+  it("cover the 24 pilot commands, the 4 lenient neighbours, the 5 ticket-sync follow-ups and the 3 Linear sync commands, each in version 1 of its domain", () => {
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(FORMER_KEYS).sort());
     for (const def of ALL) {
       expect(def.since).toBe(1);

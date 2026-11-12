@@ -158,7 +158,14 @@ export type DiffScanEvent =
   | { kind: "failed"; target: DiffStatsTarget; at: string }
   | { kind: "paused"; target: DiffStatsTarget; at: string }
   | { kind: "removed"; environmentId: string; at: string }
-  | { kind: "hint"; target: DiffStatsTarget; paths: readonly string[] | null; at: string };
+  | {
+      kind: "hint";
+      target: DiffStatsTarget;
+      paths: readonly string[] | null;
+      /** The burst also changed Git metadata, which `paths` never names (`WorktreeChangeHint.gitMetadata`). */
+      gitMetadata?: boolean;
+      at: string;
+    };
 
 /**
  * A scan step that failed. `event` is a `diff-stats` log event; the
@@ -207,9 +214,10 @@ export interface DiffStatsServiceOptions {
   fileListMaxAgeMs?: number;
   /**
    * How long a container's tree may be served while its recent, complete file
-   * list stands in for a watcher (see "Container trees" above).
+   * list stands in for a watcher (see "Container trees" above). A function is
+   * read on every tree read (an agent-test profile's timing override).
    */
-  containerTreeMaxAgeMs?: number;
+  containerTreeMaxAgeMs?: number | (() => number);
   treeLimits?: Partial<TreeSnapshotLimits>;
   adhocTreeCache?: Partial<AdhocTreeCacheLimits>;
   failureRetry?: Partial<RetryPolicy>;
@@ -505,7 +513,7 @@ export class DiffStatsService {
   private readonly tree: WorktreeTreeSnapshots;
   private readonly adhoc: AdhocWorktreeReads;
   private readonly removalReads = new WorktreeRemovalReads();
-  private readonly containerTreeMaxAgeMs: number;
+  private readonly containerTreeMaxAge: () => number;
 
   constructor(options: DiffStatsServiceOptions) {
     this.options = {
@@ -549,7 +557,8 @@ export class DiffStatsService {
     this.failureRetry = { ...DEFAULT_FAILURE_RETRY, ...options.failureRetry };
     this.watcherRetry = { ...DEFAULT_WATCHER_RETRY, ...options.watcherRetry };
     this.watcherStableMs = options.watcherStableMs ?? WATCHER_STABLE_MS;
-    this.containerTreeMaxAgeMs = options.containerTreeMaxAgeMs ?? CONTAINER_TREE_MAX_AGE_MS;
+    const treeMaxAge = options.containerTreeMaxAgeMs ?? CONTAINER_TREE_MAX_AGE_MS;
+    this.containerTreeMaxAge = typeof treeMaxAge === "function" ? treeMaxAge : () => treeMaxAge;
 
     const walkTree =
       options.walkTree ??
@@ -1053,17 +1062,18 @@ export class DiffStatsService {
    */
   private treeMaxAge(entry: DiffStatsEntry): number {
     const list = entry.fileList;
+    const containerTreeMaxAgeMs = this.containerTreeMaxAge();
     if (
       entry.target.kind !== "container" ||
       !list ||
       list.truncated ||
       list.membershipDigest === undefined ||
       entry.failure ||
-      this.options.monotonicNow() - list.completedAt > this.containerTreeMaxAgeMs
+      this.options.monotonicNow() - list.completedAt > containerTreeMaxAgeMs
     ) {
       return this.options.fileListMaxAgeMs;
     }
-    return Math.max(this.containerTreeMaxAgeMs, this.options.fileListMaxAgeMs);
+    return Math.max(containerTreeMaxAgeMs, this.options.fileListMaxAgeMs);
   }
 
   private isQualified(entry: DiffStatsEntry): boolean {
@@ -1094,6 +1104,7 @@ export class DiffStatsService {
           kind: "hint",
           target: entry.target,
           paths: hint?.paths && !hint.overflow ? hint.paths : null,
+          ...(hint?.gitMetadata ? { gitMetadata: true } : {}),
           at: this.options.now(),
         });
       },

@@ -142,8 +142,12 @@ export interface TestNode {
   helloOverrides?: Record<string, unknown>;
   online: boolean;
   portal: NodePortal;
-  /** Extra commands this node answers (projects, environments, writes). */
-  commands: Map<string, (args: Record<string, unknown>) => unknown>;
+  /**
+   * Extra commands this node answers (projects, environments, writes).
+   * `signal` is the request's, standing in for the gateway's call signal: it
+   * aborts when the command node gives up on the request.
+   */
+  commands: Map<string, (args: Record<string, unknown>, signal?: AbortSignal) => unknown>;
   /** Open event streams; `emit` pushes to all of them. */
   streams: Set<ReadableStreamDefaultController<Uint8Array>>;
   emit(event: string, payload: unknown): void;
@@ -225,18 +229,33 @@ export class TestNodeNetwork {
         return json(500, toWire(unknownCommand(body.command)));
       }
       try {
-        const result = extra
-          ? await extra(
+        // As a real fetch does, an aborted request rejects rather than answering.
+        const aborted = init?.signal
+          ? new Promise<never>((_, reject) =>
+              init.signal!.addEventListener(
+                "abort",
+                () => reject(new DOMException("The request was aborted.", "AbortError")),
+                { once: true },
+              ),
+            )
+          : null;
+        const answer = extra
+          ? extra(
               body.command === "public_action" && controller
                 ? withRelayController(body.args ?? {}, controller)
                 : (body.args ?? {}),
+              init?.signal ?? undefined,
             )
-          : await handler!(body.args ?? {}, {
+          : handler!(body.args ?? {}, {
               nodes: node.service,
               nodePortal: node.portal,
             } as unknown as CommandContext);
+        const result = aborted
+          ? await Promise.race([Promise.resolve(answer), aborted])
+          : await answer;
         return json(200, { result });
       } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
         if (isIncompatibilityError(error)) return json(500, toWire(error));
         return json(500, {
           error: error instanceof Error ? error.message : String(error),

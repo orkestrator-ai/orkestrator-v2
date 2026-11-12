@@ -19,6 +19,8 @@
  * place so only missing blobs cross the boundary).
  */
 
+import { lstat } from "node:fs/promises";
+import path from "node:path";
 import { CaptureError, captureErrorReason } from "./capture-error.js";
 import { confinedRead, validCapturePath } from "./confined-read.js";
 import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
@@ -225,7 +227,18 @@ export interface CaptureExecutor {
     signal: AbortSignal,
     sizes?: ReadonlyMap<string, number>,
   ): Promise<ReadRecord[]>;
+  /**
+   * Whether every one of these worktree-relative paths is Git-ignored and
+   * neither {@link inventory} would list it nor anything below it. Absent
+   * where the runtime cannot answer cheaply (a container), which callers read
+   * as "no". Rejects when Git cannot answer; callers read that as "no" too.
+   */
+  ignoredAndUnlisted?(paths: readonly string[], signal: AbortSignal): Promise<boolean>;
 }
+
+/** Output beyond which {@link HostCaptureExecutor.ignoredAndUnlisted} gives up. */
+const IGNORED_PROBE_MAX_OUTPUT_BYTES = 64 * 1024;
+const IGNORED_PROBE_TIMEOUT_MS = 5_000;
 
 /** Git invocation hardened against repository-configured programs. */
 export const SAFE_GIT_CONFIG = [...HARDENED_GIT_CONFIG, "-c", "core.untrackedCache=false"];
@@ -271,13 +284,71 @@ export class HostCaptureExecutor implements CaptureExecutor {
     this.label = `host:${root}`;
   }
 
-  private git(args: string[], timeoutMs: number, signal?: AbortSignal) {
+  private git(
+    args: string[],
+    timeoutMs: number,
+    signal?: AbortSignal,
+    bounds: { maxOutputBytes?: number; stdin?: string } = {},
+  ) {
     return runCommandBuffer("git", [...SAFE_GIT_CONFIG, ...args], {
       cwd: this.root,
       signal,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
       timeoutMs,
+      ...bounds,
     });
+  }
+
+  /**
+   * Two short Git processes, in parallel, using the same rules as
+   * {@link inventory}:
+   *
+   * - `check-ignore` must report every path as ignored. It does not stat, so a
+   *   directory is spelt with a trailing slash for a `dist/` rule to match.
+   *   It never reports a path in the index, and refuses one inside a
+   *   submodule.
+   * - `ls-files --cached --others --exclude-standard` over the paths as
+   *   literal pathspecs must list nothing: no tracked file (present or
+   *   deleted) and no visible untracked file at or below any of them, which
+   *   catches a tracked file under an ignored directory and a rule that
+   *   un-ignores part of one (`build/*` with `!build/keep.txt`).
+   *
+   * Exit status 1 from `check-ignore` (nothing ignored), a Git error, a
+   * timeout or output past a small bound rejects.
+   */
+  async ignoredAndUnlisted(paths: readonly string[], signal: AbortSignal): Promise<boolean> {
+    const spelled = await Promise.all(
+      paths.map(async (name) =>
+        (await lstat(path.join(this.root, name)).catch(() => null))?.isDirectory()
+          ? `${name}/`
+          : name,
+      ),
+    );
+    const bounds = { maxOutputBytes: IGNORED_PROBE_MAX_OUTPUT_BYTES };
+    const [ignored, listed] = await Promise.all([
+      this.git(["check-ignore", "-z", "--stdin"], IGNORED_PROBE_TIMEOUT_MS, signal, {
+        ...bounds,
+        stdin: spelled.map((name) => `${name}\0`).join(""),
+      }),
+      this.git(
+        [
+          "--literal-pathspecs",
+          "ls-files",
+          "-z",
+          "--cached",
+          "--others",
+          "--exclude-standard",
+          "--",
+          ...paths,
+        ],
+        IGNORED_PROBE_TIMEOUT_MS,
+        signal,
+        bounds,
+      ),
+    ]);
+    if (listed.stdout.length > 0) return false;
+    const reported = new Set(splitNulBuffer(ignored.stdout).map((name) => name.toString("utf8")));
+    return spelled.every((name) => reported.has(name));
   }
 
   async inventory(limits: CaptureLimits, signal?: AbortSignal): Promise<Inventory> {

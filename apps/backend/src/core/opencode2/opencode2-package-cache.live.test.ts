@@ -20,9 +20,11 @@ import {
   OPENCODE2_LAUNCH_ROOT,
 } from "../agent-credential-files.js";
 import { CONTAINER_BRIDGE_LAUNCHER } from "../container-bridge-credential.js";
-import { OPENCODE_HOST_CONFIG_INPUT } from "../opencode-container-launch.js";
 import { openCodePackageCacheScript } from "../opencode-package-cache.js";
-import { openCode2LaunchConfigScript } from "../opencode2-container-launch.js";
+import {
+  OPENCODE_HOST_CONFIG_INPUT,
+  openCode2LaunchConfigScript,
+} from "../opencode2-container-launch.js";
 import { startOpenCode2OnFreePort } from "./live-server.test-support.js";
 import { OPENCODE2_FLAGS } from "./server.js";
 import { mintOpenCode2InputId } from "./steer.js";
@@ -135,7 +137,7 @@ mkdir -p "node_modules/$(dirname "$name")" && cp -R "${fixtures}/$name" "node_mo
     );
     await chmod(bun, 0o755);
     const cache = path.join(run, "cache");
-    const cacheScript = openCodePackageCacheScript("opencode2")
+    const cacheScript = openCodePackageCacheScript()
       .replaceAll(OPENCODE2_LAUNCH_CACHE_HOME, cache)
       .replaceAll(OPENCODE2_LAUNCH_CONFIG_DIR, path.join(run, "opencode"))
       .replaceAll(CONTAINER_BRIDGE_LAUNCHER, launcher)

@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { waitUntil } from "../agent-provider-test-support.js";
-import {
-  manualSilenceClock,
-  type ManualSilenceClock,
-} from "../opencode-stream-silence.test-support.js";
+import { manualSilenceClock, type ManualSilenceClock } from "./stream-silence.test-support.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 

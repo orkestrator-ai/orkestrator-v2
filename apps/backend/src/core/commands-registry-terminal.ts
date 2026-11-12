@@ -1,12 +1,11 @@
-import {
-  buildTerminalAgentLaunchCommand,
-  parseTerminalOpenCodeLaunchCommand,
-} from "@orkestrator/protocol/terminal-agent-launch";
+import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { resolveManagedBinary } from "./commands-agent-support.js";
-import { resolveOpenCode2TerminalCommand } from "./opencode2/terminal-launch.js";
-import { writeOpenCode2HostConfig } from "./opencode2/server.js";
+import {
+  resolveOpenCode2TerminalCommand,
+  containerOpenCodeTerminalCommand,
+  writeOpenCode2HostConfig,
+} from "./opencode2/index.js";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
-import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
   bootstrapTerminalSessionCommand,
@@ -62,6 +61,7 @@ import {
   type FileTreeNode,
 } from "@orkestrator/protocol/contract/domains/files";
 import type { CommandContext } from "./commands-context.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
@@ -93,12 +93,10 @@ import {
   CONTAINER_EVIDENCE_REMOVER,
   CONTAINER_EVIDENCE_WRITER,
   isAnnotationEvidencePath,
-  runContainerEvidenceScript,
-} from "./web-annotation-evidence-files.js";
-import {
   MAX_WORKSPACE_PATH_CHECKS,
+  runContainerEvidenceScript,
   runContainerPathCheck,
-} from "./web-annotation-source-checks.js";
+} from "./web-annotations/index.js";
 import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-validation";
 import { parseFileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import {
@@ -664,21 +662,16 @@ export function registerTerminalCommands(
       bootstrapDataHash,
       () => {
         const config = runtime.terminals.sessionConfig(id)!;
-        // Only the canonical managed OpenCode launch gets the private database.
-        // Plain commands and the shared interactive shell keep the user's defaults.
-        const openCodePrefix = buildTerminalAgentLaunchCommand({ tabType: "opencode" })!;
-        const legacy =
-          config.kind === "local" &&
-          config.openCodeDatabase &&
-          (terminalData === openCodePrefix ||
-            terminalData.startsWith(`${openCodePrefix} `) ||
-            terminalData.startsWith(`${openCodePrefix}\n`))
-            ? `OPENCODE_DB=${quoteShell(config.openCodeDatabase)} ${terminalData}`
-            : terminalData;
+        // A container's OpenCode tab runs its image's 2.x TUI (opencode2/container-terminal-launch.ts).
+        if (config.kind === "container") {
+          return containerOpenCodeTerminalCommand(terminalData, config.user);
+        }
+        // Only the canonical OpenCode launch is rewritten. Plain commands and
+        // the shared interactive shell keep the user's defaults.
         const openCodeLaunch =
           config.kind === "local" ? parseTerminalOpenCodeLaunchCommand(terminalData) : null;
-        if (config.kind !== "local" || !openCodeLaunch) return legacy;
-        // A new tab follows "Use OpenCode 2 for new sessions" (opencode2/terminal-launch.ts).
+        if (config.kind !== "local" || !openCodeLaunch) return terminalData;
+        // The managed OpenCode TUI with the host server's storage (opencode2/terminal-launch.ts).
         return resolveOpenCode2TerminalCommand(
           {
             storage: context.storage,
@@ -688,7 +681,9 @@ export function registerTerminalCommands(
           },
           config.environmentId,
           openCodeLaunch,
-        ).then((v2) => (v2 === undefined ? legacy : `${v2}${openCodeLaunch.lineEnding}`));
+        ).then((line) =>
+          line === undefined ? terminalData : `${line}${openCodeLaunch.lineEnding}`,
+        );
       },
       context,
     );
@@ -882,10 +877,6 @@ export function registerTerminalCommands(
       // applies to terminals opened after it.
       const accountEnvironment = await activeAgentAccountShellEnvironment(context);
       const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
-      if (storedConfig?.kind === "local") {
-        storedConfig.openCodeDatabase =
-          hostOpenCodeDatabaseEnvironment(launchEnvironment).OPENCODE_DB;
-      }
       if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
         stripInheritedAgentCredentials(launchEnvironment);
       }
@@ -1061,14 +1052,17 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
-  register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) =>
-    readLocalFileAtBranch(
+  // Only the diff viewer of v2.21.0 to v2.23.0 asks this and
+  // `read_file_at_branch` (to-do 7570 task 2).
+  register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) => {
+    compatibilityPathUsage.record("retired-command.read-file-at-branch");
+    return readLocalFileAtBranch(
       worktreePath,
       filePath,
       branch,
       context.runtime.diffStats.gitFetchScheduler,
-    ),
-  );
+    );
+  });
   register(
     readFileBase64Command,
     async ({ filePath }, context) => readFileBase64(filePath, await readableHostFileRoots(context)),
@@ -1392,6 +1386,7 @@ export function registerTerminalCommands(
   register(
     readFileAtBranchCommand,
     async ({ containerId, filePath, branch }) => {
+      compatibilityPathUsage.record("retired-command.read-file-at-branch");
       const target = validateRelativeFilePath(filePath);
       const object = `${branch}:${target}`;
       // One `git cat-file --batch` answers the size and the body; the output is

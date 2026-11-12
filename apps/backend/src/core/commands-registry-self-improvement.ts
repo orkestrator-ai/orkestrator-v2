@@ -18,8 +18,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 import { buildDiagnosticsBundle } from "./diagnostics-bundle.js";
 import { diagnosticsSources } from "./diagnostics-sources.js";
 import { applyClaudeHostCredentialEnvironment } from "./host-agent-credentials.js";
-import type { Board, BoardTicket } from "./self-improvement/loop.js";
-import { SelfImprovementService } from "./self-improvement/service.js";
+import { type Board, type BoardTicket, SelfImprovementService } from "./self-improvement/index.js";
 
 /** Credentials a review run never needs; the title runner strips the same ones. */
 const STRIPPED_ENV = ["GITHUB_TOKEN", "GH_TOKEN"] as const;

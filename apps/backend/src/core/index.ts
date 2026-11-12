@@ -5,6 +5,9 @@ import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
+import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
+import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
+import { coordinatorRepairJob } from "./coordinator-repair-job.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -29,7 +32,7 @@ import {
 } from "./bug-report-runtime.js";
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { createSelfImprovementService } from "./commands-registry-self-improvement.js";
-import type { SelfImprovementService } from "./self-improvement/service.js";
+import type { SelfImprovementService } from "./self-improvement/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -150,14 +153,15 @@ const ACTIVITY_JOB_MS = 2_000;
 const MAINTENANCE_JOB_MS = 60_000;
 /** Safety cadence for rename intent when none is pending. */
 const RENAME_SAFETY_MS = 30_000;
-import { WebAnnotationService } from "./web-annotation-service.js";
-import { WebAnnotationRollout } from "./web-annotation-rollout.js";
-import { WebAnnotationDispatchAdapter } from "./web-annotation-dispatch.js";
 import {
   compileWebAnnotationBrief,
   composeWebAnnotationDispatchText,
-} from "./web-annotation-brief.js";
-import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+  WebAnnotationDispatchAdapter,
+  WebAnnotationRollout,
+  WebAnnotationService,
+  WEB_ANNOTATION_GC_EVERY_TICKS,
+  type WebAnnotationToolHost,
+} from "./web-annotations/index.js";
 import {
   combineProvisionalFindingSinks,
   type ProvisionalFindingSink,
@@ -213,7 +217,7 @@ import {
   type ControlMcpEndpointState,
   type ControlMcpInfo,
   type ControlMcpSettings,
-} from "./control-mcp-server.js";
+} from "./control-mcp/index.js";
 import { isDefaultDataDir } from "../data-dir.js";
 import { installStorageEventFanout } from "./backend-event-fanout.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
@@ -224,13 +228,9 @@ import {
   nativeAgentSessionStorageKey,
   NativeAgentService,
 } from "./native-agent-service.js";
-import {
-  containerRunsOpenCode2,
-  openCode2EnvironmentServer,
-} from "./opencode2-container-server.js";
-import { openCodeEnvironmentListenerRecheck } from "./opencode-environment-listener.js";
-import { openCodeWorkflowRoutingDependencies } from "./native-agent-opencode-protocol.js";
-import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
+import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
+import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
+import { openCode2WorkerMailbox } from "./opencode2/index.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 import {
   createSessionTitleService,
@@ -309,6 +309,7 @@ import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
+import { autoPipelineToolHost, createAutoPipelineService } from "./auto-pipeline-wiring.js";
 import { GraphDescribeService } from "./graph-describe-service.js";
 import { GraphMockRuns } from "./graph-mock-launch.js";
 import { installGraphMockExecutors } from "./graph-mock-provider.js";
@@ -401,6 +402,8 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
   private uninstallDispatchHold?: () => void;
+  /** Agent-test profiles only: a spec's shortened periods (`agent-test-timing.ts`). */
+  private readonly agentTestTiming: AgentTestTiming | undefined;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
@@ -428,6 +431,7 @@ export class OrkestratorBackend {
         AgentToolsServer,
         | "setGoalToolHost"
         | "setSuborkToolHost"
+        | "setAutoPipelineToolHost"
         | "revokeTab"
         | "workflowResultConnection"
         | "servicePort"
@@ -503,6 +507,7 @@ export class OrkestratorBackend {
           AgentToolsServer,
           | "setGoalToolHost"
           | "setSuborkToolHost"
+          | "setAutoPipelineToolHost"
           | "revokeTab"
           | "workflowResultConnection"
           | "servicePort"
@@ -645,21 +650,28 @@ export class OrkestratorBackend {
       : undefined;
     this.controlMcp =
       options.controlMcp ??
-      new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed for the installed app's default data directory; ephemeral for
-        // tests, agent-test backends and every other data directory.
-        port: controlMcpPortOverride(
-          options.runtimeFlavor,
-          process.env,
-          isDefaultDataDir(options.dataDir),
-        ),
-        agentVoiceChatReply: (input) => {
-          if (!this.agentVoiceChatReplier) {
-            return Promise.reject(new Error("Agent voice chat replies are unavailable"));
-          }
-          return this.agentVoiceChatReplier.reply(input);
+      new ControlMcpServer(
+        options.dataDir,
+        (command, args, invokeOptions) =>
+          invokeOptions?.signal
+            ? this.invoke(command, args, { signal: invokeOptions.signal })
+            : this.invoke(command, args),
+        {
+          // Fixed for the installed app's default data directory; ephemeral for
+          // tests, agent-test backends and every other data directory.
+          port: controlMcpPortOverride(
+            options.runtimeFlavor,
+            process.env,
+            isDefaultDataDir(options.dataDir),
+          ),
+          agentVoiceChatReply: (input) => {
+            if (!this.agentVoiceChatReplier) {
+              return Promise.reject(new Error("Agent voice chat replies are unavailable"));
+            }
+            return this.agentVoiceChatReplier.reply(input);
+          },
         },
-      });
+      );
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.applicationLogging = options.applicationLogging ?? null;
@@ -670,10 +682,24 @@ export class OrkestratorBackend {
       runtimeFlavor: options.runtimeFlavor,
     });
     if (dispatchHold) this.uninstallDispatchHold = installAgentTestDispatchHold(dispatchHold);
+    // Agent-test profiles only: a spec may shorten the container tree cache
+    // and the web annotation collection period (`agent-test-timing.ts`).
+    // Undefined (the production constants) everywhere else.
+    const timing = agentTestTiming({
+      dataDir: options.dataDir,
+      runtimeFlavor: options.runtimeFlavor,
+    });
+    this.agentTestTiming = timing;
     this.runtime =
       options.runtime ??
       new BackendRuntime({
         emit,
+        ...(timing
+          ? {
+              containerTreeMaxAgeMs: () =>
+                timingValue(timing, "containerTreeMaxAgeMs", CONTAINER_TREE_MAX_AGE_MS),
+            }
+          : {}),
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
@@ -1069,15 +1095,13 @@ export class OrkestratorBackend {
       }),
     });
     this.coordinators.noticeRouter.setUsageLimitStops(this.usageLimitNotices);
-    // The OpenCode 2.x preview server of a local or container environment;
-    // see opencode2-host-server.ts and opencode2-container-server.ts.
-    const openCode2HostServer = (environmentId: string, options: { start: boolean }) =>
+    // The OpenCode server of a local or container environment; see
+    // opencode2-host-server.ts and opencode2-container-server.ts.
+    const openCodeServer = (environmentId: string, options: { start: boolean }) =>
       openCode2EnvironmentServer(context, environmentId, options);
-    // Workflows follow the same preview switch (docs/todo/agent-engines/0008-opencode-v2.md),
-    // in local environments and in containers whose image runs 2.x.
-    const openCode2Workflow = (environmentId: string) =>
-      openCodeWorkflowRoutingDependencies(openCode2HostServer, storage, environmentId, {
-        inContainer: (environment) => containerRunsOpenCode2(context, environment),
+    // Workflows reach the same server, with a pipeline worker's own mailbox.
+    const openCodeWorkflow = (environmentId: string) =>
+      openCodeWorkflowDependencies(openCodeServer, storage, environmentId, {
         workerMailbox: openCode2WorkerMailbox(environmentId, {
           getEnvironment: (id) => storage.getEnvironment(id),
           authenticate: (capability) =>
@@ -1101,15 +1125,12 @@ export class OrkestratorBackend {
           ? { sessionTitles: createSessionTitleService(context) }
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
-        openCode2HostServer,
-        openCode2InContainer: (environment) => containerRunsOpenCode2(context, environment),
+        openCodeServer,
         planUsage: this.runtime.accounts.planUsage,
         usageLimitStops: this.accountAutoSwitch,
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
-        openCodeCoordinatorResearch: this.runtime.localServers.openCodeAgentTools.research,
-        openCodeListenerRecheck: openCodeEnvironmentListenerRecheck(storage),
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
@@ -1409,6 +1430,12 @@ export class OrkestratorBackend {
       composeText: composeWebAnnotationDispatchText,
       invoke: (command, args) => this.invoke(command, args),
       resultTools: typeof annotationTools.setWebAnnotationToolHost === "function",
+      ...(timing
+        ? {
+            gcEveryTicks: () =>
+              timingValue(timing, "webAnnotationGcEveryTicks", WEB_ANNOTATION_GC_EVERY_TICKS),
+          }
+        : {}),
     });
     annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
     context.webAnnotations = this.webAnnotations;
@@ -1469,7 +1496,7 @@ export class OrkestratorBackend {
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,
-          openCode2Workflow,
+          openCodeWorkflow,
         },
         resolveAgentToolConnection,
         // Each worker's own mailbox identity on turns without a result tool.
@@ -1535,7 +1562,7 @@ export class OrkestratorBackend {
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,
-          openCode2Workflow,
+          openCodeWorkflow,
         },
         resolveAgentToolConnection,
         resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
@@ -1707,7 +1734,7 @@ export class OrkestratorBackend {
       providerDependencies: {
         planUsage: this.runtime.accounts.planUsage,
         usageLimitStops: this.accountAutoSwitch,
-        openCode2Workflow,
+        openCodeWorkflow,
       },
       agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
       ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
@@ -1766,15 +1793,15 @@ export class OrkestratorBackend {
       storage,
     });
     // "Describe a graph" (item 215): backend-owned designer agent jobs.
-    // Describe, goal verifier and subork sessions follow the OpenCode 2.x
-    // preview switch like every other workflow (`openCode2Workflow`).
+    // Describe, goal verifier and subork sessions reach OpenCode the way every
+    // other workflow does (`openCodeWorkflow`).
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),
       dependencies: {
         workflowResults: this.workflowResults,
         planUsage: this.runtime.accounts.planUsage,
-        openCode2Workflow,
+        openCodeWorkflow,
       },
     });
     this.graphDescribe = new GraphDescribeService({
@@ -1793,7 +1820,7 @@ export class OrkestratorBackend {
     this.goalVerifierProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),
-      dependencies: { workflowResults: this.workflowResults, openCode2Workflow },
+      dependencies: { workflowResults: this.workflowResults, openCodeWorkflow },
     });
     this.goalVerifier = new NativeAgentGoalVerifier({
       storage,
@@ -1812,7 +1839,7 @@ export class OrkestratorBackend {
       dependencies: {
         workflowResults: this.workflowResults,
         planUsage: this.runtime.accounts.planUsage,
-        openCode2Workflow,
+        openCodeWorkflow,
       },
     });
     this.suborks = new NativeAgentSuborkService({
@@ -1845,6 +1872,10 @@ export class OrkestratorBackend {
     });
     context.suborks = this.suborks;
     this.agentTools.setSuborkToolHost?.(this.suborks);
+    // `convert_to_pipeline`: an interactive tab's agent submits its own draft.
+    this.agentTools.setAutoPipelineToolHost?.(
+      autoPipelineToolHost(createAutoPipelineService(context, invokeCommand)),
+    );
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -2691,17 +2722,17 @@ export class OrkestratorBackend {
           run: () => this.agentMail.drainInjects(),
           ...jobLog("mail-injection"),
         },
-        {
-          name: "coordinator-repair",
-          kind: "coordinator-repair",
-          priority: "recovery",
+        // Agent-test profiles only: a spec may shorten the period after which
+        // a stopped worker's delegation closes (`coordinator-repair-job.ts`).
+        coordinatorRepairJob({
           intervalMs: MAINTENANCE_JOB_MS,
-          run: async () => {
+          timing: this.agentTestTiming,
+          repair: async () => {
             reconcileCoordinatorWorkflows();
             await coordinatorWorkflowReconcileInFlight;
           },
           ...jobLog("coordinator-repair"),
-        },
+        }),
         {
           name: "mail-retention",
           kind: "mail-retention",

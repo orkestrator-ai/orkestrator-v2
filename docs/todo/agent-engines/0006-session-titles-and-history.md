@@ -82,7 +82,7 @@ This pass ran task 6 for Codex and Pi end to end on loopback models (the real Co
 
 **Problem.** Users could not remove a session from the resume list without deleting it, and deletion is forbidden.
 
-**Context.** `thread/delete` is banned by the transport invariants. Design-canvas to-do 0038 waits on an archived state.
+**Context.** `thread/delete` is banned by the transport invariants. Design-canvas to-do 0038 (retired 2026-11-11) waited on an archived state; design links now show it ([`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context)).
 
 **Investigation.** #1337 shipped the action for Codex with `actions.archive`, and renamed the misleading option to `onlyArchived`. Decision 8 kept Cursor out because its SDK could only unarchive cloud agents. That is false at 1.2.0: the real SDK's `Agent.archive` and `Agent.unarchive` both work on a local agent (`JsonlLocalAgentStore`), despite `stubs.d.ts` saying "Cloud-only". So the recommended shared action is now possible, and Cursor has it.
 
@@ -641,8 +641,10 @@ part of this qualification.
 - 7520, message rewind and branch switching in the client (found by task 6;
   done and deleted 2026-11-09, outcome in
   [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
-- [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)
-  was waiting on the archive work here; it can now add an archived state.
+- To-do 0038 (retired 2026-11-11) was waiting on the archive work here; design
+  links now read the archived state from the resume list and offer Unarchive
+  and resume
+  ([`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context)).
 - To-do 0081 (retired 2026-11-10; #1318): the annotation strip it added to the
   backend fallback now lives in `session-title-text.ts`; see
   [Session titles](../../architecture/agent-engines.md#session-titles).

@@ -187,8 +187,8 @@ export interface DesignSessionLink {
 
 /**
  * What the backend maps for one link's tab, read from its durable
- * native-session record (never a bridge or a liveness route). Whether the tab
- * is open is the client's pane layout to answer.
+ * native-session record (never a liveness route). Whether the tab is open is
+ * the client's pane layout to answer.
  */
 export interface DesignSessionLinkState {
   linkId: string;
@@ -198,6 +198,14 @@ export interface DesignSessionLinkState {
    * link) or the conversation never started.
    */
   session: "retained" | "missing";
+  /**
+   * `true`: the tab closed and the agent lists the conversation recorded on
+   * the link as archived, so it has to be restored before it can be resumed.
+   * Asked only of an agent that can archive, and only when its bridge is
+   * already running (never started for this read). Absent means not archived
+   * or not known; an older backend never sends it.
+   */
+  archived?: boolean;
 }
 
 /** A resumed link and the live provider session its new tab adopts. */

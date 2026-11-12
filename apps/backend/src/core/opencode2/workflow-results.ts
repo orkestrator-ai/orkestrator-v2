@@ -24,18 +24,22 @@
  * server (`turn-connections.ts` decides which turns carry one).
  */
 import type { NativeAgentMcpServerAction } from "@orkestrator/protocol/native-agent";
-import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  tryParseStructuredOutputText,
+  type JsonSchema,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import {
   PromptRejectedError,
   ProviderDispatchPreparationError,
   type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
 } from "../agent-provider-contract.js";
-import { openCodeStructuredPrompt, parseOpenCodeStructuredText } from "../opencode-messages.js";
+import { asRecord } from "../agent-provider-runtime.js";
 import {
   isOpenCodeWorkflowResultToolName,
   openCodeWorkflowResultTurnProblem,
-} from "../opencode-provider-helpers.js";
+} from "./policy-rules.js";
 import type { OpenCode2McpServers } from "./mcp.js";
 import { OPENCODE2_ARTIFACTS_MCP_PREFIX, OPENCODE2_DESIGN_MCP_PREFIX } from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
@@ -48,6 +52,41 @@ import {
 
 type TurnOptions = ProviderPrepareDispatchOptions &
   Pick<ProviderSendOptions, "workflowResultKey" | "schema">;
+
+/**
+ * The schema constrains the *final* message, not the whole turn.
+ *
+ * `parseOpenCodeStructuredText` joins the answer's text parts and recovers the
+ * last well-formed document, so prose before that document is safe.
+ * Forbidding commentary outright left a long structured turn looking silent
+ * to anyone watching the tab.
+ */
+export function openCodeStructuredPrompt(prompt: string, schema: JsonSchema): string {
+  return `${prompt}\n\n## Required OpenCode output\n\nEnd your turn with exactly one JSON value matching this JSON Schema. That final message must be the JSON value alone, not wrapped in Markdown and with no commentary around it.\n\nBefore that final message you may send ordinary prose progress updates. Keep them plain sentences: never send a JSON object or array as a progress update, and never draft or preview the final value.\n\n${JSON.stringify(schema)}`;
+}
+
+/**
+ * Join an answer's text parts and recover the structured JSON value.
+ * Reasoning parts are ignored so a thinking trace cannot be parsed as the
+ * contract payload.
+ */
+export function parseOpenCodeStructuredText(parts: unknown): unknown {
+  if (!Array.isArray(parts)) throw new Error("OpenCode returned no structured text");
+  const text = parts
+    .flatMap((part) => {
+      const candidate = asRecord(part);
+      return candidate?.type === "text" && typeof candidate.text === "string"
+        ? [candidate.text]
+        : [];
+    })
+    .join("")
+    .trim();
+  if (!text) throw new Error("OpenCode returned no structured text");
+
+  const value = tryParseStructuredOutputText(text);
+  if (value === undefined) throw new Error("OpenCode returned malformed structured text");
+  return value;
+}
 
 /** Why this turn's workflow-result fields cannot run on 2.x, or null. */
 export function openCode2WorkflowTurnProblem(options: TurnOptions): string | null {
@@ -182,8 +221,8 @@ export class OpenCode2WorkflowTurns {
     return this.mcp.removeSession(sessionId);
   }
 
-  mcpServers() {
-    return this.mcp.userServers();
+  mcpServers(signal?: AbortSignal) {
+    return this.mcp.userServers(signal);
   }
 
   mcpServerAction(serverId: string, action: NativeAgentMcpServerAction) {

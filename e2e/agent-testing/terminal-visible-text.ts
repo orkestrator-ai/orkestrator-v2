@@ -1,7 +1,7 @@
 /**
  * Terminal output as the text a person sees: every escape sequence and
  * non-printing control a shell interleaves removed, so a spec can compare
- * whole lines of a `get_terminal_output_snapshot` (to-do 7340, failure 4741).
+ * whole lines of a `get_terminal_output_snapshot` (to-do 7340, retired 2026-11-11; failure 4741).
  *
  * The one copy for the agent-testing specs. Keep whole-line assertions after
  * stripping: matching text anywhere can pass on the echoed command. Do not

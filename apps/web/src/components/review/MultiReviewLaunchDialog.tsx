@@ -1,5 +1,3 @@
-import { AutoPipelineLaunch } from "./AutoPipelineLaunch";
-import type { AutoPipelineTabData } from "@/types/paneLayout";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Eye, Plus, Trash2, Wrench } from "lucide-react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
@@ -98,9 +96,6 @@ export type MultiReviewResolvedDefaults =
   | { status: "failed"; message: string };
 
 interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
-  autoPipelineEnvironmentId?: string;
-  /** Opens the environment's Auto-pipeline tab; without it the Auto-pipeline section is hidden. */
-  onOpenAutoPipelineTab?: (target: AutoPipelineTabData) => boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy?: boolean;
@@ -431,8 +426,6 @@ function ModelRow({
 }
 
 export function MultiReviewLaunchDialog({
-  autoPipelineEnvironmentId,
-  onOpenAutoPipelineTab,
   defaultAutoAddressFindings = false,
   defaultAutoPr = false,
   open,
@@ -572,17 +565,6 @@ export function MultiReviewLaunchDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {open && autoPipelineEnvironmentId && onOpenAutoPipelineTab && (
-          <AutoPipelineLaunch
-            key={autoPipelineEnvironmentId}
-            environmentId={autoPipelineEnvironmentId}
-            onOpenTab={(target) => {
-              const opened = onOpenAutoPipelineTab(target);
-              if (opened) onOpenChange(false);
-              return opened;
-            }}
-          />
-        )}
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
           aria-busy={busy || defaultsLoading}

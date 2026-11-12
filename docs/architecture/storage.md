@@ -13,7 +13,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-database-rows.ts` | How a value splits into rows under its layout, row ids and positions; no SQLite |
 | `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
-| `apps/backend/src/core/storage-retired-features.ts` | The migration that removes data of retired features (Looped Review) |
+| `apps/backend/src/core/storage-retired-features.ts` | The migrations that remove data of retired features (Looped Review, the OpenCode 2 preview's session record) |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
 | `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
@@ -37,7 +37,7 @@ namespace), their per-file lock files and five-deep backup ladders.
   holding that repository (`storage.kanban.addKanbanTask()`, where
   `KanbanStorage = Pick<KanbanRepository, "addKanbanTask" | …>`).
 
-The area fields are `kanban` (`KanbanStorage`), `coordinators`
+The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
 `nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`),
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
@@ -74,6 +74,7 @@ the change journal.
 | `AgentMailInjects` | `storage-agent-mail-injects.ts` | Inject scheduling: the pending queue, claim and settle, retries and verification, delegation and stored-mail holds |
 | `AgentMailBudgets` | `storage-agent-mail-budgets.ts` | Routed mail budgets: pair loop budget and hourly limit, resets, releases and the held-mail notice |
 | `KanbanRepository` | `storage-kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
+| `LinearRepository` | `storage-linear.ts` | Linear board links per repository, disconnects to apply on other machines, and `create_linear_issue` request keys ([tickets.md](tickets.md#linear)), reached as `storage.linear` |
 | `KanbanSyncRepository` | `storage-kanban-sync-repository.ts` | Kanban sync across machines ([tickets.md](tickets.md#sync-across-machines)), reached as `storage.ticketSync`; shares `KanbanBoardStore` (`storage-kanban-board.ts`: the Kanban lease, its reads and the commit that stamps each change for sync) with `KanbanRepository` |
 | `PreviewServicesRepository` | `storage-preview-services.ts` | Preview services and settings, the backend profile and identity |
 | `NodesRepository` | `storage-nodes.ts` | Command-node stores |
@@ -85,9 +86,8 @@ the change journal.
 | `GraphEffectsRepository` | `storage-graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease. A mock run records `simulated` rows instead (`recordSimulatedGraphEffect`, data `{ wouldRun }`, item 213) |
 | `SuborksRepository` | `storage-suborks.ts` | `native-agent-suborks`: one row per `ask_agents` call, holding each target's branch record, its bounded answer and the delivery state ([suborks.md](suborks.md)); revision compare-and-swap inside the row's transaction; owned by the environment, deleted with it. Its transcripts share the content-addressed transcript store |
 | `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
-| `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
+| `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`); `coordinator-action-marks` (one row per coordinator conversation, owned by its project and deleted with it: the action cards the user marked done by hand, at most 500, a further mark refused; announces `coordinator-action-marks`; commands in the `coordinator` domain, [coordinator.md](coordinator.md#marking-actions-done-by-hand)). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
 | `WatchedPullRequestsRepository` | `storage-watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
-| `OpenCode2SessionsRepository` | `storage-opencode2-sessions.ts` | `opencode2-sessions`: one row per environment listing the OpenCode 2.x sessions its workflows (build pipelines, Multi Review, graph agent nodes) created, so the routing provider keeps sending them to 2.x ([0008](../todo/agent-engines/0008-opencode-v2.md)); at most 4,096 per environment, a full row refusing a new 2.x session rather than forgetting one; deleted with the environment's native agent sessions |
 | `SetupApprovalsRepository` | `storage-setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
@@ -909,6 +909,12 @@ Each pass writes one `storage` `upkeep.finished` line with how long
 `optimize` held the event loop, the pages released and left, and why the
 release stopped (`slow-step` for the case above); slow SQLite calls on either file write `operation.slow`
 ([what ran during a stall](logging.md#what-ran-during-a-stall)).
+
+Version 8 (`retire-opencode2-sessions`, `storage-retired-features.ts`)
+deletes the `opencode2-sessions` store. The OpenCode 2 preview recorded there
+which workflow sessions it had put on OpenCode 2, so a router could keep them
+off OpenCode 1.x; with 1.x retired every OpenCode session is a 2.x session and
+nothing reads it. It held only environment and session ids.
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

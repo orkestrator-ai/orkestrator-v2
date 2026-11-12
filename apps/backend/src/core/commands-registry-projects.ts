@@ -119,8 +119,6 @@ import {
   asStringArray,
   asNonBlankString,
   asRequiredBoolean,
-  peekLocalAgentBridge,
-  peekContainerAgentBridge,
   fetchAcpNormalizedModelsResult,
   readOriginUrl,
   addExistingProject,
@@ -133,6 +131,7 @@ import {
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
+import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   ensureHostPiModelCatalogCommand,
@@ -779,12 +778,10 @@ export function registerProjectCommands(
       config.global.openCodeModelProviders,
     );
     let openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
-    const runningOpenCodeBridge =
-      environment.environmentType === "local"
-        ? await peekLocalAgentBridge(environment.id, context, "opencode")
-        : environment.containerId
-          ? await peekContainerAgentBridge(environment.containerId, "opencode")
-          : null;
+    // The environment's running OpenCode 2.x server (host or in-container), never started here.
+    const runningOpenCodeBridge = await openCode2EnvironmentServer(context, environment.id, {
+      start: false,
+    }).catch(() => undefined);
     const openCodeCatalogInput = {
       environmentId: id,
       agent: "opencode" as const,

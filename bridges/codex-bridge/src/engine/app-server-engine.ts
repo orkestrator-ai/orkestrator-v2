@@ -27,6 +27,7 @@ import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-inst
 import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
   ARTIFACT_TOOL_NAMES,
@@ -157,6 +158,7 @@ const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
     ...ARTIFACT_TOOL_NAMES,
     ...AGENT_GOAL_TOOL_NAMES,
     ...AGENT_SUBORK_TOOL_NAMES,
+    ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
     ...KEY_INFORMATION_TOOL_NAMES,
   ].map((name) => [name, { approval_mode: "approve" }]),
 );

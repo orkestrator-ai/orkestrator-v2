@@ -375,6 +375,39 @@
               {
                 "group": ["**/http-bridge/*", "!**/http-bridge/index.js"],
                 "message": "Import the http-bridge domain through http-bridge/index.js."
+              },
+              {
+                "group": [
+                  "**/web-annotations/*",
+                  "!**/web-annotations/index.js",
+                  "!**/web-annotations/store-layout.js",
+                  "!**/web-annotations/tools.js"
+                ],
+                "message": "Import the web-annotations domain through web-annotations/index.js."
+              },
+              {
+                "group": ["**/permission-rules/*", "!**/permission-rules/index.js"],
+                "message": "Import the permission-rules domain through permission-rules/index.js."
+              },
+              {
+                "group": ["**/self-improvement/**", "!**/self-improvement/index.js"],
+                "message": "Import the self-improvement domain through self-improvement/index.js."
+              },
+              {
+                "group": [
+                  "**/opencode2/*",
+                  "!**/opencode2/index.js",
+                  "!**/opencode2/container-credentials.js"
+                ],
+                "message": "Import the opencode2 domain through opencode2/index.js."
+              },
+              {
+                "group": [
+                  "**/control-mcp/*",
+                  "!**/control-mcp/index.js",
+                  "!**/control-mcp/tools.js"
+                ],
+                "message": "Import the control-mcp domain through control-mcp/index.js."
               }
             ]
           }
@@ -456,6 +489,41 @@
                   "!**/backend/src/core/http-bridge/index.js"
                 ],
                 "message": "Import the http-bridge domain through http-bridge/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/web-annotations/*",
+                  "!**/backend/src/core/web-annotations/index.js"
+                ],
+                "message": "Import the web-annotations domain through web-annotations/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/permission-rules/*",
+                  "!**/backend/src/core/permission-rules/index.js"
+                ],
+                "message": "Import the permission-rules domain through permission-rules/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/self-improvement/**",
+                  "!**/backend/src/core/self-improvement/index.js"
+                ],
+                "message": "Import the self-improvement domain through self-improvement/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/opencode2/*",
+                  "!**/backend/src/core/opencode2/index.js"
+                ],
+                "message": "Import the opencode2 domain through opencode2/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/control-mcp/*",
+                  "!**/backend/src/core/control-mcp/index.js"
+                ],
+                "message": "Import the control-mcp domain through control-mcp/index.js."
               }
             ]
           }
@@ -465,7 +533,7 @@
     {
       "files": [
         "apps/backend/src/core/bridge-session-close.ts",
-        "apps/backend/src/core/control-mcp-server.ts",
+        "apps/backend/src/core/control-mcp/server.ts",
         "apps/backend/src/core/coordinator-service.ts",
         "apps/backend/src/core/extension-discovery.ts",
         "apps/backend/src/core/http-bridge/claude-runtime.ts",

@@ -67,6 +67,10 @@ export const HEADLESS_CAPABLE_ELECTRON_SPECS: readonly string[] = [
   // Launches through `service-preview-electron-launch.ts`, which honours the
   // opt-in. Its Linux runs (through `ss` and `lsof`) are in 0042's evidence log.
   "service-preview-seeded-electron.spec.ts",
+  // Terminal snapshot owners of `terminalVisibleText`. Both passed headless on
+  // Linux on 2026-11-11 (to-do 7340, retired; its record is in 2181 task 3).
+  "terminal-input-resume-electron.spec.ts",
+  "local-gateway-transport-electron.spec.ts",
 ];
 
 /**

@@ -64,6 +64,13 @@ export interface WorktreeChangeHint {
    * content generations of every live body must advance.
    */
   paths?: string[];
+  /**
+   * The burst also changed Git metadata (the index, `HEAD`, a compared ref),
+   * which {@link paths} never names. A consumer reasoning from `paths` alone,
+   * such as the change-tracking filter that skips writes only to ignored
+   * output, must treat such a burst as unknown.
+   */
+  gitMetadata?: true;
 }
 
 /** Paths carried by one settled hint before it degrades to "unknown paths". */
@@ -303,6 +310,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   // Content paths seen in this burst; null once one event lacked a name or
   // the bound was exceeded.
   let burstPaths: Set<string> | null = new Set();
+  // A Git metadata event (or its lost-event signal) in this burst; see
+  // `WorktreeChangeHint.gitMetadata`.
+  let burstGitMetadata = false;
 
   const fail = (error: unknown) => {
     if (closed) return;
@@ -379,6 +389,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     if (closed) return;
     burstEvents += 1;
     if (contentPath === null) burstPaths = null;
+    else if (contentPath === undefined) burstGitMetadata = true;
     else if (contentPath !== undefined && burstPaths) {
       burstPaths.add(contentPath);
       if (burstPaths.size > WATCH_HINT_MAX_PATHS) burstPaths = null;
@@ -401,11 +412,16 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       }
       const settled: WorktreeChangeHint =
         burstPaths && burstPaths.size > 0 && !pending.overflow
-          ? { ...pending, paths: [...burstPaths] }
+          ? {
+              ...pending,
+              paths: [...burstPaths],
+              ...(burstGitMetadata ? { gitMetadata: true as const } : {}),
+            }
           : pending;
       pending = { fileList: false, tree: false, overflow: false };
       burstEvents = 0;
       burstPaths = new Set();
+      burstGitMetadata = false;
       if (!closed) options.onChange(settled);
     }, settleMs);
     // Never hold the process open for a debounce that only refreshes a badge.

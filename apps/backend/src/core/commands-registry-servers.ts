@@ -56,7 +56,6 @@ import {
   CURSOR_BRIDGE_PORT,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
-  OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
@@ -87,20 +86,24 @@ import {
   checkHttpHealth,
   waitForUnhealthy,
   enqueueContainerBridgeOperation,
-  openCodeHealthHeaders,
   claudeBridgeAuthHeaders,
   agentToolConnectionFingerprint,
   syncContainerCursorApiKey,
   startContainerServer,
-  startContainerOpenCodeServer,
   startContainerClaudeServer,
   isFreshClaudeModelCatalog,
   conciseError,
   refreshClaudeModelCatalog,
 } from "./commands-helpers.js";
-import { containerCredentialMode, containerOpenCodeMode } from "./container-credential-mode.js";
+import { containerCredentialMode } from "./container-credential-mode.js";
 import {
-  CONTAINER_TOKEN_FILES,
+  openCodeContainerServerStatus,
+  startOpenCodeContainerServer,
+  stopOpenCodeContainerServer,
+} from "./opencode2-container-server.js";
+import { OPENCODE2_CONTAINER_LOG } from "./opencode2/index.js";
+import {
+  type ContainerBridgeKind,
   containerBridgeLaunch,
   readContainerBridgeToken,
   removeContainerBridgeCredential,
@@ -138,7 +141,7 @@ function containerBridgeControl(
 /** A stopped bridge's token is dead; if this fails, the next start overwrites it. */
 function forgetContainerBridgeCredential(
   containerId: string,
-  kind: LocalServerKind,
+  kind: ContainerBridgeKind,
 ): Promise<void> {
   return removeContainerBridgeCredential(containerId, kind).catch(() => undefined);
 }
@@ -206,69 +209,17 @@ export function registerServerCommands(
 ): void {
   const registerBridgeStart = containerBridgeStartRegistrar(register);
   const { claudeModelCatalogRefreshes, validatedClaudeModelCatalogs, commands } = dependencies;
-  register(startOpencodeServerCommand, async ({ containerId }, context) => {
-    const id = asString(containerId, "containerId");
-    const operationId = await containerBridgeOperationId(context, id);
-    return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
-      await syncContainerLoginUnlocked(context, "opencode", id);
-      const started = await startContainerOpenCodeServer(id, () =>
-        containerOpenCodeMode(context, id),
-      );
-      const connection = await resolveContainerAgentToolConnection(context, id);
-      if (connection) {
-        context.runtime.localServers.openCodeAgentTools.schedule(
-          `container:${id}`,
-          started.hostPort,
-          started.authToken,
-          connection,
-          "/workspace",
-        );
-      }
-      return started;
-    });
-  });
-  register(stopOpencodeServerCommand, async ({ containerId }, context) => {
-    const id = asString(containerId, "containerId");
-    const operationId = await containerBridgeOperationId(context, id);
-    return enqueueContainerBridgeOperation(context, "opencode", operationId, () => {
-      context.runtime.localServers.openCodeAgentTools.cancel(`container:${id}`);
-      // Bracketing avoids matching the `bash -lc` shell carrying this command.
-      return dockerExec(
-        id,
-        `pkill -f '[o]pencode serve' || true; rm -f ${CONTAINER_TOKEN_FILES.opencode}`,
-      ).then(() => forgetContainerBridgeCredential(id, "opencode"));
-    });
-  });
-  register(getOpencodeServerStatusCommand, async ({ containerId }, context) => {
-    const id = asString(containerId, "containerId");
-    const hostPort = await getHostPort(id, OPENCODE_SERVER_PORT);
-    const authToken = hostPort ? await readContainerBridgeToken(id, "opencode") : null;
-    const running =
-      !!hostPort &&
-      !!authToken &&
-      (await checkHttpHealth(hostPort, "/global/health", openCodeHealthHeaders(authToken)));
-    if (running && context.agentTools) {
-      const connection = await resolveContainerAgentToolConnection(context, id);
-      if (connection && hostPort && authToken) {
-        context.runtime.localServers.openCodeAgentTools.schedule(
-          `container:${id}`,
-          hostPort,
-          authToken,
-          connection,
-          "/workspace",
-        );
-      }
-    }
-    return {
-      running,
-      hostPort,
-      ...(running ? { authToken } : {}),
-      ...(running && context.agentTools
-        ? { agentTools: context.runtime.localServers.openCodeAgentTools.state(`container:${id}`) }
-        : {}),
-    };
-  });
-  register(getOpencodeServerLogCommand, serverLogCommand("/tmp/opencode-serve.log"));
+  // The container's OpenCode server (`opencode2-container-server.ts`).
+  register(startOpencodeServerCommand, ({ containerId }, context) =>
+    startOpenCodeContainerServer(context, asString(containerId, "containerId")),
+  );
+  register(stopOpencodeServerCommand, ({ containerId }, context) =>
+    stopOpenCodeContainerServer(context, asString(containerId, "containerId")),
+  );
+  register(getOpencodeServerStatusCommand, ({ containerId }) =>
+    openCodeContainerServerStatus(asString(containerId, "containerId")),
+  );
+  register(getOpencodeServerLogCommand, serverLogCommand(OPENCODE2_CONTAINER_LOG));
   register(getOpencodeModelPreferencesCommand, async (_args, context) => {
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
       return { recent: [], favorite: [], variant: {} };

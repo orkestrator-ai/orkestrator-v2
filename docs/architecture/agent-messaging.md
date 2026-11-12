@@ -542,7 +542,7 @@ having a working mailbox.
 
 ### Control MCP — operator
 
-`apps/backend/src/core/control-mcp-server.ts`, documented in
+`apps/backend/src/core/control-mcp/server.ts`, documented in
 [`control-mcp.md`](./control-mcp.md).
 
 An operator credential with the `mail` capability can `list_mailboxes` and
@@ -620,7 +620,12 @@ wins.
 `report_goal` shares the mail tools' footing: it never prompts, and it writes only
 to Orkestrator's own record ([goals.md](goals.md)). So does `ask_agents`, which
 writes only to that record and starts read-only sessions. Its answers come back as
-a system-route notice ([suborks.md](suborks.md#results-delivery)).
+a system-route notice ([suborks.md](suborks.md#results-delivery)). And so does
+`convert_to_pipeline`, which only records an Auto-pipeline draft for the user to
+review: it creates no ticket and starts no pipeline
+([build-pipeline-view.md](build-pipeline-view.md#manual-auto-pipeline-promotion)).
+Its name is `AGENT_AUTO_PIPELINE_TOOL_NAMES`, a dependency-free module so a
+bridge does not load the draft schema for a name.
 
 ## How each provider gets the tools
 
@@ -634,7 +639,7 @@ process. Claude, Codex, Pi, Cursor, and Grok can also take a **per-tab**
 | --- | --- | --- | --- |
 | Claude native | Vendor SDK | `mcpServers.orkestrator` | Yes |
 | Codex native | app-server config | `mcp_servers.orkestrator` | Yes |
-| OpenCode native | Vendor `/mcp` API | `configureOpenCodeAgentTools` once per environment | No — environment credential |
+| OpenCode native | Runtime servers (`PUT /api/experimental/mcp/:server`) | The tab's own server, `orkestrator_tab_<id>`, registered per session (`opencode2/mcp.ts`) | Yes — the session's rules deny every other tab's server |
 | Pi native | Bridge-owned client (`pi-bridge/src/mcp.ts`) | Env, then per-tab `agentMcp` | Yes |
 | Cursor native | SDK `AgentOptions.mcpServers` | Per-tab `agentMcp`, else process env | Yes |
 | Grok native | ACP `session/new` / `session/load` | `configuredAcpMcpServers(state.agentMcp)` | Yes |
@@ -684,12 +689,14 @@ for coordinator delegation.
 **Codex native.** Same flags. Per-turn MCP into generated app-server
 config. Qualified for coordinator delegation.
 
-**OpenCode native.** Flags are on. MCP is registered once against
-`opencode serve` with an environment-scoped token. Each turn's trusted
-system text names its tab, and the agent passes it as `tabId`; with a
-single OpenCode tab the call may omit it. There is no per-turn MCP attach, which is why OpenCode is
-unqualified for workflow-result *tools* — that is a different feature, not
-a mail gap.
+**OpenCode native.** Flags are on. Each session registers its tab's own
+Orkestrator server on the environment's OpenCode server, with the tab's
+credential (`orkestrator_tab_<id>`, `opencode2/mcp.ts`); other sessions'
+permission rules deny it, so the credential reaches only its own session and
+the tab is its own mailbox. Result turns use the environment-wide
+workflow-result broker, granted for the turn only. Until 2026-11-11 OpenCode
+1.x registered one environment-wide `orkestrator` server, and each turn's
+trusted system text named its tab for the agent to pass as `tabId`.
 
 **Pi native.** Flags are on. Pi's SDK sessions load no MCP client; the bridge
 owns one and registers Orkestrator tools through an inline extension.
@@ -815,7 +822,7 @@ capability row says so.
 | Native inject / presence | `apps/backend/src/core/native-agent-service.ts` |
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
-| Control MCP mail | `apps/backend/src/core/control-mcp-server.ts` |
+| Control MCP mail | `apps/backend/src/core/control-mcp/server.ts` |
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |

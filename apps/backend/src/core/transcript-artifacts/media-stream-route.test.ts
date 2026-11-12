@@ -12,7 +12,9 @@ import {
   MEDIA_MAX_RESPONSES_PER_CAPABILITY,
   MEDIA_RANGE_RESPONSE_MAX_BYTES,
   parseMediaRange,
+  resolveMediaWithin,
   type MintMediaInput,
+  type OpenedMediaFile,
 } from "./media-stream-route.js";
 import { sniffServedMediaMime } from "./media-stream-sniff.js";
 
@@ -135,6 +137,55 @@ describe("parseMediaRange", () => {
       expect(parseMediaRange(header, 100)).toEqual({ kind: "unsatisfiable" });
     }
     expect(parseMediaRange("bytes=-5", 0)).toEqual({ kind: "unsatisfiable" });
+  });
+});
+
+describe("resolveMediaWithin", () => {
+  /** A stand-in opened file that records whether the route closed it. */
+  function fakeOpened(): { file: OpenedMediaFile; closed: () => boolean } {
+    let closed = false;
+    const handle = {
+      close: async () => {
+        closed = true;
+      },
+    } as unknown as OpenedMediaFile["handle"];
+    return { file: { handle, size: 1, identity: "fake" }, closed: () => closed };
+  }
+
+  test("a file opened in time is returned open", async () => {
+    const opened = fakeOpened();
+    let signal: AbortSignal | undefined;
+    const file = await resolveMediaWithin(async (given) => {
+      signal = given;
+      return opened.file;
+    }, 60_000);
+    expect(file).toBe(opened.file);
+    expect(opened.closed()).toBe(false);
+    expect(signal?.aborted).toBe(false);
+  });
+
+  test("the deadline aborts the resolver and a handle it opens late is closed", async () => {
+    const opened = fakeOpened();
+    let signal: AbortSignal | undefined;
+    let finished!: () => void;
+    const lateOpen = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const outcome = await resolveMediaWithin(async (given) => {
+      signal = given;
+      // A resolver that ignores its signal and opens the file anyway.
+      await new Promise<void>((resolve) => given.addEventListener("abort", () => resolve()));
+      setTimeout(finished, 0);
+      return opened.file;
+    }, 5).catch((error: unknown) => error);
+    expect(outcome).toBeInstanceOf(Error);
+    expect(signal?.aborted).toBe(true);
+    await lateOpen;
+    // The late handle reaches no response, so the route closes it.
+    for (let attempt = 0; attempt < 50 && !opened.closed(); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(opened.closed()).toBe(true);
   });
 });
 

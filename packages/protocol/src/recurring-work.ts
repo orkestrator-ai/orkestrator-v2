@@ -268,6 +268,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // one snapshot (`docker exec` in a container, tmux spawns locally) plus,
   // before the transcript binds, its backed-off search. Serial per tab.
   "tmux-tab-loop": backend("B30", "interval", "progress", 250, "per-key-serial", "next-tick"),
+  // Per attached interactive terminal: 250 ms, doubling to 1 s while the pane
+  // is unchanged. A leased terminal stops when its client stops renewing
+  // (to-do 7745, retired). One timer capture is one attempt.
   "tmux-interactive-capture": backend(
     "B19",
     "completion",
@@ -275,7 +278,6 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     250,
     "per-key-serial",
     "snapshot-rehydrate",
-    false,
   ),
   "tmux-queue-drain": backend("B09", "interval", "progress", 2_000, "join", "storage-reconcile"),
   // Presence TTL is 4 s; its own fixed-rate 2 s job refreshes it (step 08).

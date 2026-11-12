@@ -47,7 +47,7 @@ Only tests whose complete unchanged owner passed alone appear here. Exact known-
 | `apps/backend/tests/portable-inputs-stamps.test.ts` | a restart with unchanged inputs > a staged file rewritten with the same bytes is still unchanged | Test deadline 60,000 ms exceeded. | 50 pass, 0 fail, 0 skip; 186.11 s; `310f4fd7a` |
 | `apps/web/src/components/native-agent/AgentNativeTab.render-count.test.tsx` | anchor resize does not render the native controller | Expected 0 React commits; received 1 (lines 406/903). | 37 pass, 0 fail, 0 skip; 5.30 s; `894861968` |
 | `apps/backend/tests/portable-inputs-stamps.test.ts` | a restart with unchanged inputs > the relay's fresh copy of unchanged mounts is still unchanged | Test deadline 60,000 ms exceeded. | 50 pass, 0 fail, 0 skip; 186.11 s; `310f4fd7a` |
-| `apps/backend/src/core/control-mcp-coordinator-goals.test.ts` | what a coordinator is offered > a call that leaves out or exceeds the limit sets nothing | Test deadline 5,000 ms exceeded. | 21 pass, 0 fail, 0 skip; 6.51 s; `894861968` |
+| `apps/backend/src/core/control-mcp/coordinator-goals.test.ts` | what a coordinator is offered > a call that leaves out or exceeds the limit sets nothing | Test deadline 5,000 ms exceeded. | 21 pass, 0 fail, 0 skip; 6.51 s; `894861968` |
 
 Every owner ran once with `--parallel=1 --only-failures --reporter=junit`; backend owners explicitly preloaded `../../tests/setup-node.ts`, while web used its DOM preloads. No assertion, deadline, skip or unrelated production code changed. All exact commands and retained JUnit locations are in [the validation report](../../../development/worktree-watcher-validation.md#isolated-owner-commands).
 

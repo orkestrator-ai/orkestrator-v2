@@ -44,6 +44,11 @@ pids/
 *.seed
 *.pid.lock
 
+# Core dumps. A host whose kernel.core_pattern is a relative name such as
+# `core` writes `core.<pid>` into the crashing process's working directory,
+# often a checkout (Playwright's Chromium in the browser suites, for one).
+core.[0-9]*
+
 # Coverage
 coverage/
 .nyc_output/

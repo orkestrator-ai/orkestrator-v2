@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands";
+import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_SIZE_LABEL } from "../src/core/path-safety";
 import * as realPty from "../src/core/pty";
 import { runCommand } from "../src/core/shell";
@@ -1194,6 +1195,9 @@ esac
       ).rejects.toThrow(
         `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
       );
+      const branchReads = () =>
+        compatibilityPathUsage.snapshot().paths["retired-command.read-file-at-branch"]?.count ?? 0;
+      const branchReadsBefore = branchReads();
       await expect(
         commands.get("read_file_at_branch")?.(
           { containerId: "container-1", filePath: "src/app.ts", branch: "main" },
@@ -1234,6 +1238,8 @@ esac
           context,
         ),
       ).rejects.toThrow("File is too large to open in the editor");
+      // Only v2.21.0 to v2.23.0 renderers ask; every call is counted (to-do 7570).
+      expect(branchReads()).toBe(branchReadsBefore + 6);
       await expect(
         commands.get("read_container_file_base64")?.(
           { containerId: "container-1", filePath: "assets/blob.bin" },
@@ -1392,9 +1398,10 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     ).toThrow("Expected environmentId to be a string");
   });
 
-  test("reports OpenCode agent-tool readiness only for a live server with agent tools", async () => {
-    // No `worktreePath`, so the status read reports readiness without
-    // scheduling reconciliation — this test asserts the surface, not the POST.
+  test("a local OpenCode status read reports the process and never touches agent tools", async () => {
+    // OpenCode attaches the Orkestrator MCP server per session
+    // (`opencode2/mcp.ts`), so a status read has no environment-wide MCP
+    // state to report and never mints a credential.
     const environment = { id: "env-tools", localOpencodePort: 4201, opencodePid: fakePid(5201) };
     const commands = createCommandRegistry();
     const agentTools = {
@@ -1429,22 +1436,13 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     } as unknown as ChildProcessWithoutNullStreams;
     localServers.adoptProcess("opencode:env-tools", openCodeChild);
     try {
-      // Live, but nothing has been reconciled yet: readiness is unknown rather
-      // than an unqualified claim that the ticket tools are wired up.
       await expect(
         commands.get("get_local_opencode_server_status")?.(
           { environmentId: "env-tools" },
           withAgentTools,
         ),
-      ).resolves.toEqual({
-        running: true,
-        port: 4201,
-        pid: fakePid(5201),
-        agentTools: "pending",
-      });
+      ).resolves.toEqual({ running: true, port: 4201, pid: fakePid(5201) });
 
-      // Claude has no MCP wiring of its own, and a backend built without an
-      // agent-tools server must not advertise the field at all.
       localServers.adoptProcess("claude:env-tools", claudeChild);
       await expect(
         commands.get("get_local_claude_server_status")?.(

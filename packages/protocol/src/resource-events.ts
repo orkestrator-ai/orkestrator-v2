@@ -94,6 +94,12 @@ export const RESOURCE_KINDS = [
    * `list_notice_dismissals`. A hint only.
    */
   "notice-dismissal",
+  /**
+   * A coordinator conversation's manual action marks changed ("Mark done" in
+   * the Actions panel). The id is the conversation id, with its `projectId`;
+   * clients re-read `get_coordinator_action_marks`. A hint only.
+   */
+  "coordinator-action-marks",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

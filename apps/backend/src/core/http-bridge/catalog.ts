@@ -15,6 +15,7 @@ import type {
   BridgeConnection,
   ProviderCommandCatalogue,
   ProviderCommandRefreshResult,
+  ProviderReadOptions,
 } from "../agent-provider-contract.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
@@ -152,11 +153,14 @@ export class HttpBridgeCatalogAdapter {
     return { outcome: outcome ?? "failed", ...(message ? { message } : {}) };
   }
 
-  async mcpServers(sessionId: string): Promise<NativeAgentMcpServer[]> {
+  async mcpServers(
+    sessionId: string,
+    options: ProviderReadOptions = {},
+  ): Promise<NativeAgentMcpServer[]> {
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/mcp`,
-      {},
+      options.signal ? { signal: options.signal } : {},
       this.fetchImpl,
     );
     if (response.status === 404) return [];

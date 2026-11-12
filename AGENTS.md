@@ -20,7 +20,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `bridges/cursor-bridge/` | [`bridges/cursor-bridge/AGENTS.md`](bridges/cursor-bridge/AGENTS.md) |
 | `bridges/acp-bridge/` | [`bridges/acp-bridge/AGENTS.md`](bridges/acp-bridge/AGENTS.md) |
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
-| OpenCode provider, SDK pin or `patches/` | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
+| OpenCode provider or its `opencode2` pin (`apps/backend/src/core/opencode2/`, `opencode2-*.ts`) | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
 | Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
@@ -35,7 +35,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
-| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp-coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
+| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp/coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
 | Unified federation plan work items (`plans/unified/`): starting one, updating its status | [`plans/unified/0000-index.md`](plans/unified/0000-index.md#how-to-use-this-board) |
 
 ## Show every visual change as an image in the transcript
@@ -148,7 +148,7 @@ compression, or synchronization code, preserve these invariants:
     credentials, tokens, or attachment data.
 13. Closing a tab never deletes the conversation. Never call Claude's
     `DELETE /session/:id` or SDK `deleteSession`, Codex `thread/delete`, or
-    OpenCode `client.session.delete` from a close path.
+    OpenCode's session delete (`DELETE /api/session/:id`) from a close path.
 14. A transcript row is one model response (one step of the agent loop),
     never a whole turn. A turn kept alive by background work runs for hours,
     and a multi-megabyte row fits no transcript window: readers get only a
@@ -221,20 +221,14 @@ read. `tests/unit/inheritance-chains.test.ts` fails on any new project-class
 inheritance; a deliberate one-level subclass (an error refinement, a hook
 override) goes in its `INTENTIONAL_SUBCLASSES` list with a reason.
 
-## OpenCode SDK v2 - CRITICAL
+## OpenCode
 
-**Always use v2 of the `@opencode-ai/sdk` package.**
-
-```typescript
-// CORRECT - v2 API
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
-
-// WRONG - v1 API (different parameter structure, missing features)
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
-```
-
-The SDK is patched (`patches/`). Read the OpenCode maintenance notes in
-`docs/architecture/agent-engines.md` before bumping it.
+OpenCode 2.x is the only OpenCode line; OpenCode 1.x and its
+`@opencode-ai/sdk` were retired on 2026-11-11. The backend talks to OpenCode
+2's own `/api/*` server through `OpenCode2Client`
+(`apps/backend/src/core/opencode2/client.ts`); do not add an OpenCode SDK.
+Read the OpenCode maintenance notes in `docs/architecture/agent-engines.md`
+before bumping the `opencode2` pin.
 
 ## Task Runner - mise; Package Manager - Bun
 
@@ -989,8 +983,7 @@ When touching any of them:
 - **Close is non-destructive.** It stops owned work, denies parked approvals,
   questions and plan approvals, settles dispatch claims, and releases the
   bridge's live mapping. It never deletes vendor history: no Claude SDK
-  `deleteSession`, no Codex `thread/delete`, no OpenCode
-  `client.session.delete`.
+  `deleteSession`, no Codex `thread/delete`, no OpenCode session delete.
 - **Only a 2xx that affirms `closed: true` is a confirmed close.** 200
   `{ closed: true, retained: true }` or `{ closed: true, missing: true }`.
   Anything else, including an empty or malformed 2xx, is not a close.
@@ -1161,9 +1154,10 @@ Runtimes:
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 
 Agent CLIs, one per supported platform:
-- Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), and Pi
-  (`pi`), whose runtime paths the backend reads from `CLAUDE_CLI_PATH`,
-  `CODEX_CLI_PATH`, `OPENCODE_CLI_PATH`, and `PI_CLI_PATH`.
+- Claude Code (`claude`), Codex (`codex`), OpenCode 2.x (`opencode2`; a
+  terminal's `opencode` wraps it), and Pi (`pi`), whose runtime paths the
+  backend reads from `CLAUDE_CLI_PATH`, `CODEX_CLI_PATH`, `OPENCODE2_CLI_PATH`,
+  and `PI_CLI_PATH`.
 - Grok Build (`grok`) is downloaded as a hash-verified pinned artifact. Pi is
   downloaded the same way, as a bundle rather than a single file.
 - The image build fails immediately if any managed CLI is not runnable, and if

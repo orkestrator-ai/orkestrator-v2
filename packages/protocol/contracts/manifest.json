@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 996,
-    "defined": 996,
+    "commands": 1011,
+    "defined": 1011,
     "untyped": 0,
     "events": 45
   },
@@ -369,6 +369,15 @@
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
       "resultDigest": "sha256:3278a466d8326d281a8faeaab2216231c5dd1881139fbefa26026d82f8148962"
+    },
+    "apply_linear_sync_state": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:10414558c8fdea34a82979c55dc5e28ef6a41ad5cb82fe55efc319ccd605298e",
+      "resultDigest": "sha256:f355474beb17c3410a2566775bdac15d60eae3a00f008140074ed7f0eb5cb9a3"
     },
     "apply_mcp_configuration": {
       "domain": "mcp",
@@ -1015,7 +1024,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:0250bafd36aa815f589364caf84e9dd8d64a031206a6681691fef73b44b7e2c8",
+      "argsDigest": "sha256:b0c38d7045cd8abe558e67a47362c40fe653d0aa082e4b7130e55f248d400399",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "claude_tmux_detach_interactive_terminal": {
@@ -1071,6 +1080,15 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:691e4c6f1b2858ee182fded4e35f62d0ac3342823392eb7df96eea7c1d942d01"
+    },
+    "claude_tmux_renew_interactive_terminal": {
+      "domain": "claude-tmux",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:a74434be5ffcad928221e020a53ef3c32d02c641af6a9b2ba7ceae76b8915ba1"
     },
     "claude_tmux_reply_hook": {
       "domain": "claude-tmux",
@@ -1270,6 +1288,15 @@
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
       "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
+    "clear_linear_board_link": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:19ce211607625af7105dea0db4669f7e44c04a50a7e31322f4305df8befcc2a6"
+    },
     "clear_task_build_status": {
       "domain": "pipelines",
       "since": 1,
@@ -1394,7 +1421,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:bbaee338b78354b38c4541fbff4f4c76d578408a24ba523f58cc2ac3f3d7d27c",
-      "resultDigest": "sha256:515b4c99a5a6ca3b41504cf3c3d1468b91ba0c8e9c71f590466f95a19fe1c106"
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "controller_multi_review_surface": {
       "domain": "coordinator",
@@ -1431,6 +1458,15 @@
       "critical": [],
       "argsDigest": "sha256:1d2b126c1590e9b5fae79d21b14251056704c2f8dc3bf5e791713af10ae81f8f",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "copy_linear_connection_from_node": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ca77bd3b33e13665db4d22a514d7601c3b4df67b45f4296c8dee77b94c30f4b5",
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "copy_project_to_node": {
       "domain": "nodes",
@@ -1571,6 +1607,15 @@
       "critical": [],
       "argsDigest": "sha256:025f5b4372a2bd026a5584abcdad69881ec1a8d5ede38d608887d900b75e0334",
       "resultDigest": "sha256:50e7d45f9e8c5ed6b6d0ee99a12d3e1995aa838eb2218ce58d9fc83ae8926948"
+    },
+    "create_linear_issue": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestKey"],
+      "argsDigest": "sha256:7287f6941afb269d2cd04cabb9cccc90c19b47af9b3293bba3fde88390985d24",
+      "resultDigest": "sha256:4f18a63177434b691befa955db925475417991998b8fab349e3d9a063ceab6d4"
     },
     "create_local_folder": {
       "domain": "files",
@@ -2119,7 +2164,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
-      "resultDigest": "sha256:e86e0297c16c1fc0071f8b3253c07eca0e9287bb2a0fb8eb7fa820e50c4e1751"
+      "resultDigest": "sha256:0f6a5a528581c7039907254284ea3a3055abbb9d9726c4eeedfcb6d86dba7413"
     },
     "design_session_resume": {
       "domain": "design",
@@ -2127,7 +2172,7 @@
       "access": "workspace",
       "read": false,
       "critical": ["expectedTabId"],
-      "argsDigest": "sha256:1dffde9857593328026d368f73a0f5be3506961ce83fc81d4e1aedd24409d34a",
+      "argsDigest": "sha256:068887a3fe9da6f93dd49b10d86085319d4b9687b66a72c4308ab2bbe12182f9",
       "resultDigest": "sha256:1549043105579ae1534c6addfd23191cb843a92ab9ab9d3414d0c26715ab0861"
     },
     "design_session_unlink": {
@@ -2281,7 +2326,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:515b4c99a5a6ca3b41504cf3c3d1468b91ba0c8e9c71f590466f95a19fe1c106"
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "dismiss_native_agent_suggested_prompt": {
       "domain": "native-sessions",
@@ -2489,6 +2534,15 @@
       "critical": [],
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "export_linear_connection": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:6302105fe5078d31b374262eb2e6d771a1b8ae06da4af210d24644ba6673384a"
     },
     "fetch_project_git": {
       "domain": "coordinator",
@@ -2966,6 +3020,15 @@
       "critical": [],
       "argsDigest": "sha256:7d2ff51773c95d156f18bf790610baf1ceeef8c9bae503cb5ced462ed4aa0386",
       "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
+    },
+    "get_coordinator_action_marks": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:76e52e8acb69ca97d72bac91b227241a35ab90def4f06242aaf6d0b11f978000",
+      "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
     },
     "get_coordinator_checkout_turn": {
       "domain": "coordinator",
@@ -3480,6 +3543,24 @@
       "argsDigest": "sha256:4fd04a3dce747fd27f884500f729c3c92a4ee1c37b4864f86c9bc4db9c1d2b4d",
       "resultDigest": "sha256:64c1e6bbaa848790efe28e6aae20d256506e553b7a569c74d1b0cdd14da41684"
     },
+    "get_linear_board_link": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:5064edf6147ed320f500a86bfffc61a32c8909b7bd6cbe0bfc8903e238c9a2c5"
+    },
+    "get_linear_board_options": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:e0b055cf448519a40db737c45d1e2dbbda14e72e90ca25a81a568a6d7fe8ac67"
+    },
     "get_linear_connection": {
       "domain": "kanban",
       "since": 1,
@@ -3487,7 +3568,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:515b4c99a5a6ca3b41504cf3c3d1468b91ba0c8e9c71f590466f95a19fe1c106"
+      "resultDigest": "sha256:8d92369a8376e8658f22997bb60123ea547270950fbc150ba7975006debe554f"
     },
     "get_linear_issue": {
       "domain": "kanban",
@@ -3495,7 +3576,7 @@
       "access": "workspace",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:029b6a76072908c7791cdaa464a1a1a1fcd7976351c60a87f1153fc03637bf59",
+      "argsDigest": "sha256:6e8a07ec284aab6047c5468696ba68af84aa08ba0a9621a18a7d062860c88bb4",
       "resultDigest": "sha256:4f18a63177434b691befa955db925475417991998b8fab349e3d9a063ceab6d4"
     },
     "get_linear_issues": {
@@ -3504,8 +3585,35 @@
       "access": "workspace",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "argsDigest": "sha256:7982596b88ea31d156d47c9dbdcd319a8c530de9aef473c193e330f29ebf15ac",
       "resultDigest": "sha256:bd37d9f9a2cb5c66e081d57eec9dd61756fd14a1926dcf9dc43116774d40f66a"
+    },
+    "get_linear_node_connections": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:43c8790aed62185253e2ea2bafc932bb4c08cb93b1318211aba2a43f134d4b91"
+    },
+    "get_linear_sync_state": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:1c3e36e91ceadbf49307bc96aeb80b7c0f58f7d0079fc4833aec85b75b850085"
+    },
+    "get_linear_teams": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7805baf91872a82480e3b9e7d2b2d473dedb4c8d9fb9771a079aae66ba8ad153"
     },
     "get_local_claude_server_status": {
       "domain": "agent-servers",
@@ -5831,7 +5939,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:7e783db5a53eba1eb816c9af869cf8f86b1091075d99dac7a73124551b71f3a4",
+      "argsDigest": "sha256:11f150191d2741da37858966f77dfee217ffa02ba853daeee5fc372763adbeb9",
       "resultDigest": "sha256:95577e36e3ebaf4797621309d730ae42a61536ccc9e820aa7e6892f20da27d41"
     },
     "pr_monitor_agent_turn_completed": {
@@ -7310,6 +7418,15 @@
       "argsDigest": "sha256:3f0014644ea7fd62ae9a15b27c06f8e533e6dea73ebe0f5eb0b54d1bf102a46e",
       "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
     },
+    "set_coordinator_action_mark": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d585af22fe4e369406a3b609f2167d7399ac0f04d6bcfa1a50eac08104963d74",
+      "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
+    },
     "set_coordinator_upstream_auto_merge": {
       "domain": "config",
       "since": 1,
@@ -7462,6 +7579,15 @@
       "critical": ["projectId"],
       "argsDigest": "sha256:72977ee14dfdccaca0e10345929cae424ca309bad31f6850a37a3edece6eda6f",
       "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
+    },
+    "set_linear_board_link": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a439d4a3696a9f2de9a896f439f6e3bc6d6f2a35538724421b58a531c743b8af",
+      "resultDigest": "sha256:38fb800c989f1f9a2f340bd803600066b4d7d0f199f35e2f822e219318d679e1"
     },
     "set_mcp_management_rollout": {
       "domain": "mcp",
@@ -8560,6 +8686,15 @@
       "critical": ["labels", "markdown", "preserveDoneStatus", "sections"],
       "argsDigest": "sha256:b31457c6de75194ede48ac2a8bf27d37dd820fc9f7dc9d96341700fd6c412bd6",
       "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
+    },
+    "update_linear_issue": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4a759509ef42ae7832967d341871022b8873dc31dba0b24b9eb7e63441f4117a",
+      "resultDigest": "sha256:4f18a63177434b691befa955db925475417991998b8fab349e3d9a063ceab6d4"
     },
     "update_native_agent_controls": {
       "domain": "native-sessions",

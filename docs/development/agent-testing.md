@@ -79,9 +79,11 @@ shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
 fixture networks. Docker refuses overlaps atomically; other errors propagate.
 Every other Docker call is `exec`ed straight to the real CLI, so a follower or
 exec session the backend stops is stopped itself rather than orphaned.
-The Docker scheduler profile allows ten minutes between reporter lines because
-the annotation cleanup case intentionally waits for a 100-tick, three-second
-backend garbage-collection pass (its own test deadline is nine minutes).
+The Docker scheduler profile allows ten minutes between reporter lines so a
+hung test still reaches its own deadline and reports its failure: the longest
+are eight minutes (the coordinator view, the Cursor fake-engine cell and the
+rebuild cycle). The annotation cleanup case no longer waits out a 100-tick
+garbage-collection period, so its deadline dropped from nine minutes to four.
 It changes no daemon settings and deletes no foreign resources. Without `ip`
 for the route check, automatic-pool exhaustion remains a hard failure. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.
@@ -115,9 +117,10 @@ isolated browser run on Linux: it reads `/proc` for the profile's Electron tree 
 display variables, the headless switches on the launcher's child) and loads the app.
 
 Electron specs launch their own Electron rather than the profile's, so the
-profile's headless setting does not apply to them. The design canvas, service
-preview and web annotation Electron specs support
-`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
+profile's headless setting does not apply to them. The specs listed in
+`HEADLESS_CAPABLE_ELECTRON_SPECS` (design canvas, cleanup, web annotation,
+seeded service preview, terminal input resume and local gateway transport)
+support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
 [Electron specs and their display](#electron-specs-and-their-display) and
 [Packaged-app Electron spec](#packaged-app-electron-spec).
 
@@ -325,6 +328,39 @@ All files tab: while hidden the page sends no Files panel read, and the new
 entry shows on return. It also checks that a tree revision announced while the
 document was hidden still shows on a local worktree after return.
 
+The inactive-environment step returns to the container only once the backend's
+change projection (`changes_get_view`, read from the test process, never the
+page) lists the new file, so the change is proven to have landed while the
+environment was not shown. The hidden-document step is a negative check and
+stays a timed window, sized from the timings the spec runs with: three page
+polls, and two polls past the container tree cache. To keep that window short
+the spec sets two test-only timings (from to-do 7569, retired 2026-11-11):
+
+- **Page poll.** `window.orkestratorAgentTestTiming = { filesPanelPollMs }`
+  from an init script (`apps/web/src/lib/agent-test-timing.ts`). Only a Vite dev
+  renderer of an agent-test profile reads it; a production build drops the
+  branch. The spec reads the interval back from that module before sizing the
+  window, so an ignored override cannot make the window shorter than one poll.
+- **Backend periods.** `<data dir>/agent-test-fixtures/timing.json`, with
+  `containerTreeMaxAgeMs` (500–10 000 ms), `webAnnotationGcEveryTicks`
+  (1–100 reconcile ticks of 3 s) and `coordinatorRepairIntervalMs`
+  (1 000–60 000 ms, the period between the passes that close a stopped
+  worker's delegation; the job checks it every second, so a new value applies
+  within a second rather than after the pass already scheduled), read by
+  `apps/backend/src/core/agent-test-timing.ts`. It exists only where the
+  dispatch hold does (a source-run backend of flavor `agent-test` with
+  `ORKESTRATOR_AGENT_TEST_ISOLATED=1` and a non-default data directory), is
+  re-read when the file changes, can only shorten a period, and ignores
+  anything malformed. Removing the file restores the production values. The
+  annotation evidence spec uses the collection period the same way, and the
+  coordinator view test the repair interval. Each time the backend reads a
+  changed file it writes what it applied to `timing-applied.json` beside it,
+  echoing the `revision` that `setBackendTiming` tags the file with. The Files
+  spec sizes its window from that acknowledged tree cache bound
+  (`appliedBackendTiming`), and from the production 10 s bound when the backend
+  has not acknowledged its revision, so an ignored override cannot make the
+  window shorter than the real cache.
+
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:
 
@@ -343,6 +379,26 @@ container UI on the same profile:
   their environments stop. Each is checked across an environment switch, a
   hidden document, a reload and a second window. The coordinator test stops
   and restarts both fixture environments.
+
+Where the coordinator view test spends its time (to-do 7569, retired, task 4):
+the test records the phases outside a `test.step` as `phase-ms` annotations,
+and the JSON report (`output/agent-testing/<run-id>/browser/results.json`)
+holds each step's duration. Measured on beelink (Linux, Docker fixture shard 2):
+
+| Run (2026-11-11) | Total | Delegations close | Everything else |
+| --- | --- | --- | --- |
+| Before the repair override | 124 s | 90 s | fixed 3 s and 6 s sleeps; set-up, login, reload, second window and fixture restart 0.6–7 s each |
+| Override armed, applied after the 60 s pass already queued (4 runs) | 44–69 s | 12–53 s | no fixed waits; same phases, 0.4–7.4 s each |
+| Override applied within a second (`ef953263b`) | 23 s | 8 s | login 2.1 s, reload 2.2 s, second window 2.7 s, fixture restart 4.1 s |
+
+Almost all of the time went on the coordinator repair pass that closes a
+stopped worker's delegation (60 s in production). The two sleeps now wait on
+the backend's delegation record, and the test shortens the repair period to
+5 s through `coordinatorRepairIntervalMs`, which the backend applies within a
+second. What is left is real work: signing in, reloading, opening a second
+window and restarting the two fixture environments. There is no other fixed
+wait to take out. In that last run the whole `test:agent:docker:isolated` task
+took 250 s (shards 195 s and 160 s; 26 passed, 5 skipped, 0 failed).
 
 Both specs' tests are named "Docker fixture", so `mise run test:agent:docker`
 runs them. Results are recorded in
@@ -623,12 +679,13 @@ On Linux an agent-test profile's Electron, and everything it starts, also runs
 with a core file size limit of 0, set by the launcher for that process tree
 only. A host whose `kernel.core_pattern` is a relative name such as `core`
 writes a crashing process's dump into its working directory, which for a
-profile is the checkout: untracked, one `git add -A` from a commit. A crash
+profile is the checkout: about a gigabyte of disk per crash (`.gitignore`
+ignores `core.<pid>`, so it cannot be committed by accident). A crash
 still shows in `electron.log` (Chromium's `FATAL` line, and
 `.../electron exited with signal SIGTRAP`), and systemd-coredump still records
 it in the journal. To keep the dumps for a diagnosis, start the profile with
 `ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1`; they then land in the checkout root as
-`core.<pid>`, so move them out before any `git add`. `headless-profile.spec.ts`
+`core.<pid>`; delete them when you are done. `headless-profile.spec.ts`
 checks the limit on each run. `mise run dev` and macOS keep their usual limit.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
@@ -1020,13 +1077,11 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
 (the profile setup is in the spec's header).
-`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
-OpenCode 2: it turns the profile's preview setting on for the run and back off
-afterwards, and adds a `steer` case (a prompt queued from the composer while a
+OpenCode also runs a `steer` case (a prompt queued from the composer while a
 turn runs is steered into it from its queue strip, then checked again after a
 reload) that every other platform records as skipped. `mise run
-verify:opencode2:real-stack` runs exactly that against the running profile
-named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+verify:opencode2:real-stack` runs the OpenCode cases against the running
+profile named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, with
 scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
 overrides the list). Start the profile with `--fixture --no-agent-credentials
@@ -1037,9 +1092,8 @@ firewall drops container traffic to the profile (beelink's ufw, to-do
 [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
 run that profile and the spec on `mise run docker:disposable -- start
 --host-loopback` with its `DOCKER_HOST` exported for both, and build the
-image inside that daemon. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
-puts the run's OpenCode sessions on the 2.x preview, the only OpenCode line
-whose shell can background a command. The `detach` case waits each
+image inside that daemon. OpenCode's `shell` can background a command, so
+`background` exercises OpenCode too. The `detach` case waits each
 provider's own idle window: 630 s for the 10 min bridges, and up to 35.5 min
 for Codex (30 min without a touch, found by a 5 min sweep), which it waits
 with the renderer closed, because Codex's tab reads refresh the thread's
@@ -1066,16 +1120,18 @@ each is one sample, not a p95:
   shell (Claude through the task's output file) and Claude's and Pi's full
   630 s detach wait. A missed final event is recovered inside the 17.5 s
   lost-announcement bound, though often above the 3 s budget.
-- OpenCode's background shell (2026-11-11): on the 2.x preview
-  (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`) the `shell` call
+- OpenCode's background shell (2026-11-11): on the 2.x line (then opted
+  into with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`, retired with
+  OpenCode 1.x the same day) the `shell` call
   returns at once, and when the command ends 2.x resumes the idle session with
   its output, which the idle page shows without a turn from the test. The
   first runs overstated this: the check matched the marker in the prompt and
   in the command line, and the tab showed only the command. Since the
   transcript shows a finished background shell's output and the check counts
   only a non-user row that arrived after the turn settled, the rerun
-  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` cannot background a command, so
-  on the default line the case is `not-exercised` (rerun `oc2-bgfix-legacy1`).
+  (`oc2-bgfix-bg3`) passed. 1.19.5's `bash` could not background a command,
+  so on that line, then the default, the case was `not-exercised` (rerun
+  `oc2-bgfix-legacy1`).
 - Claude in a container (2026-11-11, beelink2, on a disposable rootless daemon
   with host loopback, because the host's firewall drops the profile's port):
   `missed-final`, `background` and `no-renderer` passed on a current image.
@@ -1369,8 +1425,9 @@ headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
 `design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts`,
-`web-annotations-electron.spec.ts` and `service-preview-seeded-electron.spec.ts`
-can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`web-annotations-electron.spec.ts`, `service-preview-seeded-electron.spec.ts`,
+`terminal-input-resume-electron.spec.ts` and
+`local-gateway-transport-electron.spec.ts` can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
 when it is limited to those). Each reads
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
@@ -1381,6 +1438,12 @@ env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
   bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
   web-annotations-electron.spec.ts --workers=1
 ```
+
+The gateway case of `local-gateway-transport-electron.spec.ts` relaunches
+Electron from the production bundles, so build them first
+(`bun run --cwd apps/backend build` and `bun run --cwd apps/web build`);
+without them the relaunched window closes at start because `backend/main.js`
+is missing.
 
 On a host where other work creates and removes Docker networks, the
 Vite-served renderer of these specs loses its modules to
@@ -1640,7 +1703,10 @@ mise run dev:stop --profile qa-outage
 mise run dev:reset --profile qa-outage
 ```
 
-Each case records content-free timings as an annotation in `results.json`. The
+Each case records content-free timings as an annotation in `results.json`.
+On beelink2 on 2026-11-11 the four backend-restart cases failed in two runs
+while the other seven passed; that is
+[7835](../todo/cross-cutting/7835-client-outage-restart-cases-fail-on-beelink2.md). The
 Electron half (a remote backend really restarted, then a silent link) is
 `connection-outage-electron.spec.ts`, in `mise run test:agent:electron`. The Codex
 breaker against a real binary is gated separately, and needs only the pinned
@@ -1797,6 +1863,51 @@ A spec that restarts a profile builds the launcher's arguments with
 `devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
+
+### Live conditional reads (loopback models)
+
+`e2e/agent-testing/conditional-reads-live.spec.ts` measures what a streaming
+native tab costs the bridge and the renderer (efficiency batch E10, and the
+part-trimmed head of E11): requests, bytes and handler time per bridge route,
+whether state bodies repeat, what a transcript delta would have carried, and
+the renderer's answers by outcome. It is opt-in
+(`ORKESTRATOR_AGENT_TEST_E10_BASELINE=1`) and makes no billed turn. Start a
+credential-free profile (add `codex` to the platforms for the Codex runs):
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile e10-qa \
+  --fixture --headless --no-agent-credentials --agent-platforms claude,codex
+ORKESTRATOR_AGENT_TEST_PROFILE=e10-qa ORKESTRATOR_AGENT_TEST_RUN_ID=e10-qa \
+  ORKESTRATOR_AGENT_TEST_E10_BASELINE=1 E10_SCENARIO=large-window \
+  mise run test:logged -- --name e10 -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts conditional-reads-live.spec.ts
+```
+
+For Claude the spec writes an `env` block into the profile's own Claude
+`settings.json` that points the real CLI at `conditional-reads-fake-model.ts`.
+For Codex (`E10_PLATFORM=codex`) it writes a made-up API key and an
+`openai_base_url` into the profile's own Codex home, pointing it at
+`conditional-reads-codex-model.ts`, a Bun loopback Responses WebSocket. A
+`bun` wrapper in the profile's toolchain directory preloads
+`conditional-reads-bridge-counter.ts` into every bridge the backend starts.
+All of these are removed or restored at the end. `E10_SCENARIO` picks the
+scripted turn:
+
+| Scenario | Turn | Measured from |
+| --- | --- | --- |
+| `baseline` (default) | 18 rounds of 5 s at 1.2 KB/s | 5 s after it starts |
+| `large-window` | 26 rounds of 30 KB | ten rounds in, when the window is near 512 KiB |
+| `trimmed-head` | one 150 s response at 20 KB/s | 600,000 characters (`E10_READY_CHARS` moves it) |
+
+Each run measures 20 s with one viewer, 20 s with a second page on the same
+tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
+token or session id) to
+`output/agent-testing/<run id>/conditional-reads[-codex][-<scenario>].json`.
+Non-baseline scenarios add the whole turn's bridge totals and the exact
+head-row recovery reads (`/messages`); `trimmed-head` also captures the first
+viewer to `output/visual-previews/`. Stop and reset the profile afterwards.
+The latest figures are in
+[native-transcripts.md](../architecture/native-transcripts.md#one-request-per-round).
 
 ### Loopback plan-usage origin
 
@@ -2481,8 +2592,8 @@ session writes.
 
 ### Auto-pipeline flow (fake model)
 
-`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline launch
-end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
+`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline flow
+(the toolbar's **To pipeline** button) end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
 disposable `dev:test --fixture --headless --no-agent-credentials
 --agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
 then stops and resets the profile. The real backend, Pi bridge, Pi SDK
@@ -2491,18 +2602,22 @@ fake. The spec points the profile's isolated Pi `models.json` at a loopback
 model (`auto-pipeline-fake-model.ts`, script in
 `auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
 defaults as Pi on that model with one reviewer. The fake answers each stage's
-result tool with a fixed, valid, finding-free result, keeps only counts, and
-parks Verify until the spec releases it.
+result tool with a fixed, valid, finding-free result, answers the drafting
+request by calling `convert_to_pipeline` with a fixed draft, keeps only counts,
+and parks Verify until the spec releases it.
 
 The one case walks the user's path: an interactive Pi tab writes a file and
-goes idle; in the browser the user right-clicks **Multi Review**, chooses
-**Auto-pipeline**, edits the drafted title, adds a criterion and confirms. It
+goes idle; in the browser the user clicks **To pipeline**, which sends that
+tab the drafting request, and the tab's own agent submits the draft. The user
+edits the drafted title, adds a criterion and confirms. It
 then checks the ticket, the promotion commit and its trailer, and the adopted
 Build; sets the ticket's delivery to commit-only while Verify is parked;
 switches to another environment, releases Verify, and waits for the pipeline
 to finish unwatched. Back on the environment, and again after a reload and at
 a 390 px viewport, the graph must show the commit-only completion from backend
-state, and the source tab must have received no further turn. Screenshots go to
+state. The drafting request is the only turn the source tab receives: it
+grows the transcript once, and confirming and the pipeline add nothing.
+Screenshots go to
 `output/visual-previews/auto-pipeline-live-*.png`.
 
 To run the spec against a profile you started yourself, start it with the same
@@ -3450,8 +3565,11 @@ waits for the load event, which a late font holds.
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
 owned by another profile. Its two annotation cases write evidence into the
-fixture container, check paths inside it and wait (up to about 5 minutes, one
-garbage-collection period) for settled-evidence cleanup; the live one needs
+fixture container, check paths and source hints inside it, and wait for
+settled-evidence cleanup. The cleanup case shortens the backend's
+garbage-collection period from 100 to 2 reconcile ticks through the profile's
+timing file (see [Container app wiring qualification](#container-app-wiring-qualification)),
+so it waits seconds rather than up to 5 minutes; the live one needs
 `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`.
 
 `web-annotations-approval-live.spec.ts` (opt-in

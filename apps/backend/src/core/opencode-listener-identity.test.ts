@@ -7,7 +7,6 @@ import {
   judgeOpenCodeListener,
   listOpenCodeListenersScript,
   OPENCODE2_LISTENER_RECORD,
-  OPENCODE_LISTENER_RECORD,
   openCodeListenerRecord,
   parseOpenCodeListeners,
   recordOpenCodeListenerScript,
@@ -75,7 +74,7 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
     const record = path.join(directory, "opencode-listener");
     await writeFile(record, "stale");
     const recordScript = recordOpenCodeListenerScript(port).replaceAll(
-      OPENCODE_LISTENER_RECORD,
+      OPENCODE2_LISTENER_RECORD,
       record,
     );
 
@@ -95,10 +94,9 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
     expect(judge()).toBe("replaced");
   });
 
-  test("the 2.x server has a record of its own, written where it is named", async () => {
-    expect(openCodeListenerRecord("opencode")).toBe(OPENCODE_LISTENER_RECORD);
+  test("the 2.x server's record is the only one, written where it is named", async () => {
     expect(openCodeListenerRecord("opencode2")).toBe(OPENCODE2_LISTENER_RECORD);
-    expect(OPENCODE2_LISTENER_RECORD).not.toBe(OPENCODE_LISTENER_RECORD);
+    expect(OPENCODE2_LISTENER_RECORD).toBe("/run/orkestrator-bridge/opencode2-listener");
     const port = await listen();
     const directory = await mkdtemp(path.join(tmpdir(), "ork-opencode-listener-"));
     directories.push(directory);
@@ -107,7 +105,7 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
       OPENCODE2_LISTENER_RECORD,
       record,
     );
-    expect(script).not.toContain(OPENCODE_LISTENER_RECORD);
+    expect(script).not.toContain("/run/orkestrator-bridge/");
     expect(sh(script).trim()).toBe("recorded");
     expect((await readFile(record, "utf8")).trim()).toMatch(/^\d+$/);
   });
@@ -119,7 +117,7 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
     directories.push(directory);
     const record = path.join(directory, "opencode-listener");
     expect(
-      sh(recordOpenCodeListenerScript(port).replaceAll(OPENCODE_LISTENER_RECORD, record)).trim(),
+      sh(recordOpenCodeListenerScript(port).replaceAll(OPENCODE2_LISTENER_RECORD, record)).trim(),
     ).toBe("refused");
     expect(await readFile(record, "utf8").catch(() => null)).toBeNull();
   });
@@ -130,8 +128,8 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
     const record = path.join(directory, "opencode-listener");
     await writeFile(record, "123");
     // Substitute the proc listing, while running the real record publication shell.
-    const script = recordOpenCodeListenerScript(4096)
-      .replaceAll(OPENCODE_LISTENER_RECORD, record)
+    const script = recordOpenCodeListenerScript(4102)
+      .replaceAll(OPENCODE2_LISTENER_RECORD, record)
       .replace(/inodes=\$\(awk[^\n]+/, "inodes='123 456'");
     expect(sh(script).trim()).toBe("refused");
     expect(await readFile(record, "utf8").catch(() => null)).toBeNull();

@@ -76,15 +76,25 @@ const STATUS_TEXT: Partial<Record<DesignLinkStatus, string>> = {
   checking: "Checking…",
   retained: "Open in another window",
   resumable: "Closed — can be resumed",
+  archived: "Closed — archived by the agent",
   missing: "Closed — no conversation to resume",
   unavailable: "Closed — could not check the backend",
   closed: "Closed — conversation ended",
 };
 
-/** A destination the context can be added to: open now, or reopened first. */
+/** A destination the context can be added to: open now, or reopened (and unarchived) first. */
 function canReceive(status: DesignLinkStatus): boolean {
-  return status === "open" || status === "retained" || status === "resumable";
+  return (
+    status === "open" || status === "retained" || status === "resumable" || status === "archived"
+  );
 }
+
+/** The row button that reopens a closed or retained conversation. */
+const RESUME_ACTION = {
+  retained: { verb: "Open", label: "Open conversation" },
+  resumable: { verb: "Resume", label: "Resume conversation" },
+  archived: { verb: "Unarchive and resume", label: "Unarchive and resume" },
+} as const;
 
 function canResumePlatform(platform: string): boolean {
   return (
@@ -324,11 +334,15 @@ function DesignAgentDialogBody({
     });
   const receivingLinks = links.filter((link) => canReceive(statusOf(link)));
   // Until the user picks, prefer an open conversation, then one that can be
-  // resumed, and only then a new one.
+  // resumed, and only then a new one. An archived conversation is never picked
+  // for the user: reaching it unarchives it, which the user has to choose.
   const [destination, setDestination] = useState<Destination | null>(null);
   const autoLink =
     links.find((link) => statusOf(link) === "open") ??
-    links.find((link) => canReceive(statusOf(link)));
+    links.find((link) => {
+      const status = statusOf(link);
+      return status !== "archived" && canReceive(status);
+    });
   const chosen: Destination =
     destination ?? (autoLink ? { kind: "link", linkId: autoLink.id } : { kind: "new" });
   const destinationLink =
@@ -428,6 +442,7 @@ function DesignAgentDialogBody({
         canvasId: context.canvasId,
         link,
         retainTab: statusOf(link) === "retained",
+        restoreArchived: statusOf(link) === "archived",
         onClaimed: (claimed) => {
           // Keep the adopted tab even if local creation fails. Retry and a
           // later projection sync must converge on this already-open mapping.
@@ -587,14 +602,16 @@ function DesignAgentDialogBody({
       </p>
     </>
   );
-  const reopening = destinationLink !== undefined && statusOf(destinationLink) === "resumable";
+  const destinationStatus = destinationLink ? statusOf(destinationLink) : undefined;
+  const reopening = destinationStatus === "resumable" || destinationStatus === "archived";
+  const reopenVerb = destinationStatus === "archived" ? "Unarchive, resume" : "Resume";
   const actionLabel =
     effectiveDestination.kind === "new"
       ? "Start a new conversation"
       : reopening
         ? handoff
-          ? "Resume and add handoff"
-          : "Resume and add to composer"
+          ? `${reopenVerb} and add handoff`
+          : `${reopenVerb} and add to composer`
         : handoff
           ? "Add handoff to composer"
           : "Add to composer";
@@ -749,7 +766,7 @@ function DesignAgentDialogBody({
                 <li
                   key={link.id}
                   data-testid={`design-link-${link.id}`}
-                  className="flex items-center gap-2 rounded-md border border-border/60 px-2 py-1.5"
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-2 py-1.5"
                 >
                   {canReceive(status) ? (
                     <input
@@ -764,7 +781,7 @@ function DesignAgentDialogBody({
                       disabled={pending}
                     />
                   ) : null}
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-[1_1_12rem]">
                     <p className="truncate">{title}</p>
                     <p className="text-xs text-muted-foreground">
                       {platformLabel(link.platform)} ·{" "}
@@ -785,16 +802,16 @@ function DesignAgentDialogBody({
                       Open
                     </Button>
                   ) : null}
-                  {status === "resumable" || status === "retained" ? (
+                  {status === "resumable" || status === "retained" || status === "archived" ? (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
                       disabled={pending}
-                      aria-label={`${status === "retained" ? "Open" : "Resume"} ${title}`}
+                      aria-label={`${RESUME_ACTION[status].verb} ${title}`}
                       onClick={() => void resumeOnly(link)}
                     >
-                      {status === "retained" ? "Open conversation" : "Resume conversation"}
+                      {RESUME_ACTION[status].label}
                     </Button>
                   ) : null}
                   {status === "unavailable" ? (

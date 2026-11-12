@@ -4,8 +4,9 @@ Status: Living — operator and architecture guide for the client command
 surface of the published `orkestrator` package.
 
 Testing workflow and coverage by layer: [cli-testing.md](../development/cli-testing.md).
-Outstanding work: [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md) and
-[0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
+Outstanding work: [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
+What is deliberately not built, and what would reopen it, is under
+[Not built](#not-built) (from to-do 0017, retired on 2026-11-11).
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
 Public agent summary: [orkestrator.dev/skill.md](https://orkestrator.dev/skill.md)
@@ -991,10 +992,26 @@ are absent and reports Docker failures in `cleanupErrors`. `live-session`
 records the model each session reports in force (`session config get`) on
 its `session start`
 manifest entry, beside the pinned model or `null` for the provider default.
+Before cleanup, the runner reads a live scenario's recorded token usage from
+its backend's `get_usage_history` report (`scenarios/usage.ts`) into that
+scenario's `results[].usage` (counts, priced spend and per-model totals only;
+`readError` when the read fails, never a failed run).
 `live-session` also lists the session's
 commands, checks that an unknown and a changed command are refused, runs a
 selected command (Claude's built-in `/context`), and sends `--literal`,
-`--attach` and an `--enqueue` prompt behind a running turn. Options: `--scenario NAME` (repeat),
+`--attach` and an `--enqueue` prompt behind a running turn. The selected
+command runs on Claude only, by decision: other providers run the refusal,
+`--literal`, `--attach` and `--enqueue` stages. After
+`dispatch_native_agent_intent` the CLI path is provider-neutral, and each
+provider's executor is proved live through the composer
+([0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md)),
+so a planted command per provider would add fixtures and live tokens without
+proving another path. The cost is that the CLI's name-to-ID resolution and
+`bindingRevision` echo are proved live on one catalogue shape; unit tests
+(`public-api-command-surface.test.ts`, `command-surface.test.ts`) cover the
+rest. Queued and selected-command results get no browser check either: they
+appear in the tab's existing queue and transcript, whose rendering this
+surface did not change. Options: `--scenario NAME` (repeat),
 `--list`, `--keep-on-failure`, `--environment-type container
 --docker-image TAG` (a worktree-owned image from `mise run docker:build:dev`;
 the shared `latest` tag is refused), and `--provider NAME` for the
@@ -1021,10 +1038,16 @@ Claude's original custom config directory or host Keychain is read before
 isolation, and only its access token is staged in the disposable Claude home;
 its refresh token is never copied. Inherited credential-source and agent-test
 host-directory controls are cleared; only the runner's explicit live provider
-selection authorizes credentials. Git (including both global config files),
-gh and mise retain their host settings through explicit tool-specific overrides
-while provider XDG homes remain disposable. The same disposable provider homes
-are staged into containers.
+selection authorizes credentials. `HOME` itself is the disposable home, so a
+reader of any other `~/.<tool>` path, such as the shared `~/.agents/skills`
+that Codex, Cursor, Grok, OpenCode and Pi list, finds nothing of the
+operator's. Git (including both global config files), gh, mise, Docker
+(`DOCKER_CONFIG`), GnuPG (`GNUPGHOME`), Bun (`BUN_INSTALL` and its cache) and
+`XDG_CACHE_HOME` retain their host settings through explicit tool-specific
+overrides while provider homes remain disposable; SSH finds its keys through
+the password database, not `HOME`. A host Git config that names a `~/` path
+resolves it under the disposable home. The same disposable provider homes are
+staged into containers.
 
 A backend never passes on an agent tool connection it inherited
 (`ORKESTRATOR_AGENT_MCP_URL` and `_TOKEN`, dropped by
@@ -1047,6 +1070,100 @@ are not yet live-qualified (see
 Which test proves each scenario class is listed in
 [cli-testing.md](../development/cli-testing.md#coverage-by-layer).
 
+## Not built
+
+These were left out on purpose. Each keeps the rules below; reopen one as a
+new to-do (with its own design and review where noted) when its trigger is
+met. Recorded from to-do 0017 (retired on 2026-11-11; its last version is
+`git show 14df96544:docs/todo/cli-and-slash-commands/0017-cli-command-surface.md`).
+
+### Following without an event stream
+
+`session transcript --follow` and `attention --follow` poll on the shared
+observation backoff (`nextPublicWaitDelay`: 250 ms doubling to 2 s), and
+`transcriptFollow` stays `poll`. The trigger measurement is the
+`a busy-session follow stays within the polling budget` case in
+`packages/cli/tests/client-waits.test.ts`: a scripted session writes one
+1 KiB message every 400 ms for 30 s and is then idle for 30 s, followed for
+60 s on a virtual clock against a backend that answers `unchanged` to a held
+`knownToken`. Measured (2026-11-11; the poll times are fixed by the backoff,
+so the counts and latencies are exact):
+
+| Measure | Result | Budget the test pins |
+| --- | --- | --- |
+| Reads in the minute | 34 (18 while busy, 15 idle) | at most 35 |
+| Time from a message being written to its first read | 1,750 ms at most, 937 ms mean | at most 2 s |
+| Downloaded while busy | 658 KB in 18 reads: each changed read carries the whole window (here up to 75 messages) | under one window per read |
+| Downloaded while idle | 1.9 KB in 15 reads, every one `unchanged` (126 B each) | no page |
+
+On the backend each read is still one `get_native_agent_transcript_update`
+with `forceSnapshot` (the conditional read saves the wire, not the window
+read). An open native tab polls the same read about twice a second while a
+turn streams (39 to 40 answers in 20 s in
+to-do 6680 (retired;
+`git show 1fd391e3a:docs/todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md`)),
+so one follower costs about a quarter of one open tab. `attention --follow`
+has the same schedule; its page sizes are in
+[control-mcp-voice.md](control-mcp-voice.md#hearing-about-work-without-asking).
+
+Polling is within that budget, so no push follow is built. Reopen it when a
+client needs new messages faster than 2 s, or when a real follower is
+measured outside the budget (for example a changed window read on every poll
+of a remote gateway). Such a follow must reuse the gateway SSE
+(`GatewayEventReplay` and `parseGatewayCursor` in
+`apps/backend/src/gateway-event-replay.ts`), subscribe before replaying, echo
+the client's cursor in `connected`, detect gaps and generation changes and
+reset from a snapshot, bound every frame and buffer, disconnect a slow
+consumer explicitly, report auth expiry and shutdown as observation outcomes,
+serve both followers, and route through `--node` to the leaf that owns the
+session. It is advertised as a new `transcriptFollow` value.
+
+### Worker-scoped CLI credentials
+
+A worker that wants the CLI has no scoped credential of its own, and must
+never discover the operator token. Scoped automation from a worker uses a
+Control MCP credential ([control-mcp.md](control-mcp.md)) meanwhile. The
+proposed shape: the gateway accepts a Control MCP credential bearer only on
+`public_action`, applies `controlMcpActionAllowed` and the confirmation rules,
+and dispatches under `control-mcp:<id>` authority (already threaded through
+the operation ledger, node targets and schedule actions, and relayed to leaf
+nodes); the CLI reads it from a private file, as
+`connection add --url … --credential-file` already does for a remote
+gateway token, never from argv or the environment, which child processes
+inherit and `/proc` shows. The gateway accepts no Control MCP bearer today. It is a new authentication path
+into the gateway, reachable from a worker, so it needs its own to-do with a
+security design and isolation review before any code; start one when someone
+asks for it.
+
+### Declarative `apply` and backend auto-start
+
+Not planned: nobody has asked for either. Auto-start needs process ownership,
+readiness detection and data-directory exclusivity first; starting a second
+backend over the desktop's data directory is never a valid fallback, and
+client commands keep never starting a backend
+([Invocation modes](#invocation-modes)).
+
+### Rules for new client features
+
+- The CLI is a thin client of the authenticated gateway. A second
+  implementation of worktree, Docker, provider or settings persistence in the
+  client would duplicate the most delicate code in the application, so new
+  features reuse backend services through public actions.
+- The gateway was chosen over an MCP client (MCP lacked tools for several
+  operations and would tie basic shell use to MCP session handling) and over a
+  new HTTP server (it already authenticates callers and reaches the same
+  command registry, so a server for the CLI alone adds a listener and no
+  capability). Do not add either, and never expose raw registry dispatch.
+  Control MCP keeps this: it dispatches only `PUBLIC_ACTIONS` through
+  `public_action`, in process.
+- Sessions in one environment share its worktree: `session start` gives
+  independent conversations, not filesystem isolation.
+- A completed turn does not prove the requested change. Scripts and scenarios
+  check files or tests separately (for example with `environment exec`).
+- Plain text, typed commands, selected commands, steering and queued
+  follow-ups keep their distinct intent end to end; never change the caller's
+  intent automatically, for example by turning a busy prompt into a steer.
+
 ## Limitations and rollout
 
 - `capabilities.features` reports `projectCascadeRemove`, `localProjectInit`,
@@ -1065,7 +1182,7 @@ Which test proves each scenario class is listed in
   `project update --remote`).
 - Not provided: event-stream following (`--follow` polls snapshots),
   worker-scoped CLI credentials, declarative `apply`, and backend auto-start;
-  see [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md).
+  see [Not built](#not-built).
 - Container lifecycle and exec are qualified on Linux Docker and macOS Docker
   Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
   live Claude, Codex and OpenCode container passes. The 2026-10-25 evidence

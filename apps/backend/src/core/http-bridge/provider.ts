@@ -24,7 +24,7 @@ import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
-  type ProviderMcpConfigReport,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "../agent-provider-contract.js";
@@ -104,6 +104,7 @@ import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
 import { readBridgeSessionBranches } from "./session-branches.js";
+import { readBridgeHumanPrompts } from "./human-prompts.js";
 import { HttpBridgeSteerQualification } from "./steer-qualification.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
@@ -532,18 +533,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.activityBatchReader.read(sessionIds);
   }
 
-  async humanPromptOutput(sessionId: string) {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/human-prompts`,
-      {},
-      this.fetchImpl,
-    );
-    if (response.status === 404 || response.status === 405) return null;
-    assertOk(response, "Human prompt observation");
-    return asRecord(
-      await boundedJson(response, "Human prompt observation", { remaining: 512 * 1024 }),
-    );
+  humanPromptOutput(sessionId: string) {
+    return readBridgeHumanPrompts(this.connection, this.fetchImpl, sessionId);
   }
 
   async activity(sessionId: string): Promise<ProviderActivityState> {
@@ -614,9 +605,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge/mcp-evidence.ts`. */
-  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigReport> {
+  mcpConfigEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
     const { connection, fetchImpl, agent } = this;
-    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId });
+    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId, signal });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {
@@ -1111,8 +1102,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.catalogAdapter.refreshCommands(sessionId);
   }
 
-  mcpServers(sessionId: string) {
-    return this.catalogAdapter.mcpServers(sessionId);
+  mcpServers(sessionId: string, options?: ProviderReadOptions) {
+    return this.catalogAdapter.mcpServers(sessionId, options);
   }
 
   mcpServerAction(
@@ -1369,8 +1360,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       } catch {
         return { outcome: "unknown", requestId: action.requestId };
       }
-      if (response.status === 404)
+      if (response.status === 404) {
+        this.steerQualification.forget(sessionId);
         throw new PromptRejectedError(`${this.agent} session was not found`);
+      }
       const payload = asRecord(
         await boundedJson(response, `${this.agent} steer`).catch(() => ({})),
       );
@@ -1492,5 +1485,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
+    this.steerQualification.forget(sessionId);
   }
 }

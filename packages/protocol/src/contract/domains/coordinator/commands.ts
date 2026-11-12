@@ -6,12 +6,15 @@
  */
 import { COORDINATOR_PROJECT_COMMANDS } from "./commands-project.js";
 import { COORDINATOR_CONTROLLER_COMMANDS } from "./commands-controller.js";
+import { COORDINATOR_ACTION_MARK_COMMANDS } from "./commands-action-marks.js";
 
 export * from "./commands-project.js";
 export * from "./commands-controller.js";
+export * from "./commands-action-marks.js";
 
 /** Every defined `coordinator` command. */
 export const COORDINATOR_COMMANDS = [
   ...COORDINATOR_PROJECT_COMMANDS,
   ...COORDINATOR_CONTROLLER_COMMANDS,
+  ...COORDINATOR_ACTION_MARK_COMMANDS,
 ] as const;

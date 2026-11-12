@@ -32,11 +32,13 @@ import {
   FILES_PANEL_DATA_SAVING_BACKOFF_MS,
   FILES_PANEL_DATA_SAVING_UNWATCHED_BACKOFF_MS,
 } from "@/lib/data-saving-policy";
+import { filesPanelPollIntervalMs } from "@/lib/agent-test-timing";
 
 const log = createLogger("web.files");
 
-// Auto-refresh interval in milliseconds (5 seconds)
-const AUTO_REFRESH_INTERVAL = 5000;
+// Auto-refresh interval: 5 s, shorter only in an agent-test renderer that
+// asked for it (`lib/agent-test-timing.ts`).
+const AUTO_REFRESH_INTERVAL = filesPanelPollIntervalMs();
 export const MAX_EXTERNAL_FILE_DROP_BYTES = 8 * 1024 * 1024;
 export const MAX_EXTERNAL_FILE_DROP_COUNT = 20;
 

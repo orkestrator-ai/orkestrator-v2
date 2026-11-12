@@ -1,10 +1,10 @@
 /**
- * The OpenCode 2.x session provider (docs/todo/agent-engines/0008-opencode-v2.md,
- * build plan phase 3).
+ * The OpenCode session provider for one server generation
+ * (docs/todo/agent-engines/0008-opencode-v2.md). `OpenCodeEnvironmentProvider`
+ * (`environment-provider.ts`) builds one per server and hands it every call.
  *
- * It drives a 2.x `opencode serve` through {@link OpenCode2Client}. It is not
- * routed to yet: the routing provider and the per-session protocol marker
- * come next. The provider covers the required session contract and steering:
+ * It drives OpenCode 2's `opencode serve` through {@link OpenCode2Client},
+ * covering the session contract and steering:
  *
  * - **Dispatch evidence lives in the input.** Every prompt and steer carries
  *   `metadata.orkestrator.requestId`, which 2.x echoes on the user row (and on
@@ -36,6 +36,7 @@
  */
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
+  AgentModel,
   NativeAgentAuthStatus,
   NativeAgentForkOutcome,
   NativeAgentMcpServer,
@@ -58,6 +59,7 @@ import {
   type ProviderDispatchStatus,
   type ProviderNativeAgentSessionAction,
   type ProviderPrepareDispatchOptions,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
@@ -65,12 +67,15 @@ import {
   type ProviderSteerDispatchStatus,
 } from "../agent-provider-contract.js";
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
+import { readOpenCode2ModelCatalogue } from "./models.js";
+import { attachOpenCode2Instructions } from "./instructions.js";
+import { noteOpenCode2LocationsReloaded } from "./reload-gate.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
 import {
   OPENCODE2_EVENT_STREAM_SILENCE_MS,
   OpenCodeStreamSilenceWatchdog,
   type OpenCodeSilenceClock,
-} from "../opencode-stream-silence.js";
+} from "./stream-silence.js";
 import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
 import { OpenCode2McpServers, openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
@@ -233,6 +238,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       });
     }
     this.features.noteCreated(session.id, model, options);
+    // A coordinator's server runs the read-only policy: no shared instructions.
+    if (!this.coordinator)
+      await attachOpenCode2Instructions(this.client, session.id, options.policy);
     this.registerSession(session.id);
     return session.id;
   }
@@ -416,6 +424,10 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.reads.usage(sessionId);
   }
 
+  recentTurnUsage(sessionId: string) {
+    return this.reads.recentUsage(sessionId);
+  }
+
   /** A `schema` turn's parsed final answer, once its run has settled. */
   async structured<T>(
     sessionId: string,
@@ -435,8 +447,11 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   /** The user's MCP servers on this location; Orkestrator's own are not listed. */
-  mcpServers(): Promise<NativeAgentMcpServer[]> {
-    return this.workflow.mcpServers();
+  mcpServers(
+    _sessionId?: string,
+    options: ProviderReadOptions = {},
+  ): Promise<NativeAgentMcpServer[]> {
+    return this.workflow.mcpServers(options.signal);
   }
 
   mcpServerAction(_sessionId: string, serverId: string, action: NativeAgentMcpServerAction) {
@@ -575,6 +590,8 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.grants.runExclusive(key, async () => {
       const sessionId = await this.features.resumableSession(resumableSessionId);
       if (this.coordinator) await this.grants.restate(sessionId);
+      // A conversation from before the instructions entry existed gets it now.
+      else await attachOpenCode2Instructions(this.client, sessionId);
       this.registerSession(sessionId);
       return sessionId;
     });
@@ -627,6 +644,54 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   refreshCatalog(): void {
     this.features.refreshCatalog();
+  }
+
+  /** The unfiltered catalogue (no allowlist), for the durable cache. */
+  async rawModelCatalog(): Promise<AgentModel[]> {
+    return (await readOpenCode2ModelCatalogue(this.client, [])).models;
+  }
+
+  /**
+   * Whether any session on this server has a run in progress, whichever
+   * provider owns it: a tab's, a pipeline's, a review's or one no provider in
+   * this backend registered. A parked permission or form belongs to a run, so
+   * it reads busy too. One fresh `/api/session/active` read, never the cache.
+   */
+  async serverBusy(): Promise<boolean> {
+    const running = await this.client.activeSessions();
+    this.activityCache = { at: this.now(), running };
+    return running.size > 0;
+  }
+
+  /**
+   * Rebuild every loaded location, so the server reads its configuration
+   * again (`POST /api/location/reload`). It cancels pending permissions and
+   * forms; callers reload only an idle server. It also drops the runtime MCP
+   * servers every provider registered, which the next turn re-registers
+   * (`mcp.ts`).
+   */
+  async reloadLocations(): Promise<void> {
+    try {
+      await this.client.api("POST", "/api/location/reload", "OpenCode configuration reload", {
+        signal: AbortSignal.timeout(30_000),
+      });
+      // The reload answers before the location is rebuilt, and a catalogue
+      // read in between answers an empty command list (seen on 2.2.6), which
+      // would be cached as the truth. The agent list waits for the rebuilt
+      // location, so the gate is held until reads see its new state.
+      await this.client
+        .api("GET", "/api/agent", "OpenCode agent list", { signal: AbortSignal.timeout(30_000) })
+        .catch((error: unknown) => {
+          log.debug("location.reload-unconfirmed", {
+            error: formatLogError(error, { message: false }),
+          });
+        });
+    } finally {
+      // Even an ambiguous failure may have rebuilt the location and dropped
+      // every runtime MCP server on it: no provider trusts its registrations.
+      noteOpenCode2LocationsReloaded(this.client.baseUrl);
+    }
+    this.refreshCatalog();
   }
 
   observationStreamLive(): boolean {

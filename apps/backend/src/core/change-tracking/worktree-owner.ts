@@ -44,6 +44,7 @@ import {
   type WorktreeRow,
 } from "./change-ledger.js";
 import type { ObjectStore } from "./object-store.js";
+import { filterablePaths, manifestCovers, type WorktreeActivity } from "./inert-hints.js";
 
 export type WorktreeTarget =
   | { kind: "local"; worktreePath: string }
@@ -174,7 +175,7 @@ export class WorktreeChangeOwner {
   private observationEpoch = 0;
   private readonly contentGenerations = new Map<string, number>();
   private previous: Manifest | null = null;
-  private previousLoaded = false;
+  private previousLoad: Promise<void> | null = null;
   private statCache = new Map<string, StatCacheEntry>();
   private running: Promise<CaptureOutcome> | null = null;
   private queued: {
@@ -260,11 +261,46 @@ export class WorktreeChangeOwner {
     return this.contentGenerations.get(pathId) ?? 0;
   }
 
-  private async loadPrevious(): Promise<void> {
-    if (this.previousLoaded) return;
-    this.previousLoaded = true;
-    const last = this.deps.ledger.latestSnapshot(this.identity.worktreeId);
-    if (last) this.previous = await readManifest(this.deps.store, last.tree_oid);
+  /**
+   * Load the latest published manifest once. Shared, because a hint check and
+   * a capture can both want it first: a second caller must wait for the read,
+   * not proceed as if there were no previous manifest. A failed read rejects
+   * for the callers already waiting and is not retried, as before.
+   */
+  private loadPrevious(): Promise<void> {
+    if (this.previousLoad) return this.previousLoad;
+    const load = (async () => {
+      const last = this.deps.ledger.latestSnapshot(this.identity.worktreeId);
+      if (!last) return;
+      const manifest = await readManifest(this.deps.store, last.tree_oid);
+      // A capture that published meanwhile has the newer manifest.
+      this.previous ??= manifest;
+    })();
+    this.previousLoad = load.catch(() => undefined);
+    return load;
+  }
+
+  /**
+   * Whether a settled watcher hint cannot move the next capture's tree, so a
+   * provisional capture for it would only find the tree already published
+   * (todo 7840). True only when the hint names its every path
+   * (`filterablePaths`), the previous manifest covers none of them, and Git
+   * says each is ignored and the inventory would list none of them or
+   * anything below them. Containers, a missing previous manifest and every
+   * failure answer false, so the caller captures.
+   */
+  async hintCannotMoveTree(activity: WorktreeActivity, signal?: AbortSignal): Promise<boolean> {
+    const probe = this.executor.ignoredAndUnlisted?.bind(this.executor);
+    if (!probe) return false;
+    const paths = filterablePaths(activity);
+    if (!paths) return false;
+    try {
+      await this.loadPrevious();
+      if (!this.previous || manifestCovers(this.previous, paths)) return false;
+      return await probe(paths, signal ?? new AbortController().signal);
+    } catch {
+      return false;
+    }
   }
 
   /**

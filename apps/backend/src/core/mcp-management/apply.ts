@@ -27,6 +27,7 @@ import {
   type McpRuntimeApplyEntry,
 } from "@orkestrator/protocol/mcp-management";
 
+import { runWithTimeout } from "../abortable-timing.js";
 import { awaitsEvidenceIn, withTimeout, type RuntimeEvidenceRead } from "./evidence.js";
 import type { Supersession } from "./external-edits.js";
 
@@ -81,18 +82,26 @@ export interface RuntimeProbe {
    * work running; `names` are the MCP servers the rebuilt instance lists.
    */
   reloadOpenCode?(environmentId: string): Promise<{ outcome: ReloadOutcome; names?: string[] }>;
-  /** Best-effort listing after disposal, with its own timeout budget. */
-  openCodeMcpServerNames?(environmentId: string): Promise<string[] | undefined>;
+  /**
+   * Best-effort listing after disposal, with its own timeout budget. `signal`
+   * aborts when that budget runs out, ending the listing request.
+   */
+  openCodeMcpServerNames?(
+    environmentId: string,
+    signal?: AbortSignal,
+  ): Promise<string[] | undefined>;
   /**
    * What the session's bridge reports about the MCP configuration its live
    * runtime was built from, read through the no-touch `/runtime-health`
    * route. Never starts a bridge, touches liveness or re-attaches a session;
-   * `not-running` and `none` are answers, not failures.
+   * `not-running` and `none` are answers, not failures. `signal` aborts when
+   * the read's deadline fires, ending the bridge request.
    */
   mcpConfigEvidence(
     environmentId: string,
     agent: AgentPlatform,
     logicalSessionKey: string,
+    signal?: AbortSignal,
   ): Promise<RuntimeEvidenceRead>;
 }
 
@@ -266,11 +275,10 @@ export async function planRuntimes(
   savedRevision?: string,
   options: {
     /**
-     * OpenCode: the saved file is one each directory instance reads when it
-     * is built (project files, `.opencode` and config directories,
-     * `OPENCODE_CONFIG`), so rebuilding the instance loads it. OpenCode 1.19
-     * caches the user files in `$XDG_CONFIG_HOME/opencode` for the server's
-     * lifetime, so those still need a restart.
+     * OpenCode: the saved file is one each location reads when it is built
+     * (project files, `.opencode` and config directories, `OPENCODE_CONFIG`),
+     * so rebuilding the locations (`POST /api/location/reload`, after the
+     * user files are mirrored again) loads it.
      */
     openCodeInstanceSource?: boolean;
   } = {},
@@ -556,6 +564,8 @@ export async function advanceReloadRuntimes(
     try {
       // Environment-level and no-spawn: a bridge restart that forgot every
       // session still reloads, and a stopped process is never cold-started.
+      // The reloads are mutations, so their timeout only stops the wait: an
+      // abort could not undo a reload the bridge already started.
       const result =
         provider === "codex"
           ? {
@@ -588,9 +598,9 @@ export async function advanceReloadRuntimes(
         const names =
           ("names" in result ? result.names : undefined) ??
           (probe.openCodeMcpServerNames
-            ? await withTimeout(
-                probe.openCodeMcpServerNames(environmentId),
-                CODEX_RELOAD_TIMEOUT_MS,
+            ? await runWithTimeout(
+                (signal) => probe.openCodeMcpServerNames!(environmentId, signal),
+                { timeoutMs: CODEX_RELOAD_TIMEOUT_MS },
               ).catch(() => undefined)
             : undefined);
         if (!names) {

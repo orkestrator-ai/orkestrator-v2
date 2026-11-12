@@ -8,6 +8,10 @@ const UNREACHABLE = [
   "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory",
   "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
   'error during connect: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.47/containers/json": EOF',
+  // An attached `docker run` whose daemon stopped (SIGTERM) or died (SIGKILL)
+  // while it waited, as Engine 29.9.3 prints them.
+  'time="2026-11-11T14:55:41Z" level=error msg="Error waiting for container: Canceled: grpc: the client connection is closing: context canceled"',
+  'time="2026-11-11T14:55:57Z" level=error msg="error waiting for container: unexpected EOF"',
 ];
 
 describe("docker CLI error wording", () => {
@@ -30,6 +34,21 @@ describe("docker CLI error wording", () => {
     expect(isDockerDaemonUnreachable("Error response from daemon: No such container: abc")).toBe(
       false,
     );
+    // A daemon that answered the wait is not an outage.
+    expect(
+      isDockerDaemonUnreachable(
+        "Error waiting for container: Error response from daemon: No such container: abc",
+      ),
+    ).toBe(false);
+    // Even when the daemon's answer itself contains connection-loss wording.
+    for (const answered of [
+      "Error waiting for container: Error response from daemon: dial tcp 10.0.0.2:5000: connect: connection refused",
+      'time="2026-11-11T14:55:41Z" level=error msg="error waiting for container: Error response from daemon: read: connection reset by peer"',
+      "Error waiting for container: Error response from daemon: unexpected EOF",
+    ]) {
+      expect(isDockerDaemonUnreachable(answered)).toBe(false);
+      expect(operationFailureCode(new Error(answered))).not.toBe("daemon-unavailable");
+    }
     expect(operationFailureCode(new Error("something else"))).toBe("unknown");
   });
 });

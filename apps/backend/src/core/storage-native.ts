@@ -526,19 +526,12 @@ export class NativeAgentSessionsRepository {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
-          | "openCodeProtocol"
           | "modelSubstitutionNotice"
         >
       >,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
-    if (
-      input.openCodeProtocol !== undefined &&
-      (input.openCodeProtocol !== "v2" || input.agent !== "opencode")
-    ) {
-      throw new Error("Native agent session input is invalid");
-    }
     if (
       !isNonBlankString(input.key) ||
       !isNonBlankString(input.environmentId) ||
@@ -680,7 +673,6 @@ export class NativeAgentSessionsRepository {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
-          | "openCodeProtocol"
         >
       > & {
         expectedProviderSessionId?: string;
@@ -695,10 +687,7 @@ export class NativeAgentSessionsRepository {
       !isAgentPlatform(input.agent) ||
       !interactionMetadata ||
       (input.expectedProviderSessionId !== undefined &&
-        !isNonBlankString(input.expectedProviderSessionId)) ||
-      // A resumed or forked OpenCode 2.x session names its line (`openCodeProtocol`).
-      (input.openCodeProtocol !== undefined &&
-        (input.openCodeProtocol !== "v2" || input.agent !== "opencode"))
+        !isNonBlankString(input.expectedProviderSessionId))
     ) {
       throw new Error("Native agent session adoption input is invalid");
     }
@@ -1147,8 +1136,6 @@ export class NativeAgentSessionsRepository {
     // Unconditional: a retry after a partial failure finds the sessions
     // already gone, and must still clear the tails that failure left.
     await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
-    // The workflows' OpenCode 2.x session ids leave with the environment's sessions.
-    this.repos.openCode2Sessions.deleteOpenCode2SessionsForEnvironment(environmentId);
     await this.context.scrubSensitiveJsonBackups(
       this.files.nativeAgentSessionsFile(),
       (_key, record) => !isRecord(record) || record.environmentId !== environmentId,

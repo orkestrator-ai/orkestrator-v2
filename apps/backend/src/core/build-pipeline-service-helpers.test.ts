@@ -21,6 +21,7 @@ import { WorkflowResultService } from "./workflow-result-service.js";
 import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { MERGE_RESOLUTION_VALIDATION_INSTRUCTION } from "./build-pipeline-prompts.js";
 import { UNCHANGED_REWORK_PAUSE_MESSAGE } from "./build-pipeline-service-supervisor.js";
 import {
   connectionDefaultsFor,
@@ -109,6 +110,26 @@ describe("stageAfterReview", () => {
 });
 
 describe("conflict resolution resume prompt", () => {
+  test("lays the resume prompt out as one paragraph per rule", () => {
+    const prompt = resumePromptFor("resolving-conflicts")!;
+    const paragraphs = prompt.split("\n\n");
+    const rules = MERGE_RESOLUTION_VALIDATION_INSTRUCTION.split("\n\n");
+
+    expect(rules.length).toBeGreaterThanOrEqual(6);
+    expect(paragraphs).toEqual([
+      "Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused and finish the conflict resolution.",
+      ...rules,
+      "Do not ask questions; make sensible assumptions.",
+    ]);
+    for (const paragraph of paragraphs) {
+      expect(paragraph).not.toContain("\n");
+      expect(paragraph.trim()).toBe(paragraph);
+      expect(paragraph.length).toBeGreaterThan(0);
+    }
+    expect(paragraphs.some((p) => p.startsWith("Documentation-only conflicts:"))).toBe(true);
+    expect(paragraphs.some((p) => p.startsWith("Code conflicts:"))).toBe(true);
+  });
+
   test("defers validation choices to repository instructions", () => {
     const prompt = resumePromptFor("resolving-conflicts");
 

@@ -2,17 +2,12 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { lowPriorityCommand } from "./process-priority.js";
 import { spawnCommand } from "./shell.js";
 import { reapProcessGroup, terminateProcessTree } from "./process-tree.js";
-import {
-  OpenCodeAgentToolsReconciler,
-  type OpenCodeAgentToolsTuning,
-} from "./opencode-agent-tools.js";
 import { forgetBridgeAuthorityKey, retainHostBridgeAuthorityKey } from "./bridge-authority-keys.js";
-import { OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
-import { OpenCode2HostServerState } from "./opencode2/host-server-state.js";
+import { OpenCode2HostServerState } from "./opencode2/index.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { bridgeRestarts, type BridgeRestartCounter } from "./bridge-restarts.js";
@@ -66,6 +61,24 @@ export const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 /** How long an orphaned agent CLI gets to leave on SIGTERM after its bridge died. */
 export const LOCAL_SERVER_ORPHAN_GRACE_MS = 2_000;
 
+/**
+ * How long a passed reuse health check stands for the same bridge process,
+ * port and token. Every native-agent read resolves its provider through the
+ * start command, and a live update makes two reads, so without this a viewer
+ * cost the bridge two `/global/health` requests per poll (to-do 6680, retired, task 6).
+ * A bridge that stops answering inside the window fails the read that follows
+ * it, and the next start after the window probes again.
+ */
+export const LOCAL_SERVER_HEALTHY_REUSE_MS = 2_000;
+
+/** A passed reuse health check (see {@link LOCAL_SERVER_HEALTHY_REUSE_MS}). */
+export type LocalServerHealthyAnswer = {
+  child: ChildProcessWithoutNullStreams;
+  port: number;
+  authToken: string;
+  at: number;
+};
+
 /** When an owned bridge process was first seen failing its reuse health check. */
 export type LocalServerUnresponsiveMarker = {
   child: ChildProcessWithoutNullStreams;
@@ -104,9 +117,6 @@ export type LocalServerRuntimeOptions = {
    * `spawn` is substituted, unless a reaper is given too.
    */
   reapProcessGroup?: typeof reapProcessGroup;
-  openCodeAgentTools?: OpenCodeAgentToolsTuning;
-  /** Waits before each retry of a host OpenCode start that lost the database. */
-  openCodeLockedStartRetryDelaysMs?: readonly number[];
   piCatalog?: PiCatalogProbesOptions;
   /** Where bridge starts and unrequested exits are counted; the process-wide counter by default. */
   bridgeRestarts?: BridgeRestartCounter;
@@ -123,9 +133,6 @@ export type LocalServerRuntimeOptions = {
 export class LocalServerRuntime {
   /** Launches bridge and probe processes. */
   readonly spawn: typeof spawnCommand;
-  readonly openCodeAgentTools: OpenCodeAgentToolsReconciler;
-  /** Host OpenCode starts, one at a time (`opencode-host-start.ts`). */
-  readonly openCodeHostStart: OpenCodeHostStartGate;
   /** Pi's host catalogue probes (`pi-model-catalog-seeding.ts`). */
   readonly piCatalog: PiCatalogProbes;
   /** Host model catalogue seeds and their failure cooldown (`host-model-catalog-seed.ts`). */
@@ -136,7 +143,7 @@ export class LocalServerRuntime {
   readonly gitHubCliLogin = new GitHubCliLoginSlot();
   /** The OpenCode provider sign-in, login change reservation and list flight. */
   readonly openCodeProviderLogin = new OpenCodeProviderLoginSlot();
-  /** Host OpenCode 2.x preview servers (`opencode2-host-server.ts`). */
+  /** Host OpenCode servers: password, directory and coordinator authority (`opencode2-host-server.ts`). */
   readonly openCode2 = new OpenCode2HostServerState();
 
   private readonly terminateTree: typeof terminateProcessTree;
@@ -153,6 +160,8 @@ export class LocalServerRuntime {
   /** Credential generation used by each live local Cursor bridge. */
   private readonly cursorCredentialFingerprints = new Map<string, string>();
   private readonly unresponsiveMarkers = new Map<string, LocalServerUnresponsiveMarker>();
+  /** At most one per owned process key; dropped with the process or a failed probe. */
+  private readonly healthyAnswers = new Map<string, LocalServerHealthyAnswer>();
   private readonly accountIds = new Map<string, string>();
   private readonly tokenExpiry = new Map<string, number>();
   private readonly loginlessBridges = new Set<string>();
@@ -183,8 +192,6 @@ export class LocalServerRuntime {
     // group; signalling `-pid` for one could reach a real process on the host.
     this.reapGroup =
       options.reapProcessGroup ?? (options.spawn ? async () => "empty" : reapProcessGroup);
-    this.openCodeAgentTools = new OpenCodeAgentToolsReconciler(options.openCodeAgentTools);
-    this.openCodeHostStart = new OpenCodeHostStartGate(options.openCodeLockedStartRetryDelaysMs);
     this.piCatalog = new PiCatalogProbes(options.piCatalog);
   }
 
@@ -246,6 +253,7 @@ export class LocalServerRuntime {
     this.processes.delete(key);
     this.workingDirectories.delete(key);
     this.unresponsiveMarkers.delete(key);
+    this.healthyAnswers.delete(key);
     this.accountIds.delete(key);
     this.tokenExpiry.delete(key);
     this.loginlessBridges.delete(key);
@@ -255,7 +263,6 @@ export class LocalServerRuntime {
     if (separator > 0 && this.bridgeTokens.has(kind)) {
       forgetBridgeAuthorityKey(this.bridgeTokens.get(kind)!.get(environmentId));
       this.bridgeTokens.get(kind)!.delete(environmentId);
-      if (kind === "opencode") this.openCodeAgentTools.cancel(`local:${environmentId}`);
       if (kind === "cursor") this.cursorCredentialFingerprints.delete(environmentId);
     }
     return true;
@@ -382,6 +389,36 @@ export class LocalServerRuntime {
 
   markUnresponsive(key: string, marker: LocalServerUnresponsiveMarker): void {
     this.unresponsiveMarkers.set(key, marker);
+    this.healthyAnswers.delete(key);
+  }
+
+  /** Record a passed reuse health check for the process that owns `key`. */
+  recordHealthy(key: string, answer: LocalServerHealthyAnswer): void {
+    if (this.processes.get(key) !== answer.child) return;
+    this.healthyAnswers.set(key, answer);
+  }
+
+  /** Whether `child` passed a reuse health check on this port and token within the window. */
+  recentlyHealthy(
+    key: string,
+    child: ChildProcessWithoutNullStreams,
+    port: number,
+    authToken: string,
+    now = Date.now(),
+  ): boolean {
+    const answer = this.healthyAnswers.get(key);
+    if (!answer) return false;
+    if (
+      answer.child === child &&
+      answer.port === port &&
+      answer.authToken === authToken &&
+      now >= answer.at &&
+      now - answer.at < LOCAL_SERVER_HEALTHY_REUSE_MS
+    ) {
+      return true;
+    }
+    this.healthyAnswers.delete(key);
+    return false;
   }
 
   /** Clears the marker; with `child`, only when that process is the one it describes. */
@@ -519,7 +556,6 @@ export class LocalServerRuntime {
    */
   closeAdmission(): void {
     this.requestShutdown();
-    this.openCodeAgentTools.cancelAll();
   }
 
   /**

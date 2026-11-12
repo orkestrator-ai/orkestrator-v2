@@ -17,7 +17,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `docs/architecture/suborks.md` describes the path. A subork uses the same plan-turn and result-tool path as a goal's verifier, which passed live on all six providers (`docs/architecture/goals.md`, Qualification), so a surprise is more likely in `ask_agents` being reached and in the wake than in the subork's turn.
 
-**Investigation.** No live model has run it. On 2026-11-04 `native-agent-suborks-opencode.live.test.ts` ran the pinned `opencode serve` (1.19.5) against a scripted model on loopback, as caller and as target, and passed. It found that a reviewer-session subork on OpenCode was offered `orkestrator_ask_agents` and the environment-wide ticket tools, and the same change denies both (see Assumptions and decisions). The other five providers have no real-process run. Worth watching: Codex and Grok tool approval for `ask_agents`; whether each provider surfaces the handle; the mail wake after a real turn end; `suborkLatestAction` against each provider's real rows, because the fake rows are hand-written.
+**Investigation.** No live model has run it. On 2026-11-04 `native-agent-suborks-opencode.live.test.ts` ran the pinned `opencode serve` (1.19.5) against a scripted model on loopback, as caller and as target, and passed. That test was removed with OpenCode 1.x on 2026-11-11 (`git show 5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`); its OpenCode 2 port, `apps/backend/src/core/opencode2/opencode2-suborks.live.test.ts` (in `mise run verify:opencode2:live`), ran the pinned `opencode2 serve` (2.2.6) the same way on 2026-11-11 and passed, with the caller on its per-tab MCP server and the subork offered no editing tool, no `subagent` and only its result connection's tools. It found that a reviewer-session subork on OpenCode was offered `orkestrator_ask_agents` and the environment-wide ticket tools, and the same change denies both (see Assumptions and decisions). The other five providers have no real-process run. Worth watching: Codex and Grok tool approval for `ask_agents`; whether each provider surfaces the handle; the mail wake after a real turn end; `suborkLatestAction` against each provider's real rows, because the fake rows are hand-written.
 
 **Decisions.** Where to run it:
 - A new `e2e/agent-testing` spec driven by `test:agent:browser:isolated` (recommended). Pros: repeatable at the next provider bump, like `goals-*-live.spec.ts`. Cons: spends real turns on each run.
@@ -29,7 +29,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `SUBORK_TOOL_DESCRIPTION` in `apps/backend/src/core/agent-tools-subork-schema.ts`, shared by the agent tools server and the coordinator's control MCP. Some providers have their own sub-agent tools competing for the same request.
 
-**Investigation.** A test proves the tool and description are offered (`native-agent-suborks.test.ts`). The real-OpenCode test shows a plain-text request reaching `ask_agents` through OpenCode's own MCP client with that description, but its script, not a model, chooses the tool. Real models not run.
+**Investigation.** A test proves the tool and description are offered (`native-agent-suborks.test.ts`). The real-OpenCode 1.x test (retired 2026-11-11, see task 1) and its OpenCode 2 port showed a plain-text request reaching `ask_agents` through OpenCode's own MCP client with that description, but their script, not a model, chose the tool. Real models not run.
 
 **Decisions.** If a provider prefers its own sub-agents:
 - Sharpen the tool description first (recommended). Pros: the same text on every provider, in keeping with the design. Cons: may not be enough for every model.
@@ -69,7 +69,11 @@ Grok's gap was the reason, but Cursor, OpenCode and an unsandboxed Claude are al
 
 ### OpenCode subork turns deny `ask_agents` and the environment-wide tools by permission rule (task 1)
 
-A subork runs in a reviewer session, and OpenCode applies no per-turn tool map to one, so the tool map that hid `ask_agents` never reached a subork. `openCodeWorkflowResultPermissionRules` now denies `orkestrator_ask_agents` on every workflow turn, and on a subork's turn `orkestrator_*` apart from its own result tools, matching the result-only credential other providers get. The `ask_agents` deny is not lifted at settle, because only sessions Orkestrator runs itself take workflow turns, and those cannot start suborks.
+A subork runs in a reviewer session, and OpenCode applies no per-turn tool map to one, so the tool map that hid `ask_agents` never reached a subork. `openCodeWorkflowResultPermissionRules` (now in `apps/backend/src/core/opencode2/policy-rules.ts`, applied by `opencode2/permissions.ts`) now denies `orkestrator_ask_agents` on every workflow turn, and on a subork's turn `orkestrator_*` apart from its own result tools, matching the result-only credential other providers get. The `ask_agents` deny is not lifted at settle, because only sessions Orkestrator runs itself take workflow turns, and those cannot start suborks.
+
+### OpenCode 2 replaces the retired 1.x real-process run (task 1)
+
+Retiring OpenCode 1.x removed the only real-process subork run. Its port, `opencode2/opencode2-suborks.live.test.ts`, keeps the same scope (one OpenCode caller, one OpenCode and one Codex-fake target, the real mail drain) on the shared `startOpenCode2Fixture`, so it runs in `verify:opencode2:live` with the other OpenCode 2 live tests rather than needing its own switch. The caller uses its tab's own `agentMcp` connection, as a 2.x tab does, instead of the 1.x environment-wide registration. This does not change task 1's status: the six-provider sweep against real models is still open.
 
 ## Related
 

@@ -249,7 +249,6 @@ export class OwnershipModel {
     for (const expected of [
       "./tests",
       "./e2e/agent-testing/artifact-sanitizer.test.ts",
-      "./scripts/opencode-live-compatibility-probe.test.ts",
       "./test-fixtures/agent-project/server.test.ts",
     ])
       if (!rootArgs.includes(expected))

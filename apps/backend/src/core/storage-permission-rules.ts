@@ -1,4 +1,4 @@
-import { PermissionRuleStore } from "./permission-rules/store.js";
+import { PermissionRuleStore } from "./permission-rules/index.js";
 import type { StorageContext } from "./storage-context.js";
 
 /** Adapts the permission-rule store to the shared database and change journal. */

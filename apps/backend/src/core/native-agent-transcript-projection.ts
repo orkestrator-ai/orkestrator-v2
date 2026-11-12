@@ -107,6 +107,7 @@ import {
   type NativeAgentTranscriptView,
   type NativeAgentViewIdentity,
   type NativeAgentAsyncQuestionResponse,
+  type NativeAgentContextUsage,
   nativeAgentApprovalModes,
   normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
@@ -120,7 +121,7 @@ import { legacyCompatibilityCounts } from "./change-tracking/index.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionSnapshot } from "@orkestrator/protocol/agent-interactions";
-import type { PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
+import type { PermissionRuleEnforcer } from "./permission-rules/index.js";
 import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
   inferredComposerSelectionToPersist,
@@ -234,6 +235,7 @@ import {
   deferredToolArgsPreview,
 } from "./native-agent-deferred-display.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { runWithTimeout } from "./abortable-timing.js";
 
 const log = createLogger("native-agent");
 
@@ -556,6 +558,30 @@ export class NativeAgentTranscriptProjection {
           })
         : 0,
   });
+  /**
+   * Hands a usage report read outside a full projection to the recorder: the
+   * session-state view and a settled turn's outcome read see usage a session
+   * driven only through the CLI would otherwise never record.
+   */
+  observeSessionUsage(
+    session: Pick<
+      PersistedNativeAgentSession,
+      "environmentId" | "agent" | "logicalSessionKey" | "providerSessionId"
+    >,
+    usage: NativeAgentContextUsage | undefined,
+  ): void {
+    this.usageRecorder.observe({
+      sessionKey: nativeAgentSessionStorageKey(
+        session.environmentId,
+        session.agent,
+        session.logicalSessionKey,
+      ),
+      environmentId: session.environmentId,
+      platform: session.agent,
+      ...(session.providerSessionId ? { providerSessionId: session.providerSessionId } : {}),
+      usage,
+    });
+  }
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** When the last exact recovery read started, per key; spaces those reads out. */
@@ -3594,6 +3620,10 @@ export class NativeAgentTranscriptProjection {
       selectedModel?.contextWindow,
       storedContextUsage,
     );
+    // The provider's own report only: the stored fallback came from a full
+    // projection, which already recorded it. A CLI-driven session may never
+    // get one, so this read is what counts its turns.
+    this.observeSessionUsage(resolved.session, stateSnapshot.contextUsage);
     const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
     const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const sourceGeneration = providerGeneration;
@@ -4158,22 +4188,15 @@ export class NativeAgentTranscriptProjection {
       input.logicalSessionKey,
     );
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
-    if (provider.mcpServers) {
+    const mcpServers = provider.mcpServers?.bind(provider);
+    if (mcpServers) {
       try {
-        // Bound the action response as well as the read. A late provider result
-        // is observed by Promise.race but can never publish into the cache.
-        let deadline: ReturnType<typeof setTimeout> | undefined;
-        let value;
-        try {
-          value = await Promise.race([
-            provider.mcpServers(providerSessionId),
-            new Promise<never>((_, reject) => {
-              deadline = setTimeout(() => reject(new Error("MCP discovery timed out")), 2_000);
-            }),
-          ]);
-        } finally {
-          clearTimeout(deadline);
-        }
+        // Bound the action response as well as the read: the deadline aborts
+        // the provider's request, and a late result can never publish here.
+        const value = await runWithTimeout((signal) => mcpServers(providerSessionId, { signal }), {
+          timeoutMs: 2_000,
+          message: "MCP discovery timed out",
+        });
         // A later identity change owns the section now; this read is not its.
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) {
           return;

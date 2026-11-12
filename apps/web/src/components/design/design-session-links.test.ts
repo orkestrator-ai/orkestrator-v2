@@ -8,6 +8,7 @@ import { DesignClientError } from "@/lib/design-client";
 import {
   createDesignLinkResumer,
   designLinkCheckFailure,
+  designLinkCheckFrom,
   designLinkStatus,
   designResumeTabId,
   resumeDesignLink,
@@ -27,9 +28,10 @@ function link(overrides: Partial<DesignSessionLink> = {}): DesignSessionLink {
   };
 }
 
-const ready = (session: "retained" | "missing"): DesignLinkCheck => ({
+const ready = (session: "retained" | "missing", archived = false): DesignLinkCheck => ({
   kind: "ready",
   states: new Map([["link-1", session]]),
+  archived: new Set(archived ? ["link-1"] : []),
 });
 
 describe("designLinkStatus", () => {
@@ -55,6 +57,32 @@ describe("designLinkStatus", () => {
     expect(designLinkStatus(link({ sessionId: "s-1" }), { ...base, check: ready("missing") })).toBe(
       "resumable",
     );
+  });
+
+  test("a closed conversation the agent archived reads as archived, never as resumable", () => {
+    const recorded = link({ sessionId: "s-1" });
+    expect(designLinkStatus(recorded, { ...base, check: ready("missing", true) })).toBe("archived");
+    // An open or retained tab is not archived, whatever the list says.
+    expect(
+      designLinkStatus(recorded, { ...base, tabOpen: true, check: ready("missing", true) }),
+    ).toBe("open");
+    expect(designLinkStatus(recorded, { ...base, check: ready("retained", true) })).toBe(
+      "retained",
+    );
+    // No recorded session: nothing to unarchive.
+    expect(designLinkStatus(link(), { ...base, check: ready("missing", true) })).toBe("missing");
+  });
+
+  test("the backend's archived flag reaches the check, and its absence is not archived", () => {
+    const check = designLinkCheckFrom({
+      sessions: [],
+      states: [
+        { linkId: "a", session: "missing", archived: true },
+        { linkId: "b", session: "missing" },
+        { linkId: "c", session: "missing", archived: false },
+      ],
+    });
+    expect(check.kind === "ready" ? [...check.archived] : null).toEqual(["a"]);
   });
 
   test("a disconnected backend is unavailable, never a guess", () => {
@@ -174,6 +202,33 @@ describe("resumeDesignLink", () => {
     });
     expect(options.initialPrompt).toBeUndefined();
     expect(client.focus).toHaveBeenCalledWith(designResumeTabId(resumable));
+  });
+
+  test("asks the backend to unarchive only an archived link it resumes", async () => {
+    const client = fakeClient();
+    const claim = mock(async (input: { tabId: string; restoreArchived?: boolean }) => ({
+      link: { ...resumable, tabId: input.tabId },
+      providerSessionId: "live-1",
+    }));
+    const resume = createDesignLinkResumer();
+    await resume({
+      environmentId: "env-1",
+      canvasId: "canvas-1",
+      link: resumable,
+      restoreArchived: true,
+      ...client,
+      claim,
+    });
+    expect(claim.mock.calls[0]![0]).toMatchObject({ restoreArchived: true });
+
+    await resume({
+      environmentId: "env-1",
+      canvasId: "canvas-1",
+      link: { ...resumable, id: "link-2" },
+      ...client,
+      claim,
+    });
+    expect(claim.mock.calls[1]![0]).not.toHaveProperty("restoreArchived");
   });
 
   test("two clicks in one client share one attempt", async () => {

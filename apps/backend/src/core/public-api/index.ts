@@ -6,7 +6,7 @@
 // operation-ledger.js and revisions.js directly: the storage layer
 // (storage-public-operations.ts), the environment commands
 // (commands-environment.ts, commands-servers.ts, container-replacement.ts) and
-// the control MCP and scheduled-job callers (control-mcp-caller.ts,
+// the control MCP and scheduled-job callers (control-mcp/caller.ts,
 // scheduled-jobs/executor.ts).
 export {
   commandArguments,

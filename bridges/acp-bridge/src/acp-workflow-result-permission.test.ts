@@ -320,6 +320,18 @@ describe("the current turn's workflow-result attempt", () => {
   });
 });
 
+test("convert_to_pipeline is auto-allowed, because it only records a draft for review", () => {
+  const toolCall = named("orkestrator__convert_to_pipeline", { title: "Draft" });
+  expect(orkestratorToolPermissionOption({ toolCall, options }, "ask")).toBe("allow");
+  // Another server's tool of the same name is not Orkestrator's.
+  expect(
+    orkestratorToolPermissionOption(
+      { toolCall: named("other__convert_to_pipeline", {}), options },
+      "ask",
+    ),
+  ).not.toBe("allow");
+});
+
 test("native ask_agents is auto-allowed; a result-only attempt cannot grant it", () => {
   const toolCall = named("orkestrator__ask_agents", { targets: [{ agent: "codex" }] });
   expect(orkestratorToolPermissionOption({ toolCall, options }, "ask")).toBe("allow");

@@ -10,7 +10,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6e`.
 3. **Claude: unattended sessions and Claude Code's own 529 retry**: Multi Review, build and graph sessions run with a longer Claude Code overload backoff. Status: done (2026-10-31); seeing a real overload through it moved to 7568 on 2026-11-10.
 4. **Cursor: classify capacity refusals from `@cursor/sdk`**: the SDK bridge has no retry for transient provider errors; classify a capacity refusal on its structured field and retry it like Codex. Status: blocked (waits on 7568: 1010 task 4, a real Cursor capacity refusal's error shape; the 1.2.0 SDK reading in 1020 does not give it).
 5. **Grok (ACP bridge): bring the existing retry in line**: the ACP retry uses the shared backoff with jitter and a per-wait cap, shows its wait, and ends at once on Stop. Status: done (2026-10-31); how a real Grok overload reaches the bridge moved to 7568 on 2026-11-10.
-6. **OpenCode: unattended sessions skip turn recovery**: unattended turns ended by an overload are continued inside the provider, keeping their request and grant. Status: done (2026-10-31); seeing a real overload through it moved to 7568 on 2026-11-10.
+6. **OpenCode: unattended sessions skip turn recovery**: unattended turns ended by an overload are continued inside the provider, keeping their request and grant. Status: done (2026-10-31) for OpenCode 1.x; seeing a real overload through it moved to 7568 on 2026-11-10. The continuation was removed with OpenCode 1.x on 2026-11-11 (see [0008](0008-opencode-v2.md) "OpenCode 1.x retired (2026-11-11)"): OpenCode 2 schedules its own retries (a `retry` part, `opencode2/transcript.ts`), and nothing in Orkestrator continues a 2.x turn after it gives up.
 7. **Pi: rely on the SDK's own retry**: Pi's `auto_retry_start`/`auto_retry_end` already covers overloads. Status: done (no change needed).
 
 ### 1. Codex: continue a turn the model refused for capacity
@@ -282,7 +282,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
   - **Inside `OpenCodeProvider`, driven by the workflow's status poll (chosen).**
     - Pros: the request, grant, tools, schema and result key all stay put, as in Codex; no workflow state machine changes; nothing runs once nobody polls.
     - Cons: a second OpenCode retry path beside the interactive one; idle rather than `running` during the wait.
-- **Chosen:** `opencode-capacity-retry.ts`, called from `settleCompleted` under the dispatch lock. The skip in `appliesTo` stays, so interactive sessions are unchanged.
+- **Chosen:** `opencode-capacity-retry.ts` (removed with OpenCode 1.x on 2026-11-11: `git show 5f4e27b1c:apps/backend/src/core/opencode-capacity-retry.ts`), called from `settleCompleted` under the dispatch lock. The skip in `appliesTo` stays, so interactive sessions are unchanged.
 - **Idle and `turnSettled: false`:** the session reads idle during the wait, because OpenCode itself is idle, and the request reads unsettled. `turnTerminalError` answers unavailable meanwhile, so no outcome is recorded. Activity views may show the session idle for up to a minute.
 - **What counts:** an `APIError` with status 503 or 529, or 429 with an overload body, unless the message or body names a limit or login. A 429 without an overload body is a rate limit.
 - **The continuation:** the existing `OPENCODE_PROVIDER_ERROR_CONTINUATION` text, with the turn's model, agent, variant, tools, system instruction and schema wrapper. Its message id carries the request's marker (`nextOpenCodeMessageIdForRequest`), so settlement, the terminal error and the structured result read the newest attempt.
@@ -306,7 +306,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
 - Codex turns started by prompt dispatch retry `serverOverloaded` and `policyCapacityUnavailable` up to five attempts. This covers interactive tabs, Multi Review steps and build stages alike.
 - Claude `pipeline` sessions run with a 4 s base and 64 s maximum overload backoff inside Claude Code.
 - Grok turns retry on the shared backoff, with a card, and stop at once on Stop.
-- Unattended OpenCode turns ended by an overload are continued by the provider on the shared backoff.
+- OpenCode 2 retries an overload inside its own server; the 1.x provider's continuation of unattended turns (task 6) was removed with OpenCode 1.x on 2026-11-11.
 - Cursor has no retry (task 4). Pi relies on its SDK (task 7).
 - Tests:
   - `app-server-runtime-capacity-retry.test.ts` covers:
@@ -321,7 +321,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
   - `sessions/capacity-retry.test.ts` covers the policy.
   - `history/rollout-rows.test.ts` covers the replay.
   - `multi-review-service.test.ts` ("an unattended Fix survives a Codex capacity retry", "an unattended Fix waits out an OpenCode capacity retry") covers the backend side of the contract.
-  - `opencode-capacity-retry.test.ts` covers classification, the continuation, backoff, exhaustion, Stop, and rejected and ambiguous sends.
+  - `opencode-capacity-retry.test.ts` covered the 1.x classification, continuation, backoff, exhaustion, Stop, and rejected and ambiguous sends (removed with OpenCode 1.x on 2026-11-11: `git show 5f4e27b1c:apps/backend/src/core/opencode-capacity-retry.test.ts`).
   - `acp-prompt.test.ts` and `acp-reconciliation.test.ts` cover the ACP retry, its card, Stop during a long wait, and errors that name a limit.
   - `runtime-env.test.ts` and `session-manager-prompt.test.ts` cover which Claude sessions get the longer backoff.
   - `packages/protocol/src/capacity-retry.test.ts` covers the shared policy.

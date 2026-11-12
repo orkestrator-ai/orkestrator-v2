@@ -1264,6 +1264,16 @@ export class ChangeLedger {
     return row ? (JSON.parse(row.measurement_json) as ChangeMeasurement) : null;
   }
 
+  /** One measurement's finality, without parsing the whole record. */
+  measurementFinality(id: string): string | null {
+    const row = this.db
+      .query(
+        "SELECT json_extract(measurement_json, '$.finality') AS finality FROM change_measurements WHERE id = ?",
+      )
+      .get(id) as { finality: string | null } | null;
+    return row?.finality ?? null;
+  }
+
   measurementOwner(id: string): { owner_kind: string; owner_id: string } | null {
     return this.db
       .query("SELECT owner_kind, owner_id FROM change_measurements WHERE id = ?")

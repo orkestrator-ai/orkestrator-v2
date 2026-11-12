@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CONTAINER_GIT_CREDENTIAL_HELPER } from "../src/core/commands-files";
 import { syncRuntimeGitHubCredential } from "../src/core/container-github-credential";
 import type { readImageManifest } from "../src/core/docker-image";
@@ -527,6 +528,10 @@ exit 0
           useHostGitHubCredentials: false,
           containerGitHubCredential: "pat",
           githubToken: "rotated-token",
+          // Only the GitHub credential is under test. With an agent platform
+          // enabled, each start also pipes that platform's own credential step
+          // (Claude's restrict or sign-out drop) into the same exec log.
+          enabledAgentPlatforms: [] as AgentPlatform[],
         },
         repositories: {},
       };
@@ -555,6 +560,9 @@ exit 1
           await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
           const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+          // Each start syncs only the GitHub credential: no agent platform is
+          // enabled, so no Claude restrict or sign-out drop is piped (those
+          // payloads are owned by agent-accounts-containers*.test.ts).
           expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
           const calls = await fs.readFile(logs.all, "utf8");
           expect(calls.match(/start container-1/g)).toHaveLength(2);

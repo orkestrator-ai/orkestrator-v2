@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.37.6-beta",
+  "version": "2.38.0-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -19,6 +19,7 @@
     "./agent-system-instructions": "./src/agent-system-instructions.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
+    "./auto-pipeline-tool": "./src/auto-pipeline-tool.ts",
     "./suborks": "./src/suborks.ts",
     "./ticket-labels": "./src/ticket-labels.ts",
     "./ticket-sections": "./src/ticket-sections.ts",
@@ -150,6 +151,7 @@
     "./controller-settings": "./src/controller-settings.ts",
     "./coordinator": "./src/coordinator.ts",
     "./coordinator-activity": "./src/coordinator-activity.ts",
+    "./coordinator-action-marks": "./src/coordinator-action-marks.ts",
     "./coordinator-launch-overrides": "./src/coordinator-launch-overrides.ts",
     "./coordinator-context": "./src/coordinator-context.ts",
     "./coordinator-pane-layout": "./src/coordinator-pane-layout.ts",
@@ -246,7 +248,6 @@
     "./environment-attention": "./src/environment-attention.ts",
     "./notification-sounds": "./src/notification-sounds.ts",
     "./opencode-message-id": "./src/opencode-message-id.ts",
-    "./opencode-protocol": "./src/opencode-protocol.ts",
     "./opencode-provider-auth": "./src/opencode-provider-auth.ts",
     "./pane-layout": "./src/pane-layout.ts",
     "./pane-layout-merge": "./src/pane-layout-merge.ts",

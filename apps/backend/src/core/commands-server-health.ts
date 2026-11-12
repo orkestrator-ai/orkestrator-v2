@@ -19,6 +19,14 @@ export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
  * binding than the lightweight HTTP bridges.
  */
 export const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
+/**
+ * OpenCode 2's first start creates its database or migrates one an older 2.x
+ * wrote before it answers `/api/info`, which can take far longer than binding
+ * a port on a busy host. About 60 s at the poll interval, the budget the
+ * separate 2.x host server had (`OPENCODE2_HOST_READY_TIMEOUT_MS`) before the
+ * supervisor took it over.
+ */
+export const OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS = 300;
 
 /**
  * Liveness probing for locally bound agent servers and bridges.
@@ -129,11 +137,21 @@ export async function isHttpServerReachable(
   });
 }
 
+/**
+ * The route a server answers once it is ready: the bridges' `/global/health`,
+ * or OpenCode's `/api/info` (`/global/health` is not an OpenCode 2 route, and
+ * its web app answers it with HTML, which `checkHttpHealth` refuses).
+ */
+export function localServerHealthPath(kind: LocalServerKind): string {
+  return kind === "opencode" ? "/api/info" : "/global/health";
+}
+
 export function localServerHealthAttempts(kind: LocalServerKind): number {
   // Cursor, Grok, and Pi use the longer budget because their cold
   // start builds a model runtime and may refresh a provider catalogue over the
   // network before it can answer, which is slower than a bridge that only has
   // to bind a port.
+  if (kind === "opencode") return OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS;
   return kind === "cursor" || kind === "grok" || kind === "pi"
     ? ACP_LOCAL_SERVER_HEALTH_ATTEMPTS
     : LOCAL_SERVER_HEALTH_ATTEMPTS;
@@ -177,6 +195,8 @@ export async function confirmRunningServerHealth(
   dependencies: {
     checkHealth?: typeof checkHttpHealth;
     delay?: (milliseconds: number) => Promise<void>;
+    /** The readiness route ({@link localServerHealthPath}); `/global/health` by default. */
+    path?: string;
   } = {},
 ): Promise<{ healthy: boolean; failedProbes: number }> {
   const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
@@ -189,7 +209,7 @@ export async function confirmRunningServerHealth(
       failedProbes === 0
         ? LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS
         : LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS;
-    if (await checkHealth(port, "/global/health", headers, timeoutMs)) {
+    if (await checkHealth(port, dependencies.path ?? "/global/health", headers, timeoutMs)) {
       return { healthy: true, failedProbes };
     }
     failedProbes += 1;
@@ -207,7 +227,7 @@ export async function waitForLocalServerHealth(
 ): Promise<void> {
   await waitForHealth(
     port,
-    "/global/health",
+    localServerHealthPath(kind),
     localServerHealthAttempts(kind),
     headers,
     dependencies,

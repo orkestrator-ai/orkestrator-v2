@@ -228,6 +228,12 @@ export const LinearConnectionStatusSchema = openRecord({
   hasToken: Schema.Boolean,
   viewer: Schema.optional(LinearViewerSchema),
   error: optionalString,
+  /**
+   * A short SHA-256 fingerprint of the stored key, so machines can tell
+   * whether they hold the same key. Never the key, and not enough to rebuild it.
+   */
+  keyFingerprint: optionalString,
+  connectedAt: optionalString,
 }).annotate({ identifier: "LinearConnectionStatus" });
 
 const linearIssueFields = {
@@ -281,3 +287,89 @@ export const LinearCompletionCommentResultSchema = openRecord({
   commentId: Schema.optional(Schema.String),
   postedAt: optionalString,
 }).annotate({ identifier: "LinearCompletionCommentResult" });
+
+// --- Linear boards ---------------------------------------------------------------
+
+/**
+ * The Linear board one Orkestrator project uses: a team, optionally narrowed
+ * to one Linear project in it. `key` is `repo:<repositoryHint>` for a project
+ * with a Git remote (the same on every machine, so it syncs) or
+ * `project:<projectId>` for one without (this machine only). A cleared link
+ * is kept as a tombstone (`cleared: true`) so the clear syncs too.
+ */
+export const LinearBoardLinkSchema = openRecord({
+  key: Schema.String,
+  repositoryHint: optionalString,
+  projectId: optionalString,
+  teamId: Schema.optional(Schema.String),
+  teamKey: optionalString,
+  teamName: optionalString,
+  linearProjectId: optionalString,
+  linearProjectName: optionalString,
+  updatedAt: Schema.String,
+  cleared: Schema.optional(Schema.Boolean),
+}).annotate({ identifier: "LinearBoardLink" });
+
+/** `get_linear_board_link`: the project's link, absent when it has none. */
+export const LinearBoardLinkResultSchema = Schema.Struct({
+  link: Schema.optional(LinearBoardLinkSchema),
+}).annotate({ identifier: "LinearBoardLinkResult" });
+
+/** A Linear project inside a team, for the board picker. */
+export const LinearTeamProjectSchema = openRecord({
+  id: Schema.String,
+  name: Schema.optional(Schema.String),
+  state: optionalString,
+}).annotate({ identifier: "LinearTeamProject" });
+
+/** A Linear team (one board) and its projects, for the board picker. */
+export const LinearTeamSchema = openRecord({
+  id: Schema.String,
+  key: optionalString,
+  name: Schema.optional(Schema.String),
+  projects: Schema.optional(mutableArray(LinearTeamProjectSchema)),
+}).annotate({ identifier: "LinearTeam" });
+
+/** The ids a write to a board can use: its workflow states, labels and members. */
+export const LinearBoardOptionsSchema = openRecord({
+  teamId: Schema.String,
+  states: Schema.optional(
+    mutableArray(
+      openRecord({
+        id: Schema.String,
+        name: optionalString,
+        type: optionalString,
+        position: optionalNumber,
+      }),
+    ),
+  ),
+  labels: Schema.optional(
+    mutableArray(openRecord({ id: Schema.String, name: optionalString, color: optionalString })),
+  ),
+  members: Schema.optional(
+    mutableArray(
+      openRecord({
+        id: Schema.String,
+        name: optionalString,
+        displayName: optionalString,
+        email: optionalString,
+      }),
+    ),
+  ),
+}).annotate({ identifier: "LinearBoardOptions" });
+
+/** Linear's view of one other machine, as the command node last read it. Never a key. */
+export const LinearNodeConnectionSchema = openRecord({
+  nodeId: Schema.String,
+  nodeName: optionalString,
+  connected: Schema.Boolean,
+  viewerName: optionalString,
+  keyFingerprint: optionalString,
+  readAt: optionalString,
+}).annotate({ identifier: "LinearNodeConnection" });
+
+/** A disconnect, kept so machines that were offline clear the same key later. */
+export const LinearRevocationSchema = openRecord({
+  keyFingerprint: Schema.String,
+  revokedAt: Schema.String,
+}).annotate({ identifier: "LinearRevocation" });

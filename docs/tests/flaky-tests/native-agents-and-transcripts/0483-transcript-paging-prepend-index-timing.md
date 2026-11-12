@@ -178,3 +178,9 @@ mise run test:logged -- --name transcript-browser-alone -- bun scripts/loopback-
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `f799aaa14`, base `14df96544` (`mise run flaky:recurrence -- 0483 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes backend read cancellation, one desktop IPC test and docs; it changes no `apps/web` or `e2e` code. `mise run test:logged -- --name browser -- mise run test:browser`: 6 failed, 153 skipped, 1709 passed (21.9 m), all six in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602). On mobile-chromium, `native: paging before prose holds the original tool position` failed `toBeGreaterThan(1)` (received 1) and `native: a same-minute page growing row zero holds the original tool position` failed `toBeGreaterThan(500)` (received 0), both at line 42. The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` (exit 0, 283.0 s). Status stays open; no assertion, timeout or skip changed.
+
+A second browser run on the same branch (at `487e2aa4e`: 9 failed, 1706 passed) failed the same cases again; the two owners again passed together with one worker (295.5 s). See 0382 for that run.

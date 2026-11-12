@@ -162,6 +162,26 @@ describe("container trees", () => {
     expect(after.scans).toBe(before.scans);
   });
 
+  test("a bound given as a function is read on every tree read", async () => {
+    // An agent-test profile's timing override (`agent-test-timing.ts`) is a
+    // function, so a spec that shortens the bound mid-run is honoured at once.
+    let bound = CONTAINER_TREE_MAX_AGE_MS;
+    const owner = createOwner({ containerTreeMaxAgeMs: () => bound });
+    owner.setTree([{ name: "a.ts" }]);
+    await trackQuietContainer(owner);
+    const walksAt = async (ticks: number) => {
+      const start = owner.walkCount;
+      for (let tick = 0; tick < ticks; tick += 1) {
+        await owner.time.advance(5_000);
+        await poll(owner);
+      }
+      return owner.walkCount - start;
+    };
+    expect(await walksAt(6)).toBe(2);
+    bound = FILE_LIST_MAX_AGE_MS;
+    expect(await walksAt(6)).toBe(6);
+  });
+
   test("a Git-visible create reaches the tree through the next list scan", async () => {
     const owner = createOwner();
     owner.setTree([{ name: "a.ts" }]);

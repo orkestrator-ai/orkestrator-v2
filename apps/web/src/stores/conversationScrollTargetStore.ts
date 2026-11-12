@@ -138,7 +138,7 @@ export function resetConversationScrollTargets(): void {
  * Index of the rendered row for a scroll target, or -1.
  *
  * How the ids line up (see `anchorInProjection` in the backend's
- * `web-annotation-dispatch.ts`, which records `WebAnnotationTranscriptRef`):
+ * `web-annotations/dispatch.ts`, which records `WebAnnotationTranscriptRef`):
  *
  * - `transcript.messageId` is the `id` of the *user* message in the native
  *   runtime projection whose content carries the request marker. The renderer

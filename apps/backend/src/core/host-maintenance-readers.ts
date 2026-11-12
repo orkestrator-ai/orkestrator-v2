@@ -71,17 +71,12 @@ function managedVersion(executable: string, name: string): string | null {
 }
 
 /**
- * Tools the backend also runs from PATH when no managed copy exists. Grok
- * never falls back (`resolveManagedAcpBinary`), so a `grok` on PATH is
- * reported missing: the backend would not use it.
+ * Tools the backend also runs from PATH when no managed copy exists. Grok and
+ * OpenCode (`opencode2`) never fall back (`resolveManagedAcpBinary`,
+ * `resolveOpenCode2Binary`), so one on PATH is reported missing: the backend
+ * would not use it.
  */
-const PATH_FALLBACK_TOOLS: ReadonlySet<string> = new Set([
-  "claude",
-  "codex",
-  "opencode",
-  "pi",
-  "gh",
-]);
+const PATH_FALLBACK_TOOLS: ReadonlySet<string> = new Set(["claude", "codex", "pi", "gh"]);
 
 /** Each managed tool's pin, where this backend finds it, and the managed copy's version. */
 export async function readToolStatus(

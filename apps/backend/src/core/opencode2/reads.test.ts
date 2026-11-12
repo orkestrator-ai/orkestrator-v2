@@ -88,3 +88,36 @@ describe("OpenCode2Provider live hints", () => {
     expect("messages" in again).toBe(true);
   });
 });
+
+describe("OpenCode2Provider settled-turn usage", () => {
+  test("recentTurnUsage lists every recent response; the cheap reads list only the newest", async () => {
+    server = new FakeOpenCode2Server();
+    provider = new OpenCode2Provider(server.client(), { monitorRetryMs: 5 });
+    const id = await provider.createSession("build", "x");
+    server.pushRow(id, { type: "user", text: "do two things" });
+    // One prompt, two model calls: a tool call, then the answer.
+    for (const [index, input] of [100, 7].entries()) {
+      server.pushRow(id, {
+        id: `msg_assistant_${index}`,
+        type: "assistant",
+        model: { providerID: "anthropic", id: "fake" },
+        cost: index === 0 ? 0.5 : 0.25,
+        tokens: { input, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 10 + index, completed: 20 + index },
+      });
+    }
+
+    const recent = await provider.recentTurnUsage(id);
+    expect(recent?.turns?.map((turn) => [turn.turnId, turn.inputTokens, turn.costUsd])).toEqual([
+      ["msg_assistant_0", 100, 0.5],
+      ["msg_assistant_1", 7, 0.25],
+    ]);
+    // The lightweight reads keep their one-row cost and see the last response only.
+    expect((await provider.refreshUsage(id))?.turns?.map((turn) => turn.turnId)).toEqual([
+      "msg_assistant_1",
+    ]);
+    expect(
+      (await provider.sessionState(id)).contextUsage?.turns?.map((turn) => turn.turnId),
+    ).toEqual(["msg_assistant_1"]);
+  });
+});

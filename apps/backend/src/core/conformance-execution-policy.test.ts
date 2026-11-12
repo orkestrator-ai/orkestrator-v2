@@ -6,8 +6,8 @@
  * resolver really returns, that the axes a container owns (its boundary and
  * its firewall) match the environment, and that a build prompt carries the
  * approval controls the bridge runners assume. It also runs the suite for
- * OpenCode, whose adapter lives here: the session's permission rules are
- * captured from the `session.create` call itself.
+ * OpenCode, whose adapter lives here: a session's base permission rules are
+ * the ones `opencode2/permissions.ts` builds for its execution policy.
  */
 import { describe, expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
@@ -17,7 +17,6 @@ import {
   policyCliOutput,
   withPolicyCliFixture,
 } from "../../../../tests/conformance/execution-policy/vendor-cli.js";
-import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 import {
   nativeAgentPolicyEffects,
@@ -33,7 +32,9 @@ import {
 import type { BridgeConnection } from "./agent-provider-contract.js";
 import { bridgePromptBody } from "./http-bridge/prompt-body.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
-import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
+import { openCode2PolicyRules } from "./opencode2/permissions.js";
+import { effectiveOpenCodePolicy } from "./opencode2/policy-rules.js";
+import type { OpenCode2PermissionRule } from "./opencode2/types.js";
 
 const shapes = POLICY_SHAPES as readonly PolicyShape[];
 
@@ -87,31 +88,28 @@ describe("execution policy shapes", () => {
   });
 });
 
-type OpenCodeRule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
-
-/** OpenCode applies the last rule whose permission matches (`*` matches all). */
-function ruleAction(rules: readonly OpenCodeRule[], permission: string) {
-  return rules.findLast((rule) => rule.permission === permission || rule.permission === "*")
-    ?.action;
+/** OpenCode applies the last rule whose action matches (`*` matches all). */
+function ruleEffect(rules: readonly OpenCode2PermissionRule[], action: string) {
+  return rules.findLast((rule) => rule.action === action || rule.action === "*")?.effect;
 }
 
-/** What OpenCode does with the rules it was created with. */
+/** What OpenCode does with the rules a session was created with. */
 function observeOpenCode(
-  rules: readonly OpenCodeRule[],
+  rules: readonly OpenCode2PermissionRule[],
   projectResources: boolean,
 ): AdapterEffects {
-  const shell = ruleAction(rules, "bash");
+  const shell = ruleEffect(rules, "shell");
   return {
     // OpenCode has no sandbox; its rules are the only boundary.
     providerSandbox: false,
     approvals: shell === "allow" ? "auto-approve" : shell === "ask" ? "ask" : "deny",
     // Observed independently from the pinned CLI loading a fixture in that directory.
     projectResources,
-    restrictsNetwork: shell === "deny" && ruleAction(rules, "webfetch") === "deny",
+    restrictsNetwork: shell === "deny" && ruleEffect(rules, "webfetch") === "deny",
   };
 }
 
-const opencode = policyQualificationCli("opencode");
+const opencode = policyQualificationCli("opencode2");
 
 async function writeOpenCodeProbe(cwd: string): Promise<void> {
   await writeFile(
@@ -130,10 +128,29 @@ function observeOpenCodeProjectResources(): Promise<boolean> {
   openCodeProjectResources ??= withPolicyCliFixture(async (fixture) => {
     await writeOpenCodeProbe(fixture.cwd);
     expect(await policyCliOutput(opencode!, ["--version"], fixture)).toContain(
-      PINNED_TOOLCHAIN_VERSIONS.opencode,
+      PINNED_TOOLCHAIN_VERSIONS.opencode2,
     );
-    const config = JSON.parse(await policyCliOutput(opencode!, ["debug", "config"], fixture));
-    return config.instructions?.includes("POLICY_PROBE.md") === true;
+    // 2.x lists each configuration source it loaded, a document with its contents.
+    // `--standalone` answers from a private server. Without it the CLI joins or
+    // starts the per-user background service on its fixed port: on a host
+    // already running OpenCode's service that port is taken and the probe hangs
+    // past the spawn timeout (exit 143), and elsewhere it leaves a daemon
+    // running after the test.
+    const sources = JSON.parse(
+      await policyCliOutput(opencode!, ["debug", "config", "--standalone"], fixture),
+    ) as {
+      info?: { instructions?: unknown };
+    }[];
+    return sources.some(
+      (source) =>
+        Array.isArray(source.info?.instructions) &&
+        source.info.instructions.includes("POLICY_PROBE.md"),
+    );
+  });
+  // A failed probe is not remembered, so one failure is reported once rather
+  // than by every later shape in under a millisecond.
+  openCodeProjectResources.catch(() => {
+    openCodeProjectResources = undefined;
   });
   return openCodeProjectResources;
 }
@@ -144,29 +161,12 @@ runExecutionPolicyConformance(
     async apply(shape) {
       return withPolicyCliFixture(async (fixture) => {
         await writeOpenCodeProbe(fixture.cwd);
-        const created: Array<Record<string, unknown>> = [];
-        const client = {
-          session: {
-            create: async (body: Record<string, unknown>) => {
-              created.push(body);
-              return { data: { id: `session-${shape.id}` } };
-            },
-          },
-        } as unknown as OpencodeClient;
-        const permissions = new OpenCodeReviewSessionPermissions(
-          client,
-          fixture.cwd,
-          () => ({ signal: new AbortController().signal }),
-          () => undefined,
-        );
-        const { policy } = await permissions.createSession("conformance", { policy: shape.policy });
-        expect(created).toHaveLength(1);
         const projectResources = await observeOpenCodeProjectResources();
         expect(projectResources).toBe(true);
         return {
-          // The provider reports this policy in its session snapshots.
-          reported: policy!,
-          observed: observeOpenCode(created[0]!.permission as OpenCodeRule[], projectResources),
+          // What OpenCode can honour of the policy, notes included.
+          reported: effectiveOpenCodePolicy(shape.policy),
+          observed: observeOpenCode(openCode2PolicyRules(shape.policy), projectResources),
         };
       });
     },

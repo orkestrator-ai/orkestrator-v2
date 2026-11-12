@@ -89,6 +89,7 @@ import {
 } from "./commands-registry-accounts.js";
 import { registerWorkflowResultCommands } from "./commands-registry-workflow-results.js";
 import { registerLinearCommands } from "./commands-registry-linear.js";
+import { registerLinearSyncCommands } from "./commands-registry-linear-sync.js";
 import { registerNativeAgentCommands } from "./commands-registry-native.js";
 import { registerPullRequestCommands } from "./commands-registry-pr.js";
 import { registerProjectCommands } from "./commands-registry-projects.js";
@@ -378,6 +379,7 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerPermissionRuleCommands(register);
   registerNodeCommands(register);
   registerTicketSyncCommands(register);
+  registerLinearSyncCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);

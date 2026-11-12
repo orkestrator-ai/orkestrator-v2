@@ -394,8 +394,12 @@ export class TranscriptMediaStreams {
     absolute: string,
     roots: () => Promise<string[]>,
   ): Promise<TranscriptMediaStreamResponse> {
-    const resolve = async (): Promise<OpenedMediaFile> => {
-      const { handle, stats } = await openReadableHostFile(absolute, await roots());
+    // The route closes a handle that opens after it stopped waiting; this only
+    // skips the open once the route has already given up.
+    const resolve = async (signal?: AbortSignal): Promise<OpenedMediaFile> => {
+      const allowed = await roots();
+      signal?.throwIfAborted();
+      const { handle, stats } = await openReadableHostFile(absolute, allowed);
       return { handle, size: stats.size, identity: identityOf(stats) };
     };
     let opened: OpenedMediaFile;

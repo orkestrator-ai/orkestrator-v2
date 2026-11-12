@@ -1,35 +1,34 @@
 /**
- * Coordinators on OpenCode 2.x (docs/todo/agent-engines/0008-opencode-v2.md,
- * owner decision 4: the preview switch moves coordinators too, once 2.x can
- * serve them).
+ * Coordinators on OpenCode (docs/todo/agent-engines/0008-opencode-v2.md,
+ * owner decision 4).
  *
- * A coordinator conversation's 2.x server is its own process (the runtime id
- * is its environment key, `opencode2:<runtime id>`), so the read-only policy
- * is held by that process rather than by any session record:
+ * A coordinator conversation's OpenCode server is its own process (the
+ * conversation's `opencode` local server, keyed by its runtime id), so the
+ * read-only policy is held by that process rather than by any session record:
  *
- * - **Launch authority** ({@link openCode2CoordinatorLaunch}). The server is
- *   started with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
+ * - **Launch authority** ({@link openCode2CoordinatorLaunchEnv}). The server
+ *   is started with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
  *   the data directory to protect, the research setting of the moment and
  *   `OPENCODE_DISABLE_PROJECT_CONFIG=1`, so the checkout's `opencode.json`,
  *   `.opencode/` agents, commands, plugins and MCP servers never load (2.2.6's
- *   `config.project`; 1.x has no such switch). Its configuration directory
- *   holds the credential plugin and the coordinator guard
- *   (`coordinator-plugin.ts`), which refuses every tool outside the read-only
- *   set and every read of the data directory, in the server process, whatever
- *   a session's stored rules say.
- * - **Backend authority** ({@link OpenCode2CoordinatorAuthority}). The route
+ *   `config.project`). Its configuration directory holds the credential
+ *   plugin and the coordinator guard (`coordinator-plugin.ts`), which refuses
+ *   every tool outside the read-only set and every read of the data
+ *   directory, in the server process, whatever a session's stored rules say.
+ * - **Backend authority** ({@link OpenCode2CoordinatorAuthority}). The
  *   connection of that server carries the policy it was launched with. The
  *   provider built for it ignores a request's policy and a session's stored
  *   base rules: every create, resume, policy synchronization and turn writes
  *   the rules computed here and reads them back before the prompt
  *   (`turn-grants.ts`), pins the `plan` agent and refuses provider commands.
- * - **Tools.** The conversation's Control MCP credential (the one its 1.x
- *   server was launched with) is registered as the location's `orkestrator`
- *   server, and the research servers named at launch as theirs; their tools
- *   are allowed by exact id, as on 1.x.
+ * - **Tools.** The conversation's Control MCP credential (the one the
+ *   supervisor issued for the server's launch, held beside the process) is
+ *   registered as the location's `orkestrator` server, and the research
+ *   servers named at launch as theirs; their tools are allowed by exact id.
  *
- * A changed research setting replaces an idle coordinator server, as it
- * replaces the 1.x one; a busy one keeps its launch setting until it is idle.
+ * A changed research setting replaces an idle coordinator server (the
+ * supervisor compares the launch's research signature); a busy one keeps its
+ * launch setting until it is idle.
  */
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -38,17 +37,13 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_PROTECTED_DATA_DIR_ENV,
-  coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import {
   coordinatorWebResearchEnv,
   type CoordinatorResearchMcpServer,
   type CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
-import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
-import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import {
   PromptRejectedError,
   ProviderDispatchPreparationError,
@@ -56,11 +51,8 @@ import {
 } from "../agent-provider-contract.js";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "../agent-tools.js";
 import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
-import {
-  listOpenCodeResearchTools,
-  openCodeResearchToolIds,
-} from "../opencode-coordinator-research.js";
-import { openCodePermissionRules } from "../opencode-provider-helpers.js";
+import { openCodePermissionRules } from "./policy-rules.js";
+import { listOpenCodeResearchTools, openCodeResearchToolIds } from "./research-tools.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import {
   OPENCODE2_ATTACHMENT_ROOT_ENV,
@@ -94,9 +86,10 @@ export interface OpenCode2CoordinatorAuthority {
   /** Equal for two launches with the same research setting. */
   signature: string;
   /**
-   * The conversation's current Control MCP credential: the one its 1.x server
-   * was launched with, which that launch issues and revokes. Undefined while
-   * none is live; a turn is then refused.
+   * The conversation's current Control MCP credential: the one its server was
+   * launched with, which that launch issues and revokes on exit
+   * (`startLocalServerAttempt`). Undefined while none is live; a turn is then
+   * refused.
    */
   controlConnection(): OpenCode2McpConnection | undefined;
 }
@@ -207,41 +200,6 @@ export function openCode2CoordinatorLaunchEnv(input: {
     // MCP servers: a coordinator reads the checkout, it never runs it.
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
   };
-}
-
-// ── which sessions take 2.x ─────────────────────────────────────────────────
-
-export interface NewOpenCodeCoordinatorSessionInput {
-  agent: string;
-  environmentId: string;
-  origin?: AgentInteractionOrigin;
-  owner?: AgentSessionOwner;
-  executionPolicy?: string;
-  policy?: NativeAgentExecutionPolicy;
-}
-
-/**
- * `"v2"` when a new coordinator session should run on 2.x: the preview
- * switch is on, a 2.x host exists, and the request is exactly the trusted
- * coordinator shape (`native-agent-service.ts` builds it) for a coordinator
- * runtime. Anything else answers undefined, which keeps 1.x.
- */
-export function newOpenCodeCoordinatorSessionProtocol(
-  input: NewOpenCodeCoordinatorSessionInput,
-  setting: unknown,
-  available: boolean,
-): "v2" | undefined {
-  if (input.agent !== "opencode" || !available) return undefined;
-  if (resolveOpenCodeProtocol(setting) !== "v2") return undefined;
-  const coordinatorId = coordinatorIdFromRuntimeId(input.environmentId);
-  if (!coordinatorId) return undefined;
-  if (input.origin !== "coordinator") return undefined;
-  if (input.owner?.kind !== "coordinator" || input.owner.coordinatorId !== coordinatorId) {
-    return undefined;
-  }
-  if (input.executionPolicy !== COORDINATOR_EXECUTION_POLICY) return undefined;
-  if (input.policy && input.policy.id !== COORDINATOR_EXECUTION_POLICY) return undefined;
-  return "v2";
 }
 
 // ── the provider side ───────────────────────────────────────────────────────

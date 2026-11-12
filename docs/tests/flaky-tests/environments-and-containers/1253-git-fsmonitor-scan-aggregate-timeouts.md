@@ -371,3 +371,33 @@ reported `open`: record it as a recurrence.
 - **Isolated rerun:** the runner's one-file rerun of
   `apps/backend/src/core/git-fsmonitor.test.ts` passed alone (3.5 s).
 
+
+## Skill-staging review preparation recurrence — 2026-11-12
+
+`mise run flaky:recurrence 1253 --base b257a8c32fe79a9ebb41f13dc0fbc01c425ed3fa`
+reported `open`: record it as a recurrence.
+
+- **Branch / base:** `skill-injection-status-22f14b7e79fa-r1` at `c4ef848a0`,
+  merge base `b257a8c32fe79a9ebb41f13dc0fbc01c425ed3fa`. The branch changes
+  container input staging (`portable-inputs.ts`), its tests and
+  `container-lifecycle.md`. The failure triage reached `portable-inputs.ts`
+  only indirectly (three import hops, verdict `undetermined`); the owner,
+  `git-fsmonitor.ts` and `ProjectGitService` are unchanged, and the failing
+  case does not stage inputs.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups).
+- **Failure:** the same signature as the two 2026-11-11 recurrences: `git
+  fsmonitor > project-home status auto-starts and preserves the configured
+  daemon` failed at 11,345.24 ms because `git fsmonitor--daemon status`
+  rejected at `git-fsmonitor.test.ts:281` after `status` returned.
+- **Suite counts:** backend 18,089 pass, 200 skip, 1 fail across 1,278 files
+  (175.12 s); web 14,732 tests across 1,015 files passed.
+- **Isolated reruns:** unlike the earlier recurrences, the runner's own
+  one-file rerun also failed (13.8 s), so the failure was not confined to the
+  aggregate. On the same host after the preparation load had gone, the
+  address-findings stage reran the unchanged owner alone on the fix commit
+  `045dfa433` (`bun --cwd=apps/backend test ./src/core/git-fsmonitor.test.ts
+  --parallel=1`) and it passed (6.5 s).
+- **Hypothesis (unconfirmed):** as above, the asynchronous daemon start can
+  lose the race with the follow-up `status` call when the host is loaded; a
+  one-file rerun straight after a loaded aggregate is not free of that load.

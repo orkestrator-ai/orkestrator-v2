@@ -744,10 +744,29 @@ brings the offer back.
 User-authored extension directories (Claude's `commands`, `skills`,
 `agents`, `ide`, `plugins`; Grok's `hooks`, `skills`, `commands`; Pi's
 `skills`, `prompts`, `extensions`, `themes`) are staged one top-level entry at
-a time, so one skill directory is one unit. Input spec version 4 applies a conservative credential guard to the newly
+a time, so one skill directory is one unit. A unit is all-or-nothing, with
+one exception (input spec version 7): inside an entry of a skill root, a file
+over the per-file bound is left out and counted as `too-large`, and the rest
+of the skill is staged. Skills ship platform binaries (Impeccable carries a
+17 MB macOS executable beside a launcher that downloads the Linux one), and
+dropping the whole skill for a file the container cannot run left the agent
+without it. A skill whose own `SKILL.md` is over the bound is still refused
+whole. The skips of files left out of a unit (links, withheld files, a
+skill's oversized files) are counted only once the unit is staged, so a unit
+refused whole counts as that one refusal. Input spec version 4 applies a conservative credential guard to the newly
 added Claude `skills` and Grok `commands` trees. It withholds environment files,
 credential/secret/token files, private-key files and common credential directories,
-and files containing private-key blocks or credential assignments. Checks run on
+and files containing private-key blocks or credential assignments. Since input
+spec version 7 an assignment counts only when its value looks generated: eight
+or more characters with both a letter and a digit, not a `${VAR}`, `%VAR%` or
+`<placeholder>`, not spelled with a placeholder word (`your`, `example`,
+`secret`, `password`, …), and read only up to a bracket. Every assignment in a
+file is checked, not just the first, and a value never starts on the next
+line: an empty `API_KEY=` does not take the following `CLIENT_SECRET=…` as
+its value, and an assignment that appears inside another's value is checked
+on its own. Before that, documentation such as
+`export CONTEXT7_API_KEY=your_key`, `"total_tokens": 1234` or
+`tokens=1-3` withheld the `SKILL.md` that defines the skill. Checks run on
 the bounded bytes before writing any staged file; safe binary resources retain
 their bytes. Withheld files count as `credential-withheld` without logging paths
 or contents. This is defense in depth, not arbitrary-secret detection: keep

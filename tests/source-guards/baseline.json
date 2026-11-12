@@ -282,7 +282,6 @@
     "apps/backend/tests/docker-image.test.ts": 1,
     "apps/backend/tests/grok-mcp-parity-live.test.ts": 1,
     "apps/backend/tests/portable-inputs-shared-skills.test.ts": 1,
-    "apps/backend/tests/portable-inputs-user-extensions.test.ts": 1,
     "apps/backend/tests/portable-inputs.test.ts": 1,
     "apps/backend/tests/process-tree.test.ts": 1,
     "apps/backend/tests/project-git-mirror-create.test.ts": 1,

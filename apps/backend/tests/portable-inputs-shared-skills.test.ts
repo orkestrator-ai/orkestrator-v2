@@ -132,7 +132,10 @@ async function sharedSkillsFixture() {
     path.join(grok, "fixture-claude-only"),
   );
   await write(path.join(agents, "fixture-keyed", "SKILL.md"), skill("fixture-keyed"));
-  await write(path.join(agents, "fixture-keyed", "config.json"), '{"api_key":"SENTINEL-KEY"}');
+  await write(
+    path.join(agents, "fixture-keyed", "config.json"),
+    '{"api_key":"SENTINEL-KEY-5b0e9d3a7c12"}',
+  );
   await fs.symlink(path.join(agents, "fixture-keyed"), path.join(grok, "fixture-keyed"));
 
   // Pi links a shared skill the same way.

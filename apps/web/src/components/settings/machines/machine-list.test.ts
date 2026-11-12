@@ -320,6 +320,31 @@ describe("maintenanceIssues", () => {
     ).toEqual([]);
     expect(maintenanceIssues(hostMaintenanceSnapshotFixture({ image: null }))).toEqual([]);
   });
+
+  test("a usable image built from an older Orkestrator is reported", () => {
+    const image = {
+      name: "orkestrator-v2:latest",
+      present: true,
+      compatible: true,
+      reason: null,
+      releaseReference: "ghcr.io/x:2.26.0",
+      outdatedEnvironments: [],
+    };
+    expect(
+      maintenanceIssues(
+        hostMaintenanceSnapshotFixture({
+          image: { ...image, builtForVersion: "2.24.0", olderThanBackend: true },
+        }),
+      ),
+    ).toEqual(["The container image is older than this Orkestrator"]);
+    expect(
+      maintenanceIssues(
+        hostMaintenanceSnapshotFixture({
+          image: { ...image, builtForVersion: "2.26.0", olderThanBackend: false },
+        }),
+      ),
+    ).toEqual([]);
+  });
 });
 
 test("browser discovery failure retains a self entry even without profile metadata", () => {

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1010,
-    "defined": 1010,
+    "commands": 1011,
+    "defined": 1011,
     "untyped": 0,
     "events": 45
   },
@@ -4235,6 +4235,15 @@
       "critical": [],
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
       "resultDigest": "sha256:6d16f7ea4eb4c5e0bceda19c15c64552489de7d83738408e74e2b09239115842"
+    },
+    "get_project_setup_requirements": {
+      "domain": "projects",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:014a712f937f130a0091b19670a99bf5a1d62ebace0a672f192c473feea79f27"
     },
     "get_project_usage_limits": {
       "domain": "accounts",

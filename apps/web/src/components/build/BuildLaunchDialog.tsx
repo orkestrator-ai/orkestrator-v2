@@ -19,6 +19,7 @@ import {
   ScanSearch,
   Shield,
   ShieldCheck,
+  TriangleAlert,
 } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { Button } from "@/components/ui/button";
@@ -253,6 +254,29 @@ const NETWORK_OPTIONS: Array<{
   },
 ];
 
+/**
+ * Shown under the network choice when Restricted is picked for a project whose
+ * setup has root steps: `workspace-setup.sh` refuses those without full
+ * network access, so the container would stop at setup.
+ */
+function RootStepsNetworkWarning({ steps }: { steps: number }) {
+  return (
+    <p
+      role="status"
+      className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-200"
+    >
+      <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+      <span>
+        This project's orkestrator-ai.json has{" "}
+        {steps === 1 ? "a root setup step" : `${steps} root setup steps`}. Root steps run only with
+        Full access, because a command running as root could get round the restriction whatever it
+        connects to. With Restricted, setup will stop there. Choose Full access, or remove the
+        &quot;root&quot; field from orkestrator-ai.json.
+      </span>
+    </p>
+  );
+}
+
 interface BuildLaunchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -272,6 +296,12 @@ interface BuildLaunchDialogProps {
   busy?: boolean;
   /** Whether this project has a host checkout that can own local worktrees. */
   localEnvironmentAvailable?: boolean;
+  /**
+   * Root setup steps on the project's default branch (`useBuildLaunchOptions`);
+   * they run only with full network access, so Restricted shows a warning.
+   * `null` or absent when unknown: no warning.
+   */
+  rootSetupSteps?: number | null;
   /** Trigger that receives focus again after the dialog closes. */
   returnFocusRef?: RefObject<HTMLElement | null>;
   onConfirm: (selection: BuildLaunchSelection) => void;
@@ -719,6 +749,7 @@ export function BuildLaunchDialog({
   deliveryPolicy,
   busy = false,
   localEnvironmentAvailable = true,
+  rootSetupSteps = null,
   returnFocusRef,
   onConfirm,
 }: BuildLaunchDialogProps) {
@@ -1163,6 +1194,9 @@ export function BuildLaunchDialog({
                       );
                     })}
                   </div>
+                  {networkAccessMode === "restricted" && (rootSetupSteps ?? 0) > 0 && (
+                    <RootStepsNetworkWarning steps={rootSetupSteps ?? 0} />
+                  )}
                 </div>
               )}
 

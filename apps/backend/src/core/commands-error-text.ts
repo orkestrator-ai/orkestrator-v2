@@ -38,7 +38,7 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   setupScript:
     "A setup command exited with an error. The setup output shows which one; fix it, then retry setup.",
   rootSetupNeedsFullNetwork:
-    'This project\'s orkestrator-ai.json has "root" setup steps, and root steps only run in containers with full network access. This environment\'s network is restricted. Create the environment again with network access set to Full, or remove the "root" field from orkestrator-ai.json.',
+    'This project\'s orkestrator-ai.json has "root" setup steps. They run as root, which could get round a network restriction whatever addresses they use, so they only run in containers with full network access. This environment\'s network is restricted. Create the environment again with network access set to Full, or remove the "root" field from orkestrator-ai.json.',
   setupStillRunning:
     "The previous setup run's processes did not stop, so setup was not started again. Retry setup in a moment.",
   timedOut: "Environment start timed out. Check the container runtime and retry.",

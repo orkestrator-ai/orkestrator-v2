@@ -20,15 +20,15 @@
  * network. The session reports the reason on `/session/:id/status` as
  * `readOnlyCommandSandbox`, which Multi Review shows on the reviewer.
  *
- * Only an environment's container is detected, and the session's policy
- * decides it: the backend gives every container session a `sandbox:
- * "container"` policy (`interactive-container` for interactive ones). A host
- * session keeps Codex's sandbox even where a container marker file is visible
- * (a Podman toolbox or distrobox creates `/run/.containerenv` but shares the
- * host's home and may allow bubblewrap's namespace). The marker files are read
- * only for a session with no policy at all. On a Linux host Codex's sandbox
- * stays on: a host whose policy refuses bubblewrap's namespace is not probed
- * here yet.
+ * A container is recognised from either side. The bridge's own process sees
+ * Docker's `/.dockerenv` or Podman's `/run/.containerenv` whatever policy the
+ * session carries: a containerised environment can resolve to a `provider`
+ * or `none` sandbox (full network, a sandbox override, the `pipeline` policy
+ * id), and its bubblewrap is refused all the same. The session's policy also
+ * counts on its own (`sandbox: "container"`, or `interactive-container` under
+ * an override), for a bridge that cannot see a marker. On a Linux host with
+ * neither, Codex's sandbox stays on: a host whose policy refuses bubblewrap's
+ * namespace is not probed here yet.
  */
 import { existsSync } from "node:fs";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -62,8 +62,9 @@ export function codexReadOnlyCommandSandboxOff(
 ): string | undefined {
   if (options.permissionProfile || options.policy?.id === "coordinator-read-only") return undefined;
   if ((options.platform ?? process.platform) !== "linux") return undefined;
-  const container = options.policy
-    ? options.policy.sandbox === "container" || options.policy.id === "interactive-container"
-    : (options.inContainer ?? runningInContainer)();
+  const container =
+    options.policy?.sandbox === "container" ||
+    options.policy?.id === "interactive-container" ||
+    (options.inContainer ?? runningInContainer)();
   return container ? CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER : undefined;
 }

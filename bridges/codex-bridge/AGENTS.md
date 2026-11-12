@@ -236,8 +236,10 @@ replay shows it as the card, never as a message the user typed. See
   the thread's refusal before every `turn/start` (a retry may dispatch on a
   replacement context), and key a legacy approval by its `conversationId`.
   The decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
-  which the session's policy decides, not the container marker files,
-  and the session reports it as `readOnlyCommandSandbox` on
+  which counts the container marker files (`/.dockerenv`,
+  `/run/.containerenv`) for every session, whatever sandbox its policy names,
+  as well as a container session policy; keep the coordinator and
+  permission-profile exclusions. The session reports it as `readOnlyCommandSandbox` on
   `/session/:id/status`. See "Codex read-only turns in a container" in
   [`coordinator.md`](../../docs/architecture/coordinator.md).
 - Never read a missing tool row as "the model did not try". Under a sandbox

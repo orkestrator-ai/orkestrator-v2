@@ -1456,16 +1456,17 @@ reviewer could not read its package or diff, submitted a blocked report
 with no findings, and the review step still showed as complete.
 
 The bridge now decides per turn (`codexReadOnlyCommandSandboxOff`,
-`bridges/codex-bridge/src/codex-read-only-sandbox.ts`). A Linux bridge whose
-session is a container session (a policy with `sandbox: "container"`, or the
-`interactive-container` policy under a sandbox override) runs the turn with
-`sandbox: "danger-full-access"`
-and `approvalPolicy: "untrusted"`. The policy decides, not the container
-marker files: a host session keeps the sandbox even where `/run/.containerenv`
-is visible (a Podman toolbox or distrobox shares the user's home and may
-allow bubblewrap's namespace). The markers (`/.dockerenv`,
-`/run/.containerenv`) count only for a session with no policy at all. Codex
-then runs without asking only the
+`bridges/codex-bridge/src/codex-read-only-sandbox.ts`). A Linux bridge that
+runs in a container runs the turn with `sandbox: "danger-full-access"` and
+`approvalPolicy: "untrusted"`. It is in a container when the bridge process
+sees `/.dockerenv` or `/run/.containerenv`, whatever the session's policy
+says (a containerised environment can resolve to a `provider` or `none`
+sandbox, for example with full network or under the `pipeline` policy id,
+and bubblewrap is refused there all the same), or when the session's policy
+is a container one (`sandbox: "container"`, or `interactive-container` under
+a sandbox override). A host session that can see a marker (a Podman toolbox
+or distrobox creates `/run/.containerenv`) is therefore treated as a
+container too. Codex then runs without asking only the
 commands it classifies as read-only (`cat`, `ls`, `rg`, `sed -n`, `git
 diff`/`log`/`show` and the like), and the bridge declines every approval
 the turn asks for at once rather than offering it to a tab

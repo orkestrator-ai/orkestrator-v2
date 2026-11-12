@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
 import {
@@ -44,18 +45,44 @@ describe("codexReadOnlyCommandSandboxOff", () => {
     ).toBe(CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER);
   });
 
-  test("a host session keeps the sandbox even where a container marker is visible", () => {
-    // A Podman toolbox or distrobox creates `/run/.containerenv` on what is
-    // still the user's host; the session policy, not the marker, decides.
+  test("a container marker counts whatever sandbox the session policy names", () => {
+    // A containerised environment can resolve to a `provider` or `none`
+    // sandbox (full network, an override, the `pipeline` id); bubblewrap is
+    // still refused inside the container.
+    for (const sessionPolicy of [
+      policy("none"),
+      policy("provider"),
+      policy("none", "pipeline"),
+      policy("provider", "pipeline"),
+    ]) {
+      expect(
+        codexReadOnlyCommandSandboxOff({
+          policy: sessionPolicy,
+          platform: "linux",
+          inContainer: () => true,
+        }),
+      ).toBe(CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER);
+    }
+  });
+
+  test("a Linux host session keeps the sandbox where no container marker is visible", () => {
     for (const hostPolicy of [policy("none"), policy("provider"), policy("none", "pipeline")]) {
       expect(
         codexReadOnlyCommandSandboxOff({
           policy: hostPolicy,
           platform: "linux",
-          inContainer: () => true,
+          inContainer: () => false,
         }),
       ).toBeUndefined();
     }
+  });
+
+  test("the bridge reads the container markers when no check is injected", () => {
+    // Pinned to this host's answer so the test holds on a container CI host.
+    const inContainer = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+    expect(codexReadOnlyCommandSandboxOff({ policy: policy("provider"), platform: "linux" })).toBe(
+      inContainer ? CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER : undefined,
+    );
   });
 
   test("a Linux host and macOS keep Codex's sandbox", () => {

@@ -30,6 +30,7 @@ import { AppServerRuntime, type RuntimeSseEvent } from "./app-server-runtime.js"
 
 import type { WatchRolloutFile } from "./sessions/refused-cell-tail.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
+import type { EngineTurnConfig } from "./engine/types.js";
 
 import type { AppServerSupervisorOptions } from "./app-server/process-supervisor.js";
 
@@ -302,6 +303,8 @@ export async function harness(
     commandChangeProbe?: CommandChangeProbe;
     changeEvidence?: CodexChangeEvidence;
     watchRolloutFile?: WatchRolloutFile;
+    /** Defaults to "the sandbox can run", whatever host runs the test. */
+    readOnlyCommandSandboxOff?: (config: EngineTurnConfig) => string | undefined;
     notificationQueueMaxDepth?: number;
   } = {},
 ): Promise<Harness> {
@@ -405,6 +408,7 @@ export async function harness(
     ...(options.commandChangeProbe ? { commandChangeProbe: options.commandChangeProbe } : {}),
     ...(options.changeEvidence ? { changeEvidence: options.changeEvidence } : {}),
     ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),
+    readOnlyCommandSandboxOff: options.readOnlyCommandSandboxOff ?? (() => undefined),
   });
   runtimes.add(runtime);
   if (options.deferStart !== true) await runtime.start();

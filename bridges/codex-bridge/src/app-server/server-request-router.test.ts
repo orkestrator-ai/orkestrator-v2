@@ -1546,3 +1546,57 @@ describe("pausing a parked deadline", () => {
     expect(h.router.holdInteraction(elicited!, true)).toEqual({ status: "stale" });
   });
 });
+
+describe("refuseApproval", () => {
+  test.each(INTERACTIVE_APPROVAL_METHODS)(
+    "%s is declined at once and never offered to the UI",
+    async (method) => {
+      const offered: ApprovalRequest[] = [];
+      const h = harness({
+        refuseApproval: ({ threadId }) => (threadId === "thread-1" ? "Read-only turn." : undefined),
+        presentApproval: (approval) => {
+          offered.push(approval);
+          return true;
+        },
+      });
+      h.router.handle(request(method), 1);
+      await settle();
+
+      expect(offered).toHaveLength(0);
+      expect(h.answers).toHaveLength(1);
+      expect(JSON.stringify(h.answers[0]!.result)).not.toMatch(/"accept|approved/);
+      expect(h.transcript).toEqual([{ threadId: "thread-1", message: "Read-only turn." }]);
+      expect(h.violations).toHaveLength(0);
+      expect(h.router.getPending()).toHaveLength(0);
+    },
+  );
+
+  test("a request the check does not refuse is offered as usual", async () => {
+    const offered: ApprovalRequest[] = [];
+    const h = harness({
+      refuseApproval: () => undefined,
+      presentApproval: (approval) => {
+        offered.push(approval);
+        return true;
+      },
+    });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    expect(offered).toHaveLength(1);
+    expect(h.answers).toHaveLength(0);
+  });
+
+  test("a check that throws declines rather than approving", async () => {
+    const h = harness({
+      refuseApproval: () => {
+        throw new Error("boom");
+      },
+      presentApproval: () => true,
+    });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    expect(h.answers).toEqual([{ generation: 1, id: "srv-1", result: { decision: "decline" } }]);
+  });
+});

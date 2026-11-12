@@ -899,6 +899,10 @@ export class AppServerEngine implements CodexEngine {
   private accountConnectorRetryGeneration?: EngineGeneration;
   private accountConnectorRetrySequence?: number;
   private approvalHandler?: (request: ApprovalRequest) => boolean;
+  private approvalRefusalHandler?: (target: {
+    threadId: string | null;
+    turnId: string | null;
+  }) => string | undefined;
   private approvalResolvedHandler?: (
     request: ApprovalRequest,
     decision: ApprovalResolvedDecision,
@@ -987,6 +991,7 @@ export class AppServerEngine implements CodexEngine {
        * pre-approval behaviour — so attaching a UI is purely additive.
        */
       presentApproval: (request) => this.approvalHandler?.(request) === true,
+      refuseApproval: (target) => this.approvalRefusalHandler?.(target),
       onApprovalResolved: (request, decision, resolution) =>
         this.approvalResolvedHandler?.(request, decision, resolution),
       presentInteraction: (request) => this.interactionHandler?.(request) === true,
@@ -1012,9 +1017,12 @@ export class AppServerEngine implements CodexEngine {
       decision: ApprovalResolvedDecision,
       resolution: ApprovalResolution,
     ) => void;
+    /** Declines a request outright, with this transcript message; see the router. */
+    refuse?: (target: { threadId: string | null; turnId: string | null }) => string | undefined;
   }): void {
     this.approvalHandler = handlers.present;
     this.approvalResolvedHandler = handlers.resolved;
+    this.approvalRefusalHandler = handlers.refuse;
   }
 
   setInteractionHandlers(handlers: {
@@ -1767,6 +1775,7 @@ export class AppServerEngine implements CodexEngine {
       ...(config.policy?.id === "coordinator-read-only" ? [] : [agentSystemInstructions()]),
       ...(loadsProject ||
       config.sandbox === "read-only" ||
+      config.readOnlyCommandSandboxOff !== undefined ||
       config.policy?.id === "coordinator-read-only"
         ? []
         : [await readRepositoryInstructions(cwd)]),

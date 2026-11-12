@@ -18,6 +18,7 @@ import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
 import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
 import { codexLoadsProjectSkills, codexReadOnlyTurnPolicy } from "./codex-config.js";
+import { codexReadOnlyCommandSandboxOff } from "./codex-read-only-sandbox.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -410,21 +411,31 @@ export class CodexRuntimePrompt {
     const isPlanReview = session.config.mode === "plan";
     // Consolidation is a structured report turn, not a planning turn. Keep the
     // reusable Fix session in build mode while applying the read-only boundary
-    // and workflow-result approval only to this dispatch.
-    const promptConfig = (): EngineTurnConfig => ({
-      ...session.config,
-      ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
-      ...(input.readOnly
-        ? {
-            sandbox: "read-only",
-            networkAccessEnabled: false,
-            approvalPolicy: "never",
-            approvalsReviewer: "user",
-            policy: codexReadOnlyTurnPolicy(session.config.policy),
-          }
-        : {}),
-      ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
-    });
+    // and workflow-result approval only to this dispatch. Where Codex's command
+    // sandbox cannot run (an environment's container), `read-only` would fail
+    // every command before it starts; such a turn runs only what Codex treats
+    // as read-only and the bridge declines everything else
+    // (`codex-read-only-sandbox.ts`).
+    const sandboxOffFor =
+      this.ctx.options.readOnlyCommandSandboxOff ?? codexReadOnlyCommandSandboxOff;
+    const promptConfig = (): EngineTurnConfig => {
+      const sandboxOff = input.readOnly ? sandboxOffFor(session.config) : undefined;
+      return {
+        ...session.config,
+        ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
+        ...(input.readOnly
+          ? {
+              sandbox: sandboxOff ? "danger-full-access" : "read-only",
+              networkAccessEnabled: false,
+              approvalPolicy: sandboxOff ? "untrusted" : "never",
+              approvalsReviewer: "user",
+              policy: codexReadOnlyTurnPolicy(session.config.policy),
+              ...(sandboxOff ? { readOnlyCommandSandboxOff: sandboxOff } : {}),
+            }
+          : {}),
+        ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
+      };
+    };
     // Thread-scoped configuration a prompt can change: MCP approvals, and
     // hosted web search when a read-only turn denies a network the session
     // allows. app-server applies both only when a thread starts or resumes.
@@ -543,6 +554,12 @@ export class CodexRuntimePrompt {
       throw new OverlappingTurnError(context.threadId);
     }
     context.dispatchInFlight = true;
+    // The approval refusal reads the thread's; `/session/:id/status` reports
+    // the session's until its next turn, as Claude's bridge does.
+    context.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
+    if (turnConfig.readOnlyCommandSandboxOff !== undefined) {
+      session.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
+    } else delete session.readOnlyCommandSandboxOff;
     this.ctx.registry.setPhase(context, "starting");
 
     // `turn/start` applies the session's configured model but does not echo it

@@ -181,6 +181,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "app-server did not report an exit after SIGKILL; the restart or shutdown went on without it.",
       "approval.cancel-failed": "Cancelling a turn after an approval answer failed.",
       "approval.present-failed": "Presenting an approval threw; it is auto-declined.",
+      "approval.refusal-check-failed":
+        "Checking whether a read-only turn refuses an approval threw; it is declined.",
       "approval.resolved-callback-failed": "An approval resolved callback threw.",
       "command-changes.record-failed":
         "Recording line changes for a command failed; the turn carries on.",

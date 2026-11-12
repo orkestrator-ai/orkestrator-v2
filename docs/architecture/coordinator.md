@@ -1446,6 +1446,47 @@ probe answers there. Not yet run: that workflow's first 24.04 report, stock
 Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor and Fedora (SELinux)
 ([0145](../todo/agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md)).
 
+#### Codex read-only turns in a container
+
+A Codex `readOnly` prompt asks Codex for its `read-only` sandbox, which on
+Linux runs every shell command under bubblewrap in a new user namespace. An
+environment's container refuses that namespace, so every command failed
+before it started ("the sandbox cannot create a namespace"): a Codex
+reviewer could not read its package or diff, submitted a blocked report
+with no findings, and the review step still showed as complete.
+
+The bridge now decides per turn (`codexReadOnlyCommandSandboxOff`,
+`bridges/codex-bridge/src/codex-read-only-sandbox.ts`). A Linux bridge in a
+container (`/.dockerenv`, `/run/.containerenv`, or a session policy with
+`sandbox: "container"`) runs the turn with `sandbox: "danger-full-access"`
+and `approvalPolicy: "untrusted"`. Codex then runs without asking only the
+commands it classifies as read-only (`cat`, `ls`, `rg`, `sed -n`, `git
+diff`/`log`/`show` and the like), and the bridge declines every approval
+the turn asks for at once rather than offering it to a tab
+(`refuseApproval` on the server-request router, `approvalRefusal` in
+`app-server-runtime-approvals.ts`). So nothing else runs, and an
+unattended review never waits on a card. The read-only turn policy, the
+hosted search denial and the dropped repository instructions are
+unchanged. With the sandbox off, `networkAccessEnabled: false` no longer
+applies to commands, so the container firewall is the network boundary.
+
+Unlike Claude's hook, Codex's read-only list admits `git diff`, `git log`
+and `git show`, so a repository's Git configuration can still run its
+helpers. That is acceptable only because the fallback is limited to
+containers, where every other turn already runs with full access and the
+container is the boundary. A Linux host, macOS and a coordinator (which
+runs under its launcher's permission profile) keep Codex's sandbox. A Linux
+host whose policy refuses bubblewrap's namespace is not probed for Codex
+yet.
+
+`/session/:id/status` carries `readOnlyCommandSandbox: { state: "off",
+reason }` until the session's next turn, in the same shape as Claude's, so
+the backend keeps it as `commandSandboxOff` on the reviewer and the
+consolidation step, and Multi Review shows the warning note. Proved by
+`app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`
+and the `refuseApproval` cases of `server-request-router.test.ts` against a
+scripted app-server. No real Codex turn in a container has run with it yet.
+
 ### Changing qualification
 
 Do not reintroduce a platform literal at any of the gates listed above — that

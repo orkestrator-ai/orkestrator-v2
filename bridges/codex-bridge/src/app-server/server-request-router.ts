@@ -140,6 +140,16 @@ export interface ServerRequestRouterOptions {
    * Must be synchronous and cheap: it is called on the path from the read loop.
    */
   presentApproval?: (request: ApprovalRequest) => boolean;
+  /**
+   * A transcript message when the request's turn refuses every approval
+   * outright (a read-only turn running without Codex's command sandbox), or
+   * undefined to route it as usual. A refused request is declined at once and
+   * never offered to the UI. Synchronous: it runs on the read-loop path.
+   */
+  refuseApproval?: (target: {
+    threadId: string | null;
+    turnId: string | null;
+  }) => string | undefined;
   /** Notifies the UI that a parked approval is no longer actionable. */
   onApprovalResolved?: (
     request: ApprovalRequest,
@@ -475,8 +485,21 @@ export class ServerRequestRouter {
     // Interactive path first: if the UI takes ownership, none of the automatic
     // responses below should run. If it declines, we fall through to exactly the
     // behaviour that existed before approvals were wired up.
-    if (isInteractiveApprovalMethod(method) && this.options.presentApproval) {
-      if (this.tryPark(key, record, method, request, generation)) return;
+    if (isInteractiveApprovalMethod(method)) {
+      const refusal = this.refusal(record);
+      if (refusal !== undefined) {
+        this.explain(record, refusal);
+        return this.finish(key, record, "declined", () =>
+          this.options.respond(
+            generation,
+            request.id,
+            buildApprovalResponse(method, "deny", request.params).result,
+          ),
+        );
+      }
+      if (this.options.presentApproval && this.tryPark(key, record, method, request, generation)) {
+        return;
+      }
     }
     if (
       (method === "item/tool/requestUserInput" || method === "mcpServer/elicitation/request") &&
@@ -967,6 +990,19 @@ export class ServerRequestRouter {
   private violation(method: string, detail: string): void {
     this.options.onInvariantViolation?.(method, detail);
     log.error("app-server.invariant-violation", { method, detail });
+  }
+
+  /** `refuseApproval`'s answer; one that throws refuses with no message of its own. */
+  private refusal(record: ServerRequestRecord): string | undefined {
+    if (!this.options.refuseApproval) return undefined;
+    try {
+      return this.options.refuseApproval({ threadId: record.threadId, turnId: record.turnId });
+    } catch (error) {
+      log.error("approval.refusal-check-failed", { error: formatLogError(error) });
+      // Deny rather than approve: the check exists to stop a turn that may
+      // only read, and a broken check cannot say this one may do more.
+      return "Orkestrator declined this request because it could not check the turn's read-only boundary.";
+    }
   }
 
   private explain(record: ServerRequestRecord, message: string): void {

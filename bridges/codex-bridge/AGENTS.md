@@ -227,6 +227,16 @@ replay shows it as the card, never as a message the user typed. See
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.
+- Never send a `readOnly` turn to Codex's `read-only` sandbox where that
+  sandbox cannot run. In an environment's container bubblewrap cannot create
+  its user namespace, so every command fails and a reviewer reads nothing.
+  There the turn runs `danger-full-access` under `untrusted`, and the router
+  declines every approval it asks for at once (`refuseApproval`); never let
+  such a turn's approvals reach a tab or the default auto-approve path. The
+  decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
+  and the session reports it as `readOnlyCommandSandbox` on
+  `/session/:id/status`. See "Codex read-only turns in a container" in
+  [`coordinator.md`](../../docs/architecture/coordinator.md).
 - Never read a missing tool row as "the model did not try". Under a sandbox
   (`read-only` or `workspace-write`), app-server emits no item for a call the
   sandbox refuses: a rejected `apply_patch`, or a failing command whose output

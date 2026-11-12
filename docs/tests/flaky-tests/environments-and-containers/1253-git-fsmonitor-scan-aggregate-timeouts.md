@@ -371,6 +371,63 @@ reported `open`: record it as a recurrence.
 - **Isolated rerun:** the runner's one-file rerun of
   `apps/backend/src/core/git-fsmonitor.test.ts` passed alone (3.5 s).
 
+## Codex read-only container fallback review recurrence — 2026-11-12
+
+`mise run flaky:recurrence 1253 --base dc8803a8c` reported `open`: record it
+as a recurrence.
+
+- **Branch / base:** `sandbox-read-failure-fc374b934b86-r1` at `118897004`,
+  merge base `dc8803a8c08c5cd3e539828dfedb2bdf0fd0ca68`. The branch changes
+  the Codex bridge and adds one event name to
+  `packages/protocol/src/log-vocabulary/bridge.ts`, which the failure triage
+  found four imports away from the owner (`reaches-changed-file-indirectly`).
+  It does not change the owner, `git-fsmonitor.ts` or `ProjectGitService`.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups).
+- **Failure:** the same signature as the two 2026-11-11 recurrences:
+  `git fsmonitor > project-home status auto-starts and preserves the
+  configured daemon` failed at 11,345.49 ms because `git fsmonitor--daemon
+  status` rejected at `git-fsmonitor.test.ts:281` after `status` returned.
+- **Suite counts:** backend 18,082 pass, 200 skip, 1 fail across 1,277 files
+  (186.72 s); every other group passed.
+- **Isolated reruns:** the runner's own one-file rerun, which waited 15 s for
+  another worktree's exclusive resource, failed the same assertion alone
+  (24 pass, 1 fail, 11,261.61 ms). In the address-findings step, at load
+  average about 3, `bun --cwd=apps/backend test src/core/git-fsmonitor.test.ts
+  --parallel=1` passed alone three times (5.0 s, 7.2 s, 5.6 s), and a
+  `--rerun-each 3` run passed this case all three times (its two failures
+  were `fixture repositories inherit fsmonitor off from the test preload` on
+  repeats, which `--rerun-each` itself causes).
+- **Note:** the failing alone-rerun ran while the host was busy, which fits the
+  unconfirmed hypothesis above (the daemon is not yet watching when `status`
+  returns under load) rather than a regression in this branch.
+
+## Codex read-only container fallback, round 2 recurrence — 2026-11-12
+
+`mise run flaky:recurrence 1253 --base dc8803a8c` reported `open`: record it
+as a recurrence.
+
+- **Branch / base:** `sandbox-read-failure-fc374b934b86-r1` at `ecb55fb46`,
+  merge base `dc8803a8c08c5cd3e539828dfedb2bdf0fd0ca68`. Same branch as the
+  entry above; between the two runs it changed only the Codex bridge's
+  container detection, not the owner, `git-fsmonitor.ts` or
+  `ProjectGitService`. Triage again: `undetermined`,
+  `reaches-changed-file-indirectly` through
+  `packages/protocol/src/log-vocabulary/bridge.ts` (four imports).
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups).
+- **Failure:** same signature: `git fsmonitor > project-home status
+  auto-starts and preserves the configured daemon` failed at 11,322.28 ms,
+  `fsmonitor--daemon status` rejecting at `git-fsmonitor.test.ts:281`.
+- **Suite counts:** backend 18,082 pass, 200 skip, 1 fail across 1,277 files
+  (192.03 s); every other group passed.
+- **Isolated reruns:** the runner's own one-file rerun failed alone again
+  (14.4 s). In the address-findings step (load average about 7),
+  `bun test ./src/core/git-fsmonitor.test.ts` from `apps/backend` passed alone
+  twice (25 pass, 7.2 s; and 4.7 s through `test:logged`), and the exact
+  recorded command then passed (212.3 s).
+- **Note:** a second alone failure straight after a loaded aggregate, then
+  passes once the host settled, again fits the load hypothesis above.
 
 ## Skill-staging review preparation recurrence — 2026-11-12
 

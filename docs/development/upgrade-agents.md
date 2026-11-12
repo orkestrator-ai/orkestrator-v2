@@ -1125,6 +1125,20 @@ the pinned binary's parser over the production argument shape.
    app-server's `question` script (`fake-codex-app-server.mjs`) so
    `fake-question-deadline.test.ts` keeps matching what Codex sends.
 
+   Check that a read-only turn without Codex's command sandbox still reads
+   through the bridge's own rules file (`orkestrator-read-only.rules`) and
+   nothing else, on a loopback endpoint and without credits. It expects a
+   chained `cat | head` to run without asking only when the rules are in
+   place, and a redirection and `sed` to ask (and be declined) either way. A
+   release that rejects the rules file fails every thread start, so a failure
+   here blocks the bump:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-read-only-exec-rules.test.ts
+   ```
+
    Then check that approving a command still saves no rule, on the same kind
    of loopback endpoint and without credits:
 

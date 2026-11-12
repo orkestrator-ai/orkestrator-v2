@@ -19,6 +19,7 @@ import type {
   EngineAccountUsageWindow,
   EngineRateLimitWindow,
   EngineRateLimitWindowUpdate,
+  EngineTurnConfig,
   EngineTurnUsage,
 } from "./engine/types.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
@@ -125,6 +126,19 @@ export interface AppServerRuntimeOptions {
    * default; tests drive it by hand.
    */
   watchRolloutFile?: WatchRolloutFile;
+  /**
+   * Why a `readOnly` turn under this session configuration runs without
+   * Codex's command sandbox, or undefined when the sandbox can run
+   * (`codexReadOnlyCommandSandboxOff` by default). Tests pin it so the host
+   * running them does not decide.
+   */
+  readOnlyCommandSandboxOff?: (config: EngineTurnConfig) => string | undefined;
+  /**
+   * Puts the exec-policy rules that let a sandbox-off read-only turn read in
+   * place before its thread starts (`ensureCodexReadOnlyExecRules` into
+   * `codexHome` by default). Tests observe or fail it.
+   */
+  ensureReadOnlyExecRules?: () => Promise<void>;
 }
 
 export interface OrderedRuntimeEvent {

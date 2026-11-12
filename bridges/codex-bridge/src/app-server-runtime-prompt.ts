@@ -18,6 +18,8 @@ import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
 import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
 import { codexLoadsProjectSkills, codexReadOnlyTurnPolicy } from "./codex-config.js";
+import { codexReadOnlyCommandSandboxOff } from "./codex-read-only-sandbox.js";
+import { ensureCodexReadOnlyExecRules } from "./codex-read-only-exec-rules.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -410,21 +412,54 @@ export class CodexRuntimePrompt {
     const isPlanReview = session.config.mode === "plan";
     // Consolidation is a structured report turn, not a planning turn. Keep the
     // reusable Fix session in build mode while applying the read-only boundary
-    // and workflow-result approval only to this dispatch.
-    const promptConfig = (): EngineTurnConfig => ({
-      ...session.config,
-      ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
-      ...(input.readOnly
-        ? {
-            sandbox: "read-only",
-            networkAccessEnabled: false,
-            approvalPolicy: "never",
-            approvalsReviewer: "user",
-            policy: codexReadOnlyTurnPolicy(session.config.policy),
-          }
-        : {}),
-      ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
-    });
+    // and workflow-result approval only to this dispatch. Where Codex's command
+    // sandbox cannot run (an environment's container), `read-only` would fail
+    // every command before it starts; such a turn runs only the reading
+    // programs the bridge's exec-policy rules allow and the bridge declines
+    // everything else (`codex-read-only-sandbox.ts`,
+    // `codex-read-only-exec-rules.ts`).
+    //
+    // Decided once per dispatch, not on every `promptConfig()` read: the
+    // thread is started (or reloaded) and the turn dispatched from separate
+    // reads, and a policy change accepted between them must not leave the
+    // thread on one sandbox and the turn on the other. The decision is also
+    // in the thread reload key (`promptThreadConfig`), so an attached thread
+    // started under the other decision is reloaded before the turn.
+    const sandboxOff = input.readOnly
+      ? (this.ctx.options.readOnlyCommandSandboxOff ?? codexReadOnlyCommandSandboxOff)(
+          session.config,
+        )
+      : undefined;
+    if (sandboxOff) {
+      // Codex reads its rules when a thread starts or resumes, and a
+      // sandbox-off thread is always started or reloaded under that decision
+      // (it is in the reload key), so the file is in place before the thread
+      // that needs it. A failed write costs the reads, not the boundary:
+      // every command then asks and is declined.
+      await (
+        this.ctx.options.ensureReadOnlyExecRules ??
+        (() => ensureCodexReadOnlyExecRules(this.ctx.options.codexHome))
+      )().catch((error: unknown) => {
+        log.warn("read-only-rules.write-failed", { error: formatLogError(error) });
+      });
+    }
+    const promptConfig = (): EngineTurnConfig => {
+      return {
+        ...session.config,
+        ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
+        ...(input.readOnly
+          ? {
+              sandbox: sandboxOff ? "danger-full-access" : "read-only",
+              networkAccessEnabled: false,
+              approvalPolicy: sandboxOff ? "untrusted" : "never",
+              approvalsReviewer: "user",
+              policy: codexReadOnlyTurnPolicy(session.config.policy),
+              ...(sandboxOff ? { readOnlyCommandSandboxOff: sandboxOff } : {}),
+            }
+          : {}),
+        ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
+      };
+    };
     // Thread-scoped configuration a prompt can change: MCP approvals, and
     // hosted web search when a read-only turn denies a network the session
     // allows. app-server applies both only when a thread starts or resumes.
@@ -543,6 +578,25 @@ export class CodexRuntimePrompt {
       throw new OverlappingTurnError(context.threadId);
     }
     context.dispatchInFlight = true;
+    // The approval refusal reads the thread's marker, so it is armed before
+    // every `turn/start` (a retry may dispatch on a replacement context) and
+    // withdrawn when the turn proved not to run. `/session/:id/status` reports
+    // the session's until its next turn, as Claude's bridge does, so that is
+    // published only once the turn may be running.
+    const armReadOnlySandboxOff = (target: ThreadContext) => {
+      if (turnConfig.readOnlyCommandSandboxOff !== undefined) {
+        target.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
+      } else delete target.readOnlyCommandSandboxOff;
+    };
+    const withdrawReadOnlySandboxOff = (target: ThreadContext) => {
+      delete target.readOnlyCommandSandboxOff;
+    };
+    const publishReadOnlySandboxOff = () => {
+      if (turnConfig.readOnlyCommandSandboxOff !== undefined) {
+        session.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
+      } else delete session.readOnlyCommandSandboxOff;
+    };
+    armReadOnlySandboxOff(context);
     this.ctx.registry.setPhase(context, "starting");
 
     // `turn/start` applies the session's configured model but does not echo it
@@ -586,6 +640,7 @@ export class CodexRuntimePrompt {
     // the request id is safe to forget.
     const refuseRetryForClose = async (): Promise<PromptDispatchOutcome> => {
       context!.dispatchInFlight = false;
+      withdrawReadOnlySandboxOff(context!);
       retractProvisionalMessages();
       this.ctx.registry.setPhase(context!, "idle");
       this.lifecycle.emitStatus(context!);
@@ -703,6 +758,7 @@ export class CodexRuntimePrompt {
         }
         if (this.ctx.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
+          withdrawReadOnlySandboxOff(context);
           // The phase was moved to `starting` before the dispatch, and `starting`
           // reports `running`. Settling it is not optional: the thread can outlive
           // this bridge session (another tab may share it, and `releaseSession`
@@ -746,6 +802,7 @@ export class CodexRuntimePrompt {
         }
         if (this.ctx.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
+          withdrawReadOnlySandboxOff(context);
           const message = this.ctx.stopping
             ? "Codex bridge stopped during retry recovery"
             : "Session was deleted during retry recovery";
@@ -791,6 +848,7 @@ export class CodexRuntimePrompt {
                 ? error.message
                 : "Codex failed to create a replacement thread";
             staleContext.dispatchInFlight = false;
+            withdrawReadOnlySandboxOff(staleContext);
             retractProvisionalMessages();
             this.ctx.registry.setPhase(staleContext, "failed", message);
             this.lifecycle.emitStatus(staleContext);
@@ -799,6 +857,7 @@ export class CodexRuntimePrompt {
           if (!thread.id) {
             const message = "Codex did not return a thread id";
             staleContext.dispatchInFlight = false;
+            withdrawReadOnlySandboxOff(staleContext);
             retractProvisionalMessages();
             this.ctx.registry.setPhase(staleContext, "failed", message);
             this.lifecycle.emitStatus(staleContext);
@@ -850,6 +909,10 @@ export class CodexRuntimePrompt {
           threadId: context.threadId,
         });
         dispatchDefinitelyDidNotRun = false;
+        // A replacement or re-attached context carries no marker of its own;
+        // without this its approvals would be parked instead of declined.
+        if (context !== staleContext) withdrawReadOnlySandboxOff(staleContext);
+        armReadOnlySandboxOff(context);
         turn = await startTurn();
       }
       // Both halves of the exchange, so "fork from here" works on either bubble
@@ -862,6 +925,7 @@ export class CodexRuntimePrompt {
         threadId: context.threadId,
         turnId: turn.turnId,
       });
+      publishReadOnlySandboxOff();
       session.lastAcceptedRequestId = requestId;
       session.recoveredContextPending = false;
       if (recordsTypedPrompt) {
@@ -949,6 +1013,7 @@ export class CodexRuntimePrompt {
     } catch (error) {
       context.dispatchInFlight = false;
       if (error instanceof DispatchJournalAdmissionError) {
+        withdrawReadOnlySandboxOff(context);
         retractProvisionalMessages();
         this.ctx.registry.setPhase(context, "failed", error.message);
         this.lifecycle.emitStatus(context);
@@ -969,6 +1034,7 @@ export class CodexRuntimePrompt {
        * turn that may still be executing.
        */
       if (classified.class === "rejected" || dispatchDefinitelyDidNotRun) {
+        withdrawReadOnlySandboxOff(context);
         retractProvisionalMessages();
         this.ctx.registry.setPhase(context, "failed", classified.engineError.message);
         await this.ctx.journal.markRetryable(requestId);
@@ -989,7 +1055,13 @@ export class CodexRuntimePrompt {
         // `attached` and `terminal` must keep the rows: that turn really ran.
         // `recovering` is still unknown, and retracting there would erase a
         // prompt that may be executing.
-        if (ambiguousResolution === "absent") retractProvisionalMessages();
+        if (ambiguousResolution === "absent") {
+          withdrawReadOnlySandboxOff(context);
+          retractProvisionalMessages();
+        }
+        // A turn proven to have run to its end ran under this turn's sandbox
+        // decision, so the session reports it, as an accepted turn would.
+        if (ambiguousResolution === "terminal") publishReadOnlySandboxOff();
       }
 
       if (ambiguousResolution === "attached" || ambiguousResolution === "recovering") {
@@ -999,6 +1071,8 @@ export class CodexRuntimePrompt {
         if (ambiguousResolution === "attached") {
           session.lastAcceptedRequestId = requestId;
         }
+        // The turn ran or may be running under this turn's sandbox decision.
+        publishReadOnlySandboxOff();
         await this.ctx.callbacks.persistSession(session);
         this.lifecycle.emitStatus(context);
         return {

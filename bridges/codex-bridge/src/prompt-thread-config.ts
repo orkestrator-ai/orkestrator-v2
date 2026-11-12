@@ -21,5 +21,9 @@ export function promptThreadConfig(config: EngineTurnConfig): string {
     // The command environment (item 209): a loaded thread keeps the one it
     // started with, so a change needs a reload.
     ...(nativeAgentWithholdsGitHubCredential(config.policy) ? ["withhold-github"] : []),
+    // A read-only turn without Codex's command sandbox starts its thread
+    // under `danger-full-access`/`untrusted` and without the repository's
+    // AGENTS.md; a thread started under the other decision is reloaded.
+    ...(config.readOnlyCommandSandboxOff !== undefined ? ["read-only-sandbox-off"] : []),
   ]);
 }

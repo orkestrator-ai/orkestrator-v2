@@ -1112,6 +1112,32 @@ describe("LinearTicketsView", () => {
     );
   });
 
+  test("puts the Build button in the ticket header beside Open", async () => {
+    let resolveDetail: (detail: LinearIssueDetail) => void = () => undefined;
+    getLinearIssueMock.mockImplementationOnce(
+      () =>
+        new Promise<LinearIssueDetail>((resolve) => {
+          resolveDetail = resolve;
+        }),
+    );
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    // The header shows Build while the ticket is still loading, but it cannot
+    // launch a build until the details it builds from have arrived.
+    const buildButton = await screen.findByRole("button", { name: /^build/i });
+    expect((buildButton as HTMLButtonElement).disabled).toBe(true);
+
+    resolveDetail(issueDetail);
+    expect(await screen.findByText("Build Linear support")).toBeTruthy();
+    await waitFor(() => expect((buildButton as HTMLButtonElement).disabled).toBe(false));
+
+    const openButton = screen.getByRole("button", { name: "Open" });
+    expect(openButton.parentElement).toBe(buildButton.parentElement);
+    expect(screen.getAllByRole("button", { name: /^build/i })).toHaveLength(1);
+  });
+
   test("shows an empty state when the ticket has no comments", async () => {
     getLinearIssueMock.mockResolvedValue({ ...issueDetail, comments: [] });
     renderLinearTicketsView();
@@ -1277,11 +1303,21 @@ describe("LinearTicketsView", () => {
     fireEvent.click(await screen.findByText("Add Linear integration"));
     expect(await screen.findByText("Linear detail unavailable")).toBeTruthy();
 
+    // The header keeps Build visible after a failed load, but it cannot launch
+    // a build without the details it builds from.
+    const buildButton = screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement;
+    expect(buildButton.disabled).toBe(true);
+
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Build Linear support")).toBeTruthy();
     });
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
   });
 
   test("clears failed completion comment state when retrying from ticket details", async () => {

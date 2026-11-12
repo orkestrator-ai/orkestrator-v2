@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTO_PIPELINE_TOOL_NAME } from "@orkestrator/protocol/build-pipeline";
+import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
 import { AgentToolsServer } from "./agent-tools.js";
 import type { AutoPipelineToolHost, AutoPipelineToolScope } from "./agent-tools-auto-pipeline.js";
 import { StorageService } from "./storage.js";
@@ -10,7 +11,7 @@ import { WorkflowResultService } from "./workflow-result-service.js";
 
 type RpcBody = {
   result?: {
-    tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
+    tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
     structuredContent?: Record<string, unknown>;
   };
 };
@@ -90,8 +91,9 @@ describe("convert_to_pipeline on the Orkestrator MCP server", () => {
     const tab = tabConnection();
     const listed = await rpc(tab.url, tab.token, "tools/list");
     expect(toolNames(listed)).toContain(AUTO_PIPELINE_TOOL_NAME);
-    const schema = listed.result?.tools?.find((tool) => tool.name === AUTO_PIPELINE_TOOL_NAME)
-      ?.inputSchema as { required: string[] };
+    const tool = listed.result?.tools?.find((tool) => tool.name === AUTO_PIPELINE_TOOL_NAME);
+    expect(tool?.description).toContain(ACCEPTANCE_CRITERIA_RULE);
+    const schema = tool?.inputSchema as { required: string[] };
     expect(schema.required).toEqual(["title", "description", "acceptanceCriteria", "notes"]);
 
     offered = false;

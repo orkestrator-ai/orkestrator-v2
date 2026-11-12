@@ -639,6 +639,13 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain('"id": "ac-7"');
     expect(prompt).toContain("Never mark such a criterion passed");
     expect(prompt).toContain("Any failed criterion means complete: false");
+    // Verify judges the change: what earlier runs did on the host, which no
+    // commit can meet or undo, must not fail a criterion and loop through Rework.
+    expect(prompt).toContain("Judge only the committed change.");
+    expect(prompt).toContain(
+      "What earlier runs did on the host, and whether the worker kept to the ticket's constraints while working, is outside this check",
+    );
+    expect(prompt).toContain("You are judging the change, not how the work was carried out.");
     // The criteria come before the output contract that names the field.
     expect(prompt.indexOf("Acceptance criteria to check")).toBeLessThan(
       prompt.indexOf('"acceptanceCriteria":['),

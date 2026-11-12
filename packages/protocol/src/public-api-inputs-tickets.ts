@@ -12,6 +12,7 @@ import type {
 } from "./public-api-inputs.js";
 import { TICKET_LABEL_LIMITS } from "./ticket-labels.js";
 import {
+  ACCEPTANCE_CRITERIA_RULE,
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
   TICKET_KINDS,
@@ -94,12 +95,14 @@ const ticketSections: PublicJsonSchema = {
     problem: ticketText("What is wrong today."),
     context: ticketText("Background, evidence and where to look."),
     decisions: ticketText("Choices already made."),
-    constraints: ticketText("Limits on how the work is done."),
+    constraints: ticketText(
+      "Limits on how the work is done, including what the worker may not read, run or touch.",
+    ),
     acceptanceCriteria: {
       type: "array",
       maxItems: TICKET_SECTION_LIMITS.maxAcceptanceCriteria,
       items: { type: "string", minLength: 1, maxLength: TICKET_SECTION_LIMITS.maxCriterionLength },
-      description: "One checkable criterion per entry. An unchanged entry keeps its result.",
+      description: `One checkable criterion per entry. An unchanged entry keeps its result. ${ACCEPTANCE_CRITERIA_RULE}`,
     },
     checks: {
       type: "array",
@@ -176,7 +179,9 @@ export const TICKET_ACTION_INPUTS: Readonly<Record<TicketActionName, PublicActio
           kind: ticketKind,
           sections: ticketSections,
           description: ticketText("Ticket description."),
-          acceptanceCriteria: ticketText("Acceptance criteria."),
+          acceptanceCriteria: ticketText(
+            `Acceptance criteria, one per line. ${ACCEPTANCE_CRITERIA_RULE}`,
+          ),
           status: { ...ticketStatus, description: "Column (default backlog)." },
           labels: { ...labelList, description: `${labelList.description} Default none.` },
         },
@@ -201,7 +206,9 @@ export const TICKET_ACTION_INPUTS: Readonly<Record<TicketActionName, PublicActio
             description: `${TICKET_SECTIONS_GUIDANCE} Sections not named are unchanged.`,
           },
           description: ticketText("New description."),
-          acceptanceCriteria: ticketText("New acceptance criteria."),
+          acceptanceCriteria: ticketText(
+            `New acceptance criteria, one per line. ${ACCEPTANCE_CRITERIA_RULE}`,
+          ),
           status: { ...ticketStatus, description: "Move the ticket to this column." },
           labels: {
             ...labelList,

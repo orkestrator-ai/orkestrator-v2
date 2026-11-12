@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import type { KeyInformationPatch } from "./build-pipeline-key-information.js";
 import { asModel } from "./contract/model-schema.js";
 import { AUTO_PIPELINE_TOOL_NAME } from "./auto-pipeline-tool.js";
+import { ACCEPTANCE_CRITERIA_RULE } from "./ticket-sections.js";
 
 const text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32000));
 const texts = Schema.Array(text).check(Schema.isMaxLength(100));
@@ -197,7 +198,7 @@ export function autoPipelineDraftPrompt(): string {
     `Convert this conversation and the work in this environment into a pipeline draft for review. Call the Orkestrator tool \`${AUTO_PIPELINE_TOOL_NAME}\` once with:`,
     "- title: one line.",
     "- description: Summary, Problem and Context sections.",
-    "- acceptanceCriteria: each one line and independently checkable.",
+    `- acceptanceCriteria: each one line and independently checkable. ${ACCEPTANCE_CRITERIA_RULE}`,
     "- notes: only what you observed. Record decisions as a concise engineering summary (the choice, the options with their pros and cons, and the justification from requirements, code or test results), the files you touched, the checks you ran with their results, and any unfinished work. Do not reconstruct private reasoning or invent alternatives.",
     "Work from your own record of this session and from the repository: read `git status`, `git diff` and `git log` rather than relying on memory for what changed. Do not edit files, commit or send messages. When the tool accepts the draft, say that it is ready to review in the Auto-pipeline tab and stop.",
   ].join("\n");

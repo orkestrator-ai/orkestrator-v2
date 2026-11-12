@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
+import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
 import { StorageService } from "./storage.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
@@ -909,6 +910,28 @@ describe("FeaturePlanningService", () => {
       await context.dispose();
     }
   });
+
+  for (const toolMode of [false, true]) {
+    test(`story refinement keeps criterion guidance after session recreation (${toolMode ? "tool" : "state-block"})`, async () => {
+      const context = await harness({ withStory: true, toolMode });
+      try {
+        context.provider.statusState = "missing";
+        await context.start({
+          kind: "story",
+          storyId: "story-1",
+          userMessage: "Tighten the acceptance criteria",
+        });
+
+        expect(context.provider.created).toEqual([`feature-planning:${context.featureId}`]);
+        expect(context.provider.sends).toHaveLength(1);
+        expect(context.provider.sends[0]?.sessionId).toBe("session-1");
+        expect(context.provider.sends[0]?.prompt).toContain(ACCEPTANCE_CRITERIA_RULE);
+        expect(context.provider.sends[0]?.prompt).toContain("Title: Export");
+      } finally {
+        await context.dispose();
+      }
+    });
+  }
 
   test("fails definitely when the planning environment disappears during session creation", async () => {
     const context = await harness();

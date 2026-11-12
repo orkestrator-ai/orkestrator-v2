@@ -16,6 +16,7 @@ import {
   AUTO_PIPELINE_TOOL_NAME,
   autoPipelineResultSchema,
 } from "@orkestrator/protocol/build-pipeline";
+import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
 
 /** What the agent tool server needs from Auto-pipeline. */
 export interface AutoPipelineToolHost {
@@ -59,7 +60,7 @@ export function registerAutoPipelineTool(
       title: "Convert this conversation into a pipeline",
       description:
         "Use only when the user asks you to turn this conversation, or the work in this environment, into a pipeline: a ticket plus the finished Build handoff, continuing from Review through verification and delivery. " +
-        "Work from your own record of this session and from the repository (git status, git diff, git log). Description needs Summary, Problem and Context sections; every acceptance criterion is one independently checkable line; notes record only what you observed. " +
+        `Work from your own record of this session and from the repository (git status, git diff, git log). Description needs Summary, Problem and Context sections; every acceptance criterion is one independently checkable line (${ACCEPTANCE_CRITERIA_RULE}); notes record only what you observed. ` +
         "This saves a draft for the user to review and edit. Nothing is created or started until they confirm it in the Auto-pipeline tab, so tell them it is ready and stop. Calling it again replaces the unconfirmed draft.",
       inputSchema: resultInput(),
       annotations: {

@@ -227,6 +227,30 @@ replay shows it as the card, never as a message the user typed. See
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.
+- Never send a `readOnly` turn to Codex's `read-only` sandbox where that
+  sandbox cannot run. In an environment's container bubblewrap cannot create
+  its user namespace, so every command fails and a reviewer reads nothing.
+  There the turn runs `danger-full-access` under `untrusted`. Codex 0.167.0
+  asks for every command no exec-policy rule allows, so before the thread
+  starts the bridge writes `CODEX_HOME/rules/orkestrator-read-only.rules`
+  (`codex-read-only-exec-rules.ts`), allowing only programs none of whose
+  options writes a file or runs another program (a prefix rule admits any
+  arguments: never add `rg`, `sed`, `find`, `git diff`/`show`/`log` or a
+  launcher). The router declines every approval the turn asks for at once
+  (`refuseApproval`), MCP tool-approval elicitations included. Never approve
+  one from the bridge, and never let such a turn's approvals reach a tab or
+  the default auto-approve path. Decide the sandbox once per dispatch, so
+  the thread and the turn agree, and keep the decision in
+  `promptThreadConfig`. Arm the thread's refusal before every `turn/start`
+  (a retry may dispatch on a replacement context), and key a legacy
+  approval by its `conversationId`.
+  The decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
+  which counts the container marker files (`/.dockerenv`,
+  `/run/.containerenv`) for every session, whatever sandbox its policy names,
+  as well as a container session policy; keep the coordinator and
+  permission-profile exclusions. The session reports it as `readOnlyCommandSandbox` on
+  `/session/:id/status`. See "Codex read-only turns in a container" in
+  [`coordinator.md`](../../docs/architecture/coordinator.md).
 - Never read a missing tool row as "the model did not try". Under a sandbox
   (`read-only` or `workspace-write`), app-server emits no item for a call the
   sandbox refuses: a rejected `apply_patch`, or a failing command whose output
@@ -311,7 +335,10 @@ replay shows it as the card, never as a message the user typed. See
   (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`). Codex
   writes an accepted one into `CODEX_HOME/rules/`, where it applies to every
   later Codex session on the host, and app-server 0.166.0 has no method to
-  list or remove it. `approvals.ts` drops the amendments from the descriptor
+  list or remove it. The one rules file the bridge writes itself,
+  `orkestrator-read-only.rules`, is bridge-owned (rewritten whenever it
+  differs), written only for a sandbox-off read-only turn in a container, and
+  allows reads only. `approvals.ts` drops the amendments from the descriptor
   and the backend ignores `amendments` from an older bridge. The exec-policy
   prefix alone is forwarded as `proposedCommandPrefix`, a preselection hint
   for an Orkestrator rule (todo 0723) that no answer carries back.

@@ -1446,6 +1446,103 @@ probe answers there. Not yet run: that workflow's first 24.04 report, stock
 Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor and Fedora (SELinux)
 ([0145](../todo/agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md)).
 
+#### Codex read-only turns in a container
+
+A Codex `readOnly` prompt asks Codex for its `read-only` sandbox, which on
+Linux runs every shell command under bubblewrap in a new user namespace. An
+environment's container refuses that namespace, so every command failed
+before it started ("the sandbox cannot create a namespace"): a Codex
+reviewer could not read its package or diff, submitted a blocked report
+with no findings, and the review step still showed as complete.
+
+The bridge now decides per turn (`codexReadOnlyCommandSandboxOff`,
+`bridges/codex-bridge/src/codex-read-only-sandbox.ts`). A Linux bridge that
+runs in a container runs the turn with `sandbox: "danger-full-access"` and
+`approvalPolicy: "untrusted"`. It is in a container when the bridge process
+sees `/.dockerenv` or `/run/.containerenv`, whatever the session's policy
+says (a containerised environment can resolve to a `provider` or `none`
+sandbox, for example with full network or under the `pipeline` policy id,
+and bubblewrap is refused there all the same), or when the session's policy
+is a container one (`sandbox: "container"`, or `interactive-container` under
+a sandbox override). A host session that can see a marker (a Podman toolbox
+or distrobox creates `/run/.containerenv`) is therefore treated as a
+container too.
+
+Under `untrusted` the pinned Codex (0.167.0) runs without asking only a
+command an exec-policy `allow` rule matches; it has no built-in list of safe
+commands any more, so every other command, reads included, asks
+(`render_decision_for_unmatched_command` in `codex-rs/core/src/exec_policy.rs`).
+Before the thread of such a turn starts, the bridge writes its own rules file,
+`CODEX_HOME/rules/orkestrator-read-only.rules`
+(`bridges/codex-bridge/src/codex-read-only-exec-rules.ts`), which Codex reads
+whenever a thread starts or resumes. It allows `basename`, `cat`, `cmp`,
+`comm`, `cut`, `diff`, `dirname`, `echo`, `grep`, `head`, `ls`, `nl`, `pwd`,
+`readlink`, `realpath`, `stat`, `tail` and `wc`, and `git status`,
+`git rev-parse`, `git ls-files` and `git merge-base`, also chained with pipes,
+`&&` or `;` inside `bash -lc`. A prefix rule lets any arguments follow, so
+only programs none of whose options writes a file or runs another program are
+listed: `rg` (`--pre`), `sed`, `find`, `awk`, `sort`, `xargs`, `env` and
+`git diff`/`show`/`log` (`--output=<file>`) are not. A command with a
+redirection or subshell is not split into plain commands, matches no rule and
+asks. The thread's developer instructions name the allowed commands, so the
+model reads diffs from its review package with `cat` rather than spending the
+turn on refused commands. The bridge rewrites the file only when its content
+differs; it is not an exec-policy amendment, which the bridge never offers.
+Other Codex sessions on that `CODEX_HOME` (the same container) also run these
+programs without asking afterwards. A failed write is logged
+(`read-only-rules.write-failed`) and the turn still runs: its reads are then
+declined, never approved.
+
+The bridge declines every approval the turn asks for at once, rather than
+offering it to a tab (`refuseApproval` on the server-request router,
+`approvalRefusal` in `app-server-runtime-approvals.ts`), with
+`CODEX_READ_ONLY_APPROVAL_REFUSAL` in the transcript: every command the rules
+do not allow, a file change, a permission request, input to a running process
+and a command that asks for network access. An MCP tool approval
+(`mcpServer/elicitation/request` with `codex_approval_kind: "mcp_tool_call"`)
+is declined the same way; a server's own elicitation routes as usual. The
+bridge never approves anything itself. The legacy `execCommandApproval` and
+`applyPatchApproval`, which name their thread `conversationId`, are answered
+the same way. The refusal is armed on the thread before every `turn/start`, a
+retry on a replacement thread included. So nothing else runs, and an
+unattended review never waits on a card. A refusal check that throws declines
+and logs `approval.refusal-check-failed`. The sandbox decision is made once
+per dispatch, so the thread and its turn always agree, and it is part of the
+thread reload key: an attached thread started under the other decision is
+reloaded before the turn. The read-only turn policy, the hosted search denial
+and the dropped repository instructions are unchanged. With the sandbox off,
+`networkAccessEnabled: false` no longer applies to commands, so the container
+firewall is the network boundary.
+
+`git status` can run helpers named in the checkout's local `.git/config`
+(`core.fsmonitor`) and refreshes the index's stat cache. That is acceptable
+only because the fallback is limited to containers, where every other turn
+already runs with full access and the container is the boundary. Against
+the real pinned app-server on a loopback model,
+`live-read-only-exec-rules.test.ts` (`RUN_LIVE_CODEX_APP_SERVER=1`, no
+credits) shows a chained `cat | head && grep` run without asking only when
+the rules are in place, and a redirection and `sed` ask and are declined
+with the sentinel file unchanged. A full reviewer turn in a container has
+not run yet (to-do
+[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
+A Linux host, macOS and a coordinator (which runs under its launcher's
+permission profile) keep Codex's sandbox. A Linux host whose policy refuses
+bubblewrap's namespace is not probed for Codex yet.
+
+`/session/:id/status` carries `readOnlyCommandSandbox: { state: "off",
+reason }` from the moment such a turn is accepted (or may be running, or is
+proven to have run to its end, after an ambiguous dispatch) until the
+session's next turn that runs; a dispatch that proved not to run changes
+neither the status nor the thread's gate. It
+has the same shape as Claude's, so
+the backend keeps it as `commandSandboxOff` on the reviewer and the
+consolidation step, and Multi Review shows the warning note. Proved by
+`app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`,
+`codex-read-only-exec-rules.test.ts`, and the `refuseApproval` cases of
+`server-request-router.test.ts` against a
+scripted app-server. No real Codex turn in a container has run with it yet
+(to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
+
 ### Changing qualification
 
 Do not reintroduce a platform literal at any of the gates listed above — that

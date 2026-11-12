@@ -303,6 +303,13 @@ export interface EngineTurnConfig {
    * presence permits that narrow server to bypass Codex's MCP approval gate.
    */
   workflowResultTool?: string;
+  /**
+   * A read-only turn that runs without Codex's command sandbox, because the
+   * sandbox cannot run here (`codexReadOnlyCommandSandboxOff`): the reason.
+   * Such a turn is still read-only in every other respect; only the sandbox
+   * mode and approval policy differ. Per turn, never persisted.
+   */
+  readOnlyCommandSandboxOff?: string;
 }
 
 export interface StartThreadOptions {

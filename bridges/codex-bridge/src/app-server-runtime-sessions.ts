@@ -1499,6 +1499,8 @@ export class CodexRuntimeSessions {
     policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
     readiness?: NativeAgentReadiness;
     authNotice?: ThreadAuthNotice;
+    /** The latest read-only turn ran without Codex's command sandbox, and why. */
+    readOnlyCommandSandbox?: { state: "off"; reason: string };
   } | null {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
@@ -1571,6 +1573,16 @@ export class CodexRuntimeSessions {
         : {}),
       // A provider login Codex had to renew during this thread's turns.
       ...(context?.authNotice ? { authNotice: context.authNotice } : {}),
+      // Same shape as Claude's bridge, which the backend reads for any bridge
+      // (`claudeReadOnlySandboxObservation`) and Multi Review shows.
+      ...(session.readOnlyCommandSandboxOff !== undefined
+        ? {
+            readOnlyCommandSandbox: {
+              state: "off" as const,
+              reason: session.readOnlyCommandSandboxOff,
+            },
+          }
+        : {}),
       // Omitted rather than "ready" otherwise: only a confirmed sign-out is known.
       ...(this.ctx.options.engine.isAccountSignInRequired()
         ? {

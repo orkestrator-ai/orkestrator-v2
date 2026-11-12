@@ -169,6 +169,11 @@ export interface BridgeSession {
    * earlier history name nothing in a new one, so a new epoch clears it.
    */
   revisedRows?: RecentlyRevisedRows;
+  /**
+   * Why the latest turn, a read-only one, ran without Codex's command sandbox
+   * (`codex-read-only-sandbox.ts`). Cleared by the next turn. In memory only.
+   */
+  readOnlyCommandSandboxOff?: string;
 }
 
 export interface PromptAttachmentInput {
@@ -199,6 +204,11 @@ export interface ThreadContext {
    */
   promptThreadConfig?: string;
   projectSkillsRevision?: number;
+  /**
+   * Set while the thread's latest turn is a read-only turn running without
+   * Codex's command sandbox: every approval it asks for is declined at once.
+   */
+  readOnlyCommandSandboxOff?: string;
   bridgeSessionIds: Set<string>;
   /** The one canonical transcript for this Codex thread. */
   messages: NormalizedMessage[];

@@ -15,15 +15,23 @@ import {
 } from "./app-server/approvals.js";
 import {
   isInteractionAnswerMap,
+  isMcpToolApprovalElicitation,
   type InteractionAnswer,
   type InteractionRequest,
   type InteractionResolution,
 } from "./app-server/interactions.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
-import type { ParkedHoldOutcome } from "./app-server/server-request-router.js";
+import type {
+  ApprovalRefusalTarget,
+  ParkedHoldOutcome,
+} from "./app-server/server-request-router.js";
 import { estimateOrderedEventBytes, isJsonObject } from "./app-server-runtime-base.js";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
+import {
+  CODEX_READ_ONLY_APPROVAL_REFUSAL,
+  CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL,
+} from "./codex-read-only-sandbox.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.codex");
@@ -50,6 +58,28 @@ export class CodexRuntimeApprovals {
     private readonly ctx: CodexRuntimeContext,
     private readonly lifecycle: CodexRuntimeLifecycle,
   ) {}
+
+  /**
+   * Declines every approval a read-only turn without Codex's command sandbox
+   * asks for. Such a turn runs Codex's `untrusted` policy, so an approval is
+   * exactly a command the bridge's exec-policy rules do not allow
+   * (`codex-read-only-exec-rules.ts`), a file change, a
+   * permission request or an MCP tool approval; none may run, and an
+   * unattended review must not wait on a card. An MCP elicitation that is a
+   * server's own question, not a tool approval, routes as usual.
+   *
+   * Must stay synchronous: this runs on the path from the RPC read loop.
+   */
+  approvalRefusal(target: ApprovalRefusalTarget): string | undefined {
+    const context = target.threadId ? this.ctx.registry.getThread(target.threadId) : undefined;
+    if (context?.readOnlyCommandSandboxOff === undefined) return undefined;
+    if (target.method === "mcpServer/elicitation/request") {
+      return isMcpToolApprovalElicitation(target.params)
+        ? CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL
+        : undefined;
+    }
+    return CODEX_READ_ONLY_APPROVAL_REFUSAL;
+  }
 
   /**
    * Claims an approval on behalf of the UI and announces it.

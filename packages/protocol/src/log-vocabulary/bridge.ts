@@ -181,6 +181,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "app-server did not report an exit after SIGKILL; the restart or shutdown went on without it.",
       "approval.cancel-failed": "Cancelling a turn after an approval answer failed.",
       "approval.present-failed": "Presenting an approval threw; it is auto-declined.",
+      "approval.refusal-check-failed":
+        "Checking whether a read-only turn refuses an approval threw; it is declined.",
       "approval.resolved-callback-failed": "An approval resolved callback threw.",
       "command-changes.record-failed":
         "Recording line changes for a command failed; the turn carries on.",
@@ -214,6 +216,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "The backend that launched this bridge has gone; stopping turns and shutting down.",
       "queue.overflow": "The notification queue passed a bound and dropped its backlog.",
       "queue.task-failed": "A task on a per-thread queue failed.",
+      "read-only-rules.write-failed":
+        "Writing the read-only exec-policy rules failed; the turn's reads are declined instead.",
       "recorder.notice":
         "The notification recorder needs attention: it is on, or was asked for without its confirmation.",
       "recorder.threw": "The notification recorder threw.",

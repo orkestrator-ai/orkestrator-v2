@@ -1103,7 +1103,12 @@ clears (`cursorAppliedPolicy` in `execution-policy.ts`,
 read-only turn on a host where its command sandbox cannot run (a container, or
 Linux without a working bubblewrap) runs with the sandbox off and reports
 `sandbox: "none"` with the probe's reason; see "Read-only review turns without
-a working sandbox" in [`coordinator.md`](coordinator.md).
+a working sandbox" in [`coordinator.md`](coordinator.md). A Codex read-only
+turn in a container likewise runs without Codex's sandbox, under `untrusted`
+with a bridge-owned exec-policy rules file allowing a fixed set of reading
+programs and every approval declined, and reports why on
+`/session/:id/status`; see
+"Codex read-only turns in a container" there.
 
 ### Approval modes
 

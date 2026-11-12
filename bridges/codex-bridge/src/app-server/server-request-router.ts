@@ -82,6 +82,14 @@ export const KNOWN_SERVER_REQUEST_METHODS: readonly ServerRequestMethod[] = [
   "execCommandApproval",
 ];
 
+/** What `refuseApproval` is asked about. */
+export interface ApprovalRefusalTarget {
+  threadId: string | null;
+  turnId: string | null;
+  method: string;
+  params: unknown;
+}
+
 export type ServerRequestResolution =
   | "declined"
   | "cancelled"
@@ -140,6 +148,16 @@ export interface ServerRequestRouterOptions {
    * Must be synchronous and cheap: it is called on the path from the read loop.
    */
   presentApproval?: (request: ApprovalRequest) => boolean;
+  /**
+   * A transcript message when the request's turn refuses every approval
+   * outright (a read-only turn running without Codex's command sandbox), or
+   * undefined to route it as usual. A refused request is declined at once and
+   * never offered to the UI. It is asked about every interactive approval
+   * method and about MCP elicitations, so Codex's MCP tool approval (raised
+   * as an elicitation) can be refused before it parks. Synchronous: it runs
+   * on the read-loop path.
+   */
+  refuseApproval?: (target: ApprovalRefusalTarget) => string | undefined;
   /** Notifies the UI that a parked approval is no longer actionable. */
   onApprovalResolved?: (
     request: ApprovalRequest,
@@ -418,9 +436,12 @@ export class ServerRequestRouter {
       id: request.id,
       method: request.method,
       generation,
-      threadId: asString(params.threadId),
+      // The legacy approval methods spell the thread `conversationId` and the
+      // item `callId`, as `describeApproval` reads them. Without the fallback a
+      // legacy request reached `refuseApproval` with no thread and was parked.
+      threadId: asString(params.threadId) ?? asString(params.conversationId),
       turnId: asString(params.turnId),
-      itemId: asString(params.itemId),
+      itemId: asString(params.itemId) ?? asString(params.callId),
       receivedAt: this.now(),
     };
 
@@ -475,8 +496,36 @@ export class ServerRequestRouter {
     // Interactive path first: if the UI takes ownership, none of the automatic
     // responses below should run. If it declines, we fall through to exactly the
     // behaviour that existed before approvals were wired up.
-    if (isInteractiveApprovalMethod(method) && this.options.presentApproval) {
-      if (this.tryPark(key, record, method, request, generation)) return;
+    if (isInteractiveApprovalMethod(method)) {
+      const refusal = this.refusal(record, request.params);
+      if (refusal !== undefined) {
+        this.explain(record, refusal);
+        return this.finish(key, record, "declined", () =>
+          this.options.respond(
+            generation,
+            request.id,
+            buildApprovalResponse(method, "deny", request.params).result,
+          ),
+        );
+      }
+      if (this.options.presentApproval && this.tryPark(key, record, method, request, generation)) {
+        return;
+      }
+    }
+    if (method === "mcpServer/elicitation/request") {
+      // Codex raises an MCP tool approval as an elicitation, so a turn whose
+      // approvals may not reach a tab refuses it here, before it can park.
+      const refusal = this.refusal(record, request.params);
+      if (refusal !== undefined) {
+        this.explain(record, refusal);
+        return this.finish(key, record, "declined", () =>
+          this.options.respond(generation, request.id, {
+            action: "decline",
+            content: null,
+            _meta: null,
+          }),
+        );
+      }
     }
     if (
       (method === "item/tool/requestUserInput" || method === "mcpServer/elicitation/request") &&
@@ -967,6 +1016,24 @@ export class ServerRequestRouter {
   private violation(method: string, detail: string): void {
     this.options.onInvariantViolation?.(method, detail);
     log.error("app-server.invariant-violation", { method, detail });
+  }
+
+  /** `refuseApproval`'s answer; one that throws refuses with no message of its own. */
+  private refusal(record: ServerRequestRecord, params: unknown): string | undefined {
+    if (!this.options.refuseApproval) return undefined;
+    try {
+      return this.options.refuseApproval({
+        threadId: record.threadId,
+        turnId: record.turnId,
+        method: record.method,
+        params,
+      });
+    } catch (error) {
+      log.error("approval.refusal-check-failed", { error: formatLogError(error) });
+      // Deny rather than approve: the check exists to stop a turn that may
+      // only read, and a broken check cannot say this one may do more.
+      return "Orkestrator declined this request because it could not check the turn's read-only boundary.";
+    }
   }
 
   private explain(record: ServerRequestRecord, message: string): void {

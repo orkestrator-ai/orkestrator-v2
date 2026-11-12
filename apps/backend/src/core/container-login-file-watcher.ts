@@ -12,7 +12,7 @@ import {
   exportOpenCode2Refreshes,
   openCode2RefreshLineageFile,
   runningOpenCode2HostClient,
-} from "./opencode2/credentials.js";
+} from "./opencode2/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("docker");

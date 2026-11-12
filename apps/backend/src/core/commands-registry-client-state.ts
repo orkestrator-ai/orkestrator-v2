@@ -11,6 +11,11 @@ import {
   saveCoordinatorPaneLayoutCommand,
   setCoordinatorUpstreamAutoMergeCommand,
 } from "@orkestrator/protocol/contract/domains/config";
+import {
+  getCoordinatorActionMarksCommand,
+  setCoordinatorActionMarkCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
+import { COORDINATOR_ACTION_MARK_LIMITS } from "@orkestrator/protocol/coordinator-action-marks";
 import type {
   CoordinatorUpstreamAutoMerge,
   CoordinatorUpstreamMergeCheck,
@@ -23,6 +28,7 @@ import {
 } from "@orkestrator/protocol/notice-dismissals";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { checkUpstreamBeforeMessage } from "./coordinator-message-upstream.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
@@ -50,6 +56,10 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  * - `list_notice_dismissals`, `dismiss_notices {sessions}`,
  *   `reconcile_notice_dismissals {sessionIdentity, activeOccurrenceIds}` →
  *   the dismissal snapshot.
+ * - `get_coordinator_action_marks {projectId, conversationId}` and
+ *   `set_coordinator_action_mark {projectId, conversationId, cardId, done}`
+ *   (`coordinator` domain) → the conversation's manual action marks. The
+ *   conversation must belong to the project's coordinator, open or closed.
  */
 
 /**
@@ -64,6 +74,23 @@ async function existingProjectId(value: unknown, context: CommandContext): Promi
   if (projectId.length > 200) throw new Error("projectId is too long");
   if (!(await context.storage.getProject(projectId))) throw new Error("Project not found");
   return projectId;
+}
+
+/** A conversation of the project's coordinator (closed ones included: their transcripts stay readable). */
+async function existingConversationId(
+  projectId: string,
+  value: unknown,
+  context: CommandContext,
+): Promise<string> {
+  const conversationId = asNonBlankString(value, "conversationId");
+  if (conversationId.length > COORDINATOR_ACTION_MARK_LIMITS.idChars) {
+    throw new Error("conversationId is too long");
+  }
+  const workspace = await context.storage.coordinators.getCoordinatorWorkspace(projectId);
+  if (!workspace?.conversations.some((conversation) => conversation.id === conversationId)) {
+    throw new Error("Coordinator conversation not found");
+  }
+  return conversationId;
 }
 
 export function registerClientStateCommands(register: CommandRegistrar): void {
@@ -115,15 +142,19 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
 
   register(
     getCoordinatorUpstreamAutoMergeCommand,
-    async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => ({
-      enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
-        await existingProjectId(projectId, context),
-      ),
-    }),
+    async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => {
+      compatibilityPathUsage.record("retired-command.coordinator-upstream-auto-merge");
+      return {
+        enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
+          await existingProjectId(projectId, context),
+        ),
+      };
+    },
   );
   register(
     setCoordinatorUpstreamAutoMergeCommand,
     async ({ projectId, enabled }, context): Promise<CoordinatorUpstreamAutoMerge> => {
+      compatibilityPathUsage.record("retired-command.coordinator-upstream-auto-merge");
       if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
       return {
         enabled: context.storage.clientState.setCoordinatorUpstreamAutoMerge(
@@ -131,6 +162,27 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
           enabled,
         ),
       };
+    },
+  );
+
+  register(getCoordinatorActionMarksCommand, async ({ projectId, conversationId }, context) => {
+    const project = await existingProjectId(projectId, context);
+    return context.storage.clientState.getCoordinatorActionMarks(
+      project,
+      await existingConversationId(project, conversationId, context),
+    );
+  });
+  register(
+    setCoordinatorActionMarkCommand,
+    async ({ projectId, conversationId, cardId, done }, context) => {
+      if (typeof done !== "boolean") throw new Error("done must be a boolean");
+      const project = await existingProjectId(projectId, context);
+      return context.storage.clientState.setCoordinatorActionMark(
+        project,
+        await existingConversationId(project, conversationId, context),
+        asNonBlankString(cardId, "cardId"),
+        done,
+      );
     },
   );
 

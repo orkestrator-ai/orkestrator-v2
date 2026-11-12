@@ -424,6 +424,10 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.reads.usage(sessionId);
   }
 
+  recentTurnUsage(sessionId: string) {
+    return this.reads.recentUsage(sessionId);
+  }
+
   /** A `schema` turn's parsed final answer, once its run has settled. */
   async structured<T>(
     sessionId: string,

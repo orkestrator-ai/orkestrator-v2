@@ -88,6 +88,20 @@ export function turnIdFor(
 export class TurnBoundaryService {
   private readonly lastProvisional = new Map<string, number>();
   private readonly provisionalRunning = new Set<string>();
+  /**
+   * Hints dropped by the spacing or a running pass since the last provisional
+   * pass claimed its slot, per worktree. Each is a token; one whose own hint
+   * proves inert removes itself. While any remain, an inert hint still
+   * captures: the inert check compares only its own paths with the previous
+   * manifest, and a dropped visible write would otherwise wait for the next
+   * visible hint or the turn's end. A claim replaces the set, so a check that
+   * settles afterwards cannot touch the new one.
+   */
+  private readonly provisionalPending = new Map<string, Set<symbol>>();
+  /** Provisional passes skipped because their hint could not move the tree (todo 7840). */
+  provisionalInertSkips = 0;
+  /** Provisional passes that claimed the slot and have released it again. */
+  provisionalPassesFinished = 0;
   /** The running end-capture retry per worktree, cancelled by a new turn there. */
   private readonly recoveries = new Map<string, AbortController>();
 
@@ -782,11 +796,22 @@ export class TurnBoundaryService {
    * snapshot id, so a publish would store the whole file list again. The
    * unused snapshot row goes with retention's next sweep, and a turn's end
    * always publishes.
+   *
+   * `inert` answers whether the hint that prompted this pass cannot move the
+   * tree (todo 7840, `WorktreeChangeOwner.hintCannotMoveTree`). It runs only
+   * during a running turn, so an idle worktree pays nothing for it, and a
+   * skipped pass leaves the spacing untouched. It does not hold the pass
+   * slot: a hint arriving meanwhile is judged on its own paths rather than
+   * dropped behind one that turns out to need no capture. A hint the spacing
+   * or a running pass drops stays pending until a later pass claims the slot
+   * (see `provisionalPending`), unless its own check proves it inert; while
+   * one is pending no hint is skipped as inert.
    */
   async provisional(
     environmentId: string,
     owner: WorktreeChangeOwner,
     nowMs = Date.now(),
+    inert?: () => Promise<boolean>,
   ): Promise<string[]> {
     const turns = this.deps.ledger
       .activeTurns()
@@ -801,10 +826,33 @@ export class TurnBoundaryService {
         ? this.deps.policies.policy.provisionalSpacingRemoteMs
         : this.deps.policies.policy.provisionalSpacingLocalMs;
     const key = owner.identity.worktreeId;
-    if (this.provisionalRunning.has(key) || nowMs - (this.lastProvisional.get(key) ?? 0) < spacing)
+    const blocked = () =>
+      this.provisionalRunning.has(key) || nowMs - (this.lastProvisional.get(key) ?? 0) < spacing;
+    if (blocked()) {
+      // Pending until a later pass claims the slot, or this hint proves inert.
+      const pending = this.pendingHints(key);
+      const token = Symbol("dropped-hint");
+      pending.add(token);
+      if (inert && (await inert().catch(() => false))) pending.delete(token);
       return [];
+    }
+    if (inert) {
+      const hintInert = await inert().catch(() => false);
+      if (hintInert && this.pendingHints(key).size === 0) {
+        this.provisionalInertSkips++;
+        return [];
+      }
+      // A pass that claimed the slot meanwhile reads the tree after this
+      // hint's write, so it covers this hint and everything pending before
+      // it; if it fails, it marks the worktree pending itself.
+      if (blocked()) return [];
+    }
     this.provisionalRunning.add(key);
     this.lastProvisional.set(key, nowMs);
+    // The capture reads the tree after this claim, so it covers every hint
+    // dropped before it; a hint dropped from here on joins the new set.
+    this.provisionalPending.set(key, new Set());
+    let captured = false;
     try {
       const outcome = await owner.capture({
         purpose: "provisional",
@@ -834,10 +882,23 @@ export class TurnBoundaryService {
         });
         advanced.push(...(await this.publishTurn(turn.turn_id, outcome.snapshotId, false, true)));
       }
+      captured = true;
       return advanced;
     } finally {
+      // A pass that captured or published nothing covers nothing it claimed to.
+      if (!captured) this.pendingHints(key).add(Symbol("failed-pass"));
       this.provisionalRunning.delete(key);
+      this.provisionalPassesFinished++;
     }
+  }
+
+  private pendingHints(key: string): Set<symbol> {
+    let pending = this.provisionalPending.get(key);
+    if (!pending) {
+      pending = new Set();
+      this.provisionalPending.set(key, pending);
+    }
+    return pending;
   }
 
   private sameAsPublished(turnId: string, segmentId: string, snapshotId: string): boolean {

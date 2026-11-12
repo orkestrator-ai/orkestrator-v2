@@ -30,6 +30,21 @@
   3060–3077) under `.orkestrator/review-artifacts/review-validation-085f2243-54bc-4625-8ead-8f255e326766/`
   in that worktree.
 
+## Recurrence — 2026-11-11 (provisional captures review repairs)
+
+Observed 2026-11-11 on `provisional-captures-510c8fc4900c-r1` (head `e188947f2`), base commit `963ffa6ab70bcc7e412e9748078cdbc0333a7ad1`
+(`mise run flaky:recurrence 9963 --base 963ffa6ab…` answered "open. Record
+the failure as a recurrence"). The branch changes only backend change-tracking code, the worktree watcher, a benchmark script and documentation; it touches nothing under `apps/web/` and no container code.
+
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  on beelink (Linux x86_64, 16 cores), guard stage skipped for an unrelated
+  `main` finding; host load average about 35 to 42 at the end of the run.
+- **Failure:** the same case, Expected false, Received true.
+- **Suite counts:** backend 18,020 pass and 1 fail; web 14,637 pass and 1
+  fail ([9932](../native-agents-and-transcripts/9932-virtuoso-cancellation-fake-clock-timer-count.md));
+  the other groups passed.
+- **Isolated rerun:** the runner's own rerun reported `PASSED ALONE (1.2s)`.
+
 ## Hypothesis
 
 Unconfirmed. The assertion reads the whole fake Docker log written during
@@ -93,6 +108,32 @@ touch this file or the container create path.
 
 Status stays open; no assertion, timeout or skip changed.
 
+## Recurrence — 2026-11-11 (main CI)
+
+Observed 2026-11-11 in `main` CI run 43093113394 (job "Tests (backend)",
+head `963ffa6ab`, PR #2176), which changes agent-testing specs and does not
+touch this file or the container create path. Recorded from branch
+`fix-ci-main-1727044b99e3-r1`, base `51456e887`
+(`mise run flaky:recurrence -- 9963 --base 51456e887` answered "open. Record
+the failure as a recurrence").
+
+- **Command:** `mise run test:full` with `ORKESTRATOR_TEST_GROUPS=backend`
+  (two backend workers) on the GitHub-hosted Linux x64 runner.
+- **Failure:** line 177, Received true (30.35 ms): the same fake-Docker `ps `
+  entry.
+- **Isolated rerun:** the runner's automatic rerun reported `FAILED ALONE`
+  in 9 ms, but it never ran the file: under GitHub Actions Bun prints each
+  file header as `::group::tests/…:`, and the runner took that marker as
+  part of the path. That parser is fixed in the same change
+  (`scripts/test-all.ts`, `BUN_FILE_HEADER`). Run alone locally,
+  `bun test --preload ../../tests/setup-node.ts tests/container-rootless-host-ports-create.test.ts`
+  in `apps/backend` passed 3/3 (three repetitions).
+- **Diagnostics:** the assertion now compares the `ps ` lines themselves
+  with `[]` rather than a boolean, so the next failure names the `ps`
+  command (and so its caller, from its filters). Its strength is unchanged.
+
+Status stays open.
+
 ## Resolution — 2026-11-11 (to-do 7569 rework, `docker-fixture-waits-859dbd041c3d-r1`)
 
 **Cause.** The assertion was wider than its claim. The comment says "no
@@ -125,3 +166,11 @@ on a rootful create still fails it, and no timeout or skip changed.
 
 **Verification.** `mise run test:logged -- --name rootless-host-ports -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts tests/container-rootless-host-ports-create.test.ts --parallel=1 --rerun-each=5`
 passed (4 tests × 5).
+
+**Superseded diagnostics.** The main CI recurrence above changed the
+assertion to compare every `ps ` line with `[]` so the next failure would name
+the caller. That check had the same width as the original and would still fail
+on an unrelated `ps`; this fix replaces it with `ownedPortListings`, which also
+compares lines with `[]`, so a genuine owned-port listing is still named. The
+recurrences recorded in main CI run 43093113394 and on the provisional captures
+review show the same symptom and are covered by this cause.

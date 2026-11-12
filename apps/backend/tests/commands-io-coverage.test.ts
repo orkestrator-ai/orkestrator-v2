@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands";
+import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_SIZE_LABEL } from "../src/core/path-safety";
 import * as realPty from "../src/core/pty";
 import { runCommand } from "../src/core/shell";
@@ -1194,6 +1195,9 @@ esac
       ).rejects.toThrow(
         `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
       );
+      const branchReads = () =>
+        compatibilityPathUsage.snapshot().paths["retired-command.read-file-at-branch"]?.count ?? 0;
+      const branchReadsBefore = branchReads();
       await expect(
         commands.get("read_file_at_branch")?.(
           { containerId: "container-1", filePath: "src/app.ts", branch: "main" },
@@ -1234,6 +1238,8 @@ esac
           context,
         ),
       ).rejects.toThrow("File is too large to open in the editor");
+      // Only v2.21.0 to v2.23.0 renderers ask; every call is counted (to-do 7570).
+      expect(branchReads()).toBe(branchReadsBefore + 6);
       await expect(
         commands.get("read_container_file_base64")?.(
           { containerId: "container-1", filePath: "assets/blob.bin" },

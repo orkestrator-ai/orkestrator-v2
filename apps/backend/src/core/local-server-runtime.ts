@@ -7,7 +7,7 @@ import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
-import { OpenCode2HostServerState } from "./opencode2/host-server-state.js";
+import { OpenCode2HostServerState } from "./opencode2/index.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { bridgeRestarts, type BridgeRestartCounter } from "./bridge-restarts.js";

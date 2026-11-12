@@ -1,8 +1,10 @@
 import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { resolveManagedBinary } from "./commands-agent-support.js";
-import { resolveOpenCode2TerminalCommand } from "./opencode2/terminal-launch.js";
-import { containerOpenCodeTerminalCommand } from "./opencode2/container-terminal-launch.js";
-import { writeOpenCode2HostConfig } from "./opencode2/server.js";
+import {
+  resolveOpenCode2TerminalCommand,
+  containerOpenCodeTerminalCommand,
+  writeOpenCode2HostConfig,
+} from "./opencode2/index.js";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
@@ -59,6 +61,7 @@ import {
   type FileTreeNode,
 } from "@orkestrator/protocol/contract/domains/files";
 import type { CommandContext } from "./commands-context.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
@@ -1049,14 +1052,17 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
-  register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) =>
-    readLocalFileAtBranch(
+  // Only the diff viewer of v2.21.0 to v2.23.0 asks this and
+  // `read_file_at_branch` (to-do 7570 task 2).
+  register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) => {
+    compatibilityPathUsage.record("retired-command.read-file-at-branch");
+    return readLocalFileAtBranch(
       worktreePath,
       filePath,
       branch,
       context.runtime.diffStats.gitFetchScheduler,
-    ),
-  );
+    );
+  });
   register(
     readFileBase64Command,
     async ({ filePath }, context) => readFileBase64(filePath, await readableHostFileRoots(context)),
@@ -1380,6 +1386,7 @@ export function registerTerminalCommands(
   register(
     readFileAtBranchCommand,
     async ({ containerId, filePath, branch }) => {
+      compatibilityPathUsage.record("retired-command.read-file-at-branch");
       const target = validateRelativeFilePath(filePath);
       const object = `${branch}:${target}`;
       // One `git cat-file --batch` answers the size and the body; the output is

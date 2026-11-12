@@ -58,3 +58,26 @@ settled place. The reader's place is recorded after the wheel animation and
 Virtuoso's correction settle (5 unchanged frames, from 6380), so the gap of
 about 500 px is more than late movement. Start from 6380's clamp fix in the
 transcript controller.
+
+## Recurrence — 2026-11-11 (main CI)
+
+Observed 2026-11-11 in `main` CI run 43093113394, job "Mobile shell
+(webkit)", step "Test inspector transcript preservation and settling", head
+`963ffa6ab` (PR #2176, agent-testing specs only; nothing under
+`e2e/InspectorTranscriptHide.spec.ts` or the transcript controller). This
+answers the open question above: CI's WebKit job does hit it. Recorded from
+branch `fix-ci-main-1727044b99e3-r1`, base `51456e887`
+(`mise run flaky:recurrence -- 9981 --base 51456e887` answered "open").
+
+- **Command:** `bunx playwright test --config e2e/playwright.config.ts e2e/InspectorTranscriptHide.spec.ts --workers=1`
+  with `ORKESTRATOR_E2E_BROWSER=webkit`, through `test:logged`.
+- **Failure:** `[mobile-chromium] Build Pipeline keeps a reader's place across another node`,
+  line 220, expected 12046, received 11550 — the same fixed received value
+  as every earlier mobile failure. 13 of 14 passed.
+- **Again on the next main head:** run 43101971793 (head `51456e887`,
+  PR #2179, an Actions-panel context menu) failed the same test at the same
+  line, expected 12065, received 11550; 13 of 14 passed.
+- **Isolated rerun:** not run; this host has no Linux WebKit image set up for
+  the spec. The earlier Docker runs above remain the reproduction.
+
+Status stays open; no assertion or wait changed.

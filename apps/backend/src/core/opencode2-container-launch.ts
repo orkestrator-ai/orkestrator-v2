@@ -72,17 +72,13 @@ import {
   OPENCODE2_CONTAINER_PROCESS_PATTERN,
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,
   buildOpenCode2GitHubEnvironmentPluginSource,
-} from "./opencode2/container-server.js";
-import {
   OPENCODE2_CREDENTIAL_PLUGIN_ID,
   OPENCODE2_DISABLE_FILEWATCHER,
   OPENCODE2_FLAGS,
   buildOpenCode2CredentialPluginSource,
-} from "./opencode2/server.js";
-import {
   OPENCODE2_USER_CONFIG_MIRROR_FILE,
   buildOpenCode2UserConfigMergeCommand,
-} from "./opencode2/user-config.js";
+} from "./opencode2/index.js";
 import { runCommand } from "./shell.js";
 
 /**

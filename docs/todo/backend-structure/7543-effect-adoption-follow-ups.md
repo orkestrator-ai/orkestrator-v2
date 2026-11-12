@@ -187,7 +187,7 @@ and its body read, not the bridge's own work. What each family got:
   `NodePortal.invokeOnNode` and on to the node link's request, whose abort
   ends the HTTP request; the gateway gives every invoke its own signal that
   aborts when the client's connection closes before the answer, so the node
-  running the command sees the cancel too. `control-mcp-machine-load.ts` and
+  running the command sees the cancel too. `control-mcp/machine-load.ts` and
   `agent-accounts-machines.ts` now bound their routed reads with
   `runWithTimeout`. `ticket-criteria-head.ts` keeps its race as a soft budget
   (see Assumptions and decisions).

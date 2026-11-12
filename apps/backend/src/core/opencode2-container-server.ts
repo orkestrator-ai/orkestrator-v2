@@ -68,8 +68,8 @@ import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-
 import { readImageManifest } from "./docker-image.js";
 import { retryableBridgeStartupError } from "./local-server-runtime.js";
 import type { Environment } from "./models.js";
-import { OpenCode2Client } from "./opencode2/client.js";
 import {
+  OpenCode2Client,
   OPENCODE2_CONTAINER_DIRECTORY,
   OPENCODE2_CONTAINER_LOG,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
@@ -78,15 +78,15 @@ import {
   buildOpenCode2ContainerStartScript,
   manifestRunsOpenCode2,
   publishesOpenCode2Port,
-} from "./opencode2/container-server.js";
-import type { OpenCode2ServerConnection } from "./opencode2/environment-provider.js";
+  type OpenCode2ServerConnection,
+  waitForOpenCode2Ready,
+} from "./opencode2/index.js";
 import {
   OPENCODE2_LAUNCH_FINGERPRINT,
   recordOpenCode2Listener,
   startOpenCode2WithLauncher,
   stopOpenCode2Listeners,
 } from "./opencode2-container-launch.js";
-import { waitForOpenCode2Ready } from "./opencode2/server.js";
 import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
 import { runCommand } from "./shell.js";
 

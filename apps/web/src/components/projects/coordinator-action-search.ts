@@ -11,7 +11,7 @@ export function coordinatorActionIcon(card: CoordinatorActionCard): LucideIcon {
 
 /** The status line under a card's title. */
 export function coordinatorActionStatus(card: CoordinatorActionCard): string {
-  if (card.done) return "Done";
+  if (card.done) return card.markedDone ? "Marked done" : "Done";
   return card.state ?? (card.kind === "topic" ? "Topic" : "Awaiting answer");
 }
 

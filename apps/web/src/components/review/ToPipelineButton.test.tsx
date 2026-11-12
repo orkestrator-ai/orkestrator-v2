@@ -1,11 +1,56 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
-import { ToPipelineButton } from "./ToPipelineButton";
+import { TO_PIPELINE_POLL_MS, ToPipelineButton } from "./ToPipelineButton";
 
-afterEach(cleanupNodeScopes);
+/**
+ * Holds the button's poll interval so a test advances it by hand rather than
+ * waiting on the wall clock. Only intervals at the poll delay are captured;
+ * everything else (Testing Library, promises) stays on the real clock. The
+ * button is the delay's only owner in this tree, so a second live interval at
+ * it is reported rather than silently shared.
+ */
+function controlPolling() {
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const live = new Map<object, () => void>();
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (typeof callback !== "function" || delay !== TO_PIPELINE_POLL_MS)
+      return originalSetInterval(callback, delay, ...args);
+    if (live.size > 0) throw new Error("controlPolling: a second poll interval was scheduled");
+    const handle = { unref: () => handle };
+    live.set(handle, () => (callback as (...callbackArgs: unknown[]) => void)(...args));
+    return handle as unknown as ReturnType<typeof setInterval>;
+  }) as typeof globalThis.setInterval;
+  globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+    if (handle && live.delete(handle as unknown as object)) return;
+    originalClearInterval(handle);
+  }) as typeof globalThis.clearInterval;
+  return {
+    /** Fires every live poll interval once, as if the poll delay had elapsed. */
+    tick() {
+      act(() => {
+        for (const poll of Array.from(live.values())) poll();
+      });
+    },
+    liveCount: () => live.size,
+    restore() {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    },
+  };
+}
+
+let polling: ReturnType<typeof controlPolling>;
+beforeEach(() => {
+  polling = controlPolling();
+});
+afterEach(() => {
+  cleanupNodeScopes();
+  polling.restore();
+});
 
 type Source = { tabId: string; label: string; disabledReason?: string };
 const original: Source = { tabId: "original", label: "Original work" };
@@ -112,7 +157,8 @@ test("a running tab explains why it is disabled, and enables when the turn finis
     "finish",
   );
   node.respond("auto_pipeline_sources", { available: true, sources: [original] });
-  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false), { timeout: 4000 });
+  polling.tick();
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
 });
 
 test("a tab that cannot open, such as at the tab limit, starts no drafting", async () => {
@@ -144,10 +190,18 @@ test("stops polling when it unmounts", async () => {
   const node = client();
   const view = render(node, () => true);
   await screen.findByRole("button", { name: "To pipeline" });
-  view.unmount();
   const calls = node.calls("auto_pipeline_sources").length;
-  await new Promise((resolve) => setTimeout(resolve, 2300));
-  expect(node.calls("auto_pipeline_sources")).toHaveLength(calls);
+  // While mounted, each elapsed poll delay reads again.
+  polling.tick();
+  await waitFor(() => expect(node.calls("auto_pipeline_sources")).toHaveLength(calls + 1));
+  expect(polling.liveCount()).toBe(1);
+  view.unmount();
+  // Unmounting clears the interval and the visibility listener, so neither an
+  // elapsed delay nor the window being shown reads again.
+  expect(polling.liveCount()).toBe(0);
+  polling.tick();
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(node.calls("auto_pipeline_sources")).toHaveLength(calls + 1);
 });
 
 test("reads nothing while the window is hidden and reads again once it is shown", async () => {
@@ -156,35 +210,21 @@ test("reads nothing while the window is hidden and reads again once it is shown"
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
     document.dispatchEvent(new Event("visibilitychange"));
   };
-  // The component's 2 s poll, captured so the test can run its ticks while
-  // hidden instead of sleeping past them.
-  const realSetInterval = globalThis.setInterval;
-  const polls: Array<() => void> = [];
-  const intervals = spyOn(globalThis, "setInterval").mockImplementation(((
-    callback: () => void,
-    delay?: number,
-  ) => {
-    if (delay === 2000) polls.push(callback);
-    return realSetInterval(callback, delay);
-  }) as typeof setInterval);
   try {
     setVisibility("hidden");
     const node = client();
     render(node, () => true);
-    expect(polls).toHaveLength(1);
-    act(() => {
-      polls[0]!();
-      polls[0]!();
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
+    // The poll is armed, yet elapsed delays read nothing while hidden. Each
+    // read is issued synchronously from the poll, so a read would already be
+    // recorded here.
+    expect(polling.liveCount()).toBe(1);
+    polling.tick();
+    polling.tick();
     expect(node.calls("auto_pipeline_sources")).toHaveLength(0);
     act(() => setVisibility("visible"));
     expect(await screen.findByRole("button", { name: "To pipeline" })).toBeTruthy();
     expect(node.calls("auto_pipeline_sources")).toHaveLength(1);
   } finally {
-    intervals.mockRestore();
     if (visibility) Object.defineProperty(document, "visibilityState", visibility);
     else delete (document as { visibilityState?: unknown }).visibilityState;
   }

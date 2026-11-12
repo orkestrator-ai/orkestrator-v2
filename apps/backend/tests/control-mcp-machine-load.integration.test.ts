@@ -5,7 +5,7 @@ import path from "node:path";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import { MACHINE_LOAD_COMMAND, type MachineLoadReport } from "@orkestrator/protocol/machine-load";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
-import { readNodeMachineLoad } from "../src/core/control-mcp-machine-load.js";
+import { readNodeMachineLoad } from "../src/core/control-mcp/machine-load.js";
 import { OrkestratorBackend } from "../src/core/index.js";
 import type { MachineLoadSampler } from "../src/core/machine-load.js";
 

@@ -33,6 +33,7 @@ import {
   MAX_REPORTED_UNCOMMITTED_PATHS,
   MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   prPrompt,
+  resolveConflictsLocallyPrompt,
   resolveConflictsPrompt,
   reviewPrompt,
   structuredReportRepairPrompt,
@@ -1294,6 +1295,22 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("resolve every merge conflict");
     expect(prompt).toContain("Choose validation from the repository's instructions");
     expect(prompt).toContain("Confirm no conflict markers remain");
+  });
+
+  test("lays the conflict-resolution prompt out as separate paragraphs", () => {
+    for (const prompt of [
+      resolveConflictsPrompt("develop"),
+      resolveConflictsLocallyPrompt("develop"),
+    ]) {
+      const paragraphs = prompt.split("\n\n");
+      expect(paragraphs.length).toBeGreaterThanOrEqual(8);
+      expect(paragraphs[0]).toBe(
+        "Fetch origin, merge origin/develop, and resolve every merge conflict correctly.",
+      );
+      expect(paragraphs.some((p) => p.startsWith("Documentation-only conflicts:"))).toBe(true);
+      expect(paragraphs.some((p) => p.startsWith("Code conflicts:"))).toBe(true);
+      expect(paragraphs.at(-1)).toEndWith("Do not ask questions.");
+    }
   });
 
   test("defers validation choices to repository instructions", () => {

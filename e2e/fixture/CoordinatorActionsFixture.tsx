@@ -5,6 +5,7 @@ import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-intera
 import { NativeChatShell } from "../../apps/web/src/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 import {
+  applyCoordinatorActionMarks,
   coordinatorActionCards,
   type CoordinatorActionCard,
 } from "../../apps/web/src/components/projects/coordinator-action-cards";
@@ -32,6 +33,8 @@ const extraQuestions = (): CoordinatorActionCard[] =>
 export function CoordinatorActionsFixture() {
   const [anchor, setAnchor] = useState("");
   const [extra] = useState(extraQuestions);
+  // Manual marks, held here as the shell holds the backend's copy.
+  const [marked, setMarked] = useState<ReadonlySet<string>>(new Set());
   return (
     <div className="relative h-screen bg-background text-foreground">
       <FloatingNoticeLayer columnRem={56}>
@@ -39,53 +42,64 @@ export function CoordinatorActionsFixture() {
           One message waiting
         </FloatingNotice>
         <CoordinatorActionsPanel
-          cards={[
-            ...coordinatorActionCards([
-              {
-                id: "pr-notice",
-                createdAt: "2026-11-09",
-                role: "user",
-                content: "",
-                parts: [],
-                peerMail: {
-                  messageId: "pr-notice",
-                  kind: "notice",
-                  sender: "System",
-                  warning: "",
-                  subject: "Pull request Search is ready to merge",
-                  body: "Pull request: https://github.com/org/repo/pull/42",
-                  notice: {
-                    resource: { kind: "pull-request", id: "env", label: "Search" },
-                    state: "pr-merged",
-                    tone: "success",
-                    pullRequest: {
-                      url: "https://github.com/org/repo/pull/42",
-                      number: 42,
-                      title: "Improve search and filters",
+          cards={applyCoordinatorActionMarks(
+            [
+              ...coordinatorActionCards([
+                {
+                  id: "pr-notice",
+                  createdAt: "2026-11-09",
+                  role: "user",
+                  content: "",
+                  parts: [],
+                  peerMail: {
+                    messageId: "pr-notice",
+                    kind: "notice",
+                    sender: "System",
+                    warning: "",
+                    subject: "Pull request Search is ready to merge",
+                    body: "Pull request: https://github.com/org/repo/pull/42",
+                    notice: {
+                      resource: { kind: "pull-request", id: "env", label: "Search" },
+                      state: "pr-merged",
+                      tone: "success",
+                      pullRequest: {
+                        url: "https://github.com/org/repo/pull/42",
+                        number: 42,
+                        title: "Improve search and filters",
+                      },
                     },
                   },
-                },
-              } as NativeMessage,
-            ]),
-            {
-              id: "topic",
-              anchorId: "user",
-              index: 0,
-              kind: "topic",
-              title: "Search",
-              done: false,
-            },
-            {
-              id: "question",
-              anchorId: "assistant",
-              index: 1,
-              kind: "question",
-              title: "Which option?",
-              done: false,
-            },
-            ...extra,
-          ]}
+                } as NativeMessage,
+              ]),
+              {
+                id: "topic",
+                anchorId: "user",
+                index: 0,
+                kind: "topic",
+                title: "Search",
+                done: false,
+              },
+              {
+                id: "question",
+                anchorId: "assistant",
+                index: 1,
+                kind: "question",
+                title: "Which option?",
+                done: false,
+              },
+              ...extra,
+            ],
+            marked,
+          )}
           onNavigate={setAnchor}
+          onMarkDone={(card, done) =>
+            setMarked((current) => {
+              const next = new Set(current);
+              if (done) next.add(card.id);
+              else next.delete(card.id);
+              return next;
+            })
+          }
         />
         <main className="mx-auto max-w-[56rem] p-8">
           <h1>Coordinator conversation</h1>

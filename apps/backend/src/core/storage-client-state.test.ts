@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorPaneLayout } from "@orkestrator/protocol/coordinator-pane-layout";
+import { COORDINATOR_ACTION_MARK_LIMITS } from "@orkestrator/protocol/coordinator-action-marks";
 import { NOTICE_DISMISSAL_LIMITS } from "@orkestrator/protocol/notice-dismissals";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
+import { COORDINATOR_ACTION_MARKS_FULL_ERROR } from "./storage-client-state.js";
 import { createProject, StorageService } from "./storage.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
 
@@ -177,6 +179,112 @@ describe("client state storage", () => {
   });
 });
 
+describe("coordinator action marks", () => {
+  test("marks are per conversation, idempotent, announced and never leak", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const changes: ResourceChange[] = [];
+      storage.addResourceChangeListener((change) => changes.push(change));
+      const state = storage.clientState;
+      expect(state.getCoordinatorActionMarks("p", "c1")).toEqual({
+        projectId: "p",
+        conversationId: "c1",
+        revision: 0,
+        cardIds: [],
+      });
+
+      const first = state.setCoordinatorActionMark("p", "c1", "toolu_1", true);
+      expect(first).toEqual({
+        projectId: "p",
+        conversationId: "c1",
+        revision: 1,
+        cardIds: ["toolu_1"],
+      });
+      // The same mark again changes nothing and keeps the revision.
+      expect(state.setCoordinatorActionMark("p", "c1", "toolu_1", true).revision).toBe(1);
+      const second = state.setCoordinatorActionMark("p", "c1", ":pr:https://x/pull/2", true);
+      expect(second.cardIds).toEqual(["toolu_1", ":pr:https://x/pull/2"]);
+
+      // Another conversation, and the same conversation id in another project, see nothing.
+      expect(state.getCoordinatorActionMarks("p", "c2").cardIds).toEqual([]);
+      expect(state.getCoordinatorActionMarks("q", "c1").cardIds).toEqual([]);
+
+      const cleared = state.setCoordinatorActionMark("p", "c1", "toolu_1", false);
+      expect(cleared).toMatchObject({ revision: 3, cardIds: [":pr:https://x/pull/2"] });
+      // Clearing a mark that is not there changes nothing.
+      expect(state.setCoordinatorActionMark("p", "c1", "toolu_1", false).revision).toBe(3);
+      // The last mark cleared keeps the row, so the revision keeps moving forward.
+      state.setCoordinatorActionMark("p", "c1", ":pr:https://x/pull/2", false);
+      expect(state.getCoordinatorActionMarks("p", "c1")).toMatchObject({
+        revision: 4,
+        cardIds: [],
+      });
+
+      expect(
+        changes
+          .filter((change) => change.resource === "coordinator-action-marks")
+          .map(({ id, projectId }) => ({ id, projectId })),
+      ).toEqual(Array.from({ length: 4 }, () => ({ id: "c1", projectId: "p" })));
+      expect(() => state.setCoordinatorActionMark("p", "c1", "", true)).toThrow("cardId");
+    });
+  });
+
+  test("a full conversation refuses a further mark instead of evicting one", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const state = storage.clientState;
+      for (let index = 0; index < COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation; index += 1) {
+        state.setCoordinatorActionMark("p", "c", `card-${index}`, true);
+      }
+      expect(() => state.setCoordinatorActionMark("p", "c", "one-more", true)).toThrow(
+        COORDINATOR_ACTION_MARKS_FULL_ERROR,
+      );
+      const stored = state.getCoordinatorActionMarks("p", "c");
+      expect(stored.cardIds).toHaveLength(COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation);
+      expect(stored.cardIds[0]).toBe("card-0");
+      // Clearing one makes room again.
+      state.setCoordinatorActionMark("p", "c", "card-0", false);
+      expect(state.setCoordinatorActionMark("p", "c", "one-more", true).cardIds.at(-1)).toBe(
+        "one-more",
+      );
+    });
+  });
+
+  test("marks survive reopening storage and go with their project", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const project = await storage.addProject(createProject("https://example.invalid/r.git"));
+      const other = await storage.addProject(createProject("https://example.invalid/s.git"));
+      storage.clientState.setCoordinatorActionMark(project.id, "c1", "a", true);
+      storage.clientState.setCoordinatorActionMark(project.id, "c2", "b", true);
+      storage.clientState.setCoordinatorActionMark(other.id, "c1", "c", true);
+
+      const reopened = new StorageService(dataDir);
+      await reopened.init();
+      expect(reopened.clientState.getCoordinatorActionMarks(project.id, "c1")).toMatchObject({
+        revision: 1,
+        cardIds: ["a"],
+      });
+      expect(reopened.clientState.getCoordinatorActionMarks(project.id, "c2").cardIds).toEqual([
+        "b",
+      ]);
+
+      const changes: ResourceChange[] = [];
+      reopened.addResourceChangeListener((change) => changes.push(change));
+      await reopened.removeProject(project.id);
+      expect(reopened.clientState.getCoordinatorActionMarks(project.id, "c1").cardIds).toEqual([]);
+      expect(reopened.clientState.getCoordinatorActionMarks(project.id, "c2").cardIds).toEqual([]);
+      expect(reopened.clientState.getCoordinatorActionMarks(other.id, "c1").cardIds).toEqual(["c"]);
+      expect(
+        changes
+          .filter((change) => change.resource === "coordinator-action-marks")
+          .map(({ id, deleted }) => ({ id, deleted }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+      ).toEqual([
+        { id: "c1", deleted: true },
+        { id: "c2", deleted: true },
+      ]);
+    });
+  });
+});
+
 describe("client state commands", () => {
   async function withCommands(
     projectGit: Partial<NonNullable<CommandContext["projectGit"]>>,
@@ -328,6 +436,84 @@ describe("client state commands", () => {
       expect(await call("get_coordinator_pane_layout", { projectId })).toMatchObject({
         revision: 1,
       });
+    });
+  });
+});
+
+describe("coordinator action mark commands", () => {
+  async function withConversations(
+    run: (
+      call: (name: string, args?: Record<string, unknown>) => Promise<unknown>,
+      projectId: string,
+    ) => Promise<void>,
+  ) {
+    await withTemporaryStorage(async (storage) => {
+      const project = await storage.addProject(createProject("https://example.invalid/r.git"));
+      // Only the workspace's conversation list matters to these commands.
+      const coordinators = {
+        getCoordinatorWorkspace: async (projectId: string) =>
+          projectId === project.id
+            ? { conversations: [{ id: "conv-open" }, { id: "conv-closed", closedAt: "x" }] }
+            : null,
+      };
+      const scoped = Object.assign(Object.create(storage) as StorageService, { coordinators });
+      const commands = createCommandRegistry();
+      const context = { storage: scoped } as unknown as CommandContext;
+      await run(async (name, args = {}) => commands.get(name)!(args, context), project.id);
+    });
+  }
+
+  test("read and set a conversation's marks, closed conversations included", async () => {
+    await withConversations(async (call, projectId) => {
+      expect(
+        await call("get_coordinator_action_marks", { projectId, conversationId: "conv-open" }),
+      ).toEqual({ projectId, conversationId: "conv-open", revision: 0, cardIds: [] });
+      expect(
+        await call("set_coordinator_action_mark", {
+          projectId,
+          conversationId: "conv-open",
+          cardId: "toolu_1",
+          done: true,
+        }),
+      ).toEqual({ projectId, conversationId: "conv-open", revision: 1, cardIds: ["toolu_1"] });
+      expect(
+        await call("set_coordinator_action_mark", {
+          projectId,
+          conversationId: "conv-closed",
+          cardId: "toolu_2",
+          done: true,
+        }),
+      ).toMatchObject({ cardIds: ["toolu_2"] });
+      expect(
+        await call("get_coordinator_action_marks", { projectId, conversationId: "conv-open" }),
+      ).toMatchObject({ cardIds: ["toolu_1"] });
+    });
+  });
+
+  test("refuse unknown projects, unknown conversations and malformed marks", async () => {
+    await withConversations(async (call, projectId) => {
+      await expect(
+        call("get_coordinator_action_marks", { projectId: "missing", conversationId: "conv-open" }),
+      ).rejects.toThrow("Project not found");
+      await expect(
+        call("get_coordinator_action_marks", { projectId, conversationId: "elsewhere" }),
+      ).rejects.toThrow("Coordinator conversation not found");
+      await expect(
+        call("set_coordinator_action_mark", {
+          projectId,
+          conversationId: "conv-open",
+          cardId: "toolu_1",
+          done: "yes",
+        }),
+      ).rejects.toThrow();
+      await expect(
+        call("set_coordinator_action_mark", {
+          projectId,
+          conversationId: "conv-open",
+          cardId: " ",
+          done: true,
+        }),
+      ).rejects.toThrow("cardId");
     });
   });
 });

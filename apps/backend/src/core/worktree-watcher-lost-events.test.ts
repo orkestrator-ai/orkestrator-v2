@@ -180,14 +180,44 @@ test("lost events under Git metadata rescan the file list and keep the paths see
   context.on("/repo/.git/worktrees/wt").lose();
   context.on("/repo/.git/refs").lose();
   await until(() => context.hints.length === 1);
+  // The paths cannot name the metadata change, so the hint says it had one.
   expect(context.hints[0]).toEqual({
     fileList: true,
     tree: true,
     overflow: false,
     paths: ["src/a.ts"],
+    gitMetadata: true,
   });
 
   context.on("/repo/.git").lose();
   await until(() => context.hints.length === 2);
   expect(context.hints[1]).toEqual({ fileList: true, tree: false, overflow: false });
+});
+
+test("a burst that also touched Git metadata says so beside its paths (todo 7840)", async () => {
+  const context = linkedWorktree();
+  await until(() => context.watches.length === 4);
+  await Bun.sleep(40);
+  context.hints.length = 0;
+
+  context.on("/wt").emit("change", "dist/out.js");
+  context.on("/repo/.git/worktrees/wt").emit("change", "index");
+  await until(() => context.hints.length === 1);
+  expect(context.hints[0]).toEqual({
+    fileList: true,
+    tree: true,
+    overflow: false,
+    paths: ["dist/out.js"],
+    gitMetadata: true,
+  });
+
+  // The flag belongs to that burst only.
+  context.on("/wt").emit("change", "dist/out.js");
+  await until(() => context.hints.length === 2);
+  expect(context.hints[1]).toEqual({
+    fileList: true,
+    tree: true,
+    overflow: false,
+    paths: ["dist/out.js"],
+  });
 });

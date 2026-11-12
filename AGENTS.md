@@ -35,7 +35,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
-| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp-coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
+| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp/coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
 | Unified federation plan work items (`plans/unified/`): starting one, updating its status | [`plans/unified/0000-index.md`](plans/unified/0000-index.md#how-to-use-this-board) |
 
 ## Show every visual change as an image in the transcript

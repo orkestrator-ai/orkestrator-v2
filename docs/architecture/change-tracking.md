@@ -329,6 +329,47 @@ every capture has a new snapshot id, so a publish would store the whole file
 list again. Its snapshot row is unreferenced and goes with the retention sweep
 after `orphanGraceMs`. A turn's end always publishes.
 
+A hint that names only Git-ignored output starts no capture (todo 7840,
+retired 2026-11-11; `inert-hints.ts`). A host capture inventories tracked
+files, untracked files Git does not ignore, and every path the previous
+manifest covered, so a write the inventory cannot see cannot move the tree.
+`WorktreeChangeOwner.hintCannotMoveTree` skips the pass only when all of these
+hold, and otherwise the pass captures as before:
+
+- The hint names its every path: not an overflowing burst or one with unknown
+  paths, and not a burst that also changed Git metadata (the index, `HEAD`, a
+  compared ref), which the watcher reports as `WorktreeChangeHint.gitMetadata`
+  because its paths never name it. No path is a `.gitignore`, under `.git`,
+  absolute, `..`, or spelt with a replacement character.
+- The previous manifest records none of the paths, nothing below one, and
+  nothing one lies inside (a gitlink, or an untracked nested repository
+  recorded as one `dir/` entry).
+- Git agrees, in two short processes run together
+  (`HostCaptureExecutor.ignoredAndUnlisted`): `check-ignore --stdin` reports
+  every path ignored (a directory is spelt `dir/` for a `dist/` rule to match;
+  a path in the index or inside a submodule is never reported), and
+  `ls-files --cached --others --exclude-standard` over the paths as literal
+  pathspecs lists nothing, which catches a tracked file under an ignored
+  directory and a negated rule (`build/*` with `!build/keep.txt`).
+
+Any failure, a timeout, output past 64 KiB, or a container (whose hints carry
+no paths and whose executor has no such check) captures. The check runs only
+while a turn is running, so an idle worktree pays nothing; a skipped pass
+leaves the spacing untouched, so the next visible write captures at once, and
+it does not hold the pass slot, so a hint arriving meanwhile is judged on its
+own paths. The check compares only its own hint with the previous manifest,
+so a hint the spacing or a running pass dropped stays pending in
+`TurnBoundaryService` until a later pass claims the slot, unless its own check
+proves it inert; a pass that captures or publishes nothing marks the worktree
+pending too. While anything is pending, an inert hint captures instead of
+skipping, so a dropped visible write never waits for the next visible hint or
+the turn's end. An edit to `.git/info/exclude` or a global excludes
+file produces no hint at all, so the next pass that captures picks it up, as
+before. The turn's end capture is never filtered. On this worktree (about
+11,700 tracked files) the check took 3.3 ms p50 and 5.4 ms at most over 20
+runs on beelink (2026-11-11, load average about 2), against a warm capture of
+615 ms to 1.2 s at 10,000 files ([benchmarks](#benchmarks)).
+
 The end capture has `finalizationDeadlineMs` (30 s). A turn that wrote tens of
 thousands of files can run past it on a busy host; it then ends on time as
 `end-unavailable` (reason `capture-timeout`) with no after endpoint, so it has
@@ -1076,8 +1117,29 @@ came from writes Git ignores, not from an idle turn or from the spacing: the
 spacing dropped one pass in 25 even with a tool call every half second. A
 longer spacing would drop moving and unchanged captures alike, delaying the
 live diff during exactly the writing a user watches, so it was left at 1 s
-locally and 5 s remotely. Filtering hints whose paths are all Git-ignored is
-[7840](../todo/cross-cutting/7840-provisional-captures-for-ignored-writes.md).
+locally and 5 s remotely. Filtering hints whose paths are all Git-ignored was
+todo 7840 (retired 2026-11-11; [above](#turn-and-thread-boundaries)). The same
+benchmark with the filter, one run each on beelink (Linux, 16 cores, load
+average about 2) on 2026-11-11, branch from `963ffa6ab`:
+
+| Measure | 40 calls, 1.5 s apart | 60 calls, 0.5 s apart |
+| --- | --- | --- |
+| Hints | 17 | 25 |
+| Provisional passes | 17 | 25 |
+| Skipped: only ignored paths | 7 | 11 |
+| Captures (all published) | 10 | 13 |
+| Moved the tree | 8 | 12 |
+| Found it unchanged | 2 | 1 |
+| Passes inside the spacing | 0 | 1 |
+
+Every edit still captured and moved the tree. Of the test runs, all but the
+first were skipped: the first creates `dist/`, `coverage/` and
+`node_modules/.cache/`, and a new directory makes the watcher re-plan its
+watches and send a hint without paths, which captures. The unchanged
+captures left are that first test run in both runs and, in the first run, a
+`git status` index refresh, whose hint names only Git metadata and so no
+path. A rerun after dropped hints became pending (same day, load average
+about 5) gave the same counts in both runs.
 The workload is synthetic: a real agent's mix of tool calls, and a real
 repository's build output, set the actual ratio.
 

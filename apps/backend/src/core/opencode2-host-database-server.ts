@@ -39,15 +39,15 @@ import { pushedLoginHostFile } from "./agent-accounts-containers.js";
 import { resolveOpenCode2Binary } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { allocateLocalPort } from "./commands-servers.js";
-import { OpenCode2Client } from "./opencode2/client.js";
-import { reconcileLegacyOpenCodeLoginsBestEffort } from "./opencode2/credential-upgrade.js";
-import { openCode2RefreshLineageFile } from "./opencode2/credentials.js";
-import { openCode2ServerKey } from "./opencode2/host-server-state.js";
 import {
+  OpenCode2Client,
+  reconcileLegacyOpenCodeLoginsBestEffort,
+  openCode2RefreshLineageFile,
+  openCode2ServerKey,
   openCode2HostLaunch,
   waitForOpenCode2Ready,
   writeOpenCode2HostConfig,
-} from "./opencode2/server.js";
+} from "./opencode2/index.js";
 import { OPENCODE2_HOST_READY_TIMEOUT_MS } from "./opencode2-host-server.js";
 
 const log = createLogger("native-agent.opencode2");

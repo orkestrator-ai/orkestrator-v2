@@ -26,9 +26,10 @@ import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { readProjectUsageLimits } from "./agent-usage-limits.js";
 import type { CommandContext } from "./commands-context.js";
 import { registerScheduledJobCommands } from "./commands-registry-scheduled-jobs.js";
-import { rpc } from "./control-mcp-test-support.js";
-import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp-server.js";
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { rpc } from "./control-mcp/test-support.js";
+import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp/server.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { executeAgentAccountSwitch } from "./nodes/node-account-switch.js";
 import {
@@ -39,6 +40,9 @@ import { NodeActionRequests, type NodeActionRequest } from "./nodes/node-action-
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { ScheduledJobService } from "./scheduled-jobs/service.js";
 import { StorageService, createProject } from "./storage.js";
+
+const olderNodeCount = () =>
+  compatibilityPathUsage.snapshot().paths["auto-switch.older-node"]?.count ?? 0;
 
 /**
  * A coordinator's self-timers and provider-account tools over the real
@@ -810,13 +814,15 @@ describe("automatic switching", () => {
     expect(switches).toEqual([]);
   });
 
-  test("a machine that predates it is left alone when the tick is set", async () => {
+  test("a machine that predates it is left alone when the tick is set, and counted", async () => {
+    const before = olderNodeCount();
     await call("main", "set_account_auto_switch", {
       platform: "claude",
       enabled: true,
       nodeId: LEAF,
     });
     expect(tickCalls.map((entry) => entry.machine)).toEqual([SELF]);
+    expect(olderNodeCount()).toBe(before + 1);
   });
 
   test("ticking again here ends this machine's pin and no other's", async () => {
@@ -852,6 +858,7 @@ describe("automatic switching", () => {
   test("ticking with a machine named ends that machine's pin, keeping the ticks and this machine's pin", async () => {
     autoSwitch[SELF] = { mode: "off", pinnedAccountId: "default", includedAccountIds: [] };
     autoSwitch[LEAF] = { mode: "pinned", pinnedAccountId: "default", includedAccountIds: [] };
+    const before = olderNodeCount();
     await call("main", "set_account_auto_switch", {
       platform: "claude",
       enabled: true,
@@ -869,6 +876,8 @@ describe("automatic switching", () => {
         args: { platform: "claude" },
       },
     ]);
+    // A machine that reports its state is no compatibility use.
+    expect(olderNodeCount()).toBe(before);
   });
 
   test("an account's tick travels by email; one with no email stays on its machine", async () => {

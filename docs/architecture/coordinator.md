@@ -328,7 +328,7 @@ works across the nodes that node controls:
   `send_prompt_to_node_tab`, `send_node_message`) were removed because they
   did less; `read_node_environment` stays, as the only way to read a file in
   another node's environment. `RETIRED_COORDINATOR_TOOLS`
-  (`control-mcp-tools.ts`) names each replacement: a saved schedule that names
+  (`control-mcp/tools.ts`) names each replacement: a saved schedule that names
   a retired tool is paused with it. The backend commands behind them stay, so
   older command nodes and leaves are unaffected
   ([version-compatibility.md](version-compatibility.md)).
@@ -747,7 +747,7 @@ banner saying the mail is waiting.
 Every other conversation is a **side agent**, named Side 1, Side 2… (the lowest
 free number). A side agent reads the project and Orkestrator state (its
 credential carries only the `discovery`, `mail` and `schedules` capabilities
-(`coordinatorRoleCapabilities` in `control-mcp-tools.ts`), so it launches
+(`coordinatorRoleCapabilities` in `control-mcp/tools.ts`), so it launches
 nothing, graphs included; `ask_agents` is on `discovery` because a subork is
 read-only and answers only its asker), and exchanges mail with the main coordinator only:
 the mail store refuses side ↔ worker and side ↔ peer mail in both
@@ -1901,7 +1901,7 @@ the workers still being waited on, filtered before the 200-row cap, so it answer
 `coordinatorDelegationBucket` (`packages/protocol/src/coordinator.ts`) is the one
 definition of a delegation's bucket.
 
-The poll guard (`apps/backend/src/core/control-mcp-poll-guard.ts`) covers
+The poll guard (`apps/backend/src/core/control-mcp/poll-guard.ts`) covers
 `read_messages`, `get_message_status`, `list_environments`, `list_agents`,
 `get_environment`, `get_tab_state`, `get_tab_transcript`, `get_build_pipeline`,
 `get_multi_review` and `list_workflows`. After three identical answers, the
@@ -2049,7 +2049,7 @@ outcome [version-compatibility.md](version-compatibility.md) allows for a field
 an old version never wrote: the refusal, with the setting as the way out.
 
 What the check covers is listed tool by tool in
-`control-mcp-coordinator-environment-scope.ts`, and a test fails on an
+`control-mcp/coordinator-environment-scope.ts`, and a test fails on an
 environment- or workflow-taking tool that is in no list:
 
 - **Checked:** `send_message` (`toEnvironmentId`, in its commands, because a
@@ -3715,9 +3715,9 @@ A live run is the `goal` scenario of `mise run test:agent:coordinator`, describe
 
 The main coordinator runs saved graph templates
 ([graphs.md](graphs.md#launching)); it never authors them (D6). Four tools
-(`control-mcp-graph-tools.ts`, over the commands in
+(`control-mcp/graph-tools.ts`, over the commands in
 `coordinator-graph-actions.ts`) need the `graphs` capability, which only the
-main role holds (`COORDINATOR_TOOL_CAPABILITY` in `control-mcp-tools.ts`).
+main role holds (`COORDINATOR_TOOL_CAPABILITY` in `control-mcp/tools.ts`).
 They are in `COORDINATOR_CONTROL_TOOL_NAMES`, the allowlist Pi's read-only
 gate and OpenCode's coordinator permission rules (`orkestrator_<tool>`, by
 name) admit, like every other Control MCP tool. They change nothing in
@@ -3742,7 +3742,7 @@ starts with its stable code (`GRAPH_LAUNCH_ERROR_CODES` in
 deletes, trusts or describes a template. "Describe a graph"
 (`graph_describe_*`) are app commands only: neither a coordinator
 credential, the operator profile nor a public action reaches them
-(`graph-describe-coordinator.test.ts`, `control-mcp-graph-tools.test.ts`).
+(`graph-describe-coordinator.test.ts`, `control-mcp/graph-tools.test.ts`).
 
 **Launching.** `launch_graph` goes through the same `GraphRunLaunchService`
 as the app and the CLI, recorded as `requestedBy: "coordinator"`. Omitted
@@ -3894,7 +3894,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   state, released-node records, the shared request-alias lookup):
   `coordinator-workflow-retention.test.ts`; its banner:
   `CoordinatorWorkflowStoreBanner.test.tsx`; the `send_message` warning:
-  `coordinator-worker-mail.test.ts`, `control-mcp-server-messaging.test.ts`
+  `coordinator-worker-mail.test.ts`, `control-mcp/server-messaging.test.ts`
 - work on a forgotten, handed-over, unregistered or long-unreachable node:
   `coordinator-node-release.test.ts`; the release hooks:
   `nodes/node-service.test.ts`, `nodes/node-handover.test.ts`
@@ -3903,7 +3903,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   graph runs: `graph-run-coordinator-status.test.ts`,
   `coordinator-status-wakes-graph.test.ts`; feature plans and kinds a reader
   does not know: `coordinator-status-wakes-feature-plan.test.ts`,
-  `control-mcp-feature-plan-workflows.test.ts`; pull requests (the reducer and
+  `control-mcp/feature-plan-workflows.test.ts`; pull requests (the reducer and
   environment PR fields: `coordinator-pr-status.test.ts`; follows, Resolve
   tabs, review handoff: `coordinator-status-wakes-pr.test.ts`; a remote
   worker's Resolve tab and follow: `coordinator-pr-remote.test.ts`)
@@ -3923,7 +3923,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   the two-profile run (`e2e/agent-testing/coordinator-restart-fake.spec.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
-  (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a
+  (`control-mcp/graph-tools.test.ts`); no describe or authoring tool for a
   coordinator, the operator profile or a public action
   (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
@@ -3932,7 +3932,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   ended-worker refusals, expiry and its notice, worker replies, leaf-side node
   delivery, transcripts, result-key identity, restart):
   `pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
-  leaf: `control-mcp-pipeline-workers.test.ts`; worker derivation and carrier
+  leaf: `control-mcp/pipeline-workers.test.ts`; worker derivation and carrier
   framing: `packages/protocol/src/pipeline-worker-mail.test.ts`; each worker's
   own mail identity (result server, OpenCode broker, and the environment-wide
   connection with `mailCapability`: send, reply, ack, forged, foreign and
@@ -3940,8 +3940,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
   reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
   and OpenCode's per-turn worker connection (`opencode2/turn-connections.test.ts`)
-- tool contract and poll guard: `control-mcp-server-reads.test.ts` and
-  `control-mcp-server-messaging.test.ts`
+- tool contract and poll guard: `control-mcp/server-reads.test.ts` and
+  `control-mcp/server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and
   malformed answers never sent, end to end on this node
   (`worker-question-relay.test.ts`) and on a connected node
@@ -3951,7 +3951,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - project-home messages: a reason required, held outside the 3-hour window,
   approve, decline, replay, the window opened only by sent mail, and ordinary
   workers unchanged (`coordinator-worker-mail.test.ts`); the tool result
-  shapes (`control-mcp-server-messaging.test.ts`); the dialog
+  shapes (`control-mcp/server-messaging.test.ts`); the dialog
   (`node-action-requests.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
@@ -4025,7 +4025,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `coordinator-surface-actions.test.ts`; the patch and the untouched
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
-  and side agents: `control-mcp-server-coordinator-workflows.test.ts`
+  and side agents: `control-mcp/server-coordinator-workflows.test.ts`
 - `get_worker_changes` bounds, paging, path filters, uncommitted marks and
   diff rendering over fake `changes_*` answers:
   `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,
@@ -4040,7 +4040,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 
 - worker goals: the tools, the schema limit pinned to the constant, refusals for
   tabs the coordinator does not own, replay and framing:
-  `control-mcp-coordinator-goals.test.ts`; many iterations, one wake, for each way a
+  `control-mcp/coordinator-goals.test.ts`; many iterations, one wake, for each way a
   goal stops, and the sweep's hold: `coordinator-goal-wake.test.ts`
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
@@ -4135,7 +4135,8 @@ and question anchors from the message holding the tool call; mail and automatic
 prompts do not start user subjects. The next actual user message handles a
 marked plain-text question. No additional model call or renderer persistence
 store is used for cards; the only renderer persistence is the docked panel's
-open or folded preference above.
+open or folded preference above. The one stored override is the user's manual
+marks (below), which the backend keeps.
 
 The panel replays historical action evidence together with the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures
@@ -4158,6 +4159,55 @@ Only bare native tool names and explicit Orkestrator server prefixes create mark
 Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.
+
+### Marking actions done by hand
+
+When the user has dealt with an action outside the transcript, they can
+right-click its card (or press the context-menu key or Shift+F10 on a focused
+card) and choose **Mark done**. The menu is the app's shared context menu
+(`components/ui/context-menu.tsx`); it gives focus back to the card when it
+closes, and a narrow overlay stays open while it is used. Escape that closes
+the menu closes only the menu: the overlay's own Escape handlers skip a key
+press the menu used.
+
+- A mark is an override on top of the derived state: a card is done when the
+  transcript says so or when the user marked it
+  (`applyCoordinatorActionMarks` in `coordinator-action-cards.ts`). The
+  transcript replay itself is unchanged. A marked card shows muted, its label
+  starts "Done: ", its status reads "Marked done", and it leaves the waiting
+  count.
+- **Mark not done** appears only on a card the user marked and the transcript
+  still has open, and clears that mark. A card the transcript finished offers
+  only a disabled "Done in the conversation": no mark can reopen it.
+- Marks are keyed by the card's stable `id` within one coordinator
+  conversation, and stored by the backend that owns the conversation
+  (`coordinator-action-marks`, one row per conversation owned by its project,
+  in `storage-client-state.ts`; deleted with the project). The `coordinator`
+  domain's `get_coordinator_action_marks` and `set_coordinator_action_mark`
+  read and change them; the set is idempotent and refuses a mark beyond 500
+  per conversation rather than evicting one. Each change announces
+  `coordinator-action-marks` (id: the conversation id, with its `projectId`).
+- A mark stays stored when the transcript later finishes its card, where it
+  changes nothing. So a full conversation does not stay full: when a new mark
+  would exceed the limit, the renderer first clears up to 25 of the oldest
+  marks on cards the transcript has finished (the chat shell passes them as
+  `reclaimable`, from `redundantCoordinatorActionMarks`). Those cards stay
+  done, and no mark on an open card is ever cleared to make room.
+- The renderer mirrors them per node scope (`coordinatorActionMarksStore`).
+  It keeps the newest backend snapshot (by revision, from a read or a save's
+  answer) apart from this client's unanswered changes, and shows the changes
+  laid over the snapshot. A mark applies at once and is saved in the
+  background; a snapshot read while a save is out is kept, an older answer
+  arriving after a newer one changes nothing, and a save that fails (refused,
+  or the node unreachable) drops its change at once with an error toast,
+  whether or not the follow-up read succeeds. Refreshes follow the hint,
+  resyncs and the periodic safety check. Every window and client showing the
+  conversation reads the same marks, after a reload or restart too. Against a
+  backend without the commands the read fails and cards offer no menu.
+  `useCoordinatorActionMarking` is the hook the tab controller hands to the
+  chat shell.
+- The coordinator's own `mark_topic` and `mark_question` tools are unrelated
+  and unchanged: they create cards, never manual marks.
 
 ### Searching actions
 

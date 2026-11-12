@@ -158,7 +158,14 @@ export type DiffScanEvent =
   | { kind: "failed"; target: DiffStatsTarget; at: string }
   | { kind: "paused"; target: DiffStatsTarget; at: string }
   | { kind: "removed"; environmentId: string; at: string }
-  | { kind: "hint"; target: DiffStatsTarget; paths: readonly string[] | null; at: string };
+  | {
+      kind: "hint";
+      target: DiffStatsTarget;
+      paths: readonly string[] | null;
+      /** The burst also changed Git metadata, which `paths` never names (`WorktreeChangeHint.gitMetadata`). */
+      gitMetadata?: boolean;
+      at: string;
+    };
 
 /**
  * A scan step that failed. `event` is a `diff-stats` log event; the
@@ -1097,6 +1104,7 @@ export class DiffStatsService {
           kind: "hint",
           target: entry.target,
           paths: hint?.paths && !hint.overflow ? hint.paths : null,
+          ...(hint?.gitMetadata ? { gitMetadata: true } : {}),
           at: this.options.now(),
         });
       },

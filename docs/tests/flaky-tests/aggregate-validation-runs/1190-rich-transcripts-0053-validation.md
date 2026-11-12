@@ -34,7 +34,7 @@ switched back.
 | `apps/backend/tests/docker-image.test.ts` | `pinned image identity`: restricted runtime on a gateway image; rootless host address | 19 passed, 2 failed | 19 passed, 2 failed |
 | `apps/backend/tests/staged-input-relay.test.ts` | Four `staged input relay` cases, under 1 s each | 5 passed, 4 failed | 5 passed, 4 failed |
 | `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write` | 33 passed, 1 failed | 33 passed, 1 failed |
-| `apps/backend/src/core/control-mcp-operator-tools.test.ts` | `launch_environment returns the created environment…`, 29.8 s | 7 passed | Not rerun |
+| `apps/backend/src/core/control-mcp/operator-tools.test.ts` | `launch_environment returns the created environment…`, 29.8 s | 7 passed | Not rerun |
 | `apps/backend/tests/commands-environment-fork.test.ts` | `starts a local fork from the source commit…`, 9.2 s | 24 passed | Not rerun |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | Two `pruneProfiles` cases | Not rerun | 20 passed, 2 failed ([1100](../electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md)) |
 | `tests/unit/migrate-copy.test.ts` | `verified copy helper > a missing listing/root completion…`: extraction status 2, not 0 | Not rerun | 10 passed, 2 failed |

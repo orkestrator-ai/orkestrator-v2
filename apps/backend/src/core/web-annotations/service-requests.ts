@@ -72,7 +72,8 @@ const BRIEF_ENTRY_LIMIT = 50;
 const MAX_MATERIALIZE_FAILURES = 5;
 const MAX_BACKOFF_MS = 60_000;
 const RECONCILE_CONCURRENCY = 4;
-const GC_EVERY_TICKS = 100;
+/** Reconcile ticks between garbage-collection passes (100 × 3 s). */
+export const WEB_ANNOTATION_GC_EVERY_TICKS = 100;
 const GC_DEADLINE_MS = 250;
 
 interface PreparationCandidate {
@@ -128,6 +129,8 @@ export class WebAnnotationRequests {
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private reconcileInFlight: Promise<void> | null = null;
   private reconcileTicks = 0;
+  /** The tick the last garbage-collection pass ran on; the first tick runs one. */
+  private lastGcTick: number | null = null;
   private reconcileOffset = 0;
   private stopped = false;
 
@@ -1416,7 +1419,13 @@ export class WebAnnotationRequests {
       }
     };
     await Promise.all(Array.from({ length: Math.min(RECONCILE_CONCURRENCY, work.length) }, worker));
-    if (this.reconcileTicks % GC_EVERY_TICKS === 1) await this.collectAllGarbage();
+    // Read every tick, so an agent-test timing override that shortens the
+    // period applies from the next tick rather than after the current period.
+    const gcEvery = Math.max(1, this.ctx.options.gcEveryTicks?.() ?? WEB_ANNOTATION_GC_EVERY_TICKS);
+    if (this.lastGcTick === null || this.reconcileTicks - this.lastGcTick >= gcEvery) {
+      this.lastGcTick = this.reconcileTicks;
+      await this.collectAllGarbage();
+    }
   }
 
   /**

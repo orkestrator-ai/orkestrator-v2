@@ -37,6 +37,7 @@ import {
   withOutputTails,
   configuredDevWorktreeRoot,
   profileWorktreeLocation,
+  rendererDevServerEnv,
 } from "./lifecycle.js";
 
 // This file starts a real shell; allow subprocess startup under aggregate load.
@@ -48,6 +49,40 @@ const complete = {
   browserUrl: "http://x/",
   invokeUrl: "http://internal/",
 };
+
+describe("renderer dev server environment", () => {
+  const profile = {
+    rendererHost: "127.0.0.1" as const,
+    rendererPort: 5199,
+    id: "qa-renderer-env",
+    flavor: "agent-test" as const,
+  };
+
+  test("drops an inherited NODE_ENV=production so the dev renderer keeps DEV gates", () => {
+    // Vite reads NODE_ENV=production as a production build and folds
+    // import.meta.env.DEV to false, which turned off the agent-test harnesses.
+    const env = rendererDevServerEnv(
+      { NODE_ENV: "production", PATH: "/usr/bin" },
+      profile,
+      "instance-1",
+    );
+    expect(env.NODE_ENV).toBeUndefined();
+    expect(env).toMatchObject({
+      PATH: "/usr/bin",
+      VITE_DEV_HOST: "127.0.0.1",
+      VITE_DEV_PORT: "5199",
+      VITE_ORKESTRATOR_PROFILE: "qa-renderer-env",
+      VITE_ORKESTRATOR_PROFILE_FLAVOR: "agent-test",
+      ORKESTRATOR_RENDERER_INSTANCE: "instance-1",
+    });
+  });
+
+  test("keeps any other NODE_ENV", () => {
+    expect(rendererDevServerEnv({ NODE_ENV: "development" }, profile, "i").NODE_ENV).toBe(
+      "development",
+    );
+  });
+});
 
 describe("Electron readiness", () => {
   test("always requires the backend gateway", () => {

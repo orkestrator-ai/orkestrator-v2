@@ -10,6 +10,7 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureAnnotation } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { MATERIALIZED_EVIDENCE_RETENTION_MS, materializedEvidencePath } from "./materialization.js";
+import { WEB_ANNOTATION_GC_EVERY_TICKS } from "./service-requests.js";
 import type { WebAnnotationFaultStage } from "./storage.js";
 import {
   ENV_A,
@@ -309,8 +310,13 @@ describe("interrupted uploads", () => {
 });
 
 describe("materialized evidence ownership and cleanup", () => {
-  async function materializedRequest(options: { environmentType: "local" | "docker" }) {
-    harness = await createHarness();
+  async function materializedRequest(options: {
+    environmentType: "local" | "docker";
+    gcEveryTicks?: () => number;
+  }) {
+    harness = await createHarness(
+      options.gcEveryTicks ? { gcEveryTicks: options.gcEveryTicks } : {},
+    );
     const worktree = await mkdtemp(join(tmpdir(), "ork-wa-evidence-"));
     temporary.push(worktree);
     harness.host.environments.set(ENV_A, {
@@ -422,6 +428,36 @@ describe("materialized evidence ownership and cleanup", () => {
     });
     await harness!.service.collectGarbage(ENV_A);
     expect(existsSync(file)).toBe(false);
+  });
+
+  test("the reconciler collects every 100 ticks unless a shorter period is set, which applies at once", async () => {
+    let every: number | undefined;
+    const { file, receipt } = await materializedRequest({
+      environmentType: "local",
+      gcEveryTicks: () => every ?? WEB_ANNOTATION_GC_EVERY_TICKS,
+    });
+    harness!.dispatch.observe_("req-1", "completed");
+    // Tick 1 collects (the first tick always does); the note still holds the file.
+    await harness!.service.reconcileOnce();
+    expect(existsSync(file)).toBe(true);
+    const { annotation } = await harness!.service.get(ENV_A, receipt.annotationId);
+    await harness!.service.delete({
+      environmentId: ENV_A,
+      operationId: "op-del-gc",
+      annotationId: receipt.annotationId,
+      expectedMetadataRevision: annotation.metadataRevision,
+    });
+    // Ticks 2 and 3: the production period has not elapsed.
+    await harness!.service.reconcileOnce();
+    await harness!.service.reconcileOnce();
+    expect(existsSync(file)).toBe(true);
+    // A shorter period counts from the last pass, so tick 4 (three after
+    // tick 1) collects instead of waiting out the rest of the 100.
+    every = 3;
+    await harness!.service.reconcileOnce();
+    expect(existsSync(file)).toBe(false);
+    const { request } = await harness!.service.getRequest(ENV_A, "req-1");
+    expect(request.attachments[0]?.removedAt).toBeDefined();
   });
 
   test("missing containers count as removed; unreachable ones are retried later", async () => {

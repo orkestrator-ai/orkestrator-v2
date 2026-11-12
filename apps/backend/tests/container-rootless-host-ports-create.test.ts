@@ -144,15 +144,34 @@ function ingress(line: string): string | null {
 
 const STAGED = { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 };
 
+/**
+ * The owned-port listing (`listOwnedBackendHostPorts`), and nothing else: the
+ * fake Docker log is process-wide, so another `docker ps` (a probe cleanup or
+ * a state read) can land in it during a create. Matching every `ps ` line
+ * made the rootful case fail on such a call (flake 9963).
+ */
+function ownedPortListings(docker: string): string[] {
+  return docker
+    .split("\n")
+    .filter(
+      (entry) =>
+        entry.startsWith("ps -a --filter label=orkestrator-owner=") &&
+        entry.includes(` --filter label=${LABEL} `),
+    );
+}
+
 async function createLines(
   capabilities: Record<string, number>,
   rootless: boolean,
   ownedLabels = "",
+  alongside?: () => void,
 ): Promise<{ workload: string; gateway: string | null; docker: string }> {
   const { tar, create } = await fixture(capabilities);
   let result: { workload: string; gateway: string | null; docker: string } | null = null;
   await withDockerScript(fakeDocker(tar, rootless, ownedLabels), async (log) => {
-    await create();
+    const created = create();
+    alongside?.();
+    await created;
     const docker = await log.read();
     const creates = docker.split("\n").filter((entry) => entry.startsWith("create --name"));
     const gateway = creates.find((entry) =>
@@ -173,9 +192,20 @@ describe("host ports of a new container", () => {
     expect(published(workload)).toContain("127.0.0.1::3000/tcp");
     expect(published(workload)).toContain("127.0.0.1:45173:5173/tcp");
     expect(label(workload)).toBeNull();
-    // No owned-port listing on a rootful daemon. The lines themselves are
-    // compared so a failure names which `ps` was issued (flake 9963).
-    expect(docker.split("\n").filter((entry) => entry.startsWith("ps "))).toEqual([]);
+    // No owned-port listing on a rootful daemon.
+    expect(ownedPortListings(docker)).toEqual([]);
+  });
+
+  test("another docker ps during a rootful create is not taken for the owned-port listing", async () => {
+    // What flake 9963 saw: a `ps` line in the log of a create whose published
+    // ports prove it was rootful. Here it is issued on purpose, the way an
+    // unrelated backend caller would, through the same fake `docker`.
+    const { workload, docker } = await createLines(STAGED, false, "", () => {
+      expect(spawnSync("docker", ["ps", "-a", "--no-trunc", "--format", "{{.ID}}"]).status).toBe(0);
+    });
+    expect(docker.split("\n").some((entry) => entry.startsWith("ps -a --no-trunc"))).toBe(true);
+    expect(published(workload)).toContain("127.0.0.1::3000/tcp");
+    expect(ownedPortListings(docker)).toEqual([]);
   });
 
   test("a rootless create fixes every automatic port, labels them, and keeps ingress", async () => {
@@ -195,7 +225,7 @@ describe("host ports of a new container", () => {
       ingressPorts(ports.flatMap((value) => ["-p", value])),
     );
     expect(ingress(workload)!.split(",")).toContain("3000");
-    expect(docker).toContain(`ps -a --filter label=orkestrator-owner=`);
+    expect(ownedPortListings(docker)).toHaveLength(1);
   });
 
   test("with an egress gateway, only the gateway publishes and carries the label", async () => {

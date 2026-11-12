@@ -1,7 +1,7 @@
 # Rootful container create logs an owned-port listing in the aggregate
 
 - **ID:** 9963
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Base:** `465c473d99ee046fe4889c9aa28468c994a5979d`.
 - **Observed head:** `merge-button-confusion-7ba4930d15d6-r1` at `ab8580dda`.
@@ -133,3 +133,44 @@ the failure as a recurrence").
   command (and so its caller, from its filters). Its strength is unchanged.
 
 Status stays open.
+
+## Resolution — 2026-11-11 (to-do 7569 rework, `docker-fixture-waits-859dbd041c3d-r1`)
+
+**Cause.** The assertion was wider than its claim. The comment says "no
+owned-port listing on a rootful daemon", but the check failed on any fake
+Docker log line starting with `ps `. The fake script logs every `docker`
+invocation made while `PATH` points at it, and the backend has more than a
+dozen `docker ps` callers (manifest probe cleanup, container state and usage
+reads, gateway listings). In every observation the published-port and label
+assertions before it passed: `127.0.0.1::3000/tcp` was published unchanged,
+which only the rootful branch of `createDockerContainer` does
+(`topology.rootless` decides both the port choice and the listing). So the
+create was rootful and the stray `ps` was some other caller, not the owned-port
+listing. That caller was not identified: the failures recorded no log text.
+
+**Reproduction.** Not reproduced as it happened: 120 runs of the owning file
+under `bun scripts/test-under-contention.ts --burners 8 -- ... --rerun-each=40`
+passed. The mechanism is reproduced deterministically instead. The new case
+`another docker ps during a rootful create is not taken for the owned-port listing`
+issues an unrelated `docker ps -a --no-trunc` through the same fake `docker`
+while the create runs. The old check
+(`some((entry) => entry.startsWith("ps "))` is `false`) fails on that log; the
+new one passes.
+
+**Fix.** The test file's `ownedPortListings` now matches exactly the call
+`listOwnedBackendHostPorts` makes (`ps -a --filter label=orkestrator-owner=…`
+with the `orkestrator-backend-host-ports` label filter). The rootful case
+asserts there is none, and the rootless case now asserts exactly one where it
+had asserted a substring. The assertion is not loosened: an owned-port listing
+on a rootful create still fails it, and no timeout or skip changed.
+
+**Verification.** `mise run test:logged -- --name rootless-host-ports -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts tests/container-rootless-host-ports-create.test.ts --parallel=1 --rerun-each=5`
+passed (4 tests × 5).
+
+**Superseded diagnostics.** The main CI recurrence above changed the
+assertion to compare every `ps ` line with `[]` so the next failure would name
+the caller. That check had the same width as the original and would still fail
+on an unrelated `ps`; this fix replaces it with `ownedPortListings`, which also
+compares lines with `[]`, so a genuine owned-port listing is still named. The
+recurrences recorded in main CI run 43093113394 and on the provisional captures
+review show the same symptom and are covered by this cause.

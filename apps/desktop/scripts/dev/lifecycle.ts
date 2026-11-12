@@ -489,6 +489,32 @@ export function stoppedRuntimeStatusIfUnchanged(
   return { ...latest, status: "stopped", updatedAt };
 }
 
+/**
+ * The Vite dev server's environment. A launcher shell may descend from a
+ * production backend or build shell that set `NODE_ENV=production`; Vite then
+ * serves the source with `import.meta.env.DEV` false, which silently turns
+ * off every dev-renderer gate, including the agent-test harnesses (plan item
+ * 2013, to-do 7569 (retired)). The backend launcher drops it for the same reason
+ * (`apps/desktop/electron/backend-process.ts`).
+ */
+export function rendererDevServerEnv(
+  base: NodeJS.ProcessEnv,
+  profile: Pick<RuntimeProfile, "rendererHost" | "rendererPort" | "id" | "flavor">,
+  rendererInstance: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    VITE_DEV_HOST: profile.rendererHost,
+    ORKESTRATOR_RENDERER_INSTANCE: rendererInstance,
+    VITE_DEV_PORT: String(profile.rendererPort),
+    VITE_ORKESTRATOR_PROFILE: profile.id,
+    // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
+    VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
+  };
+  if (env.NODE_ENV === "production") delete env.NODE_ENV;
+  return env;
+}
+
 export type ProfileSeedDependencies = {
   seedModelCatalogCaches?: typeof seedInstalledModelCatalogCaches;
   seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
@@ -623,8 +649,8 @@ const NO_CORE_DUMPS_SCRIPT = 'ulimit -c 0 && exec "$0" "$@"';
  * runs with a core file size limit of 0, inherited by everything it starts.
  * When the host's `kernel.core_pattern` is a relative name such as `core`, a
  * crash writes its dump (about 1 GB for Electron) into the crashing process's
- * working directory, which for a profile is the checkout: untracked, one
- * `git add -A` from a commit, and a gigabyte of disk per crash. The limit is
+ * working directory, which for a profile is the checkout: a gigabyte of disk
+ * per crash (`.gitignore` keeps `core.<pid>` out of commits). The limit is
  * per process and changes nothing on the host. With systemd-coredump the
  * journal still records the crash, and Chromium's own `FATAL` line still
  * reaches `electron.log`. `ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1` keeps the
@@ -1036,15 +1062,7 @@ export async function startDevelopment(
         cwd: webRoot,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          VITE_DEV_HOST: profile.rendererHost,
-          ORKESTRATOR_RENDERER_INSTANCE: rendererInstance,
-          VITE_DEV_PORT: String(profile.rendererPort),
-          VITE_ORKESTRATOR_PROFILE: profile.id,
-          // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
-          VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
-        },
+        env: rendererDevServerEnv(process.env, profile, rendererInstance),
       });
       viteExited = childExit(vite);
       attachLog(vite, path.join(profile.logDir, "vite.log"));

@@ -3,7 +3,14 @@ import { randomUUID } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  appliedBackendTiming,
+  PRODUCTION_CONTAINER_TREE_MAX_AGE_MS,
+  setBackendTiming,
+  setRendererTiming,
+} from "./agent-test-timing-support";
+import {
   POLL_BUDGET_MS,
+  backendChangedPaths,
   containerName,
   fixtureEnvironment,
   inContainer,
@@ -11,6 +18,7 @@ import {
   localName,
   login,
   openSecondWindow,
+  profileStatus,
   reloadApp,
   selectEnvironment,
   setDocumentHidden,
@@ -119,9 +127,18 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       `rm -f ${files.join(" ")}; git checkout -- README.md 2>/dev/null; true`,
     );
 
+  // The hidden-document window is sized from these (to-do 7569 (retired), task 2):
+  // a 1 s page poll and a 3 s container tree cache, the shortest the tree
+  // bound gets while it also follows the 3 s file-list bound. Both are
+  // honoured only by an agent-test profile.
+  const dataDir = profileStatus().dataDir;
+  if (!dataDir) throw new Error("dev:status reported no data directory");
+  await setRendererTiming(page.context(), { filesPanelPollMs: 1_000 });
+
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
   const polls = recordFilesPanelPolls(page);
+  const backend = setBackendTiming(dataDir, { containerTreeMaxAgeMs: 3_000 });
   try {
     await test.step("the Files panel on a container shows a change made in it", async () => {
       await selectEnvironment(page, containerName);
@@ -133,8 +150,22 @@ test("Docker fixture container Files panel follows changes across switch, hidden
     await test.step("a change made while another environment is open shows on return", async () => {
       await selectEnvironment(page, localName);
       await expect(changeRow(page, visibleFile)).toBeHidden({ timeout: 15_000 });
+      const written = Date.now();
       inContainer(containerId, `echo inactive > ${inactiveFile}`);
-      await page.waitForTimeout(6_000);
+      // Return only once the backend's own scan has the change, so it is
+      // proven to have landed while the environment was not shown. Budget as
+      // for the hidden document below: one 15 s scan interval, a skipped
+      // tick and the scan.
+      await expect
+        .poll(async () => (await backendChangedPaths(container.id)).includes(inactiveFile), {
+          timeout: 2 * POLL_BUDGET_MS,
+          intervals: [500, 1_000],
+        })
+        .toBe(true);
+      testInfo.annotations.push({
+        type: "inactive-projection",
+        description: `change in the backend projection ${Date.now() - written} ms after it was written, while inactive`,
+      });
       await selectEnvironment(page, containerName);
       await openFilesPanel(page);
       await expect(changeRow(page, inactiveFile)).toBeVisible({ timeout: POLL_BUDGET_MS });
@@ -165,6 +196,22 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       await expect(page.getByText("README.md", { exact: true }).first()).toBeVisible({
         timeout: 30_000,
       });
+      // The poll interval the renderer actually runs with, not the one asked
+      // for: a window sized from an ignored override would be shorter than
+      // one poll and prove nothing.
+      const pollMs = await page.evaluate(async () => {
+        const modulePath = "/src/lib/agent-test-timing.ts";
+        const { filesPanelPollIntervalMs } = await import(/* @vite-ignore */ modulePath);
+        return (filesPanelPollIntervalMs as () => number)();
+      });
+      // Likewise the tree cache bound the backend applied, not the one asked
+      // for. The tree read above made it read the timing file; without its
+      // acknowledgement the production bound applies, so the window grows.
+      const applied = await appliedBackendTiming(dataDir, backend.revision, 5_000);
+      const treeCacheMs = Math.min(
+        applied?.containerTreeMaxAgeMs ?? PRODUCTION_CONTAINER_TREE_MAX_AGE_MS,
+        PRODUCTION_CONTAINER_TREE_MAX_AGE_MS,
+      );
       // The visible tab polls the container from the page.
       const visiblePolls = polls.length;
       await expect
@@ -175,9 +222,19 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       await page.waitForTimeout(1_000);
       const hiddenPolls = polls.length;
       inContainer(containerId, `echo hidden > ${hiddenTreeFile}`);
-      // Three poll intervals, past the container tree's 10 s cache: a page
-      // that kept polling would have read the new tree by now.
-      await page.waitForTimeout(18_000);
+      // Three poll intervals, and past the container tree's cache by two
+      // more: a page that kept polling would have read the new tree by now.
+      // A negative check, so a timed window (to-do 7569 (retired), task 2): 5 s with
+      // this test's 1 s poll and 3 s cache, 20 s with the production 5 s and
+      // 10 s.
+      const hiddenWindowMs = Math.max(3 * pollMs, treeCacheMs + 2 * pollMs);
+      testInfo.annotations.push({
+        type: "hidden-window",
+        description: `${hiddenWindowMs} ms (poll ${pollMs} ms, tree cache ${treeCacheMs} ms${
+          applied ? "" : ", backend override not acknowledged"
+        })`,
+      });
+      await page.waitForTimeout(hiddenWindowMs);
       expect(polls.slice(hiddenPolls)).toEqual([]);
       await expect(treeEntry()).toHaveCount(0);
       const returned = Date.now();
@@ -233,6 +290,7 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       expect((await fetchCounters()).started).toBe(before.started);
     });
   } finally {
+    backend.restore();
     cleanup();
   }
 });

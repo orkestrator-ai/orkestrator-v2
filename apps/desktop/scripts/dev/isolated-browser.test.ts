@@ -271,6 +271,11 @@ test("a credential-free run reads nothing from the host installation unless aske
   expect(isolatedProfileArguments(["--credential-source", "claude"])).not.toContain(
     "--no-host-seed",
   );
+  // So does one that asks for the production app's dev worktree folder setting.
+  expect(isolatedProfileArguments(["--use-dev-worktree-folder"])).not.toContain("--no-host-seed");
+  expect(() => isolatedProfileArguments(["--no-host-seed", "--use-dev-worktree-folder"])).toThrow(
+    "cannot be combined with --no-host-seed",
+  );
 });
 
 test("a one-shot run cannot opt out of headless", async () => {

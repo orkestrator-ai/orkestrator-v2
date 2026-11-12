@@ -29,7 +29,9 @@ export type DevArguments = {
    * catalogues from the production data directory, and model caches from
    * `~/.codex` and `~/.grok`, before Electron (`seedAgentTestProfileState`).
    * With it the profile downloads its toolchains and starts with no cached
-   * model metadata. Credential seeding is separate (`--no-agent-credentials`).
+   * model metadata, and `--use-dev-worktree-folder` (which reads the
+   * production `config.json`) is refused. Credential seeding is separate
+   * (`--no-agent-credentials`).
    * `false` (`--host-seed`) seeds from the host again. The choice is recorded
    * in the profile, so a later start without either flag keeps it
    * (`resolveHostSeedDisabled`).
@@ -182,6 +184,13 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
   result.agentPlatforms = [...new Set(result.agentPlatforms)];
   if (result.agentCredentialsDisabled && result.credentialSources.length > 0) {
     throw new Error("--no-agent-credentials cannot be combined with --credential-source");
+  }
+  // The dev worktree folder is a setting in the production app's config.json,
+  // so honouring it would read the production data directory after all.
+  if (result.hostSeedDisabled === true && result.useDevWorktreeFolder) {
+    throw new Error(
+      "--use-dev-worktree-folder reads the production app's config.json and cannot be combined with --no-host-seed",
+    );
   }
   return result;
 }

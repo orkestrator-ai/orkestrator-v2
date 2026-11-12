@@ -560,7 +560,10 @@ it. The one-shot isolated runners (`mise run test:agent:browser:isolated` and th
 suites built on `isolatedProfileArguments`) add `--no-host-seed` to every
 credential-free run, so review preparation never reads the production
 directory; pass `--host-seed` to keep the faster local copy. A run that names
-`--credential-source` reads the host anyway and keeps the copy.
+`--credential-source` or `--use-dev-worktree-folder` reads the host anyway and
+keeps the copy. `dev:test` refuses `--no-host-seed` with
+`--use-dev-worktree-folder`, because that folder is a setting in the
+production `config.json`.
 
 ```bash
 mise run dev:test --profile qa-clean --fixture --no-agent-credentials --no-host-seed --agent-platforms codex
@@ -573,7 +576,8 @@ durable per-installation selection.
 A new agent-test profile keeps its worktrees under `<profile>/worktrees/` even
 when Settings > Disk usage names a folder for new dev worktrees, so the browser
 suites see the same layout on every host. Pass `--use-dev-worktree-folder` to
-place them in that folder instead; `mise run dev` always uses it.
+place them in that folder instead (it reads the production `config.json`, so
+it cannot be combined with `--no-host-seed`); `mise run dev` always uses it.
 
 #### Headless Electron
 
@@ -1772,6 +1776,24 @@ the flag. The launcher logged `Host seeding is off` and downloaded
 backend down 0.88 to 1.02 s, the login page 0.9 s after the backend listened,
 the banner 4011 ms after the stop, and 20 of 20 quick-restart first reconnects
 inside the 4 s delay (1054 to 2005 ms).
+
+Isolation and cleanup audit (2026-11-12). The earlier reads of the production
+data directory cannot be undone; this records their extent. The seeders
+involved only read: `seedInstalledAgentToolchains` copies into the profile
+and writes nothing back, and the catalogue export opens the production
+database with `readonly: true`. No run used credentials (`--no-agent-credentials`
+throughout), so the credential seeders read no host login. With
+`--no-host-seed` an agent-test start reads nothing under the production data
+directory: the seeders are skipped, credentials stay off with
+`--no-agent-credentials`, and the one other read, the dev worktree folder
+setting behind `--use-dev-worktree-folder`, is now refused with the flag. At
+the end of the work `dev:status` reported `missing` for every profile it
+started (`qa-outage-7835`, `qa-outage-7835r2` and the review runs'
+`qa-browser-b2fe3668-45e` and `qa-browser-586b9ea1-7fe`), and
+`docker:disposable status` reported no daemons. Under `output/` it removed
+only the env and log files it wrote; the `output/agent-testing/<profile>/`
+results and the previews written by review runs are kept, as is everything
+that was there before. Nothing under `/tmp/orkestrator-test-run.*` was removed.
 
 ### Live cold restart
 

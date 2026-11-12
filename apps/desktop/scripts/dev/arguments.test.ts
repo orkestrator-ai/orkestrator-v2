@@ -129,6 +129,13 @@ describe("development CLI arguments", () => {
     expect(() => parseAgentTestArguments(["--host-seed", "--no-host-seed"])).toThrow(
       "cannot be combined",
     );
+    // The dev worktree folder is read from the production config.json.
+    expect(() => parseAgentTestArguments(["--no-host-seed", "--use-dev-worktree-folder"])).toThrow(
+      "cannot be combined with --no-host-seed",
+    );
+    expect(
+      parseAgentTestArguments(["--host-seed", "--use-dev-worktree-folder"]).useDevWorktreeFolder,
+    ).toBe(true);
     for (const flag of ["--no-host-seed", "--host-seed"]) {
       expect(() => parseDevArguments([flag])).toThrow("only supported by mise run dev:test");
     }

@@ -118,8 +118,9 @@ const PROFILE_OPTIONS = new Set([
  * these suites for tickets that forbid reading those directories (to-do 7835's
  * pipeline did, and its seeded run broke that rule). The profile records the
  * choice, so a suite that restarts it keeps it. `--host-seed` keeps the
- * faster local copy; a run that names credential sources already reads the
- * host and keeps it too.
+ * faster local copy; a run that names credential sources or
+ * `--use-dev-worktree-folder` (a production `config.json` setting) already
+ * reads the host and keeps it too.
  */
 export function isolatedProfileArguments(input: readonly string[] = []): string[] {
   const extra = [...input];
@@ -143,7 +144,10 @@ export function isolatedProfileArguments(input: readonly string[] = []): string[
     "--fixture",
     "--headless",
     ...(credentials ? [] : ["--no-agent-credentials"]),
-    ...(hostSeed || extra.includes("--no-host-seed") || extra.includes("--credential-source")
+    ...(hostSeed ||
+    extra.includes("--no-host-seed") ||
+    extra.includes("--credential-source") ||
+    extra.includes("--use-dev-worktree-folder")
       ? []
       : ["--no-host-seed"]),
     ...(extra.includes("--agent-platforms") ? [] : ["--agent-platforms", "codex"]),

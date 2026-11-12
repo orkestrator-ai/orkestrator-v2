@@ -957,7 +957,9 @@ export async function startDevelopment(
     ...(await profileWorktreeLocation(
       existingProfile,
       dependencies.roots,
-      flavor === "development" || args.useDevWorktreeFolder === true,
+      // A stored opt-out with the flag on a restart reads nothing either way
+      // (the stored profile keeps its folder); never consult production then.
+      flavor === "development" || (args.useDevWorktreeFolder === true && !hostSeedDisabled),
     )),
   });
   const profilePath = await initializeProfile(profile);

@@ -305,6 +305,82 @@ describe("user skills and commands in containers", () => {
     ).toBeUndefined();
   });
 
+  test("an empty credential assignment never hides the key on the next line", async () => {
+    const withheld: Record<string, string> = {
+      "config.txt": "API_KEY=\nCLIENT_SECRET=sk-SENTINEL-4f8e2a91c7d3\n",
+      "setup.md": "API_KEY=\r\nCLIENT_SECRET=sk-SENTINEL-4f8e2a91c7d3\r\n",
+      "db.md": "TOKEN=\nDB_PASSWORD=Hk3vR9qL2x-SENTINEL\n",
+      "admin.yaml": "api_key:\r\nadmin_password: Hk3vR9qL2x-SENTINEL\r\n",
+      // On one line, the second assignment is still read as its own.
+      "inline.md": "API_KEY= CLIENT_SECRET=sk-SENTINEL-4f8e2a91c7d3\n",
+      "chained.md": "API_KEY=CLIENT_SECRET=sk-SENTINEL-4f8e2a91c7d3\n",
+    };
+    const { dataDir, home } = await extensionsFixture();
+    const skill = path.join(home, ".claude", "skills", "blank-then-key");
+    await write(path.join(skill, "SKILL.md"), "---\nname: blank-then-key\n---\nUse.\n");
+    for (const [name, contents] of Object.entries(withheld)) {
+      await write(path.join(skill, name), contents);
+    }
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-blank-assignment",
+      new Set(["claude"] as const),
+      { home, agentTest: false },
+    );
+    const directory = path.join(staged.directory, "claude-config", "skills", "blank-then-key");
+    expect(await listFiles(directory)).toEqual(["SKILL.md"]);
+    expect(
+      staged.providers.find((entry) => entry.provider === "claude")?.skipped["credential-withheld"],
+    ).toBe(Object.keys(withheld).length);
+  });
+
+  test("a template prefix or a placeholder word is what lets a key-shaped value through", async () => {
+    // Each kept value passes every other rule; its control differs only by
+    // the prefix or the placeholder word, and is withheld.
+    const kept: Record<string, [string, string]> = {
+      "dollar.md": ["API_KEY=$ENV_KEY_12345", "API_KEY=ENV_KEY_12345"],
+      "percent.md": ["TOKEN=%APPDATA_TOKEN_9%", "TOKEN=APPDATA_TOKEN_9%"],
+      "angle.md": ["PASSWORD=<pass12345>", "PASSWORD=pass12345>"],
+    };
+    for (const word of [
+      "your",
+      "example",
+      "sample",
+      "placeholder",
+      "changeme",
+      "dummy",
+      "redacted",
+      "secret",
+      "password",
+      "xxxx",
+    ]) {
+      kept[`word-${word}.md`] = [`ACCESS_KEY=${word}9k2q7z`, "ACCESS_KEY=k4m9k2q7z"];
+    }
+    const { dataDir, home } = await extensionsFixture();
+    const skills = path.join(home, ".claude", "skills");
+    for (const name of ["shapes", "shapes-control"]) {
+      await write(path.join(skills, name, "SKILL.md"), `---\nname: ${name}\n---\nUse.\n`);
+    }
+    for (const [name, [example, control]] of Object.entries(kept)) {
+      await write(path.join(skills, "shapes", name), `${example}\n`);
+      await write(path.join(skills, "shapes-control", name), `${control}\n`);
+    }
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-value-shapes",
+      new Set(["claude"] as const),
+      { home, agentTest: false },
+    );
+    const stagedSkills = path.join(staged.directory, "claude-config", "skills");
+    expect(await listFiles(path.join(stagedSkills, "shapes"))).toEqual(
+      ["SKILL.md", ...Object.keys(kept)].sort(),
+    );
+    expect(await listFiles(path.join(stagedSkills, "shapes-control"))).toEqual(["SKILL.md"]);
+    expect(
+      staged.providers.find((entry) => entry.provider === "claude")?.skipped["credential-withheld"],
+    ).toBe(Object.keys(kept).length);
+  });
+
   test("leaves a skill's oversized file out, never the rest of the skill", async () => {
     const { dataDir, home } = await extensionsFixture();
     const skills = path.join(home, ".claude", "skills");
@@ -417,6 +493,9 @@ describe("user skills and commands in containers", () => {
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout.toString())).toContain("fixture-review");
     },
+    // Starting the real Claude CLI takes several seconds; the spawn above
+    // has its own 35 s bound, which Bun's 5 s default never let it reach.
+    40_000,
   );
 
   test.skipIf(!process.env.GROK_CLI_PATH)(

@@ -568,9 +568,17 @@ class Skip extends Error {
   }
 }
 
-/** A credential-named key assigned a value; group 1 is the value, unquoted. */
+/**
+ * A credential-named key assigned a value; group 1 is the value, unquoted.
+ * A match consumes only the key and its `=` or `:`; the value is read by a
+ * lookahead, so a value that is itself an assignment (`API_KEY= SECRET=...`)
+ * is checked again as its own match. Spacing around the operator never
+ * crosses a line break: an empty `API_KEY=` must not take the next line's
+ * `CLIENT_SECRET=...` as its value, which hid the real key behind the word
+ * "SECRET".
+ */
 const CREDENTIAL_ASSIGNMENT =
-  /(?:^|[\s"'{};,])[\w-]{0,128}(?:api[_-]?key|token|password|secret|private[_-]?key|access[_-]?key)[\w-]{0,128}["']?\s*[:=]\s*["']?([^\s"'#,;(){}[\]]+)/gim;
+  /(?<=^|[\s"'{};,=:])[\w-]{0,128}(?:api[_-]?key|token|password|secret|private[_-]?key|access[_-]?key)[\w-]{0,128}["']?[ \t]*[:=](?=[ \t]*["']?([^\s"'#,;(){}[\]]+))/gim;
 
 /** Words that mark a value as an example rather than a key someone holds. */
 const PLACEHOLDER_VALUE =
@@ -642,6 +650,11 @@ export interface StagingOptions {
   /** Reflink unfiltered files where the filesystem can. Default true. */
   cloneFiles?: boolean;
   copyFile?: typeof copyFile;
+  /**
+   * Test seam: runs after a directory unit is listed and admitted and before
+   * its files are copied, so a test can change the source in between.
+   */
+  afterListing?: (source: string) => Promise<void> | void;
 }
 
 /**
@@ -864,6 +877,7 @@ class ProviderCopier {
     /** Real paths a linked skill may resolve into ({@link linkedSkillRoots}). */
     private readonly skillRoots: readonly string[] = [],
     private readonly cloner?: FileCloner,
+    private readonly afterListing?: StagingOptions["afterListing"],
   ) {
     this.summary = { provider, files: 0, bytes: 0, skipped: {} };
   }
@@ -999,7 +1013,10 @@ class ProviderCopier {
 
   /**
    * Copies the directory `source` to `destinationRoot/relative` all-or-nothing.
-   * `verify` runs after the last file, before anything is counted.
+   * `verify` runs after the last file, before anything is counted: the skips
+   * of files left out (links, files withheld or changed mid-copy, a skill's
+   * oversized files) are held until the unit commits, so a unit refused whole
+   * is counted as that one refusal and nothing else.
    *
    * A `skill` (an entry of a skill root) is the one exception: a file over the
    * per-file bound is left out and counted as `too-large`, and the rest of the
@@ -1019,7 +1036,10 @@ class ProviderCopier {
   ): Promise<void> {
     const { skill = false, verify } = options;
     const listed = await listTree(source, this.limits.directoryEntries, exclude);
-    if (listed.symlinks > 0) this.skip("symlink", listed.symlinks);
+    const skipped = new Map<SkipReason, number>();
+    const leaveOut = (reason: SkipReason, count = 1) =>
+      skipped.set(reason, (skipped.get(reason) ?? 0) + count);
+    if (listed.symlinks > 0) leaveOut("symlink", listed.symlinks);
     const oversized = (entry: TreeEntry) =>
       entry.kind === "file" && entry.size > this.limits.fileBytes;
     // Only a skill's optional files may be left out; its SKILL.md never is.
@@ -1028,13 +1048,13 @@ class ProviderCopier {
     const entries = dropped
       ? listed.entries.filter((entry) => !(oversized(entry) && optional(entry)))
       : listed.entries;
+    if (dropped > 0) leaveOut("too-large", dropped);
     const bytes = entries.reduce((sum, entry) => sum + entry.size, 0);
     if (bytes > this.limits.directoryBytes) throw new Skip("too-large");
     if (entries.some(oversized)) throw new Skip("too-large");
     const files = entries.filter((entry) => entry.kind === "file");
     if (!this.total.fits(files.length, bytes)) throw new Skip("aggregate-budget");
-    // Counted once the unit is known to fit, so a skill refused whole is one skip.
-    if (dropped > 0) this.skip("too-large", dropped);
+    await this.afterListing?.(source);
     await mkdir(path.join(destinationRoot, relative), { recursive: true, mode: 0o700 });
     let copied = 0;
     let copiedBytes = 0;
@@ -1062,7 +1082,7 @@ class ProviderCopier {
           // One file changing mid-copy skips that file, not its siblings. A
           // file that grew past the bound since listing does too, in a skill.
           if (error instanceof Skip && (error.reason !== "too-large" || optional(entry))) {
-            this.skip(error.reason);
+            leaveOut(error.reason);
           } else throw error;
         }
         if (copiedBytes > this.limits.directoryBytes) throw new Skip("too-large");
@@ -1072,6 +1092,7 @@ class ProviderCopier {
       await rm(path.join(destinationRoot, relative), { recursive: true, force: true });
       throw error;
     }
+    for (const [reason, count] of skipped) this.skip(reason, count);
     this.record(copied, copiedBytes);
   }
 
@@ -1181,7 +1202,14 @@ export async function stagePortableInputs(
     const skillRoots = await linkedSkillRoots(specs, providers, homes);
     for (const spec of specs) {
       if (!providers.has(spec.provider)) continue;
-      const copier = new ProviderCopier(spec.provider, total, limits, skillRoots, cloner);
+      const copier = new ProviderCopier(
+        spec.provider,
+        total,
+        limits,
+        skillRoots,
+        cloner,
+        options.afterListing,
+      );
       for (const source of spec.directories) {
         if (!source.root) continue;
         // The home entry itself is resolved, as the bind mount it replaces

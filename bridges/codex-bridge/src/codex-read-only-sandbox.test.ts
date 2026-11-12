@@ -18,7 +18,7 @@ const policy = (
 });
 
 describe("codexReadOnlyCommandSandboxOff", () => {
-  test("a Linux bridge in a container runs read-only turns without the sandbox", () => {
+  test("a Linux bridge in a container with no session policy runs read-only turns without the sandbox", () => {
     expect(codexReadOnlyCommandSandboxOff({ platform: "linux", inContainer: () => true })).toBe(
       CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER,
     );
@@ -32,6 +32,30 @@ describe("codexReadOnlyCommandSandboxOff", () => {
         inContainer: () => false,
       }),
     ).toBe(CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER);
+  });
+
+  test("an interactive container session counts even under a provider-sandbox override", () => {
+    expect(
+      codexReadOnlyCommandSandboxOff({
+        policy: policy("provider", "interactive-container"),
+        platform: "linux",
+        inContainer: () => false,
+      }),
+    ).toBe(CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER);
+  });
+
+  test("a host session keeps the sandbox even where a container marker is visible", () => {
+    // A Podman toolbox or distrobox creates `/run/.containerenv` on what is
+    // still the user's host; the session policy, not the marker, decides.
+    for (const hostPolicy of [policy("none"), policy("provider"), policy("none", "pipeline")]) {
+      expect(
+        codexReadOnlyCommandSandboxOff({
+          policy: hostPolicy,
+          platform: "linux",
+          inContainer: () => true,
+        }),
+      ).toBeUndefined();
+    }
   });
 
   test("a Linux host and macOS keep Codex's sandbox", () => {

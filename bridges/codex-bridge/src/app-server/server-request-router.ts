@@ -428,9 +428,12 @@ export class ServerRequestRouter {
       id: request.id,
       method: request.method,
       generation,
-      threadId: asString(params.threadId),
+      // The legacy approval methods spell the thread `conversationId` and the
+      // item `callId`, as `describeApproval` reads them. Without the fallback a
+      // legacy request reached `refuseApproval` with no thread and was parked.
+      threadId: asString(params.threadId) ?? asString(params.conversationId),
       turnId: asString(params.turnId),
-      itemId: asString(params.itemId),
+      itemId: asString(params.itemId) ?? asString(params.callId),
       receivedAt: this.now(),
     };
 

@@ -554,12 +554,25 @@ export class CodexRuntimePrompt {
       throw new OverlappingTurnError(context.threadId);
     }
     context.dispatchInFlight = true;
-    // The approval refusal reads the thread's; `/session/:id/status` reports
-    // the session's until its next turn, as Claude's bridge does.
-    context.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
-    if (turnConfig.readOnlyCommandSandboxOff !== undefined) {
-      session.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
-    } else delete session.readOnlyCommandSandboxOff;
+    // The approval refusal reads the thread's marker, so it is armed before
+    // every `turn/start` (a retry may dispatch on a replacement context) and
+    // withdrawn when the turn proved not to run. `/session/:id/status` reports
+    // the session's until its next turn, as Claude's bridge does, so that is
+    // published only once the turn may be running.
+    const armReadOnlySandboxOff = (target: ThreadContext) => {
+      if (turnConfig.readOnlyCommandSandboxOff !== undefined) {
+        target.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
+      } else delete target.readOnlyCommandSandboxOff;
+    };
+    const withdrawReadOnlySandboxOff = (target: ThreadContext) => {
+      delete target.readOnlyCommandSandboxOff;
+    };
+    const publishReadOnlySandboxOff = () => {
+      if (turnConfig.readOnlyCommandSandboxOff !== undefined) {
+        session.readOnlyCommandSandboxOff = turnConfig.readOnlyCommandSandboxOff;
+      } else delete session.readOnlyCommandSandboxOff;
+    };
+    armReadOnlySandboxOff(context);
     this.ctx.registry.setPhase(context, "starting");
 
     // `turn/start` applies the session's configured model but does not echo it
@@ -603,6 +616,7 @@ export class CodexRuntimePrompt {
     // the request id is safe to forget.
     const refuseRetryForClose = async (): Promise<PromptDispatchOutcome> => {
       context!.dispatchInFlight = false;
+      withdrawReadOnlySandboxOff(context!);
       retractProvisionalMessages();
       this.ctx.registry.setPhase(context!, "idle");
       this.lifecycle.emitStatus(context!);
@@ -720,6 +734,7 @@ export class CodexRuntimePrompt {
         }
         if (this.ctx.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
+          withdrawReadOnlySandboxOff(context);
           // The phase was moved to `starting` before the dispatch, and `starting`
           // reports `running`. Settling it is not optional: the thread can outlive
           // this bridge session (another tab may share it, and `releaseSession`
@@ -763,6 +778,7 @@ export class CodexRuntimePrompt {
         }
         if (this.ctx.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
+          withdrawReadOnlySandboxOff(context);
           const message = this.ctx.stopping
             ? "Codex bridge stopped during retry recovery"
             : "Session was deleted during retry recovery";
@@ -808,6 +824,7 @@ export class CodexRuntimePrompt {
                 ? error.message
                 : "Codex failed to create a replacement thread";
             staleContext.dispatchInFlight = false;
+            withdrawReadOnlySandboxOff(staleContext);
             retractProvisionalMessages();
             this.ctx.registry.setPhase(staleContext, "failed", message);
             this.lifecycle.emitStatus(staleContext);
@@ -816,6 +833,7 @@ export class CodexRuntimePrompt {
           if (!thread.id) {
             const message = "Codex did not return a thread id";
             staleContext.dispatchInFlight = false;
+            withdrawReadOnlySandboxOff(staleContext);
             retractProvisionalMessages();
             this.ctx.registry.setPhase(staleContext, "failed", message);
             this.lifecycle.emitStatus(staleContext);
@@ -867,6 +885,10 @@ export class CodexRuntimePrompt {
           threadId: context.threadId,
         });
         dispatchDefinitelyDidNotRun = false;
+        // A replacement or re-attached context carries no marker of its own;
+        // without this its approvals would be parked instead of declined.
+        if (context !== staleContext) withdrawReadOnlySandboxOff(staleContext);
+        armReadOnlySandboxOff(context);
         turn = await startTurn();
       }
       // Both halves of the exchange, so "fork from here" works on either bubble
@@ -879,6 +901,7 @@ export class CodexRuntimePrompt {
         threadId: context.threadId,
         turnId: turn.turnId,
       });
+      publishReadOnlySandboxOff();
       session.lastAcceptedRequestId = requestId;
       session.recoveredContextPending = false;
       if (recordsTypedPrompt) {
@@ -966,6 +989,7 @@ export class CodexRuntimePrompt {
     } catch (error) {
       context.dispatchInFlight = false;
       if (error instanceof DispatchJournalAdmissionError) {
+        withdrawReadOnlySandboxOff(context);
         retractProvisionalMessages();
         this.ctx.registry.setPhase(context, "failed", error.message);
         this.lifecycle.emitStatus(context);
@@ -986,6 +1010,7 @@ export class CodexRuntimePrompt {
        * turn that may still be executing.
        */
       if (classified.class === "rejected" || dispatchDefinitelyDidNotRun) {
+        withdrawReadOnlySandboxOff(context);
         retractProvisionalMessages();
         this.ctx.registry.setPhase(context, "failed", classified.engineError.message);
         await this.ctx.journal.markRetryable(requestId);
@@ -1006,7 +1031,10 @@ export class CodexRuntimePrompt {
         // `attached` and `terminal` must keep the rows: that turn really ran.
         // `recovering` is still unknown, and retracting there would erase a
         // prompt that may be executing.
-        if (ambiguousResolution === "absent") retractProvisionalMessages();
+        if (ambiguousResolution === "absent") {
+          withdrawReadOnlySandboxOff(context);
+          retractProvisionalMessages();
+        }
       }
 
       if (ambiguousResolution === "attached" || ambiguousResolution === "recovering") {
@@ -1016,6 +1044,8 @@ export class CodexRuntimePrompt {
         if (ambiguousResolution === "attached") {
           session.lastAcceptedRequestId = requestId;
         }
+        // The turn ran or may be running under this turn's sandbox decision.
+        publishReadOnlySandboxOff();
         await this.ctx.callbacks.persistSession(session);
         this.lifecycle.emitStatus(context);
         return {

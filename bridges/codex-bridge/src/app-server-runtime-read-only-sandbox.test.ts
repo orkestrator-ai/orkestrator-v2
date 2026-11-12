@@ -7,7 +7,12 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
-import { harness, type Harness } from "./app-server-runtime-test-harness.js";
+import {
+  deferredSignal,
+  harness,
+  type Harness,
+  threadPayload,
+} from "./app-server-runtime-test-harness.js";
 import { CODEX_READ_ONLY_APPROVAL_REFUSAL } from "./codex-read-only-sandbox.js";
 
 const REASON = "Codex's command sandbox cannot run commands in this container.";
@@ -20,14 +25,45 @@ const containerPolicy: NativeAgentExecutionPolicy = {
   networkAccess: "full",
 };
 
-function sandboxOffInContainer() {
-  return harness(
-    {},
-    {
-      readOnlyCommandSandboxOff: (config) =>
-        config.policy?.sandbox === "container" ? REASON : undefined,
+const sandboxOffFor = (config: { policy?: NativeAgentExecutionPolicy }) =>
+  config.policy?.sandbox === "container" ? REASON : undefined;
+
+function sandboxOffInContainer(
+  handlers: Parameters<typeof harness>[0] = {},
+  options: Parameters<typeof harness>[1] = {},
+) {
+  return harness(handlers, { readOnlyCommandSandboxOff: sandboxOffFor, ...options });
+}
+
+function overloaded(): Error {
+  const error = new Error("ingress queue full");
+  (error as { rpcCode?: number }).rpcCode = -32001;
+  return error;
+}
+
+/** Asks for approval of a command the way app-server does; the request id is unique per call. */
+function requestCommandApproval(h: Harness, id: number, turnId: string) {
+  h.child().stdout.pushMessage({
+    jsonrpc: "2.0",
+    id,
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: "thread-1",
+      turnId,
+      itemId: `item-${id}`,
+      startedAtMs: 1,
+      command: "rm -rf build",
+      cwd: "/tmp/ws",
     },
-  );
+  });
+}
+
+function answerTo(h: Harness, id: number): string | undefined {
+  return h
+    .child()
+    .stdin.lines.join("")
+    .split("\n")
+    .find((line) => line.includes(`"id":${id}`) && !line.includes('"method"'));
 }
 
 function turnStarts(h: Harness) {
@@ -140,6 +176,243 @@ describe("read-only turn without Codex's command sandbox", () => {
     });
     await h.drain();
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(1);
+  });
+
+  test("declines a legacy approval that names its thread by conversationId", async () => {
+    const h = await sandboxOffInContainer();
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await h.drain();
+
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9103,
+      method: "execCommandApproval",
+      params: {
+        conversationId: "thread-1",
+        callId: "call-1",
+        approvalId: null,
+        command: ["rm", "-rf", "build"],
+        cwd: "/tmp/ws",
+        reason: null,
+        parsedCmd: [],
+      },
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9104,
+      method: "applyPatchApproval",
+      params: {
+        conversationId: "thread-1",
+        callId: "call-2",
+        fileChanges: {},
+        reason: null,
+        grantRoot: null,
+      },
+    });
+    await h.drain();
+
+    expect(answerTo(h, 9103)).toContain('"denied"');
+    expect(answerTo(h, 9104)).toContain('"denied"');
+    expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+    expect(JSON.stringify(h.events)).toContain(CODEX_READ_ONLY_APPROVAL_REFUSAL);
+  });
+
+  test("a retry on a replacement thread still declines approvals", async () => {
+    let attempts = 0;
+    const h = await sandboxOffInContainer(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) throw overloaded();
+          return { turn: { id: "turn-after-restart" } };
+        },
+      },
+      { initialPromptRetryDelayMs: 0 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    const requestId = "initial-prompt:env-1:tab-read-only-retry";
+    const retryableWriteStarted = deferredSignal();
+    const allowRetryableWrite = deferredSignal();
+    const journal = h.runtime.getJournal();
+    const markRetryable = journal.markRetryable.bind(journal);
+    journal.markRetryable = async (candidateRequestId) => {
+      retryableWriteStarted.resolve();
+      await allowRetryableWrite.promise;
+      await markRetryable(candidateRequestId);
+    };
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId,
+      attachments: [],
+      readOnly: true,
+    });
+    await retryableWriteStarted.promise;
+    try {
+      // The child restarts during the retry delay, so the retry dispatches on
+      // a context generation recovery or the retry itself created.
+      await h.engine.getSupervisor().restartNow("restart during read-only retry");
+    } finally {
+      allowRetryableWrite.resolve();
+    }
+    expect(await pending).toMatchObject({ ok: true, result: { turnId: "turn-after-restart" } });
+    expect(h.children).toHaveLength(2);
+
+    const retried = turnStarts(h).at(-1)!;
+    expect(retried.params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(retried.params.approvalPolicy).toBe("untrusted");
+
+    requestCommandApproval(h, 9105, "turn-after-restart");
+    await h.drain();
+    expect(answerTo(h, 9105)).toContain('"decision":"decline"');
+    expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toEqual({
+      state: "off",
+      reason: REASON,
+    });
+  });
+
+  test("a dispatch the app-server rejected leaves no sandbox-off status or refusal behind", async () => {
+    let reject = true;
+    const h = await sandboxOffInContainer({
+      "turn/start": () => {
+        if (reject) throw overloaded();
+        return { turn: { id: "turn-2" } };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+
+    // Not an initial-prompt id, so the overload is not retried: a definite
+    // non-dispatch.
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Review the package",
+        requestId: "review-1",
+        attachments: [],
+        readOnly: true,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toBeUndefined();
+
+    // A later ordinary turn on the same thread offers its approvals as usual.
+    reject = false;
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Fix the findings",
+        requestId: "fix-1",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true });
+    requestCommandApproval(h, 9106, "turn-2");
+    await h.drain();
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(1);
+  });
+
+  test("an ambiguous dispatch that proved never to have run leaves no sandbox-off status", async () => {
+    const h = await sandboxOffInContainer({
+      "turn/start": () => {
+        throw new Error("write failed mid-request");
+      },
+      // `thread/read` is the authority: no turn carries the request.
+      "thread/read": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    expect(outcome).toMatchObject({ ok: false });
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toBeUndefined();
+  });
+
+  test("a failed ordinary turn keeps reporting the last read-only turn that ran", async () => {
+    let reject = false;
+    const h = await sandboxOffInContainer({
+      "turn/start": () => {
+        if (reject) throw overloaded();
+        return { turn: { id: "turn-1" } };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await completeTurn(h, "turn-1");
+
+    reject = true;
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Fix the findings",
+        requestId: "fix-1",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: false });
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toEqual({
+      state: "off",
+      reason: REASON,
+    });
+  });
+
+  test("a Multi Review result turn keeps its submit tools approved and reloads the thread", async () => {
+    const h = await sandboxOffInContainer({
+      "mcpServerStatus/list": () => ({
+        data: [
+          {
+            name: "orkestrator",
+            runtimeStatus: "connected",
+            tools: { submit_review: { name: "submit_review" } },
+            toolsError: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, { prompt: "Prepare", requestId: "prepare", attachments: [] });
+    await completeTurn(h, "turn-1");
+    const reloadsBefore = h
+      .child()
+      .requests.filter((request) => request.method === "thread/resume").length;
+
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Submit the review",
+        requestId: "review-1",
+        attachments: [],
+        readOnly: true,
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+        workflowResultTool: "submit_review",
+      }),
+    ).toMatchObject({ ok: true });
+
+    // The thread was reloaded under the turn's own approval policy and
+    // sandbox, with the attempt's server approved up front: an `approve`
+    // server bypasses `untrusted`, so the submit call needs no approval the
+    // refusal would decline.
+    const resumes = h.child().requests.filter((request) => request.method === "thread/resume");
+    expect(resumes.length).toBeGreaterThan(reloadsBefore);
+    const reload = resumes.at(-1)!;
+    expect(reload.params.sandbox).toBe("danger-full-access");
+    expect(reload.params.approvalPolicy).toBe("untrusted");
+    const config = reload.params.config as Record<string, Record<string, unknown>>;
+    expect(config["mcp_servers.orkestrator"]?.default_tools_approval_mode).toBe("approve");
+    const turn = turnStarts(h).at(-1)!;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turn.params.approvalPolicy).toBe("untrusted");
   });
 
   test("where the sandbox can run, a read-only turn keeps it", async () => {

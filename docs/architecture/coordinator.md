@@ -1456,15 +1456,24 @@ reviewer could not read its package or diff, submitted a blocked report
 with no findings, and the review step still showed as complete.
 
 The bridge now decides per turn (`codexReadOnlyCommandSandboxOff`,
-`bridges/codex-bridge/src/codex-read-only-sandbox.ts`). A Linux bridge in a
-container (`/.dockerenv`, `/run/.containerenv`, or a session policy with
-`sandbox: "container"`) runs the turn with `sandbox: "danger-full-access"`
-and `approvalPolicy: "untrusted"`. Codex then runs without asking only the
+`bridges/codex-bridge/src/codex-read-only-sandbox.ts`). A Linux bridge whose
+session is a container session (a policy with `sandbox: "container"`, or the
+`interactive-container` policy under a sandbox override) runs the turn with
+`sandbox: "danger-full-access"`
+and `approvalPolicy: "untrusted"`. The policy decides, not the container
+marker files: a host session keeps the sandbox even where `/run/.containerenv`
+is visible (a Podman toolbox or distrobox shares the user's home and may
+allow bubblewrap's namespace). The markers (`/.dockerenv`,
+`/run/.containerenv`) count only for a session with no policy at all. Codex
+then runs without asking only the
 commands it classifies as read-only (`cat`, `ls`, `rg`, `sed -n`, `git
 diff`/`log`/`show` and the like), and the bridge declines every approval
 the turn asks for at once rather than offering it to a tab
 (`refuseApproval` on the server-request router, `approvalRefusal` in
-`app-server-runtime-approvals.ts`). So nothing else runs, and an
+`app-server-runtime-approvals.ts`), including the legacy
+`execCommandApproval` and `applyPatchApproval`, which name their thread
+`conversationId`. The refusal is armed on the thread before every
+`turn/start`, a retry on a replacement thread included. So nothing else runs, and an
 unattended review never waits on a card. The read-only turn policy, the
 hosted search denial and the dropped repository instructions are
 unchanged. With the sandbox off, `networkAccessEnabled: false` no longer
@@ -1480,12 +1489,16 @@ host whose policy refuses bubblewrap's namespace is not probed for Codex
 yet.
 
 `/session/:id/status` carries `readOnlyCommandSandbox: { state: "off",
-reason }` until the session's next turn, in the same shape as Claude's, so
+reason }` from the moment such a turn is accepted (or may be running after an
+ambiguous dispatch) until the session's next turn that runs; a dispatch that
+proved not to run changes neither the status nor the thread's refusal. It
+has the same shape as Claude's, so
 the backend keeps it as `commandSandboxOff` on the reviewer and the
 consolidation step, and Multi Review shows the warning note. Proved by
 `app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`
 and the `refuseApproval` cases of `server-request-router.test.ts` against a
-scripted app-server. No real Codex turn in a container has run with it yet.
+scripted app-server. No real Codex turn in a container has run with it yet
+(to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
 
 ### Changing qualification
 

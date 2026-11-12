@@ -166,6 +166,40 @@ describe("the repository's AGENTS.md on Codex threads", () => {
     expect(await instructionsFor({ projectResources: true })).toBe(agentSystemInstructions());
   });
 
+  test("a read-only turn without Codex's sandbox excludes them on start and resume, an ordinary one restores them", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+    });
+    const ordinary: EngineTurnConfig = {
+      ...BUILD,
+      cwd: workspace,
+      policy: policy({ projectResources: false }),
+    };
+    // What `app-server-runtime-prompt.ts` sends for a read-only turn whose
+    // command sandbox cannot run (`codex-read-only-sandbox.ts`).
+    const sandboxOff: EngineTurnConfig = {
+      ...ordinary,
+      sandbox: "danger-full-access",
+      approvalPolicy: "untrusted",
+      readOnlyCommandSandboxOff: "Codex's command sandbox cannot run commands in this container.",
+    };
+    const instructions = (method: string, occurrence: number) =>
+      h.child().requests.filter((request) => request.method === method)[occurrence]!.params
+        .developerInstructions as string | undefined;
+    try {
+      await h.engine.start();
+      await h.engine.startThread({ config: sandboxOff });
+      await h.engine.resumeThread("t1", { config: sandboxOff });
+      await h.engine.resumeThread("t1", { config: ordinary });
+      expect(instructions("thread/start", 0)).toBe(agentSystemInstructions());
+      expect(instructions("thread/resume", 0)).toBe(agentSystemInstructions());
+      expect(instructions("thread/resume", 1)).toContain("Always show visual changes as images.");
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
   test("a read-only coordinator excludes repository instructions", async () => {
     const instructions = await instructionsFor({
       id: "coordinator-read-only",

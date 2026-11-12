@@ -232,8 +232,11 @@ replay shows it as the card, never as a message the user typed. See
   its user namespace, so every command fails and a reviewer reads nothing.
   There the turn runs `danger-full-access` under `untrusted`, and the router
   declines every approval it asks for at once (`refuseApproval`); never let
-  such a turn's approvals reach a tab or the default auto-approve path. The
-  decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
+  such a turn's approvals reach a tab or the default auto-approve path. Arm
+  the thread's refusal before every `turn/start` (a retry may dispatch on a
+  replacement context), and key a legacy approval by its `conversationId`.
+  The decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
+  which the session's policy decides, not the container marker files,
   and the session reports it as `readOnlyCommandSandbox` on
   `/session/:id/status`. See "Codex read-only turns in a container" in
   [`coordinator.md`](../../docs/architecture/coordinator.md).

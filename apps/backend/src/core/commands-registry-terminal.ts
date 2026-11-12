@@ -1,4 +1,7 @@
-import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import {
+  isLaunchableTerminalJobTabType,
+  parseTerminalOpenCodeLaunchCommand,
+} from "@orkestrator/protocol/terminal-agent-launch";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import {
   resolveOpenCode2TerminalCommand,
@@ -66,7 +69,6 @@ import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import { createHash, randomUUID } from "node:crypto";
-import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import {
   getEnvironmentCommitAncestryCommand,
@@ -370,11 +372,7 @@ export function registerTerminalCommands(
         throw new Error("tabId must be at most 256 characters");
       }
       const tabType = asNonBlankString(args.tabType, "tabType");
-      if (
-        tabType !== "plain" &&
-        tabType !== "claude-tmux" &&
-        (!isAgentPlatform(tabType) || tabType === "cursor")
-      ) {
+      if (tabType !== "claude-tmux" && !isLaunchableTerminalJobTabType(tabType)) {
         throw new Error("Terminal job tab type is invalid");
       }
       const title = asOptionalString(args.title)?.trim();
@@ -424,6 +422,11 @@ export function registerTerminalCommands(
         title,
         activate:
           args.activateTab === "setup-handoff" ? "setup-handoff" : args.activateTab === true,
+        // A shell-only restart is for a tab that is already open. Checking for
+        // it here, inside the serialized layout mutation and before any PTY is
+        // created, means a restart that raced the user closing the tab fails
+        // instead of putting the tab back.
+        ...(tabType !== "claude-tmux" && data === undefined ? { requireExistingTab: true } : {}),
       });
 
       const invoke = async <T>(

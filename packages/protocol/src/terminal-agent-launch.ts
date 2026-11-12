@@ -1,7 +1,22 @@
-import type { AgentPlatform } from "./agent-platforms.js";
+import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import { claudeCliReasoningSelection } from "./claude-model-catalog.js";
 
 export type TerminalAgentTabType = AgentPlatform | "plain";
+
+/**
+ * PTY-backed tab types `launch_terminal_job` can start a shell for. Cursor has
+ * no terminal mode, and `claude-tmux` tabs are started by tmux rather than a
+ * PTY, so neither is listed. The backend validates against this predicate and
+ * the renderer uses it to decide which launched tabs it may restart, so a new
+ * agent platform becomes restartable everywhere at once.
+ */
+export type LaunchableTerminalJobTabType = Exclude<AgentPlatform, "cursor"> | "plain";
+
+export function isLaunchableTerminalJobTabType(
+  value: unknown,
+): value is LaunchableTerminalJobTabType {
+  return value === "plain" || (isAgentPlatform(value) && value !== "cursor");
+}
 
 /**
  * Environment every OpenCode process Orkestrator starts must carry.

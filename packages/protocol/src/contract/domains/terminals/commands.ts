@@ -167,7 +167,8 @@ export const launchTerminalJobCommand = defineCommand({
     title: optionalUnknown,
     // Required for a new job of every tab type but `claude-tmux`, checked by the
     // handler. Omitted with a `tabId`, that tab gets a shell that runs
-    // nothing (Reconnect after the backend that owned the old shell restarted).
+    // nothing (Reconnect after the backend that owned the old shell restarted);
+    // the tab must still be open, or the launch is refused rather than reopening it.
     data: optionalUnknown,
     initialPrompt: optionalUnknown,
     model: optionalUnknown,

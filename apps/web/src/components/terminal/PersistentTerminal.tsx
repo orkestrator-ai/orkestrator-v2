@@ -831,6 +831,13 @@ export function PersistentTerminal({
     tabType === "cursor" ||
     tabType === "grok";
 
+  // The input-failure toast offers Reconnect too. For a launched tab that has
+  // to be the same recovery the banner runs, because a plain reattach can never
+  // bring back a shell the backend no longer has. `handleReconnect` is defined
+  // further down, so the toast reaches it through a ref.
+  const handleReconnectRef = useRef<() => void>(() => {});
+  const requestLaunchedShellReconnect = useCallback(() => handleReconnectRef.current(), []);
+
   const {
     sessionId,
     bootstrapped,
@@ -854,6 +861,10 @@ export function PersistentTerminal({
     replayOutputBuffer: shouldReplayBackendOutputBuffer,
     attachExistingOnly,
     trackEnvironmentActivity,
+    onReconnectRequest:
+      backendManagedTerminal && !isBackendManagedSetupTab
+        ? requestLaunchedShellReconnect
+        : undefined,
   });
 
   // Keep connect ref up to date to avoid stale closures in effects
@@ -2037,6 +2048,11 @@ export function PersistentTerminal({
   // session a needless call; a race would converge anyway, because both calls
   // resolve to the tab's one stable backend session.
   const [launchedShellRestarting, setLaunchedShellRestarting] = useState(false);
+  // The target whose new shell could not be started, so the banner can say
+  // Reconnect starts a new shell even when the tab still holds a dead id.
+  const [launchedShellRestartFailedTarget, setLaunchedShellRestartFailedTarget] = useState<
+    string | null
+  >(null);
   const launchedShellRestartTargetRef = useRef<string | null>(null);
   const launchedShellRestartAttemptRef = useRef(0);
   const launchedShellTarget = `${environmentId}\0${tabId}\0${existingSessionId ?? ""}`;
@@ -2046,6 +2062,16 @@ export function PersistentTerminal({
     currentLaunchedShellTargetRef.current = launchedShellTarget;
     reconnectRef.current = reconnect;
   }, [launchedShellTarget, reconnect]);
+  // A restart still in flight when this terminal goes away must not launch:
+  // the tab may have been closed, and a launch would only start a shell nobody
+  // shows. A remount runs its own restart for whatever target it then has.
+  const launchedShellMountedRef = useRef(false);
+  useEffect(() => {
+    launchedShellMountedRef.current = true;
+    return () => {
+      launchedShellMountedRef.current = false;
+    };
+  }, []);
   useEffect(() => {
     if (!backendManagedTerminal || isBackendManagedSetupTab) return;
     if (!terminalIsOpened || isConnected || isConnecting) return;
@@ -2063,19 +2089,27 @@ export function PersistentTerminal({
             tabId,
             tabType,
             existingSessionId,
+            shouldLaunch: () =>
+              launchedShellMountedRef.current && currentLaunchedShellTargetRef.current === target,
           }),
         )
         .then(async (outcome) => {
+          if (outcome.kind === "cancelled") return;
           if (outcome.kind === "failed") {
             log.warn("reconnect.new-shell-failed", { tabId, error: outcome.message });
+            setLaunchedShellRestartFailedTarget(target);
             return;
           }
+          setLaunchedShellRestartFailedTarget(null);
           // A new session id arrives through the pane snapshot and connects on
-          // its own; only an unchanged id needs an explicit attach, and only
-          // while this tab still points at the shell that was restarted.
+          // its own. The tab still needs an explicit attach when its id did not
+          // change: the shell restarted under the same stable id, or it was
+          // already running again (another window restarted it after this one
+          // had used up its attach retries). Only while this tab still points
+          // at the target that was checked.
           if (
-            outcome.kind === "restarted" &&
-            outcome.sessionId === existingSessionId &&
+            (outcome.kind === "attach" || outcome.sessionId === existingSessionId) &&
+            launchedShellMountedRef.current &&
             currentLaunchedShellTargetRef.current === target
           ) {
             await reconnectRef.current();
@@ -2159,18 +2193,30 @@ export function PersistentTerminal({
       }
     }
     if (backendManagedTerminal) {
+      const target = launchedShellTarget;
+      // The same gate as the automatic restart: it keeps the banner down while
+      // the restart runs, and lowering it afterwards re-arms the banner, so a
+      // failed start leaves the tab with a Reconnect button rather than none.
+      launchedShellRestartTargetRef.current = target;
+      const attempt = ++launchedShellRestartAttemptRef.current;
+      setLaunchedShellRestarting(true);
       void restartLaunchedTerminal({
         backend: backendForScope(backendScope),
         environmentId,
         tabId,
         tabType,
         existingSessionId,
+        shouldLaunch: () => launchedShellMountedRef.current,
       })
         .then(async (outcome) => {
+          if (outcome.kind === "cancelled") return;
           if (outcome.kind === "failed") {
+            log.warn("reconnect.new-shell-failed", { tabId, error: outcome.message });
+            setLaunchedShellRestartFailedTarget(target);
             toast.error("Could not start a new shell", { description: outcome.message });
             return;
           }
+          setLaunchedShellRestartFailedTarget(null);
           // A new session id reaches this tab through the pane snapshot, and
           // that new target connects on its own. Only an unchanged id (the old
           // shell exited while the backend kept running) needs an explicit attach.
@@ -2178,7 +2224,15 @@ export function PersistentTerminal({
             await reconnect();
           }
         })
-        .finally(() => terminal.focus());
+        .catch((error: unknown) => {
+          log.warn("reconnect.new-shell-failed", { tabId, error: formatLogError(error) });
+        })
+        .finally(() => {
+          if (launchedShellRestartAttemptRef.current === attempt) {
+            setLaunchedShellRestarting(false);
+          }
+          terminal.focus();
+        });
       return;
     }
     void reconnect().finally(() => terminal.focus());
@@ -2189,6 +2243,7 @@ export function PersistentTerminal({
     environmentId,
     existingSessionId,
     isBackendManagedSetupTab,
+    launchedShellTarget,
     reconnect,
     retireSetupTabMarker,
     tabId,
@@ -2197,6 +2252,9 @@ export function PersistentTerminal({
     terminalData.serializeAddon,
     terminalSessions,
   ]);
+  useEffect(() => {
+    handleReconnectRef.current = handleReconnect;
+  }, [handleReconnect]);
   const handleDismissDisconnectedNotice = useCallback(() => {
     setDisconnectedNoticeDismissed(true);
     // Same reason the warning banner hands focus back: the button unmounts with
@@ -2245,7 +2303,8 @@ export function PersistentTerminal({
       {showDisconnectedNotice && (
         <TerminalDisconnectedBanner
           message={
-            backendManagedTerminal && !existingSessionId
+            backendManagedTerminal &&
+            (!existingSessionId || launchedShellRestartFailedTarget === launchedShellTarget)
               ? "This terminal's shell is no longer running. Reconnect starts a new shell in this tab."
               : attachExistingOnly && !existingSessionId
                 ? "This terminal's shell is no longer running, so it cannot accept input."

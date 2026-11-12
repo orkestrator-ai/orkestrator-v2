@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import { restartLaunchedTerminal } from "./restart-launched-terminal";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { isLaunchableTerminalTabType, restartLaunchedTerminal } from "./restart-launched-terminal";
 
 function backend(options: {
   status?: { running: boolean } | Error;
@@ -97,5 +98,37 @@ describe("restartLaunchedTerminal", () => {
       kind: "failed",
       message: "Environment is not running with setup complete",
     });
+  });
+
+  test("does not launch once the caller has stopped wanting the restart", async () => {
+    // The tab was closed (or retargeted) while the status read was in flight.
+    let wanted = true;
+    const api = backend({ status: { running: false } });
+    api.getTerminalSession.mockImplementation(async () => {
+      wanted = false;
+      return { running: false };
+    });
+    const outcome = await restartLaunchedTerminal({
+      ...base,
+      backend: api,
+      existingSessionId: "old-session",
+      shouldLaunch: () => wanted,
+    });
+
+    expect(outcome).toEqual({ kind: "cancelled" });
+    expect(api.launchTerminalJob).not.toHaveBeenCalled();
+  });
+});
+
+describe("isLaunchableTerminalTabType", () => {
+  // Every agent platform with a terminal mode is restartable without a second
+  // edit here: the renderer and launch_terminal_job share one predicate.
+  test("matches launch_terminal_job's own rule for every platform", () => {
+    for (const platform of AGENT_PLATFORMS) {
+      expect(isLaunchableTerminalTabType(platform)).toBe(platform !== "cursor");
+    }
+    expect(isLaunchableTerminalTabType("plain")).toBe(true);
+    expect(isLaunchableTerminalTabType("claude-tmux")).toBe(false);
+    expect(isLaunchableTerminalTabType("root")).toBe(false);
   });
 });

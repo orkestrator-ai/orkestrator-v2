@@ -978,6 +978,12 @@ export class SessionsRepository {
     activate?: boolean | "setup-handoff";
     terminalSessionId?: string | null;
     existingOnly?: boolean;
+    /**
+     * Refuse, rather than create, a tab that is not in the layout. A shell-only
+     * restart of a launched tab uses it so a request still in flight when the
+     * user closed the tab cannot bring the tab back.
+     */
+    requireExistingTab?: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(input.environmentId);
@@ -998,6 +1004,9 @@ export class SessionsRepository {
       // The post-bootstrap identity publish must lose a race with an explicit
       // user close. Returning the current snapshot keeps the command result
       // idempotent without recreating the tab the user removed.
+      if (input.requireExistingTab && !existingTab) {
+        throw new Error(`Terminal tab no longer exists: ${input.tabId}`);
+      }
       if (input.existingOnly && !existingTab) {
         if (!previous) throw new Error("Persisted pane layout disappeared during terminal launch");
         return previous;

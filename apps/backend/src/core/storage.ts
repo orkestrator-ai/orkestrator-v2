@@ -918,6 +918,7 @@ export class StorageService {
     activate?: boolean | "setup-handoff";
     terminalSessionId?: string | null;
     existingOnly?: boolean;
+    requireExistingTab?: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureTerminalJobTab(input);
   }

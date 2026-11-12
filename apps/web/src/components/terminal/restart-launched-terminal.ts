@@ -1,12 +1,15 @@
 import type { TabType } from "@/contexts";
 import { createUuid } from "@/lib/uuid";
+import {
+  isLaunchableTerminalJobTabType,
+  type LaunchableTerminalJobTabType,
+} from "@orkestrator/protocol/terminal-agent-launch";
 
-/** Tab types `launch_terminal_job` accepts for a PTY-backed tab. */
-const LAUNCHABLE_TAB_TYPES = new Set(["plain", "claude", "codex", "grok", "opencode", "pi"]);
-type LaunchableTabType = "plain" | "claude" | "codex" | "grok" | "opencode" | "pi";
+type LaunchableTabType = LaunchableTerminalJobTabType;
 
+/** Tab types `launch_terminal_job` accepts for a PTY-backed tab (the backend's own rule). */
 export function isLaunchableTerminalTabType(tabType: TabType): tabType is LaunchableTabType {
-  return LAUNCHABLE_TAB_TYPES.has(tabType);
+  return isLaunchableTerminalJobTabType(tabType);
 }
 
 type RestartBackend = {
@@ -24,7 +27,9 @@ export type RestartLaunchedTerminalOutcome =
   | { kind: "attach" }
   /** A shell was started; reattach only when it kept the same session id. */
   | { kind: "restarted"; sessionId: string | null }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string }
+  /** The caller no longer wanted the restart (closed or replaced tab); nothing was launched. */
+  | { kind: "cancelled" };
 
 /**
  * Reconnect for a tab the backend launched (Run Commands, an agent CLI tab).
@@ -38,6 +43,11 @@ export type RestartLaunchedTerminalOutcome =
  *
  * A failed status read is not evidence that the shell is gone, so it falls back
  * to attaching rather than replacing a shell that may still be running.
+ *
+ * `shouldLaunch` is asked once more immediately before the launch, after the
+ * status read, so a restart whose tab was closed or retargeted meanwhile stops
+ * there. The backend also refuses a shell-only launch for a tab that is no
+ * longer in the layout, which closes the remaining window.
  */
 export async function restartLaunchedTerminal(input: {
   backend: RestartBackend;
@@ -45,13 +55,15 @@ export async function restartLaunchedTerminal(input: {
   tabId: string;
   tabType: TabType;
   existingSessionId: string | null | undefined;
+  shouldLaunch?: () => boolean;
 }): Promise<RestartLaunchedTerminalOutcome> {
-  const { backend, environmentId, tabId, tabType, existingSessionId } = input;
+  const { backend, environmentId, tabId, tabType, existingSessionId, shouldLaunch } = input;
   if (!isLaunchableTerminalTabType(tabType)) return { kind: "attach" };
   if (existingSessionId) {
     const status = await backend.getTerminalSession(existingSessionId).catch(() => null);
     if (!status || status.running) return { kind: "attach" };
   }
+  if (shouldLaunch && !shouldLaunch()) return { kind: "cancelled" };
   try {
     const result = await backend.launchTerminalJob({
       requestId: `restart-shell-${createUuid()}`,

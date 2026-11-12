@@ -11,6 +11,7 @@ import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { invoke } from "@/lib/native/backend";
 import { mockReadText, mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import {
   emitViewportChange,
   restoreMatchMedia,
@@ -62,6 +63,7 @@ type MockUseTerminalOptions = {
   replayOutputBuffer?: boolean;
   attachExistingOnly?: boolean;
   trackEnvironmentActivity?: boolean;
+  onReconnectRequest?: () => void;
 };
 let lastUseTerminalOptions: MockUseTerminalOptions | undefined;
 let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
@@ -2692,6 +2694,291 @@ describe("PersistentTerminal", () => {
         restart.restore();
         timer.restore();
       }
+    });
+
+    const statusCalls = () =>
+      invokeMock.mock.calls.filter(([command]) => command === "get_terminal_session");
+    const launchedResult = (sessionId: string) => ({
+      jobId: "job-1",
+      environmentId: "env-1",
+      tabId: "tab-1",
+      tabType: "plain",
+      sessionId,
+      status: "started",
+    });
+    const installLaunchedShellRestart = () =>
+      installControlledTimeout(LAUNCHED_SHELL_RESTART_MS, {
+        label: "PersistentTerminal launched shell restart",
+      });
+
+    it("reattaches a retained session id whose shell restarted under the same id", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command === "get_terminal_session") return { id: "stable-session", running: false };
+          if (command === "launch_terminal_job") return launchedResult("stable-session");
+          return undefined;
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+            backendTerminalSessionId="stable-session"
+          />,
+        );
+
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+
+        await waitFor(() => expect(reconnectMock).toHaveBeenCalledTimes(1));
+        expect(statusCalls()).toHaveLength(1);
+        expect(launchCalls()).toHaveLength(1);
+        expect(launchCalls()[0]![1]).not.toHaveProperty("data");
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("attaches without a launch when another window already restarted the shell", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        // This window used up its attach retries against a stopped shell; by the
+        // time its restart checks, another window has started it again.
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command === "get_terminal_session") return { id: "stable-session", running: true };
+          if (command === "launch_terminal_job") return launchedResult("stable-session");
+          return undefined;
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+            backendTerminalSessionId="stable-session"
+          />,
+        );
+
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+
+        await waitFor(() => expect(reconnectMock).toHaveBeenCalledTimes(1));
+        expect(launchCalls()).toHaveLength(0);
+        // The banner stays down while the restart is in flight and after it.
+        expect(screen.queryByRole("status") === null).toBe(true);
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("explains Reconnect starts a new shell when a retained id's restart fails", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command === "get_terminal_session") return { id: "stable-session", running: false };
+          if (command === "launch_terminal_job") throw new Error("Environment is stopped");
+          return undefined;
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+            backendTerminalSessionId="stable-session"
+          />,
+        );
+
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+
+        expect(launchCalls()).toHaveLength(1);
+        expect(reconnectMock).not.toHaveBeenCalled();
+        expect(screen.getByRole("status").textContent).toContain(
+          "This terminal's shell is no longer running. Reconnect starts a new shell in this tab.",
+        );
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("does not launch a restart whose terminal went away while its status was read", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        let resolveStatus: (value: { id: string; running: boolean }) => void = () => {};
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command === "get_terminal_session") {
+            return new Promise((resolve) => {
+              resolveStatus = resolve;
+            });
+          }
+          if (command === "launch_terminal_job") return launchedResult("replacement-session");
+          return undefined;
+        });
+        const view = renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+            backendTerminalSessionId="dead-session"
+          />,
+        );
+
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+        await waitFor(() => expect(statusCalls()).toHaveLength(1));
+        // The user closes the tab while the status read is still pending.
+        view.unmount();
+        await act(async () => {
+          resolveStatus({ id: "dead-session", running: false });
+        });
+        await settleTerminal();
+
+        expect(launchCalls()).toHaveLength(0);
+        expect(reconnectMock).not.toHaveBeenCalled();
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("re-raises the notice after a manual Reconnect cannot start a new shell", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        useTerminalSessionId = null;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command === "launch_terminal_job") throw new Error("Environment is stopped");
+          return undefined;
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+          />,
+        );
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        expect(screen.queryByRole("status") === null).toBe(true);
+        await waitFor(() => expect(launchCalls()).toHaveLength(2));
+        await waitFor(() =>
+          expect(mockToastError).toHaveBeenCalledWith("Could not start a new shell", {
+            description: "Environment is stopped",
+          }),
+        );
+        // The failed start leaves the tab with a Reconnect button again.
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+        expect(screen.getByRole("status").textContent).toContain(
+          "Reconnect starts a new shell in this tab",
+        );
+        expect(launchCalls()[1]![1]).not.toHaveProperty("data");
+        expect(reconnectMock).not.toHaveBeenCalled();
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("leaves a new session id to the pane snapshot after a manual Reconnect", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        useTerminalSessionId = null;
+        let launches = 0;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command !== "launch_terminal_job") return undefined;
+          launches += 1;
+          if (launches === 1) throw new Error("Environment is stopped");
+          return launchedResult("replacement-session");
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+          />,
+        );
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        await waitFor(() => expect(launchCalls()).toHaveLength(2));
+        await settleTerminal();
+
+        // The new id arrives through the pane snapshot, which connects it.
+        expect(reconnectMock).not.toHaveBeenCalled();
+        expect(mockToastError).not.toHaveBeenCalled();
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("routes the input-failure toast's Reconnect through the new-shell recovery", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      const restart = installLaunchedShellRestart();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        useTerminalSessionId = null;
+        let launches = 0;
+        invokeMock.mockImplementation(async (command: string) => {
+          if (command !== "launch_terminal_job") return undefined;
+          launches += 1;
+          if (launches === 1) throw new Error("Environment is stopped");
+          return launchedResult("replacement-session");
+        });
+        renderInAppCommandScope(
+          <PersistentTerminal
+            {...disconnectedProps(createTerminalData())}
+            backendManagedTerminal
+          />,
+        );
+        await waitFor(() => expect(restart.pendingCount()).toBe(1));
+        await advanceClock(restart);
+        await waitFor(() => expect(launchCalls()).toHaveLength(1));
+
+        // What the toast's Reconnect action calls once typing into the dead tab fails.
+        const onReconnectRequest = lastUseTerminalOptions?.onReconnectRequest;
+        expect(onReconnectRequest).toBeDefined();
+        act(() => onReconnectRequest!());
+
+        await waitFor(() => expect(launchCalls()).toHaveLength(2));
+        expect(launchCalls()[1]![1]).toMatchObject({ tabId: "tab-1", tabType: "plain" });
+        expect(launchCalls()[1]![1]).not.toHaveProperty("data");
+      } finally {
+        restart.restore();
+        timer.restore();
+      }
+    });
+
+    it("keeps the hook's own Reconnect for terminals the renderer can recreate", async () => {
+      useTerminalIsConnected = true;
+      renderInAppCommandScope(<PersistentTerminal {...disconnectedProps(createTerminalData())} />);
+      await waitFor(() => expect(lastUseTerminalOptions).toBeDefined());
+      expect(lastUseTerminalOptions?.onReconnectRequest).toBeUndefined();
     });
   });
 

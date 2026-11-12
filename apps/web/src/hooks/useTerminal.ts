@@ -139,6 +139,13 @@ interface UseTerminalOptions {
   attachExistingOnly?: boolean;
   /** Persist prompt and settled-output activity for this environment-owned agent PTY. */
   trackEnvironmentActivity?: boolean;
+  /**
+   * What the input-failure toast's Reconnect does, when the owner recovers a
+   * terminal differently from a plain reattach (a launched tab asks the backend
+   * for a new shell). Defaults to this hook's own `reconnect`. The callback
+   * must not route back through the toast, so it should call `reconnect`.
+   */
+  onReconnectRequest?: () => void;
 }
 
 interface UseTerminalReturn {
@@ -273,6 +280,7 @@ export function useTerminal({
   replayOutputBuffer = false,
   attachExistingOnly = false,
   trackEnvironmentActivity = false,
+  onReconnectRequest,
 }: UseTerminalOptions): UseTerminalReturn {
   const nodeBackend = useScopeBackend();
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -1133,8 +1141,8 @@ export function useTerminal({
   }, [attachExistingOnly, connect, disconnect, cleanupEventListener]);
   const reconnectRef = useRef<() => void>(() => {});
   useEffect(() => {
-    reconnectRef.current = () => void reconnect();
-  }, [reconnect]);
+    reconnectRef.current = onReconnectRequest ?? (() => void reconnect());
+  }, [onReconnectRequest, reconnect]);
 
   const resize = useCallback(
     async (newCols: number, newRows: number) => {

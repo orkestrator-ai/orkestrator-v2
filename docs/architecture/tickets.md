@@ -21,6 +21,18 @@ A ticket without a stored kind is a feature ticket. Follow-up and steer
 messages to a running worker stay agent mail, not a ticket kind (see the design
 record).
 
+An acceptance criterion names something the committed change itself can be
+checked against: what its code, tests or documentation do. Rules for how the
+work is carried out (what the worker may read, run, sign in to or touch on the
+host) go in Constraints. `ACCEPTANCE_CRITERIA_RULE`
+(`packages/protocol/src/ticket-sections.ts`) says so to every writer of
+criteria: the ticket tools' `sections` guidance (`TICKET_SECTIONS_GUIDANCE`,
+which the agent and coordinator tools carry once rather than on each field, to
+stay inside the coordinator tool-surface byte bound), the public CLI's ticket
+inputs, the auto-pipeline draft prompt and tool, and the feature planner.
+Verify applies the same boundary when it judges them
+([Verify](#verify)).
+
 Standing project rules (report format, the checks every change runs, the PR
 flow, safety rules) belong in the project's `AGENTS.md` `## Orkestrator`
 section. Tickets carry only what differs for this piece of work; the tool
@@ -180,6 +192,15 @@ evidence }] }`. The prompt allows `passed` only on evidence the verifier
 established itself and requires `not-checked`, never `passed`, for a criterion
 it cannot establish here. A verdict in the old two-field shape (a verify turn
 started before the upgrade) is still accepted and records no criteria.
+
+Verify judges the committed change and nothing else. A criterion about how the
+work was to be carried out is judged by what the change does (a default or
+guard the diff adds), and is `not-checked` when the change has nothing to show
+for it. What earlier runs did on the host, and whether the worker kept to the
+ticket's constraints, is evidence neither for nor against any criterion. A
+Verify that once failed a criterion because an earlier run had read a
+directory the ticket forbade sent the build to Rework, which no commit can
+satisfy, so it would only loop.
 
 A `not-checked` criterion does not by itself fail a run. No later stage can
 supply a real device, a live provider or a person, so failing would only loop

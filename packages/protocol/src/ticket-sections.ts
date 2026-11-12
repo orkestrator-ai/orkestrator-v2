@@ -1247,6 +1247,14 @@ export function ticketCriteriaSummary(
 export const TICKET_KIND_GUIDANCE =
   "feature (default): what to build, for the board — summary plus acceptance criteria. work-brief: a coordinator's instructions for one worker on how to do the work — problem, context, decisions, constraints, delivery and reporting. Follow-up steers to a running worker are messages, not tickets.";
 
+/**
+ * What an acceptance criterion may say, for every prompt or tool that writes
+ * one. Verify judges the committed change and nothing else, so a criterion
+ * about how the work was carried out (what a worker read or ran on the host)
+ * can only loop through Rework: no commit meets or undoes it.
+ */
+export const ACCEPTANCE_CRITERIA_RULE =
+  "Verify judges each against the committed change alone (its code, tests or docs); rules for how the worker works (what it may read, run or touch) go in constraints.";
+
 /** What a tool's `sections` field says. */
-export const TICKET_SECTIONS_GUIDANCE =
-  "Structured ticket sections; each is optional and replaces only that section (an empty value clears it). acceptanceCriteria: one checkable item per entry; Verify marks each passed, failed or not checked. checks: standard commands (lint, typecheck, tests) that must pass, kept out of acceptanceCriteria. delivery.policy: commit-only, push-no-pr or open-pr; a build reads it when Verify passes, and none means open-pr. constraints: when you limit which files the work may edit, say that updating references to files it deletes, moves or renames, and descriptions it makes untrue, is exempt; workers always repair those. custom: extra titled sections. Do not repeat standing project rules (report format, checks every change runs, PR flow, safety rules); they live in AGENTS.md's Orkestrator section.";
+export const TICKET_SECTIONS_GUIDANCE = `Ticket sections; each is optional and replaces only itself (empty clears it). acceptanceCriteria: one item per entry. ${ACCEPTANCE_CRITERIA_RULE} checks: standard commands (lint, typecheck, tests) that must pass. delivery.policy: commit-only, push-no-pr or open-pr (the default); a build applies it once Verify passes. constraints: a limit on which files the work may edit never covers updating references to files it deletes, moves or renames, or descriptions it makes untrue; say so. custom: extra titled sections. Standing project rules (report format, standard checks, PR flow, safety) live in AGENTS.md's Orkestrator section; do not repeat them.`;

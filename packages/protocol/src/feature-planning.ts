@@ -12,6 +12,7 @@
  */
 
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import { ACCEPTANCE_CRITERIA_RULE } from "./ticket-sections.js";
 
 /* ------------------------------------------------------------------ *
  * Structural plan shapes
@@ -95,6 +96,7 @@ Rules:
 - Use read-only codebase inspection tools when existing implementation details would clarify the feature, such as searching or reading files.
 - When you have enough information, describe the feature exactly as the user has described it and ask for confirmation before generating user stories.
 - When the user confirms, generate user story cards with a title, one-paragraph description, and acceptance criteria.
+- Acceptance criteria: ${ACCEPTANCE_CRITERIA_RULE}
 - Do not write code, edit files, or run mutating commands in this planning chat.
 - When you regenerate or revise stories that already appeared in an earlier state block, reuse that story's exact "id" value. Only omit "id" for brand-new stories you are introducing for the first time.
 - Every assistant response must end with exactly one machine-readable state block.
@@ -124,6 +126,7 @@ Rules:
 - Use read-only codebase inspection tools when existing implementation details would clarify the feature, such as searching or reading files.
 - When you have enough information, describe the feature exactly as the user has described it and ask for confirmation before generating user stories.
 - When the user confirms, generate user story cards with a title, one-paragraph description, and acceptance criteria.
+- Acceptance criteria: ${ACCEPTANCE_CRITERIA_RULE}
 - Do not write code, edit files, or run mutating commands in this planning chat.
 - When you regenerate or revise stories from an earlier accepted state, reuse each story's exact "id" value. Only omit "id" for brand-new stories.
 - Submit the complete current planning state through the assigned workflow result tool, then respond conversationally without a state block.`;

@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { autoPipelineDraftPrompt } from "./auto-pipeline.js";
 import {
+  FEATURE_PLANNER_SYSTEM_PROMPT,
+  FEATURE_PLANNER_TOOL_SYSTEM_PROMPT,
+} from "./feature-planning.js";
+import { PUBLIC_ACTION_INPUTS } from "./public-api-inputs.js";
+import {
+  ACCEPTANCE_CRITERIA_RULE,
+  TICKET_SECTIONS_GUIDANCE,
   DELIVERY_POLICY_LABELS,
   deliveryPolicyChoices,
   effectiveDeliveryPolicy,
@@ -586,5 +594,36 @@ describe("the commit a criterion check judged", () => {
       },
       { id: "ac-4", text: "Four" },
     ]);
+  });
+});
+
+describe("what an acceptance criterion may say", () => {
+  // Verify judges only the committed change. A criterion about how the work was
+  // carried out once failed on what an earlier run had read on the host, and the
+  // build looped through Rework, which no commit could satisfy. Every writer of
+  // criteria carries the rule that keeps such rules in constraints.
+  test("every prompt and tool that writes criteria states the rule", () => {
+    expect(ACCEPTANCE_CRITERIA_RULE).toContain(
+      "Verify judges each against the committed change alone",
+    );
+    const writers = {
+      sectionsGuidance: TICKET_SECTIONS_GUIDANCE,
+      autoPipelineDraft: autoPipelineDraftPrompt(),
+      featurePlanner: FEATURE_PLANNER_SYSTEM_PROMPT,
+      featurePlannerTool: FEATURE_PLANNER_TOOL_SYSTEM_PROMPT,
+      cliCreateText:
+        PUBLIC_ACTION_INPUTS["ticket.create"].input.properties.acceptanceCriteria?.description,
+      cliUpdateText:
+        PUBLIC_ACTION_INPUTS["ticket.update"].input.properties.acceptanceCriteria?.description,
+      cliSectionsList:
+        PUBLIC_ACTION_INPUTS["ticket.create"].input.properties.sections?.properties
+          ?.acceptanceCriteria?.description,
+    };
+    for (const [writer, text] of Object.entries(writers)) {
+      expect({ writer, states: text?.includes(ACCEPTANCE_CRITERIA_RULE) }).toEqual({
+        writer,
+        states: true,
+      });
+    }
   });
 });

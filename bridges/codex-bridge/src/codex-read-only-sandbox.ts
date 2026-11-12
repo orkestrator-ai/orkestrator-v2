@@ -11,11 +11,14 @@
  * it reported itself blocked with no findings.
  *
  * Where the sandbox cannot run, the turn runs without it, the way Claude's
- * read-only turn does (`claudeReadOnlyCommandSandbox`): Codex's `untrusted`
- * approval policy runs only commands Codex itself classifies as read-only
- * without asking, and the bridge declines every approval the turn asks for
- * at once (`readOnlyApprovalRefusal`), so nothing else runs and an unattended
- * review does not wait on a card nobody will answer. The network denial and
+ * read-only turn does (`claudeReadOnlyCommandSandbox`): under Codex's
+ * `untrusted` approval policy the pinned Codex asks before every command no
+ * exec-policy rule allows, reads included, and the bridge answers each
+ * approval itself at once (`approvalGate`). A command the bridge proves only
+ * reads (`codex-read-only-commands.ts`) is approved; every other command, a
+ * file change, a permission request and an MCP tool approval are declined,
+ * so nothing else runs and an unattended review does not wait on a card
+ * nobody will answer. The network denial and
  * the read-only policy are kept; the container firewall still holds the
  * network. The session reports the reason on `/session/:id/status` as
  * `readOnlyCommandSandbox`, which Multi Review shows on the reviewer.
@@ -36,9 +39,17 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 export const CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER =
   "Codex's command sandbox cannot run commands in this container: its Linux sandbox (bubblewrap) needs an unprivileged user namespace, which the container refuses.";
 
-/** Shown in the transcript for each approval a sandbox-off read-only turn declines. */
+/**
+ * Shown in the transcript for an approval a sandbox-off read-only turn
+ * declines that is not a command (a file change, a permission request). A
+ * declined command gets its own reason from `codexReadOnlyCommandVerdict`.
+ */
 export const CODEX_READ_ONLY_APPROVAL_REFUSAL =
-  "Codex asked to run something outside the commands it treats as read-only. Orkestrator declined it: this read-only turn runs without Codex's command sandbox, so it may only read.";
+  "Codex asked for something other than a reading command. Orkestrator declined it: this read-only turn runs without Codex's command sandbox, so it may only read.";
+
+/** Shown for an MCP tool approval a sandbox-off read-only turn declines. */
+export const CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL =
+  "Codex asked to call an MCP tool that needs approval. Orkestrator declined it: this read-only turn runs without Codex's command sandbox, and its approvals never wait on a person.";
 
 /** Docker always creates `/.dockerenv`, Podman `/run/.containerenv`. */
 function runningInContainer(): boolean {

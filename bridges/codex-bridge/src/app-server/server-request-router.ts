@@ -82,8 +82,26 @@ export const KNOWN_SERVER_REQUEST_METHODS: readonly ServerRequestMethod[] = [
   "execCommandApproval",
 ];
 
+/** What `gateApproval` is asked about. */
+export interface ApprovalGateTarget {
+  threadId: string | null;
+  turnId: string | null;
+  method: string;
+  params: unknown;
+}
+
+export type ApprovalGateVerdict = { verdict: "approve" } | { verdict: "refuse"; message: string };
+
+/** The only methods a gate may approve: a command it has checked. */
+const GATE_APPROVABLE_METHODS: ReadonlySet<string> = new Set([
+  "item/commandExecution/requestApproval",
+  "execCommandApproval",
+]);
+
 export type ServerRequestResolution =
   | "declined"
+  /** Approved by `gateApproval` after checking the command only reads. */
+  | "read-only-approved"
   | "cancelled"
   | "unsupported"
   | "protocol-error"
@@ -141,15 +159,15 @@ export interface ServerRequestRouterOptions {
    */
   presentApproval?: (request: ApprovalRequest) => boolean;
   /**
-   * A transcript message when the request's turn refuses every approval
-   * outright (a read-only turn running without Codex's command sandbox), or
-   * undefined to route it as usual. A refused request is declined at once and
-   * never offered to the UI. Synchronous: it runs on the read-loop path.
+   * Answers an approval itself when the request's turn may not reach the UI
+   * (a read-only turn running without Codex's command sandbox), or returns
+   * undefined to route it as usual. `approve` is honoured for a command
+   * approval only (any other method is declined instead); `refuse` declines
+   * at once with this transcript message, and also covers Codex's MCP
+   * tool-approval elicitations. Neither is ever offered to the UI.
+   * Synchronous: it runs on the read-loop path.
    */
-  refuseApproval?: (target: {
-    threadId: string | null;
-    turnId: string | null;
-  }) => string | undefined;
+  gateApproval?: (target: ApprovalGateTarget) => ApprovalGateVerdict | undefined;
   /** Notifies the UI that a parked approval is no longer actionable. */
   onApprovalResolved?: (
     request: ApprovalRequest,
@@ -430,7 +448,7 @@ export class ServerRequestRouter {
       generation,
       // The legacy approval methods spell the thread `conversationId` and the
       // item `callId`, as `describeApproval` reads them. Without the fallback a
-      // legacy request reached `refuseApproval` with no thread and was parked.
+      // legacy request reached `gateApproval` with no thread and was parked.
       threadId: asString(params.threadId) ?? asString(params.conversationId),
       turnId: asString(params.turnId),
       itemId: asString(params.itemId) ?? asString(params.callId),
@@ -489,9 +507,23 @@ export class ServerRequestRouter {
     // responses below should run. If it declines, we fall through to exactly the
     // behaviour that existed before approvals were wired up.
     if (isInteractiveApprovalMethod(method)) {
-      const refusal = this.refusal(record);
-      if (refusal !== undefined) {
-        this.explain(record, refusal);
+      const gate = this.gate(record, request.params);
+      if (gate?.verdict === "approve" && GATE_APPROVABLE_METHODS.has(method)) {
+        return this.finish(key, record, "read-only-approved", () =>
+          this.options.respond(
+            generation,
+            request.id,
+            buildApprovalResponse(method, "approve", request.params).result,
+          ),
+        );
+      }
+      if (gate !== undefined) {
+        this.explain(
+          record,
+          gate.verdict === "refuse"
+            ? gate.message
+            : "Orkestrator declined this request because a read-only turn may only run commands it has checked.",
+        );
         return this.finish(key, record, "declined", () =>
           this.options.respond(
             generation,
@@ -502,6 +534,26 @@ export class ServerRequestRouter {
       }
       if (this.options.presentApproval && this.tryPark(key, record, method, request, generation)) {
         return;
+      }
+    }
+    if (method === "mcpServer/elicitation/request") {
+      // Codex raises an MCP tool approval as an elicitation, so a turn whose
+      // approvals may not reach a tab refuses it here, before it can park.
+      const gate = this.gate(record, request.params);
+      if (gate !== undefined) {
+        this.explain(
+          record,
+          gate.verdict === "refuse"
+            ? gate.message
+            : "Orkestrator declined this MCP request because a read-only turn may only run commands it has checked.",
+        );
+        return this.finish(key, record, "declined", () =>
+          this.options.respond(generation, request.id, {
+            action: "decline",
+            content: null,
+            _meta: null,
+          }),
+        );
       }
     }
     if (
@@ -995,16 +1047,25 @@ export class ServerRequestRouter {
     log.error("app-server.invariant-violation", { method, detail });
   }
 
-  /** `refuseApproval`'s answer; one that throws refuses with no message of its own. */
-  private refusal(record: ServerRequestRecord): string | undefined {
-    if (!this.options.refuseApproval) return undefined;
+  /** `gateApproval`'s answer; one that throws refuses with no message of its own. */
+  private gate(record: ServerRequestRecord, params: unknown): ApprovalGateVerdict | undefined {
+    if (!this.options.gateApproval) return undefined;
     try {
-      return this.options.refuseApproval({ threadId: record.threadId, turnId: record.turnId });
+      return this.options.gateApproval({
+        threadId: record.threadId,
+        turnId: record.turnId,
+        method: record.method,
+        params,
+      });
     } catch (error) {
       log.error("approval.refusal-check-failed", { error: formatLogError(error) });
       // Deny rather than approve: the check exists to stop a turn that may
       // only read, and a broken check cannot say this one may do more.
-      return "Orkestrator declined this request because it could not check the turn's read-only boundary.";
+      return {
+        verdict: "refuse",
+        message:
+          "Orkestrator declined this request because it could not check the turn's read-only boundary.",
+      };
     }
   }
 

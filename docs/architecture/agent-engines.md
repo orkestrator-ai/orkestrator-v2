@@ -1105,7 +1105,8 @@ Linux without a working bubblewrap) runs with the sandbox off and reports
 `sandbox: "none"` with the probe's reason; see "Read-only review turns without
 a working sandbox" in [`coordinator.md`](coordinator.md). A Codex read-only
 turn in a container likewise runs without Codex's sandbox, under `untrusted`
-with every approval declined, and reports why on `/session/:id/status`; see
+with the bridge approving only commands it proves read and declining every
+other approval, and reports why on `/session/:id/status`; see
 "Codex read-only turns in a container" there.
 
 ### Approval modes

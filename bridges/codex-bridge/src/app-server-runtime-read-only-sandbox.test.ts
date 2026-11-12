@@ -1,8 +1,10 @@
 /**
  * A read-only turn where Codex's command sandbox cannot run (an environment's
  * container): it runs without the sandbox under `untrusted`, every approval it
- * asks for is declined at once, and `/session/:id/status` says so until the
- * next turn. `codex-read-only-sandbox.test.ts` covers the decision itself.
+ * asks for is answered at once (a command proven to only read is approved,
+ * anything else declined), and `/session/:id/status` says so until the next
+ * turn. `codex-read-only-sandbox.test.ts` covers the decision itself and
+ * `codex-read-only-commands.test.ts` the command check.
  */
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -13,7 +15,10 @@ import {
   type Harness,
   threadPayload,
 } from "./app-server-runtime-test-harness.js";
-import { CODEX_READ_ONLY_APPROVAL_REFUSAL } from "./codex-read-only-sandbox.js";
+import {
+  CODEX_READ_ONLY_APPROVAL_REFUSAL,
+  CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL,
+} from "./codex-read-only-sandbox.js";
 
 const REASON = "Codex's command sandbox cannot run commands in this container.";
 
@@ -133,7 +138,158 @@ describe("read-only turn without Codex's command sandbox", () => {
     expect(h.child().stdin.lines.join("")).toContain('"decision":"decline"');
     expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+    expect(JSON.stringify(h.events)).toContain("`rm` is not a reading program");
+  });
+
+  // The pinned Codex asks under `untrusted` for every command no exec-policy
+  // rule allows, reads included; declining those left a reviewer unable to
+  // read anything.
+  test("approves a command that only reads, without offering it to a person", async () => {
+    const h = await sandboxOffInContainer();
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await h.drain();
+
+    const reads = [
+      "/bin/bash -lc 'cat review-package.json'",
+      "/bin/bash -lc 'git diff origin/main...HEAD | head -200'",
+      "/bin/bash -lc \"sed -n '1,80p' src/app.ts\"",
+    ];
+    reads.forEach((command, index) =>
+      h.child().stdout.pushMessage({
+        jsonrpc: "2.0",
+        id: 9200 + index,
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: `item-${index}`,
+          startedAtMs: 1,
+          command,
+          cwd: "/tmp/ws",
+        },
+      }),
+    );
+    await h.drain();
+
+    for (const index of reads.keys()) {
+      expect(answerTo(h, 9200 + index)).toContain('"decision":"accept"');
+    }
+    expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+  });
+
+  test("declines a read that also asks for network access, and input to a running process", async () => {
+    const h = await sandboxOffInContainer();
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await h.drain();
+
+    const base = { threadId: "thread-1", turnId: "turn-1", startedAtMs: 1, cwd: "/tmp/ws" };
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9210,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        ...base,
+        itemId: "item-net",
+        command: "cat a",
+        networkApprovalContext: { host: "example.com", protocol: "https" },
+      },
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9211,
+      method: "item/commandExecution/requestApproval",
+      params: { ...base, itemId: "item-stdin", kind: "writeStdin", command: "cat a" },
+    });
+    await h.drain();
+
+    expect(answerTo(h, 9210)).toContain('"decision":"decline"');
+    expect(answerTo(h, 9211)).toContain('"decision":"decline"');
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+  });
+
+  test("declines file-change and permission requests through the thread's own marker", async () => {
+    const h = await sandboxOffInContainer();
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await h.drain();
+
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9220,
+      method: "item/fileChange/requestApproval",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-patch", startedAtMs: 1 },
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9221,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-perm",
+        startedAtMs: 1,
+        permissions: { network: { enabled: true }, fileSystem: { write: ["/tmp/ws"] } },
+      },
+    });
+    await h.drain();
+
+    expect(answerTo(h, 9220)).toContain('"decision":"decline"');
+    const permissions = answerTo(h, 9221)!;
+    expect(permissions).toContain('"permissions":{}');
+    expect(permissions).not.toContain('"network"');
+    expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
     expect(JSON.stringify(h.events)).toContain(CODEX_READ_ONLY_APPROVAL_REFUSAL);
+  });
+
+  test("declines an MCP tool approval at once instead of parking it on a tab", async () => {
+    const h = await sandboxOffInContainer();
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await h.drain();
+
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9230,
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "docs",
+        mode: "form",
+        message: "Allow docs.search?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "search" },
+      },
+    });
+    await h.drain();
+
+    expect(answerTo(h, 9230)).toContain('"action":"decline"');
+    expect(h.events.some((event) => event.type === "session.interaction-requested")).toBe(false);
+    expect(JSON.stringify(h.events)).toContain(CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL);
   });
 
   test("the next ordinary turn restores the session's own settings and approvals", async () => {
@@ -334,6 +490,133 @@ describe("read-only turn without Codex's command sandbox", () => {
     });
     expect(outcome).toMatchObject({ ok: false });
     expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toBeUndefined();
+  });
+
+  // A lost turn/start response that `thread/read` proves ran to its end: that
+  // turn ran under its own sandbox decision, so the status follows it.
+  test("a lost dispatch reconciled as completed reports the read-only turn that ran", async () => {
+    const h = await sandboxOffInContainer({
+      "turn/start": () => {
+        throw new Error("write failed mid-request");
+      },
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-review",
+              status: "completed",
+              items: [{ type: "userMessage", clientId: "review-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toEqual({
+      state: "off",
+      reason: REASON,
+    });
+  });
+
+  test("a lost ordinary dispatch reconciled as completed clears the earlier warning", async () => {
+    let loseDispatch = false;
+    const h = await sandboxOffInContainer({
+      "turn/start": () => {
+        if (loseDispatch) throw new Error("write failed mid-request");
+        return { turn: { id: "turn-1" } };
+      },
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-fix",
+              status: "completed",
+              items: [{ type: "userMessage", clientId: "fix-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+    await completeTurn(h, "turn-1");
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toBeDefined();
+
+    loseDispatch = true;
+    await h.runtime.prompt(sessionId, {
+      prompt: "Fix the findings",
+      requestId: "fix-1",
+      attachments: [],
+    });
+    expect(h.runtime.getStatus(sessionId)?.readOnlyCommandSandbox).toBeUndefined();
+  });
+
+  // The thread is started (or reloaded) and the turn dispatched from separate
+  // configuration reads; the sandbox decision must not change between them.
+  test("decides the sandbox once per dispatch, so thread and turn agree", async () => {
+    let decisions = 0;
+    const h = await harness(
+      {},
+      {
+        // The first answer only: a policy change that lands while
+        // thread/start is in flight would answer differently afterwards.
+        readOnlyCommandSandboxOff: () => (++decisions === 1 ? REASON : undefined),
+      },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+
+    expect(decisions).toBe(1);
+    const thread = h.child().requests.find((request) => request.method === "thread/start")!;
+    expect(thread.params.sandbox).toBe("danger-full-access");
+    expect(thread.params.approvalPolicy).toBe("untrusted");
+    const turn = turnStarts(h)[0]!;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turn.params.approvalPolicy).toBe("untrusted");
+  });
+
+  test("an attached thread started for an ordinary turn is reloaded for a sandbox-off one", async () => {
+    const h = await sandboxOffInContainer();
+    // Network already denied, so a read-only turn changes nothing else about
+    // the thread: only the sandbox decision can force the reload.
+    const policy: NativeAgentExecutionPolicy = {
+      ...containerPolicy,
+      capabilityPolicy: { deny: ["network"] },
+    };
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy });
+    await h.runtime.prompt(sessionId, { prompt: "Prepare", requestId: "prepare", attachments: [] });
+    await completeTurn(h, "turn-1");
+    const resumes = () =>
+      h.child().requests.filter((request) => request.method === "thread/resume");
+    const before = resumes().length;
+
+    await h.runtime.prompt(sessionId, {
+      prompt: "Review the package",
+      requestId: "review-1",
+      attachments: [],
+      readOnly: true,
+    });
+
+    expect(resumes().length).toBe(before + 1);
+    expect(resumes().at(-1)!.params.sandbox).toBe("danger-full-access");
+    expect(resumes().at(-1)!.params.approvalPolicy).toBe("untrusted");
   });
 
   test("a failed ordinary turn keeps reporting the last read-only turn that ran", async () => {

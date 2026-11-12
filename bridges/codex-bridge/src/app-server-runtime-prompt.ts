@@ -416,10 +416,19 @@ export class CodexRuntimePrompt {
     // every command before it starts; such a turn runs only what Codex treats
     // as read-only and the bridge declines everything else
     // (`codex-read-only-sandbox.ts`).
-    const sandboxOffFor =
-      this.ctx.options.readOnlyCommandSandboxOff ?? codexReadOnlyCommandSandboxOff;
+    //
+    // Decided once per dispatch, not on every `promptConfig()` read: the
+    // thread is started (or reloaded) and the turn dispatched from separate
+    // reads, and a policy change accepted between them must not leave the
+    // thread on one sandbox and the turn on the other. The decision is also
+    // in the thread reload key (`promptThreadConfig`), so an attached thread
+    // started under the other decision is reloaded before the turn.
+    const sandboxOff = input.readOnly
+      ? (this.ctx.options.readOnlyCommandSandboxOff ?? codexReadOnlyCommandSandboxOff)(
+          session.config,
+        )
+      : undefined;
     const promptConfig = (): EngineTurnConfig => {
-      const sandboxOff = input.readOnly ? sandboxOffFor(session.config) : undefined;
       return {
         ...session.config,
         ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
@@ -1035,6 +1044,9 @@ export class CodexRuntimePrompt {
           withdrawReadOnlySandboxOff(context);
           retractProvisionalMessages();
         }
+        // A turn proven to have run to its end ran under this turn's sandbox
+        // decision, so the session reports it, as an accepted turn would.
+        if (ambiguousResolution === "terminal") publishReadOnlySandboxOff();
       }
 
       if (ambiguousResolution === "attached" || ambiguousResolution === "recovering") {

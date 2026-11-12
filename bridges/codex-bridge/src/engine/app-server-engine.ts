@@ -51,6 +51,8 @@ import {
 } from "../app-server/process-supervisor.js";
 import {
   ServerRequestRouter,
+  type ApprovalGateTarget,
+  type ApprovalGateVerdict,
   type ParkedHoldOutcome,
 } from "../app-server/server-request-router.js";
 import type {
@@ -899,10 +901,7 @@ export class AppServerEngine implements CodexEngine {
   private accountConnectorRetryGeneration?: EngineGeneration;
   private accountConnectorRetrySequence?: number;
   private approvalHandler?: (request: ApprovalRequest) => boolean;
-  private approvalRefusalHandler?: (target: {
-    threadId: string | null;
-    turnId: string | null;
-  }) => string | undefined;
+  private approvalGateHandler?: (target: ApprovalGateTarget) => ApprovalGateVerdict | undefined;
   private approvalResolvedHandler?: (
     request: ApprovalRequest,
     decision: ApprovalResolvedDecision,
@@ -991,7 +990,7 @@ export class AppServerEngine implements CodexEngine {
        * pre-approval behaviour — so attaching a UI is purely additive.
        */
       presentApproval: (request) => this.approvalHandler?.(request) === true,
-      refuseApproval: (target) => this.approvalRefusalHandler?.(target),
+      gateApproval: (target) => this.approvalGateHandler?.(target),
       onApprovalResolved: (request, decision, resolution) =>
         this.approvalResolvedHandler?.(request, decision, resolution),
       presentInteraction: (request) => this.interactionHandler?.(request) === true,
@@ -1017,12 +1016,12 @@ export class AppServerEngine implements CodexEngine {
       decision: ApprovalResolvedDecision,
       resolution: ApprovalResolution,
     ) => void;
-    /** Declines a request outright, with this transcript message; see the router. */
-    refuse?: (target: { threadId: string | null; turnId: string | null }) => string | undefined;
+    /** Answers a request without the UI (approve a checked read, or refuse); see the router. */
+    gate?: (target: ApprovalGateTarget) => ApprovalGateVerdict | undefined;
   }): void {
     this.approvalHandler = handlers.present;
     this.approvalResolvedHandler = handlers.resolved;
-    this.approvalRefusalHandler = handlers.refuse;
+    this.approvalGateHandler = handlers.gate;
   }
 
   setInteractionHandlers(handlers: {

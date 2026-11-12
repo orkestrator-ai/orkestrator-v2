@@ -1466,38 +1466,60 @@ and bubblewrap is refused there all the same), or when the session's policy
 is a container one (`sandbox: "container"`, or `interactive-container` under
 a sandbox override). A host session that can see a marker (a Podman toolbox
 or distrobox creates `/run/.containerenv`) is therefore treated as a
-container too. Codex then runs without asking only the
-commands it classifies as read-only (`cat`, `ls`, `rg`, `sed -n`, `git
-diff`/`log`/`show` and the like), and the bridge declines every approval
-the turn asks for at once rather than offering it to a tab
-(`refuseApproval` on the server-request router, `approvalRefusal` in
-`app-server-runtime-approvals.ts`), including the legacy
-`execCommandApproval` and `applyPatchApproval`, which name their thread
-`conversationId`. The refusal is armed on the thread before every
-`turn/start`, a retry on a replacement thread included. So nothing else runs, and an
-unattended review never waits on a card. The read-only turn policy, the
+container too.
+
+Under `untrusted` the pinned Codex (0.167.0) asks for approval before every
+command that no exec-policy rule allows, reads included
+(`exec_policy.rs` returns `Prompt` for an unmatched command), so the bridge
+answers every approval the turn asks for itself, at once, rather than
+offering it to a tab (`gateApproval` on the server-request router,
+`approvalGate` in `app-server-runtime-approvals.ts`). A command that
+`codexReadOnlyCommandVerdict`
+(`bridges/codex-bridge/src/codex-read-only-commands.ts`) proves only reads
+is approved: an allowlist of reading programs (`cat`, `rg`, `grep`, `ls`,
+`find`, `head`, `sed -n 'N,Mp'`, `git status`/`diff`/`log`/`show` and the
+like), chained with `|`, `&&`, `||` or `;`, with literal arguments only. A
+command with redirection, substitution, variables, globs, escapes or an
+unlisted program, a file change, a permission request, input to a running
+process, a command that asks for network access and an MCP tool approval
+(`mcpServer/elicitation/request` with `codex_approval_kind: "mcp_tool_call"`)
+are declined with a transcript note. The legacy `execCommandApproval` and
+`applyPatchApproval`, which name their thread `conversationId`, are
+answered the same way. The gate is armed on the thread before every
+`turn/start`, a retry on a replacement thread included. So nothing else
+runs, and an unattended review never waits on a card. The sandbox decision
+is made once per dispatch, so the thread and its turn always agree, and it
+is part of the thread reload key: an attached thread started under the
+other decision is reloaded before the turn. The read-only turn policy, the
 hosted search denial and the dropped repository instructions are
 unchanged. With the sandbox off, `networkAccessEnabled: false` no longer
 applies to commands, so the container firewall is the network boundary.
 
-Unlike Claude's hook, Codex's read-only list admits `git diff`, `git log`
-and `git show`, so a repository's Git configuration can still run its
-helpers. That is acceptable only because the fallback is limited to
-containers, where every other turn already runs with full access and the
-container is the boundary. A Linux host, macOS and a coordinator (which
+Unlike Claude's hook, which admits Git only behind a command sandbox, the
+gate admits `git diff`, `git log`, `git show` and the other inspection
+subcommands, so helpers named in the checkout's local `.git/config`
+(`diff.external`, `core.fsmonitor`) can still run. That is acceptable only
+because the fallback is limited to containers, where every other turn
+already runs with full access and the container is the boundary. The
+gate's tables follow the Claude bridge's coordinator allowlist
+(`read-only-policy.ts`) but are kept in the Codex bridge: Codex sends a
+shell command (`/bin/bash -lc '<script>'`), so this check lexes POSIX
+quoting, and it drops `awk`, whose quoted program could call `system()`. A Linux host, macOS and a coordinator (which
 runs under its launcher's permission profile) keep Codex's sandbox. A Linux
 host whose policy refuses bubblewrap's namespace is not probed for Codex
 yet.
 
 `/session/:id/status` carries `readOnlyCommandSandbox: { state: "off",
-reason }` from the moment such a turn is accepted (or may be running after an
-ambiguous dispatch) until the session's next turn that runs; a dispatch that
-proved not to run changes neither the status nor the thread's refusal. It
+reason }` from the moment such a turn is accepted (or may be running, or is
+proven to have run to its end, after an ambiguous dispatch) until the
+session's next turn that runs; a dispatch that proved not to run changes
+neither the status nor the thread's gate. It
 has the same shape as Claude's, so
 the backend keeps it as `commandSandboxOff` on the reviewer and the
 consolidation step, and Multi Review shows the warning note. Proved by
-`app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`
-and the `refuseApproval` cases of `server-request-router.test.ts` against a
+`app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`,
+`codex-read-only-commands.test.ts` and the `gateApproval` cases of
+`server-request-router.test.ts` against a
 scripted app-server. No real Codex turn in a container has run with it yet
 (to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
 

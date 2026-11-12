@@ -1548,13 +1548,14 @@ describe("pausing a parked deadline", () => {
   });
 });
 
-describe("refuseApproval", () => {
+describe("gateApproval", () => {
   test.each(INTERACTIVE_APPROVAL_METHODS)(
     "%s is declined at once and never offered to the UI",
     async (method) => {
       const offered: ApprovalRequest[] = [];
       const h = harness({
-        refuseApproval: ({ threadId }) => (threadId === "thread-1" ? "Read-only turn." : undefined),
+        gateApproval: ({ threadId }) =>
+          threadId === "thread-1" ? { verdict: "refuse", message: "Read-only turn." } : undefined,
         presentApproval: (approval) => {
           offered.push(approval);
           return true;
@@ -1575,7 +1576,7 @@ describe("refuseApproval", () => {
   test("a request the check does not refuse is offered as usual", async () => {
     const offered: ApprovalRequest[] = [];
     const h = harness({
-      refuseApproval: () => undefined,
+      gateApproval: () => undefined,
       presentApproval: (approval) => {
         offered.push(approval);
         return true;
@@ -1617,9 +1618,11 @@ describe("refuseApproval", () => {
     const offered: ApprovalRequest[] = [];
     const checked: Array<{ threadId: string | null }> = [];
     const h = harness({
-      refuseApproval: (target) => {
+      gateApproval: (target) => {
         checked.push({ threadId: target.threadId });
-        return target.threadId === "thread-1" ? "Read-only turn." : undefined;
+        return target.threadId === "thread-1"
+          ? { verdict: "refuse", message: "Read-only turn." }
+          : undefined;
       },
       presentApproval: (approval) => {
         offered.push(approval);
@@ -1640,12 +1643,157 @@ describe("refuseApproval", () => {
     expect(h.router.getPending()).toHaveLength(0);
   });
 
+  test("an approve verdict accepts a command approval without offering it", async () => {
+    const offered: ApprovalRequest[] = [];
+    const seen: Array<{ method: string; params: unknown }> = [];
+    const h = harness({
+      gateApproval: ({ method, params }) => {
+        seen.push({ method, params });
+        return { verdict: "approve" };
+      },
+      presentApproval: (approval) => {
+        offered.push(approval);
+        return true;
+      },
+    });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    expect(seen).toEqual([
+      {
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1" },
+      },
+    ]);
+    expect(offered).toHaveLength(0);
+    expect(h.answers).toEqual([{ generation: 1, id: "srv-1", result: { decision: "accept" } }]);
+    expect(h.transcript).toHaveLength(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("read-only-approved");
+  });
+
+  test("a legacy command approval approved by the gate answers `approved`", async () => {
+    const h = harness({
+      gateApproval: () => ({ verdict: "approve" }),
+      presentApproval: () => true,
+    });
+    h.router.handle(
+      {
+        kind: "server-request",
+        id: "srv-legacy",
+        method: "execCommandApproval",
+        params: { conversationId: "thread-1", callId: "call-1", command: ["cat", "a"] },
+      },
+      1,
+    );
+    await settle();
+
+    expect(h.answers).toEqual([
+      { generation: 1, id: "srv-legacy", result: { decision: "approved" } },
+    ]);
+  });
+
+  // Only a checked command may be approved: a gate that answers `approve` for
+  // a patch or a permission grant is declined instead.
+  test.each([
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "applyPatchApproval",
+  ])("an approve verdict for %s is declined", async (method) => {
+    const offered: ApprovalRequest[] = [];
+    const h = harness({
+      gateApproval: () => ({ verdict: "approve" }),
+      presentApproval: (approval) => {
+        offered.push(approval);
+        return true;
+      },
+    });
+    h.router.handle(request(method), 1);
+    await settle();
+
+    expect(offered).toHaveLength(0);
+    expect(h.answers).toHaveLength(1);
+    expect(JSON.stringify(h.answers[0]!.result)).not.toMatch(
+      /"accept|approved|"network"|"fileSystem"/,
+    );
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("declined");
+  });
+
+  test("a refused MCP elicitation is declined at once and never parked", async () => {
+    const parked: unknown[] = [];
+    const h = harness({
+      gateApproval: ({ method }) =>
+        method === "mcpServer/elicitation/request"
+          ? { verdict: "refuse", message: "No MCP approvals here." }
+          : undefined,
+      presentInteraction: (interaction) => {
+        parked.push(interaction);
+        return true;
+      },
+    });
+    h.router.handle(
+      {
+        kind: "server-request",
+        id: "srv-mcp",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "docs",
+          mode: "form",
+          message: "Allow the tool?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "search" },
+        },
+      },
+      1,
+    );
+    await settle();
+
+    expect(parked).toHaveLength(0);
+    expect(h.answers).toEqual([
+      { generation: 1, id: "srv-mcp", result: { action: "decline", content: null, _meta: null } },
+    ]);
+    expect(h.transcript).toEqual([{ threadId: "thread-1", message: "No MCP approvals here." }]);
+    expect(h.router.getPending()).toHaveLength(0);
+  });
+
+  test("an MCP elicitation the gate does not answer is parked as usual", async () => {
+    const parked: unknown[] = [];
+    const h = harness({
+      gateApproval: () => undefined,
+      presentInteraction: (interaction) => {
+        parked.push(interaction);
+        return true;
+      },
+    });
+    h.router.handle(
+      {
+        kind: "server-request",
+        id: "srv-mcp",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "docs",
+          mode: "form",
+          message: "Which project?",
+          requestedSchema: { type: "object", properties: {} },
+        },
+      },
+      1,
+    );
+    await settle();
+
+    expect(parked).toHaveLength(1);
+    expect(h.answers).toHaveLength(0);
+  });
+
   test("a check that throws declines rather than approving, logs and explains", async () => {
     const outputs: LogOutput[] = [];
     configureLogger({ sink: (output) => void outputs.push(output) });
     try {
       const h = harness({
-        refuseApproval: () => {
+        gateApproval: () => {
           throw new Error("boom");
         },
         presentApproval: () => true,

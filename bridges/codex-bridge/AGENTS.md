@@ -231,10 +231,17 @@ replay shows it as the card, never as a message the user typed. See
   sandbox cannot run. In an environment's container bubblewrap cannot create
   its user namespace, so every command fails and a reviewer reads nothing.
   There the turn runs `danger-full-access` under `untrusted`, and the router
-  declines every approval it asks for at once (`refuseApproval`); never let
-  such a turn's approvals reach a tab or the default auto-approve path. Arm
-  the thread's refusal before every `turn/start` (a retry may dispatch on a
-  replacement context), and key a legacy approval by its `conversationId`.
+  answers every approval it asks for at once (`gateApproval`): a command
+  `codexReadOnlyCommandVerdict` (`codex-read-only-commands.ts`) proves only
+  reads is approved, and every other command, file change, permission
+  request and MCP tool-approval elicitation is declined. Never rely on
+  `untrusted` exempting reads: the pinned Codex asks for every command no
+  exec-policy rule allows. Never let such a turn's approvals reach a tab or
+  the default auto-approve path, and never widen the check into a denylist.
+  Decide the sandbox once per dispatch, so the thread and the turn agree,
+  and keep the decision in `promptThreadConfig`. Arm the thread's gate
+  before every `turn/start` (a retry may dispatch on a replacement context),
+  and key a legacy approval by its `conversationId`.
   The decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
   which counts the container marker files (`/.dockerenv`,
   `/run/.containerenv`) for every session, whatever sandbox its policy names,

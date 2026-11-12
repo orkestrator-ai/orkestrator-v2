@@ -35,7 +35,6 @@ import {
   namespaceStatus,
   newOperationId,
   PUBLIC_OPERATION_RECORD_VERSION,
-  recordBytes,
   requestKey,
   type PublicAuthority,
   type PublicOperationIndex,
@@ -55,11 +54,27 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 
-interface NamespaceFile {
-  version: 1;
-  namespace: string;
-  operations: PublicOperationRecord[];
+/** One operation row as last read, so a later read re-parses only changed rows. */
+interface CachedOperationRow {
+  value: string;
+  record: PublicOperationRecord;
+  bytes: number;
 }
+
+/**
+ * A namespace's validated records at one committed revision. `records` is
+ * shared by every read until the revision moves: code in this repository
+ * never mutates a record it loaded, and every record it hands out is a copy.
+ */
+interface NamespaceRecords {
+  revision: number | null;
+  rows: Map<string, CachedOperationRow>;
+  records: readonly PublicOperationRecord[];
+  bytes: number;
+}
+
+/** Namespaces whose parsed rows are kept; more than a retention window ever holds. */
+const MAX_CACHED_NAMESPACES = 32;
 
 export interface AdmitPublicOperationInput {
   authority: PublicAuthority;
@@ -83,8 +98,8 @@ export type PublicOperationLookup =
 
 /**
  * Durable public operation receipts and the revision-checked edits public
- * actions make. Records live in one file per namespace under
- * `public-operations/`, guarded by a cross-process lock; the admission check,
+ * actions make. Records live in one store per namespace under
+ * `public-operations/`, one row per record, guarded by a cross-process lock; the admission check,
  * the key reservation and the record publication happen in one critical
  * section before any side effect runs.
  */
@@ -197,48 +212,129 @@ export class PublicOperationsRepository {
     return value;
   }
 
-  private async loadNamespaceRecords(namespace: string): Promise<PublicOperationRecord[]> {
-    const value = await this.readStrictJson<NamespaceFile>(
-      this.publicOperationNamespaceFile(namespace),
-    );
-    if (!value) return [];
-    if (!Array.isArray(value.operations)) {
-      throw new PublicActionError(
-        "internal-error",
-        "A public operation namespace file is malformed",
-      );
-    }
-    if (
-      value.operations.some(
-        (record) =>
-          !isPublicOperationRecord(record) ||
-          !isPublicActionName(record.action) ||
-          !isPublicNamespace(record.namespace) ||
-          !isPublicRequestId(record.requestId) ||
-          record.namespace !== namespace ||
-          namespaceOfOperationId(record.operationId) !== namespace ||
-          record.requestKey !==
-            requestKey(record.authority, record.action, record.scope, record.requestId) ||
-          !/^[a-f0-9]{64}$/.test(record.fingerprint),
-      )
-    ) {
-      throw new PublicActionError(
-        "internal-error",
-        "A public operation namespace is malformed; admissions are refused until it is repaired",
-      );
-    }
-    return value.operations as PublicOperationRecord[];
+  private readonly namespaceCache = new Map<string, NamespaceRecords>();
+
+  /**
+   * A namespace's records, validated. The result is shared: never mutate it
+   * or a record in it. Each record is its own row (`storage-public-operation-rows.ts`),
+   * so a read after one admission or state change parses and checks that one
+   * row and reuses the others; at an unchanged revision it parses nothing.
+   */
+  private async loadNamespaceRecords(namespace: string): Promise<readonly PublicOperationRecord[]> {
+    return (await this.loadNamespace(namespace)).records;
   }
 
-  private async saveNamespaceRecords(
+  private async loadNamespace(namespace: string): Promise<NamespaceRecords> {
+    const file = this.publicOperationNamespaceFile(namespace);
+    const serialized = this.context.loadStoreSerialized(file);
+    if (serialized === null) {
+      this.namespaceCache.delete(namespace);
+      return { revision: null, rows: new Map(), records: [], bytes: 0 };
+    }
+    if (serialized === undefined || serialized.mode !== "rows") {
+      // Inside an atomic scope that buffers this store, or a store held whole
+      // (an unreadable document carried forward, or one whose records could
+      // not be keyed): read it strictly, and keep nothing.
+      const value = await this.readStrictJson<unknown>(file);
+      return this.validateNamespace(namespace, null, value === null ? [] : this.rowsOf(value));
+    }
+    const cached = this.namespaceCache.get(namespace);
+    if (cached && cached.revision === serialized.revision) return cached;
+    const rows: Array<{ key: string; value: string; reuse?: CachedOperationRow }> = [];
+    for (const row of serialized.rows) {
+      if (row.collection !== "") this.malformed();
+      const previous = cached?.rows.get(row.key);
+      rows.push({
+        key: row.key,
+        value: row.value,
+        ...(previous?.value === row.value ? { reuse: previous } : {}),
+      });
+    }
+    const loaded = this.validateNamespace(namespace, serialized.revision, rows);
+    this.namespaceCache.delete(namespace);
+    this.namespaceCache.set(namespace, loaded);
+    if (this.namespaceCache.size > MAX_CACHED_NAMESPACES) {
+      this.namespaceCache.delete(this.namespaceCache.keys().next().value!);
+    }
+    return loaded;
+  }
+
+  /** A whole store's value as rows to validate; anything but a record map is malformed. */
+  private rowsOf(value: unknown): Array<{ key: string; value: string }> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) this.malformed();
+    return Object.entries(value as Record<string, unknown>).map(([key, record]) => ({
+      key,
+      value: JSON.stringify(record),
+    }));
+  }
+
+  private validateNamespace(
     namespace: string,
-    operations: PublicOperationRecord[],
-  ): Promise<void> {
-    await this.context.saveSensitiveJson(this.publicOperationNamespaceFile(namespace), {
-      version: 1,
-      namespace,
-      operations,
-    } satisfies NamespaceFile);
+    revision: number | null,
+    rows: Array<{ key: string; value: string; reuse?: CachedOperationRow }>,
+  ): NamespaceRecords {
+    const byKey = new Map<string, CachedOperationRow>();
+    const records: PublicOperationRecord[] = [];
+    let bytes = 0;
+    for (const row of rows) {
+      let entry = row.reuse;
+      if (!entry) {
+        let record: unknown;
+        try {
+          record = JSON.parse(row.value) as unknown;
+        } catch {
+          throw new PublicActionError(
+            "internal-error",
+            "The public operation store is unreadable; admissions are refused until it is repaired",
+          );
+        }
+        if (!this.isNamespaceRecord(namespace, row.key, record)) this.malformed();
+        entry = { value: row.value, record, bytes: Buffer.byteLength(row.value) };
+      }
+      byKey.set(row.key, entry);
+      records.push(entry.record);
+      bytes += entry.bytes;
+    }
+    return { revision, rows: byKey, records, bytes };
+  }
+
+  private isNamespaceRecord(
+    namespace: string,
+    key: string,
+    record: unknown,
+  ): record is PublicOperationRecord {
+    return (
+      isPublicOperationRecord(record) &&
+      record.operationId === key &&
+      isPublicActionName(record.action) &&
+      isPublicNamespace(record.namespace) &&
+      isPublicRequestId(record.requestId) &&
+      record.namespace === namespace &&
+      namespaceOfOperationId(record.operationId) === namespace &&
+      record.requestKey ===
+        requestKey(record.authority, record.action, record.scope, record.requestId) &&
+      /^[a-f0-9]{64}$/.test(record.fingerprint)
+    );
+  }
+
+  private malformed(): never {
+    throw new PublicActionError(
+      "internal-error",
+      "A public operation namespace is malformed; admissions are refused until it is repaired",
+    );
+  }
+
+  /**
+   * Writes one record's row. The caller holds the store lock and has loaded
+   * the namespace strictly first, so an unreadable namespace refuses before
+   * anything is written.
+   */
+  private saveNamespaceRecord(record: PublicOperationRecord): void {
+    this.context.updateSensitiveStoreRow(
+      this.publicOperationNamespaceFile(record.namespace),
+      record.operationId,
+      () => ({ result: undefined, value: record }),
+    );
   }
 
   private async indexWithCurrent(now: number): Promise<PublicOperationIndex> {
@@ -304,7 +400,7 @@ export class PublicOperationsRepository {
             { details: { operationId: existing.operationId, namespace: existing.namespace } },
           );
         }
-        return { record: existing, replayed: true };
+        return { record: structuredClone(existing), replayed: true };
       }
       if (input.action === "environment.exec" && input.resources?.environmentId) {
         let active = 0;
@@ -336,8 +432,7 @@ export class PublicOperationsRepository {
           { details: { namespace: targetEntry.id } },
         );
       }
-      const records = await this.loadNamespaceRecords(targetEntry.id);
-      const bytes = records.reduce((total, record) => total + recordBytes(record), 0);
+      const { records, bytes } = await this.loadNamespace(targetEntry.id);
       if (
         records.length >= this.publicOperationLimits.maxOperationsPerNamespace ||
         bytes >= this.publicOperationLimits.maxNamespaceBytes
@@ -368,7 +463,7 @@ export class PublicOperationsRepository {
         createdAt: timestamp,
         updatedAt: timestamp,
       });
-      await this.saveNamespaceRecords(targetEntry.id, [...records, record]);
+      this.saveNamespaceRecord(record);
       return { record, replayed: false };
     });
   }
@@ -386,17 +481,18 @@ export class PublicOperationsRepository {
     if (!namespace) return null;
     return this.enqueuePublicOperationMutation(async () => {
       const records = await this.loadNamespaceRecords(namespace);
-      const position = records.findIndex(
+      const current = records.find(
         (record) => isPublicOperationRecord(record) && record.operationId === operationId,
       );
-      if (position < 0) return null;
-      const current = records[position]!;
+      if (!current) return null;
       const next = update(structuredClone(current));
-      if (!next) return current;
-      if (!isActiveRecord(current) && isActiveRecord(next)) return current;
+      if (!next) return structuredClone(current);
+      if (!isActiveRecord(current) && isActiveRecord(next)) return structuredClone(current);
       const bounded = boundRecord({ ...next, updatedAt: new Date().toISOString() });
-      records[position] = bounded;
-      await this.saveNamespaceRecords(namespace, records);
+      if (bounded.operationId !== operationId || bounded.namespace !== namespace) {
+        throw new Error("A public operation update cannot move a record");
+      }
+      this.saveNamespaceRecord(bounded);
       return bounded;
     });
   }
@@ -411,7 +507,7 @@ export class PublicOperationsRepository {
     const record = (await this.loadNamespaceRecords(namespace)).find(
       (candidate) => isPublicOperationRecord(candidate) && candidate.operationId === operationId,
     );
-    return record ? { status: "found", record } : { status: "missing" };
+    return record ? { status: "found", record: structuredClone(record) } : { status: "missing" };
   }
 
   /**
@@ -424,7 +520,7 @@ export class PublicOperationsRepository {
       const record = (await this.loadNamespaceRecords(entry.id)).find(
         (candidate) => isPublicOperationRecord(candidate) && candidate.requestKey === requestKey,
       );
-      if (record) return record;
+      if (record) return structuredClone(record);
     }
     return null;
   }
@@ -469,7 +565,7 @@ export class PublicOperationsRepository {
         if (!isPublicOperationRecord(record) || record.requestId !== requestId) continue;
         if (record.authority !== filter.authority) continue;
         if (filter.action && record.action !== filter.action) continue;
-        records.push(record);
+        records.push(structuredClone(record));
       }
     }
     return { records };
@@ -505,7 +601,8 @@ export class PublicOperationsRepository {
           { rank: 1, at: Date.parse(b.updatedAt), key: attentionKey("run", b.operationId) },
         ),
       )
-      .slice(0, Math.max(0, limit));
+      .slice(0, Math.max(0, limit))
+      .map((record) => structuredClone(record));
     return { records, total: changed.length };
   }
 
@@ -514,7 +611,9 @@ export class PublicOperationsRepository {
     const active: PublicOperationRecord[] = [];
     for (const entry of index.namespaces) {
       for (const record of await this.loadNamespaceRecords(entry.id)) {
-        if (isPublicOperationRecord(record) && isActiveRecord(record)) active.push(record);
+        if (isPublicOperationRecord(record) && isActiveRecord(record)) {
+          active.push(structuredClone(record));
+        }
       }
     }
     return active;
@@ -569,6 +668,7 @@ export class PublicOperationsRepository {
           await this.context.deleteStore(this.publicOperationNamespaceFile(namespace));
         }
       });
+      for (const namespace of retired) this.namespaceCache.delete(namespace);
       return { retired, kept };
     });
   }

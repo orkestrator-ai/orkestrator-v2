@@ -199,7 +199,7 @@ A store is named by the JSON path it replaced, without `.json` (`kanban`,
 | --- | --- | --- |
 | `document` | One JSON value | Small settings-like stores (catalogue, journal, accounts, auth) |
 | `array` | One row per item, keyed by `id` (or a named field), order kept | Projects, environments, sessions, Kanban, feature plans, notes, comment records |
-| `record` | One row per key | Native sessions, prompt queues, drafts, handoffs, reviews, pipelines, pane layouts |
+| `record` | One row per key | Native sessions, prompt queues, drafts, handoffs, reviews, pipelines, pane layouts, public operation namespaces |
 | `envelope` | A document plus named record collections as rows | Agent mail (mailboxes, idempotency, counterparts), coordinators, catalogue, preview services |
 
 Business code still reads and writes a store's whole logical value through
@@ -474,6 +474,15 @@ primitives above serialize their writes.
   write survives a crash, and a torn write is impossible. `StorageDatabase`
   defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
   explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
+  The one exception inside the main file is the `leases` table: a lease
+  claim, heartbeat or release commits at NORMAL (`leaseCommit`), so it appends
+  to the WAL without syncing and the next FULL commit's sync covers it. A lease
+  is coordination between live processes, so a power loss that drops one
+  loses nothing (no holder survives it, and a lost release is a stale row the
+  next waiter reclaims). Before, every leased store write cost three FULL
+  syncs, claim, write and release; on btrfs on beelink2 that was 8 ms and
+  255 KB of disk writes against 2.5 ms and 95 KB with the lease at NORMAL
+  (to-do 7562).
 - "Survives a crash" means an application or operating-system crash. Whether a
   commit also survives sudden power loss depends on the platform's sync call.
   On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0
@@ -915,6 +924,21 @@ deletes the `opencode2-sessions` store. The OpenCode 2 preview recorded there
 which workflow sessions it had put on OpenCode 2, so a router could keep them
 off OpenCode 1.x; with 1.x retired every OpenCode session is a 2.x session and
 nothing reads it. It held only environment and session ids.
+
+Version 9 (`public-operation-rows`, `storage-public-operation-rows.ts`)
+rewrites each public operation namespace (`public-operations/ns-…`) from one
+`{ version: 1, namespace, operations: [...] }` document into a `record` store,
+one row per operation keyed by its `operationId`, in admission order. Before
+it, every admission and every state change parsed, re-validated and rewrote the
+whole namespace, which takes admissions for seven days, so each FULL-synced
+commit grew with the run (to-do 7562). `PublicOperationsRepository` now writes
+one row (`updateSensitiveStoreRow`) under the public operation store lock and
+keeps each namespace's validated rows by serialized value, re-parsing only rows
+whose value changed (`loadStoreSerialized`). A namespace that is unreadable, or
+whose records cannot be keyed, is left as it was, and the reader still refuses
+admissions on it. Retirement still deletes a namespace whole under the same
+lock; `storage-writer-guards.test.ts` allows that deletion beside the leased
+row writes and nothing else.
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

@@ -459,13 +459,22 @@ refuses admission instead of being treated as empty. Each namespace is the
 logical SQLite store `public-operations/<namespace>` (with the index in
 `public-operations/index`) in the backend database: WAL with
 `synchronous = FULL`, so a committed admission survives a process crash; see
-[storage.md](storage.md). "Never delete `public-operations/`" below means those
+[storage.md](storage.md). A namespace holds one row per record, keyed by its
+operation id in admission order, so an admission or a state change writes and
+syncs that one row, and a read re-parses and re-checks only the rows that
+changed since the last one (schema version 9; to-do 7562 found the whole
+namespace rewritten on every update, 16 to 20 MiB of WAL a minute on a busy
+run). "Never delete `public-operations/`" below means those
 logical stores.
 
 ### After a restart
 
 A reconciler (startup pass, environment change events, 15 s sweep, and every
-`run get`) settles active operations from authoritative state:
+`run get`) settles active operations from authoritative state. The sweep and
+environment passes skip a prompt run whose turn was seen to end with a later
+turn in its session until its record changes, its environment is gone or the
+full pass every 10 minutes; `run get` always observes it
+([recurring work](recurring-work.md), B31):
 
 | Operation in flight | After a backend restart |
 | --- | --- |
@@ -644,7 +653,11 @@ record (with one provider status read when the turn has visibly ended,
 coalesced across concurrent waiters). An idle environment, another tab's
 completion, a dropped client or the agent's wording are never evidence. A
 later steering input does not end a turn while the session is busy. Missing
-evidence stays `unknown`. A provider whose status reads idle after a failed
+evidence stays `unknown`. A run once observed to have ended (`unknown` because
+its outcome was not recorded, or `unsupported`) stays ended while a later turn
+keeps the session busy: that turn is not this run running again, and
+re-observing it writes nothing (to-do 7562 found every such run flipping to
+`running` and back with each later turn, one record write each way). A provider whose status reads idle after a failed
 turn (OpenCode keeps the error on the request's last assistant message) is
 asked for that request's terminal error before an idle turn counts as
 completed; an unreadable answer is retried, never settled as success. A turn

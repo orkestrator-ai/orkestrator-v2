@@ -362,7 +362,17 @@ time `storageCallMs`, and the parts of it on the main database
 (`storageMainCallMs`) and the change-tracking ledger (`storageLedgerCallMs`).
 Those come from 250 ms buckets by end time, kept for 32 s, so they are exact
 to one bucket at either edge. A call is an outermost statement or a whole
-transaction. The command
+transaction. `storageWrites` counts the calls that committed a change (each one
+a WAL sync on the main database), and the calls are also counted by caller:
+`storageTopCaller` names the one that took the most time, as
+`<database>:<caller>`, with its `storageTopCallerCalls`, `storageTopCallerMs`
+and `storageTopCallerWrites`, and `storageCallers` lists up to four as
+`<database>:<caller>=<calls>/<ms>ms/<writes>w`, busiest first. A caller is a
+transaction's store family (`native-agent-sessions`), a lease's family
+(`lease:public-operations`: its claim, heartbeat and release), a store family a
+revision check outside a transaction named, or else `table:<name>` of the
+statement; ids never appear. A bucket keeps 32 callers and folds the rest into
+`other`. The command
 source adds `commandsInFlight`, the names of up to three of the most recently
 started (`commands`), and `blockingCommand` with `blockingCommandMs` when a
 command's synchronous part of 250 ms or more overlapped the window. The

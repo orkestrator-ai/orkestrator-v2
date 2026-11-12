@@ -260,12 +260,56 @@ describe("request keys and receipts", () => {
       { requestId: "valid" },
     );
     const store = namespaceStores(h.dataDir)[0]!;
-    const namespace = readStoredValue<{ operations: Array<{ requestKey: string }> }>(
-      h.dataDir,
-      store,
-    )!;
-    namespace.operations[0]!.requestKey = "0".repeat(64);
+    // One row per record, keyed by operation id (storage-public-operation-rows.ts).
+    const namespace = readStoredValue<Record<string, { requestKey: string }>>(h.dataDir, store)!;
+    Object.values(namespace)[0]!.requestKey = "0".repeat(64);
+    // Written by another connection after this backend cached the namespace:
+    // the changed row is re-read and checked, never served from the cache.
     seedStore(h.dataDir, store, namespace);
+    const response = await h.call(
+      "project.add",
+      { remote: "https://example.invalid/valid.git" },
+      { requestId: "valid" },
+    );
+    expect(response.ok).toBe(false);
+    expect((await h.storage.loadProjects()).length).toBe(1);
+  });
+
+  test("a namespace whose row is not keyed by its own operation id refuses admission", async () => {
+    const h = await harness();
+    await h.call(
+      "project.add",
+      { remote: "https://example.invalid/valid.git" },
+      { requestId: "valid" },
+    );
+    const store = namespaceStores(h.dataDir)[0]!;
+    const namespace = readStoredValue<Record<string, unknown>>(h.dataDir, store)!;
+    const [record] = Object.values(namespace);
+    seedStore(h.dataDir, store, { "op-elsewhere": record });
+    const response = await h.call(
+      "project.add",
+      { remote: "https://example.invalid/other.git" },
+      { requestId: "other" },
+    );
+    expect(response.ok).toBe(false);
+    expect((await h.storage.loadProjects()).length).toBe(1);
+  });
+
+  test("a namespace still held as a version-1 document refuses admission", async () => {
+    const h = await harness();
+    await h.call(
+      "project.add",
+      { remote: "https://example.invalid/valid.git" },
+      { requestId: "valid" },
+    );
+    const store = namespaceStores(h.dataDir)[0]!;
+    const namespace = readStoredValue<Record<string, unknown>>(h.dataDir, store)!;
+    // The shape the migration converts; nothing may read it as records.
+    seedStore(h.dataDir, store, {
+      version: 1,
+      namespace: store.slice("public-operations/".length),
+      operations: Object.values(namespace),
+    });
     const response = await h.call(
       "project.add",
       { remote: "https://example.invalid/valid.git" },

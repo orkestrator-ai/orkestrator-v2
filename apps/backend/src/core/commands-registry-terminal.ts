@@ -1,4 +1,7 @@
-import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import {
+  isLaunchableTerminalJobTabType,
+  parseTerminalOpenCodeLaunchCommand,
+} from "@orkestrator/protocol/terminal-agent-launch";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import {
   resolveOpenCode2TerminalCommand,
@@ -66,7 +69,6 @@ import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import { createHash, randomUUID } from "node:crypto";
-import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import {
   getEnvironmentCommitAncestryCommand,
@@ -370,17 +372,23 @@ export function registerTerminalCommands(
         throw new Error("tabId must be at most 256 characters");
       }
       const tabType = asNonBlankString(args.tabType, "tabType");
-      if (
-        tabType !== "plain" &&
-        tabType !== "claude-tmux" &&
-        (!isAgentPlatform(tabType) || tabType === "cursor")
-      ) {
+      if (tabType !== "claude-tmux" && !isLaunchableTerminalJobTabType(tabType)) {
         throw new Error("Terminal job tab type is invalid");
       }
       const title = asOptionalString(args.title)?.trim();
       if (title && title.length > 200) throw new Error("title must be at most 200 characters");
-      const data = tabType === "claude-tmux" ? undefined : asString(args.data, "data");
+      // Omitting `data` opens a shell that runs nothing. Reconnect uses it to give
+      // an existing launched tab a new shell once the backend that owned its old
+      // one has restarted: the renderer must not create a PTY for these tabs
+      // itself, and running the original command again is not what was asked.
+      const data =
+        tabType === "claude-tmux" || args.data === undefined
+          ? undefined
+          : asString(args.data, "data");
       if (data !== undefined && !data.trim()) throw new Error("data must not be blank");
+      if (tabType !== "claude-tmux" && data === undefined && !requestedTabId) {
+        throw new Error("data is required for a new terminal job");
+      }
       if (data !== undefined && data.length > 500_000) {
         throw new Error("data must be at most 500000 characters");
       }
@@ -414,6 +422,11 @@ export function registerTerminalCommands(
         title,
         activate:
           args.activateTab === "setup-handoff" ? "setup-handoff" : args.activateTab === true,
+        // A shell-only restart is for a tab that is already open. Checking for
+        // it here, inside the serialized layout mutation and before any PTY is
+        // created, means a restart that raced the user closing the tab fails
+        // instead of putting the tab back.
+        ...(tabType !== "claude-tmux" && data === undefined ? { requireExistingTab: true } : {}),
       });
 
       const invoke = async <T>(
@@ -443,7 +456,6 @@ export function registerTerminalCommands(
         return { jobId, environmentId, tabId, tabType, status: "started" as const };
       }
 
-      if (data === undefined) throw new Error("data is required for terminal jobs");
       const trackEnvironmentActivity = tabType !== "plain";
       let created: { sessionId: string; created?: boolean; bootstrapped?: boolean };
       if (environment.environmentType === "local") {
@@ -466,17 +478,19 @@ export function registerTerminalCommands(
         });
         await invoke("start_terminal_session", { sessionId: created.sessionId });
       }
-      const bootstrap = await invoke<{
-        bootstrapped: boolean;
-        duplicate?: boolean;
-        matchesExisting?: boolean;
-      }>("bootstrap_terminal_session", {
-        sessionId: created.sessionId,
-        data,
-      });
-      if (!bootstrap.bootstrapped) throw new Error("Terminal job could not be started");
-      if (bootstrap.duplicate && bootstrap.matchesExisting !== true) {
-        throw new Error("Terminal job session was already bootstrapped by another owner");
+      if (data !== undefined) {
+        const bootstrap = await invoke<{
+          bootstrapped: boolean;
+          duplicate?: boolean;
+          matchesExisting?: boolean;
+        }>("bootstrap_terminal_session", {
+          sessionId: created.sessionId,
+          data,
+        });
+        if (!bootstrap.bootstrapped) throw new Error("Terminal job could not be started");
+        if (bootstrap.duplicate && bootstrap.matchesExisting !== true) {
+          throw new Error("Terminal job session was already bootstrapped by another owner");
+        }
       }
       // Publish the backend-owned PTY identity only after it is ready to attach.
       // The renderer is intentionally forbidden from manufacturing a replacement

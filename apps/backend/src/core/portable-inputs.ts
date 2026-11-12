@@ -55,9 +55,11 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * Version 2 adds Cursor's `~/.cursor/mcp.json`; version 3 adds Claude's
  * `skills` and Grok's `commands`; version 4 withholds credentials in those trees;
  * version 5 adds the shared `~/.agents/skills` and stages a linked skill;
- * version 6 stages `.claude.json` through `claudeContainerConfig`.
+ * version 6 stages `.claude.json` through `claudeContainerConfig`; version 7
+ * leaves a skill's oversized files out instead of the whole skill, and its
+ * credential guard ignores example and placeholder values.
  */
-export const PORTABLE_INPUT_SPEC_VERSION = 6;
+export const PORTABLE_INPUT_SPEC_VERSION = 7;
 
 export type InputLimits = {
   fileBytes: number;
@@ -566,6 +568,36 @@ class Skip extends Error {
   }
 }
 
+/** A credential-named key assigned a value; group 1 is the value, unquoted. */
+const CREDENTIAL_ASSIGNMENT =
+  /(?:^|[\s"'{};,])[\w-]{0,128}(?:api[_-]?key|token|password|secret|private[_-]?key|access[_-]?key)[\w-]{0,128}["']?\s*[:=]\s*["']?([^\s"'#,;(){}[\]]+)/gim;
+
+/** Words that mark a value as an example rather than a key someone holds. */
+const PLACEHOLDER_VALUE =
+  /your|example|sample|placeholder|changeme|dummy|redacted|secret|password|xxxx/i;
+
+/**
+ * Whether an assigned value is shaped like a generated secret rather than an
+ * example, a reference or a count: eight or more characters holding both a
+ * letter and a digit, not a `${VAR}`, `%VAR%` or `<placeholder>`, and not
+ * spelled with a placeholder word. The value stops at a bracket, so
+ * `token = tokens[0]` reads as `tokens`. Skill documentation is full of
+ * `export CONTEXT7_API_KEY=your_key`, `--password=secret123`,
+ * `"total_tokens": 1234`, `tokens=1-3` and `TOKEN = window.__APP_TOKEN__`;
+ * withholding those discarded the very SKILL.md that defines a skill. A
+ * random 20-character key lacks a digit about 3% of the time, which is the
+ * price of this guard being defense in depth rather than secret detection.
+ */
+function looksLikeSecretValue(value: string): boolean {
+  return (
+    value.length >= 8 &&
+    /[A-Za-z]/.test(value) &&
+    /\d/.test(value) &&
+    !/^[$%<]/.test(value) &&
+    !PLACEHOLDER_VALUE.test(value)
+  );
+}
+
 /** Conservative guard for newly portable extension resources. Never logs file names or bytes. */
 function extensionCredentialGuard(relative: string): (contents: Buffer) => void {
   return (contents) => {
@@ -578,10 +610,15 @@ function extensionCredentialGuard(relative: string): (contents: Buffer) => void 
       );
     const text = contents.toString("utf8");
     const privateKey = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(text);
-    const credentialValue =
-      /(?:^|[\s"'{};,])[\w-]{0,128}(?:api[_-]?key|token|password|secret|private[_-]?key|access[_-]?key)[\w-]{0,128}["']?\s*[:=]\s*["']?[^\s"'#,}]+/im.test(
-        text,
-      );
+    // Every assignment is checked: an example early in a file must not hide a
+    // real key further down.
+    let credentialValue = false;
+    for (const match of text.matchAll(CREDENTIAL_ASSIGNMENT)) {
+      if (looksLikeSecretValue(match[1]!)) {
+        credentialValue = true;
+        break;
+      }
+    }
     if (sensitivePath || privateKey || credentialValue) throw new Skip("credential-withheld");
   };
 }
@@ -915,7 +952,9 @@ class ProviderCopier {
       return;
     }
     if (!stat.isDirectory()) throw new Skip("not-regular");
-    await this.tree(source, destinationRoot, relative, exclude, withholdCredentials);
+    await this.tree(source, destinationRoot, relative, exclude, withholdCredentials, {
+      skill: followSkillLink,
+    });
   }
 
   /**
@@ -941,23 +980,34 @@ class ProviderCopier {
     const sourceRelative = path.relative(container, target).split(path.sep).join("/");
     // Reject sensitive source ancestry even when the destination uses a benign alias.
     extensionCredentialGuard(sourceRelative)(Buffer.alloc(0));
-    await this.tree(target, destinationRoot, relative, [], true, async () => {
-      const after = await lstat(target).catch(() => null);
-      if (!after || after.ino !== before.ino || after.dev !== before.dev) {
-        throw new Skip("changed-while-reading");
-      }
-      try {
-        await assertNoSymlinkAncestry(container, `${sourceRelative}/SKILL.md`);
-        if ((await realpath(link)) !== target) throw new Skip("changed-while-reading");
-      } catch {
-        throw new Skip("changed-while-reading");
-      }
+    await this.tree(target, destinationRoot, relative, [], true, {
+      skill: true,
+      verify: async () => {
+        const after = await lstat(target).catch(() => null);
+        if (!after || after.ino !== before.ino || after.dev !== before.dev) {
+          throw new Skip("changed-while-reading");
+        }
+        try {
+          await assertNoSymlinkAncestry(container, `${sourceRelative}/SKILL.md`);
+          if ((await realpath(link)) !== target) throw new Skip("changed-while-reading");
+        } catch {
+          throw new Skip("changed-while-reading");
+        }
+      },
     });
   }
 
   /**
    * Copies the directory `source` to `destinationRoot/relative` all-or-nothing.
    * `verify` runs after the last file, before anything is counted.
+   *
+   * A `skill` (an entry of a skill root) is the one exception: a file over the
+   * per-file bound is left out and counted as `too-large`, and the rest of the
+   * skill is still staged. Skills ship platform binaries and data blobs (a
+   * 17 MB macOS executable beside a launcher that downloads the Linux one),
+   * and losing the whole skill to a file the container cannot run anyway
+   * left the agent without it. The skill's own `SKILL.md` is not optional:
+   * when that is too large the skill is not staged at all.
    */
   private async tree(
     source: string,
@@ -965,17 +1015,26 @@ class ProviderCopier {
     relative: string,
     exclude: readonly string[],
     withholdCredentials: boolean,
-    verify?: () => Promise<void>,
+    options: { skill?: boolean; verify?: () => Promise<void> } = {},
   ): Promise<void> {
-    const { entries, symlinks } = await listTree(source, this.limits.directoryEntries, exclude);
-    if (symlinks > 0) this.skip("symlink", symlinks);
+    const { skill = false, verify } = options;
+    const listed = await listTree(source, this.limits.directoryEntries, exclude);
+    if (listed.symlinks > 0) this.skip("symlink", listed.symlinks);
+    const oversized = (entry: TreeEntry) =>
+      entry.kind === "file" && entry.size > this.limits.fileBytes;
+    // Only a skill's optional files may be left out; its SKILL.md never is.
+    const optional = (entry: TreeEntry) => skill && entry.relative !== "SKILL.md";
+    const dropped = listed.entries.filter((entry) => oversized(entry) && optional(entry)).length;
+    const entries = dropped
+      ? listed.entries.filter((entry) => !(oversized(entry) && optional(entry)))
+      : listed.entries;
     const bytes = entries.reduce((sum, entry) => sum + entry.size, 0);
     if (bytes > this.limits.directoryBytes) throw new Skip("too-large");
-    if (entries.some((entry) => entry.kind === "file" && entry.size > this.limits.fileBytes)) {
-      throw new Skip("too-large");
-    }
+    if (entries.some(oversized)) throw new Skip("too-large");
     const files = entries.filter((entry) => entry.kind === "file");
     if (!this.total.fits(files.length, bytes)) throw new Skip("aggregate-budget");
+    // Counted once the unit is known to fit, so a skill refused whole is one skip.
+    if (dropped > 0) this.skip("too-large", dropped);
     await mkdir(path.join(destinationRoot, relative), { recursive: true, mode: 0o700 });
     let copied = 0;
     let copiedBytes = 0;
@@ -999,12 +1058,14 @@ class ProviderCopier {
                 : undefined,
             )) ?? 0;
           copied += 1;
-          if (copiedBytes > this.limits.directoryBytes) throw new Skip("too-large");
         } catch (error) {
-          // One file changing mid-copy skips that file, not its siblings.
-          if (error instanceof Skip && error.reason !== "too-large") this.skip(error.reason);
-          else throw error;
+          // One file changing mid-copy skips that file, not its siblings. A
+          // file that grew past the bound since listing does too, in a skill.
+          if (error instanceof Skip && (error.reason !== "too-large" || optional(entry))) {
+            this.skip(error.reason);
+          } else throw error;
         }
+        if (copiedBytes > this.limits.directoryBytes) throw new Skip("too-large");
       }
       await verify?.();
     } catch (error) {

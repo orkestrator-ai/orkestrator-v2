@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { portableInputSpec, stagePortableInputs } from "../src/core/portable-inputs";
+import { INPUT_LIMITS, portableInputSpec, stagePortableInputs } from "../src/core/portable-inputs";
 import { tempDir } from "./container-lifecycle-fixtures";
 
 const ENTRYPOINT = path.join(import.meta.dir, "../../../docker/entrypoint.sh");
@@ -234,7 +234,9 @@ describe("user skills and commands in containers", () => {
           ["resources/.env.production", "SENTINEL-ENV-PROD"],
           ["resources/deploy.key", "SENTINEL-KEY"],
           ["resources/key-disguised.txt", "-----BEGIN OPENSSH PRIVATE KEY-----\nSENTINEL-PRIVATE"],
-          ["resources/config.json", '{"api_key":"SENTINEL-API"}'],
+          ["resources/config.json", '{"api_key":"SENTINEL-API-7f3a9c21e0b4"}'],
+          // A real key after an example in the same file is still found.
+          ["resources/setup.md", "export API_KEY=your_key\n\nAPI_KEY=sk-SENTINEL-4f8e2a91c7d3\n"],
           ["resources/.aws/config", "SENTINEL-AWS"],
         ])
           await write(path.join(home, bundle, name!), contents);
@@ -263,10 +265,83 @@ describe("user skills and commands in containers", () => {
     }
     expect(
       staged.providers.find((entry) => entry.provider === "claude")?.skipped["credential-withheld"],
-    ).toBe(6);
+    ).toBe(7);
     expect(
       staged.providers.find((entry) => entry.provider === "grok")?.skipped["credential-withheld"],
-    ).toBe(7);
+    ).toBe(8);
+  });
+
+  test("keeps skill files whose credential-named values are examples, references or counts", async () => {
+    // Shapes taken from real skills whose SKILL.md the guard used to withhold.
+    const examples: Record<string, string> = {
+      "SKILL.md": "Set it:\n\n```sh\nexport CONTEXT7_API_KEY=your_key\n```\n",
+      "reference/pdf.md":
+        "qpdf --password=mypassword --decrypt in.pdf out.pdf\nqpdf --password=secret123 in.pdf\n",
+      "reference/schema.md": '{ "total_tokens": 84213, "output_tokens": 912 }\n',
+      "reference/polish.md": "- **missing token:** the system needs a reusable value;\n",
+      "reference/live.md": "design tokens: - colour\n",
+      "scripts/launch.cmd": 'for /f "usebackq tokens=1-3" %%a in ("x") do echo %%a\n',
+      "scripts/live.js":
+        "const TOKEN = window.__APP_TOKEN__;\nconst token = getToken();\nlet token = tokens[0];\n",
+      "examples/mcp.json": '{ "env": { "API_KEY": "${API_KEY}", "TOKEN": "<your-token>" } }\n',
+    };
+    const { dataDir, home } = await extensionsFixture();
+    for (const [name, contents] of Object.entries(examples)) {
+      await write(path.join(home, ".claude", "skills", "docs-skill", name), contents);
+    }
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-examples",
+      new Set(["claude"] as const),
+      {
+        home,
+        agentTest: false,
+      },
+    );
+    const skill = path.join(staged.directory, "claude-config", "skills", "docs-skill");
+    expect(await listFiles(skill)).toEqual(Object.keys(examples).sort());
+    expect(
+      staged.providers.find((entry) => entry.provider === "claude")?.skipped["credential-withheld"],
+    ).toBeUndefined();
+  });
+
+  test("leaves a skill's oversized file out, never the rest of the skill", async () => {
+    const { dataDir, home } = await extensionsFixture();
+    const skills = path.join(home, ".claude", "skills");
+    // A platform binary over the per-file bound beside the launcher that uses it.
+    await write(
+      path.join(skills, "with-binary", "SKILL.md"),
+      "---\nname: with-binary\n---\nRun.\n",
+    );
+    await write(path.join(skills, "with-binary", "scripts", "launch"), "#!/bin/sh\n");
+    await write(
+      path.join(skills, "with-binary", "scripts", "bin", "darwin-arm64", "tool"),
+      "x".repeat(200),
+    );
+    // The same layout reached through a link from ~/.agents/skills.
+    const shared = path.join(home, ".agents", "skills", "linked-binary");
+    await write(path.join(shared, "SKILL.md"), "---\nname: linked-binary\n---\nRun.\n");
+    await write(path.join(shared, "bin", "tool"), "x".repeat(200));
+    await fs.symlink(shared, path.join(skills, "linked-binary"));
+    // A skill whose own SKILL.md is over the bound is not a skill without it.
+    await write(path.join(skills, "huge-definition", "SKILL.md"), "x".repeat(200));
+    await write(path.join(skills, "huge-definition", "notes.md"), "notes\n");
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-oversized-skill",
+      new Set(["claude"] as const),
+      { home, agentTest: false },
+      new Date(),
+      { ...INPUT_LIMITS, fileBytes: 100 },
+    );
+    const files = await listFiles(path.join(staged.directory, "claude-config", "skills"));
+    expect(
+      files.filter((file) => /^(with-binary|linked-binary|huge-definition)\//.test(file)),
+    ).toEqual(["linked-binary/SKILL.md", "with-binary/SKILL.md", "with-binary/scripts/launch"]);
+    // One per left-out binary, one for the skill refused whole.
+    expect(
+      staged.providers.find((entry) => entry.provider === "claude")?.skipped["too-large"],
+    ).toBe(3);
   });
 
   test("the entrypoint copies exactly the extension directories the backend stages", async () => {

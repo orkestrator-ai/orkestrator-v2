@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-11 against `main` at `963ffa6ab` (first analysed 2026-11-10
+Analysed 2026-11-12 against `main` at `0c9f7e5f8` (earlier 2026-11-11 at `963ffa6ab`, first analysed 2026-11-10
 at `c98b20e6f`, task 1 against `498b68766`). Written from the 4960 busy soak of 2026-11-10 ([Change tracking: busy live
 soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)),
 which measured the change-tracking row cap and saw this on the side.
@@ -11,8 +11,9 @@ which measured the change-tracking row cap and saw this on the side.
 
 1. **Find what makes the stalls grow over a long busy run**: reproduce the growth and attribute it. Status: done (2026-11-11: the event-loop thread waits on disk inside bursts of short main-database SQLite calls that grow with the run; see Assumptions and decisions).
 2. **Decide the fix once the cause is known**. Status: done (2026-11-11: the burst was public operation records; three fixes landed, see task 2 and Assumptions and decisions).
-3. **Confirm on a complete 150-round busy run with the fixes**: the confirming run was cut off at minute 58 of its busy phase. Status: open.
-4. **Stop re-observing public runs that can no longer change**: ended runs of a provider without qualified completion stay active and every reconciler pass reads them. Status: open.
+3. **Confirm on a complete 150-round busy run with the fixes**: the confirming run was cut off at minute 58 of its busy phase. Status: done (2026-11-12: a complete R1-shaped run logged no stall and met every client budget R1 missed; see Assumptions and decisions, task 3).
+4. **Stop re-observing public runs that can no longer change**: ended runs of a provider without qualified completion stay active and every reconciler pass reads them. Status: done (2026-11-11: the pass has its own recurring kind, `public-operation-reconcile`, and skips such runs; see Assumptions and decisions, task 4).
+5. **Check the disk waits on a filesystem other than btrfs**: every run so far had its profile on btrfs. Status: open (not doable on beelink2: its only writable filesystems are btrfs, tmpfs and the vfat `/boot`, and mounting an ext4 image needs root; needs a Linux host with an ext4 or XFS home, or a Mac).
 
 ### 1. Find what makes the stalls grow over a long busy run
 
@@ -140,7 +141,8 @@ were never printed.
 on a build with the three task 2 commits; about 100 minutes on beelink2,
 headless, no credentials, fake model.
 
-**Investigation.** Not run. The cut-off run logged no stall line in 58
+**Investigation.** Done 2026-11-12; see Assumptions and decisions ("Task 3").
+Before that: the cut-off run logged no stall line in 58
 minutes at a load average of 0.4 to 22; the same configuration without the
 third fix logged eight 1.0 to 1.8 s stalls in its first 34 minutes at a load
 of 30 to 42 (see Assumptions and decisions, task 2). Host load differed
@@ -149,7 +151,7 @@ between the two, which is why a complete run is still wanted.
 **Decisions.**
 
 - **How to confirm?**
-  - **One complete R1-shaped run on the fixed build, reading the stall lines' callers and the activity-indicator and queued-dispatch rows against R1 (recommended).**
+  - **One complete R1-shaped run on the fixed build, reading the stall lines' callers and the activity-indicator and queued-dispatch rows against R1 (recommended; taken 2026-11-12).**
     - Pros: the same workload and length as the run that showed the growth; the stall lines now name their callers.
     - Cons: about 100 minutes on a shared host whose load varies.
   - **Treat the 60-round and cut-off runs as enough and close the task.**
@@ -173,14 +175,15 @@ native session and its activity snapshot. Retention already lets a
 permanently `unknown` record with nothing to recover stop pinning its
 namespace after its fence (`collectPublicOperations`).
 
-**Investigation.** Not measured: no stall line in the final run named a read
-caller for these runs, and the pass has no recurring-work kind of its own, so
-its time is not in `/metrics`.
+**Investigation.** Done 2026-11-11; see Assumptions and decisions ("Task 4").
+Before that: not measured, because no stall line in the final run named a read
+caller for these runs and the pass had no recurring-work kind of its own, so
+its time was not in `/metrics`.
 
 **Decisions.**
 
 - **What to do with runs that can no longer change?**
-  - **Give the reconciler pass a recurring-work kind first, then skip a run whose turn was seen to end and that has a later turn in its session (recommended).**
+  - **Give the reconciler pass a recurring-work kind first, then skip a run whose turn was seen to end and that has a later turn in its session (recommended; taken 2026-11-11).**
     - Pros: measures before changing; a skipped run is exactly one whose observation `run-observer.ts` now returns unchanged.
     - Cons: two changes; a skip rule must keep `run get` re-observing on demand.
   - **Skip such runs in the pass now.**
@@ -189,6 +192,33 @@ its time is not in `/metrics`.
   - **Settle them as terminal.**
     - Pros: nothing left active.
     - Cons: claims completion the public CLI contract allows only for qualified providers.
+
+### 5. Check the disk waits on a filesystem other than btrfs
+
+**Problem.** Task 1 found the stalls were the event-loop thread waiting in
+btrfs writeback and sync (`write_all_supers`, `wait_log_commit`), and task 2's
+costs per commit (about 90 KB of disk writes per FULL commit) were measured on
+btrfs. Whether ext4, XFS or APFS show the same waits under this workload, and
+so whether other users' hosts saw the growth, is not known.
+
+**Context.** The tmpfs arm of task 1 had no stall, so the waits are the
+filesystem's; the three task 2 fixes cut the number of syncs whatever the
+filesystem. beelink2 has only btrfs (`/`, `/home`), tmpfs (`/tmp`,
+`/dev/shm`) and vfat (`/boot`) mounted, and an agent cannot mount a loop
+ext4 image without root.
+
+**Investigation.** Not run: no non-btrfs, non-tmpfs filesystem is available
+to an agent on beelink2.
+
+**Decisions.**
+
+- **Where to check?**
+  - **The task 2 benchmark (`output/benchmarks/q7562-callers/bench/namespace-write.ts` is git-ignored on beelink2: recreate it from task 2: one namespace of 100, 500 and 2,000 records, a timed update and `/proc/self/io` write bytes) and a 40-round busy run on a Linux host with an ext4 home, or a Mac (recommended).**
+    - Pros: tens of minutes; compares per-commit cost directly against the btrfs numbers.
+    - Cons: needs another machine.
+  - **Leave it: the fixes reduce syncs on any filesystem.**
+    - Pros: no work.
+    - Cons: leaves open whether the original growth was btrfs-specific.
 
 ## Assumptions and decisions
 
@@ -344,13 +374,85 @@ within 77 ms (1.6 s before). Its `burst-backend` row timed out 3 times in
 Backend disk writes per minute were not compared: the change-tracking
 ledger's writes (70 to 320 MiB a minute) swamp the main database's.
 
+### Task 4: a recurring kind for the reconciler pass, then the skip
+
+Both halves of the recommended option, in `135124bc6`:
+
+- **The kind.** `public-operation-reconcile` (inventory row B31 in
+  [recurring work](../../architecture/recurring-work.md)) wraps every pass of
+  `PublicOperationReconciler` (`public-api/reconciler.ts`), so a pass's time,
+  storage reads and writes are in `/metrics` and a stall line can name it.
+  Each pass request is `requested`, one that lands during a pass `coalesced`.
+- **The skip.** When an observation of a prompt run finds its turn ended
+  (`unknown` without an outcome, or `unsupported`) with a later turn in the
+  session's journal and returns no change, `observeRun` remembers the run
+  against its record revision (`updatedAt`, state and stop request) in
+  `PublicApiReconciliations` (in memory, at most 10,000 runs). That
+  observation cannot change while the record and environment stay as they
+  are: the journal only grows, and an ended observation is kept while later
+  turns run (task 2's third fix). The 15 s pass then skips the run (one
+  `cacheHits` each; every observed operation is a `cacheMisses`), and a pass
+  for a changed environment skips it while the environment still exists.
+  A record change, a missing environment, the full pass every 10 minutes
+  (`RECONCILE_FULL_PASS_MS`) and every `run get` observe it again.
+  `public-api-reconciler-settled.test.ts` covers each of those; four of its
+  five tests fail with the skip disabled.
+
+Choices made:
+
+- **Remember in memory, not in the record.** Persisting a "settled" marker
+  would change the public record shape the CLI contract owns, and a restart
+  observing everything once is cheap. Cost: the first pass after a restart
+  reads every such run again.
+- **Keep a full pass every 10 minutes.** Changes outside the record and the
+  environment row (a Coordinator conversation closing, a session record
+  going) are not events this reconciler hears; the full pass bounds how long
+  such a change waits, and `run get` never waits. Cost: one full read of the
+  settled runs every 40 passes.
+- **Not settled as terminal.** The third option would claim completion the
+  public CLI contract allows only for qualified providers.
+
+Under load (the task 3 run below), the pass ran 28.6 times a minute, and in
+its 56-minute busy phase observed 4,131 operations and skipped 159,327: about
+97 of every 100 observations it would have made were of runs that could no
+longer change. The whole kind cost 363 storage reads, 24 writes and 8
+provider requests a minute, 13.6 ms of pass time on average (longest 537 ms).
+
+### Task 3: a complete 150-round run with every fix
+
+The R1 command from task 1 with `--profile-prefix q7562r3` on `135124bc6`
+(the three task 2 fixes plus task 4), 2026-11-11 23:32 to 2026-11-12 00:30
+UTC on beelink2: headless, the driver's default `--no-agent-credentials`,
+only the Pi toolchain on the loopback fake model, the reachability check off,
+`--keep-profiles` so the log could be read, the profile reset afterwards. The
+host's load average was 0.6 to 3 for the first 35 minutes, then 28 to 42
+while other builds ran. Evidence (git-ignored):
+`output/benchmarks/q7562-callers/confirm/` (`run.log`, `result.json`,
+`electron.log`, `load.log`, `reconcile-metrics.jsonl`).
+
+| Row | R1 (`83731af28`) | This run (`135124bc6`) |
+| --- | --- | --- |
+| Busy phase, 150 rounds (0, 1, 2 clients) | 104 min | 56 min |
+| Stall lines | 110 | 0 |
+| Longest stall | 13.1 s | under 1 s |
+| Background activity indicator p95 (≤ 4 s) | 11.4 s | 2.0 s |
+| Queued prompt dispatched p95 (≤ 3 s) | 10.7 s | 2.1 s |
+
+Every other client row was within its budget, with no timeouts, no
+duplicated dispatch and no failed obligation (150 held turns, queued
+prompts, approvals, mails and reviews each), and no burst rescan timed out.
+The phase that loaded the host to 28 to 42, the same load at which the
+rows-and-leases build stalled 1.0 to 1.8 s (task 2), logged no stall. The
+backend used 18.1 s of CPU a minute in the busy window, with a median RSS of
+473 MiB (R1: 429) and a maximum of 689 MiB (R1: 751).
+
 ## Needs verification
 
 - Whether the growth appears at a normal host load; the soak ran at a load
   average of 50 to 64. Answered 2026-11-11: it does (stalls of 7 to 13 s at a
   load average of 8 to 9, see Assumptions and decisions).
 - Whether a filesystem other than btrfs (ext4, APFS) shows the same disk
-  waits under this workload; every run so far was on btrfs.
+  waits under this workload; every run so far was on btrfs. Now task 5.
 
 ## Related
 

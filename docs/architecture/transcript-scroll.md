@@ -147,6 +147,18 @@ reading anchor. A follower is not held, and neither is a pointer held on the
 scroller itself (a scrollbar drag); a pointer held on content (the click that
 focused a link) is.
 
+The hold restores the place a frame later, which is too late for a click: a
+press focuses its control at pointerdown, and a released reader near the end
+is clamped as the protected rows measure, so the control moved before
+pointerup and the click was lost (flake 9980). For a reader who is not
+following, `VirtualizedMessageList` therefore protects focus that arrives
+during a press in the task after the press ends. The press ends at
+`pointerup` or `pointercancel`, or, when no release arrives, at a
+non-modifier key, a context menu, a native drag or the window losing focus,
+so a lost release cannot defer later keyboard focus. Focus that moves
+outside a press supersedes a protection the press left pending. A follower
+is protected at pointerdown as before.
+
 ## Semantic anchors and history
 
 A place is `{ rowKey, index, partId, offsetPx, inner? }`: a display row by
@@ -394,11 +406,6 @@ runner read them; nothing else does.
   not searched, so inner virtualization cannot shift find's pairing.
 - Exact reading-line preservation inside a reflowed paragraph is block-level:
   a prose part keeps its top, not a specific word.
-- The native tab's background poll (every 500–1500 ms) retires a history page
-  still in flight (`useNativeAgentSession`'s refresh sequence), so a page
-  slower than the poll never lands and the reader has to ask again. That is the
-  session hook's paging policy, predating this design; the "reader moves while
-  a page loads" browser test therefore runs against the reviewer view.
 
 ## Maintaining the Virtuoso patch
 

@@ -362,3 +362,21 @@ All 38 ToolGroupFold cases passed; both native branch-selection cases still fail
 - **After:** the same command with `--repeat-each=80` passed 160 of 160
   (367.5 s), as did a 160-run diagnostic copy of the case. The complete owner
   passed with one worker (`--workers=1 --retries=0`, 145.0 s).
+
+## Recurrence check — 2026-11-11 (no recurrence; stays resolved)
+
+Today's nine-worker `mise run test:browser` failures in this owner were
+recorded against 1012, 0793 and 9980; none was this case's `scrollTop` 704
+instead of 0. `mise run flaky:recurrence -- 0747 --base "$(git merge-base HEAD origin/main)" --registry-ref origin/main`
+(base `51456e887`) answered "resolved, and the base contains its fix
+(`e1b83430d7`)", so a failure would be a real recurrence, but none was found:
+
+- `ORKESTRATOR_E2E_PORT=1493 mise run test:logged -- --name tgf-full-before -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --repeat-each=5 --workers=9 --retries=0`
+  passed 190 of 190 (host load average 28 to 96 from other worktrees).
+- The same case under 80 unpinned burners
+  (`bun scripts/test-under-contention.ts --burners 80`, `--repeat-each=10 --workers=9`)
+  and under CDP CPU throttling (`Emulation.setCPUThrottlingRate` 6, 10 and 20
+  on a scratch copy of the spec) failed only by page-load or 30 s test
+  timeouts at 20x and under 80 burners, never by the recorded assertion.
+
+Status stays `resolved`.

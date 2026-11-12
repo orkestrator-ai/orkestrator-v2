@@ -14,7 +14,15 @@ import os from "node:os";
 import path from "node:path";
 import { COORDINATOR_MAIL_ADDRESS, coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { AgentMailMessage, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
+import type {
+  AgentMailMessage,
+  AgentMailNotice,
+  AgentMailPullRequest,
+} from "@orkestrator/protocol/agent-mail";
+import {
+  gitHubPullRequestUrl,
+  parseGitHubPullRequestLink,
+} from "@orkestrator/protocol/github-pull-requests";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
 import type { CoordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
@@ -38,6 +46,20 @@ export type MailActor = {
 type Address = MailActor | typeof COORDINATOR_MAIL_ADDRESS | { environmentId: string };
 
 const BASE_COMMIT = "a".repeat(40);
+
+/**
+ * A PR notice's card as production reads it on a host without a GitHub
+ * credential: URL and number, no title. The service's default runs
+ * `gh auth token` and asks api.github.com for every PR notice, real process
+ * and network work that is not under test and timed the wakes out under load
+ * (flake 9978).
+ */
+async function offlinePullRequestMetadata(url: string): Promise<AgentMailPullRequest | undefined> {
+  const parsed = parseGitHubPullRequestLink(url);
+  if (!parsed) return undefined;
+  const ref = { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
+  return { url: gitHubPullRequestUrl(ref), number: ref.number };
+}
 
 export type MailWorldOptions = {
   /** Off keeps the project's default, the origin check refusing what it did not create. */
@@ -110,7 +132,7 @@ export class MailWorld {
       }),
       undefined,
       workerActivity,
-      { ...statusWakes, ...options.delegations },
+      { pullRequestMetadata: offlinePullRequestMetadata, ...statusWakes, ...options.delegations },
     );
     const mail = new AgentMailService(
       storage,

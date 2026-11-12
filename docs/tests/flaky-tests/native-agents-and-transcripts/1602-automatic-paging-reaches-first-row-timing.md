@@ -1,7 +1,7 @@
 # Automatic paging does not reach the first row in time
 
 - **ID:** 1602
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `native: history pages in without a click, opening with a page and paging near the top` (desktop Chromium)
 - **File:** `e2e/TranscriptPaging.spec.ts:414`
@@ -202,3 +202,45 @@ The cause remains unconfirmed. Status stays open. No assertion, timeout or skip 
 Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `f799aaa14`, base `14df96544` (`mise run flaky:recurrence -- 1602 --base 14df96544` answered "open. Record the failure as a recurrence"). The branch changes backend read cancellation, one desktop IPC test and docs; it changes no `apps/web` or `e2e` code. `mise run test:logged -- --name browser -- mise run test:browser`: 6 failed, 153 skipped, 1709 passed (21.9 m), all six in ToolGroupFold and TranscriptPaging (flakes 1012, 0483, 1602). Both mobile-chromium and desktop-chromium failed `expect(received).toBe(1)` (received 0) in `native: history pages in without a click, opening with a page and paging near the top`. The complete unchanged owners then passed together with one worker: `mise run test:logged -- --name browser-fold-paging-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1` (exit 0, 283.0 s). Status stays open; no assertion, timeout or skip changed.
 
 A second browser run on the same branch (at `487e2aa4e`: 9 failed, 1706 passed) failed the same cases again; the two owners again passed together with one worker (295.5 s). See 0382 for that run.
+
+## Resolution (2026-11-11)
+
+Branch `fix-flaky-tests-400972eda2c6-r1`, base `51456e887`.
+
+- **Root cause:** two causes.
+  1. The product race resolved in
+     [0483](0483-transcript-paging-prepend-index-timing.md#resolution-2026-11-11):
+     `useNativeAgentSession.loadEarlierMessages` dropped any history page
+     during which a background poll had started (shared `refreshSequenceRef`).
+     `useAutoLoadEarlier` retries a page that left the head where it was once.
+     After a second such page from the same head it stops for good, so two
+     polls landing during consecutive automatic pages on a loaded host stalled
+     paging above `Reached stop 0.`. The superseded opening page and its retry
+     were the "requested twice" observation.
+  2. Test pacing: the poll wheeled a fixed 4000 px per step, and
+     `expect.poll` steps every second after its first few. Crossing the 300
+     rows took about twenty steps whatever paging did: 22 to 25 s of the
+     test's 30 s at load average about 33 with one worker (one of six failed
+     at 30.1 s). After fix 1 a trace of a remaining mobile failure showed
+     paging progressing steadily, at stop 113 when time ran out, after a
+     14.6 s `goto`.
+- **Fix:** (1) the product fix in `useNativeAgentSession.ts` (see 0483), with
+  `useAutoLoadEarlier`'s comment and `docs/architecture/native-transcripts.md`
+  updated. (2) `e2e/TranscriptPaging.spec.ts`: each poll step wheels the
+  reader by the list's own `scrollTop` plus 1000 px, all the way to the head.
+  Each step then waits only on the next automatic page landing (the readiness
+  signal). Assertions and the 30 s bound are unchanged.
+- **Reproduced:** yes. Before either fix the 0483 load command
+  (`repro-paging-before`, six workers, `--repeat-each=10`, load average 150 to
+  195) failed this case 13 of 20 starts at `:477` (expected 1, received 0)
+  besides navigation timeouts. With the product fix alone, the same command
+  failed it 4 of 20 (all mobile; the trace above), and none for a superseded
+  page. With both fixes it passed 20 of 20 under 60 burners in both the cold
+  and the warm stress runs. Paced alone, six starts (both projects, one worker)
+  took 51.4 s in total including the server start, where before each took
+  22 to 25 s. The deterministic product reproduction is in 0483.
+- **Stress:** `NODE_ENV= ORKESTRATOR_E2E_PORT=14483 mise run test:logged -- --name stress-paging-after -- bun scripts/test-under-contention.ts --burners 60 -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts -g "native: (paging before prose|history pages in without a click|a reader who moves)" --repeat-each=10 --workers=6 --retries=0`
+  passed this case 20 of 20; so did the same command against a warm fixture
+  server. The whole owner with nine workers passed it 6 of 6
+  (`--repeat-each=3`) and 4 of 4 (`--repeat-each=2`). The other failures
+  in those runs are in 0483's Resolution.

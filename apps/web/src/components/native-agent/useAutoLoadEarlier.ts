@@ -53,8 +53,9 @@ export interface AutoLoadEarlierInput {
  * reader scrolls near the top. Returns the ref for a sentinel rendered at the
  * transcript's head.
  *
- * A page can come back with nothing new: a poll that lands while it is in
- * flight supersedes it, or it fails. One retry covers the first; after a
+ * A page can come back with nothing new: a mutation or a rotated history
+ * supersedes it while it is in flight (a background poll does not), or it
+ * fails. One retry covers the first; after a
  * second page from the same head automatic paging stops until the head changes
  * some other way (a clicked page), and the button stays for that case.
  *

@@ -133,8 +133,14 @@ history, so it shows the live window plus one page (up to 200 rows and
 1 MiB), and again whenever the transcript's head comes within 800 px of the
 viewport. It pages only from a direct cursor
 (`canLoadEarlierAutomatically`), so a joined mint or joined page, each a
-whole-transcript read, still needs the button. A page that leaves the head
-where it was (superseded by a poll, or failed) is retried once; after a second
+whole-transcript read, still needs the button. A background poll that lands
+while a page is in flight does not retire it: the page merges into the live
+tail current when it lands, and is dropped only when a mutation, a later page,
+a read that replaced its cursor (a rotated history, a collapse to the live
+tail) or a read that found the session gone superseded it. A held row that a
+poll revised while the page was in flight keeps the poll's copy; the page
+refreshes only held rows still as it found them. A page that leaves the head where it was (superseded, or
+failed) is retried once; after a second
 it stops until the head moves some other way. Those two pages per head count
 for the whole session, even if the head moved in between, so a transcript that
 keeps collapsing back to its live tail cannot load and lose the same page over

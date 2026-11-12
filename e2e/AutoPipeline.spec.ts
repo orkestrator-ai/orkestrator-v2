@@ -92,6 +92,44 @@ test("details, acceptance criteria and confirm are steps of the same tab", async
   await shot(page, "tab-promoted", testInfo.project.name);
 });
 
+test("the description fills the page and is never cut off", async ({ page }, testInfo) => {
+  const measure = () =>
+    page.getByRole("button", { name: /^Description, rendered/ }).evaluate((pane) => {
+      const region = pane.closest('[aria-label="Auto-pipeline draft"]')!;
+      return {
+        pane: pane.clientHeight,
+        content: pane.scrollHeight,
+        regionHeight: region.clientHeight,
+        regionBottom: region.getBoundingClientRect().bottom,
+      };
+    });
+  // A short description still fills the space down to its hint above the footer.
+  await page.goto("/auto-pipeline");
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
+  const short = await measure();
+  const hint = await page.getByText(/^Markdown\. Click the description/).boundingBox();
+  expect(short.regionBottom - (hint!.y + hint!.height)).toBeLessThanOrEqual(24);
+  // A long one grows with its text: the page scrolls, the pane never does.
+  await page.goto("/auto-pipeline?longDescription");
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
+  const rendered = page.getByRole("button", { name: /^Description, rendered/ });
+  await expect(rendered.getByText("The last line of the description.")).toBeAttached();
+  const long = await measure();
+  expect(long.content).toBeLessThanOrEqual(long.pane);
+  expect(long.pane).toBeGreaterThan(long.regionHeight);
+  await rendered.getByText("The last line of the description.").scrollIntoViewIfNeeded();
+  await expect(rendered.getByText("The last line of the description.")).toBeInViewport();
+  await shot(page, "description-long", testInfo.project.name);
+  // Editing keeps the whole Markdown visible too.
+  await rendered.press("Enter");
+  const editor = page.getByRole("textbox", { name: "Description", exact: true });
+  const sizes = await editor.evaluate((area) => ({
+    client: area.clientHeight,
+    scroll: area.scrollHeight,
+  }));
+  expect(sizes.scroll).toBeLessThanOrEqual(sizes.client);
+});
+
 test("a blank criterion blocks confirmation and says why", async ({ page }, testInfo) => {
   await page.goto("/auto-pipeline");
   await page.getByRole("button", { name: "To pipeline", exact: true }).click();

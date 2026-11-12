@@ -2,8 +2,12 @@ import { lazy, Suspense, useState, type Ref } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-const PANE =
-  "h-[min(55vh,34rem)] w-full rounded-md border border-border/70 focus-hairline outline-none";
+/**
+ * No fixed height: nothing sits below the description, so it grows to fill the
+ * rest of the page, and past it with its content (the page scrolls, not the
+ * pane). The textarea grows with its text through `field-sizing-content`.
+ */
+const PANE = "min-h-48 w-full grow rounded-md border border-border/70 focus-hairline outline-none";
 const MessageMarkdown = lazy(() =>
   import("@/components/chat/MessageMarkdown").then((module) => ({
     default: module.MessageMarkdown,
@@ -44,7 +48,7 @@ export function AutoPipelineDescriptionField({
             event.currentTarget.blur();
           }
         }}
-        className={cn(PANE, "resize-none overflow-y-auto font-mono text-xs leading-relaxed")}
+        className={cn(PANE, "resize-none font-mono text-xs leading-relaxed")}
       />
     );
   return (
@@ -66,7 +70,7 @@ export function AutoPipelineDescriptionField({
       }}
       className={cn(
         PANE,
-        "overflow-y-auto bg-input-surface px-4 py-3 text-left text-sm shadow-xs",
+        "overflow-x-auto bg-input-surface px-4 py-3 text-left text-sm shadow-xs",
         disabled ? "cursor-default opacity-70" : "cursor-text hover:border-border",
       )}
     >

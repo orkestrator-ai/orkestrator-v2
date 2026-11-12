@@ -361,9 +361,10 @@ export function AutoPipelineTab({
       <div
         role="region"
         aria-label="Auto-pipeline draft"
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
       >
-        <div className="mx-auto w-full max-w-4xl">
+        {/* Grows to the region's height so the Details step's description can fill the page. */}
+        <div className="mx-auto flex w-full max-w-4xl grow flex-col">
           {!state && !readError && (
             <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 aria-hidden className="size-4 animate-spin" />
@@ -450,9 +451,12 @@ export function AutoPipelineTab({
             </p>
           )}
           {draft && edits && (
-            <fieldset disabled={promoting || !!locked} className="min-w-0 border-0">
+            <fieldset
+              disabled={promoting || !!locked}
+              className="flex min-w-0 grow flex-col border-0"
+            >
               {currentStep === "details" && (
-                <div className="space-y-5">
+                <div className="flex grow flex-col space-y-5">
                   <div className="space-y-1.5">
                     <Label htmlFor={`${fieldId}-title`}>Title</Label>
                     <Input
@@ -465,7 +469,7 @@ export function AutoPipelineTab({
                       }
                     />
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="flex grow flex-col space-y-1.5">
                     <h3 className="text-sm font-medium">Description</h3>
                     <AutoPipelineDescriptionField
                       value={edits.description}

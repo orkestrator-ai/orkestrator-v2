@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  getLinearBoardOptions,
+  getLinearTeam,
   issueIsOnBoard,
+  listLinearTeams,
   linearIssueCreateId,
   linearIssueUpdateFields,
   linearKeyFingerprint,
@@ -135,6 +138,50 @@ async function boardContext() {
   return { context, commands: createCommandRegistry(), real };
 }
 
+/** The most a single Linear query may score before Linear refuses it. */
+const LINEAR_MAX_QUERY_COMPLEXITY = 10_000;
+
+/**
+ * Scores a query the way Linear documents
+ * (https://linear.app/developers/rate-limiting): a field is 0.1 point, an
+ * object 1 point, and a connection (a selection with `nodes`) multiplies its
+ * children by its `first` argument, or 50 without one. It errs high:
+ * `pageInfo` is charged once per node. Fragments and aliases are not handled;
+ * these queries use neither.
+ */
+function linearQueryComplexity(query: string): number {
+  const tokens = query.slice(query.indexOf("{")).match(/[{}()]|[^\s{}()]+/g) ?? [];
+  let index = 0;
+  const selection = (): { points: number; connection: boolean } => {
+    let points = 0;
+    let connection = false;
+    index += 1; // "{"
+    while (index < tokens.length && tokens[index] !== "}") {
+      if (tokens[index] === "nodes") connection = true;
+      index += 1; // the field name
+      let args = "";
+      if (tokens[index] === "(") {
+        for (let depth = 0; index < tokens.length; index += 1) {
+          if (tokens[index] === "(") depth += 1;
+          else if (tokens[index] === ")" && --depth === 0) break;
+          args += ` ${tokens[index]}`;
+        }
+        index += 1; // ")"
+      }
+      if (tokens[index] !== "{") {
+        points += 0.1;
+        continue;
+      }
+      const child = selection();
+      const pageSize = Number(/first:\s*(\d+)/.exec(args)?.[1] ?? 50);
+      points += child.connection ? pageSize * child.points : 1 + child.points;
+    }
+    index += 1; // "}"
+    return { points, connection };
+  };
+  return Math.ceil(selection().points);
+}
+
 describe("Linear board helpers", () => {
   test("a key's fingerprint is short, stable and not the key", () => {
     const fingerprint = linearKeyFingerprint(" lin_api_secret ");
@@ -169,6 +216,37 @@ describe("Linear board helpers", () => {
         addedLabelIds: [],
       }),
     ).toEqual({ title: "New", assigneeId: null, estimate: null });
+  });
+
+  test("scores queries the way Linear's documentation does", () => {
+    const query = `query MyCreatedIssues {
+      user(id: "me") {
+        createdIssues(first: 10) { nodes { id title createdAt } }
+      }
+    }`;
+    expect(linearQueryComplexity(query)).toBe(14);
+    expect(linearQueryComplexity(query.replace("(first: 10)", ""))).toBe(66);
+  });
+
+  test("the board picker's queries stay within Linear's complexity limit", async () => {
+    const requests = fakeLinear({
+      OrkestratorLinearTeams: () => ({
+        teams: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+      }),
+      OrkestratorLinearTeam: () => ({ team: null }),
+      OrkestratorLinearBoardOptions: () => ({ team: { id: "t1" } }),
+    });
+    await listLinearTeams("lin_api_secret");
+    await getLinearTeam("lin_api_secret", "t1");
+    await getLinearBoardOptions("lin_api_secret", "t1");
+    expect(operations(requests)).toEqual([
+      "OrkestratorLinearTeams",
+      "OrkestratorLinearTeam",
+      "OrkestratorLinearBoardOptions",
+    ]);
+    for (const request of requests) {
+      expect(linearQueryComplexity(request.query)).toBeLessThanOrEqual(LINEAR_MAX_QUERY_COMPLEXITY);
+    }
   });
 });
 

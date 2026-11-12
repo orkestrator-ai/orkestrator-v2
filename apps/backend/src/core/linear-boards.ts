@@ -40,6 +40,14 @@ export type LinearIssueBoard = {
 const MAX_TEAMS = 250;
 const MAX_TEAM_PROJECTS = 250;
 const MAX_OPTIONS = 250;
+/**
+ * Teams fetched per page. Linear refuses any query scoring over 10,000 points
+ * ("Query too complex"): each object is 1 point, each field 0.1, and a
+ * connection multiplies its children by its page size. One team with 250
+ * projects scores about 326, so 50 teams a page (about 16,300) was refused
+ * outright; 20 (about 6,500) leaves room.
+ */
+const TEAMS_PAGE_SIZE = 20;
 
 /**
  * A short fingerprint of a Linear key, so machines can tell whether they hold
@@ -135,7 +143,7 @@ export async function listLinearTeams(apiKey: string): Promise<LinearTeam[]> {
     } = await linearGraphql(
       apiKey,
       `query OrkestratorLinearTeams($after: String) {
-          teams(first: 50, after: $after) {
+          teams(first: ${TEAMS_PAGE_SIZE}, after: $after) {
             nodes {
               id
               key

@@ -75,6 +75,14 @@ const CODEX_APPROVAL_KIND_KEY = "codex_approval_kind";
 const CODEX_MCP_TOOL_CALL_APPROVAL = "mcp_tool_call";
 
 /**
+ * True when an `mcpServer/elicitation/request` is Codex's approval before an
+ * MCP tool call rather than a server's own question.
+ */
+export function isMcpToolApprovalElicitation(params: unknown): boolean {
+  return record(record(params)._meta)[CODEX_APPROVAL_KIND_KEY] === CODEX_MCP_TOOL_CALL_APPROVAL;
+}
+
+/**
  * The tool hints of an MCP tool approval, or `undefined`.
  *
  * Codex 0.167.0 sends the approval as a form elicitation whose `_meta` has
@@ -83,14 +91,6 @@ const CODEX_MCP_TOOL_CALL_APPROVAL = "mcp_tool_call";
  * Only that discriminator, which Codex keeps servers from forwarding, opens
  * the hints: an MCP server's own elicitation cannot describe a tool here.
  */
-/**
- * True when an `mcpServer/elicitation/request` is Codex's approval before an
- * MCP tool call rather than a server's own question.
- */
-export function isMcpToolApprovalElicitation(params: unknown): boolean {
-  return record(record(params)._meta)[CODEX_APPROVAL_KIND_KEY] === CODEX_MCP_TOOL_CALL_APPROVAL;
-}
-
 function mcpToolApprovalHints(meta: unknown): AgentInteractionToolHints | undefined {
   const fields = record(meta);
   if (fields[CODEX_APPROVAL_KIND_KEY] !== CODEX_MCP_TOOL_CALL_APPROVAL) return undefined;

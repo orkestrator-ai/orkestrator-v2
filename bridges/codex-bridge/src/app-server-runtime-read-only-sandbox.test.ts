@@ -1,10 +1,8 @@
 /**
  * A read-only turn where Codex's command sandbox cannot run (an environment's
  * container): it runs without the sandbox under `untrusted`, every approval it
- * asks for is answered at once (a command proven to only read is approved,
- * anything else declined), and `/session/:id/status` says so until the next
- * turn. `codex-read-only-sandbox.test.ts` covers the decision itself and
- * `codex-read-only-commands.test.ts` the command check.
+ * asks for is declined at once, and `/session/:id/status` says so until the
+ * next turn. `codex-read-only-sandbox.test.ts` covers the decision itself.
  */
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -138,13 +136,13 @@ describe("read-only turn without Codex's command sandbox", () => {
     expect(h.child().stdin.lines.join("")).toContain('"decision":"decline"');
     expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
-    expect(JSON.stringify(h.events)).toContain("`rm` is not a reading program");
+    expect(JSON.stringify(h.events)).toContain(CODEX_READ_ONLY_APPROVAL_REFUSAL);
   });
 
-  // The pinned Codex asks under `untrusted` for every command no exec-policy
-  // rule allows, reads included; declining those left a reviewer unable to
-  // read anything.
-  test("approves a command that only reads, without offering it to a person", async () => {
+  // Under `untrusted` Codex runs the commands it classifies as read-only
+  // without asking, so an approval is a command outside that set: the bridge
+  // declines it whatever it looks like, and never approves one itself.
+  test("declines every command approval, whatever the command, without offering it", async () => {
     const h = await sandboxOffInContainer();
     const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
     await h.runtime.prompt(sessionId, {
@@ -178,13 +176,15 @@ describe("read-only turn without Codex's command sandbox", () => {
     await h.drain();
 
     for (const index of reads.keys()) {
-      expect(answerTo(h, 9200 + index)).toContain('"decision":"accept"');
+      expect(answerTo(h, 9200 + index)).toContain('"decision":"decline"');
+      expect(answerTo(h, 9200 + index)).not.toContain('"accept');
     }
     expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+    expect(JSON.stringify(h.events)).toContain(CODEX_READ_ONLY_APPROVAL_REFUSAL);
   });
 
-  test("declines a read that also asks for network access, and input to a running process", async () => {
+  test("declines a command that also asks for network access, and input to a running process", async () => {
     const h = await sandboxOffInContainer();
     const { sessionId } = h.runtime.createSession({ mode: "build", policy: containerPolicy });
     await h.runtime.prompt(sessionId, {

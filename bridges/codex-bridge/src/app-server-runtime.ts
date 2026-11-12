@@ -90,7 +90,7 @@ export class AppServerRuntime {
       present: (request) => this.approvals.presentApproval(request),
       resolved: (request, decision, resolution) =>
         this.approvals.onApprovalResolved(request, decision, resolution),
-      gate: (target) => this.approvals.approvalGate(target),
+      refuse: (target) => this.approvals.approvalRefusal(target),
     });
     options.engine.setInteractionHandlers({
       present: (request) => this.approvals.presentInteraction(request),

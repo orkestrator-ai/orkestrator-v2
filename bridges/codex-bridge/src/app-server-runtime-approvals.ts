@@ -22,8 +22,7 @@ import {
 } from "./app-server/interactions.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type {
-  ApprovalGateTarget,
-  ApprovalGateVerdict,
+  ApprovalRefusalTarget,
   ParkedHoldOutcome,
 } from "./app-server/server-request-router.js";
 import { estimateOrderedEventBytes, isJsonObject } from "./app-server-runtime-base.js";
@@ -33,7 +32,6 @@ import {
   CODEX_READ_ONLY_APPROVAL_REFUSAL,
   CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL,
 } from "./codex-read-only-sandbox.js";
-import { codexReadOnlyCommandVerdict } from "./codex-read-only-commands.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.codex");
@@ -55,32 +53,6 @@ export type ParkedHoldResponse =
   | { status: "wrong-session" }
   | { status: "unavailable" };
 
-/**
- * The command a sandbox-off read-only turn may approve after checking it, or
- * undefined for a request that is never approved: a file change, a
- * permission request, input written to a running process, a user's own
- * command, or a command that also asks for network access.
- */
-function readOnlyGateCommand(
-  method: string,
-  params: Record<string, unknown>,
-): string | readonly string[] | undefined {
-  if (method === "item/commandExecution/requestApproval") {
-    if (params.kind !== undefined && params.kind !== null && params.kind !== "command") {
-      return undefined;
-    }
-    if (params.networkApprovalContext != null) return undefined;
-    return typeof params.command === "string" ? params.command : undefined;
-  }
-  if (method === "execCommandApproval") {
-    const command = params.command;
-    return Array.isArray(command) && command.every((part) => typeof part === "string")
-      ? (command as string[])
-      : undefined;
-  }
-  return undefined;
-}
-
 export class CodexRuntimeApprovals {
   constructor(
     private readonly ctx: CodexRuntimeContext,
@@ -88,34 +60,24 @@ export class CodexRuntimeApprovals {
   ) {}
 
   /**
-   * Answers every approval a read-only turn without Codex's command sandbox
-   * asks for, so none reaches a tab and an unattended review never waits on a
-   * card. Such a turn runs Codex's `untrusted` policy, under which the pinned
-   * Codex asks before every command no exec-policy rule allows, reads
-   * included. A command `codexReadOnlyCommandVerdict` proves only reads is
-   * approved; any other command, a file change, a permission request and an
-   * MCP tool approval are declined. Other MCP elicitations (a server's own
-   * question) route as usual.
+   * Declines every approval a read-only turn without Codex's command sandbox
+   * asks for. Such a turn runs Codex's `untrusted` policy, so an approval is
+   * exactly a command Codex does not treat as read-only, a file change, a
+   * permission request or an MCP tool approval; none may run, and an
+   * unattended review must not wait on a card. An MCP elicitation that is a
+   * server's own question, not a tool approval, routes as usual.
    *
    * Must stay synchronous: this runs on the path from the RPC read loop.
    */
-  approvalGate(target: ApprovalGateTarget): ApprovalGateVerdict | undefined {
+  approvalRefusal(target: ApprovalRefusalTarget): string | undefined {
     const context = target.threadId ? this.ctx.registry.getThread(target.threadId) : undefined;
     if (context?.readOnlyCommandSandboxOff === undefined) return undefined;
-    const params = isJsonObject(target.params) ? target.params : {};
     if (target.method === "mcpServer/elicitation/request") {
-      return isMcpToolApprovalElicitation(params)
-        ? { verdict: "refuse", message: CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL }
+      return isMcpToolApprovalElicitation(target.params)
+        ? CODEX_READ_ONLY_MCP_APPROVAL_REFUSAL
         : undefined;
     }
-    const command = readOnlyGateCommand(target.method, params);
-    if (command === undefined) {
-      return { verdict: "refuse", message: CODEX_READ_ONLY_APPROVAL_REFUSAL };
-    }
-    const verdict = codexReadOnlyCommandVerdict(command);
-    return verdict.allowed
-      ? { verdict: "approve" }
-      : { verdict: "refuse", message: verdict.reason };
+    return CODEX_READ_ONLY_APPROVAL_REFUSAL;
   }
 
   /**

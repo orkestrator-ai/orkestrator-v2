@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { autoPipelineDraftPrompt } from "./auto-pipeline.js";
 import {
+  createStoryRefinementPrompt,
   FEATURE_PLANNER_SYSTEM_PROMPT,
   FEATURE_PLANNER_TOOL_SYSTEM_PROMPT,
 } from "./feature-planning.js";
@@ -606,11 +607,24 @@ describe("what an acceptance criterion may say", () => {
     expect(ACCEPTANCE_CRITERIA_RULE).toContain(
       "Verify judges each against the committed change alone",
     );
+    const story = {
+      id: "story-1",
+      title: "Existing story",
+      description: "Existing description",
+      acceptanceCriteria: [],
+      messages: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
     const writers = {
       sectionsGuidance: TICKET_SECTIONS_GUIDANCE,
       autoPipelineDraft: autoPipelineDraftPrompt(),
       featurePlanner: FEATURE_PLANNER_SYSTEM_PROMPT,
       featurePlannerTool: FEATURE_PLANNER_TOOL_SYSTEM_PROMPT,
+      storyRefinement: createStoryRefinementPrompt(story, "Refine the acceptance criteria"),
+      storyRefinementTool: createStoryRefinementPrompt(story, "Refine the acceptance criteria", {
+        toolMode: true,
+      }),
       cliCreateText:
         PUBLIC_ACTION_INPUTS["ticket.create"].input.properties.acceptanceCriteria?.description,
       cliUpdateText:

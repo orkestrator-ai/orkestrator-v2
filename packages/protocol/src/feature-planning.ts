@@ -209,6 +209,8 @@ export function createStoryRefinementPrompt(
 
   return `You are refining one user story for an Orkestrator feature plan.
 
+Acceptance criteria: ${ACCEPTANCE_CRITERIA_RULE}
+
 Current story:
 Title: ${story.title}
 Description: ${story.description}

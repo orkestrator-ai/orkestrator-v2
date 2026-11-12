@@ -29,7 +29,8 @@ host) go in Constraints. `ACCEPTANCE_CRITERIA_RULE`
 criteria: the ticket tools' `sections` guidance (`TICKET_SECTIONS_GUIDANCE`,
 which the agent and coordinator tools carry once rather than on each field, to
 stay inside the coordinator tool-surface byte bound), the public CLI's ticket
-inputs, the auto-pipeline draft prompt and tool, and the feature planner.
+inputs, the auto-pipeline draft prompt and tool, and feature planning and story
+refinement prompts (both state-block and tool modes).
 Verify applies the same boundary when it judges them
 ([Verify](#verify)).
 

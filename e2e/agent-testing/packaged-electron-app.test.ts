@@ -14,6 +14,7 @@ import {
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  packagedResourcesPath,
   stopPackagedAppThenRemoveProfile,
 } from "./packaged-electron-app";
 import packaged from "./playwright.packaged-electron.config";
@@ -51,6 +52,18 @@ describe("packaged Electron app launch", () => {
         "release/packaged-test/mac/OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
       ),
     );
+  });
+
+  test("expects resources beside a Linux executable and in a macOS bundle's Contents/Resources", () => {
+    expect(packagedResourcesPath("/r/linux-unpacked/orkestrator-v2", "linux")).toBe(
+      "/r/linux-unpacked/resources",
+    );
+    expect(
+      packagedResourcesPath(
+        "/r/mac-arm64/OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
+        "darwin",
+      ),
+    ).toBe("/r/mac-arm64/OrkestratorV2.app/Contents/Resources");
   });
 
   test("passes on only allowlisted host variables and puts every home under the profile", () => {
@@ -117,6 +130,8 @@ describe("packaged Electron app launch", () => {
   test("the packaged spec has its own config, outside the default Electron run", () => {
     expect(packaged.testMatch).toEqual([
       "design-canvas-packaged-electron.spec.ts",
+      "design-canvas-renderer-pairing-electron.spec.ts",
+      "exit-marker-packaged-electron.spec.ts",
       "log-controls-packaged-electron.spec.ts",
       "packaged-native-shortcuts-electron.spec.ts",
       "packaged-security-electron.spec.ts",
@@ -124,8 +139,10 @@ describe("packaged Electron app launch", () => {
     ]);
     expect(electron.testMatch).not.toContain("packaged-security-electron.spec.ts");
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("design-canvas-renderer-pairing-electron.spec.ts");
     expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("watcher-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("exit-marker-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("packaged-native-shortcuts-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });
@@ -314,6 +331,48 @@ describe("packaged spec cleanup", () => {
       "Cannot remove profile without an owned-process snapshot",
     ]);
     expect(run.calls).toEqual(["snapshot app", "release"]);
+  });
+
+  // The renderer-pairing spec's release step stops a backend whose data
+  // directory and worktrees live under the root it removes.
+  test("keeps the profile when the release step fails, after attempting it", async () => {
+    const run = steps(() => [41, 42]);
+    const failure = await stopPackagedAppThenRemoveProfile("app", {
+      ...run.steps,
+      release: async () => {
+        run.calls.push("release");
+        throw new Error("backend did not stop");
+      },
+    }).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("backend did not stop");
+    expect(run.calls).toEqual(["snapshot app", "close app 41,42", "release"]);
+  });
+
+  test("keeps the profile when the app is not proven stopped, even if it closed", async () => {
+    const run = steps(() => [41, 42]);
+    const failure = await stopPackagedAppThenRemoveProfile("app", {
+      ...run.steps,
+      waitForStopped: async (owned: number[]) => {
+        run.calls.push(`wait ${owned.join(",")}`);
+        throw new Error("Owned processes did not exit");
+      },
+    }).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("Owned processes did not exit");
+    expect(run.calls).toEqual(["snapshot app", "close app 41,42", "release", "wait 41,42"]);
+  });
+
+  test("still releases and proves a stop when closing the app fails", async () => {
+    const run = steps(() => [41, 42]);
+    const failure = await stopPackagedAppThenRemoveProfile("app", {
+      ...run.steps,
+      close: async () => {
+        run.calls.push("close");
+        throw new Error("close timed out");
+      },
+    }).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("close timed out");
+    // A close that failed but left nothing running still lets the root go.
+    expect(run.calls).toEqual(["snapshot app", "close", "release", "wait 41,42", "remove profile"]);
   });
 
   test("removes the profile of a run that never launched an app", async () => {

@@ -195,7 +195,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 
 **Problem.** Native steer/queue, model/agent switching, durable replay, staged revert, saved rules and in-app credentials are only reachable through Session V2.
 
-**Context.** The repository deliberately does not call `client.v2.*` on 1.x. Related: 0005 (steer), 0001 (saved rules), 0006 (staged revert), 0003 (sign-in), and 0175 (whose `session.next.revert.*` events are not consumed).
+**Context.** The repository deliberately does not call `client.v2.*` on 1.x. Related: 0005 (steer), 0001 (saved rules), 0006 (staged revert), 0003 (retired 2026-11-13; sign-in), and 0175 (whose `session.next.revert.*` events are not consumed).
 
 **Investigation.** `session.next.*` events are known but unhandled (`apps/backend/src/core/opencode-events.ts:34-38` onward, map at `:22`). No `client.v2.*` call sites. On the 2.x provider (rechecked 2026-11-11 against the routes in `opencode2/*.ts` and the 2.2.6 `/openapi.json`): steer and queue (`/prompt` `delivery`), `/agent`, `/model`, staged revert (`/revert/stage`, `/revert`) and `/api/credential` are used; `/api/session/:id/context`, `/api/experimental/session/:id/log`, `/api/permission/saved`, `/api/integration*` and `/api/reference` are not.
 
@@ -834,7 +834,8 @@ These need Session V2. In 1.x they are reachable only through the experimental
 - staged revert (`revert/stage`, `revert/commit`);
 - saved "always allow" permission rules (`v2.permission.saved` in the 1.x SDK);
 - `credential` / `integration` for provider sign-in (see
-  [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md));
+  [agent-accounts.md](../../architecture/agent-accounts.md#opencode-provider-sign-in);
+  to-do 0003, retired 2026-11-13);
 - `reference.list` for `@` mentions.
 
 ### Readiness gate

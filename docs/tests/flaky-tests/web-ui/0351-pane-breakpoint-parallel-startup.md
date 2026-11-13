@@ -178,3 +178,39 @@ Failure trace:
 `output/playwright/test-results/PaneBreakpoint-split-panes-c1009-shell-appendChild-fallback--mobile-chromium/trace.zip`.
 No pane source, assertion, timeout or skip changed. The isolated pass confirms
 intermittence; it does not establish the cause of the anchor mismatch.
+
+## macOS loopback-wrapper qualification — 2026-11-13
+
+Observed on `qualify-browser-suites-636969d215a9-r1`, whose base is
+`17d28238c098b4443d1289df5c4ed75e7cc2802e`, on a Mac (macOS 27.2, 18 cores,
+Playwright 1.65.0) shared with about nine other builds. The read-only
+`mise run flaky:recurrence -- 0351 --base 17d28238c` check returned `open`.
+
+The command, for to-do 7020 task 2:
+
+```sh
+ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7000000 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=6 ORKESTRATOR_E2E_PORT=14722 ORKESTRATOR_PUBLIC_E2E_PORT=14723 mise run test:logged -- --name browser-wrapper-macos-3 -- bash -o pipefail -c "mise run test:browser 2>&1 | tee >(tail -n 800 > output/agent-testing/7020-macos/run3.tail.txt)"
+```
+
+It ran all 1,884 component cases with six workers at a load average of 48 to
+51: 1,729 passed, 154 skipped and one failed (37.6 min). The mobile case
+`split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, appendChild fallback)`
+failed at `e2e/PaneBreakpoint.spec.ts:145`: expected first visible
+`Transcript message 36.`, received `Transcript message 35.`. The public-site
+stage was not reached because the component suite failed.
+
+The complete unchanged owner then passed twice with `--repeat-each=3` and the
+default workers at a load average of 40: 33 passed in 57.5 s through
+`scripts/loopback-network.ts`, and 33 passed in 49.4 s with
+`ORKESTRATOR_E2E_HOST_NETWORK=1`:
+
+```sh
+ORKESTRATOR_E2E_PORT=14724 mise run test:logged -- --name pane-wrapper -- bash -o pipefail -c "mise exec -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --repeat-each=3 2>&1 | tee >(tail -n 30 > output/agent-testing/7020-macos/pane-wrapper.tail.txt)"
+```
+
+On macOS the wrapper runs the command on the host network, so this is the
+first record of the anchor mismatch on macOS rather than evidence about the
+wrapper. Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9X99pc/browser-wrapper-macos-3.log.gz`.
+No pane source, assertion, timeout or skip changed; the cause is still not
+established.

@@ -86,3 +86,18 @@ alone. Not confirmed. No assertion, timeout, retry or skip was changed.
 `mise run test:browser` did not complete on this snapshot, and the
 public-site config did not run. No default-suite run on this snapshot was
 green from start to finish.
+
+## Recurrence and repair: `useVirtuosoScrollState.return` (2026-11-13)
+
+The same assertion failed again in Multi Review preparation's `test:full` for
+branch `test-core-count-2ea1f7178998-r1` at `5da57d190` (base `263eea27d`),
+then passed alone. It is a test race, not host load alone: the navigation to
+the end writes `scrollTop = 4400` a frame before its operation settles, and
+`followAllowed` requires no operation in flight. The test checked
+`followOutput(true)` on the first `waitFor` poll that saw the position. That
+branch's 10 ms `waitFor` interval (from 50 ms) made the in-between frame easier
+to hit. Under eight-way parallel runs the unchanged test failed 1 of 48. The five tests
+with this pattern now wait for the position and the rendered `followEnabled`
+together (`waitForFollowingAtEnd`), then assert `followOutput(true)` once as
+before; the whole file passed 80 of 80 under the same load. Other owners in
+this case are unaffected.

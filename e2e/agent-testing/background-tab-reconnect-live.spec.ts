@@ -58,6 +58,14 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  attachToSpawnedBrowser,
+  checkVisibleRetry,
+  distinctAttempts,
+  latestFailures,
+  terminateChild,
+  type RetryStream,
+} from "./background-tab-reconnect-support";
 import { fetchModulesOutsideChromium } from "./browser-test";
 import { startOutageLink, type LinkRequestKind, type OutageLink } from "./client-outage-support";
 
@@ -88,7 +96,16 @@ const HIDDEN_RECONNECT_BUDGET_MS = EVENT_RECONNECT_CAP_MS + 4_000;
 const VISIBLE_RETRY_BUDGET_MS = 1_000;
 /** Equal jitter at the cap: the next rung is at least this far after a failure. */
 const CAP_RUNG_FLOOR_MS = EVENT_RECONNECT_CAP_MS / 2;
-const NETWORK_RESEND_MS = 100;
+/** Kept below the rung floor for the time restoring the link and showing the tab take. */
+const RUNG_MARGIN_MS = 2_000;
+/**
+ * Both streams must have failed this recently before the link returns. Each
+ * stream runs its own jittered ladder, so this waits for their phases to line
+ * up; 3 s leaves room for the 0.5 s restore and up to 1.5 s of showing.
+ */
+const ALIGNED_FAILURE_WINDOW_MS = 3_000;
+/** Capped rungs are 8 to 16 s apart per stream; a few minutes aligns them. */
+const ALIGN_TIMEOUT_MS = 180_000;
 const PROBE_TICK_MS = 100;
 
 test.skip(!LIVE, "Set ORKESTRATOR_AGENT_TEST_LIVE_BACKGROUND_TAB=1 against a disposable profile");
@@ -129,37 +146,18 @@ async function startChrome(
     [...CHROME_SWITCHES, `--user-data-dir=${userDataDir}`, "about:blank"],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  const endpoint = await new Promise<string>((resolve, reject) => {
-    let output = "";
-    const timer = setTimeout(
-      () => reject(new Error("Chromium printed no DevTools endpoint")),
-      30_000,
-    );
-    child.once("exit", () => reject(new Error("Chromium exited before it was ready")));
-    child.stderr!.on("data", (chunk: Buffer) => {
-      // Bounded: only the first lines carry the endpoint.
-      if (output.length < 64 * 1024) output += chunk.toString("utf8");
-      const match = /DevTools listening on (ws:\/\/\S+)/.exec(output);
-      if (match) {
-        clearTimeout(timer);
-        resolve(match[1]!);
-      }
-    });
-  });
-  child.stderr!.resume();
-  const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true });
+  // A failed startup terminates and awaits the child before it rejects.
+  const browser = await attachToSpawnedBrowser(child, (endpoint) =>
+    chromium.connectOverCDP(endpoint, { noDefaults: true }),
+  );
   return { browser, child };
 }
 
 async function stopChrome(chrome: { browser: Browser; child: ChildProcess } | null): Promise<void> {
   if (!chrome) return;
   await chrome.browser.close().catch(() => undefined);
-  if (chrome.child.exitCode === null && chrome.child.signalCode === null) {
-    const exited = new Promise((resolve) => chrome.child.once("exit", resolve));
-    // Only the process this test spawned, through its own handle.
-    chrome.child.kill("SIGTERM");
-    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
-  }
+  // Only the process this test spawned, through its own handle.
+  await terminateChild(chrome.child);
 }
 
 function profileStatus(): Status {
@@ -198,13 +196,17 @@ function mintLoginPath(): string {
   return `${url.pathname}${url.search}`;
 }
 
-async function createEnvironment(invoke: Invoke, fixture: Project): Promise<Environment> {
-  const environment = await invoke<Environment>("create_environment", {
+/** Only creates it, so the caller owns its cleanup before anything else can fail. */
+const createEnvironment = (invoke: Invoke, fixture: Project) =>
+  invoke<Environment>("create_environment", {
     projectId: fixture.id,
     name: `bg-tab-${Date.now()}`,
     networkAccessMode: "restricted",
     environmentType: "local",
   });
+
+/** Starts it with one plain terminal tab. */
+async function prepareEnvironment(invoke: Invoke, environment: Environment): Promise<void> {
   await invoke("start_environment", { environmentId: environment.id });
   const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
     environmentId: environment.id,
@@ -224,7 +226,6 @@ async function createEnvironment(invoke: Invoke, fixture: Project): Promise<Envi
       },
     },
   });
-  return environment;
 }
 
 type ProbeSnapshot = {
@@ -261,11 +262,7 @@ async function installProbe(page: Page): Promise<void> {
 const snapshotOf = (page: Page) => page.evaluate(() => window.backgroundTabProbe.snapshot());
 
 const attempts = (link: OutageLink, kind: LinkRequestKind, since: number, until = Infinity) =>
-  link.requests
-    .filter((request) => request.kind === kind && request.at >= since && request.at < until)
-    .map((request) => request.at)
-    // Chromium silently resends a request that died on a reused idle socket.
-    .filter((at, index, times) => index === 0 || at - times[index - 1]! > NETWORK_RESEND_MS);
+  distinctAttempts(link.requests, kind, since, until);
 
 const firstAnswered = (link: OutageLink, kind: LinkRequestKind, since: number): number | null =>
   link.requests.find(
@@ -276,9 +273,6 @@ const firstAnswered = (link: OutageLink, kind: LinkRequestKind, since: number): 
       request.status !== undefined &&
       request.status < 400,
   )?.answeredAt ?? null;
-
-const firstAttempt = (link: OutageLink, kind: LinkRequestKind, since: number): number | null =>
-  link.requests.find((request) => request.kind === kind && request.at >= since)?.at ?? null;
 
 const gapsOf = (times: readonly number[]) => times.slice(1).map((at, index) => at - times[index]!);
 
@@ -293,6 +287,33 @@ function writeEvidence(testInfo: TestInfo, name: string, evidence: unknown): voi
   writeFileSync(testInfo.outputPath(`${name}.json`), `${body}\n`);
   testInfo.annotations.push({ type: name, description: body });
   console.log(`[background-tab] ${name} ${JSON.stringify(evidence)}`);
+}
+
+/**
+ * Waits, during an outage, until every retry stream has just failed, so each
+ * ladder's next rung is at least a capped rung's floor away. Prints progress
+ * like `waitWithProgress`.
+ */
+async function waitForAlignedFailures(
+  page: Page,
+  link: OutageLink,
+  since: number,
+): Promise<Record<RetryStream, number>> {
+  const startedAt = Date.now();
+  let reportedAt = startedAt;
+  while (Date.now() - startedAt < ALIGN_TIMEOUT_MS) {
+    const aligned = latestFailures(link.requests, since, Date.now(), ALIGNED_FAILURE_WINDOW_MS);
+    // Only on a fresh attempt, so neither stream is about to fire its next rung.
+    if (aligned && Date.now() - Math.max(...Object.values(aligned)) < 1_000) return aligned;
+    await page.waitForTimeout(100);
+    if (Date.now() - reportedAt >= 30_000) {
+      reportedAt = Date.now();
+      console.log(
+        `[background-tab] aligning failures: ${Math.round((reportedAt - startedAt) / 1_000)} s`,
+      );
+    }
+  }
+  throw new Error("The main and terminal streams never failed within the same few seconds");
 }
 
 /**
@@ -360,7 +381,7 @@ async function show(page: Page, session: CDPSession): Promise<string> {
 
 // oxlint-disable-next-line no-empty-pattern -- Playwright reads fixture dependencies from this destructuring.
 test("a background tab reconnects while hidden and retries at once when shown", async ({}, testInfo) => {
-  test.setTimeout(2 * OUTAGE_MS + 240_000);
+  test.setTimeout(2 * OUTAGE_MS + ALIGN_TIMEOUT_MS + 240_000);
   const status = profileStatus();
   expect(status.status).toBe("ready");
   const invoke = directInvoke(status);
@@ -368,15 +389,19 @@ test("a background tab reconnects while hidden and retries at once when shown", 
     (project) => project.localPath === status.testProject,
   );
   if (!fixture) throw new Error("The fixture project is missing from this profile");
-  const environment = await createEnvironment(invoke, fixture);
-  const link = await startOutageLink({
-    owner: "background-tab",
-    gatewayUrl: status.browserUrl!,
-    rendererUrl: status.rendererUrl!,
-  });
   const userDataDir = testInfo.outputPath("chrome-profile");
+  // Everything acquired from here on is released in `finally`, whichever step fails.
+  let ownedEnvironment: Environment | null = null;
+  let ownedLink: OutageLink | null = null;
   let chrome: Awaited<ReturnType<typeof startChrome>> | null = null;
   try {
+    const environment = (ownedEnvironment = await createEnvironment(invoke, fixture));
+    await prepareEnvironment(invoke, environment);
+    const link = (ownedLink = await startOutageLink({
+      owner: "background-tab",
+      gatewayUrl: status.browserUrl!,
+      rendererUrl: status.rendererUrl!,
+    }));
     chrome = await startChrome(userDataDir);
     const context = chrome.browser.contexts()[0]!;
     await fetchModulesOutsideChromium(context);
@@ -499,13 +524,11 @@ test("a background tab reconnects while hidden and retries at once when shown", 
     const secondOutageAt = Date.now();
     link.setMode("reset");
     await waitWithProgress(page, OUTAGE_MS, "outage");
-    // Wait for a failed attempt, so the ladder's next rung is at least
-    // CAP_RUNG_FLOOR_MS away; restore the link and show the tab right after.
-    const lastFailure = Date.now();
-    await expect
-      .poll(() => firstAttempt(link, "main-stream", lastFailure), { timeout: 30_000 })
-      .not.toBeNull();
-    const failedAt = firstAttempt(link, "main-stream", lastFailure)!;
+    // Wait until both streams have just failed, so each ladder's next rung is
+    // at least CAP_RUNG_FLOOR_MS away; restore the link and show the tab right
+    // after. Any attempt before the tab is shown is then a ladder rung, and
+    // fails the check below.
+    const lastFailures = await waitForAlignedFailures(page, link, secondOutageAt);
     await page.waitForTimeout(300);
     const secondRestoredAt = Date.now();
     link.setMode("up");
@@ -521,35 +544,46 @@ test("a background tab reconnects while hidden and retries at once when shown", 
     await expect
       .poll(() => firstAnswered(link, "terminal-stream", secondRestoredAt), { timeout: 30_000 })
       .not.toBeNull();
-    const mainRetryAt = firstAttempt(link, "main-stream", secondRestoredAt)!;
-    const terminalRetryAt = firstAttempt(link, "terminal-stream", secondRestoredAt)!;
+    const retry = checkVisibleRetry({
+      requests: link.requests,
+      lastFailures,
+      restoredAt: secondRestoredAt,
+      visibleAt,
+      rungFloorMs: CAP_RUNG_FLOOR_MS,
+      rungMarginMs: RUNG_MARGIN_MS,
+      budgetMs: VISIBLE_RETRY_BUDGET_MS,
+    });
     const visibleRetry = {
       outageMs: secondRestoredAt - secondOutageAt,
       shownBy,
       hiddenThroughOutage: (await snapshotOf(page)).visibility
         .filter((entry) => entry.at >= secondOutageAt && entry.at < shownAt)
         .every((entry) => entry.state === "hidden"),
-      lastFailedAttemptBeforeShowMs: shownAt - failedAt,
+      restoredBeforeVisibleMs: visibleAt - secondRestoredAt,
       ladderNextRungAtLeastMs: CAP_RUNG_FLOOR_MS,
-      mainRetryAfterVisibleMs: mainRetryAt - visibleAt,
-      terminalRetryAfterVisibleMs: terminalRetryAt - visibleAt,
+      main: retry.streams["main-stream"],
+      terminal: retry.streams["terminal-stream"],
       mainBackAfterVisibleMs: firstAnswered(link, "main-stream", secondRestoredAt)! - visibleAt,
       terminalBackAfterVisibleMs:
         firstAnswered(link, "terminal-stream", secondRestoredAt)! - visibleAt,
       budgetMs: VISIBLE_RETRY_BUDGET_MS,
+      violations: retry.violations,
     };
     writeEvidence(testInfo, "evidence-visible-retry", visibleRetry);
-    // Well inside the capped rung, so the retry was the visibility edge's.
+    // Both streams had just failed and neither tried again until the tab was
+    // shown, so each retry was the visibility edge's, not the ladder's.
     expect(visibleRetry.hiddenThroughOutage).toBe(true);
-    expect(visibleRetry.lastFailedAttemptBeforeShowMs).toBeLessThan(CAP_RUNG_FLOOR_MS - 2_000);
-    expect(visibleRetry.mainRetryAfterVisibleMs).toBeLessThanOrEqual(VISIBLE_RETRY_BUDGET_MS);
-    expect(visibleRetry.terminalRetryAfterVisibleMs).toBeLessThanOrEqual(VISIBLE_RETRY_BUDGET_MS);
+    expect(retry.violations).toEqual([]);
     await expect(page.locator(".xterm:visible")).toHaveCount(1);
   } finally {
+    // The profile directory goes only once the browser using it has exited.
     await stopChrome(chrome);
     rmSync(userDataDir, { recursive: true, force: true });
-    await link.close();
-    await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
-    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    await ownedLink?.close();
+    if (ownedEnvironment) {
+      const environmentId = ownedEnvironment.id;
+      await invoke("stop_environment", { environmentId }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId }).catch(() => undefined);
+    }
   }
 });

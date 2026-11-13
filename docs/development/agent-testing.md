@@ -1866,8 +1866,14 @@ hide the tab (occlusion, another tab of the same window, or minimising), and
 checks that hidden timers are throttled, that a link that drops and returns
 while hidden is reconnected by the hidden tab on its own (within the ladder's
 16 s cap plus 4 s), and that showing the tab retries the main and terminal
-streams within 1 s. It needs a display (it opens a window for a few minutes)
-and is opt-in:
+streams within 1 s. For that last check it waits, during the second outage,
+until both streams have just failed (each runs its own jittered ladder), so
+neither ladder's next rung can fall before the tab is shown; an attempt by
+either stream between the link returning and the tab becoming `visible`
+fails the run. Those rules and the browser's exception-safe startup (a
+failed start terminates the child before it rejects) are in
+`background-tab-reconnect-support.ts`, unit-tested by the default suite. It
+needs a display (it opens a window for a few minutes) and is opt-in:
 
 ```bash
 ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile q48t18 \

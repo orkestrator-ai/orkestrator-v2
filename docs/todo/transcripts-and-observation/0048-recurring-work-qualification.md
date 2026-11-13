@@ -1855,6 +1855,17 @@ in the same window. The link drop is `reset` mode (connections refused),
   `retryWaitingStreams` clears the
   waiting timers on the visibility edge, as designed. No product change was
   needed.
+- **Rerun after the review repair (decision Q5).** The runs above pinned
+  only the main stream before showing the tab. With the spec now waiting
+  until both streams have just failed and refusing any attempt before the
+  edge, a sixth run on 2026-11-13 (profile `q48t18r`, at `f6ddfe0a1` plus
+  the repair; display locked, so hidden by occlusion and shown by focus
+  emulation) passed: hidden timers p50 1000 ms (visible 100), back 9.5 / 1.5 s
+  after the link returned while hidden, then, with both streams' last
+  failures 1.6 s before the tab became `visible` and no attempt by either
+  between the link returning and the edge, a retry 16 / 17 ms after it and
+  an answer 62 ms after it. Lining the two ladders up added 23 s to the
+  second outage. The profile was stopped and reset.
 - **Earlier attempts that day.** Two development runs did not reach these
   checks. While the Mac's screen was locked, every window was occluded:
   only the tab Chromium opened at launch was hidden, and in one run it
@@ -3149,3 +3160,29 @@ group passes, discovery within budget, two turn-end edges).
 Budgets: a hidden tab is back within the ladder's 16 s cap plus 4 s for the
 once-a-second timer alignment (20 s), and a shown tab retries within 1 s; the
 measured worst cases were 10.0 s and 163 ms.
+
+#### Q5. Task 18 review repair: what makes a visible retry the visibility edge's
+
+Multi Review found that the five runs above pinned only the main stream's
+backoff before showing the tab: the terminal stream runs its own jittered
+ladder, so its first attempt after the link returned could have been a
+ladder rung just before the tab was shown, and the check (at most 1 s after
+`visible`) accepted a negative delta.
+
+- **Wait until both streams have just failed, then require every stream's
+  first attempt to come at or after the visibility edge, none between the
+  link returning and the edge, and each last failure well inside the capped
+  rung's 8 s floor (chosen).**
+  - Pros: an attempt the ladder made cannot pass as the edge's, for either
+    stream; the rules are a pure function the default suite tests
+    (`background-tab-reconnect-support.test.ts`).
+  - Cons: the second outage runs until the two ladders' phases line up
+    (bounded at 3 minutes, usually under a minute).
+- **Keep pinning only the main stream and add a lower bound of 0 ms.**
+  - Pros: no extra wait.
+  - Cons: a terminal rung that lands just after the edge still passes.
+
+The same review also made startup and cleanup exception-safe: a Chromium
+that fails to start is terminated and awaited before the error reaches the
+test, and the environment and outage link are released by the test's
+`finally` from the moment each is acquired.

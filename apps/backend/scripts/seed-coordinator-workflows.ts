@@ -18,7 +18,7 @@ import { isDefaultDataDir } from "../src/data-dir.js";
 /**
  * Seeds coordinator workflow records that are still in use into an isolated
  * `dev:test` profile, so the coordinator panel's store banner (near its limit,
- * or full) can be checked on a live stack (to-do 6360, task 4). The launcher
+ * or full) can be checked on a live stack (6360 (retired), task 4). The launcher
  * runs it for `--seed-workflow-records` before it starts Electron, so no
  * backend has the store open: the records go in through the store's own API
  * (`saveCoordinatorWorkflowAssociation`), never by editing the database.

@@ -1,5 +1,5 @@
 /**
- * OpenCode 2.x usage and cost (docs/todo/agent-engines/0008-opencode-v2.md,
+ * OpenCode 2.x usage and cost (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`),
  * build plan phase 4).
  *
  * 2.x keeps the cumulative ledger itself: `Session.Info.tokens` and `cost`

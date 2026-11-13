@@ -1381,7 +1381,7 @@ were retired with 1.x; the last version of this section is in
 
 OpenCode 2.x is the `opencode` platform's only binary, pinned under the
 toolchain name `opencode2`, the name it had while it was pinned beside 1.x
-(`docs/todo/agent-engines/0008-opencode-v2.md`), so installed toolchain
+(to-do 0008, retired: `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), so installed toolchain
 directories stay where they are.
 
 - `PINNED_TOOLCHAIN_VERSIONS.opencode2` in `packages/toolchain/src/manifest.ts`
@@ -1457,13 +1457,20 @@ To bump it:
    connections, the user's configuration, coordinators, routing, the container
    plugins and package cache, the event-stream silence watchdog, and the
    qualification checks (an exact input retry, a turn nobody reads, a server
-   restart under a live provider, archive and restore). Also follow the
-   "Qualification" list in `0008-opencode-v2.md`; its real-stack half is the
-   idle-observation spec's OpenCode cases on fake models ([agent-testing.md](agent-testing.md)), run against a
-   disposable profile by
+   restart under a live provider, archive and restore). The real-stack half
+   is the idle-observation spec's OpenCode cases on fake models
+   ([agent-testing.md](agent-testing.md)), run against a disposable profile by
    `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> mise run verify:opencode2:real-stack`
    (the profile started with `--fixture --no-agent-credentials
-   --agent-platforms opencode --headless`). If
+   --agent-platforms opencode --headless`), and its container half by
+   `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> mise run verify:opencode2:container`
+   (the same profile with `--fixture-environments local,container`, the image
+   rebuilt for the new pin, and on a host whose firewall drops container
+   traffic to the profile, a `mise run docker:disposable -- start
+   --host-loopback` daemon whose `DOCKER_HOST` both commands use), which adds
+   a preserving rebuild that must keep `opencode2.db`. The checks these
+   replaced are listed in
+   [agent-engines.md](../architecture/agent-engines.md#maintaining-the-opencode-integration). If
    `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
    (15 s at 2.2.6) has changed: measure it again and set
    `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode2/stream-silence.ts`) to about

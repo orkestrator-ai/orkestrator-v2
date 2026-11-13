@@ -15,9 +15,6 @@ import {
   type BuildPipelineState,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
-import { createLogger } from "@orkestrator/protocol/logger";
-
-const log = createLogger("web.build-pipeline");
 
 export { isBuildPipeline } from "@/stores/buildPipelineStore";
 
@@ -25,10 +22,6 @@ type PipelineLoader = (pipelineId: string) => Promise<PersistedBuildPipeline<Bui
 type PipelineListLoader = (
   projectId: string,
 ) => Promise<Array<PersistedBuildPipeline<BuildPipeline>>>;
-type LegacyPipelineImporter = (
-  projectId: string,
-  snapshots: unknown[],
-) => Promise<{ importedIds: string[]; skipped: number }>;
 
 /**
  * Every function here acts on one node's pipelines: the `scope` it is given,
@@ -44,7 +37,6 @@ function pipelineReadsApi(scope: NodeScope) {
     getBuildPipeline: backend.getBuildPipeline,
     getBuildPipelineConditional: backend.getBuildPipelineConditional,
     getBuildPipelineControl: backend.getBuildPipelineControl,
-    importLegacyBuildPipelines: backend.importLegacyBuildPipelines,
     listBuildPipelinesConditional: backend.listBuildPipelinesConditional,
   });
 }
@@ -608,132 +600,4 @@ async function restoreBuildPipelinesForProject(
     }
   }
   return restored;
-}
-
-/** Storage key used by the pre-backend Zustand pipeline controller. */
-export const LEGACY_BUILD_PIPELINE_STORAGE_KEY = "orkestrator-build-pipelines";
-const LEGACY_BUILD_PIPELINE_MAX_VERSION = 1;
-const MAX_LEGACY_PIPELINES = 100;
-const MAX_LEGACY_STORAGE_BYTES = 5 * 1024 * 1024;
-
-export interface LegacyBuildPipelineMigrationResult {
-  importedIds: string[];
-  skipped: number;
-  unsupportedVersion?: number;
-}
-
-/**
- * Imports the pre-backend renderer store through the backend supervisor.
- *
- * The renderer deliberately does not install or rewrite these snapshots: the
- * backend validates ownership and becomes their first authoritative writer.
- * The legacy key is removed only after every project import succeeds, so a
- * transient backend failure is safely retried on the next launch.
- */
-export async function migrateLegacyBuildPipelines(
-  storage: Pick<Storage, "getItem" | "removeItem"> | undefined = typeof localStorage === "undefined"
-    ? undefined
-    : localStorage,
-  importLegacy?: LegacyPipelineImporter,
-  load?: PipelineLoader,
-  scope: NodeScope = appCommandScope(),
-): Promise<LegacyBuildPipelineMigrationResult> {
-  // The legacy copy is this browser's, so it is the command node's to import.
-  const reads = pipelineReadsApi(scope);
-  const importPipelines = importLegacy ?? reads.importLegacyBuildPipelines;
-  const loadPipeline = load ?? reads.getBuildPipeline;
-  const empty = { importedIds: [], skipped: 0 };
-  if (!storage) return empty;
-
-  let raw: string | null;
-  try {
-    raw = storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
-  } catch {
-    return empty;
-  }
-  if (!raw) return empty;
-  if (raw.length > MAX_LEGACY_STORAGE_BYTES) {
-    log.warn("legacy.state-too-large", { length: raw.length });
-    return { ...empty, skipped: 1 };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    try {
-      storage.removeItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
-    } catch {
-      // A blocked storage implementation may reject cleanup as well.
-    }
-    return { ...empty, skipped: 1 };
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ...empty, skipped: 1 };
-  }
-
-  const legacyVersion = (parsed as { version?: unknown }).version;
-  if (
-    legacyVersion !== undefined &&
-    (!Number.isSafeInteger(legacyVersion) ||
-      (legacyVersion as number) < 0 ||
-      (legacyVersion as number) > LEGACY_BUILD_PIPELINE_MAX_VERSION)
-  ) {
-    return {
-      ...empty,
-      skipped: 1,
-      ...(typeof legacyVersion === "number" ? { unsupportedVersion: legacyVersion } : {}),
-    };
-  }
-
-  const entries = (parsed as { state?: { pipelines?: unknown } }).state?.pipelines;
-  if (!Array.isArray(entries)) return { ...empty, skipped: 1 };
-
-  const byProject = new Map<string, unknown[]>();
-  let skipped = 0;
-  for (const entry of entries.slice(0, MAX_LEGACY_PIPELINES)) {
-    if (!Array.isArray(entry) || entry.length !== 2) {
-      skipped += 1;
-      continue;
-    }
-    const [id, value] = entry;
-    if (
-      typeof id !== "string" ||
-      id.length === 0 ||
-      !value ||
-      typeof value !== "object" ||
-      Array.isArray(value) ||
-      (value as { id?: unknown }).id !== id ||
-      typeof (value as { projectId?: unknown }).projectId !== "string" ||
-      (value as { projectId: string }).projectId.length === 0
-    ) {
-      skipped += 1;
-      continue;
-    }
-    const projectId = (value as { projectId: string }).projectId;
-    const projectSnapshots = byProject.get(projectId) ?? [];
-    projectSnapshots.push(value);
-    byProject.set(projectId, projectSnapshots);
-  }
-  skipped += Math.max(0, entries.length - MAX_LEGACY_PIPELINES);
-
-  const importedIds: string[] = [];
-  for (const [projectId, snapshots] of byProject) {
-    const result = await importPipelines(projectId, snapshots);
-    importedIds.push(...result.importedIds);
-    skipped += result.skipped;
-  }
-
-  try {
-    storage.removeItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
-  } catch {
-    // Repeating the migration is safe because the backend never overwrites IDs.
-  }
-
-  await Promise.all(
-    importedIds.map((id) =>
-      hydrateBuildPipeline(id, loadPipeline as PipelineLoader, undefined, scope),
-    ),
-  );
-  return { importedIds, skipped };
 }

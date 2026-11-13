@@ -14,6 +14,7 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 import {
   chainedTranscriptDelta,
+  NATIVE_TRANSCRIPT_DELTA_MAX_BASE_BYTES,
   NATIVE_TRANSCRIPT_DELTA_MAX_BASES,
   NATIVE_TRANSCRIPT_DELTA_MAX_KEY_BYTES,
   TranscriptDeltaBases,
@@ -193,6 +194,29 @@ describe("transcript readers behind the newest view (TX-1)", () => {
     });
   });
 
+  test("a viewer one view behind a head row over a million characters gets a small patch", async () => {
+    // About 3 MB encoded, and a new copy on every read: no two views share it,
+    // so each superseded view costs more than the 2 MiB key bound. That used
+    // to empty the ring and send the viewer the whole 3 MB view (to-do 7845 (retired)).
+    const streamed = "streamed ".repeat(330_000);
+    await withStream([row("prompt", "prompt"), row("head", streamed)], async (context) => {
+      const { history, service, advance } = context;
+      const behind = await advance();
+      history[1] = row("head", `${streamed} and more`);
+      await advance();
+      const update = asDelta(
+        await service.getTranscriptUpdate({
+          ...read,
+          knownToken: behind,
+          patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION,
+        }),
+      );
+      expect(update.delta.messageUpserts).toEqual([]);
+      expect(update.delta.messagePatches?.map((patch) => patch.id)).toEqual(["head"]);
+      expect(JSON.stringify(update.delta).length).toBeLessThan(4_096);
+    });
+  });
+
   test("a token nothing issued gets a snapshot", async () => {
     await withStream([row("m1")], async ({ service, advance }) => {
       await advance();
@@ -367,6 +391,7 @@ describe("TranscriptDeltaBases", () => {
     const bases = new TranscriptDeltaBases({
       maxBases: 3,
       maxKeyBytes: 1_000_000,
+      maxBaseBytes: 1_000_000,
       maxTotalBytes: 1_000_000,
     });
     let current = view([row("m0")]);
@@ -385,6 +410,7 @@ describe("TranscriptDeltaBases", () => {
     const bases = new TranscriptDeltaBases({
       maxBases: 100,
       maxKeyBytes: 5_000,
+      maxBaseBytes: 1_000_000,
       maxTotalBytes: 1_000_000,
     });
     let current = view([row("m0")]);
@@ -402,6 +428,7 @@ describe("TranscriptDeltaBases", () => {
     const bases = new TranscriptDeltaBases({
       maxBases: 100,
       maxKeyBytes: 5_000,
+      maxBaseBytes: 1_000_000,
       maxTotalBytes: 6_000,
     });
     bases.record("quiet", superseded("q0", view([row("a")])), view([row("b")]));
@@ -419,6 +446,7 @@ describe("TranscriptDeltaBases", () => {
     const bases = new TranscriptDeltaBases({
       maxBases: 8,
       maxKeyBytes: 3_000,
+      maxBaseBytes: 5_000,
       maxTotalBytes: 1_000_000,
     });
     bases.record("key", superseded("t0", view([row("a")])), view([row("b")]));
@@ -428,6 +456,44 @@ describe("TranscriptDeltaBases", () => {
     expect(bases.chain("key", "t0")).toBeUndefined();
     expect(bases.chain("key", "t1")).toBeUndefined();
     expect(bases.forTesting().totalBytes()).toBe(0);
+  });
+
+  test("a base over the key bound replaces the ring rather than emptying it", () => {
+    const bases = new TranscriptDeltaBases({
+      maxBases: 8,
+      maxKeyBytes: 3_000,
+      maxBaseBytes: 50_000,
+      maxTotalBytes: 1_000_000,
+    });
+    bases.record("key", superseded("t0", view([row("a")])), view([row("b")]));
+    // A head row that grows on every read: no two views share it.
+    const grown = (length: number) => view([row("head", "h".repeat(length))]);
+    bases.record("key", superseded("t1", grown(10_000)), grown(11_000));
+    expect(bases.chain("key", "t0")).toBeUndefined();
+    expect(bases.chain("key", "t1")?.later).toEqual([]);
+    bases.record("key", superseded("t2", grown(11_000)), grown(12_000));
+    expect(bases.chain("key", "t1")).toBeUndefined();
+    expect(bases.chain("key", "t2")?.later).toEqual([]);
+    const stats = bases.forTesting();
+    expect(stats.baseCount("key")).toBe(1);
+    expect(stats.totalBytes()).toBe(stats.chargedBytes());
+  });
+
+  test("a recovered head row over a million characters keeps its base under the default bounds", () => {
+    // About 3 MB encoded: over the 2 MiB key bound that used to empty the ring
+    // on every recovery (to-do 7845 (retired), task 1).
+    const bases = new TranscriptDeltaBases();
+    const content = "streamed ".repeat(330_000);
+    const grown = (extra: string) => view([row("head", content + extra)]);
+    const first = grown("a");
+    expect(encodedBytesWithMessages(first)).toBeGreaterThan(NATIVE_TRANSCRIPT_DELTA_MAX_KEY_BYTES);
+    bases.record("key", superseded("t0", first), grown("ab"));
+    expect(bases.chain("key", "t0")).toBeDefined();
+    bases.record("key", superseded("t1", grown("ab")), grown("abc"));
+    expect(bases.chain("key", "t1")).toBeDefined();
+    expect(bases.forTesting().totalBytes()).toBeLessThanOrEqual(
+      NATIVE_TRANSCRIPT_DELTA_MAX_BASE_BYTES,
+    );
   });
 
   test.each([

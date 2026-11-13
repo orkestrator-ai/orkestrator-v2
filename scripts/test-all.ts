@@ -874,6 +874,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/idle-observation-fake-codex.test.ts",
   "./e2e/agent-testing/idle-observation-fake-pi.test.ts",
   "./e2e/agent-testing/idle-observation-fake-models.test.ts",
+  "./e2e/agent-testing/idle-observation-container-rebuild.test.ts",
   "./e2e/agent-testing/steer-inactive-fake-claude.test.ts",
   "./e2e/agent-testing/steer-inactive-live-support.test.ts",
   "./e2e/agent-testing/mcp-fake-model.test.ts",
@@ -916,6 +917,8 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/claude-warm-runtime-support.test.ts",
   "./e2e/agent-testing/opencode-fake-provider.test.ts",
   "./e2e/agent-testing/mcp-probe-server.integration.test.ts",
+  // Slow tier (`*.integration.test.ts`): spawns the real backend-store.ts helper.
+  "./e2e/agent-testing/coordinator-live-account-fixtures.integration.test.ts",
   "./test-fixtures/agent-project/server.test.ts",
 ];
 

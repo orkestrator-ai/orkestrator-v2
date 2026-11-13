@@ -84,3 +84,14 @@ output was deleted by the logged runner, so individual rerun counts were not
 retained. This establishes intermittence, not its cause. No assertion, timeout
 or implementation was changed to hide the failure; the broad check remains
 non-green.
+
+## Recurrence (2026-11-13)
+
+Base `17d28238c098b4443d1289df5c4ed75e7cc2802e` (recurrence check: open);
+branch `remove-dead-bridge-be98778b92d1-r1` at `5d3ddf201`, which does not
+touch usage components. Both mobile `AgentUsage.spec.ts:38` cases exceeded
+30 s in a deadline-killed `mise run test:browser` at load about 85 and again
+in a seven-owner rerun at load about 60 (116 others passed). The unchanged
+owner then passed alone with one worker:
+`mise run test:logged -- --name agent-usage-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1`
+(49.9 s). Details in [9988](../design-canvas-and-artifacts/9988-design-launch-old-backend-reload-timeout.md).

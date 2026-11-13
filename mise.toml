@@ -494,6 +494,15 @@ run = [
   'ORKESTRATOR_AGENT_TEST_IDLE_CASES="${ORKESTRATOR_AGENT_TEST_IDLE_CASES:-missed-final,approval,reconnect,hidden,no-renderer,steer}" bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/idle-observation-live.spec.ts',
 ]
 
+[tasks."verify:opencode2:container"]
+description = "Run the idle-observation spec's OpenCode cases in a container environment, preserving rebuild included, with a scripted model on the container's loopback, against a running dev:test profile (ORKESTRATOR_AGENT_TEST_PROFILE)"
+depends = ["build:cli:test", "playwright:install"]
+env = { ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION = "1", ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS = "1", ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS = "opencode", ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT = "container" }
+run = [
+  'test -n "${ORKESTRATOR_AGENT_TEST_PROFILE:-}" || { echo "verify:opencode2:container: set ORKESTRATOR_AGENT_TEST_PROFILE to a running dev:test profile" >&2; exit 2; }',
+  'ORKESTRATOR_AGENT_TEST_IDLE_CASES="${ORKESTRATOR_AGENT_TEST_IDLE_CASES:-missed-final,approval,reconnect,hidden,no-renderer,steer,rebuild}" bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/idle-observation-live.spec.ts',
+]
+
 [tasks."verify:accounts:resend-live"]
 description = "Prove automatic switching's resend across a real bridge replacement (real bridges and pinned CLIs, scripted provider, no billed turn)"
 run = "bun test --cwd apps/backend ./tests/account-switch-resend-live.test.ts --preload ../../tests/setup-node.ts --parallel=1"

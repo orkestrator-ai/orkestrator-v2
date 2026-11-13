@@ -136,6 +136,16 @@ final class ConnectionModel: ObservableObject {
         return connectionListPayload()
     }
 
+    /// Checks `connect`'s input the way `connect` does, without saving or
+    /// contacting anything, so a request that would be refused is refused
+    /// before the user is asked about it. Returns the address it would save.
+    func normalizedConnectAddress(address: String, token: String, nickname: String?) throws -> URL {
+        let normalized = try validator.normalizedAddress(address)
+        _ = try validator.normalizedToken(token)
+        _ = try RemoteConnection.normalizedNickname(nickname)
+        return normalized
+    }
+
     @discardableResult
     func use(connectionID: String) async throws -> ConnectionListPayload {
         try rereadVaultBeforeWrite()

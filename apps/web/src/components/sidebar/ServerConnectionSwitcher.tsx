@@ -215,6 +215,19 @@ export function ServerConnectionSwitcher() {
   };
 
   const openConnectionDialog = (connection?: ConnectionSummary) => {
+    const nativeEditor = getConnectionsApi()?.addInNativeEditor;
+    if (nativeEditor) {
+      // The iOS app takes the token in its own editor, so a token for another
+      // machine never passes through this machine's page
+      // (docs/architecture/renderer-security.md, iOS app). The editor opens
+      // empty even for a server that needs a token: the iOS app keeps every
+      // token it saved and never reports `requiresToken`
+      // (RemoteConnection.swift), so no re-authentication starts from here.
+      void nativeEditor().catch((caught) => {
+        toast.error("Could not open the server editor", { description: errorMessage(caught) });
+      });
+      return;
+    }
     setAddress(connection?.address ?? "");
     setToken("");
     setShowToken(false);

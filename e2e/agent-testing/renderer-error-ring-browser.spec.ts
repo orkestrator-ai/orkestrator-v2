@@ -6,7 +6,7 @@ import path from "node:path";
 
 /**
  * A browser tab's renderer error ring reaches the essential log of the backend
- * it is signed in to (to-do 6300 task 2), against the running profile: a real
+ * it is signed in to (to-do 6300 (retired) task 2), against the running profile: a real
  * uncaught error in the signed-in tab becomes one `renderer-errors`
  * `error.recorded` line with route `browser` and the five content-free fields,
  * and one tab's writes are held to its own share of the minute. A tab opened

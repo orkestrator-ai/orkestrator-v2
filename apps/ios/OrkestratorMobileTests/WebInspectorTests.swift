@@ -3,7 +3,7 @@ import WebKit
 import XCTest
 @testable import OrkestratorMobile
 
-/// Safari's Web Inspector follows the page's renderer debug logging (to-do 6300 task 3).
+/// Safari's Web Inspector follows the page's renderer debug logging (to-do 6300 (retired) task 3).
 @MainActor
 final class WebInspectorTests: XCTestCase {
     private func makeCoordinator() -> (RemoteWebView.Coordinator, WKWebView, () -> [String]) {

@@ -915,8 +915,15 @@ steer must have reached the agent exactly once.
   Each profile was stopped and reset, and the Cursor entry was back in place.
   While the dialog handling was being written, two earlier Cursor runs failed
   on that startup dialog (a wrong role for its locator, then the
-  accessibility-tree race above).
-- **Not covered.** Real Claude and Cursor models (the 7568 item), a container
+  accessibility-tree race above). After the review round 1 fixes (per-delivery
+  appends, the entry lock and owner-only fake), profile `steer7fix` with the
+  same flags and `--repeat-each=2`: Claude 2/2 and Cursor 2/2 passed, Codex
+  skipped; the real entry was back in place with no lock left, and the
+  profile was stopped and reset.
+- **Not covered.** Two overlapping live runs against one checkout (the lock's
+  refusal and the owner-only fake are unit-tested in
+  `steer-inactive-live-support.test.ts`, including a run of the built bundle).
+  Real Claude and Cursor models (the 7568 item), a container
   environment, and Cursor's real SDK steer path, which the fake answers with
   `complete_delivered`.
 

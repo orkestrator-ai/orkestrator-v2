@@ -340,7 +340,7 @@ run.
 
 ## Related
 
-- [1020-provider-upgrade-2026-10-30.md](1020-provider-upgrade-2026-10-30.md): the error shapes at the current pins (task 7).
+- 1020 (retired 2026-11-13; `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`): the error shapes at the 2026-10-30 pins (task 7).
 - To-do 0235 (retired 2026-11-10): the refusal line a failed turn shows, now in [native-transcripts.md](../../architecture/native-transcripts.md#terminal-rows).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the real-refusal checks for tasks 3, 5 and 6, and the user part of task 4: capturing a real Cursor refusal) moved there on 2026-11-10.

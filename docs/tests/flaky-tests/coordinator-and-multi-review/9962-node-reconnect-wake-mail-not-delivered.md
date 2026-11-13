@@ -35,3 +35,20 @@ not if the subscription's send awaits real I/O (storage or a timer) that a
 loaded host delays. Per the testing guide, reproduce it first (for example
 under `scripts/test-under-contention.ts`) before changing the test, and await
 the send itself rather than adding microtask rounds.
+
+## Recurrence 2026-11-13
+
+- **Branch:** `reviewer-failure-c64fd66ac37e-r1` at `b3807407a`, base
+  `17d28238c`. `mise run flaky:recurrence -- 9962 --base 17d28238c` returned
+  "open. Record the failure as a recurrence". The branch changes the
+  structured review contract and review handling, not node coordination or
+  agent mail.
+- **Command:** the aggregate's workspace group run directly
+  (`bunx turbo run build test:workspace ... --concurrency=2`,
+  `ORKESTRATOR_BACKEND_TEST_WORKERS=4`) at load average about 100 on 16
+  cores. Full command and counts are in
+  [9995](../previews-annotations-and-gateway/9995-proxy-buffer-reservation-release-timeout-under-load.md).
+- **Failure:** the same assertion at `coordinator-node-reconnect-wakes.test.ts:390`,
+  Expected length 1, Received length 0 (59.10 ms).
+- **Isolated rerun:** the owning file passed alone with one worker, in the
+  same run as the gateway file.

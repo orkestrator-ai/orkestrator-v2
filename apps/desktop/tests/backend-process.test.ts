@@ -530,7 +530,6 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_TEST_HOST_WORKERS: "2",
         ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
         ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
-        ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
         ORKESTRATOR_RECURRING_METRICS: "1",
         ORKESTRATOR_PREVIEW_TRANSPORT: "1",
         ORKESTRATOR_PREVIEW_RELAY: "0",
@@ -564,7 +563,6 @@ describe("Electron backend process supervisor", () => {
     // Recurring-work policy switches reach the backend so a profile can
     // qualify the rollback drivers.
     expect(isolated.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK).toBe("all");
-    expect(isolated.ORKESTRATOR_NATIVE_OBSERVATION_SHARING).toBe("0");
     expect(isolated.ORKESTRATOR_RECURRING_METRICS).toBe("1");
     // So do the service-preview transport overrides, so a profile can
     // qualify the desktop tunnel and relay.

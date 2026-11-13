@@ -86,6 +86,7 @@ export default defineConfig({
     "idle-observation-live.spec.ts",
     "session-history-live.spec.ts",
     "client-outage.spec.ts",
+    "background-tab-reconnect-live.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

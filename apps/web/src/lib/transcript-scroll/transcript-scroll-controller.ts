@@ -10,9 +10,10 @@ import {
   type ScrollIntentState,
   type ViewportMode,
 } from "./scroll-intent";
-import { classifyKey, classifyWheel, TouchGesture } from "./scroll-input";
+import { classifyKey, classifyWheel, TouchGesture, type ScrollDirection } from "./scroll-input";
 import {
   readScrollMetrics,
+  type ScrollMetrics,
   VirtuosoScrollAdapter,
   type TranscriptVirtualizerHandle,
 } from "./virtuoso-scroll-adapter";
@@ -36,6 +37,14 @@ const POINTER_SCROLL_UP_TOLERANCE_PX = 2;
  */
 const INPUT_ARM_MS = 250;
 const MOMENTUM_CHAIN_MS = 120;
+
+/**
+ * How long after upward input an unobserved upward movement is still the
+ * reader's (`readerMovedUpUnobserved`). Longer than `INPUT_ARM_MS`: under
+ * load WebKit's virtualizer compensation for the tick's first step was seen
+ * 555 ms after the wheel event, its scroll events delayed with it.
+ */
+const UPWARD_INPUT_HOLD_MS = 1_000;
 
 /** A navigation has converged once its target holds within this for this many frames. */
 const CONVERGENCE_TOLERANCE_PX = 1;
@@ -327,6 +336,8 @@ export class TranscriptScrollController {
   private userScrollUntil = 0;
   /** When the reader last gave input that will scroll this transcript. */
   private lastInputAt = Number.NEGATIVE_INFINITY;
+  /** Until when the reader's last input, which scrolls up, may still be moving them. */
+  private upwardInputUntil = 0;
   private pointerHeld = false;
   /** The held pointer went down on the scroller itself (its scrollbar), not its content. */
   private pointerOnScroller = false;
@@ -948,6 +959,7 @@ export class TranscriptScrollController {
       return;
     }
     const metrics = readScrollMetrics(el);
+    if (this.readerMovedUpUnobserved(metrics)) return;
     // Only ever move down. Shrinking content is clamped by the browser, and
     // pulling the viewport up would fight a reader mid-gesture.
     if (metrics.maxScrollTop > metrics.scrollTop) {
@@ -1485,9 +1497,39 @@ export class TranscriptScrollController {
 
   // ------------------------------------------------------------------ input
 
+  /**
+   * The reader's own upward movement that no `scroll` event has reported yet,
+   * taken as their departure instead of being pinned back to the end.
+   *
+   * WebKit animates a wheel tick. Its first step can move up by about as much
+   * as the list shrinks in the same frame (rows coming into view measure
+   * shorter than estimated), so the offset is clamped to the new end and the
+   * reader still reads as following. Virtuoso then moves the offset up to keep
+   * the rows on screen in place, and the resize delivery that reports the
+   * shrink reaches `followGrowth` in the same task, before that movement's
+   * `scroll` event. Pinning there put the reader back at the end and cancelled
+   * the animation: the tick moved nothing (to-do 7766, retired; transcript-scroll.md,
+   * "Reader input"). An offset that fell
+   * below the last observed one soon after upward input, ending away from the
+   * end, is that movement.
+   */
+  private readerMovedUpUnobserved(metrics: ScrollMetrics): boolean {
+    if (now() >= this.upwardInputUntil) return false;
+    if (metrics.scrollTop >= this.lastObservedTop) return false;
+    if (metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX) return false;
+    this.lastObservedTop = metrics.scrollTop;
+    this.lastObservedEnd = metrics.maxScrollTop;
+    this.shownTop = metrics.scrollTop;
+    this.setAtBottom(false);
+    this.dispatch({ type: "user-departed" }, "cancelled");
+    this.scheduleAnchorCapture();
+    return true;
+  }
+
   /** Recognised reader input that will scroll this transcript. */
-  private userInput(): void {
+  private userInput(direction: ScrollDirection | null): void {
     this.lastInputAt = now();
+    this.upwardInputUntil = direction === "up" ? this.lastInputAt + UPWARD_INPUT_HOLD_MS : 0;
     this.userScrollUntil = this.lastInputAt + INPUT_ARM_MS;
     if (this.op) this.counters.userInterruptions += 1;
     this.dispatch({ type: "user-navigation" }, "cancelled");
@@ -1612,8 +1654,10 @@ export class TranscriptScrollController {
   /** Wheel input on a sibling overlay belongs to this viewport. */
   forwardWheel(event: WheelEvent): void {
     const el = this.scroller;
-    if (!el || !this.active || event.defaultPrevented || !classifyWheel(event, el)) return;
-    this.userInput();
+    if (!el || !this.active || event.defaultPrevented) return;
+    const direction = classifyWheel(event, el);
+    if (!direction) return;
+    this.userInput(direction);
     event.preventDefault();
     // WheelEvent units are pixels, lines, or viewport pages respectively.
     const unit = event.deltaMode === 2 ? el.clientHeight : event.deltaMode === 1 ? 16 : 1;
@@ -1627,7 +1671,7 @@ export class TranscriptScrollController {
     const onWheel = (event: WheelEvent) => {
       const direction = classifyWheel(event, el);
       if (direction) {
-        this.userInput();
+        this.userInput(direction);
         return;
       }
       // Scrolling an inner viewport is the reader's too when the current
@@ -1639,7 +1683,7 @@ export class TranscriptScrollController {
         event.target instanceof Element &&
         event.target.closest("[data-transcript-inner-viewport]")
       ) {
-        this.userInput();
+        this.userInput(null);
       }
     };
     const onScroll = () => this.handleScroll(el);
@@ -1666,7 +1710,7 @@ export class TranscriptScrollController {
       if (event.touches && event.touches.length > 0) {
         const direction = this.touch.move(event, el);
         if (direction === null) return;
-        this.userInput();
+        this.userInput(direction);
       }
       const metrics = readScrollMetrics(el);
       const previous = this.touchScrollTop;
@@ -1681,7 +1725,7 @@ export class TranscriptScrollController {
     };
     const onKey = (event: KeyboardEvent) => {
       const direction = classifyKey(event, el, this.lastPointerInside);
-      if (direction) this.userInput();
+      if (direction) this.userInput(direction);
     };
     const onDocumentKey = (event: KeyboardEvent) => {
       // Keys targeted inside the transcript are handled by its own listener.

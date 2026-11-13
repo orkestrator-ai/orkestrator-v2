@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { INNER_SEEK_EVENT, TranscriptScrollController } from "./transcript-scroll-controller";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
@@ -154,6 +154,74 @@ describe("transcript at-bottom UI state", () => {
     view.scrollTo(2000);
     expect(view.controller.wantsFollow).toBe(false);
     expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+  });
+
+  // WebKit's animated wheel tick (to-do 7766, retired; transcript-scroll.md, "Reader input"): its first step meets a list that
+  // shrinks by about as much, so the offset is clamped to the new end; the
+  // virtualizer's compensation then moves it up, and the resize delivery that
+  // reports the shrink arrives before that movement's scroll event.
+  function shrinkUnderFirstStep(
+    view: ReturnType<typeof harness>,
+    deltaY: number,
+    beforeCompensation = () => {},
+  ) {
+    view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+    view.grow(-200);
+    view.scroller.scrollTop = 4210; // The tick's first step, clamped to the new end.
+    view.scroller.dispatchEvent(new Event("scroll"));
+    expect(view.scroller.scrollTop).toBe(4200);
+    expect(view.controller.wantsFollow).toBe(true);
+    beforeCompensation();
+    view.scroller.scrollTop = 4010; // Size compensation, its scroll event still queued.
+    view.controller.notifyLayout("resize");
+  }
+
+  test("a wheel tick up whose first step meets a shrinking end still leaves the end", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, -190);
+    expect(view.scroller.scrollTop).toBe(4010);
+    expect(view.controller.wantsFollow).toBe(false);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+    view.scrollTo(4010); // The compensation's scroll event.
+    frame();
+    expect(view.scroller.scrollTop).toBe(4010);
+    expect(view.controller.wantsFollow).toBe(false);
+    expect(view.controller.diagnostics().writes).toBe(0);
+  });
+
+  test("compensation that a loaded host delays past the input window is still the reader's", () => {
+    let clock = 1_000;
+    const nowSpy = spyOn(performance, "now").mockImplementation(() => clock);
+    disposals.push(() => nowSpy.mockRestore());
+    controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, -190, () => {
+      clock += 600; // Seen in WebKit under load: 555 ms after the wheel event.
+    });
+    expect(view.scroller.scrollTop).toBe(4010);
+    expect(view.controller.wantsFollow).toBe(false);
+  });
+
+  test("an unrelated compensation long after upward input is pinned back to the end", () => {
+    let clock = 1_000;
+    const nowSpy = spyOn(performance, "now").mockImplementation(() => clock);
+    disposals.push(() => nowSpy.mockRestore());
+    controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, -190, () => {
+      clock += 5_000;
+    });
+    expect(view.scroller.scrollTop).toBe(4200);
+    expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  test("the same compensation without upward input is pinned back to the end", () => {
+    controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, 190);
+    expect(view.scroller.scrollTop).toBe(4200);
+    expect(view.controller.wantsFollow).toBe(true);
   });
 
   for (const retirement of ["pause", "cancel", "supersede", "inactive", "converge"] as const) {

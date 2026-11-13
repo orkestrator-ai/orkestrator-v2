@@ -96,6 +96,25 @@ intent; during a navigation, movement counts as the reader's only with a held
 pointer or input given after the navigation began, because the tail of an
 earlier gesture overlaps the virtualizer's own compensation writes.
 
+A follower's first upward wheel tick must leave the end even when the list
+shrinks under it. WebKit animates a wheel tick, and its first step can move up
+by about as much as the list shrinks in the same frame (rows coming into view
+measure shorter than estimated), so the browser clamps the offset to the new
+end and the reader still reads as following. Virtuoso then moves the offset up
+to keep the rows on screen in place, and the resize delivery that reports the
+shrink reaches the growth pin in the same task, before that movement's
+`scroll` event. Pinning there put the reader back at the end and cancelled the
+animation, so the tick moved nothing: in Playwright's Linux WebKit 9 of 20
+first ticks under load, and most of CI's Mobile shell (webkit) runs before
+`e2e/InspectorTranscriptHide.spec.ts` retried the tick. Playwright's macOS
+WebKit did not show it (40 of 40 single ticks moved). So for a second after
+upward input (`UPWARD_INPUT_HOLD_MS`, longer than the 250 ms input window
+because a loaded WebKit was seen compensating 555 ms after the wheel event),
+an offset below the last observed one that ends away from the end is the
+reader's departure, not growth to pin (`readerMovedUpUnobserved`). Movement
+long after the input, or with downward input, is still pinned. The spec now
+asserts that one tick leaves the end.
+
 ## Measured convergence
 
 Navigations converge on geometry, not on timers. A row target that is not

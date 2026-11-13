@@ -31,6 +31,18 @@
 - **Evidence:** `orkestrator-test-run.BWoW10/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
   under the host temporary directory.
 
+## Recurrences
+
+- **2026-11-13**, same base, branch head `3a88e8609`, in
+  `mise run test:logged -- --name review-default-tests-rerun3 -- mise run test`:
+  the sibling test `StaticHtmlArtifactView > document text in Find > a frame
+  over the element limit and a read over the budget both withhold the
+  document` failed at line 594, again `artifactSearchBodyWithheld(REF)`
+  received `false` (85.23 ms) right after the wait for the unavailable state
+  passed. Web 14,721 passed and 1 failed. The aggregate runner's lone rerun
+  of the unchanged file: `PASSED ALONE (2.5s)`. Evidence:
+  `orkestrator-test-run.2L8bxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
 ## Hypothesis
 
 Unconfirmed. The error text and the search-withheld mark may be published

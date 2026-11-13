@@ -41,7 +41,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against 
 
 **Context.** `apps/backend/src/core/agent-usage-limits.ts:119` (`readProjectUsageLimits`, command `get_project_usage_limits`), `packages/protocol/src/agent-usage-limits.ts` (`classifyUsageLimitError`, `usageLimitFailure`, `exhaustedUsageWindows`).
 
-**Investigation.** The one durable record of a failed turn is the session's `turnOutcomes` (bounded error text, written for every backend-dispatched prompt). When this was built, bridges reduced usage limits to error strings (Codex's `codexErrorInfo` code was dropped in `setPhase`, Claude's `rate_limit_event` status was not read); task 5 changed that. Plan windows are cached per platform for the active account (`plan-usage-cache.ts`). Tests: `agent-usage-limits.test.ts` (backend and protocol).
+**Investigation.** The one durable record of a failed turn is the session's `turnOutcomes` (bounded error text, written for every backend-dispatched prompt). When this was built, bridges reduced usage limits to error strings (Codex's `codexErrorInfo` code was dropped in `setPhase`, Claude's `rate_limit_event` status was not read); task 5 changed that. Plan windows are cached per platform for the active account (`plan-usage/cache.ts`). Tests: `agent-usage-limits.test.ts` (backend and protocol).
 
 **Decisions.** See Assumptions and decisions: "Usage-limit reader".
 

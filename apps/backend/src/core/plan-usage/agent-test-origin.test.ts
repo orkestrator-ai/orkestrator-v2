@@ -2,23 +2,23 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
+import { AgentAccountsRuntime } from "../agent-accounts-runtime.js";
 import {
   AGENT_TEST_ANTHROPIC_ORIGIN_ENV,
   AGENT_TEST_USAGE_ORIGIN_ENV,
   agentTestAnthropicOrigin,
   agentTestUsageOrigin,
   applyAgentTestAnthropicOrigin,
-} from "./agent-test-fixtures.js";
-import type { CommandContext } from "./commands-context.js";
-import { defaultDataDir } from "../data-dir.js";
+} from "../agent-test-fixtures.js";
+import type { CommandContext } from "../commands-context.js";
+import { defaultDataDir } from "../../data-dir.js";
 import {
   CLAUDE_USAGE_URL,
   CODEX_USAGE_URL,
   createPlanUsageReader,
   planUsageUrl,
   readAgentAccountPlanUsage,
-} from "./plan-usage.js";
+} from "./reader.js";
 
 /**
  * To-do 7542 task 1: an isolated agent-test profile's backend reads Claude

@@ -871,6 +871,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/idle-observation-fake-codex.test.ts",
   "./e2e/agent-testing/idle-observation-fake-pi.test.ts",
   "./e2e/agent-testing/idle-observation-fake-models.test.ts",
+  "./e2e/agent-testing/idle-observation-container-rebuild.test.ts",
   "./e2e/agent-testing/mcp-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-mail-tiles.test.ts",
   "./e2e/agent-testing/bridge-builds-setup.test.ts",

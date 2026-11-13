@@ -6,7 +6,7 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * it through a provider in the profile's own Pi `models.json`
  * (`piFakeModelsConfig`), the way to-do 0048's soak reaches its fake.
  *
- *   bun idle-observation-fake-pi.ts
+ *   bun idle-observation-fake-pi.ts [--port 0]
  *
  * prints its base URL (`http://127.0.0.1:<port>/v1`) as the first stdout
  * line. Turns follow the Claude fake's script (`scriptedStep`) with Pi's
@@ -19,7 +19,9 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * offers `background`, which a background step sets (todo 0049 task 8). Pi has no sub-agent,
  * background or question tool, so those steps reply in text or run in the
  * foreground. It keeps no request body and logs
- * nothing.
+ * nothing. A container OpenCode run (todo 0008 task 7) bundles it into one
+ * file and serves it on the container's loopback on a fixed `--port`
+ * (`installContainerFakeOpenCode`).
  */
 import { finalReply, scriptedStep } from "./idle-observation-fake-claude";
 
@@ -126,12 +128,12 @@ export function piFakeModelsConfig(baseUrl: string) {
   });
 }
 
-export function startPiFakeModel(platform = { Response: globalThis.Response }) {
+export function startPiFakeModel(platform = { Response: globalThis.Response }, port = 0) {
   const Reply = platform.Response;
   let counter = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
-    port: 0,
+    port,
     async fetch(request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname.endsWith("/models")) {
@@ -194,7 +196,14 @@ export function startPiFakeModel(platform = { Response: globalThis.Response }) {
   return server;
 }
 
+/** `--port <n>`, or 0 (any free port) when absent or not a port number. */
+export function fakePortArgument(argv: readonly string[]): number {
+  const index = argv.indexOf("--port");
+  const value = index >= 0 ? Number(argv[index + 1]) : 0;
+  return Number.isInteger(value) && value >= 0 && value <= 65_535 ? value : 0;
+}
+
 if ((import.meta as { main?: boolean }).main) {
-  const server = startPiFakeModel();
+  const server = startPiFakeModel(undefined, fakePortArgument(process.argv));
   console.log(`http://127.0.0.1:${server.port}/v1`);
 }

@@ -40,6 +40,11 @@
  *   steered into it from its queue strip. The turn must end on the steer's
  *   reply, never the first prompt's, with the steer shown once, before and
  *   after a reload. Every other platform records it `skipped`.
+ * - `rebuild`: OpenCode in a container only (todo 0008 task 7). A preserving
+ *   rebuild moves the environment to a new runtime; the conversation's
+ *   `opencode2.db` must come with it, so a follow-up turn settles on the same
+ *   session with the earlier rows kept (`idle-observation-container-rebuild.ts`).
+ *   Every other run records it `skipped`.
  * - `detach`: the session sits idle past the provider's idle detach (10 min
  *   for Claude, Cursor and Pi), recording the view's idle read cadence, then a
  *   prompt must reattach and settle.
@@ -75,12 +80,15 @@
  * `background` exercises OpenCode too (todo 0049 task 8). OpenCode's server
  * mirrors the same profile configuration (todo 0008 task 7).
  *
- * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
- * container environment (todo 0049 task 9) instead of a local one, from the
- * profile's development image. With fake models the scripted Claude model is
- * copied into the container and serves on its loopback, because a host
- * firewall may refuse the container's route to the host. `bridge-restart`
- * is local only.
+ * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude or OpenCode
+ * in a new container environment (todo 0049 task 9, todo 0008 task 7) instead
+ * of a local one, from the profile's development image. With fake models the
+ * scripted model is copied into the container and serves on its loopback,
+ * because a host firewall may refuse the container's route to the host. For
+ * OpenCode the profile's `opencode.json` names that loopback address before
+ * the environment is created, because the container's server reads the
+ * profile's configuration through the input staged with each runtime.
+ * `bridge-restart` is local only.
  */
 import {
   expect,
@@ -103,8 +111,11 @@ import {
   detachWaitMs,
   idleDetachWindowMs,
 } from "./idle-observation-live-support";
+import { runContainerRebuildCase } from "./idle-observation-container-rebuild";
 import {
   installContainerFakeClaude,
+  installContainerFakeOpenCode,
+  pointProfileOpenCodeAtContainerFake,
   readContainerFile,
   withFakeModelCleanup,
   startLocalFakeModel,
@@ -528,8 +539,8 @@ test.describe("live idle observation", () => {
         "the loopback models stand in for Claude, Codex, Pi and OpenCode only",
       );
       test.skip(
-        IN_CONTAINER && platform !== "claude",
-        "the container variant runs Claude (its loopback model runs inside the container)",
+        IN_CONTAINER && platform !== "claude" && platform !== "opencode",
+        "the container variant runs Claude and OpenCode (their loopback models run inside the container)",
       );
 
       const records: Record<string, CaseRecord> = {};
@@ -561,6 +572,8 @@ test.describe("live idle observation", () => {
       let environmentName = "";
       let containerId: string | null = null;
       const fakeModels: FakeModelHandle[] = [];
+      /** The fake serving inside the current container, so a rebuild can replace it. */
+      let containerFake: FakeModelHandle | null = null;
       /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
       let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       /** Puts the profile's OpenCode protocol setting back; set only when the run changed it. */
@@ -581,6 +594,16 @@ test.describe("live idle observation", () => {
           (project) => project.localPath === status.testProject,
         );
         expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
+        if (FAKE_MODELS && IN_CONTAINER && platform === "opencode") {
+          expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
+          // Staged into each runtime the environment gets, so it must be in
+          // place before the environment is created and kept until it is gone.
+          fakeModels.push(pointProfileOpenCodeAtContainerFake(status.dataDir!));
+          restoreOpenCodeAllowlist = await allowOpenCodeFakeProvider(
+            (command, args) => client.invoke(command, args),
+            PI_FAKE_PROVIDER,
+          );
+        }
         if (FAKE_MODELS && !IN_CONTAINER) {
           expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
           const fake = await startLocalFakeModel(
@@ -625,6 +648,15 @@ test.describe("live idle observation", () => {
         // A Pi session names its model; the fake is a provider of its own.
         const model = idleObservationModel(platform, FAKE_MODELS, MODELS.get(platform));
         if (model) summary.model = model;
+        const installContainerFake = async (id: string) => {
+          const fake =
+            platform === "opencode"
+              ? await installContainerFakeOpenCode(id)
+              : await installContainerFakeClaude(id);
+          fakeModels.push(fake);
+          containerFake = fake;
+          summary.fakeModelOrigin = fake.origin;
+        };
         /** Start the current environment with one native tab and its session. */
         const prepareEnvironment = async () => {
           await client.invoke("start_environment", { environmentId });
@@ -637,11 +669,7 @@ test.describe("live idle observation", () => {
               containerId,
               "the container environment started without a container",
             ).toBeTruthy();
-            if (FAKE_MODELS) {
-              const fake = await installContainerFakeClaude(containerId!);
-              fakeModels.push(fake);
-              summary.fakeModelOrigin = fake.origin;
-            }
+            if (FAKE_MODELS) await installContainerFake(containerId!);
           }
           const layout = await client.invoke<{ revision?: number } | null>("get_pane_layout", {
             environmentId,
@@ -1978,6 +2006,52 @@ test.describe("live idle observation", () => {
               timeout: SIDEBAR_BOUND_MS,
             })
             .toBe("idle");
+        });
+
+        await runCase("rebuild", async (record) => {
+          if (!IN_CONTAINER || platform !== "opencode" || !containerId) {
+            record.status = "skipped";
+            record.notes.push("the preserving rebuild is checked on OpenCode in a container only");
+            return;
+          }
+          containerId = await runContainerRebuildCase(
+            {
+              environmentId,
+              containerId,
+              invoke: () => client.invoke,
+              projection,
+              sendFromBackend,
+              waitForReply: async (previous, word) => {
+                await watchSettle(previous, word, {
+                  uiBoundMs: COMPLETION_BUDGET_MS,
+                  pageObserves: false,
+                });
+              },
+              stopFake: async () => {
+                const fake = containerFake;
+                if (!fake) return;
+                containerFake = null;
+                const index = fakeModels.indexOf(fake);
+                if (index >= 0) fakeModels.splice(index, 1);
+                await fake.stop();
+              },
+              installFake: installContainerFake,
+              reopenAndShow: async (words) => {
+                await goToEnvironment();
+                for (const word of words) {
+                  await expect(page().getByText(word, { exact: true }).first()).toBeVisible({
+                    timeout: 30_000,
+                  });
+                }
+                await expect(stopButton()).toHaveCount(0);
+              },
+              replyPrompt,
+              nonce,
+              progress,
+              sleep,
+            },
+            record,
+          );
         });
 
         await runCase("detach", async (record) => {

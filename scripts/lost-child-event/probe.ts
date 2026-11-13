@@ -8,7 +8,11 @@
  * 5 s after its `exit` with no `close`. At a lost `close` it records whether
  * the child's process group still exists and a zero-timeout `poll()` of this
  * process's own ends of the child's stdio: `IN|HUP` there means the kernel
- * already reports EOF and nothing has read it.
+ * already reports EOF and nothing has read it. Bun's `node:child_process`
+ * exposes no descriptor on a child's streams, so those ends are the
+ * descriptors that appeared across the synchronous `spawn` and are still open
+ * pipes or sockets (`stdioFdsSince`); the record says when their count is not
+ * the child's number of piped streams (`fdsAttributed: false`).
  *
  * Records are JSON lines, to `LOST_CHILD_PROBE_OUT` or stdout. They hold the
  * command and its subcommand only (`git rev-parse`), never paths, arguments,
@@ -27,7 +31,7 @@
  */
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import type { ChildProcess } from "node:child_process";
-import { appendFileSync, readdirSync } from "node:fs";
+import { appendFileSync, fstatSync, readdirSync } from "node:fs";
 
 const mac = process.platform === "darwin";
 if (!mac && process.platform !== "linux") throw new Error("macOS and Linux only");
@@ -76,9 +80,36 @@ export function pollNow(fds: readonly number[]): string[] {
   });
 }
 
-/** This process's open descriptors; compare before and after a synchronous spawn. */
+function fdKind(fd: number): "pipe" | "other" | "closed" {
+  try {
+    const stat = fstatSync(fd);
+    return stat.isFIFO() || stat.isSocket() ? "pipe" : "other";
+  } catch {
+    return "closed";
+  }
+}
+
+/**
+ * This process's open descriptors; compare before and after a synchronous
+ * spawn. The listing opens a directory descriptor of its own, which appears
+ * in what it reads and is closed again when it returns, so only descriptors
+ * still open afterwards count: otherwise a spawn that reuses that number
+ * would hide one of the child's ends, and the next listing's own descriptor
+ * would pass for one.
+ */
 export function openFds(): Set<number> {
-  return new Set(readdirSync(mac ? "/dev/fd" : "/proc/self/fd").map(Number));
+  const listed = readdirSync(mac ? "/dev/fd" : "/proc/self/fd").map(Number);
+  return new Set(listed.filter((fd) => fdKind(fd) !== "closed"));
+}
+
+/**
+ * The descriptors opened since `before` (`openFds()` read immediately before a
+ * synchronous `spawn`) that can be the child's stdio: still-open pipes or
+ * sockets. A directory, a regular file or a Linux pidfd that appeared at the
+ * same time is not counted.
+ */
+export function stdioFdsSince(before: Set<number>): number[] {
+  return [...openFds()].filter((fd) => !before.has(fd) && fdKind(fd) === "pipe");
 }
 
 /** The command and its subcommand, skipping git's `-C <path>` and `-c <k=v>`. */
@@ -112,7 +143,10 @@ type Tracked = {
   /** The test it started in, numbered by `preload.ts`. */
   test: number;
   spawnAt: number;
+  /** This process's ends of the child's stdio (`stdioFdsSince`). */
   fds: number[];
+  /** Whether `fds` has exactly one descriptor per piped stream of the child. */
+  fdsAttributed: boolean;
   zombieAt: number;
   exitAt: number;
   closeAt: number;
@@ -144,6 +178,8 @@ export type ScheduleWrite = {
   write: string;
   content?: string;
   contentBase64?: string;
+  /** Why the content was not recorded; a replay refuses a schedule with one. */
+  skipped?: "too-large" | "unsupported-content";
   open: number[];
 };
 export type ScheduleEntry = ScheduleCommand | ScheduleWrite;
@@ -167,16 +203,27 @@ function openNow(): number[] {
 /**
  * Records a file write for the replay; a no-op unless recording. Writes over
  * 64 KiB, or of content that is neither a string nor bytes, are recorded as
- * skipped, so the replay can say it is incomplete.
+ * `skipped` without content, and `reduction.ts replay` refuses such a
+ * schedule: without that write it would not be the recorded workload.
  */
 export function recordWrite(file: unknown, data: unknown): void {
   if (!recording || typeof file !== "string") return;
   const entry: ScheduleWrite = { at: Date.now(), write: file, open: openNow() };
-  if (typeof data === "string" && Buffer.byteLength(data) <= MAX_WRITE_BYTES) entry.content = data;
-  else if (ArrayBuffer.isView(data) && data.byteLength <= MAX_WRITE_BYTES)
-    entry.contentBase64 = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
+  const bytes =
+    typeof data === "string"
+      ? Buffer.byteLength(data)
+      : ArrayBuffer.isView(data)
+        ? data.byteLength
+        : undefined;
+  if (bytes === undefined) entry.skipped = "unsupported-content";
+  else if (bytes > MAX_WRITE_BYTES) entry.skipped = "too-large";
+  else if (typeof data === "string") entry.content = data;
+  else {
+    const view = data as ArrayBufferView;
+    entry.contentBase64 = Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString(
       "base64",
     );
+  }
   schedule.push(entry);
 }
 
@@ -189,7 +236,8 @@ function record(entry: Record<string, unknown>): void {
 
 /**
  * Registers a child just spawned. `before` is `openFds()` read immediately
- * before the synchronous `spawn`, so the new descriptors are the child's stdio.
+ * before the synchronous `spawn`; the child's stdio ends are the pipes and
+ * sockets opened since (`stdioFdsSince`).
  */
 export function track(
   child: ChildProcess,
@@ -199,13 +247,17 @@ export function track(
   env?: Record<string, string | undefined>,
 ): void {
   if (child.pid === undefined) return;
+  startScanner();
+  const fds = stdioFdsSince(before);
+  const piped = (child.stdio ?? []).slice(0, 3).filter((stream) => stream != null).length;
   const t: Tracked = {
     label: commandLabel(argv),
     seq: tracked.length + 1,
     pid: child.pid,
     test: probeState.test,
     spawnAt: Date.now(),
-    fds: [...openFds()].filter((fd) => !before.has(fd)),
+    fds,
+    fdsAttributed: fds.length === piped,
     zombieAt: 0,
     exitAt: 0,
     closeAt: 0,
@@ -281,14 +333,20 @@ function scan(): void {
         exitAfterSpawnMs: t.exitAt - t.spawnAt,
         groupAlive: groupAlive(t.pid),
         poll: pollNow(t.fds),
+        fdsAttributed: t.fdsAttributed,
         marks: t.marks,
       });
     }
   }
 }
 
-const scanner = setInterval(scan, 20);
-scanner.unref();
+// Started by the first `track`, so importing the probe schedules nothing.
+let scanner: ReturnType<typeof setInterval> | undefined;
+function startScanner(): void {
+  if (scanner) return;
+  scanner = setInterval(scan, 20);
+  scanner.unref();
+}
 
 /** Waits up to `maxMs` for every tracked child to close, then writes the summary. */
 export async function holdUntilClosed(maxMs: number): Promise<void> {
@@ -296,6 +354,7 @@ export async function holdUntilClosed(maxMs: number): Promise<void> {
   while (tracked.some((t) => !t.closeAt) && Date.now() < until) await Bun.sleep(50);
   scan();
   clearInterval(scanner);
+  scanner = undefined;
   const scheduleFile = process.env.LOST_CHILD_PROBE_SCHEDULE;
   if (scheduleFile) {
     const first = schedule.find((entry) => "argv" in entry)?.at ?? 0;

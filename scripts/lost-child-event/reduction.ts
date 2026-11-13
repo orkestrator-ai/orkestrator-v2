@@ -27,13 +27,18 @@
  * each command its recorded Git identity, starts each entry at its recorded
  * offset once every entry that had finished before it in the recording has
  * finished, and substitutes each recorded revision with the one the replay's
- * own command printed. It never aborts.
+ * own command printed. It never aborts. A schedule with a write it cannot
+ * make (recorded without its content, being over 64 KiB or neither text nor
+ * bytes, or outside the test's directories) is refused before anything runs
+ * (`IncompleteScheduleError`), since leaving the write out would replay a
+ * different repository and workload.
  *
  * Every command's outcome is checked: in `pattern` a scan that was not aborted
  * must succeed, and in `replay` each command must exit as it did when it was
  * recorded. A mismatch is printed (`PATTERN_FAILURE`, `REPLAY_MISMATCH`, with
  * the command's label only) and the script exits 1, because a run whose
- * commands failed is not the workload it claims to be.
+ * commands failed is not the workload it claims to be. A refused schedule
+ * also exits 1.
  *
  * Prints probe records, then one summary line per mode, then the probe's
  * summary. See to-do 6900 for the counts.
@@ -247,13 +252,44 @@ process.stdin.on("end", () => process.exit(0));
 const OID = /\b(?:[0-9a-f]{64}|[0-9a-f]{40})\b/g;
 
 /** Reads a schedule, refusing one recorded before outcomes and writes were. */
-function readSchedule(text: string): ScheduleEntry[] {
+export function readSchedule(text: string): ScheduleEntry[] {
   const parsed = JSON.parse(text.split("\n")[0]!) as ScheduleFile | unknown[];
   if (Array.isArray(parsed) || parsed.version !== SCHEDULE_VERSION)
     throw new Error(
       "this schedule predates version 2: it holds no file writes, Git identity, exit statuses or revisions, so a replay of it is not the recorded workload. Record it again with the current probe.",
     );
   return parsed.entries;
+}
+
+/** A schedule a replay cannot make faithfully; nothing has run when it is thrown. */
+export class IncompleteScheduleError extends Error {
+  constructor(readonly problems: string[]) {
+    super(
+      `this schedule cannot be replayed as the recorded workload: ${problems.join("; ")}. Record it again with every write under 64 KiB of text or bytes.`,
+    );
+    this.name = "IncompleteScheduleError";
+  }
+}
+
+/**
+ * The writes a replay of `entries` could not make, by entry index and reason
+ * (never a path or content): one recorded without its content, or one outside
+ * `recordedRoot`, the recorded test's directories.
+ */
+export function incompleteWrites(
+  entries: readonly ScheduleEntry[],
+  recordedRoot: string,
+): string[] {
+  return entries.flatMap((entry, index) => {
+    if ("argv" in entry) return [];
+    if (!entry.write.startsWith(`${recordedRoot}/`))
+      return [`entry ${index} writes outside the recorded test's directories`];
+    if (entry.content === undefined && entry.contentBase64 === undefined)
+      return [
+        `entry ${index} is a write recorded without its content (${entry.skipped ?? "none"})`,
+      ];
+    return [];
+  });
 }
 
 /** Runs one replayed command; `run` by default, or a capture under test. */
@@ -280,7 +316,9 @@ export async function replay(
   const sample = commands.find((entry) => entry.cwd.includes("/repos/"))?.cwd;
   if (!sample) throw new Error("the schedule has no command run in a repos/ directory");
   const recordedRoot = sample.slice(0, sample.indexOf("/repos/"));
-  const counts = { commands: 0, mismatches: 0, unmappedRevisions: 0, skippedWrites: 0 };
+  const incomplete = incompleteWrites(schedule, recordedRoot);
+  if (incomplete.length > 0) throw new IncompleteScheduleError(incomplete);
+  const counts = { commands: 0, writes: 0, mismatches: 0, unmappedRevisions: 0 };
   const mismatch = (iteration: number, index: number, detail: Record<string, unknown>) => {
     counts.mismatches++;
     console.log(JSON.stringify({ kind: "REPLAY_MISMATCH", iteration, index, ...detail }));
@@ -299,17 +337,11 @@ export async function replay(
       const wait = entry.at - (Date.now() - started);
       if (wait > 0) await Bun.sleep(wait);
       if (!("argv" in entry)) {
-        const content =
-          entry.content ??
-          (entry.contentBase64 === undefined
-            ? undefined
-            : Buffer.from(entry.contentBase64, "base64"));
-        if (content === undefined || !entry.write.startsWith(`${recordedRoot}/`)) {
-          counts.skippedWrites++;
-        } else {
-          mkdirSync(path.dirname(remap(entry.write)), { recursive: true });
-          writeFileSync(remap(entry.write), content);
-        }
+        // `incompleteWrites` has checked that every write has its content.
+        const content = entry.content ?? Buffer.from(entry.contentBase64!, "base64");
+        mkdirSync(path.dirname(remap(entry.write)), { recursive: true });
+        writeFileSync(remap(entry.write), content);
+        counts.writes++;
         done[index] = Promise.resolve();
         continue;
       }

@@ -14,15 +14,18 @@
  * worker-surface tool once and the root-changes approval accepted in its
  * dialog, Claude only, see `coordinator-live-surfaces.ts`), `gap-tools` (each
  * gap-review tool called once against one worker, see
- * `coordinator-live-gap-tools.ts`), `ask` (a worker launched and a question
- * asked in one turn, answered from the card, see `coordinator-live-ask.ts`),
- * `identity` (each tab its own mailbox `self`, an `idle`-policy injection and a
- * resume into another tab, see `coordinator-live-identity.ts`),
- * `account-switch` (self-timers, a seeded usage limit and a switch to a
- * fixture account, by request and under a timer's permission, see
- * `coordinator-live-account-switch.ts`) and `peer`. Every
- * scenario with mail also judges each echoed carrier through the renderer's
- * tile parser (`coordinator-mail-tiles.ts`).
+ * `coordinator-live-gap-tools.ts`), `graph-profiles` (one-node graphs with the
+ * reviewer, builder and researcher capability profiles, the tier the launch
+ * picker shows against what the provider lets the node do, see
+ * `coordinator-live-graph-profiles.ts`; no coordinator turn), `ask` (a worker
+ * launched and a question asked in one turn, answered from the card, see
+ * `coordinator-live-ask.ts`), `identity` (each tab its own mailbox `self`, an
+ * `idle`-policy injection and a resume into another tab, see
+ * `coordinator-live-identity.ts`), `account-switch` (self-timers, a seeded
+ * usage limit and a switch to a fixture account, by request and under a
+ * timer's permission, see `coordinator-live-account-switch.ts`) and `peer`.
+ * Every scenario with mail also judges each echoed carrier through the
+ * renderer's tile parser (`coordinator-mail-tiles.ts`).
  *
  * Opt-in only: each case runs a real coordinator turn on the host's
  * credentials, so every case is skipped unless
@@ -138,6 +141,12 @@ import {
   researchApplies,
 } from "../../apps/desktop/scripts/dev/coordinator-live-research";
 import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
+import { graphProfileProbesFor } from "../../apps/desktop/scripts/dev/coordinator-live-graph-profiles";
+import {
+  gitGraphProfilesWorkspace,
+  runGraphProfilesProbe,
+} from "../../apps/desktop/scripts/dev/coordinator-live-graph-profiles-orchestration";
+import { enableExperimentalGraphs } from "./experimental-graphs";
 import { runAskScenario } from "../../apps/desktop/scripts/dev/coordinator-live-ask-orchestration";
 import { askApplies } from "../../apps/desktop/scripts/dev/coordinator-live-ask";
 import { runIdentityScenario } from "../../apps/desktop/scripts/dev/coordinator-live-identity-orchestration";
@@ -1091,6 +1100,87 @@ async function gapToolsCase(input: {
 }
 
 /**
+ * The graph-profiles scenario (to-do 0031 task 10): one-node graphs whose
+ * agent node has the reviewer, builder and (Claude only) researcher profile,
+ * each on its own environment of the fixture project, judged by
+ * `coordinator-live-graph-profiles.ts`. No coordinator turn: the graph runs
+ * are launched through the same commands as "Run graph…". A probe whose node
+ * failed for want of a login skips the case rather than failing it.
+ */
+async function graphProfilesCase(input: {
+  page: Page;
+  entry: CoordinatorLivePlatform;
+  summary: CoordinatorLivePlatformSummary;
+  skip: (reason: string) => never;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { entry, summary, skip, cleanup } = input;
+  const { platform } = entry;
+  const { invoke, fixture } = await openProfile(input.page);
+  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
+  const enabled = config.global.enabledAgentPlatforms;
+  if (Array.isArray(enabled) && !enabled.includes(platform)) {
+    skip(`${platform} is not enabled in this profile (start it with --agent-platforms)`);
+  }
+  if (config.global.experimentalGraphs !== true) {
+    const previous = config.global.experimentalGraphs;
+    await enableExperimentalGraphs(invoke);
+    cleanup.push(async () => {
+      const current = await invoke<{ global: Record<string, unknown> }>("get_config");
+      await invoke("update_global_config", {
+        global: { ...current.global, experimentalGraphs: previous },
+      });
+    });
+  }
+  const checks: CoordinatorLiveCheck[] = [];
+  const observed: Record<string, number> = {};
+  for (const probe of graphProfileProbesFor(platform)) {
+    const nonce = randomBytes(4).toString("hex");
+    const created = await invoke<{ id: string }>("create_environment", {
+      projectId: fixture.id,
+      name: `graph-profiles-${platform}-${probe}-${nonce}`,
+      environmentType: "local",
+      networkAccessMode: "restricted",
+    });
+    cleanup.push(() => invoke("delete_environment", { environmentId: created.id }));
+    cleanup.push(() => invoke("stop_environment", { environmentId: created.id }));
+    await invoke("start_environment", { environmentId: created.id });
+    const deadline = Date.now() + 120_000;
+    let worktree: string | null | undefined;
+    while (Date.now() < deadline) {
+      const environment = await invoke<{ status?: string; worktreePath?: string | null }>(
+        "get_environment",
+        { environmentId: created.id },
+      );
+      worktree = environment.worktreePath;
+      if (environment.status === "running" && worktree) break;
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+    if (!worktree) throw new Error(`${probe}: the probe environment never started`);
+    const result = await runGraphProfilesProbe({
+      invoke,
+      projectId: fixture.id,
+      environmentId: created.id,
+      workspace: gitGraphProfilesWorkspace(worktree),
+      platform,
+      probe,
+      nonce,
+      timeoutMs: budgets.step,
+      pollIntervalMs: POLL_INTERVAL_MS,
+    });
+    const error = result.evidence.activation?.error ?? "";
+    if (result.evidence.activation?.state === "failed" && isSignInError(error)) {
+      skip(`no usable ${platform} credential in this profile: ${error.slice(0, 300)}`);
+    }
+    summary.tier ??= result.evidence.shown?.tier;
+    checks.push(...result.checks.map((check) => ({ ...check, name: `${probe}: ${check.name}` })));
+    observed[`${probe}ToolCalls`] = result.evidence.attempts?.toolCalls ?? -1;
+  }
+  const failures = recordChecks(summary, checks, observed);
+  expect(failures, `${platform}: the graph-profiles scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1520,6 +1610,18 @@ test.describe("live coordinator", () => {
             cleanup.push(async () => restore());
           }
           await gapToolsCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("graph-profiles")) {
+      test(`graph profiles on ${platform}: the tier the launch picker shows is the tier a reviewer, builder${platform === "claude" ? " and researcher" : ""} node runs at, and nothing the profile forbids lands unnoticed`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests["graph-profiles"]);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "graph-profiles", async ({ summary, skip, cleanup }) => {
+          await graphProfilesCase({ page, entry, summary, skip, cleanup });
         });
       });
     }

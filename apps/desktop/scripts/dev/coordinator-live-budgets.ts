@@ -33,6 +33,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     surfaces: step * 4,
     // Seven turns, the launch wake, the long turn's start, the stop wake and the command.
     "gap-tools": step * 11,
+    // Three probes (reviewer, builder, researcher), each an environment start and one node turn.
+    "graph-profiles": step * 6,
     // The delegate-and-ask turn, the worker's wake and the settle after it.
     ask: step * 3,
     // Three tab turns, the idle-policy mail turn and the resumed tab's turn.

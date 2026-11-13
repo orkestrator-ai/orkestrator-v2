@@ -1,52 +1,26 @@
 # Live-provider and platform qualification
 
-Checked against `main` at `00a0cb82` (2026-10-25).
+Checked against `main` at `17d28238c` (2026-11-13).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-13 against `main` at `17d28238c`.
 
 ### Tasks
 
-2. **Transcript part coverage**: write an opt-in live spec under `e2e/agent-testing/` that drives a compaction, an image round trip and a long-running tool on Claude, lets the turn finish while inactive, then returns and reloads. Status: open (the spec; running it with a real Claude login is 7568: 0031 task 2; OpenCode's compaction part only is covered).
 5. **Codex live and cold row layout**: a multi-agent v2 turn is one assistant row live but two after a cold reload; scrub the recorded stream, add it as a fixture, then align or document. Status: blocked (waits on 7568: 0031 task 5; the current layouts are pinned by a credential-free test).
 6. **Re-qualification rule after agent bumps**: write the maintainer's chosen rule into `docs/development/upgrade-agents.md`. Status: blocked (waits on 7568: 0031 task 6).
-8. **Scheduled CI for platform runs**: decide which runs become CI jobs. Status: partly done (a weekly Docker live workflow exists; Electron and macOS are not in CI).
-9. **Keep "Current state" and the batching index current**: the pins and CI list are already stale. Status: open.
-10. **Graph capability profiles on live providers** (graphs item 209): build the reusable `graph-profiles` scenario that checks the tiers the graph designer and launch pickers show against what each provider does to a graph agent node. Status: open (2026-10-29: steps 1, 2 and 5 ran by hand on Claude, Codex, OpenCode and Pi on macOS, all claims held; the remaining live runs, Grok, Cursor, Linux, step 3 and step 4, are 7568: 0031 task 10).
+8. **Scheduled CI for platform runs**: add the scheduled job the maintainer chooses. Status: blocked (waits on 7568: 0031 task 8; no scheduled workflow is added until then).
 
-### 2. Transcript part coverage
-
-**Problem.** Compaction, retry, status and image parts are not proved to render from the snapshot after a turn finishes in an inactive environment, on Claude or Pi, and no repeatable spec exists to prove it. This task writes the spec; its live run with a real Claude login is 7568 (0031 task 2).
-
-**Context.** Replaces the remaining browser QA of `03-transcript-part-coverage.md`. Needs `--credential-source claude --agent-platforms claude` (or Pi).
-
-**Investigation.** No live spec drives a compaction plus image round trip plus long-running tool. The inactive-path procedure is in `docs/development/agent-testing.md` and `AGENTS.md` ("Test the inactive-environment path"). Claude is now pinned at SDK 0.3.309 and CLI 2.1.309 (`bridges/claude-bridge/package.json:16`, `docker/Dockerfile:193`), newer than the 0.3.296 named in Current state.
-
-**Decisions.**
-
-- **Which provider?**
-  - **Claude (recommended).**
-    - Pros: compaction is user-triggerable with `/compact`; image input is a first-class path; the most used native provider.
-    - Cons: spends Claude tokens; compaction of a small fixture conversation may be trivial.
-  - **Pi.**
-    - Pros: covers a newer bridge whose compaction is less exercised.
-    - Cons: Pi fronts the user's own providers; the default-model fallback issue ([Pi default model](../../development/credentials-and-models.md#default-model)) can block a fresh host.
-- **Manual or scripted?**
-  - **A scripted opt-in spec under `e2e/agent-testing/`, gated like `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE` (recommended).**
-    - Pros: repeatable on every Claude bump (task 6); evidence is exact.
-    - Cons: more work than one manual pass; asserting a compaction part needs a stable locator.
-  - **A manual browser pass.**
-    - Pros: fastest to close the item.
-    - Cons: not repeatable; the next bump has no check.
+Tasks 2 (the transcript part coverage spec), 9 (Current state and the batching index) and 10 (the `graph-profiles` scenario) were done on 2026-11-13; see [Assumptions and decisions](#assumptions-and-decisions). Their live runs are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting) (0031 tasks 2 and 10).
 
 ### 5. Codex live and cold row layout
 
 **Problem.** A Codex multi-agent v2 turn is one assistant row live but two rows after a cold reload, so a reload visibly reshapes the transcript.
 
-**Context.** Live spawns arrive only as `subAgentActivity` items, which are not tool calls, while the rollout's `spawn_agent` calls split the row (`bridges/codex-bridge/src/history/rollout.ts:616`, `:1728`). `bridges/codex-bridge/AGENTS.md` ("One row per model response") defines the live boundary.
+**Context.** Live spawns arrive only as `subAgentActivity` items, which are not tool calls, while the rollout's `spawn_agent` calls split the row (`bridges/codex-bridge/src/history/rollout.ts`). `bridges/codex-bridge/AGENTS.md` ("One row per model response") defines the live boundary.
 
-**Investigation.** The live boundary rules now also open a row on a new tool call after `thread/tokenUsage/updated`, but neither rule fires on the final agent message after activity-only items, so the description still holds. `apps/backend/tests/codex-subagent-cards.test.ts:161`-`:178` pins both layouts (one live row with intro, four cards and summary; two cold rows). The recorded-fixture checklist in `bridges/codex-bridge/src/testing/fixtures/README.md:65` still has "sub-agent spawn and collaboration" unticked, so no recorded stream exists to decide from. Codex is now pinned at 0.164.0 (`docker/Dockerfile:194`), not 0.162.1.
+**Investigation.** The live boundary rules now also open a row on a new tool call after `thread/tokenUsage/updated`, but neither rule fires on the final agent message after activity-only items, so the description still holds. `apps/backend/tests/codex-subagent-cards.test.ts` pins both layouts (one live row with intro, four cards and summary; two cold rows). The recorded-fixture checklist in `bridges/codex-bridge/src/testing/fixtures/README.md` still has "sub-agent spawn and collaboration" unticked, so no recorded stream exists to decide from. The Codex pin is `CODEX_CLI_VERSION` in `docker/Dockerfile` (0.167.0 on 2026-11-13).
 
 **Decisions.**
 
@@ -65,103 +39,19 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The file recommends: no blanket re-run; re-run only the bumped engine's opt-in live specs, and re-qualify a feature only when the changelog touches it. Left to the maintainer.
 
-**Investigation.** `docs/development/upgrade-agents.md` now has one such rule already: slash commands must be re-qualified for every provider whose pin moved, before the upgrade merges (`:1607`), plus the inactive-path check (`:1602`). So the runbook has started answering this per feature rather than generally. Pins moved for every provider since this file was checked (task 9).
+**Investigation.** `docs/development/upgrade-agents.md` already has one such rule: slash commands must be re-qualified for every provider whose pin moved, before the upgrade merges, plus the inactive-path check. So the runbook has started answering this per feature rather than generally. Two opt-in specs added on 2026-11-13 are natural candidates for a per-bump rule: `transcript-parts-live.spec.ts` (Claude) and the coordinator suite's `graph-profiles` scenario (every provider).
 
-**Decisions.** Which rule to adopt is the maintainer's call and moved to 7568 (0031 task 6) on 2026-11-10, with the options. This task writes the chosen rule into `upgrade-agents.md` and closes the open question below.
+**Decisions.** Which rule to adopt is the maintainer's call and moved to 7568 (0031 task 6) on 2026-11-10, with the options. This task writes the chosen rule into `upgrade-agents.md`.
 
 ### 8. Scheduled CI for platform runs
 
 **Problem.** Live and platform runs are manual, so regressions on macOS, Electron and Docker show up only when someone qualifies.
 
-**Context.** The file recommends the credential-free Electron suite first (`terminal-input-resume-electron.spec.ts` took 16 s) and keeping provider suites manual.
+**Context.** The credential-free Electron suite (`mise run test:agent:electron`) is the cheapest platform run to schedule; provider suites spend tokens and need secrets.
 
-**Investigation.** Out of date in the file: CI is now `.github/workflows/ci.yml` (no `lint.yml`), and `container-live-qualification.yml` (added `a0cc3edd`, 2026-10-23) runs the opt-in live Docker suites against a real Linux Engine on both architectures, weekly, on demand, and on pull requests touching those suites. So "Docker live suites on a Docker-capable runner" is done for Linux Engine. No workflow runs Electron or macOS (`ci.yml` uses `ubuntu-latest` only).
+**Investigation.** As of `17d28238c`: `container-live-qualification.yml` runs the opt-in live Docker suites against a real Linux Engine on both architectures (weekly, on demand, and on pull requests touching them); `native-application-menu.yml` runs three Electron specs under `xvfb-run` on Linux and on Windows and macOS runners, and the packaged log controls on Linux and macOS, but only on pull requests that touch its paths and on demand, never on a schedule; `validate-bun-runtime.yml` builds the packaged desktop app and the image nightly, with macOS runners; `claude-apparmor-qualification.yml` and `mixed-version-qualification.yml` run weekly. No workflow runs the whole `test:agent:electron` suite, nothing runs a live provider, Docker Desktop or iOS. `validate-bun-runtime.yml` notes the Free plan's limit of five concurrent macOS runners.
 
-**Decisions.**
-
-- **What next for CI?**
-  - **Add `mise run test:agent:electron` to a weekly and on-demand Linux workflow under `xvfb`, mirroring the container workflow's schedule (recommended).**
-    - Pros: credential-free; catches Electron main, preload and IPC regressions; the container workflow is a working template.
-    - Cons: Linux Electron is not macOS evidence; needs a display server in CI.
-  - **A macOS runner for the Electron suite.**
-    - Pros: covers the platform most users run.
-    - Cons: macOS runners cost more and are slower; still no Docker Desktop.
-  - **Keep everything else manual.**
-    - Pros: no CI cost.
-    - Cons: Electron regressions stay invisible between qualifications.
-
-### 9. Keep "Current state" and the batching index current
-
-**Problem.** Live-run planning reads this file first, and parts of its Current state are stale.
-
-**Context.** The file holds the shared prerequisites, and the owning files hold the evidence.
-
-**Investigation.** Current state lists pins Claude SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1, OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52 (ACP SDK 1.8.0), Pi 1.2.0. Today they are Claude SDK 0.3.309 / CLI 2.1.309, Codex 0.164.0, OpenCode 1.19.4, Cursor SDK 1.0.40, Grok 1.0.67 (ACP SDK 2.0.1), Pi 1.4.0 (`docker/Dockerfile:193`-`:197`, the bridges' `package.json` files, `apps/backend/package.json:23`). The CI paragraph names `lint.yml`, which no longer exists, and omits `ci.yml` and `container-live-qualification.yml`.
-
-**Decisions.**
-
-- **How to keep the pins from going stale again?**
-  - **Replace the pin list with a pointer to `docker/Dockerfile` and the bridge manifests, and record pins only in each run's evidence (recommended).**
-    - Pros: nothing to keep in step; evidence still names the versions it proved.
-    - Cons: a reader cannot see all pins at a glance here.
-  - **Update the list now and on every bump.**
-    - Pros: one place to look.
-    - Cons: it went stale within two days; bumps are frequent.
-
-### 10. Graph capability profiles on live providers
-
-**Problem.** Graph agent nodes show an enforcement tier per provider (`graphAgentNodeEnforcement`, the same matrix as the coordinator's qualification), the launch pickers filter on it, and post-hoc guards back it up (graphs item 209). Only fake providers have exercised this; no live run has shown that the tiers shown match what each provider does to a graph node.
-
-**Context.** Added 2026-10-29 by graphs item 209 (`plans/graphs/209-guards-and-enforcement.md`). The credential-free coverage is `apps/backend/src/core/graph-node-agent-guards.test.ts` (a committing reviewer refused at submit and repairing, a commit found at consumption, baseline unavailable, push detection, a tier drop between launch and dispatch), `graph-agent-guards.test.ts`, the protocol's `agent-enforcement.test.ts`, and the Claude, Grok, Codex and Pi bridges' credential-withholding tests. Item 214 added the launch surfaces (`orkestrator graph launch`, "Run graph…", Control MCP `launch_graph`), so a live run can start; a first one was made by hand on 2026-10-29 (below). The coordinator live suite (`apps/desktop/scripts/dev/coordinator-live.ts`) still has no `graph-profiles` scenario; add it there (or a sibling runner) rather than a new harness.
-
-**What the scenario must check**, per provider in `COORDINATOR_LIVE_PLATFORMS` (Claude on macOS and on Linux with and without a working bubblewrap, Codex, OpenCode, Cursor, Grok, Pi), on a disposable `dev:test --fixture` profile whose fixture project has a throwaway remote. Running the remaining live cases with real provider logins (Grok, Cursor, Linux, steps 3 and 4) moved to 7568 (0031 task 10) on 2026-11-10:
-
-1. A `reviewer` node (read-only turn) asked to edit a file, commit and push: the provider's tier is the one the picker showed; an `enforced` provider refuses the write itself; on any provider a change is refused at submit (`worktree_changed`) or fails the activation at consumption with `read-only` evidence; a push fails it with `remote-ref` evidence.
-2. A `builder` node asked to commit (allowed) and push (refused or detected): the run branch on the remote is unchanged unless a system node pushed.
-3. `gh auth status` and `git push` over HTTPS from inside the node's shell: no credential on Claude, Grok, Codex and Pi (host and container), with `GH_CONFIG_DIR` pointing at an empty directory. Codex's per-thread `shell_environment_policy` is already proven against the pinned app-server without credits (`bridges/codex-bridge/src/app-server/live-github-credential.test.ts`, 2026-10-29) and Pi's spawn hook inside a real SDK session (`bridges/pi-bridge/src/sdk-session.test.ts`); the live run confirms them under a real model. Record what OpenCode and Cursor do (they still inherit the bridge's credential; expected gap), that a Pi extension still sees it (expected gap), and, in containers, that the runtime credential file is still readable (expected gap; detected only by the remote-ref guard).
-4. On Linux, break bubblewrap between launch and dispatch: the Claude picker stops offering an `enforced`-floor node, and a launched one fails before dispatch with the "below the step's floor" message.
-5. A `researcher` node on Claude runs as an ordinary turn at `provider-configured` with hosted search available.
-
-**Decisions.**
-
-- **Where should the scenario live?**
-  - **A `graph-profiles` scenario in the coordinator live suite (recommended).**
-    - Pros: one runner, one profile, the same platforms and summary format; tiers come from the same matrix.
-    - Cons: the suite is already long; it needs graph launch helpers.
-  - **A separate graph live runner.**
-    - Pros: independent of coordinator setup.
-    - Cons: a second harness to keep working.
-
-**Live run 2026-10-29** (macOS, Claude sandbox available; worktree `graphs-live-verify` at
-`0f24330e3`; profile `graphs-live`, `dev:test --fixture` with Claude, Codex, OpenCode, Pi and Grok
-credential sources). Driven by hand with `orkestrator graph launch` and the gateway's
-`graph_run_get`/`graph_run_transcript`, not yet by a scenario. The fixture's `origin` is the local
-bare repository `fixtures/origin.git`, so no push left the profile. Each provider got its own local
-environment; a `reviewer` node (read-only, default floor `provider-configured`) was asked to create
-a file, edit `README.md`, `touch` from the shell, `git commit --allow-empty` and `git push`, and a
-`builder` node to commit a file and push it to a new branch. The tool calls in each transcript were
-checked, not only the agent's report. Tiers came from the "Run graph…" dialog and `orkestrator graph
-show --project --environment`; both agreed with the `enforcement` guard each activation recorded at
-dispatch.
-
-| Provider | Reviewer tier shown | Reviewer outcome | Builder tier shown | Builder push outcome | Matches the claim |
-| --- | --- | --- | --- | --- | --- |
-| Claude (Sonnet, low) | enforced | File tools absent; `touch`, `git commit`, `git push` refused by the bridge's read-only Bash hook; worktree, HEAD and origin unchanged | advisory | Refused by Claude's permission rule; remote-ref passed | yes |
-| Codex (GPT-6-Luna, low) | enforced | All five refused by the OS sandbox ("Operation not permitted") | advisory | Pushed; remote-ref guard violated, activation failed | yes |
-| OpenCode (default model) | provider-configured | All five refused by OpenCode's permission rules | advisory | Refused by OpenCode's permission rule; remote-ref passed | yes |
-| Pi (openai/gpt-6-luna) | enforced | All five refused by the bridge's read-only gate | advisory | Pushed; remote-ref guard violated, activation failed | yes |
-| Grok | advisory, not offered (below the floor) | not run: host login expired | advisory | not run | picker only |
-| Cursor | not enabled | not run: no host login | not enabled | not run | not run |
-
-Step 5: in the bake-off run of the same session a Claude `researcher` node ran as an ordinary turn at
-`provider-configured` with the researcher reason; whether hosted search was used was not checked.
-No read-only node changed the workspace, so the submit-time `worktree_changed` refusal and the
-consumption-time read-only failure were not reached live. Not run: Grok and Cursor, Linux (with and
-without bubblewrap, step 4), and step 3 (agent-test profiles carry no GitHub credential, so `gh auth
-status` could not tell withholding from absence). Findings: the remote-ref guard blamed a Claude
-activation whose commit was byte-identical to one Codex pushed from a sibling worktree in the same
-second (parallel identical probes; fails closed), and Claude's read-only hook says "Coordinator is
-read-only" inside a graph node. Detail and run ids: graphs item 209's Notes, "Live conformance run".
+**Decisions.** Which runs become scheduled jobs is the maintainer's call (CI cost and runner choice) and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting-1) (0031 task 8) on 2026-11-13, with the options. This task then adds the chosen workflow. No scheduled workflow is added before that.
 
 Most features ship with unit, contract and credential-free real-stack coverage
 on Linux. The gate that is missing most often is the same everywhere: a run
@@ -192,19 +82,58 @@ evidence. This file only points at it.
   - `mise run test:cli:scenarios` (credential-free unless `--provider`);
   - `mise run verify:opencode2:live` (OpenCode 2's live set; the 1.x
     `verify:opencode:live` was removed with OpenCode 1.x on 2026-11-11);
+  - `mise run test:agent:coordinator` (one disposable profile per platform;
+    `--credential-source <platform>` and `--scenario <name>` narrow it), whose
+    scenarios include `graph-profiles` (0031 task 10, below);
   - opt-in env gates such as `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1`
-    (`e2e/agent-testing/opencode-live.spec.ts`) and
+    (`e2e/agent-testing/opencode-live.spec.ts`),
     `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`
-    (`e2e/agent-testing/web-annotations-gateway.spec.ts`).
-- CI (`.github/workflows/lint.yml`, `publish-container.yml`,
-  `validate-bun-runtime.yml`) runs no live provider, no Docker live suite, no
-  Electron window, and no macOS or iOS job. The only platform evidence CI adds
-  is the native amd64 and arm64 final-image smoke.
+    (`e2e/agent-testing/web-annotations-gateway.spec.ts`),
+    `ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PARTS=1`
+    (`e2e/agent-testing/transcript-parts-live.spec.ts`, scripted by default,
+    `ORKESTRATOR_AGENT_TEST_TRANSCRIPT_PARTS_MODEL=live` for a real Claude
+    login) and `ORKESTRATOR_AGENT_TEST_GRAPH_PROFILES_FAKE=1`
+    (`e2e/agent-testing/graph-profiles-fake.spec.ts`, the `graph-profiles`
+    scenario on Claude against the loopback model).
+- Scripted Claude: `e2e/agent-testing/fake-anthropic-model.ts` is a loopback
+  Anthropic endpoint a profile's isolated Claude home is pointed at, so the
+  real Claude CLI and bridge run with no credential and nothing billed. Beyond
+  holds, streams and a `Bash` write, it plays scripted tool calls
+  (`[script:<id>]`, filling in a workflow result key), fails requests to force
+  retries (`[retry:<id>:<n>]`) and records the images and tools each call
+  carried. A scripted pass is evidence about the product and the harness, not
+  about any model.
+- CI (`.github/workflows/`, as of `17d28238c`):
+  - `ci.yml` (every push and pull request): format, lint, typecheck and the
+    default suite on Linux, plus preview-worker staging parity on arm64 Linux
+    and macOS;
+  - `container-live-qualification.yml`: the opt-in live Docker suites against
+    a real Linux Engine on both architectures, weekly, on demand and on pull
+    requests that touch them;
+  - `native-application-menu.yml`: three Electron specs under `xvfb-run` on
+    Linux and on Windows and macOS runners, and the packaged log controls on
+    Linux and macOS, only on pull requests that touch its paths and on demand;
+  - `validate-bun-runtime.yml`: the packaged desktop app and the image,
+    nightly and on Bun, dependency or packaging changes, with macOS runners;
+  - `claude-apparmor-qualification.yml` (Claude's Linux sandbox on Ubuntu
+    24.04 against a scripted endpoint) and `mixed-version-qualification.yml`,
+    weekly and on demand;
+  - `publish-container.yml`: the image and its native amd64 and arm64
+    final-image smoke.
+
+  No workflow runs a live provider, Docker Desktop, iOS or the whole
+  `test:agent:electron` suite, and none runs Electron on a schedule; which of
+  these should is 7568 (0031 task 8).
 - Almost all recorded evidence is from Linux amd64 with Docker Engine 29.7.2,
   taken before the SQLite storage migration (#969) and the October agent
   upgrades (#964).
-- Current agent pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1,
-  OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52 (ACP SDK 1.8.0), Pi 1.2.0.
+- Agent pins are not listed here (they went stale within two days): the
+  container CLIs are the `*_VERSION` `ARG`s in `docker/Dockerfile`
+  (`CLAUDE_CLI_VERSION`, `CODEX_CLI_VERSION`, `OPENCODE2_CLI_VERSION`,
+  `GROK_BUILD_VERSION`, `PI_CLI_VERSION`), the SDKs are the bridges'
+  `package.json` dependencies, and the host toolchain is
+  `packages/toolchain/src/manifest.ts`. `tests/unit/version-drift.test.ts` keeps
+  them in step. Each run's evidence records the pins it proved.
 - Codex sub-agent cards have a permanent credential-free spec over the real
   bridge and backend: `apps/backend/tests/codex-subagent-cards.test.ts`
   (runs in `mise run test`) and `e2e/CodexSubagentCards.spec.ts` (renderer,
@@ -316,12 +245,19 @@ evidence. This file only points at it.
   their sources held `{"id":"gpt-5.6-luna","providerID":"opencode-go"}`. The
   fork still showed the source's model and reasoning, so the fallback (#975)
   is what carries it.
-- **Transcript part coverage.** Drive a compaction (Claude or Pi), an image
-  round trip and a long-running tool. Switch tabs, let the turn finish in the
-  inactive environment, then return and reload. The compaction, retry, status
-  and image parts must render from the snapshot. Still owed: the scripted
-  opt-in spec (task 2); its run on a Claude profile is in the manual-test
-  checklist. The OpenCode run above covers OpenCode's compaction part only.
+- **Transcript part coverage.** Spec done 2026-11-13 (task 2):
+  `e2e/agent-testing/transcript-parts-live.spec.ts` drives an image round
+  trip, a retried request, an interrupted turn (the status row), a compaction
+  and a long-running `Bash` call on a native Claude tab; the last turn
+  finishes while its environment is inactive, then every part is checked in
+  the backend snapshot and in the rendered transcript after return and after
+  a reload. Its scripted run passed (below). It found that a system row
+  rendered only its text, so Claude's compaction boundary was blank and its
+  retry rows never said whether they settled; `NativeMessage.tsx` now renders
+  compaction and retry parts on system rows. Still owed: the run with a real
+  Claude login (manual-test checklist, 0031 task 2), which cannot force a
+  retry and records it as not exercised. Pi was not covered: the spec is
+  Claude-only. The OpenCode run above covers OpenCode's compaction part only.
 - ~~**OpenCode inactive path.**~~ Done 2026-10-25 (behaviour). The live
   spec's native-tab case starts a turn, switches to another environment,
   waits for the backend projection to settle with no UI mounted, returns,
@@ -329,20 +265,45 @@ evidence. This file only points at it.
   (five runs, below). The poll count was not recorded: neither the backend
   nor OpenCode's log counts `session.status` reads, and the "before" it was
   to be compared with (the pre-SSE code) no longer exists (decision 4).
-- **Graph capability profiles.** Graph agent nodes' tiers, guards and
-  withheld GitHub credential on each live provider; see task 10 above. Still
-  owed: the `graph-profiles` scenario (task 10); the remaining live runs are
-  in the manual-test checklist.
+- **Graph capability profiles.** Scenario done 2026-11-13 (task 10): the
+  coordinator suite's `graph-profiles` scenario
+  (`apps/desktop/scripts/dev/coordinator-live-graph-profiles.ts` and its
+  `-orchestration.ts`) launches a one-node graph per capability profile on
+  its own fixture environment, for every platform in
+  `COORDINATOR_LIVE_PLATFORMS`: a `reviewer` asked to write, edit, `touch`,
+  commit and push; a `builder` asked to commit and push; on Claude a
+  `researcher`. It checks that the tier the launch picker shows is the tier
+  the activation recorded at dispatch, that an `enforced` or
+  `provider-configured` reviewer lets nothing land, that an `advisory` one
+  has every change caught by a guard, that a builder's push is refused or
+  caught by the remote-ref guard, and that a Claude researcher runs as an
+  ordinary turn at `provider-configured` with hosted search. The run must
+  complete, or fail only because a guard caught what the probe may not do; a
+  cancellation or any other failure fails the probe. A reviewer or builder
+  that did not attempt a file write, a commit and a push fails as
+  inconclusive, and a builder's push counts only after its own commit put
+  HEAD ahead of `origin`. Run it live with
+  `mise run test:agent:coordinator --credential-source <platform> --scenario graph-profiles`;
+  `graph-profiles-fake.spec.ts` runs it on Claude against the loopback model
+  (passed, below). Still owed (manual-test checklist, 0031 task 10): the live
+  runs, including Grok, Cursor and Linux, the withheld GitHub credential
+  (step 3) and a tier drop between launch and dispatch (step 4), which the
+  scenario does not automate. The hand-run evidence of 2026-10-29 is under
+  "Graph capability profiles evidence" below.
 
 ### Qualification: batching index
 
-Platform runs, and the todo files with items for each:
+Platform runs, and the todo files with items for each. The runs themselves
+are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md),
+each naming its source to-do and task; the source to-do holds what to assert.
+Links checked 2026-11-13: every linked file exists, and retired to-dos are
+cited as `NNNN (retired)`.
 
 | Run | Items in |
 | --- | --- |
 | macOS host with Docker Desktop (Apple Silicon) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md) |
 | Real Electron window (`mise run test:agent:electron` or a manual pass) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [8011-design-ask-agent-and-resume-across-versions.md](../design-canvas/8011-design-ask-agent-and-resume-across-versions.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)) |
-| Docker live suites and `mise run test:agent:docker` | [7548-rootless-gvisor-tap-vsock-host-loopback.md](../containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md), [7549-rootless-docker-cp-refusals.md](../containers-and-environments/7549-rootless-docker-cp-refusals.md), [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; see [mcp-management.md](../../architecture/mcp-management.md#verification-status)), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 0036 (retired), [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md) |
+| Docker live suites and `mise run test:agent:docker` | 7548 (retired; [evidence](../../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)), [7549-rootless-docker-cp-refusals.md](../containers-and-environments/7549-rootless-docker-cp-refusals.md), [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; see [mcp-management.md](../../architecture/mcp-management.md#verification-status)), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 0036 (retired), [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md) |
 | Rootless Docker Engine, arm64 live suites, registry pulls | [7390-rootless-restart-remaining-settings.md](../containers-and-environments/7390-rootless-restart-remaining-settings.md) |
 | Two machines or a remote backend | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 0052 (retired; [remote-bandwidth.md](../../development/remote-bandwidth.md)), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
 | Firefox, Safari, iOS device or simulator, narrow real browser | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0046-embedded-service-previews.md](../previews-and-annotations/0046-embedded-service-previews.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), to-do 0035 (retired 2026-11-10; its iOS run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting)), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)), to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)) |
@@ -554,6 +515,77 @@ e2e/agent-testing/opencode-live.spec.ts`.
   `mise run dev:stop --profile qa-0031-oc` and
   `mise run dev:reset --profile qa-0031-oc` afterwards.
 
+### Scripted transcript-part and graph-profiles runs
+
+Runs, 2026-11-13, Linux x86_64 (shared host), this change on top of
+`17d28238c`, Bun 1.4.4, the profile's managed Claude CLI 2.1.319 and the
+bridge's Agent SDK 0.3.319. Profile `parts0031`:
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile parts0031
+--fixture --no-agent-credentials --no-host-seed --agent-platforms claude
+--headless`. Every model call went to the loopback endpoint; nothing was
+billed and no real login was read. These are product and harness evidence,
+not evidence about any model.
+
+- `ORKESTRATOR_AGENT_TEST_PROFILE=parts0031
+  ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PARTS=1 mise run test:logged --
+  --name transcript-parts -- bunx playwright test --config
+  e2e/agent-testing/playwright.browser.config.ts transcript-parts-live.spec.ts
+  --workers=1`: exit 0, 1 passed, 72–76 s. One call carried the image block,
+  two requests failed with 500 before the answer, the compact action reported
+  `applied`, and the long tool finished 16 s after the switch away. Part kinds
+  in the snapshot: user text (with the attachment), assistant text and
+  tool-invocation, system compaction, retry and status. Before the
+  `NativeMessage.tsx` fix the same run failed at the rendered compaction row.
+- `ORKESTRATOR_AGENT_TEST_PROFILE=parts0031
+  ORKESTRATOR_AGENT_TEST_GRAPH_PROFILES_FAKE=1 mise run test:logged -- --name
+  graph-profiles -- bunx playwright test --config
+  e2e/agent-testing/playwright.browser.config.ts graph-profiles-fake.spec.ts
+  --workers=1`: exit 0, 1 passed, 15.7 s, 17 of 17 checks (rerun after the
+  review fixes below on profile `gpfix0031`: exit 0, 18 of 18 checks, the
+  reviewer's transcript showing 3 writes, 1 commit and 1 push attempted and
+  the builder's 1, 1 and 1). Claude on this
+  host: reviewer shown and applied `enforced`, five attempts (the `Write` and
+  `Edit` tools absent from the read-only turn, `touch`, commit and push
+  refused), nothing landed; builder `advisory`, the commit landed, the push
+  was refused and `origin` was unchanged; researcher `provider-configured`
+  with the researcher reason and `WebSearch` among the 20 tools offered. All
+  three runs completed with their report submitted.
+- Cleanup: each spec deleted its environments; `mise run dev:stop --profile
+  parts0031` and `mise run dev:reset --profile parts0031`.
+
+### Graph capability profiles evidence
+
+Live run 2026-10-29 (macOS, Claude sandbox available; worktree `graphs-live-verify` at
+`0f24330e3`; profile `graphs-live`, `dev:test --fixture` with Claude, Codex, OpenCode, Pi and Grok
+credential sources). Driven by hand with `orkestrator graph launch` and the gateway's
+`graph_run_get`/`graph_run_transcript`, not yet by a scenario. The fixture's `origin` is the local
+bare repository `fixtures/origin.git`, so no push left the profile. Each provider got its own local
+environment; a `reviewer` node (read-only, default floor `provider-configured`) was asked to create
+a file, edit `README.md`, `touch` from the shell, `git commit --allow-empty` and `git push`, and a
+`builder` node to commit a file and push it to a new branch. The tool calls in each transcript were
+checked, not only the agent's report. Tiers came from the "Run graph…" dialog and `orkestrator graph
+show --project --environment`; both agreed with the `enforcement` guard each activation recorded at
+dispatch.
+
+| Provider | Reviewer tier shown | Reviewer outcome | Builder tier shown | Builder push outcome | Matches the claim |
+| --- | --- | --- | --- | --- | --- |
+| Claude (Sonnet, low) | enforced | File tools absent; `touch`, `git commit`, `git push` refused by the bridge's read-only Bash hook; worktree, HEAD and origin unchanged | advisory | Refused by Claude's permission rule; remote-ref passed | yes |
+| Codex (GPT-6-Luna, low) | enforced | All five refused by the OS sandbox ("Operation not permitted") | advisory | Pushed; remote-ref guard violated, activation failed | yes |
+| OpenCode (default model) | provider-configured | All five refused by OpenCode's permission rules | advisory | Refused by OpenCode's permission rule; remote-ref passed | yes |
+| Pi (openai/gpt-6-luna) | enforced | All five refused by the bridge's read-only gate | advisory | Pushed; remote-ref guard violated, activation failed | yes |
+| Grok | advisory, not offered (below the floor) | not run: host login expired | advisory | not run | picker only |
+| Cursor | not enabled | not run: no host login | not enabled | not run | not run |
+
+Step 5: in the bake-off run of the same session a Claude `researcher` node ran as an ordinary turn at
+`provider-configured` with the researcher reason; whether hosted search was used was not checked.
+No read-only node changed the workspace, so the submit-time `worktree_changed` refusal and the
+consumption-time read-only failure were not reached live. Not run: Grok and Cursor, Linux (with and
+without bubblewrap, step 4), and step 3 (agent-test profiles carry no GitHub credential, so `gh auth
+status` could not tell withholding from absence). Findings: the remote-ref guard blamed a Claude
+activation whose commit was byte-identical to one Codex pushed from a sibling worktree in the same
+second (parallel identical probes; fails closed), and Claude's read-only hook says "Coordinator is
+read-only" inside a graph node. Detail and run ids: graphs item 209's Notes, "Live conformance run".
+
 ## Assumptions and decisions
 
 Recorded 2026-10-25 while working this file.
@@ -611,7 +643,8 @@ gateway commands, record them, and leave the scenario for later. Chose (b). Why:
 as evidence for item 209 in the same session, and a hand run on four providers cost a few minutes
 of turns, while the scenario needs launch helpers and per-platform profiles in a long suite. Pros:
 evidence now, with transcripts checked call by call. Cons: not repeatable by a command; the
-decision above (a `graph-profiles` scenario) still stands and is still open.
+decision above (a `graph-profiles` scenario) still stands and is still open. Superseded on
+2026-11-13, when the scenario was built ("Task 10: the scenario's shape", below).
 
 ### Task 10: one profile with several credential sources
 
@@ -631,13 +664,118 @@ every write itself, `provider-configured` must refuse through the provider's own
 another spelling would run. Not counted: a model that declined to attempt (a Claude Haiku reviewer
 did; it was rerun on Sonnet).
 
+### Task 2: a scripted Claude spec with a live switch
+
+Recorded 2026-11-13. The task's recommendation (an opt-in spec on Claude) was
+followed, and the spec runs on the loopback Anthropic model by default, with
+`ORKESTRATOR_AGENT_TEST_TRANSCRIPT_PARTS_MODEL=live` for a real login. Options:
+(a) live only; (b) scripted only; (c) scripted by default with a live switch.
+Chose (c). Pros: the build could prove the spec passes without a credential
+or a billed turn, every part is forced deterministically (two failed requests
+for the retry row, a held turn for the status row), and the same assertions
+serve the live run. Cons: the scripted run is not model evidence, and the live
+run cannot force a retry, so it records that case as not exercised. Pi was
+left out: its compaction would need a second scripted provider, and the task
+recommended Claude.
+
+### Task 2: how each part is produced
+
+Recorded 2026-11-13. The image goes in as a saved compose draft that the
+composer sends (the composer's own attachment path, without a native file
+dialog). The status row is the interruption row of a held turn stopped from
+the composer, the one status row both Claude's live loop and its persisted
+transcript produce. The compaction uses the session's compact action, as
+`goals-live.spec.ts` does, rather than typing `/compact`. The long tool is a
+15 s `Bash` call allowed by a rule written into the profile's isolated Claude
+settings, so it does not park an approval while the environment is away.
+
+### Task 2: fix the renderer, not the assertion
+
+Recorded 2026-11-13. The spec found the snapshot holding a compaction part
+that rendered as nothing, and retry rows showing only "The API answered 500".
+Cause: `NativeMessage.tsx` rendered a `system` row's text and ignored its
+parts, and Claude writes both notices as system rows. Options: (a) render
+compaction and retry parts on system rows; (b) have the Claude bridge put
+them on assistant rows; (c) assert only what renders. Chose (a). Pros: one
+renderer change covers every provider that writes notices as system rows,
+and no bridge or stored shape changes. Cons: retry rows now show their
+settled label and icon, a visible change (before and after screenshots in
+the change's report). Status rows (such as "Interrupted by user") keep the
+italic text rendering.
+
+### Task 9: point at the pins instead of listing them
+
+Recorded 2026-11-13. The task's recommendation was followed: Current state
+names where the pins live (`docker/Dockerfile`, the bridges' `package.json`
+files, `packages/toolchain/src/manifest.ts`) and each run's evidence records
+its own pins. The CI paragraph lists the workflows as of `17d28238c`.
+
+### Task 10: the scenario's shape
+
+Recorded 2026-11-13. The task's recommendation was followed: a
+`graph-profiles` scenario in the coordinator live suite, so a live run is
+`mise run test:agent:coordinator --credential-source <platform> --scenario graph-profiles`.
+Choices inside it:
+
+- One one-node graph per probe, each on its own environment. Pros: one
+  activation per run, so a reviewer's failure cannot stop the builder probe,
+  and each probe has its own baseline. Cons: three environment starts per
+  platform.
+- The tier shown is read from `graph_launch_options`, the same command the
+  "Run graph…" dialog reads, and compared with the tier the activation
+  recorded. Pros: no second copy of the matrix in the harness. Cons: a wrong
+  matrix that agrees with itself passes; the outcome checks catch that.
+- A probe that did not attempt what it was asked fails as inconclusive,
+  following "what counts as matching" above. Attempts are counted per
+  operation from the activation's transcript (file writes, `git commit`,
+  `git push`), never as a bare tool-call count, and the command text is read
+  only to classify a call; see "Task 10: judging attempts and outcomes".
+- Steps 3 (the withheld GitHub credential) and 4 (a tier drop between launch
+  and dispatch) are not automated: step 3 needs a real host credential to
+  tell withholding from absence, and step 4 changes the host's bubblewrap.
+  Both stay in the manual-test checklist.
+- A credential-free spec, `graph-profiles-fake.spec.ts`, runs the same
+  orchestration on Claude against the loopback model. Pros: the scenario
+  runs and is checked without a login. Cons: only Claude, and only the
+  product's half.
+
+### Task 10: judging attempts and outcomes
+
+Recorded 2026-11-13, after review. Three rules tighten the verdict so a
+probe cannot qualify a profile it never exercised:
+
+- The run must complete, or fail only because a guard (or the submit
+  refusal) caught what the probe may not do: a reviewer's write or push, a
+  builder's push. Options: accept every terminal run (pros: simple; cons: a
+  probe that failed for an unrelated reason, or was cancelled, passed on an
+  unchanged workspace), or require a completed or guard-explained run
+  (recommended, implemented; cons: a provider error during a live run now
+  fails the probe instead of passing it, which is the honest answer).
+- A reviewer or builder probe passes `attempted` only with at least one file
+  write, one `git commit` and one `git push` attempt in its transcript.
+  Options: any tool call (cons: a single `Read` qualified the profile), or
+  per-operation counts (recommended, implemented; cons: a provider that
+  hides every write tool and the shell from a read-only turn leaves the
+  model nothing to attempt, so the probe reports inconclusive rather than
+  passing; such a run is judged by hand from its summary). Shell writes are
+  recognised by `touch`, a redirect, `tee` and similar; file tools by their
+  names across the providers' transcripts (`Write`, `Edit`, `apply_patch`,
+  ...).
+- A builder's push is judged only after its own commit moved HEAD ahead of
+  where `origin` was (`commit-ahead-of-origin`). Without that commit a
+  refused push and a no-op push leave the same evidence.
+
+### Task 8: the scheduling decision goes to the checklist
+
+Recorded 2026-11-13, as the ticket asked: which runs become scheduled CI jobs
+(and on which runners) changes CI cost, so the options are an item under
+"Decisions, approvals and outward actions" in the manual-test checklist, and
+no scheduled workflow was added. Task 8 waits on that item.
+
 ## Open questions
 
-- Should any of these runs become a scheduled CI job, such as Docker live
-  suites on a Docker-capable runner or a macOS runner for Electron?
-  Recommendation: the credential-free Electron suite first
-  (`terminal-input-resume-electron.spec.ts` took 16 s here), since it needs
-  no secrets; live provider suites stay manual because they spend tokens.
+- Which runs become scheduled CI jobs is now a decision item in the
+  manual-test checklist (0031 task 8).
 
 ## Needs verification
 
@@ -647,7 +785,7 @@ did; it was rerun on Sonnet).
   rollout's `spawn_agent` calls do split it (`history/rollout.ts`). The cards
   are the same either way; only their row and the final message's row differ
   (`apps/backend/tests/codex-subagent-cards.test.ts` scenario). Check against a
-  recorded 0.162.1 stream whether live `wait_agent` or collab items should
+  recorded stream on the current pin (task 5) whether live `wait_agent` or collab items should
   open the next row, and either align the live boundary or record why the two
   differ.
 
@@ -662,7 +800,7 @@ did; it was rerun on Sonnet).
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md) for CI gates and
   slow or flaky suites.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7, the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7, the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10, and the decision of task 8 on 2026-11-13.
 - [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window) for
   old-client and old-bridge runs.
 - [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration)

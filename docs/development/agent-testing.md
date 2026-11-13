@@ -2410,6 +2410,60 @@ unfinished or unsettled terminal burst, or a p95 past the 3 s completion or
 2 s approval budget. The test fails at the end of its run unless every cell
 qualified; the evidence file is written either way.
 
+### Transcript part coverage on Claude (loopback model)
+
+`e2e/agent-testing/transcript-parts-live.spec.ts` checks that the image,
+retry, status, compaction and long-running tool parts of a native Claude tab
+render from the backend's snapshot after the last turn finished while its
+environment was inactive, and again after a reload. It sends an image from a
+saved compose draft, makes the model fail two requests so the CLI retries,
+stops a held turn ("Interrupted by user"), compacts through the session's
+compact action, and runs a 15 s `Bash` call during which it switches to a
+second environment and waits for the backend to report the turn idle. It
+then returns, checks the snapshot's part kinds and the rendered rows, reloads
+and checks them again.
+
+By default every model call goes to the loopback Anthropic model
+(`fake-anthropic-model.ts`: `[retry:<id>:<n>]`, `[hold:<id>]` and a
+`[script:<id>]` tool call), so it needs no login and bills nothing:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile parts0031 \
+  --fixture --no-agent-credentials --no-host-seed --agent-platforms claude --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=parts0031 ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PARTS=1 \
+  mise run test:logged -- --name transcript-parts -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  transcript-parts-live.spec.ts --workers=1
+```
+
+`ORKESTRATOR_AGENT_TEST_TRANSCRIPT_PARTS_MODEL=live` runs the same cases on a
+profile started with `--credential-source claude` (billed turns); the retry
+case is then recorded as not exercised. The spec writes the loopback
+endpoint and an allow rule for the fixture command into the profile's
+isolated Claude `settings.json` and puts the previous file back afterwards.
+Counts and part kinds go to `evidence-transcript-parts-*.json`.
+
+### Graph capability profiles on Claude (loopback model)
+
+`e2e/agent-testing/graph-profiles-fake.spec.ts` runs the live coordinator
+suite's `graph-profiles` scenario (below) on the real Claude CLI and bridge
+against the loopback Anthropic model, which plays each probe's tool calls and
+submits the node's result with the result key its instructions quote. It
+proves the harness and the product's half on Claude (tiers shown and applied,
+Claude's refusals, the guards), not any model:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile graphs0031 \
+  --fixture --no-agent-credentials --no-host-seed --agent-platforms claude --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=graphs0031 ORKESTRATOR_AGENT_TEST_GRAPH_PROFILES_FAKE=1 \
+  mise run test:logged -- --name graph-profiles -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  graph-profiles-fake.spec.ts --workers=1
+```
+
+It writes the suite's summary shape to
+`output/agent-testing/<run>/coordinator/claude-graph-profiles.json`.
+
 ### Live diagnostics export across nodes (two profiles)
 
 `e2e/agent-testing/diagnostics-across-nodes-live.spec.ts` exports a leaf's
@@ -3529,7 +3583,11 @@ one (`routing`), that a coordinator under the default research setting reaches
 its research MCP server (`research`), that each worker-surface tool works on a
 worker of this node and the root-changes approval copies the user's file into
 it (`surfaces`, Claude only), that each tool from the coordinator gap review
-works against a real worker (`gap-tools`), that a coordinator can launch a
+works against a real worker (`gap-tools`), that the tier the graph launch picker
+shows for a reviewer, builder and (Claude only) researcher node is the tier
+the node runs at and that nothing its capability profile forbids lands
+unnoticed (`graph-profiles`, no coordinator turn; see
+`coordinator-live-graph-profiles.ts`), that a coordinator can launch a
 worker and ask the user a question in the same turn (`ask`), that each tab of
 one environment sees itself as its own mailbox, takes `idle`-policy mail and
 keeps a resumed conversation under its own credential (`identity`), that a

@@ -85,7 +85,17 @@ export function mailBenchmarkFixture(root: string, response?: () => Response) {
         callsWith: (marker: string) =>
           marker.endsWith("-held") && draft
             ? []
-            : [{ index: 1, prompt: marker, userPrompts: 1, context: [], receivedAt: 0 }],
+            : [
+                {
+                  index: 1,
+                  prompt: marker,
+                  userPrompts: 1,
+                  context: [],
+                  receivedAt: 0,
+                  images: 0,
+                  tools: [],
+                },
+              ],
         stop: async () => {
           await fake.stop();
           record("server-stopped");

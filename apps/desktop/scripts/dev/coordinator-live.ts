@@ -60,14 +60,18 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * has the root-changes approval accepted in the dialog (Claude only, see
  * `coordinator-live-surfaces.ts`); `gap-tools` calls each tool from the
  * coordinator gap review once against one worker
- * (`coordinator-live-gap-tools.ts`); `ask` launches a worker and asks the user
- * a question in the same turn, which the harness answers from the card
- * (`coordinator-live-ask.ts`); `identity` checks each tab of one environment
- * sees itself as `self`, that an `idle`-policy injection starts a turn and that
- * a resume into another tab keeps the conversation under that tab's own
- * credential (`coordinator-live-identity.ts`); `account-switch` has a
- * coordinator set self-timers, read a seeded usage limit and switch to a
- * fixture account, once by request and once under a timer's permission
+ * (`coordinator-live-gap-tools.ts`); `graph-profiles` launches one-node graphs
+ * whose agent node has the reviewer, builder and (Claude only) researcher
+ * capability profile and checks the tier the launch picker showed against
+ * what the provider let the node do (`coordinator-live-graph-profiles.ts`);
+ * `ask` launches a worker and asks the user a question in the same turn, which
+ * the harness answers from the card (`coordinator-live-ask.ts`); `identity`
+ * checks each tab of one environment sees itself as `self`, that an
+ * `idle`-policy injection starts a turn and that a resume into another tab
+ * keeps the conversation under that tab's own credential
+ * (`coordinator-live-identity.ts`); `account-switch` has a coordinator set
+ * self-timers, read a seeded usage limit and switch to a fixture account, once
+ * by request and once under a timer's permission
  * (`coordinator-live-account-switch.ts`); `peer` drives two ordinary
  * environments' mail with Wake peers on, and runs last because it is the one
  * case that changes the messaging defaults. Each writes its own summary, and
@@ -84,6 +88,7 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "routing",
   "surfaces",
   "gap-tools",
+  "graph-profiles",
   "ask",
   "identity",
   "account-switch",

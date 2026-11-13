@@ -200,3 +200,21 @@ On desktop this time, `a paused Claude question stays paused across a reload, th
 ## Recurrence — 2026-11-13 (snapshot head recovery review)
 
 Observed on `mise run test:logged -- --name browser-rerun -- mise run test:browser` (rerun of review preparation's incomplete browser command) at `8f5280090`, branch `snapshot-head-recovery-8d306f0af39d-r1`, base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch changes backend transcript projection, one backend test and docs, plus a comment in `e2e/agent-testing/conditional-reads-live.spec.ts`; it changes no `apps/web` or component-spec code. The run reached case 1,780 of 1,884 before the 1,800 s group deadline (load average 37 to 44) with three failures. The three owners were then rerun together with one worker: `mise run test:logged -- --name browser-three-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts e2e/CoordinatorActions.spec.ts e2e/ToolGroupFold.spec.ts --workers=1` (82 passed, 1 failed, 1 skipped; 7.5 min). `mise run flaky:recurrence -- 0252 --base 17d28238c0` answered "open. Record the failure as a recurrence". mobile-chromium hit the 30 s test timeout in the `heldAt === undefined` poll at line 148; desktop passed. The complete unchanged owner passed in both projects in the one-worker rerun. No assertion, deadline, retry or skip was changed. The cause remains unconfirmed.
+
+## Recurrence 2026-11-13 (qualification-tooling review repair)
+
+- **Branch and base:** `qualification-tooling-1ab05fd26c00-r1` at `ed9e17607`,
+  base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch's only renderer change draws compaction and retry
+  parts on system rows; it does not touch the spec or the Claude interaction
+  surfaces.
+- **Command:** `NODE_ENV= mise run test:logged -- --name browser-chat-specs -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts <seven chat and transcript specs> --workers=2`
+  on the shared Linux host at load about 90: 89 passed, 1 skipped, 2 failed.
+- **Failure:** desktop-chromium, `apiRequestContext.fetch: Request context disposed`
+  in the route callback at `e2e/ClaudeInteractions.spec.ts:100`.
+- **Owner rerun alone:** `bunx playwright test --config e2e/playwright.config.ts "e2e/ClaudeInteractions.spec.ts:100" --project=desktop-chromium --workers=1`
+  through `test:logged` and `scripts/loopback-network.ts`: passed.
+- **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 17d28238c --registry-ref origin/main`
+  reported `open`. The whole run is
+  [9959](../aggregate-validation-runs/9959-qualification-tooling-review-runs-under-host-load.md).
+
+No assertion, deadline, retry or skip was changed.

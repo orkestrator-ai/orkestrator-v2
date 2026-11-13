@@ -211,7 +211,7 @@ app.get("/", (c) => {
       health: "/global/health",
       models: "/config/models",
       sessions: "/session/list",
-      events: "/event/subscribe",
+      events: "/event/subscribe?observe=1",
       mcp: "/mcp/servers",
       plugins: "/plugins",
     },

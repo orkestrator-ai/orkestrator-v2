@@ -789,6 +789,13 @@ Every run below covers `ubuntu-24.04` (linux-x64) and `ubuntu-24.04-arm`
 | 42620164217 | weekly, `main` `448e9fffb` | 2026-11-09 | Every step passed except "Live build pipeline code rewind": `build-pipeline-code-rewind-docker.test.ts:514` expected the backlog move without `preserveDoneStatus: true`, which the pipeline had started sending. The expectation was updated in `1e491c075` (#2004), merged the same day after this run |
 | 42914911207 | pull request #2105, a merge of `main` (merged as `85732c93e`) | 2026-11-10 | **Every step passed**, all 30 live steps and the benchmarks, on both architectures |
 
+- **Input stamps and the relay skip on a host uid other than 1000.** "Live
+  input stamps across a restart" (`portable-inputs-stamps-docker.test.ts`,
+  enabled there by `RUN_LIVE_DOCKER_TESTS=1`) passed on both architectures
+  in run 43065058885 (a pull request at `a6a8a96ec`, 2026-11-11), whose
+  commit includes the relay skip (#2150); the hosted runner's uid is not
+  1000, so the relay ran. Other steps of that run failed (the two C15
+  steps). This was the open check of to-do 4580 (retired 2026-11-13).
 - **C14 on any host uid.** "Live replacement (C14-C19)" passed on both
   architectures in 42620164217 and 42914911207, the green CI run to-do 0728
   waited for (retired 2026-11-11; its fix is recorded in

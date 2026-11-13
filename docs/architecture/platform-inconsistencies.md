@@ -386,8 +386,8 @@ paths only.
 ### 3.6 Reliability and teardown
 
 - **Codex** is the gold standard: generations, durable dispatch journal, idle
-  detach, SSE cursor (subscribe before replay; `connected` echoes the client
-  cursor), `/activity` never 404s, never `thread/delete`, approvals fail-closed
+  detach, SSE cursor (subscribe before the cursor check; `connected` echoes
+  the client cursor), `/activity` never 404s, never `thread/delete`, approvals fail-closed
   including dead generations. One child serves every Codex tab and build phase
   in the environment.
 - **Claude native** has **no attach warmup**; cold `query()` sits inside the

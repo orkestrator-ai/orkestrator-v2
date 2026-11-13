@@ -100,10 +100,10 @@ import {
  * as each client saw it and checked for duplicate or lost dispatches.
  *
  * Arms: `candidate` (defaults), `rollback`
- * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
- * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend
- * activity and Multi Review stay keyed in both arms, their rollback drivers
- * having been removed by todo 0048 task 13) and `metrics-off`
+ * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`; native queues, backend
+ * activity and Multi Review stay keyed and native observation stays shared in
+ * both arms, their rollback drivers and the observation-sharing switch having
+ * been removed by todo 0048 task 13) and `metrics-off`
  * (`ORKESTRATOR_RECURRING_METRICS=0`, CPU/RSS only).
  *
  * The gateway token is read from the profile's mode-0600 auth file and only
@@ -118,14 +118,12 @@ type Arm = "candidate" | "rollback" | "metrics-off";
 const ARMS: readonly Arm[] = ["candidate", "rollback", "metrics-off"];
 const POLICY_SWITCHES = [
   "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK",
-  "ORKESTRATOR_NATIVE_OBSERVATION_SHARING",
   "ORKESTRATOR_RECURRING_METRICS",
 ] as const;
 const ARM_ENV: Record<Arm, Record<string, string>> = {
   candidate: {},
   rollback: {
     ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
-    ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
   },
   "metrics-off": { ORKESTRATOR_RECURRING_METRICS: "0" },
 };

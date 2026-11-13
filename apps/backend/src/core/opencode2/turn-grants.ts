@@ -1,7 +1,7 @@
 /**
  * Per-turn permission grants on OpenCode 2.x sessions: read-only turns,
  * reviewer shell rules and workflow-result tools
- * (docs/todo/agent-engines/0008-opencode-v2.md, phase 5).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), phase 5).
  *
  * The retired 1.x broker's semantics
  * (`git show 5f4e27b1c:apps/backend/src/core/opencode-workflow-result-broker.ts`),

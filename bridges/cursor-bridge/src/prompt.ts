@@ -637,8 +637,11 @@ function recordUsage(
   // `RunResult.usage` is the SDK's authoritative cumulative usage for the run.
   // Local runs may omit usage from the `turn-ended` delta while still
   // publishing it here, which used to leave the bridge with no snapshot at
-  // all. Prefer the terminal value when it exists and retain the delta
-  // accumulator as a compatibility fallback for older SDK/runtime pairs.
+  // all. Prefer the terminal value when it exists, and keep the delta
+  // accumulator as the fallback. It is not dead: the pinned `@cursor/sdk`
+  // 1.3.1 declares `RunResult.usage` optional ("absent when none did"), and a
+  // turn failed without a terminal result (`failTurn` after a timeout or a
+  // rejected wait) has no `RunResult` at all, only what streamed.
   const turn =
     terminalTurnUsage(result?.usage) ??
     streamed.total ??

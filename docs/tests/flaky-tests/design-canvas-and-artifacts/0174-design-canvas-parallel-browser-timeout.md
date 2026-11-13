@@ -49,7 +49,7 @@ hints that never overtake their commit. This case was not rerun. Its symptoms
 (Playwright action timeouts, a disabled picker, an unmounted page) are client
 or profile timing, and nothing here implicates the design change feed. It
 stays open; see the follow-up in
-[0036-design-canvas-qualification.md](../../../todo/design-canvas/0036-design-canvas-qualification.md).
+0036 (retired; `git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`).
 
 ## Execution-policy conformance main merge recurrence — 2026-10-17
 
@@ -160,7 +160,7 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - **Command:** `ORKESTRATOR_E2E_PORT=47371 bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DesignCanvasAccessibility.spec.ts --workers=6 --repeat-each=3`.
   - Run three times at host load averages 41–64.
   - Run once more with 18 `yes` busy processes added (load about 60).
-- **Result:** this case passed in every run, 24 in total across both viewports, along with the full nine-worker `mise run test:browser` runs. The only failures were in the new accessibility spec, and were fixed in the same change (see [0036](../../../todo/design-canvas/0036-design-canvas-qualification.md#accessibility)).
+- **Result:** this case passed in every run, 24 in total across both viewports, along with the full nine-worker `mise run test:browser` runs. The only failures were in the new accessibility spec, and were fixed in the same change (see 0036 (retired; `git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`, "Accessibility")).
 - **Assessment:** host CPU contention alone did not reproduce the timeout, so there is still no basis for choosing between a client wait on an observable state and a product fix. The case stays open. No implementation, assertion, timeout or skip changed.
 
 ## Sidebar main-merge validation — 2026-10-22
@@ -265,7 +265,7 @@ unthrottled file passed 6 of 6 at the default deadline (7.2–11.7 s). The
 8x failures are the 30 s budget under emulated slowdown well beyond the
 suite's and were not chased. A quiet nine-worker `mise run test:browser` run
 to confirm no recurrence is listed in
-[0036](../../../todo/design-canvas/0036-design-canvas-qualification.md).
+0036 (retired; `git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`).
 
 ## Shared Codex state review fixes — 2026-10-26
 

@@ -28,7 +28,6 @@ import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import {
-  deleteSessionPreferences,
   MAX_LOCAL_TRANSCRIPT_ENTRIES,
   readSessionPreferences,
   sessionPreferencesUnavailable,
@@ -41,17 +40,12 @@ import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import {
-  commandChangeJournal,
-  deleteCommandChangeJournal,
-  overlayCommandChanges,
-} from "./command-changes.js";
+import { commandChangeJournal, overlayCommandChanges } from "./command-changes.js";
 import {
   IDLE_TRANSCRIPT_EVICTION_MS,
   IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS,
   TRANSCRIPT_UUID_PATTERN,
   bridgeSessionIdFromSdkId,
-  claimedPromptDispatches,
   claudeExecutableOptions,
   claudeSdk,
   currentWorkingDirectory,
@@ -63,16 +57,10 @@ import {
   sessions,
   touchSession,
 } from "./session-manager-core.js";
-import {
-  cleanupPendingInteractions,
-  forgetPromptDispatchesForSession,
-  sessionHasPendingInteractions,
-  waitForPendingPromptDispatchClaim,
-} from "./session-manager-lifecycle.js";
+import { sessionHasPendingInteractions } from "./session-manager-lifecycle.js";
 import { normalizePersistedSessionMessages } from "./session-manager-messages.js";
 import { applyLostWriteAdvisory } from "./session-manager-lost-writes.js";
 import { rehydrateSubagentParts } from "./session-manager-subagent-rehydration.js";
-import { releaseQueryControls } from "./session-manager-background-tasks.js";
 
 function localTranscriptFromPreferences(
   entries: NonNullable<SessionPreferences["localTranscript"]>,
@@ -98,36 +86,6 @@ export function applyLocalTranscriptOverlay(session: SessionState): void {
     appended = true;
   }
   if (appended) markTranscriptChanged(session);
-}
-export let sessionDeletionTick = 0;
-
-/** How many recent deletions are remembered; each only has to outlast one read. */
-export const DELETE_TOMBSTONE_LIMIT = 128;
-
-/** SDK session id → the tick at which durable deletion removed its rollout. */
-export const deletedSdkSessionTicks = new Map<string, number>();
-
-export function recordDeletedSdkSession(sdkSessionId: string): void {
-  sessionDeletionTick += 1;
-  // Insertion-ordered, so the first key is always the oldest tombstone.
-  deletedSdkSessionTicks.delete(sdkSessionId);
-  deletedSdkSessionTicks.set(sdkSessionId, sessionDeletionTick);
-  while (deletedSdkSessionTicks.size > DELETE_TOMBSTONE_LIMIT) {
-    const oldest = deletedSdkSessionTicks.keys().next();
-    if (oldest.done) break;
-    deletedSdkSessionTicks.delete(oldest.value);
-  }
-}
-
-/**
- * Whether a read that started at `readTick` could be holding a pre-deletion
- * snapshot of this session. A deletion that landed after the read started means
- * the rows it returns are stale, so adopting them would resurrect a session the
- * user deleted — with no code path that ever prunes it again.
- */
-export function deletedSinceTick(sdkSessionId: string, readTick: number): boolean {
-  const deletedAt = deletedSdkSessionTicks.get(sdkSessionId);
-  return deletedAt !== undefined && deletedAt > readTick;
 }
 
 /**
@@ -156,19 +114,16 @@ export function isDefaultSessionTitle(
 export async function reconcilePersistedSessions(): Promise<void> {
   const sdk = await claudeSdk();
   const cwd = currentWorkingDirectory();
-  // Recorded before the read, so a deletion that lands while it is in flight is
-  // detectable against the snapshot it returns.
-  const listStartedAtTick = sessionDeletionTick;
   const infos = await sdk.listSessions({
     dir: cwd,
     includeProgrammatic: true,
     // Every Orkestrator environment is a worktree of the same repository, so
     // the SDK default (`true`) would hand this bridge every *other*
-    // environment's sessions — which rename, delete and fork would then act on.
+    // environment's sessions — which rename and fork would then act on.
     includeWorktrees: false,
   });
   // Durable preferences are read before the adoption loop below: the loop's
-  // race-safety against concurrent prompts and deletions depends on it never
+  // race-safety against concurrent prompts depends on it never
   // awaiting between its `sessions.get` check and `sessions.set`. Sequential
   // rather than fanned out so a large Claude home cannot open hundreds of
   // files at once; entries that already live in memory are skipped, and memory
@@ -191,9 +146,6 @@ export async function reconcilePersistedSessions(): Promise<void> {
     if (typeof info.cwd === "string" && info.cwd.length > 0 && !isPathWithin(cwd, info.cwd)) {
       continue;
     }
-    // The rollout was deleted while this listing was in flight. Nothing prunes
-    // a re-inserted entry, so adopting it would leave a permanent zombie.
-    if (deletedSinceTick(info.sessionId, listStartedAtTick)) continue;
     const storedPreferences = storedPreferencesBySdkId.get(info.sessionId);
     const id = persistedBridgeSessionId(info.sessionId, storedPreferences);
     const existing = sessions.get(id);
@@ -259,7 +211,6 @@ export async function materializePersistedSessionState(
   sessionId: string,
   sdkId: string,
 ): Promise<SessionState | undefined> {
-  const startedAtTick = sessionDeletionTick;
   const sdk = await claudeSdk();
   // Re-checked after every await. A prompt that claimed this id while the read
   // was pending owns a running status, a live transcript and a task registry;
@@ -277,9 +228,6 @@ export async function materializePersistedSessionState(
   if (racedDuringRead) return racedDuringRead;
 
   if (!info) return undefined;
-  // Deleted while this read was in flight: the metadata is a pre-deletion
-  // snapshot and registering it would resurrect the session.
-  if (deletedSinceTick(sdkId, startedAtTick)) return undefined;
   const state: SessionState = {
     id: sessionId,
     title: info.customTitle || info.summary || `Session ${sdkId.slice(-6)}`,
@@ -437,7 +385,7 @@ export async function hydratePersistedSessionMessages(
   if (session.persistedMessagesLoaded !== false) return session.messages;
 
   const hydrated = await readPersistedSessionMessagesOnce(session);
-  // A prompt or deletion may have claimed the session while the SDK read was
+  // A prompt or close may have claimed the session while the SDK read was
   // pending. In that case its in-memory state is authoritative; the prompt
   // shares this same read and applies it before appending its live message.
   if (
@@ -498,9 +446,9 @@ export function getLastIdleTranscriptSweep(): IdleTranscriptSweepStats | undefin
  * stamped on every assistant message of every turn and never cleared, so that
  * exempted every session the user had actually run, which are precisely the
  * large transcripts. The counters only matter while a client could still be
- * resuming from them, and the SSE replay ring retains a bounded window: a
- * client whose cursor is `IDLE_TRANSCRIPT_EVICTION_MS` stale has already been
- * told `replay.required` and will rehydrate from REST regardless. So the guard
+ * resuming from them, and the SSE stream keeps no replay: a client whose
+ * cursor is behind at all is told `replay.required` and rehydrates from REST
+ * regardless. So the guard
  * now expires with {@link SessionState.lastStreamedRevisionAt}. A session
  * carrying revisions with no such timestamp is still never evicted.
  *
@@ -633,78 +581,6 @@ export function startIdleTranscriptSweep(
 }
 
 startIdleTranscriptSweep();
-
-export async function deleteSessionDurably(sessionId: string): Promise<boolean> {
-  // Do not introduce an `await` for an already registered session: deletion
-  // must claim it synchronously so a prompt cannot slip in on the next
-  // microtask before `deleting` is visible.
-  const session = sessions.get(sessionId) ?? (await ensurePersistedSession(sessionId));
-  if (!session) {
-    // A prior attempt can delete the SDK rollout and then fail while removing
-    // bridge-owned metadata. Let a retry finish that cleanup even though the
-    // authoritative rollout no longer materializes.
-    const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
-    if (sdkSessionId) {
-      await deleteSessionPreferences(sdkSessionId);
-      await deleteCommandChangeJournal(sdkSessionId);
-    }
-    return false;
-  }
-  if (session.deleting) {
-    throw sessionOperationError("conflict", "Session deletion is already in progress");
-  }
-
-  // Claim deletion before the first await. Stop every live writer before
-  // removing its rollout so it cannot recreate or append to the file.
-  session.deleting = true;
-  session.status = "running";
-  claimedPromptDispatches.delete(sessionId);
-  session.abortController?.abort();
-  session.abortController = undefined;
-  cleanupPendingInteractions(sessionId);
-  await releaseQueryControls(session);
-  await waitForPendingPromptDispatchClaim(sessionId);
-  let rolloutDeleted = false;
-  try {
-    const preferenceSessionId = session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
-    if (session.sdkSessionId) {
-      const sdk = await claudeSdk();
-      if (typeof sdk.deleteSession === "function") {
-        await sdk.deleteSession(session.sdkSessionId, {
-          dir: currentWorkingDirectory(),
-        });
-      }
-      rolloutDeleted = true;
-      // Recorded before the map entry is dropped: a reconcile already holding a
-      // pre-deletion `listSessions` snapshot would otherwise re-insert it.
-      recordDeletedSdkSession(session.sdkSessionId);
-    }
-    forgetPromptDispatchesForSession(sessionId);
-    if (preferenceSessionId) {
-      await deleteSessionPreferences(preferenceSessionId);
-      await deleteCommandChangeJournal(preferenceSessionId);
-    }
-    sessions.delete(sessionId);
-    return true;
-  } catch (error) {
-    if (rolloutDeleted && session.sdkSessionId) {
-      // The rollout is already gone and cannot be restored. Keep the registry
-      // consistent with that authoritative fact; a retry by id can still
-      // finish removing the preference journal through the missing-session
-      // branch above.
-      recordDeletedSdkSession(session.sdkSessionId);
-      sessions.delete(sessionId);
-      throw error;
-    }
-    // The rollout still exists when deletion fails. Restore an addressable idle
-    // session, but leave its stopped query stopped.
-    session.deleting = false;
-    session.status = "idle";
-    session.turnStartedAt = undefined;
-    session.completionBlockedByBackgroundTasks = false;
-    throw error;
-  }
-}
 
 export async function renameSessionDurably(sessionId: string, title: string): Promise<boolean> {
   const session = await ensurePersistedSession(sessionId);

@@ -284,7 +284,7 @@ jobs:
 
       # Design export through real `docker exec` into the run's image: client
       # kills, the daemon closing the helper's stdin, and digest reconciliation
-      # (todo 0036 task 2).
+      # (todo 0036 task 2, retired; docs/architecture/design-canvas.md).
       - name: Live design export
         if: ${{ !cancelled() }}
         env:

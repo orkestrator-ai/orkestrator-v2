@@ -2,6 +2,7 @@ import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload
 import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 import { spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -868,6 +869,17 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       // Relaunch in non-development mode: a Vite-mode process correctly refuses
       // IPC from file://. Disposable resources use the production renderer,
       // backend bundle, preload and trust rules, without installing a package.
+      // Without those bundles the relaunched window closes at once, which reads
+      // as an Electron failure; say what is missing instead.
+      for (const bundle of [
+        path.join(repositoryRoot, "apps", "backend", "dist", "main.js"),
+        path.join(webRoot, "dist", "index.html"),
+      ]) {
+        expect(
+          existsSync(bundle),
+          `${path.relative(repositoryRoot, bundle)} is missing: run \`bun run --cwd apps/backend build\` and \`bun run --cwd apps/web build\` first`,
+        ).toBe(true);
+      }
       await closeElectronWithin(app);
       app = null;
       const resources = path.join(root, "file-resources");

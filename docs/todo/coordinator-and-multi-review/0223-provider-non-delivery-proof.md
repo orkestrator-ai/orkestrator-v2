@@ -31,7 +31,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 4. **OpenCode same-id deduplication** (Needs verification): does OpenCode
    deduplicate a `promptAsync` that reuses a message id? Status: done
    (obsolete: OpenCode 1.x retired 2026-11-11, see
-   [0008](../agent-engines/0008-opencode-v2.md) "OpenCode 1.x retired
+   0008 (retired) "OpenCode 1.x retired
    (2026-11-11)"; the OpenCode 2 provider never re-posts an ambiguous prompt,
    so no message id is reused).
 

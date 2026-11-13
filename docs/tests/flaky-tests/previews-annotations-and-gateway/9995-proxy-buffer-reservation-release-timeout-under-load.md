@@ -72,3 +72,22 @@ in its group if it recurs.
   and `:606`) failed with `expect(received).toBe(expected)` (Expected `true`,
   Received `false`). The web package was then stopped (exit 130) when the
   backend task failed. The file passed alone (`bun test --cwd apps/web src/components/chat/rich/StaticHtmlArtifactView.test.tsx`).
+
+### Web package run, same day
+
+`mise run test:logged -- --name web-workspace-tests -- bun run --cwd apps/web test:workspace`
+(the web package on its own, because the run above stopped it) reported
+14,721 passed, 10 skipped and 3 failed across 1,015 files in 976.88 s,
+still at load about 100 (`orkestrator-test-run.s0FIWp`). None of the owning
+files is changed by the branch, and each passed alone with one worker:
+
+- `the drawer's bottom bar and AppDialogHost open interactive settings and return focus to the drawer trigger, including cached reopening`
+  (`apps/web/src/components/sidebar/SidebarBottomBar.environment-settings.test.tsx`,
+  1,627.43 ms).
+- `a stream that ends reconnects from its cursor`
+  (`apps/web/src/lib/native/web-gateway-relayed-stream.test.ts`): Expected
+  length 2, Received length 1 (31.04 ms).
+- `CoordinatorPanel render cost > an unrelated environment, pipeline or Multi Review write renders no conversation`
+  (`apps/web/src/components/projects/CoordinatorPanel.render-cost.test.tsx`):
+  the initial `waitFor` in `renderPanel` (line 178) gave up at 2,051.80 ms,
+  before the test wrote anything.

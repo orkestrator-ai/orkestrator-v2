@@ -55,6 +55,7 @@ coverage/
 /output/qualification-*/
 /output/contract-backfill/
 /output/disposable-docker/
+/output/older-release/
 /output/playwright/
 /output/visual-previews/
 /output/pipeline-shots/

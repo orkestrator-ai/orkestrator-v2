@@ -101,6 +101,17 @@ interval was removed (todo 0048 task 13), and
 The interaction tracker then starts its observe-only monitor if enabled.
 Background work never depends on a renderer being subscribed.
 
+A queue drain sends its head only to a session whose last turn reads idle.
+A terminal error holds the queue with back-off and then parks the head with
+the provider's explanation, so an at-capacity model cannot burn a whole
+queue. A turn a provider restart cut short (`status: "error"` with
+`interruption: "restart"`, which the Claude and Codex bridges report) is not
+a model failure: the drain sends the head at once, as after an idle turn, so
+a prompt queued before the restart still goes out before one typed after it.
+Added 2026-11-13 (7120 (retired), task 1); the live check
+(`multi-client-restarts-live.spec.ts`, backend crash case) saw the queued
+prompt go out once, before the later one.
+
 `shutdown()` sets the stop flag (every collaborator reads it through
 `isStopped`), stops the timers and scheduler, settles projection refreshes and
 catalogue reads, drains progressive reads and display tails, waits for every

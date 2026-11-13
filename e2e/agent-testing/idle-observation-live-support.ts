@@ -417,3 +417,26 @@ export function detachWaitMs(platform: string, override: string | undefined): nu
 export function detachWaitClosesRenderer(platform: string): boolean {
   return platform === "codex";
 }
+
+/** Which environment, container and container fake the spec's cases act on. */
+export interface EnvironmentScope<Fake> {
+  environmentId: string;
+  environmentName: string;
+  containerId: string | null;
+  containerFake: Fake | null;
+}
+
+/**
+ * Lend the spec's environment scope to a case that runs in an environment of
+ * its own (the approval case's ask-policy environment). `read` snapshots the
+ * run's own scope now; `restore` writes that snapshot back once the borrowed
+ * environment is deleted, because its container and fake went with it and a
+ * later case must not exec into a container that no longer exists.
+ */
+export function borrowEnvironmentScope<Fake>(
+  read: () => EnvironmentScope<Fake>,
+  write: (scope: EnvironmentScope<Fake>) => void,
+): { home: Readonly<EnvironmentScope<Fake>>; restore(): void } {
+  const home = Object.freeze({ ...read() });
+  return { home, restore: () => write({ ...home }) };
+}

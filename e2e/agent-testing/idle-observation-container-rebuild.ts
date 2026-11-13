@@ -73,7 +73,7 @@ export interface RebuildCaseContext {
   waitForReply(previous: ReadonlySet<string>, word: string): Promise<void>;
   /** Stop the current runtime's fake model before the rebuild. */
   stopFake(): Promise<void>;
-  /** Serve the fake model in the new runtime. */
+  /** Serve the fake model in the new runtime; a no-op in a real-model run. */
   installFake(containerId: string): Promise<void>;
   /** Open a fresh page on the environment and wait until it shows `words`. */
   reopenAndShow(words: readonly string[]): Promise<void>;
@@ -105,18 +105,32 @@ export function assertInspectableSessionId(sessionId: string): void {
 }
 
 /**
+ * The read-only script that prints `<bytes> <mentions>` for the database at
+ * `databasePath`: its size (`-1` when absent) and how many lines of it and its
+ * WAL name the session id in `ORKESTRATOR_QA_SESSION`. The id travels in the
+ * environment, never in the script text. POSIX `sh`, `wc` and `grep` only, so
+ * the same text runs in the container and in its unit test.
+ */
+export function databaseInspectionScript(databasePath: string = CONTAINER_OPENCODE2_DB): string {
+  if (!/^\/[A-Za-z0-9._/-]+$/.test(databasePath)) {
+    throw new Error("the database path is not one the inspection script accepts");
+  }
+  return [
+    `f='${databasePath}'`,
+    `if [ -f "$f" ]; then s=$(wc -c < "$f" | tr -d ' '); else s=-1; fi`,
+    `n=$(cat "$f" "$f-wal" 2>/dev/null | grep -a -c -F -- "$ORKESTRATOR_QA_SESSION" || true)`,
+    `echo "$s \${n:-0}"`,
+  ].join("\n");
+}
+
+/**
  * Size of `opencode2.db` in a container and how many of its (and its WAL's)
  * lines name `sessionId`. Run as root, because the server, not `node`, may
  * own the file; it reads only, and prints two numbers.
  */
 export function inspectContainerDatabase(containerId: string, sessionId: string): DatabaseEvidence {
   assertInspectableSessionId(sessionId);
-  const script = [
-    `f=${CONTAINER_OPENCODE2_DB}`,
-    `if [ -f "$f" ]; then s=$(stat -c %s "$f"); else s=-1; fi`,
-    `n=$(cat "$f" "$f-wal" 2>/dev/null | grep -a -c -F -- "$ORKESTRATOR_QA_SESSION" || true)`,
-    `echo "$s \${n:-0}"`,
-  ].join("\n");
+  const script = databaseInspectionScript();
   const result = spawnSync(
     "docker",
     [

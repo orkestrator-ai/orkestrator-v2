@@ -1,6 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
+  CONTAINER_OPENCODE2_DB,
   assertInspectableSessionId,
+  databaseInspectionScript,
   parseDatabaseEvidence,
   rebuildRequestFailure,
   rebuildSettled,
@@ -10,6 +16,64 @@ import {
   type RebuildCaseRecord,
   type RebuildProjection,
 } from "./idle-observation-container-rebuild";
+
+describe("database inspection script", () => {
+  const directories: string[] = [];
+  afterEach(() => {
+    for (const directory of directories.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  const database = () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "idleqa-rebuild-db-"));
+    directories.push(directory);
+    return path.join(directory, "opencode2.db");
+  };
+  /** Run the script the way `docker exec` does: `sh -c`, the id in the environment. */
+  const inspect = (databasePath: string, sessionId: string) => {
+    const result = spawnSync("sh", ["-c", databaseInspectionScript(databasePath)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, ORKESTRATOR_QA_SESSION: sessionId },
+      timeout: 10_000,
+    });
+    expect(result.status).toBe(0);
+    return parseDatabaseEvidence(result.stdout);
+  };
+
+  test("an absent database prints -1 and no mentions", () => {
+    expect(inspect(database(), "ses_01ABC")).toEqual({ bytes: -1, sessionMentions: 0 });
+  });
+
+  test("counts the session's lines in the main file and its WAL, and the main file's size", () => {
+    const file = database();
+    const main = "header\x00ses_01ABC row\nother\nses_01ABC again\n";
+    writeFileSync(file, main);
+    writeFileSync(`${file}-wal`, "wal ses_01ABC\nses_02XYZ\n");
+    expect(inspect(file, "ses_01ABC")).toEqual({
+      bytes: Buffer.byteLength(main),
+      sessionMentions: 3,
+    });
+  });
+
+  test("a present database that never names the session prints its size and zero", () => {
+    const file = database();
+    writeFileSync(file, "ses_02XYZ only\n");
+    expect(inspect(file, "ses_01ABC")).toEqual({ bytes: 15, sessionMentions: 0 });
+  });
+
+  test("matches the id as a fixed string, not a pattern", () => {
+    const file = database();
+    writeFileSync(file, "sesX01ABC\n");
+    expect(inspect(file, "ses.01ABC").sessionMentions).toBe(0);
+  });
+
+  test("defaults to the container path and refuses a path that could change the script", () => {
+    expect(databaseInspectionScript()).toContain(`f='${CONTAINER_OPENCODE2_DB}'`);
+    for (const bad of ["relative/opencode2.db", "/tmp/a b", "/tmp/x';id;'", "/tmp/$(id)"]) {
+      expect(() => databaseInspectionScript(bad)).toThrow("not one the inspection script accepts");
+    }
+  });
+});
 
 describe("rebuild helpers", () => {
   test("the inspection's two numbers, and nothing else", () => {

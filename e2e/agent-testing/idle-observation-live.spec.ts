@@ -124,6 +124,7 @@ import {
 import { PI_FAKE_PROVIDER } from "./idle-observation-fake-pi";
 import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
 import {
+  borrowEnvironmentScope,
   requireRecoveredBackoff,
   backgroundOutputEvidence,
   completedTaskOutputFiles,
@@ -1414,7 +1415,12 @@ test.describe("live idle observation", () => {
           // A provider without an "ask" composer mode asks only under the
           // execution policy, which a session takes when it is created: run
           // this case in a second environment created with `approvals: "ask"`.
-          const home = { environmentId, environmentName, containerId, containerFake };
+          const borrowed = borrowEnvironmentScope(
+            () => ({ environmentId, environmentName, containerId, containerFake }),
+            (scope) => {
+              ({ environmentId, environmentName, containerId, containerFake } = scope);
+            },
+          );
           let policyEnvironment: Environment | null = null;
           try {
             if (askMode) {
@@ -1518,11 +1524,8 @@ test.describe("live idle observation", () => {
                   environmentId: policyEnvironment.id,
                 })
                 .catch(() => undefined);
-              environmentId = home.environmentId;
-              environmentName = home.environmentName;
               // The policy environment's container and fake went with it.
-              containerId = home.containerId;
-              containerFake = home.containerFake;
+              borrowed.restore();
               await goToEnvironment();
             } else {
               await setControls(autoMode ? { approvalMode: autoMode.id } : {});
@@ -2039,7 +2042,8 @@ test.describe("live idle observation", () => {
                 if (index >= 0) fakeModels.splice(index, 1);
                 await fake.stop();
               },
-              installFake: installContainerFake,
+              // Only a fake-model run serves a fake; a real-model run keeps its provider.
+              installFake: FAKE_MODELS ? installContainerFake : async () => undefined,
               reopenAndShow: async (words) => {
                 await goToEnvironment();
                 for (const word of words) {

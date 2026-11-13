@@ -1,7 +1,7 @@
 # Annotation Home preview hidden after reload
 
 - **ID:** 0272
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-17
 - **Test:** `Home native preview hides beneath board panels and returns without losing its tab`
   in `e2e/agent-testing/web-annotations-electron.spec.ts`.
@@ -63,3 +63,13 @@
   (1.5 and 1.1 min) on the same loaded host, right after the failing alone
   run. The service-preview spec, which hit the symptom before its equivalent
   fix, passed 13 consecutive runs after it.
+
+## Reopened: recurrence in the 4340 Electron rerun on macOS — 2026-11-13
+
+- **Branch and base:** Branch `electron-suite-rerun-4896909ed3cc-r1`, base `17d28238c` (to-do 4340 task 5, which changes no desktop or Electron spec code). `mise run flaky:recurrence -- 0272 --base 17d28238c`: resolved, and the base contains its fix (`2a13546f8b`), so this is a real recurrence and the case is reopened.
+- **Original command:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340 mise run test:logged -- --name agent-electron -- mise run test:agent:electron` (one Playwright worker, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), on this Mac (macOS 27.2, Apple silicon) shared with nine other builds; the failure snapshot's CPU meter read 100 %.
+- **Failure:** a different step from the 2026-10-18 cause: after selecting the project row and the **Home** tab, `getByRole("textbox", { name: "Browser address" })` was not found within 5 s (`web-annotations-electron.spec.ts:842`), before the reload the earlier fix covers. Test 7.7 s; the file's 18 later serial cases did not run. Suite: 43 passed, 4 failed, 6 skipped, 25 not run (serial cases behind a failure), 25.9 min.
+- **Owning-file rerun:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340-solo-web-annotations-electron mise run test:logged -- --name solo-web-annotations-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts` passed the complete unchanged owner (17 passed, 2 skipped, 115.7 s).
+- **Evidence:** `orkestrator-test-run.2kT16D/agent-electron.log.gz` below the host temporary directory; results and traces under `output/agent-testing/electron-4340/electron/`; rerun under `output/agent-testing/electron-4340-solo-web-annotations-electron/electron/`.
+- **Hypothesis:** the Home tab's browser surface renders later than 5 s after the click on a saturated host; not established. No assertion, timeout or skip changed.
+

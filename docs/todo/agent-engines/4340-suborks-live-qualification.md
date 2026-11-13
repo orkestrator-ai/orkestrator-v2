@@ -53,13 +53,42 @@ No live model has run it. On 2026-11-04 `native-agent-suborks-opencode.live.test
 
 **Context.** The branch changes no file under `apps/desktop/` or `e2e/agent-testing/`. Thirteen of the sixteen failures stopped at the first title check with the window still titled `Orkestrator AI`, and their Electron diagnostics hold 56 to 139 `net::ERR_NETWORK_CHANGED` lines ending in `renderer.load-failed ... Failed to fetch dynamically imported module .../src/renderer-entry.tsx`. That is flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md): other builds' containers adding and removing veths and bridges on beelink. The connection-outage case failed at the same title check. The other two are native-view assertions: `web-annotations-electron.spec.ts` is open flake 1400, and `service-preview-electron.spec.ts` "a crashed service renderer reports the failure and recovers on reload" (view not visible) has no case of its own.
 
-**Investigation.** The run was not repeated. Most of these specs open a window on the host display, which on beelink is the user's live desktop. `ip monitor` during this round showed a Docker veth being created and torn down within 30 s, at interface index 7009.
+**Investigation.** The run was not repeated on beelink. Most of these specs open a window on the host display, which on beelink is the user's live desktop. `ip monitor` during this round showed a Docker veth being created and torn down within 30 s, at interface index 7009.
+
+2026-11-13, rerun on this Mac (macOS 27.2, Apple silicon, Docker not creating networks; shared with nine other builds, CPU meter at 100 % in the failure snapshots), branch `electron-suite-rerun-4896909ed3cc-r1` on `17d28238c`: `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340 mise run test:logged -- --name agent-electron -- mise run test:agent:electron` reported **43 passed, 4 failed, 6 skipped, 25 not run** (serial cases behind a failure) in 25.9 min. No failure had an `ERR_NETWORK_CHANGED` line, so 2340's cause did not recur. Each failing owner was rerun alone:
+
+- `electron-main.spec.ts`, "remote nicknames refresh all native titles and Window menu entries" (the `Workstation` poll after the second renderer's reload): passed alone (9 passed, 2 skipped). Recorded as a recurrence of flake 9863.
+- `web-annotations-electron.spec.ts`, "Home native preview hides beneath board panels and returns without losing its tab" (**Browser address** not shown within 5 s after selecting Home; its 18 later serial cases did not run): passed alone (17 passed, 2 skipped). Flake 0272 reopened with this recurrence.
+- `service-preview-electron.spec.ts`, "a Vite app keeps HMR updates made while its tab is hidden, unmounted or reloaded" (`HMR v2 not applied in place`): failed alone too (16 passed, 1 failed, 7 skipped). Recorded under flake 1303, which already reproduces in the owner on macOS and on `main`.
+- `local-gateway-transport-electron.spec.ts`, "a local window on the gateway transport shows terminal output and recovers": failed alone too, because this worktree had no `apps/backend/dist` or `apps/web/dist` and the case relaunches Electron from them (the relaunched backend logged `Module not found .../backend/main.js` and the window closed). After `bun run --cwd apps/backend build` and `bun run --cwd apps/web build` the owner passed alone (2 passed). The case now fails up front naming the missing bundle and the two build commands, instead of as a closed window.
+
+The earlier beelink failure in `service-preview-electron.spec.ts`, "a crashed service renderer reports the failure and recovers on reload", passed here in the full suite and alone.
 
 **Decisions.** Where to rerun it:
 - On a host with no concurrent Docker work, or on macOS with Docker Desktop (recommended). Pros: removes the 2340 cause without changing any test. Cons: needs a quiet window on a host whose desktop may be used.
 - Add headless launch to every Electron spec, as `design-canvas-electron.spec.ts` has. Pros: avoids the live desktop on beelink. Cons: unrelated test work, and it does not by itself avoid network churn.
 
 ## Assumptions and decisions
+
+### Scripted mode covers Pi and OpenCode only (task 1)
+
+The ticket asked for specs that pass on scripted models. Pi and OpenCode both send OpenAI chat completions to a configured endpoint, so one loopback fake (`suborks-fake-model.ts`) serves both through the profile's own settings. Claude, Codex, Cursor and Grok have no scripted model that reaches a profile's own bridge (the existing Claude and Codex fakes need a hand-started profile with a made-up Codex key, and Cursor and Grok have fake engines only in place of their bridges), so the same specs cover them only in live mode, which is on the manual-test checklist. Chose this over adding four more fakes, which would have been new harness work beyond this ticket.
+
+### One mise task runs both specs on one disposable profile (tasks 1 and 4)
+
+`mise run test:agent:suborks` follows the other fake-model runners (`runIsolatedBrowser`, `--no-agent-credentials`, `--no-host-seed`, reachability check off). The restart spec restarts the profile, so it runs second (`suiteRestartsProfiles`), the way `coordinator-notice-live` does. Chose one profile over two to halve the start-up cost.
+
+### The restart spec's scripted target is Pi until 8045 (task 4)
+
+With an OpenCode target the restart case fails on a real defect (to-do 8045). Rather than leave a red default or loosen the assertion, the scripted default is an OpenCode caller and a Pi target, so both providers still cross the restart, and `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces the defect. 8045 task 2 turns it back on.
+
+### Task 2 moved whole to the checklist (task 2)
+
+Task 2 waited only on the user's live check, which a to-do may not do. Its decision (sharpen the description first, a per-provider system line only if that fails) now travels in the checklist item, so whoever records a provider ignoring the tool can hand the follow-up to an agent, and this file has no work left.
+
+### The gateway-transport case fails up front without its bundles (task 5)
+
+It needs the production backend and web bundles, which `agent-testing.md` already says, but without them it failed as a closed Electron window. A pre-check now names the missing file and the build commands. Chose this over building the bundles in `beforeAll`, which would add minutes to every run on hosts that already have them.
 
 ### Coordinator suborks run in the project home (task 6)
 
@@ -81,4 +110,6 @@ Retiring OpenCode 1.x removed the only real-process subork run. Its port, `openc
 
 - [`docs/architecture/suborks.md`](../../architecture/suborks.md)
 - [`docs/architecture/goals.md`](../../architecture/goals.md)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, task 6, task 7, and the real-agent runs of task 1, task 2 and task 4) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, task 6, task 7, and the real-agent runs of task 1, task 2 and task 4) moved there on 2026-11-10; on 2026-11-13 they were rewritten for the landed specs and task 2's follow-up joined them.
+- [8045](8045-opencode-turn-cut-by-backend-restart-stays-busy.md): the OpenCode restart defect task 4's spec found.
+- [`docs/development/agent-testing.md`](../../development/agent-testing.md#suborks-on-every-provider-and-across-a-restart-fake-model): the suite.

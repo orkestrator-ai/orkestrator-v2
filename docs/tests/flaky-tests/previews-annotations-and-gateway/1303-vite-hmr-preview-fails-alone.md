@@ -40,3 +40,13 @@ mise run test:logged -- --name service-preview-electron-owner -- bunx playwright
 Evidence: `orkestrator-test-run.Yvz6n6/service-preview-electron-owner.log.gz`
 below the host temporary directory. This remains a failure that reproduces
 in the owner, not a newly established aggregate-only flake.
+
+## 4340 Electron rerun on macOS — 2026-11-13
+
+- **Branch and base:** Branch `electron-suite-rerun-4896909ed3cc-r1`, base `17d28238c` (to-do 4340 task 5, which changes no desktop or Electron spec code). `mise run flaky:recurrence -- 1303 --base 17d28238c`: open, record as a recurrence.
+- **Original command:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340 mise run test:logged -- --name agent-electron -- mise run test:agent:electron` (one Playwright worker, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), on this Mac (macOS 27.2, Apple silicon) shared with nine other builds; the failure snapshot's CPU meter read 100 %.
+- **Failure:** `HMR v2 not applied in place` (`service-preview-electron.spec.ts:2218`), test 51.3 s. Suite: 43 passed, 4 failed, 6 skipped, 25 not run (serial cases behind a failure), 25.9 min.
+- **Owning-file rerun:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340-solo-service-preview-electron mise run test:logged -- --name solo-service-preview-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts` failed the same way alone (16 passed, 1 failed, 7 skipped, 114.8 s; `orkestrator-test-run.gaZb1A/solo-service-preview-electron.log.gz`), so it still reproduces in the owner on macOS, as on 2026-10-28.
+- **Evidence:** `orkestrator-test-run.2kT16D/agent-electron.log.gz` below the host temporary directory; results and traces under `output/agent-testing/electron-4340/electron/`; rerun under `output/agent-testing/electron-4340-solo-service-preview-electron/electron/`.
+- **Changes:** evidence only; no HMR implementation, assertion, timeout or skip changed.
+

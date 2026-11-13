@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,10 @@ import {
   probeKeychainItemCommand,
   type KeychainItemPresence,
 } from "./claude-host-credentials.js";
+
+// The real `security` and `mkfifo` run below; Bun's 5 s default is too tight
+// for them under aggregate load.
+setDefaultTimeout(30_000);
 
 /**
  * A host Claude sign-out may remove the host's login from containers, so the
@@ -227,6 +231,29 @@ describe("isKeychainFile", () => {
     expect(await isKeychainFile(file)).toBe(true);
     expect(await isKeychainFile(root)).toBe(false);
   });
+
+  // A FIFO with no writer blocks a plain open forever; the reading must not.
+  test.skipIf(process.platform === "win32")(
+    "a FIFO is not a keychain, and the sign-out reading does not wait on it",
+    async () => {
+      const fifo = path.join(root, "fifo");
+      execFileSync("mkfifo", [fifo], { timeout: 10_000 });
+      await fs.mkdir(path.dirname(pinnedKeychain()), { recursive: true });
+      await fs.rm(pinnedKeychain(), { force: true });
+      await fs.symlink(fifo, pinnedKeychain());
+      const probe = keychain(["absent"]);
+      const settled = await Promise.race([
+        Promise.all([
+          isKeychainFile(fifo),
+          isKeychainFile(pinnedKeychain()),
+          hostClaudeSignedOut("darwin", home, undefined, {}, probe.probe),
+        ]),
+        Bun.sleep(5_000).then(() => "blocked" as const),
+      ]);
+      expect(settled).toEqual([false, false, false]);
+      expect(probe.calls).toEqual([]);
+    },
+  );
 });
 
 /**

@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { constants as fsConstants, fstatSync, promises as fs } from "node:fs";
+import { constants as fsConstants, fstatSync, promises as fs, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   INPUT_LIMITS,
@@ -16,6 +17,10 @@ import {
 } from "../src/core/portable-inputs-clone";
 import { tempDir } from "./container-lifecycle-fixtures";
 
+// `stat`, `xattr`, `chflags`, `df` and `mount` run below; Bun's 5 s default is
+// too tight for them under aggregate load.
+setDefaultTimeout(30_000);
+
 const cleanup: string[] = [];
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -23,6 +28,41 @@ afterEach(async () => {
 
 const linux = process.platform === "linux";
 const darwin = process.platform === "darwin";
+
+/**
+ * The filesystem type of the volume holding `directory` on macOS (`apfs`,
+ * `hfs`, …), read from `df` and `mount` rather than from the clone under
+ * test, so a broken clone cannot make the APFS tests skip themselves.
+ */
+function darwinFilesystemType(directory: string): string | undefined {
+  const lines = execFileSync("df", ["-P", directory], { encoding: "utf8", timeout: 10_000 })
+    .trim()
+    .split("\n");
+  // Filesystem, blocks, used, available, capacity, then the mount point (which may hold spaces).
+  const mountPoint = lines.at(-1)?.split(/\s+/).slice(5).join(" ");
+  if (!mountPoint) return undefined;
+  const mounts = execFileSync("mount", [], { encoding: "utf8", timeout: 10_000 });
+  for (const line of mounts.split("\n")) {
+    const match = / on (.+) \(([^,)]+)/.exec(line);
+    if (match?.[1] === mountPoint) return match[2];
+  }
+  return undefined;
+}
+
+/**
+ * Whether the temporary directory the fixtures use is on APFS. There the
+ * clone must work: a missing `bun:ffi` binding or a failing `fclonefileat`
+ * fails the APFS tests rather than passing them with nothing asserted. Only
+ * a temporary directory on another filesystem skips them.
+ */
+const tmpIsApfs = darwin && darwinFilesystemType(os.tmpdir()) === "apfs";
+
+/** The macOS descriptor clone, which must be available wherever the APFS tests run. */
+function requiredDarwinClone(): DescriptorClone {
+  const clone = darwinDescriptorClone();
+  expect(clone).toBeFunction();
+  return clone!;
+}
 
 async function write(file: string, content: string | Buffer) {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -250,7 +290,7 @@ describe("portable input staging by reflink", () => {
 
   test("a staged file stays independent of its source in both directions", async () => {
     const { dataDir, roots, home } = await fixture();
-    const canClone = linux ? await reflinks(dataDir) : darwin ? await apfsClones(dataDir) : false;
+    const canClone = linux ? await reflinks(dataDir) : tmpIsApfs;
     const staged = await stagePortableInputs(
       dataDir,
       "isolated",
@@ -282,25 +322,6 @@ describe("portable input staging by reflink", () => {
   });
 });
 
-/** Whether `directory` is on a volume `fclonefileat` can clone on (APFS). */
-async function apfsClones(directory: string): Promise<boolean> {
-  const clone = darwinDescriptorClone();
-  if (!clone) return false;
-  const source = path.join(directory, ".probe-source");
-  await fs.writeFile(source, "probe");
-  const handle = await fs.open(source, "r");
-  try {
-    await clone(handle.fd, `${source}-clone`);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await handle.close();
-    await fs.rm(source, { force: true });
-    await fs.rm(`${source}-clone`, { force: true });
-  }
-}
-
 /** BSD file flags of `file` (`stat -f %f`), 0 when none are set. */
 function fileFlags(file: string): number {
   return Number(execFileSync("stat", ["-f", "%f", file], { encoding: "utf8" }).trim());
@@ -323,13 +344,12 @@ describe("portable input staging by APFS clone (macOS)", () => {
     ).toBeUndefined();
   });
 
-  test.skipIf(!darwin)(
+  test.skipIf(!tmpIsApfs)(
     "clones from the checked descriptor, not the path, as a plain file",
     async () => {
       const root = await tempDir("ork-inputs-apfs-");
       cleanup.push(root);
-      if (!(await apfsClones(root))) return;
-      const clone = darwinDescriptorClone()!;
+      const clone = requiredDarwinClone();
       const source = path.join(root, "source");
       await fs.writeFile(source, "checked bytes");
       execFileSync("xattr", ["-w", "org.orkestrator.probe", "planted", source]);
@@ -354,10 +374,10 @@ describe("portable input staging by APFS clone (macOS)", () => {
     },
   );
 
-  test.skipIf(!darwin)("an immutable source still clones to a removable file", async () => {
+  test.skipIf(!tmpIsApfs)("an immutable source still clones to a removable file", async () => {
     const root = await tempDir("ork-inputs-apfs-uchg-");
     cleanup.push(root);
-    if (!(await apfsClones(root))) return;
+    const clone = requiredDarwinClone();
     const source = path.join(root, "source");
     await fs.writeFile(source, "locked");
     execFileSync("chflags", ["uchg", source]);
@@ -365,7 +385,7 @@ describe("portable input staging by APFS clone (macOS)", () => {
       const handle = await fs.open(source, "r");
       const destination = path.join(root, "clone");
       try {
-        await darwinDescriptorClone()!(handle.fd, destination);
+        await clone(handle.fd, destination);
       } finally {
         await handle.close();
       }
@@ -377,9 +397,9 @@ describe("portable input staging by APFS clone (macOS)", () => {
     }
   });
 
-  test.skipIf(!darwin)("staging on APFS clones every file staged byte for byte", async () => {
+  test.skipIf(!tmpIsApfs)("staging on APFS clones every file staged byte for byte", async () => {
     const { dataDir, roots } = await fixture();
-    if (!(await apfsClones(dataDir))) return;
+    requiredDarwinClone();
     const staged = await stagePortableInputs(dataDir, "apfs", new Set(["claude"] as const), roots);
     // CLAUDE.md, commands/review.md and the two plugin files; settings.json is
     // filtered and the skill guarded, so both are read and written instead.
@@ -462,4 +482,100 @@ describe("portable input staging by APFS clone (macOS)", () => {
     expect(attempts).toBe(0);
     expect(staged.clonedFiles).toBe(0);
   });
+});
+
+type ScrubStep = "lchflags" | "listxattr" | "removexattr";
+
+/**
+ * A stand-in for `bun:ffi` whose `fclonefileat` "clones" by writing the
+ * destination, as the real call does before the scrub runs, and whose scrub
+ * call `failAt` fails with `errno`. The clone's xattrs are `xattrs`.
+ */
+function fakeDarwinFfi(options: { failAt?: ScrubStep; errno?: number; xattrs?: string[] }) {
+  const removed: string[] = [];
+  let errno = 0;
+  const text = (value: unknown) => (value as Buffer).toString("utf8").replace(/\0$/, "");
+  const fail = (step: ScrubStep, result: number) => {
+    if (options.failAt !== step) return result;
+    errno = options.errno ?? 1;
+    return -1;
+  };
+  const listing = Buffer.from((options.xattrs ?? []).map((name) => `${name}\0`).join(""));
+  const symbols = {
+    fclonefileat: (_fd: number, _dirfd: number, name: unknown) => {
+      writeFileSync(text(name), "cloned");
+      return 0;
+    },
+    lchflags: () => fail("lchflags", 0),
+    listxattr: (_path: unknown, names: unknown, size: number) => {
+      if (names !== null) listing.copy(names as Buffer, 0, 0, size);
+      return fail("listxattr", listing.length);
+    },
+    removexattr: (_path: unknown, name: unknown) => {
+      removed.push(text(name));
+      return fail("removexattr", 0);
+    },
+    __error: () => 0,
+  };
+  const ffi = {
+    dlopen: () => ({ symbols }),
+    FFIType: new Proxy({}, { get: (_target, key) => key }),
+    ptr: (value: Buffer) => value,
+    read: { i32: () => errno },
+  };
+  return { loadFfi: () => ffi, removed };
+}
+
+describe("a macOS clone whose scrub fails", () => {
+  test("clears every xattr but the provenance, and treats ENOATTR as cleared", async () => {
+    const root = await tempDir("ork-inputs-scrub-");
+    cleanup.push(root);
+    const fake = fakeDarwinFfi({
+      xattrs: ["com.apple.provenance", "org.orkestrator.a", "org.orkestrator.b"],
+      failAt: "removexattr",
+      errno: 93,
+    });
+    const clone = darwinDescriptorClone("darwin", fake.loadFfi)!;
+    await clone(0, path.join(root, "clone"));
+    expect(fake.removed).toEqual(["org.orkestrator.a", "org.orkestrator.b"]);
+  });
+
+  for (const failAt of ["lchflags", "listxattr", "removexattr"] as const) {
+    test(`a failing ${failAt} rejects, and staging removes the clone and copies`, async () => {
+      const make = () =>
+        darwinDescriptorClone(
+          "darwin",
+          fakeDarwinFfi({ failAt, errno: 13, xattrs: ["org.orkestrator.a"] }).loadFfi,
+        )!;
+      const root = await tempDir("ork-inputs-scrub-");
+      cleanup.push(root);
+      const destination = path.join(root, "clone");
+      await expect(make()(0, destination)).rejects.toMatchObject({ code: "EACCES" });
+
+      const { dataDir, roots } = await fixture();
+      const clone = make();
+      let attempts = 0;
+      const staged = await stagePortableInputs(
+        dataDir,
+        `scrub-${failAt}`,
+        new Set(["claude"] as const),
+        roots,
+        new Date(),
+        INPUT_LIMITS,
+        {
+          cloneDescriptor: async (fd, target) => {
+            attempts += 1;
+            await clone(fd, target);
+          },
+        },
+      );
+      // The half-made clone is gone: the copy that replaced it holds the source's bytes.
+      expect(attempts).toBe(1);
+      expect(staged.clonedFiles).toBe(0);
+      const files = await contents(staged.directory);
+      expect(files["claude-config/plugins/market/a.js"]).toBe("a".repeat(4096));
+      expect(files["claude-config/CLAUDE.md"]).toBe("memory");
+      expect(Object.values(files)).not.toContain("cloned");
+    });
+  }
 });

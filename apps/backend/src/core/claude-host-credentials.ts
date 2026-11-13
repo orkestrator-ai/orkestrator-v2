@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CommandFailedError, runCommand } from "./shell.js";
@@ -185,14 +185,19 @@ const SECURITY_ITEM_NOT_FOUND_EXIT = 44;
 const KEYCHAIN_FILE_MAGIC = Buffer.from("kych", "latin1");
 
 /**
- * Whether `file` is a keychain `security` could search: it opens and starts
- * with the keychain magic. A missing, empty or foreign file, or a directory,
- * is not, and `security` would answer item-not-found for it all the same.
+ * Whether `file` is a keychain `security` could search: a regular file that
+ * starts with the keychain magic. A missing, empty or foreign file, a
+ * directory or a special file is not, and `security` would answer
+ * item-not-found for it all the same. The open does not block (a FIFO with no
+ * writer would otherwise hold the sign-out reading forever), and the type is
+ * checked on the opened descriptor, so a file swapped in after a path check
+ * cannot slip past it.
  */
 export async function isKeychainFile(file: string): Promise<boolean> {
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(file, "r");
+    handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    if (!(await handle.stat()).isFile()) return false;
     const head = Buffer.alloc(KEYCHAIN_FILE_MAGIC.length);
     const { bytesRead } = await handle.read(head, 0, head.length, 0);
     return bytesRead === head.length && head.equals(KEYCHAIN_FILE_MAGIC);

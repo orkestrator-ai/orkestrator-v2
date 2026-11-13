@@ -49,6 +49,12 @@ import {
 } from "./profile-cleanup.js";
 import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
 import { prepareProfileBridgeBuilds, type TurboRunner } from "./bridge-builds.js";
+import {
+  formatSeededWorkflowRecords,
+  seededWorkflowCheckout,
+  seedProfileWorkflowRecords,
+  type WorkflowSeedRunner,
+} from "./workflow-records.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -922,6 +928,7 @@ export async function startDevelopment(
     waitForUrl?: typeof waitForUrl;
     writeStatus?: typeof atomicWriteJson;
     checkAgentToolsPort?: typeof assertAgentToolsPortFree;
+    seedWorkflowRecords?: WorkflowSeedRunner;
   } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
@@ -1024,6 +1031,15 @@ export async function startDevelopment(
         writeLog: (text) => createBoundedLogWriter(logPath).write(text),
         ...(dependencies.turbo ? { run: dependencies.turbo } : {}),
       });
+      if (args.seedWorkflowRecords !== undefined) {
+        // Before Electron, so no backend has the store open yet.
+        const seedLog = path.join(profile.logDir, "workflow-records-seed.log");
+        const seeded = await seedProfileWorkflowRecords(profile, args.seedWorkflowRecords, {
+          writeLog: (text) => createBoundedLogWriter(seedLog).write(text),
+          ...(dependencies.seedWorkflowRecords ? { run: dependencies.seedWorkflowRecords } : {}),
+        });
+        console.log(formatSeededWorkflowRecords(seeded, seededWorkflowCheckout(profile)));
+      }
     }
 
     if (args.fixtureEnvironments.includes("container")) {

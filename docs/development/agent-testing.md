@@ -506,6 +506,51 @@ so they always build first. The older-bridge step below swaps one bundle in
 during a spec, after the check, and is unaffected.
 The Electron Playwright config starts its own app and does not use this guard.
 
+### Seeded coordinator workflow records: `--seed-workflow-records`
+
+The coordinator panel says when the workflow records every project's
+coordinator shares are nearly full or full
+([coordinator.md, "Workflow record limit and cleanup"](../architecture/coordinator.md#workflow-record-limit-and-cleanup)).
+No ordinary fixture gets near the 2,000-record limit, so `dev:test` can seed
+records that are still in use:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile workflow-store-qa \
+  --no-host-seed --no-agent-credentials --headless --agent-platforms codex \
+  --seed-workflow-records near-limit
+```
+
+The value is a count from 1 to 2,000 (no sign or leading zeros), `near-limit`
+(1,800, where the banner first shows) or `full` (2,000, where new launches are
+refused); anything else fails at argument parsing, before any build.
+`dev:test` only; `dev` rejects it. After the bridge build and before Electron starts, the launcher runs
+`apps/backend/scripts/seed-coordinator-workflows.ts` against the profile's
+data directory. No backend has the store open then, and the records go in
+through the store's own API, never by editing the database. The script refuses
+the default data directory and any directory that is not a development
+profile's `data` folder. Its output is in the profile's
+`logs/workflow-records-seed.log`; the launcher prints a one-line summary.
+
+The records belong to the coordinator of their own project,
+`seeded-workflows` (a bare repository at `fixtures/seeded-workflows` in the
+profile), so `--fixture` is optional and its project is untouched. Open that
+project's Coordinator tab: the banner is a floating notice at desktop width and
+a pill at phone width. Each record is an `environment` launch record with no
+delegation, for an environment that does not exist, and with its
+worker-outcome watch already ended, so nothing reconciles it, wakes the
+coordinator about it or mails it. A record is in use only because it is
+inside the 24-hour replay window, so every start with the option moves the
+seeded records back into it: the state lasts a day after the last seeded
+start. A smaller count on a later start leaves the rest as finished history
+that a cleanup may clear; `dev:reset` removes everything.
+
+The limit is shared with the profile's other projects. At the limit each
+seeded record goes in the way any launch's does: the store clears the oldest
+finished records, whichever project they belong to, and never one still in
+use. When only records in use are left before the requested count is reached,
+seeding stops there with the store full and the summary names how many were
+refused, so `full` on a profile with other live work seeds fewer than 2,000.
+
 ## Sign a browser in
 
 ```bash

@@ -1,5 +1,6 @@
 import { agentToolsPortProblem, type RuntimeProfile } from "../../electron/runtime-profile.js";
 import { AGENT_PLATFORMS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { parseWorkflowRecordSeed, type WorkflowRecordSeed } from "./workflow-records.js";
 
 export type DevArguments = {
   profile?: string;
@@ -58,6 +59,15 @@ export type DevArguments = {
    * the same way.
    */
   agentToolsPort?: number | "auto";
+  /**
+   * `dev:test` only (`--seed-workflow-records <count|near-limit|full>`):
+   * before Electron starts, seed that many coordinator workflow records still
+   * in use into the profile's store, under a `seeded-workflows` project of
+   * their own, so the coordinator panel's store banner can be checked live
+   * (`seedProfileWorkflowRecords`). Not recorded in the profile: the records
+   * stay in use for a day after the last start that seeded them.
+   */
+  seedWorkflowRecords?: WorkflowRecordSeed;
 };
 
 const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
@@ -143,6 +153,11 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         if (problem) throw new Error(`--agent-tools-port ${problem} (or auto)`);
         result.agentToolsPort = port;
       }
+    } else if (argument === "--seed-workflow-records") {
+      if (!options.agentTest) {
+        throw new Error("--seed-workflow-records is only supported by mise run dev:test");
+      }
+      result.seedWorkflowRecords = parseWorkflowRecordSeed(valueAfter(index++, argument));
     } else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {

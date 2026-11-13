@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -43,9 +43,12 @@ import { electronSpecEnvironment } from "./electron-spec-environment";
  *   (`apps/desktop/electron/hidden-windows.ts`), is the documented switch that
  *   makes Page Visibility report `visible`; turning it back on returns the
  *   hidden window to `hidden`. It runs everywhere.
- * - A window covered by the macOS lock screen runs only while the session's
- *   screen is locked, the one time a shown window on the user's Mac reaches
- *   nobody's eyes.
+ * - A window covered by the macOS lock screen shows a window, so like the
+ *   desktop case it needs `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1`, and it
+ *   runs only while the session's screen is locked. A lock check before the
+ *   run is not enough on its own: the fixture checks again before every step
+ *   that shows a window, and hides its windows and stops the moment the screen
+ *   unlocks, which skips the case.
  * - Hiding, minimising and covering a window that was on screen needs a
  *   display someone may see: a disposable one on Linux (the config's
  *   preflight), the Windows desktop, or a Mac whose person opted in with
@@ -60,6 +63,16 @@ const POLL_INTERVAL_MS = 400;
 const MEASURE_MS = 2_000;
 const SHOWN_WINDOWS_ENV = "ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS";
 const STEP_LINE = "WINDOW_POLLS ";
+/** The fixture's exit code when the screen it needs locked was unlocked. */
+const UNLOCKED_EXIT_CODE = 3;
+/**
+ * POSIX runs own the fixture's process group (`ownProcessGroup`). Windows has
+ * no process groups, and the group helpers need a `ps -o` that Git Bash does
+ * not have, so there the child is tracked here and its tree is stopped with
+ * `taskkill /T`, also from `afterEach` when a test times out.
+ */
+const PROCESS_GROUPS = process.platform !== "win32";
+const windowsChildren = new Set<ChildProcess>();
 
 type WindowAction =
   | "none"
@@ -153,7 +166,9 @@ Object.assign(globalThis, {
 
 const FIXTURE_MAIN = `
 const { app, BrowserWindow } = require("electron");
+const { execFileSync } = require("node:child_process");
 const page = process.env.WINDOW_POLLS_PAGE;
+const requireLocked = process.env.WINDOW_POLLS_REQUIRE_LOCKED === "1";
 const steps = JSON.parse(process.env.WINDOW_POLLS_STEPS);
 const intervalMs = Number(process.env.WINDOW_POLLS_INTERVAL_MS);
 const measureMs = Number(process.env.WINDOW_POLLS_MEASURE_MS);
@@ -162,6 +177,15 @@ if (process.platform === "darwin") app.setActivationPolicy("accessory");
 app.on("window-all-closed", () => {});
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const report = (line) => process.stdout.write(${JSON.stringify(STEP_LINE)} + JSON.stringify(line) + "\\n");
+const screenLocked = () => {
+  try {
+    const registry = execFileSync("ioreg", ["-n", "Root", "-d1"], { encoding: "utf8", timeout: 10000 });
+    return /"CGSSessionScreenIsLocked"\\s*=\\s*Yes/.test(registry);
+  } catch {
+    // Unknown counts as unlocked: never show a window on a guess.
+    return false;
+  }
+};
 
 app.whenReady().then(async () => {
   const window = new BrowserWindow({
@@ -173,6 +197,18 @@ app.whenReady().then(async () => {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   let cover = null;
+  // A case that may show windows only under the lock screen stops the moment
+  // the screen unlocks, hiding its windows first so nobody sees them.
+  const unlocked = () => {
+    if (!window.isDestroyed()) window.hide();
+    cover?.destroy();
+    report({ unlocked: true });
+    app.exit(${UNLOCKED_EXIT_CODE});
+  };
+  if (requireLocked) {
+    const { powerMonitor } = require("electron");
+    powerMonitor.on("unlock-screen", unlocked);
+  }
   await window.loadFile(page);
   const state = () => window.webContents.executeJavaScript("__polls.state()");
   const reads = async () => (await state()).reads;
@@ -205,6 +241,10 @@ app.whenReady().then(async () => {
     }
   };
   for (const step of steps) {
+    if (requireLocked && (step.action === "show-inactive" || step.action === "cover") && !screenLocked()) {
+      unlocked();
+      return;
+    }
     const before = await reads();
     const changedAt = Date.now();
     await apply(step.action);
@@ -274,30 +314,71 @@ test.afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 10 });
 });
 
-/** Runs `steps` in a fresh Electron and returns what its main process reported. */
-async function runSteps(name: string, steps: Step[]): Promise<RunResult> {
-  const child = ownProcessGroup(
-    spawn(
-      createRequire(import.meta.url)("electron") as string,
-      [
-        // Never the signed-in user's keychain.
-        ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
-        `--user-data-dir=${path.join(directory, `profile-${name}`)}`,
-        path.join(directory, "main.cjs"),
-      ],
-      {
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: electronSpecEnvironment(process.env, {
-          ELECTRON_RUN_AS_NODE: undefined,
-          WINDOW_POLLS_PAGE: path.join(directory, "page.html"),
-          WINDOW_POLLS_STEPS: JSON.stringify(steps),
-          WINDOW_POLLS_INTERVAL_MS: String(POLL_INTERVAL_MS),
-          WINDOW_POLLS_MEASURE_MS: String(MEASURE_MS),
-        }),
-      },
-    ),
+test.afterEach(async () => {
+  for (const child of Array.from(windowsChildren)) await stopFixture(child);
+});
+
+const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+
+/** Stops the fixture's Electron and everything it started. */
+async function stopFixture(child: ChildProcess): Promise<void> {
+  if (PROCESS_GROUPS) return stopProcessGroup(child);
+  // An unreaped child still holds its pid, so the pid still names this child.
+  if (!exited(child) && child.pid) {
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 5_000);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      if (exited(child)) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    if (!exited(child)) throw new Error("The fixture's Electron did not exit");
+  }
+  windowsChildren.delete(child);
+}
+
+/**
+ * Runs `steps` in a fresh Electron and returns what its main process reported.
+ * With `requireLocked`, the fixture stops and the case skips if the screen is
+ * or becomes unlocked.
+ */
+async function runSteps(
+  name: string,
+  steps: Step[],
+  options: { requireLocked?: boolean } = {},
+): Promise<RunResult> {
+  const spawned = spawn(
+    createRequire(import.meta.url)("electron") as string,
+    [
+      // Never the signed-in user's keychain.
+      ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
+      `--user-data-dir=${path.join(directory, `profile-${name}`)}`,
+      path.join(directory, "main.cjs"),
+    ],
+    {
+      detached: PROCESS_GROUPS,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: electronSpecEnvironment(process.env, {
+        ELECTRON_RUN_AS_NODE: undefined,
+        WINDOW_POLLS_PAGE: path.join(directory, "page.html"),
+        WINDOW_POLLS_STEPS: JSON.stringify(steps),
+        WINDOW_POLLS_INTERVAL_MS: String(POLL_INTERVAL_MS),
+        WINDOW_POLLS_MEASURE_MS: String(MEASURE_MS),
+        WINDOW_POLLS_REQUIRE_LOCKED: options.requireLocked ? "1" : undefined,
+      }),
+    },
   );
+  const child = PROCESS_GROUPS ? ownProcessGroup(spawned) : spawned;
+  if (!PROCESS_GROUPS) windowsChildren.add(child);
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk: Buffer) => {
@@ -307,15 +388,20 @@ async function runSteps(name: string, steps: Step[]): Promise<RunResult> {
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString("utf8")).slice(-8_000);
   });
+  let code: number | null;
   try {
-    const code = await new Promise<number | null>((resolve, reject) => {
+    code = await new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
       child.once("exit", (exitCode) => resolve(exitCode));
     });
-    expect(code, stderr).toBe(0);
   } finally {
-    await stopProcessGroup(child);
+    await stopFixture(child);
   }
+  test.skip(
+    options.requireLocked === true && code === UNLOCKED_EXIT_CODE,
+    "the screen unlocked during the run, so the fixture hid its windows and stopped",
+  );
+  expect(code, stderr).toBe(0);
   const lines = stdout
     .split("\n")
     .filter((line) => line.startsWith(STEP_LINE))
@@ -393,21 +479,31 @@ test("a hidden window's polls read only while Electron reports it visible", asyn
 
 test("a window the macOS lock screen covers pauses its polls", async () => {
   test.skip(process.platform !== "darwin", "the lock screen case is macOS only");
+  // It shows a window, so it needs the same opt-in as the desktop case: a
+  // lock check is not permission to show one.
+  test.skip(
+    process.env[SHOWN_WINDOWS_ENV] !== "1",
+    `the case shows a window; set ${SHOWN_WINDOWS_ENV}=1 and lock the screen to run it`,
+  );
   test.skip(!macScreenLocked(), "the session's screen is not locked");
   test.setTimeout(90_000);
-  const result = await runSteps("lock-screen-covered-polls", [
-    { name: "start", action: "start-polls", expect: "hidden" },
-    // Electron marks a shown window visible; macOS then reports it occluded.
-    {
-      name: "shown under the lock screen",
-      action: "show-inactive",
-      expect: "hidden",
-      measure: true,
-    },
-    // The poll is alive: Electron's switch makes the page visible and it reads.
-    { name: "throttling off", action: "throttling-off", expect: "visible", returnRead: true },
-    { name: "throttling on", action: "throttling-on", expect: "hidden", measure: true },
-  ]);
+  const result = await runSteps(
+    "lock-screen-covered-polls",
+    [
+      { name: "start", action: "start-polls", expect: "hidden" },
+      // Electron marks a shown window visible; macOS then reports it occluded.
+      {
+        name: "shown under the lock screen",
+        action: "show-inactive",
+        expect: "hidden",
+        measure: true,
+      },
+      // The poll is alive: Electron's switch makes the page visible and it reads.
+      { name: "throttling off", action: "throttling-off", expect: "visible", returnRead: true },
+      { name: "throttling on", action: "throttling-on", expect: "hidden", measure: true },
+    ],
+    { requireLocked: true },
+  );
   const covered = stepOf(result, "shown under the lock screen");
   expectPaused(covered);
   expect(covered.windowVisible).toBe(true);
@@ -423,8 +519,8 @@ test("hidden, minimised and covered windows on a desktop pause their polls", asy
   test.skip(!shown.allowed, shown.reason);
   test.setTimeout(180_000);
   // Chromium tracks occlusion on macOS and Windows only, so a covered window
-  // on Linux may stay visible: that is recorded, not asserted (to-do 2181
-  // task 1's second decision says what to do then).
+  // on Linux may stay visible: that is recorded, not asserted (the
+  // manual-test checklist 7568's covered-window decision says what then).
   const coveredExpect = process.platform === "linux" ? "any" : "hidden";
   const result = await runSteps("desktop-window-polls", [
     { name: "start", action: "start-polls", expect: "hidden" },

@@ -50,7 +50,7 @@ const DIALOG_TEXT_MARKER = "hidden-dialog-text-marker";
 const EXCEPTION_MARKER = "hidden-dialog-synthetic-exception";
 
 type WindowFacts = { count: number; visible: number; focused: number };
-type MacAppFacts = { applicationType: string | null; front: boolean; onscreenWindows: number };
+type MacAppFacts = { applicationType: string; front: boolean; onscreenWindows: number };
 
 /** What the hidden profile's own windows are doing, from main. */
 async function windowFacts(app: ElectronApplication): Promise<WindowFacts> {
@@ -65,20 +65,39 @@ async function windowFacts(app: ElectronApplication): Promise<WindowFacts> {
 }
 
 /**
+ * Runs one native probe and returns its output, failing the spec when the
+ * probe did not answer: a failed or timed-out probe prints nothing, and
+ * nothing would otherwise read as "no window" and "not front".
+ */
+function probe(command: string, args: string[], timeout: number): string {
+  const run = spawnSync(command, args, { encoding: "utf8", timeout });
+  if (run.error || run.signal || run.status !== 0)
+    throw new Error(
+      `${command} ${args[0]} did not answer (status ${run.status}, signal ${run.signal}): ${
+        run.error?.message ?? run.stderr.trim()
+      }`,
+    );
+  return run.stdout.trim();
+}
+
+/**
  * What macOS says about the process: its LaunchServices type (`UIElement`
  * for the `accessory` activation policy), whether it is the front
  * application, and how many of its windows the window server has on screen.
- * Window bounds and titles are not read.
+ * Window bounds and titles are not read. Every fact must be observed: a probe
+ * that fails or answers in an unexpected shape fails the spec.
  */
 function macAppFacts(pid: number): MacAppFacts {
   // `lsappinfo info` takes a pid or an ASN; its `-only` form prints no type.
-  const info = spawnSync("lsappinfo", ["info", String(pid)], { encoding: "utf8", timeout: 10_000 });
-  const front = spawnSync("lsappinfo", ["front"], { encoding: "utf8", timeout: 10_000 });
-  const frontAsn = (front.stdout ?? "").trim();
-  const frontInfo = frontAsn
-    ? spawnSync("lsappinfo", ["info", frontAsn], { encoding: "utf8", timeout: 10_000 })
-    : null;
-  const windows = spawnSync(
+  const info = probe("lsappinfo", ["info", String(pid)], 10_000);
+  const applicationType = /\btype="([^"]+)"/.exec(info)?.[1];
+  if (!applicationType) throw new Error(`lsappinfo reported no type for pid ${pid}`);
+  const frontAsn = probe("lsappinfo", ["front"], 10_000);
+  if (!/^ASN:\S+$/.test(frontAsn)) throw new Error("lsappinfo front named no application");
+  const frontInfo = probe("lsappinfo", ["info", frontAsn], 10_000);
+  const frontPid = /\bpid = (\d+)\b/.exec(frontInfo)?.[1];
+  if (!frontPid) throw new Error("lsappinfo reported no pid for the front application");
+  const onscreen = probe(
     "osascript",
     [
       "-l",
@@ -94,27 +113,40 @@ function macAppFacts(pid: number): MacAppFacts {
        }
        String(onscreen);`,
     ],
-    { encoding: "utf8", timeout: 20_000 },
+    20_000,
   );
+  if (!/^\d+$/.test(onscreen)) throw new Error("the window server count was not a number");
   return {
-    applicationType: /\btype="([^"]+)"/.exec(info.stdout ?? "")?.[1] ?? null,
-    front: new RegExp(`\\bpid = ${pid}\\b`).test(frontInfo?.stdout ?? ""),
-    onscreenWindows: Number((windows.stdout ?? "").trim()),
+    applicationType,
+    front: Number(frontPid) === pid,
+    onscreenWindows: Number(onscreen),
   };
 }
 
 /** The Electron binary's own pid: `.bin/electron` is a Node wrapper that spawns it. */
 function electronAppPid(wrapper: number): number {
-  const children = spawnSync("pgrep", ["-P", String(wrapper)], { encoding: "utf8" });
-  const pids = (children.stdout ?? "").split("\n").filter(Boolean).map(Number);
-  return pids[0] ?? wrapper;
+  const pids = probe("pgrep", ["-P", String(wrapper)], 10_000)
+    .split("\n")
+    .filter(Boolean)
+    .map(Number);
+  if (pids.length !== 1)
+    throw new Error(`expected one Electron under the wrapper, found ${pids.length}`);
+  return pids[0]!;
 }
 
-/** Raises every dialog source main can raise, returning the responses it saw. */
+/**
+ * Raises every dialog source main can raise, returning the responses it saw
+ * and how many windows existed just before and just after.
+ *
+ * Everything between the two counts is synchronous: a hidden profile's router
+ * decides and logs inside the call, so the phase is one uninterrupted run of
+ * main's thread. A window startup creates cannot appear inside it, so
+ * `windowsBefore` 0 proves the dialogs were raised with no window at all.
+ */
 async function raiseDialogs(app: ElectronApplication, parented: boolean) {
   return app.evaluate(
     async ({ BrowserWindow, dialog }, { parented, marker, exceptionMarker }) => {
-      process.emit("uncaughtException", new Error(exceptionMarker), "uncaughtException");
+      const live = () => BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
       const options = {
         type: "question" as const,
         message: marker,
@@ -122,11 +154,19 @@ async function raiseDialogs(app: ElectronApplication, parented: boolean) {
         buttons: ["OK", "Cancel"],
         cancelId: 1,
       };
-      const windowless = await dialog.showMessageBox(options);
-      const parent = parented ? BrowserWindow.getAllWindows()[0] : undefined;
-      const withParent = parent ? await dialog.showMessageBox(parent, options) : null;
+      const windowsBefore = live().length;
+      const parent = parented ? live()[0] : undefined;
+      process.emit("uncaughtException", new Error(exceptionMarker), "uncaughtException");
+      const windowless = dialog.showMessageBox(options);
+      const withParent = parent ? dialog.showMessageBox(parent, options) : null;
       dialog.showErrorBox(marker, marker);
-      return { windowless: windowless.response, withParent: withParent?.response ?? null };
+      const windowsAfter = live().length;
+      return {
+        windowsBefore,
+        windowsAfter,
+        windowless: (await windowless).response,
+        withParent: withParent ? (await withParent).response : null,
+      };
     },
     { parented, marker: DIALOG_TEXT_MARKER, exceptionMarker: EXCEPTION_MARKER },
   );
@@ -196,7 +236,9 @@ test("a hidden macOS profile cancels every native dialog without UI or focus", a
     const pid = electronAppPid(electronApp.process().pid!);
 
     // Before main has created any window: no parent to find, no host to make.
-    const before = await windowFacts(electronApp);
+    // Main creates its first window only after the local backend has started
+    // (`startApplication` awaits `startLocal()`), seconds after launch, and
+    // `raiseDialogs` checks there was none inside its own synchronous phase.
     const early = await raiseDialogs(electronApp, false);
     const afterEarly = await windowFacts(electronApp);
 
@@ -227,7 +269,6 @@ test("a hidden macOS profile cancels every native dialog without UI or focus", a
       body: JSON.stringify(
         {
           electron: await electronApp.evaluate(() => process.versions.electron),
-          before,
           afterEarly,
           withWindow,
           afterLate,
@@ -242,12 +283,22 @@ test("a hidden macOS profile cancels every native dialog without UI or focus", a
       contentType: "application/json",
     });
 
-    expect(before.count).toBe(0);
-    expect(afterEarly).toEqual({ count: 0, visible: 0, focused: 0 });
+    expect(
+      early.windowsBefore,
+      "main created a window before the windowless phase ran; it must run before startup's first window",
+    ).toBe(0);
+    expect(early.windowsAfter).toBe(0);
+    // Startup may have added its hidden main window since; none may show.
+    expect(afterEarly).toMatchObject({ visible: 0, focused: 0 });
     expect(withWindow.visible).toBe(0);
     expect(afterLate).toEqual({ count: withWindow.count, visible: 0, focused: 0 });
-    expect(early).toEqual({ windowless: 1, withParent: null });
-    expect(late).toEqual({ windowless: 1, withParent: 1 });
+    expect(early).toMatchObject({ windowless: 1, withParent: null });
+    expect(late).toEqual({
+      windowsBefore: withWindow.count,
+      windowsAfter: withWindow.count,
+      windowless: 1,
+      withParent: 1,
+    });
     expect(confirmed).toBe(false);
     for (const facts of [frontBefore, frontAfter]) {
       expect(facts.applicationType).toBe("UIElement");

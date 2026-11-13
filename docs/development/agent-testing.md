@@ -1523,11 +1523,16 @@ three cases need different hosts:
 | Case | Runs | Shows a window |
 | --- | --- | --- |
 | A never-shown window, made visible by Electron's `setBackgroundThrottling(false)` | Everywhere | No |
-| A window under the macOS lock screen | macOS, while the session's screen is locked | Only under the lock screen |
+| A window under the macOS lock screen | macOS, only with `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1` and while the session's screen is locked; it skips if the screen unlocks | Only under the lock screen, hidden again the moment the screen unlocks |
 | Hidden, minimised and covered windows | Linux and Windows desktops; macOS only with `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1` on an unlocked screen | Yes, small and never focused |
 
 On macOS every case takes the `accessory` activation policy and windows that
-cannot take focus. Chromium tracks occlusion on macOS and Windows only, so on
+cannot take focus. Both cases that show a window need the opt-in: a check
+that the screen is locked is not permission to show one, so the lock-screen
+fixture checks again before each step that shows a window and, on
+`unlock-screen`, hides its windows and stops (the case then skips). On
+Windows, which has no process groups, the spec stops Electron's process tree
+with `taskkill /T` rather than the POSIX group helpers. Chromium tracks occlusion on macOS and Windows only, so on
 Linux the covered state is recorded in the `desktop-window-polls` attachment
 rather than asserted, as is a minimise that a display with no window manager
 ignores. The hidden agent-test windows turn background throttling off, so a

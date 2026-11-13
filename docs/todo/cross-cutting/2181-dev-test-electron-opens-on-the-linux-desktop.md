@@ -8,11 +8,12 @@ macOS half, tasks 2 and 3, on the Mac `arktech-mini`), and on 2026-11-11 against
 `main` at `498b68766` (task 1's Linux re-check and the CI real-display run, on
 the Linux host `omarchy-hp`), and on 2026-11-13 against `main` at `17d28238c`
 (task 4's agent checks on `arktech-mini`; 5460 task 3's Linux run moved into
-task 1 when 5460 was retired).
+task 1 when 5460 was retired; the same day's review repairs moved its
+covered-window decision to 7568).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (waits on 7568: 6303 task 2, a host with a disposable display, for the full Electron suite under a real display, which now includes 5460's window-visibility spec). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (waits on 7568: 6303 task 2, a host with a disposable display, for the full Electron suite under a real display, which now includes 5460's window-visibility spec; what to do about a covered Linux window that stays `visible` is the user's call, 7568: 2181 task 1 covered-window decision). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: done (2026-11-13: the browser smoke and the native-dialog checks passed on macOS with the window kept hidden; implementation done 2026-11-06; the checks that need a person watching the Mac's screen are in [7568](../manual-test/7568-manual-test-checklist.md) since 2026-11-11).
@@ -43,8 +44,12 @@ when it is hidden, minimised or covered. The suite's
 on Linux whenever the suite has a display. On macOS it passed on 2026-11-13
 (Current state). Chromium tracks occlusion on macOS and Windows only, so the
 spec records a covered Linux window's state rather than asserting it. Read the
-`desktop-window-polls` attachment for the `covered` step and apply the second
-decision below.
+`desktop-window-polls` attachment for the `covered` step and record it in
+Current state. If the window stayed `visible`, choosing between an occlusion
+relay and accepting it is the user's decision, on
+[7568](../manual-test/7568-manual-test-checklist.md) ("2181 task 1: what to do
+about a covered Linux window that stays visible"); an agent then applies the
+choice here.
 
 **Decisions.**
 
@@ -55,13 +60,6 @@ decision below.
   - **Document the wrapper workaround.**
     - Pros: no code.
     - Cons: every agent has to rediscover it, and a missed step opens the window anyway.
-- **If a covered window on Linux stays `visible` (from 5460 task 3)?**
-  - **Also pause on the window's blur and occlusion events relayed from the main process (recommended).**
-    - Pros: covers what the page cannot see itself; the read coordinator already takes a host-hidden input (`setHostHidden`).
-    - Cons: a new desktop-to-renderer signal, with its own row in [version compatibility](../../architecture/version-compatibility.md#register).
-  - **Accept it.**
-    - Pros: no change; hidden and minimised windows still pause.
-    - Cons: a covered Linux window keeps polling at full rate.
 
 ### 2. Home terminal on a host without systemd OSC context
 
@@ -187,8 +185,45 @@ nothing moved to 7568.
 exactly this task's real-display run, which includes the new spec. Keeping
 5460 open for the same wait would have left two to-dos blocked on one 7568
 item, so 5460 was retired and its Linux answer and its decision for a covered
-window were moved here (task 1's Investigation and Decisions). Its Windows and
-unlocked-Mac runs need a person and are in 7568.
+window were moved here (task 1's Investigation). Its Windows and
+unlocked-Mac runs need a person and are in 7568, and so, since the review
+repair below, is the covered-window decision: choosing between building an
+occlusion relay and accepting continued polling is the user's call, so it is a
+7568 decision item and this file keeps only the agent run.
+
+### Task 1 and 4: review repairs to the two specs (2026-11-13)
+
+The multi-review of the first round found five problems; each was repaired
+in the specs rather than documented around.
+
+- **The lock-screen case now needs `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1`.**
+  It shows a window, and a lock check before the run is not permission to show
+  one: an unlock during the run would have left the window on the desktop.
+  Requiring the opt-in was chosen over keeping it unattended with an unlock
+  guard alone, because only the opt-in proves that a person agreed to a window.
+  The fixture also checks the lock before every step that shows a window and,
+  on Electron's `unlock-screen`, hides its windows and exits; the case then
+  skips. Cost: agents no longer run this case on their own, so it moved into
+  the macOS item on 7568.
+- **Windows cleanup.** The POSIX process-group helpers enumerate with
+  `ps -axo`, which Git Bash lacks, so every Windows run would have failed in
+  cleanup. On Windows the spec spawns Electron without `detached`, tracks the
+  child itself and stops its tree with `taskkill /T /F` (also from
+  `afterEach`, which runs when a test times out). macOS and Linux keep the
+  process-group path. Skipping Windows was not chosen: 7568 asks for that run.
+- **The macOS probes fail closed.** A failed or timed-out `lsappinfo` or
+  `osascript` printed nothing, which read as "not front" and "no window on
+  screen", exactly what the dialog spec asserts. Each probe now fails the spec
+  unless it exits 0 and answers in the expected shape.
+- **The windowless dialog phase is one synchronous section.** Counting
+  windows, raising every dialog and counting again happen without an `await`
+  in between (a hidden profile's router decides and logs inside the call), so
+  no window startup creates can land inside the phase; the spec asserts there
+  was none before it. Main creates its first window only after the local
+  backend has started, seconds after the launch the phase follows. A
+  test-only barrier in main was not chosen, for the same reason as the
+  remote-restart hook above.
+- **The covered-window decision moved to 7568** (above).
 
 ### Task 1: repair `electron-cleanup.spec.ts` rather than call it a flake (2026-11-11)
 
@@ -663,7 +698,7 @@ locked:
 | Case | Result |
 | --- | --- |
 | Never-shown window | `hidden` from the first frame, coordinator paused, 0 reads; once Electron's `setBackgroundThrottling(false)` made it `visible`, first read after 579–602 ms and 5–8 reads in 2 s; `hidden` again with 0 reads once throttling was back on |
-| Shown under the lock screen (run while locked) | `isVisible()` true but the document `hidden`, 0 reads in 2 s; read again 636 ms after throttling was turned off |
+| Shown under the lock screen (run while locked) | `isVisible()` true but the document `hidden`, 0 reads in 2 s; read again 636 ms after throttling was turned off. Since the review repair the case needs `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1`, so these runs predate it; later agent runs skip it |
 | Hidden, minimised, covered on a desktop | Skipped: no disposable display on a Mac (on 7568 for a person at an unlocked Mac) |
 
 Exploratory runs before the spec, without Playwright, gave the reasons for its
@@ -694,7 +729,7 @@ polling, as intended.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), and 6303 task 2, the display host task 1 waits on.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), the covered-window decision of task 1 (moved 2026-11-13), and 6303 task 2, the display host task 1 waits on.
 - [6303](6303-window-close-during-request-throws.md), whose task 2 asks for the host with a disposable display.
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - 7340 (retired 2026-11-11, see task 3 above), found in task 3's audit.

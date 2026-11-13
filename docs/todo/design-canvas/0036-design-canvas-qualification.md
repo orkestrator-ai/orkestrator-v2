@@ -823,8 +823,8 @@ now pass.
   shell on an added account, it ran on one account and wrote into the
   other's directory, with no way to pick the account with headroom. The
   merged host-home isolation change now keeps writes in the profile; selecting
-  the matching credential entry remains logged in
-  [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md).
+  the matching credential entry remained logged in to-do 0003 (retired
+  2026-11-13; see [agent-accounts.md](../../architecture/agent-accounts.md)).
 - **Repository validation.** No product or test code changed. `mise run
   check` passed, and so did the flake-index and doc-link unit tests. A full
   `mise run test` passed all four groups in 647.6 s with no profile live.

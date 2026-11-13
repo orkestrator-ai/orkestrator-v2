@@ -1,7 +1,7 @@
 import { GatewayTransport } from "../src/client/transport.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createProcessStartReader,
@@ -17,7 +17,9 @@ import {
   DESCRIPTOR_START_AFTER_TOLERANCE_MS,
   DESCRIPTOR_START_BEFORE_TOLERANCE_MS,
   descriptorProcessRefusal,
+  resolveProfile,
   resolveSavedConnection,
+  type ResolvedTarget,
 } from "../src/client/targets.js";
 import {
   createSandbox,
@@ -445,38 +447,49 @@ describe("cached target process binding", () => {
 });
 
 describe("a target follows its backend through a restart", () => {
-  async function restartable(installationAfter = "install-a") {
+  async function restartable(
+    options: { installationAfter?: string; kind?: "connection" | "profile" } = {},
+  ) {
     const box = await sandbox();
     const first = await gateway();
     const second = await gateway();
     const dataDir = await box.publishDescriptor(first);
+    const descriptorFile = path.join(dataDir, "backend-instance.json");
     let start: number | null = Date.now();
-    const target = await resolveSavedConnection(
-      "local",
-      {
-        kind: "descriptor",
-        descriptorPath: path.join(dataDir, "backend-instance.json"),
-        addedAt: new Date().toISOString(),
-      },
-      async () => start,
-    );
+    let generation = 1;
+    const readStart = async () => start;
+    let target: ResolvedTarget;
+    if (options.kind === "profile") {
+      // The profile's backend pid is this process, as in the descriptor.
+      await publishProfile(box, first, dataDir, process.pid);
+      target = await resolveProfile("qa", box.env, readStart);
+    } else {
+      target = await resolveSavedConnection(
+        "local",
+        { kind: "descriptor", descriptorPath: descriptorFile, addedAt: new Date().toISOString() },
+        readStart,
+      );
+    }
     const transport = new GatewayTransport(target);
     return {
       first,
       second,
       target,
       transport,
-      /** The old process exits; nothing has replaced it yet. */
+      descriptorFile,
+      request: () => transport.invoke("test", {}, { mutation: false }),
+      /** The current process exits; nothing has replaced it yet. */
       exit() {
-        start = Date.now() + 120_000;
+        start = Date.now() + 120_000 * generation;
       },
       /** Its successor (same pid here, a later start) publishes its descriptor. */
-      async publishSuccessor() {
+      async publishSuccessor(next: FakeGateway = second) {
+        generation += 1;
         await rewriteDescriptor(dataDir, {
-          installationId: installationAfter,
-          generation: "gen-2",
+          installationId: options.installationAfter ?? "install-a",
+          generation: `gen-${generation}`,
           startedAt: new Date(start!).toISOString(),
-          url: second.url,
+          url: next.url,
         });
       },
     };
@@ -484,15 +497,13 @@ describe("a target follows its backend through a restart", () => {
 
   test("the next request reaches the successor of the same installation", async () => {
     const backend = await restartable();
-    await backend.transport.invoke("test", {}, { mutation: false });
+    await backend.request();
     backend.exit();
     // Until the successor publishes, the original refusal stands: a --wait
     // observer reads this as "the backend is away" and keeps waiting.
-    await expect(backend.transport.invoke("test", {}, { mutation: false })).rejects.toMatchObject({
-      code: "connection-failed",
-    });
+    await expect(backend.request()).rejects.toMatchObject({ code: "connection-failed" });
     await backend.publishSuccessor();
-    await backend.transport.invoke("test", {}, { mutation: false });
+    await backend.request();
     expect(backend.first.requests).toHaveLength(1);
     expect(backend.second.requests).toHaveLength(1);
     expect(backend.target.baseUrl).toBe(backend.second.url);
@@ -500,14 +511,78 @@ describe("a target follows its backend through a restart", () => {
     expect(backend.target.descriptorGeneration).toBe("gen-2");
   });
 
-  test("a different installation at the same data directory is refused", async () => {
-    const backend = await restartable("install-b");
+  test("a second restart is followed through the successor's own target", async () => {
+    const backend = await restartable();
+    const third = await gateway();
+    await backend.request();
     backend.exit();
     await backend.publishSuccessor();
-    await expect(backend.transport.invoke("test", {}, { mutation: false })).rejects.toMatchObject({
-      code: "identity-mismatch",
-    });
+    await backend.request();
+    expect(backend.target.baseUrl).toBe(backend.second.url);
+    // The successor exits in turn: its refusal stands until the next publishes.
+    backend.exit();
+    await expect(backend.request()).rejects.toMatchObject({ code: "connection-failed" });
+    expect(backend.second.requests).toHaveLength(1);
+    await backend.publishSuccessor(third);
+    await backend.request();
+    expect(backend.first.requests).toHaveLength(1);
+    expect(backend.second.requests).toHaveLength(1);
+    expect(third.requests).toHaveLength(1);
+    expect(backend.target.baseUrl).toBe(third.url);
+    expect(backend.target.identity.generation).toBe("gen-3");
+    expect(backend.target.descriptorGeneration).toBe("gen-3");
+  });
+
+  test("a different installation at the same data directory is refused", async () => {
+    const backend = await restartable({ installationAfter: "install-b" });
+    backend.exit();
+    await backend.publishSuccessor();
+    await expect(backend.request()).rejects.toMatchObject({ code: "identity-mismatch" });
     expect(backend.second.requests).toHaveLength(0);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a successor descriptor that fails the trust checks is not followed and gets no token",
+    async () => {
+      const backend = await restartable();
+      backend.exit();
+      await backend.publishSuccessor();
+      // Readable by other users: refused, so the original refusal stands.
+      await chmod(backend.descriptorFile, 0o644);
+      await expect(backend.request()).rejects.toMatchObject({ code: "connection-failed" });
+      // A symbolic link in its place, even to a trusted copy, is refused too.
+      const copy = `${backend.descriptorFile}.real`;
+      await chmod(backend.descriptorFile, 0o600);
+      await rename(backend.descriptorFile, copy);
+      await symlink(copy, backend.descriptorFile);
+      await expect(backend.request()).rejects.toMatchObject({ code: "connection-failed" });
+      expect(backend.second.requests).toHaveLength(0);
+      expect(backend.target.baseUrl).toBe(backend.first.url);
+      // Once it is a trusted file again, the successor is followed.
+      await rm(backend.descriptorFile);
+      await rename(copy, backend.descriptorFile);
+      await backend.request();
+      expect(backend.second.requests).toHaveLength(1);
+    },
+  );
+
+  test("a profile target follows the successor and refuses another installation", async () => {
+    const backend = await restartable({ kind: "profile" });
+    await backend.request();
+    backend.exit();
+    await expect(backend.request()).rejects.toMatchObject({ code: "connection-failed" });
+    await backend.publishSuccessor();
+    await backend.request();
+    expect(backend.first.requests).toHaveLength(1);
+    expect(backend.second.requests).toHaveLength(1);
+    expect(backend.target.baseUrl).toBe(backend.second.url);
+    expect(backend.target.identity.kind).toBe("profile");
+
+    const impostor = await restartable({ kind: "profile", installationAfter: "install-b" });
+    impostor.exit();
+    await impostor.publishSuccessor();
+    await expect(impostor.request()).rejects.toMatchObject({ code: "identity-mismatch" });
+    expect(impostor.second.requests).toHaveLength(0);
   });
 });
 

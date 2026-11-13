@@ -428,7 +428,15 @@ backend pulls the release image into that daemon (about 7 GB unpacked).
 `--phases service,linger,host-tasks` selects parts; `--from`, `--to`,
 `--engines-from` and `--engines-to` choose the releases (defaults 2.38.0-beta,
 2.38.1-beta, 2.29.0-beta and `--to`). It removes its container and the images
-it built or pulled; `--keep` leaves them for inspection.
+it built or pulled; `--keep` leaves them for inspection. SIGINT or SIGTERM
+stops the running Docker command and removes them the same way before it exits
+(130 or 143); a second signal exits at once. It refuses a container of the
+same name that is already there (a `--keep` run) rather than claim it. Every
+Docker call is pinned to the validated socket with `--host`, and
+`DOCKER_CONTEXT` and the TLS selectors are cleared from its environment, so
+no context can send the `--privileged` container to another daemon. The image
+pins Bun 1.4.4 and 1.4.3 for x64 and arm64 (from Bun's `SHASUMS256.txt`); only
+x64 has been run.
 `scripts/qualify-standalone-service.ts` is the service part on its own, for a
 disposable VM or a spare macOS account.
 

@@ -34,10 +34,19 @@
  *   upstream `gh` under `toolchains/gh-latest/<version>`; `host gh pinned
  *   --wait` returns to the pin.
  *
+ * Every Docker call is pinned to the validated socket (`--host`, with
+ * `DOCKER_CONTEXT` and the TLS selectors cleared), so no context or
+ * configuration can send a build, a `--privileged` run or a cleanup to
+ * another daemon. The image pins Bun for x64 and arm64.
+ *
  * Only the container, the image this script built and the images the
  * host-tasks phase pulled or tagged are removed (by exact name); the daemon
- * itself is removed with `docker:disposable stop`. Exits 0 when every check
- * held, 1 when one did not, 2 on setup errors.
+ * itself is removed with `docker:disposable stop`. A container of the same
+ * name that already exists (a `--keep` run) is refused, never claimed.
+ * SIGINT or SIGTERM stops the running Docker command and cleans up the same
+ * way before exiting (unless `--keep`); a second signal exits at once. Exits
+ * 0 when every check held, 1 when one did not, 2 on setup errors, and 130 or
+ * 143 when interrupted.
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -67,13 +76,16 @@ const HOST_SERVICE_PORT = 41733;
 export const BUN_DOWNLOADS: Record<string, Record<string, string>> = {
   "1.4.4": {
     x64: "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
+    arm64: "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e",
   },
   "1.4.3": {
     x64: "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18",
+    arm64: "efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21",
   },
 };
 
 export class SetupError extends Error {}
+export class InterruptedError extends Error {}
 
 export type Phase = "service" | "linger" | "host-tasks";
 export const PHASES: readonly Phase[] = ["service", "linger", "host-tasks"];
@@ -130,6 +142,35 @@ export function disposableSocket(env: Record<string, string | undefined>): strin
     throw new SetupError(`DOCKER_HOST is not a disposable daemon's socket: ${host || "(unset)"}`);
   }
   return match[1]!;
+}
+
+/**
+ * Variables that pick a Docker daemon, or its TLS settings, besides
+ * `DOCKER_HOST`. They are removed from every Docker child's environment.
+ */
+export const DAEMON_SELECTORS: readonly string[] = [
+  "DOCKER_CONTEXT",
+  "DOCKER_TLS",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+];
+
+/** A Docker child's environment: the caller's, bound to `socket` alone. */
+export function dockerEnvironment(
+  env: Record<string, string | undefined>,
+  socket: string,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && !DAEMON_SELECTORS.includes(key)) result[key] = value;
+  }
+  result.DOCKER_HOST = `unix://${socket}`;
+  return result;
+}
+
+/** A Docker invocation pinned to `socket`: `--host` wins over any context or configuration. */
+export function dockerCommand(docker: string, socket: string, args: string[]): string[] {
+  return [docker, "--host", `unix://${socket}`, ...args];
 }
 
 export function dockerfile(arch = process.arch): string {
@@ -240,7 +281,18 @@ export function ghOnPin(host: Record<string, any> | null): boolean {
   );
 }
 
-export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2)): Promise<number> {
+/** Test seams: the Docker executable and the checkout it treats as this one. */
+export interface Dependencies {
+  docker?: string;
+  root?: string;
+}
+
+export async function qualifyHostUpgradesContainer(
+  argv = process.argv.slice(2),
+  dependencies: Dependencies = {},
+): Promise<number> {
+  const root = dependencies.root ?? ROOT;
+  const dockerBin = dependencies.docker ?? DOCKER;
   const checks: Check[] = [];
   const log = (text: string) => console.error(`[qualify-0033] ${new Date().toISOString()} ${text}`);
   const check = (phase: string, name: string, ok: boolean, detail?: unknown) => {
@@ -256,29 +308,93 @@ export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2))
   let serviceReport: unknown = null;
   const created: { container?: string; image?: string; pulled: string[] } = { pulled: [] };
   const work = mkdtempSync(path.join(os.tmpdir(), "ork-qualify-0033-"));
+  /** Set once the socket is validated; nothing reaches Docker before that. */
+  let socket: string | null = null;
 
+  // Interruption aborts the running command and every wait, so the try
+  // unwinds into the finally below and cleans up; a second signal exits now.
+  const interrupt = new AbortController();
+  let interruptedBy: "SIGINT" | "SIGTERM" | null = null;
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => {
+    if (interruptedBy) {
+      log(
+        `second ${signal}: exiting without cleanup; left: ${[created.container, created.image, ...created.pulled].filter(Boolean).join(", ") || "nothing"}`,
+      );
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    }
+    interruptedBy = signal;
+    log(`${signal}: stopping the running command and cleaning up`);
+    interrupt.abort();
+  };
+  const onSigint = () => onSignal("SIGINT");
+  const onSigterm = () => onSignal("SIGTERM");
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  const interrupted = () => new InterruptedError(`interrupted by ${interruptedBy ?? "a signal"}`);
+  /** A `.catch` that turns a failed wait into `value`, but never swallows an interruption. */
+  const orElse =
+    <T>(value: T) =>
+    (error: unknown): T => {
+      if (interrupt.signal.aborted) throw error;
+      return value;
+    };
+
+  /** `signal` null is for cleanup, which must still run after an interruption. */
   async function run(
     command: string[],
     timeoutMs = 20 * 60_000,
     stdin?: string,
+    signal: AbortSignal | null = interrupt.signal,
   ): Promise<RunResult> {
+    if (signal?.aborted) throw interrupted();
+    if (!socket) throw new SetupError("No validated Docker socket");
     const child = Bun.spawn(command, {
+      env: dockerEnvironment(process.env, socket),
       stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
       stdout: "pipe",
       stderr: "pipe",
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    const [stdout, stderr, code] = await Promise.all([
+    let escalate: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      child.kill("SIGTERM");
+      escalate = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const output = Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
-      child.exited,
     ]);
-    clearTimeout(timer);
-    return { code, stdout, stderr };
+    output.catch(() => {});
+    try {
+      const code = await child.exited;
+      if (signal?.aborted) throw interrupted();
+      const [stdout, stderr] = await output;
+      return { code, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+      clearTimeout(escalate);
+      signal?.removeEventListener("abort", onAbort);
+    }
   }
   const docker = (args: string[], timeoutMs?: number, stdin?: string) =>
-    run([DOCKER, ...args], timeoutMs, stdin);
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    run(dockerCommand(dockerBin, socket!, args), timeoutMs, stdin);
+  /** Cleanup: not tied to the interruption, bounded by its own timeout. */
+  const dockerCleanup = (args: string[]) =>
+    run(dockerCommand(dockerBin, socket!, args), 2 * 60_000, undefined, null);
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve, reject) => {
+      if (interrupt.signal.aborted) return reject(interrupted());
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(interrupted());
+      };
+      const timer = setTimeout(() => {
+        interrupt.signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      interrupt.signal.addEventListener("abort", onAbort, { once: true });
+    });
 
   async function waitFor<T>(
     what: string,
@@ -296,8 +412,8 @@ export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2))
 
   try {
     options = parseOptions(argv);
-    const socket = disposableSocket(process.env);
-    if (!existsSync(path.join(ROOT, "packages", "cli", "dist"))) {
+    socket = disposableSocket(process.env);
+    if (!existsSync(path.join(root, "packages", "cli", "dist"))) {
       throw new SetupError("Build the client first: mise run build:cli");
     }
     const container = `${options.name}-systemd`;
@@ -306,10 +422,19 @@ export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2))
 
     // --- container -------------------------------------------------------
     writeFileSync(path.join(work, "Dockerfile"), dockerfile());
+    // A container of this name is another run's (`--keep`): refuse rather than claim it.
+    const existing = await docker(["container", "inspect", "--format", "{{.Id}}", container]);
+    if (existing.code === 0) {
+      throw new SetupError(
+        `Container ${container} already exists; remove it (docker rm -f ${container}) or pass another --name`,
+      );
+    }
     log(`building ${image} on the disposable daemon`);
+    // Recorded before each step, so an interruption mid-step still cleans it up.
+    created.image = image;
     const built = await docker(["build", "-t", image, work], 30 * 60_000);
     if (built.code !== 0) throw new SetupError(`docker build failed: ${built.stderr.slice(-800)}`);
-    created.image = image;
+    created.container = container;
     const started = await docker([
       "run",
       "-d",
@@ -324,14 +449,13 @@ export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2))
       "--tmpfs",
       "/run/lock",
       "-v",
-      `${ROOT}:${ROOT}:ro`,
+      `${root}:${root}:ro`,
       "-v",
       `${socket}:${SOCKET_IN_CONTAINER}`,
       image,
     ]);
     if (started.code !== 0)
       throw new SetupError(`docker run failed: ${started.stderr.slice(-800)}`);
-    created.container = container;
 
     const userEnv = [
       "-e",
@@ -414,7 +538,7 @@ export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2))
       const result = await asUser(
         [
           "bun",
-          path.join(ROOT, "scripts", "qualify-standalone-service.ts"),
+          path.join(root, "scripts", "qualify-standalone-service.ts"),
           "--from",
           opts.from,
           "--to",
@@ -443,7 +567,7 @@ export async function qualifyHostUpgradesContainer(argv = process.argv.slice(2))
     // --- linger and host tasks share one service -------------------------
     if (opts.phases.has("linger") || opts.phases.has("host-tasks")) {
       const dataDir = `/home/${USER}/host-service`;
-      const cli = ["bun", path.join(ROOT, "packages", "cli", "bin", "orkestrator.js")];
+      const cli = ["bun", path.join(root, "packages", "cli", "bin", "orkestrator.js")];
       const cliEnv = ["-e", `ORKESTRATOR_CLI_CONFIG_DIR=/home/${USER}/cli-config`];
       const ork = (args: string[], timeoutMs?: number) =>
         asUser([...cli, ...args], timeoutMs, cliEnv);
@@ -564,6 +688,7 @@ printf '%s\\n' "$out"
           )?.result ?? null;
         const reference = `${RELEASE_IMAGE}:${opts.to}`;
         log(`host image update: pulling ${reference} (several GB)`);
+        created.pulled.push(reference, PRIVATE_IMAGE_TAG);
         const pulled = await ork(
           [
             "--connection",
@@ -578,7 +703,6 @@ printf '%s\\n' "$out"
           ],
           65 * 60_000,
         );
-        created.pulled.push(reference, PRIVATE_IMAGE_TAG);
         const pulledJson = parseJson(pulled.stdout);
         const taskResult = pulledJson?.result?.host?.tasks?.["image-update"]?.result ?? null;
         check(
@@ -631,6 +755,7 @@ printf '%s\\n' "$out"
               accept: "application/vnd.github+json",
               "user-agent": "orkestrator-qualification",
             },
+            signal: interrupt.signal,
           })
         ).json()) as { tag_name?: string };
         const upstream = String(release.tag_name ?? "").replace(/^v/, "");
@@ -688,7 +813,7 @@ printf '%s\\n' "$out"
         const restarted = await docker(["restart", "-t", "60", container], 5 * 60_000);
         if (restarted.code !== 0) throw new Error(`docker restart failed: ${restarted.stderr}`);
         await booted();
-        const afterBoot = await serving(before?.generation ?? null).catch(() => null);
+        const afterBoot = await serving(before?.generation ?? null).catch(orElse(null));
         check(
           "linger",
           "after a reboot with nobody logged in the unit starts and serves",
@@ -708,14 +833,14 @@ printf '%s\\n' "$out"
               ? true
               : null,
           90_000,
-        ).catch(() => false);
+        ).catch(orElse(false));
         check(
           "linger",
           "control: with linger off and nobody logged in the backend stops",
           stopped === true,
         );
         await asRoot(["loginctl", "enable-linger", USER]);
-        const relingered = await serving(lingering?.generation ?? null).catch(() => null);
+        const relingered = await serving(lingering?.generation ?? null).catch(orElse(null));
         check(
           "linger",
           "control: turning linger back on starts the unit again",
@@ -741,14 +866,17 @@ printf '%s\\n' "$out"
 
     status = checks.length > 0 && checks.every((entry) => entry.ok) ? 0 : 1;
   } catch (error) {
-    status = error instanceof SetupError ? 2 : 1;
-    log(`stopped: ${error instanceof Error ? error.message : String(error)}`);
-    checks.push({ phase: "run", name: "completed", ok: false, detail: String(error) });
+    // An aborted fetch or wait rejects with its own error; the signal decides.
+    const signal = interruptedBy as "SIGINT" | "SIGTERM" | null;
+    status = signal ? (signal === "SIGINT" ? 130 : 143) : error instanceof SetupError ? 2 : 1;
+    const detail = signal ? `interrupted by ${signal}` : String(error);
+    log(`stopped: ${signal ? detail : error instanceof Error ? error.message : detail}`);
+    checks.push({ phase: "run", name: "completed", ok: false, detail });
   } finally {
     if (!options?.keep) {
-      if (created.container) await docker(["rm", "-f", created.container], 5 * 60_000);
+      if (created.container) await dockerCleanup(["rm", "-f", created.container]);
       for (const ref of [...created.pulled, ...(created.image ? [created.image] : [])]) {
-        await docker(["image", "rm", ref], 5 * 60_000);
+        await dockerCleanup(["image", "rm", ref]);
       }
     } else if (created.container) {
       log(`kept ${created.container} and its images (--keep)`);
@@ -764,6 +892,7 @@ printf '%s\\n' "$out"
       engines: options ? { from: options.enginesFrom, to: options.enginesTo, bun: "1.4.3" } : null,
       checks,
       service: serviceReport,
+      interrupted: interruptedBy,
       passed: status === 0,
     };
     if (options?.report) {
@@ -771,6 +900,8 @@ printf '%s\\n' "$out"
       writeFileSync(options.report, `${JSON.stringify(report, null, 2)}\n`);
     }
     log(status === 0 ? "every check passed" : `finished with status ${status}`);
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
   }
   return status;
 }

@@ -23,9 +23,9 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 
-import { reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -42,16 +42,84 @@ export const PAIRING_OLD_APP_ENV = "ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE";
 /** Overrides {@link DEFAULT_PAIRING_RELEASE} for the old-backend half. */
 export const PAIRING_RELEASE_ENV = "ORKESTRATOR_PAIRING_RELEASE";
 
-/** Loopback ports that are none of {@link FORBIDDEN_PORTS}. */
+/**
+ * The executable {@link PAIRING_OLD_APP_ENV} names, resolved against the
+ * repository root as `packagedAppExecutable` resolves its override, so a
+ * repository-relative value means the same path when it is checked and when
+ * the app is spawned from the run's temporary root. Undefined when unset.
+ */
+export function pairingOldAppExecutable(
+  repositoryRoot: string,
+  env: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  const value = env[PAIRING_OLD_APP_ENV]?.trim();
+  return value ? path.resolve(repositoryRoot, value) : undefined;
+}
+
+/**
+ * Where {@link pairingPorts} finds its candidates: a port number to try, and
+ * a loopback bind of exactly that port that resolves to its release, or to
+ * null when the port is taken.
+ */
+export interface PairingPortProbe {
+  candidate(): number;
+  bind(port: number): Promise<(() => Promise<void>) | null>;
+}
+
+/**
+ * Candidates are drawn from 20000–32767, below both Linux's (32768–60999) and
+ * macOS's (49152–65535) ephemeral ranges, so an outgoing connection is not
+ * handed one of them between the reservation and the backend's bind.
+ */
+const PAIRING_PORT_RANGE = { first: 20_000, last: 32_767 } as const;
+
+export const loopbackPairingPortProbe: PairingPortProbe = {
+  candidate: () =>
+    PAIRING_PORT_RANGE.first +
+    Math.floor(Math.random() * (PAIRING_PORT_RANGE.last - PAIRING_PORT_RANGE.first + 1)),
+  bind: (port) =>
+    new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "EADDRINUSE" || error.code === "EACCES") resolve(null);
+        else reject(error);
+      });
+      server.listen(port, "127.0.0.1", () =>
+        resolve(() => new Promise<void>((done) => server.close(() => done()))),
+      );
+    }),
+};
+
+/**
+ * `count` distinct free loopback ports, none of them {@link FORBIDDEN_PORTS}.
+ * A forbidden candidate is refused before anything binds it: the production
+ * ports are never bound, not even for the moment a probe socket would hold
+ * one. Each chosen port stays bound until all are chosen, then is released.
+ */
 export async function pairingPorts(
   count: number,
-  reserve: (count: number) => Promise<number[]> = reserveLoopbackPorts,
+  probe: PairingPortProbe = loopbackPairingPortProbe,
+  attempts = 200,
 ): Promise<number[]> {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const ports = await reserve(count);
-    if (ports.every((port) => port > 0 && !FORBIDDEN_PORTS.has(port))) return ports;
+  const chosen: number[] = [];
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    for (let attempt = 0; attempt < attempts && chosen.length < count; attempt++) {
+      const port = probe.candidate();
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) continue;
+      if (FORBIDDEN_PORTS.has(port) || chosen.includes(port)) continue;
+      const release = await probe.bind(port);
+      if (!release) continue;
+      chosen.push(port);
+      releases.push(release);
+    }
+  } finally {
+    await Promise.all(releases.map((release) => release()));
   }
-  throw new Error("No free loopback ports outside the production ports");
+  if (chosen.length < count) {
+    throw new Error("No free loopback ports outside the production ports");
+  }
+  return chosen;
 }
 
 /** Inherited variables a backend may see; everything else is dropped. */

@@ -331,6 +331,48 @@ describe("packaged spec cleanup", () => {
     expect(run.calls).toEqual(["snapshot app", "release"]);
   });
 
+  // The renderer-pairing spec's release step stops a backend whose data
+  // directory and worktrees live under the root it removes.
+  test("keeps the profile when the release step fails, after attempting it", async () => {
+    const run = steps(() => [41, 42]);
+    const failure = await stopPackagedAppThenRemoveProfile("app", {
+      ...run.steps,
+      release: async () => {
+        run.calls.push("release");
+        throw new Error("backend did not stop");
+      },
+    }).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("backend did not stop");
+    expect(run.calls).toEqual(["snapshot app", "close app 41,42", "release"]);
+  });
+
+  test("keeps the profile when the app is not proven stopped, even if it closed", async () => {
+    const run = steps(() => [41, 42]);
+    const failure = await stopPackagedAppThenRemoveProfile("app", {
+      ...run.steps,
+      waitForStopped: async (owned: number[]) => {
+        run.calls.push(`wait ${owned.join(",")}`);
+        throw new Error("Owned processes did not exit");
+      },
+    }).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("Owned processes did not exit");
+    expect(run.calls).toEqual(["snapshot app", "close app 41,42", "release", "wait 41,42"]);
+  });
+
+  test("still releases and proves a stop when closing the app fails", async () => {
+    const run = steps(() => [41, 42]);
+    const failure = await stopPackagedAppThenRemoveProfile("app", {
+      ...run.steps,
+      close: async () => {
+        run.calls.push("close");
+        throw new Error("close timed out");
+      },
+    }).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("close timed out");
+    // A close that failed but left nothing running still lets the root go.
+    expect(run.calls).toEqual(["snapshot app", "close", "release", "wait 41,42", "remove profile"]);
+  });
+
   test("removes the profile of a run that never launched an app", async () => {
     const run = steps(() => [1]);
     await stopPackagedAppThenRemoveProfile<string>(null, run.steps);

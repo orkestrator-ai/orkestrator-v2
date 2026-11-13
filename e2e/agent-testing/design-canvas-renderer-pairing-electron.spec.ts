@@ -13,7 +13,8 @@
  *   (`ORKESTRATOR_PAIRING_RELEASE` picks another release).
  * - **Published renderer, this backend.** A published desktop build, connected
  *   to `apps/backend/src/main.ts`. It runs only when
- *   `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE` names its executable, for example
+ *   `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE` names its executable (absolute,
+ *   or relative to the repository root), for example
  *   v2.22.3's macOS zip from the GitHub release, unpacked with `ditto -x -k`
  *   into a new empty directory under `output/agent-testing/`:
  *   `…/OrkestratorV2.app/Contents/MacOS/OrkestratorV2`. That build ships with
@@ -21,7 +22,8 @@
  *   (`--remote-debugging-port=0`) and the journey skips the steps that need
  *   main (window size, the download's save path, the window zoom factor).
  *   It predates hidden agent-test windows, so on macOS its window opens on
- *   the desktop for the length of the run.
+ *   the desktop for the length of the run; on Linux it gets the same headless
+ *   switches as the packaged app (`packagedLaunchSwitches`).
  *
  * Both apps run on a disposable agent-test profile under a temporary root,
  * with HOME, the XDG roots and an allowlisted environment
@@ -58,12 +60,14 @@ import {
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
   packagedResourcesPath,
+  stopPackagedAppThenRemoveProfile,
 } from "./packaged-electron-app";
 import {
   DEFAULT_PAIRING_RELEASE,
   PAIRING_OLD_APP_ENV,
   PAIRING_RELEASE_ENV,
   installPublishedBackend,
+  pairingOldAppExecutable,
   pairingPorts,
   startPairingBackend,
   type PairingBackend,
@@ -104,12 +108,18 @@ async function pairingProfile(temporaryRoot: string, id: string) {
 /**
  * Make `backend` the window's active connection and prove the journey's
  * commands now reach it: `get_app_version` answers the backend's version, not
- * the app's own bundled backend's.
+ * the app's own bundled backend's. That proof needs the two versions to
+ * differ, so a pairing of a version with itself fails here rather than
+ * passing against the bundled backend.
  */
 async function connectWindow(window: Page, backend: PairingBackend): Promise<void> {
   const invokeVersion = (): Promise<string> =>
     window.evaluate(() => (globalThis as any).orkestrator.invoke("get_app_version", {}));
   const localVersion = await invokeVersion();
+  expect(
+    localVersion,
+    "the paired backend must report another version than the app's bundled one",
+  ).not.toBe(backend.version);
   const active = await window.evaluate(
     ({ address, token }) =>
       (
@@ -182,24 +192,18 @@ test("this checkout's packaged renderer edits and exports a canvas on a publishe
       runDesignCanvasJourney({ electronApp, window, profile, temporaryRoot }),
     );
   }, [
-    async () => {
-      let owned: number[] | undefined = app ? undefined : [];
-      await withCleanup(async () => {
-        if (app) {
-          owned = electronProcessTree(app);
-          await closeElectron(app, owned);
-        }
-      }, [
-        async () => {
+    // The root holds the backend's data directory and worktrees as well as
+    // the app's profile: it is removed only once both are proven stopped.
+    () =>
+      stopPackagedAppThenRemoveProfile(app, {
+        snapshot: (launched) => electronProcessTree(launched),
+        close: (launched, owned) => closeElectron(launched, owned),
+        release: async () => {
           await (backend as PairingBackend | null)?.stop();
         },
-        async () => {
-          if (!owned) throw new Error("Cannot remove profile without an owned-process snapshot");
-          await waitForStopped(owned, 0);
-          await rm(temporaryRoot, { recursive: true, force: true });
-        },
-      ]);
-    },
+        waitForStopped: (owned) => waitForStopped(owned, 0),
+        removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
+      }),
   ]);
 });
 
@@ -256,7 +260,7 @@ async function publishedRendererPage(
 }
 
 test("a published desktop renderer edits and exports a canvas on this checkout's backend", async () => {
-  const executable = process.env[PAIRING_OLD_APP_ENV]?.trim();
+  const executable = pairingOldAppExecutable(repositoryRoot, process.env);
   test.skip(!executable, `Set ${PAIRING_OLD_APP_ENV} to a published desktop build's executable`);
   test.setTimeout(600_000);
   expect(existsSync(executable!), `No app at ${executable}`).toBe(true);
@@ -264,7 +268,6 @@ test("a published desktop renderer edits and exports a canvas on this checkout's
   let child: ChildProcess | null = null;
   let browser: Browser | null = null;
   let backend: PairingBackend | null = null;
-  let stopped = false;
   await withCleanup(async () => {
     backend = await startPairingBackend({ kind: "current" }, path.join(temporaryRoot, "backend"));
     const { profile, profilePath, home } = await pairingProfile(
@@ -273,12 +276,21 @@ test("a published desktop renderer edits and exports a canvas on this checkout's
     );
     let stderr = "";
     const launched = ownProcessGroup(
-      spawn(executable!, [...ELECTRON_TEST_SWITCHES, "--remote-debugging-port=0"], {
-        detached: true,
-        cwd: temporaryRoot,
-        stdio: ["ignore", "ignore", "pipe"],
-        env: packagedLaunchEnvironment(process.env, { home, profilePath }),
-      }),
+      spawn(
+        executable!,
+        [
+          ...ELECTRON_TEST_SWITCHES,
+          // Linux: the environment has no display, so the app runs headless.
+          ...packagedLaunchSwitches(process.platform),
+          "--remote-debugging-port=0",
+        ],
+        {
+          detached: true,
+          cwd: temporaryRoot,
+          stdio: ["ignore", "ignore", "pipe"],
+          env: packagedLaunchEnvironment(process.env, { home, profilePath }),
+        },
+      ),
     );
     child = launched;
     launched.stderr!.on("data", (chunk: Buffer) => {
@@ -308,18 +320,20 @@ test("a published desktop renderer edits and exports a canvas on this checkout's
       }),
     );
   }, [
-    async () => {
-      await (browser as Browser | null)?.close();
-    },
-    async () => {
-      if (child) await stopProcessGroup(child, 15_000);
-      stopped = true;
-    },
-    async () => {
-      await (backend as PairingBackend | null)?.stop();
-    },
-    async () => {
-      if (stopped) await rm(temporaryRoot, { recursive: true, force: true });
-    },
+    // As in the first test: the root goes only once the published app's whole
+    // process group and the backend are both proven stopped.
+    () =>
+      stopPackagedAppThenRemoveProfile(child as ChildProcess | null, {
+        snapshot: (launched) => (launched.pid ? [-launched.pid, launched.pid] : []),
+        close: (launched) =>
+          withCleanup(async () => {
+            await (browser as Browser | null)?.close();
+          }, [() => stopProcessGroup(launched, 15_000)]),
+        release: async () => {
+          await (backend as PairingBackend | null)?.stop();
+        },
+        waitForStopped: (owned) => waitForStopped(owned, 0),
+        removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
+      }),
   ]);
 });

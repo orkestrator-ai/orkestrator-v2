@@ -42,6 +42,9 @@ import {
 export const HEAD = "1".repeat(40);
 const FINGERPRINT = "a".repeat(64);
 
+/** What a `couldNotReviewModels` reviewer says stopped it. */
+export const BLOCKED_REVIEW_REASON = "No command could run in the review sandbox.";
+
 export function reportFor(summary: string, issueTitle?: string): StructuredReviewReport {
   return {
     reviewScope: {
@@ -153,6 +156,8 @@ export class FanoutProvider implements BuildPipelineProvider {
   readonly failingModels = new Set<string>();
   readonly failingCreateLabels = new Set<string>();
   readonly runningModels = new Set<string>();
+  /** Reviewer models whose report says the reviewer could not review. */
+  readonly couldNotReviewModels = new Set<string>();
   readonly blockedModels = new Set<string>();
   readonly ambiguousModels = new Set<string>();
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
@@ -343,6 +348,22 @@ export class FanoutProvider implements BuildPipelineProvider {
       };
     }
     if (sessionId.includes("review")) {
+      const model = this.sessionModels.get(sessionId);
+      if (model !== undefined && this.couldNotReviewModels.has(model)) {
+        const clean = reportFor(`Report from ${sessionId}`);
+        return {
+          ...base,
+          value: {
+            ...clean,
+            reviewScope: {
+              ...clean.reviewScope,
+              filesReviewed: [],
+              outcome: "blocked",
+              blockedReason: BLOCKED_REVIEW_REASON,
+            },
+          } as T,
+        };
+      }
       const report = reportFor(`Report from ${sessionId}`, "Reviewer finding");
       return {
         ...base,

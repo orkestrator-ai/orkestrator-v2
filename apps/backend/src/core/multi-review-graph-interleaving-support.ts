@@ -417,5 +417,18 @@ export async function multiReviewInterleavingWorld(
   return world;
 }
 
-/** A clean reviewer report, submitted through the activation's port tool. */
-export const INTERLEAVING_REPORT = graphReviewReport({ reviewSummary: "Reviewed" });
+const INTERLEAVING_BASE_REPORT = graphReviewReport({ reviewSummary: "Reviewed" });
+
+/**
+ * A clean reviewer report, submitted through the activation's port tool. The
+ * port tool checks its input against the strict provider schema, so the
+ * report carries the wire form of `reviewScope.outcome` (`blockedReason: null`).
+ */
+export const INTERLEAVING_REPORT = {
+  ...INTERLEAVING_BASE_REPORT,
+  reviewScope: {
+    ...INTERLEAVING_BASE_REPORT.reviewScope,
+    outcome: "reviewed",
+    blockedReason: null,
+  },
+};

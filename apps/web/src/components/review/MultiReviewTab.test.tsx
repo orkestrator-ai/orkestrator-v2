@@ -12,7 +12,10 @@ import {
   type MultiReviewStepTranscript,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  REVIEW_BLOCKED_ERROR_PREFIX,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import { readOnlyCommandSandboxOffNote } from "@orkestrator/protocol/native-agent";
 import {
   TerminalProvider,
@@ -1633,6 +1636,34 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(flowNode("Reviewer 2 ·").querySelector("[data-flow-node-error]")?.textContent).toBe(
       reason,
     );
+  });
+
+  test("shows a reviewer that could not review as failed, with its reason (todo 7871)", async () => {
+    const reason = "No shell command could run: bwrap could not create a namespace.";
+    const ready = readyWorkflow();
+    ready.reviewers[1] = {
+      ...ready.reviewers[1]!,
+      status: "failed",
+      error: `${REVIEW_BLOCKED_ERROR_PREFIX}${reason}`,
+    };
+    delete ready.reviewers[1]!.report;
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
+
+    renderInAppCommandScope(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    await screen.findAllByText(reason);
+    const node = flowNode("Reviewer 2 ·");
+    expect(node.getAttribute("aria-label")).toContain("Could not review");
+    expect(node.getAttribute("aria-label")).not.toContain("Complete");
+    expect(node.querySelector("[data-flow-node-error]")?.textContent).toBe(reason);
+    // It started, so it is not counted among the reviewers that could not start.
+    expect(screen.queryByTestId("reviewer-start-failures") === null).toBe(true);
   });
 
   test("a reviewer that failed after it started raises no start notice", async () => {

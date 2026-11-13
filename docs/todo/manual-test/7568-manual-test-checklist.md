@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (307 items): run each check under
+1. **Manual tests and live checks** (308 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -40,7 +40,9 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`.
+were done; both are in Git history at `1fd391e3a`. 7871 was retired on 2026-11-13, once
+its agent work (a blocked reviewer outcome treated as a failed reviewer) was
+built; it is in Git history at `17d28238c`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -82,13 +84,13 @@ agent can apply it.
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 24 | 9 |
-| Coordinator and Multi Review | 80 | 6 |
+| Coordinator and Multi Review | 81 | 6 |
 | Cross-cutting | 75 | 20 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 307 | 53 |
+| **Total** | 308 | 53 |
 
 ## Outstanding work
 
@@ -453,6 +455,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **6560 (retired) task 2: a turn running when its platform goes off.** On the same profile, start a long coordinator turn and turn its platform off while it runs. Record: whether the turn kept running, whether the held pane showed it as running rather than idle, and whether Stop ended it without starting a provider, to the coordinator.
 - [ ] **[7401](../coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md) task 1: run the Grok read probe signed in.** The probe now has a `data-dir-reads` variant: the bridge's coordinator launch (read-only profile, `--disable-web-search`, `--no-leader`), asked to read, list and search a fixture data directory beside its workspace, with permission requests answered `reject_once` as the bridge does. Sign in to Grok, then from a shell outside any Orkestrator data directory run `GROK_BIN=<the pinned grok> bun scripts/coordinator-probes/grok-web-tools-probe.mjs data-dir-reads` (four billed prompts, each in its own session; it creates and removes its own temporary fixture and prints fixture-labelled paths only, never a reply from the data directory). Record: the printed `version`, `summary` and `finding`, and for each step its `outcome`, `permissionRequests` (kind, paths, answer), `clientReads` and `leaked`, in 7401 task 1.
 - [ ] **4680 (retired) task 2: a real coordinator restarts a step a real usage limit stopped** (behaviour: [Restarting a failed pipeline step](../../architecture/coordinator.md#restarting-a-failed-pipeline-step)). The fake-model run (`mise run test:agent:coordinator:restart-fake`, passed 2026-11-11) already proves the restart, the reopened follow's second wake and the same-`requestId` replay on this node and on a leaf; what it cannot prove is a real provider's limit text and a real model's choice. When a build pipeline on a signed-in profile (or your own install) next fails at a step on a real usage limit (Claude 5-hour limit, Codex plan limit) with a main coordinator following it, and on a leaf the coordinator started it on if you have one: let the coordinator handle the failed status wake without prompting it. Record, to the coordinator: the provider and its limit, whether the wake named the usage limit and offered `restart_build_pipeline_step`, whether the coordinator called it (now, or by scheduling it for after the window resets) and whether the restarted step ran, and whether the next status wake arrived.
+- [ ] **7871 (retired) task 1: a real reviewer that cannot review says so** (behaviour: [A reviewer that could not review](../../architecture/review-preparation.md#a-reviewer-that-could-not-review)). The blocked outcome is proved with fake providers only; whether a real model uses it honestly is not. On a signed-in `dev:test --fixture` profile, start a two-reviewer Multi Review on Claude and on Codex where one reviewer cannot read the change: give the panel a review instruction telling that reviewer's lens (or a one-reviewer run) not to run any command or read any file. Then run a normal two-reviewer review of the same change. Record, per provider: whether the restricted reviewer's report said `blocked` with a reason (described, not quoted), whether its graph node read "Could not review" with that reason and consolidation used only the other reviewer, and whether the normal run's reviewers all reported `reviewed` (no false `blocked`), to the coordinator. A provider that answers `reviewed` with no findings when it could not look gets a prompt or schema wording change from an agent.
 
 #### Cross-cutting
 

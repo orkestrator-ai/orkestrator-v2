@@ -208,6 +208,8 @@ export function reviewReport(baseRef: string, readDiff: boolean): Record<string,
           ? "QA fixture model: the diff was read, but no finding was looked for."
           : "QA fixture model: the diff could not be read and no finding was looked for.",
       ],
+      outcome: "reviewed",
+      blockedReason: null,
     },
     whatChanged: {
       overview: "The fixture model reviewed the package without judging its content.",

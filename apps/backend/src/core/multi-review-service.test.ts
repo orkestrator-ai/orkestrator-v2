@@ -28,9 +28,11 @@ import path from "node:path";
 // calls. Keep Bun's outer budget wider than its own diagnostic waits.
 jest.setTimeout(30_000);
 import {
+  REVIEW_BLOCKED_ERROR_PREFIX,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+import { reviewerBlockedReason } from "@orkestrator/protocol/review-fanout";
 import type {
   StructuredOutputFailureCode,
   StructuredOutputResult,
@@ -163,6 +165,19 @@ const consolidatedReport: StructuredReviewReport = {
   reviewSummary: "One consolidated issue and one coverage gap.",
 };
 
+const BLOCKED_REASON = "No shell command could run in this environment, so no file could be read.";
+/** A valid report from a reviewer that could not review. */
+const blockedReport: StructuredReviewReport = {
+  ...cleanReport,
+  reviewScope: {
+    ...cleanReport.reviewScope,
+    filesReviewed: [],
+    outcome: "blocked",
+    blockedReason: BLOCKED_REASON,
+  },
+  verdict: { ready: "no", reasoning: "The change could not be reviewed." },
+};
+
 class Provider implements BuildPipelineProvider {
   /** Answer `absent` for an id never sent: a bridge whose journal is complete. */
   provesAbsence = false;
@@ -217,6 +232,8 @@ class Provider implements BuildPipelineProvider {
   messagesValue: unknown[] = [];
   messagesError: Error | null = null;
   reviewerReport: StructuredReviewReport = cleanReport;
+  /** Reviewer sessions whose report says the reviewer could not review. */
+  blockedReviewerSessions = new Set<string>();
   consolidationReport: StructuredReviewReport = consolidatedReport;
   messagesCalls = 0;
   usageTokens: number | undefined;
@@ -486,6 +503,14 @@ class Provider implements BuildPipelineProvider {
               ({ reviewSourceIds: _sourceIds, ...gap }) => gap,
             ),
           } as T,
+        };
+      }
+      if (!isConsolidation && this.blockedReviewerSessions.has(sessionId)) {
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: blockedReport as T,
         };
       }
       if (sessionId === "session-1" && this.invalidReviewerReports > 0) {
@@ -7430,6 +7455,59 @@ test("MultiReviewService keeps reviewing and consolidates when another reviewer 
     );
     expect(consolidation?.prompt).toContain(ready?.reviewers[0]?.id ?? "missing-reviewer");
     expect(consolidation?.prompt).not.toContain(ready?.reviewers[1]?.id ?? "missing-reviewer");
+  });
+});
+
+test("MultiReviewService fails a reviewer that reports it could not review and consolidates without it", async () => {
+  const provider = new Provider();
+  provider.blockedReviewerSessions.add("session-1");
+  await withService("env-blocked-reviewer", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const ready = await snapshot(started.id);
+    const blocked = ready?.reviewers[0];
+    // A valid report that says it reviewed nothing is a failed reviewer, not
+    // a clean one: no report is kept and the reason is its error.
+    expect(blocked).toMatchObject({ model: "opus", status: "failed" });
+    expect(blocked?.report).toBeUndefined();
+    expect(blocked?.startFailed).toBeUndefined();
+    expect(blocked?.error).toBe(`${REVIEW_BLOCKED_ERROR_PREFIX}${BLOCKED_REASON}`);
+    expect(reviewerBlockedReason(blocked!)).toBe(BLOCKED_REASON);
+    expect(ready?.reviewers[1]).toMatchObject({ model: "sonnet", status: "completed" });
+    expect(reviewerBlockedReason(ready!.reviewers[1]!)).toBeNull();
+    // Consolidation reads only the reviewer that reviewed.
+    const consolidation = [...provider.sends.values()].find((sent) =>
+      sent.prompt.includes("<multi-review-reports-json>"),
+    );
+    expect(consolidation?.prompt).toContain(ready?.reviewers[1]?.id ?? "missing-reviewer");
+    expect(consolidation?.prompt).not.toContain(blocked?.id ?? "missing-reviewer");
+  });
+});
+
+test("MultiReviewService does not consolidate when every reviewer could not review", async () => {
+  const provider = new Provider();
+  provider.blockedReviewerSessions.add("session-1");
+  await withService("env-blocked-panel", provider, async ({ service, start, snapshot }) => {
+    const started = await start([{ agent: "claude", model: "opus" }]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    const failed = await snapshot(started.id);
+    expect(failed?.reviewers[0]?.status).toBe("failed");
+    expect(failed?.consolidatedReport).toBeUndefined();
+    expect(
+      [...provider.sends.values()].some((sent) =>
+        sent.prompt.includes("<multi-review-reports-json>"),
+      ),
+    ).toBe(false);
   });
 });
 

@@ -7,7 +7,10 @@ import {
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewLabel,
 } from "@orkestrator/protocol/build-pipeline";
-import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
+import {
+  REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
+  reviewerBlockedReason,
+} from "@orkestrator/protocol/review-fanout";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -16,6 +19,7 @@ import {
   parseStructuredReportResult,
 } from "./review-fanout.js";
 import {
+  BLOCKED_REVIEW_REASON,
   HEAD,
   advanceUntil,
   fourReviewers,
@@ -495,6 +499,51 @@ describe("build pipeline multi-model review", () => {
       expect(failedSession?.status).toBe("idle");
       expect(failedSession?.completedAt).toBeDefined();
       expect(failedSession?.model).toBe("sonnet");
+    });
+  });
+
+  test("a reviewer that could not review is a failed reviewer, not a clean report", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.couldNotReviewModels.add("sonnet");
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      // The retired fan-out leaves each reviewer's outcome on its session.
+      const [reviewed, blocked] = [0, 1].map((slot) =>
+        addressing.sessions.find(
+          (session) => session.label === pipelineIndependentReviewLabel(slot),
+        ),
+      );
+      expect(reviewed?.reviewerOutcome).toBe("completed");
+      expect(reviewed?.reviewReport).toBeDefined();
+      expect(blocked?.reviewerOutcome).toBe("failed");
+      expect(blocked?.reviewReport).toBeUndefined();
+      expect(
+        reviewerBlockedReason({ status: blocked!.reviewerOutcome!, error: blocked!.error }),
+      ).toBe(BLOCKED_REVIEW_REASON);
+      // Only the reviewer that reviewed reached consolidation.
+      expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
+    });
+  });
+
+  test("fails the stage when every reviewer could not review", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.couldNotReviewModels.add("opus");
+      provider.couldNotReviewModels.add("sonnet");
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const failed = await advanceUntil(service, read, started.id, "failed");
+      expect(failed.error).toContain("No reviewer produced a valid report");
+      expect(failed.structuredReview).toBeUndefined();
     });
   });
 

@@ -6,6 +6,7 @@ import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { keyInformation } from "./key-information-test-fixture";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
+import { REVIEW_BLOCKED_ERROR_PREFIX } from "@orkestrator/protocol/structured-review";
 import { formatObservedAt } from "@/lib/view-freshness";
 import {
   CREATED,
@@ -309,6 +310,37 @@ describe("pipeline inspector controls", () => {
     fireEvent.click(within(notice).getByRole("button", { name: "Show reviewer" }));
     expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Could not start");
     expect(graphNode("Reviewer 2").textContent).toContain(reason);
+  });
+
+  test("a reviewer that could not review is failed, with its reason (todo 7871)", () => {
+    const reason = "No shell command could run in the container.";
+    const pipeline = build({
+      phase: "reviewing",
+      reviewers: [
+        { agent: "claude", model: "opus" },
+        { agent: "codex", model: "gpt" },
+      ],
+      reviewFanout: {
+        reviewers: [
+          { id: "r1", agent: "claude", model: "opus", status: "running" },
+          {
+            id: "r2",
+            agent: "codex",
+            model: "gpt",
+            status: "failed",
+            error: `${REVIEW_BLOCKED_ERROR_PREFIX}${reason}`,
+            agentStarted: true,
+          },
+        ],
+      },
+    });
+    renderPipelineTab(pipeline);
+    expect(screen.queryByTestId("reviewer-start-failures") === null).toBe(true);
+    fireEvent.click(graphNode("Reviewer 2"));
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Could not review");
+    // The node's face shows the reviewer's own reason, not the backend prefix.
+    expect(graphNode("Reviewer 2").textContent).toContain(reason);
+    expect(graphNode("Reviewer 2").textContent).not.toContain(REVIEW_BLOCKED_ERROR_PREFIX);
   });
 
   test("an ordinary reviewer failure raises no start notice", () => {

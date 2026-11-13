@@ -34,6 +34,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
+import { reviewerBlockedReason } from "@orkestrator/protocol/review-fanout";
 import {
   isMultiReviewWorkflow,
   type MultiReviewModelSelection,
@@ -829,6 +830,54 @@ test("the built-in reviewer prompt reaches dispatch on a sealed package", async 
     }
     expect(record.reviewers[0]?.error).toBeUndefined();
     expect(record.reviewers[0]?.status).toBe("completed");
+  } finally {
+    await world.cleanup();
+  }
+}, 30_000);
+
+// A reviewer whose report says it could not review fails its step on the
+// graph engine too, rather than reaching consolidation as a clean review.
+test("a graph reviewer that could not review fails, with its reason, and is not consolidated", async () => {
+  const reason = "No command could run: the sandbox could not start.";
+  const world = await multiReviewInterleavingWorld({
+    script: async (turn, tools) => {
+      const blocked = positionOf(turn) === 1;
+      await tools.call("submit_report", {
+        resultKey: turnSlots(turn).report,
+        result: blocked
+          ? {
+              ...INTERLEAVING_REPORT,
+              reviewScope: {
+                ...INTERLEAVING_REPORT.reviewScope,
+                filesReviewed: [],
+                outcome: "blocked",
+                blockedReason: reason,
+              },
+            }
+          : INTERLEAVING_REPORT,
+      });
+      return "idle";
+    },
+  });
+  try {
+    world.fakes.scripts.set("consolidate", ({ port }) =>
+      port === "report" ? INTERLEAVING_REPORT : undefined,
+    );
+    const process = world.start();
+    await process.ready;
+    const started = await world.startReview({ reviewers: MODELS.slice(0, 2) });
+    let record = started;
+    for (let pass = 0; pass < 30 && !record.graphRun?.settled; pass++) {
+      await process.service.advanceNow(started.id);
+      await process.graphRuns.advanceNow(multiReviewGraphRunId(started.id)).catch(() => null);
+      await world.provider.settle();
+      record = await world.workflow(started.id);
+    }
+    expect(record.reviewers.map((reviewer) => reviewer.status)).toEqual(["failed", "completed"]);
+    expect(record.reviewers[0]?.report).toBeUndefined();
+    expect(record.reviewers[0]?.startFailed).toBeUndefined();
+    expect(reviewerBlockedReason(record.reviewers[0]!)).toBe(reason);
+    expect(record.phase).toBe("ready");
   } finally {
     await world.cleanup();
   }

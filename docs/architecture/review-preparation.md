@@ -635,8 +635,42 @@ rules hold for every change to it. Open scale and cost work is in
   | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
   | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. Codex and Claude report one |
   | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
+  | Valid report with `reviewScope.outcome: "blocked"` | Reviewer | Fail that reviewer with its reason; keep the other reports ([below](#a-reviewer-that-could-not-review)) |
   | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
   | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
+
+### A reviewer that could not review
+
+A reviewer that cannot look at the change (no command runs, the package
+cannot be read, a tool keeps failing) can still return a schema-valid
+report with no findings. Read as a clean review, that report counted as a
+full opinion and the graph showed the reviewer Complete with no issues
+(2026-11-12, a Codex reviewer whose sandbox could not start in a container).
+The report therefore says whether the review happened:
+
+- **The field.** `reviewScope.outcome` is `reviewed` or `blocked`, and
+  `reviewScope.blockedReason` holds the reviewer's own reason when blocked
+  (`null` otherwise). The provider schema requires both. The domain parse
+  reads a report without them as reviewed, so stored reports and a reviewer
+  whose prompt predates the fields still parse, and the structural check of a
+  submitted report fills the pair in the same way
+  (`backfillLegacyReviewOutcome`) instead of spending a repair turn on it. A
+  blocked report needs a non-blank reason; a reviewed one must not carry one.
+- **A failed reviewer.** `structuredReviewBlockedFailure` turns a blocked
+  report into the error `The reviewer could not review the change: <reason>`.
+  The agent-branch runner's `resultFailure` hook commits the branch `failed`
+  with it instead of `completed`, after consuming the result slot as for any
+  accepted result, so no report is kept and the failed-reviewer path applies:
+  consolidation goes on without it, a panel with no usable report fails, and
+  the reviewer can be restarted. It is the one hook for the bespoke fan-out
+  (standalone Multi Review and Build Pipeline panels) and the graph engine,
+  where a `review-report@1` output fails its step before any artifact is
+  written. A single-reviewer Build Pipeline review stage fails the stage with
+  the same message.
+- **Shown as such.** `reviewerBlockedReason` reads the reason back from the
+  error, which is all a graph run keeps of a failed step. The Multi Review and
+  Build Pipeline graphs label the reviewer "Could not review" and show the
+  reason on its node, not "Complete" or a bare "Failed".
 
 ## Fan-out budgets and benchmark
 

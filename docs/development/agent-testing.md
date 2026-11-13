@@ -2909,11 +2909,15 @@ moves the leaf's activity between working and idle on cue.
   client asks for per-node names. Real older releases are a manual check
   (7568).
 
-First passed on Linux on 2026-11-13 (three cases, 138 s including both
-profile starts): the command node's row followed the leaf's record by
-460–613 ms, the flood moved the relayed ring by 10 and the main ring by 0, the
-returning tab showed the leaf's badge in 0.14 s and its activity in 0.28 s,
-and the older-peer page moved the legacy counter by 3 with one `resync`.
+Passed on Linux on 2026-11-13 (three cases, 154 s including both profile
+starts). The activity observers are armed before each dispatch and release, so
+a transition cannot happen before its polls start; the command node's row
+followed the leaf's record by 418–894 ms (median 557 ms). The flood moved the
+relayed ring by 10 and the main ring by 0, the returning tab showed the leaf's
+badge in 0.23 s and its activity in 0.53 s, a relayed stream naming the leaf
+reopened after the reload, and the older-peer page moved the legacy counter by
+3 with one `resync`. Frames are reduced by `frameFacts`, the helper the
+support unit test covers.
 
 Both backends share one kernel and loopback, so a cross-machine or slow link is
 not exercised. The content-free summary (timings, counts, ring deltas, badge

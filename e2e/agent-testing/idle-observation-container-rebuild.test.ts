@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +16,10 @@ import {
   type RebuildCaseRecord,
   type RebuildProjection,
 } from "./idle-observation-container-rebuild";
+
+// The inspection-script tests run a real `sh`; under aggregate load Bun's 5 s
+// default is too tight for a subprocess.
+setDefaultTimeout(30_000);
 
 describe("database inspection script", () => {
   const directories: string[] = [];

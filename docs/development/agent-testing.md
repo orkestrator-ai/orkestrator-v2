@@ -747,6 +747,11 @@ open until all of the following have observed evidence:
    parent. Verify no native UI, host window or focus change, the cancel
    response, and a `hidden-cancelled` event for each source. Do not inject
    exceptions into production or log dialog contents.
+   `hidden-dialogs-electron.spec.ts` (in `mise run test:agent:electron`,
+   macOS only) is this run. The remote-restart prompt needs a packaged build,
+   so the spec raises a parented box through the same router instead, and
+   the `remote-restart` label is covered by
+   `apps/desktop/tests/native-dialogs.test.ts`.
 5. Stop/reset the profile, then launch a fresh fixture with `--no-headless`
    from the same unattended shell. Verify the ordinary window and Dock icon
    appear. Stop/reset it afterwards.
@@ -755,7 +760,7 @@ Record the commit, macOS/Electron versions, profile, exact commands, results
 and cleanup. A Linux pass or a mocked activation-policy call cannot close this
 qualification. Steps 1, 2 and 5 need a person watching the Mac's screen and
 are on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
-steps 3 and 4 are agent work tracked in
+steps 3 and 4 passed on `arktech-mini` on 2026-11-13, recorded in
 [2181, task 4](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),
@@ -1560,6 +1565,43 @@ review the file's diff.
 Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
+
+`window-visibility-polls-electron.spec.ts` checks that a real window pauses
+the renderer's polls (`startCoordinatedPoll`) while its document is hidden.
+It spawns Electron itself rather than through `electron.launch()`: a page
+Playwright attaches to reports `visible` even in a window that was never
+shown. It does not use `ELECTRON_TEST_SWITCHES`, whose
+`--disable-backgrounding-occluded-windows` would turn the signal off. Its
+three cases need different hosts:
+
+| Case | Runs | Shows a window |
+| --- | --- | --- |
+| A never-shown window, made visible by Electron's `setBackgroundThrottling(false)` | Everywhere | No |
+| A window under the macOS lock screen | macOS, only with `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1` and while the session's screen is locked; it skips if the screen unlocks | Only under the lock screen, hidden again the moment the screen unlocks |
+| Hidden, minimised and covered windows | Linux and Windows desktops; macOS only with `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1` on an unlocked screen | Yes, small and never focused |
+
+On macOS every case takes the `accessory` activation policy and windows that
+cannot take focus. Both cases that show a window need the opt-in: a check
+that the screen is locked is not permission to show one, so the lock-screen
+fixture checks again before each step that shows a window and, on
+`unlock-screen`, hides its windows and stops (the case then skips). On
+Windows, which has no process groups, the spec stops Electron's process tree
+with `taskkill /T` rather than the POSIX group helpers. Whether Chromium sees
+a covered window on Linux depends on the display server and window manager
+(under Xvfb with openbox it did, on 2026-11-13), so on Linux the covered state
+is recorded in the `desktop-window-polls` attachment rather than asserted, as
+is a minimise that a display with no window manager ignores.
+
+On a Mac with Docker, the Linux run fits in a throwaway container: Xvfb and
+openbox give it a display nobody sees, and Electron's sandbox needs
+`--security-opt seccomp=unconfined` there (Docker's default profile refuses
+the user namespace it creates). The commands are in to-do 2181's Current
+state. The hidden agent-test windows turn background throttling off, so a
+hidden profile's renderer keeps polling; that is intended, since its windows
+are never shown.
+
+`hidden-dialogs-electron.spec.ts` (macOS only) is step 4 of the
+[live macOS hidden-profile qualification](#live-macos-hidden-profile-qualification).
 
 ### Measuring Electron main's CPU
 

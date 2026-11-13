@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { availableParallelism, tmpdir } from "node:os";
@@ -9,7 +9,16 @@ import {
   HOST_TEST_SCHEDULER_SOURCE,
   testSchedulingPolicy,
 } from "../../packages/protocol/src/node/host-test-scheduler";
-import { createTestAdmission } from "../../scripts/test-admission";
+import {
+  ADAPTIVE_RESERVATION_ENV,
+  AGGREGATE_PRESSURE_GATE_ENV,
+  AGGREGATE_PRESSURE_MAX_ENV,
+  AGGREGATE_PRESSURE_SETTLE_ENV,
+  createTestAdmission,
+  groupUsageKey,
+  readHostPressure,
+  type HostPressure,
+} from "../../scripts/test-admission";
 import { createTestTimingsDirectory, runAllTests } from "../../scripts/test-all";
 
 const cleanups: Array<() => void> = [];
@@ -883,4 +892,477 @@ test("cooperative admission continues on a dirty worktree and still refuses a mo
   expect(stale).toMatchObject({ status: 75, infrastructureError: true });
   expect(String(stale.output)).toContain("Repository changed while queued");
   admission.close();
+});
+
+// Learned group CPU, adaptive reservations and the experimental pressure gate.
+const SCOPE = "test-scope";
+const usageGroup = { name: "usage group", command: "unused", args: [] as string[], workers: 6 };
+const usageKeyFor = (group = usageGroup, tier = "default") => groupUsageKey(SCOPE, group, tier);
+const queuedJobs = (directory: string) => {
+  const db = new Database(path.join(directory, "queue.sqlite"), { readonly: true });
+  try {
+    return db
+      .query<{ workers: number; minWorkers: number | null; resources: string; state: string }, []>(
+        "SELECT workers, minWorkers, resources, state FROM jobs ORDER BY sequence",
+      )
+      .all();
+  } finally {
+    db.close();
+  }
+};
+const worktreeRoot = () => {
+  const root = mkdtempSync(path.join(tmpdir(), "test-admission-worktree-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  return root;
+};
+const until = async (condition: () => boolean, timeoutMs = 4000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) await Bun.sleep(10);
+  return condition();
+};
+
+test("an undisturbed measured group records its parallelism and reports it, with the default reservation unchanged", async () => {
+  const { directory, scheduler } = fixture({ workers: 8, memoryMiB: 16384 });
+  const lines: string[] = [];
+  const admission = createTestAdmission(
+    worktreeRoot(),
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory },
+    (line) => lines.push(line),
+    { usageScope: SCOPE },
+  );
+  let seen: ReturnType<typeof queuedJobs> = [];
+  let measureCpu: boolean | undefined;
+  try {
+    // History exists, but the adaptive switch is off: the plan is reserved as always.
+    scheduler.recordUsage(usageKeyFor(), 0.5);
+    const result = await admission.run(usageGroup, async (group) => {
+      measureCpu = group.measureCpu;
+      seen = queuedJobs(directory);
+      return { status: 0, cpu: { ms: 4_200, spanMs: 3_000 } };
+    });
+    expect(measureCpu).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ workers: 6, minWorkers: null, state: "running" });
+    expect(lines.filter((line) => line.startsWith("RUNNING"))).toEqual([
+      expect.stringMatching(/^RUNNING usage group \(6 worker slots; waited \d+\.\ds\)$/),
+    ]);
+    expect(result.observedCores).toBeCloseTo(1.4, 5);
+    expect(result.reservedSlots).toBe(6);
+    // Busiest of the last runs, rounded up: the earlier 0.5 and this 1.4.
+    expect(scheduler.estimateWorkers(usageKeyFor())).toBe(2);
+  } finally {
+    admission.close();
+  }
+});
+
+test("only undisturbed groups that ran at least a second teach the scheduler", async () => {
+  const { directory, scheduler } = fixture({ workers: 8, memoryMiB: 16384 });
+  const admission = createTestAdmission(
+    worktreeRoot(),
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory },
+    () => {},
+    { usageScope: SCOPE },
+  );
+  const cpu = { ms: 9_000, spanMs: 3_000 };
+  const run = (
+    result: Parameters<typeof admission.run>[1] extends (g: never) => Promise<infer R> ? R : never,
+  ) => admission.run(usageGroup, async () => result);
+  try {
+    const disturbed = [
+      await run({ status: 1, cpu }),
+      await run({ status: 0, cpu, timeoutReason: "absolute" }),
+      await run({ status: 0, cpu, outputLimitExceeded: true }),
+      await run({ status: 0, cpu, infrastructureError: true }),
+      await run({ status: 0, cpu: { ms: 900, spanMs: 999 } }),
+      await run({ status: 0 }),
+    ];
+    for (const result of disturbed) {
+      expect(result.observedCores).toBeUndefined();
+      expect(result.reservedSlots).toBeUndefined();
+    }
+    expect(scheduler.estimateWorkers(usageKeyFor())).toBeUndefined();
+    // A cancelled run is not learned from either.
+    const cancelling = admission.run(usageGroup, async () => {
+      admission.cancel();
+      return { status: 0, cpu };
+    });
+    expect((await cancelling).observedCores).toBeUndefined();
+    expect(scheduler.estimateWorkers(usageKeyFor())).toBeUndefined();
+  } finally {
+    admission.close();
+  }
+});
+
+test("a group's usage key is shared across worktrees and separates what changes its CPU use", () => {
+  const timings = (name: string) => [
+    "test",
+    "--timings",
+    `/tmp/orkestrator-test-timings.abc.${name}/root.json`,
+  ];
+  const base = { ...usageGroup, args: timings("one") };
+  const key = usageKeyFor(base);
+  expect(key).toMatch(/^[a-f0-9]{64}$/);
+  expect(usageKeyFor({ ...base, args: timings("two") })).toBe(key);
+  expect(usageKeyFor(base, "slow")).not.toBe(key);
+  expect(groupUsageKey("other-repository", base, "default")).not.toBe(key);
+  expect(usageKeyFor({ ...base, workers: 4 })).not.toBe(key);
+  expect(usageKeyFor({ ...base, args: [...base.args, "--changed=main"] })).not.toBe(key);
+  expect(usageKeyFor({ ...base, name: "another group" })).not.toBe(key);
+});
+
+test("adaptive reservation is off by default and unaffected by history", async () => {
+  const { directory, scheduler } = fixture({ workers: 8, memoryMiB: 16384 });
+  scheduler.recordUsage(usageKeyFor(), 0.3);
+  for (const env of [
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory },
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, [ADAPTIVE_RESERVATION_ENV]: "0" },
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, [ADAPTIVE_RESERVATION_ENV]: "true" },
+  ]) {
+    const admission = createTestAdmission(worktreeRoot(), env, () => {}, { usageScope: SCOPE });
+    let seen: ReturnType<typeof queuedJobs> = [];
+    try {
+      await admission.run(usageGroup, async () => {
+        seen = queuedJobs(directory);
+        return { status: 0 };
+      });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ workers: 6, minWorkers: null });
+    } finally {
+      admission.close();
+    }
+  }
+});
+
+test("adaptive reservation sizes a group from its last runs, bounded by the plan, with an elastic floor", async () => {
+  const { directory, scheduler } = fixture({ workers: 8, memoryMiB: 16384 });
+  const lines: string[] = [];
+  const admission = createTestAdmission(
+    worktreeRoot(),
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, [ADAPTIVE_RESERVATION_ENV]: "1" },
+    (line) => lines.push(line),
+    { usageScope: SCOPE },
+  );
+  const reserved = async (group = usageGroup) => {
+    let seen: ReturnType<typeof queuedJobs> = [];
+    await admission.run(group, async () => {
+      seen = queuedJobs(directory);
+      return { status: 0 };
+    });
+    return seen[0];
+  };
+  try {
+    // No history: the plan, with no floor, exactly as without the switch.
+    expect(await reserved()).toMatchObject({ workers: 6, minWorkers: null });
+    expect(lines.filter((line) => line.startsWith("RUNNING"))[0]).toMatch(
+      /^RUNNING usage group \(6 worker slots; waited \d+\.\ds\)$/,
+    );
+    // Busiest of the last five runs, rounded up.
+    for (const parallelism of [0.4, 2.2, 1.1]) scheduler.recordUsage(usageKeyFor(), parallelism);
+    expect(await reserved()).toMatchObject({ workers: 3, minWorkers: 1 });
+    expect(lines.filter((line) => line.startsWith("RUNNING"))[1]).toContain("(3 worker slots;");
+    expect(lines.filter((line) => line.startsWith("RUNNING"))[1]).toContain(
+      "adaptive: learned 3 of 6 planned",
+    );
+    // Never above the plan.
+    scheduler.recordUsage(usageKeyFor(), 40);
+    expect(await reserved()).toMatchObject({ workers: 6, minWorkers: 2 });
+    // An exclusive group keeps its whole-host reservation.
+    const exclusive = { ...usageGroup, name: "exclusive", exclusive: true };
+    scheduler.recordUsage(usageKeyFor(exclusive), 1);
+    expect((await reserved(exclusive))?.resources).toBe('["*"]');
+  } finally {
+    admission.close();
+  }
+});
+
+test("a mostly waiting group starts on a busy host only when adaptive reservation is on", async () => {
+  const { directory, scheduler } = fixture({ workers: 8, memoryMiB: 16384 });
+  scheduler.recordUsage(usageKeyFor(), 3.5); // learned: 4 of 6 planned
+  const hold = scheduler.enqueue({ owner: "b".repeat(64), workers: 6, memoryMiB: 1 });
+  const run = (env: NodeJS.ProcessEnv) => {
+    const lines: string[] = [];
+    const admission = createTestAdmission(
+      worktreeRoot(),
+      { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ...env },
+      (line) => lines.push(line),
+      { usageScope: SCOPE },
+    );
+    let started = false;
+    const finished = admission.run(usageGroup, async () => {
+      started = true;
+      return { status: 0 };
+    });
+    return { admission, lines, finished, started: () => started };
+  };
+  const off = run({});
+  const on = run({ [ADAPTIVE_RESERVATION_ENV]: "1" });
+  try {
+    expect(await until(on.started)).toBe(true);
+    // 2 of 8 slots are free: the floor (1) lets it start with them.
+    expect(on.lines.find((line) => line.startsWith("RUNNING"))).toContain("(2 worker slots;");
+    await on.finished;
+    // The default run has been told why it waits, and has not started.
+    expect(await until(() => off.lines.some((line) => line.includes("worker slots")))).toBe(true);
+    expect(off.started()).toBe(false);
+    off.admission.cancel();
+    expect(await off.finished).toMatchObject({ status: 75, infrastructureError: true });
+  } finally {
+    scheduler.release(hold);
+    on.admission.close();
+    off.admission.close();
+  }
+});
+
+test("host pressure is read from /proc, and anything unreadable is not pressure data", () => {
+  const proc = mkdtempSync(path.join(tmpdir(), "test-admission-proc-"));
+  cleanups.push(() => rmSync(proc, { recursive: true, force: true }));
+  mkdirSync(path.join(proc, "pressure"));
+  const write = (file: string, text: string) => writeFileSync(path.join(proc, file), text);
+  write("pressure/cpu", "some avg10=12.50 avg60=3.00 avg300=1.00 total=1\n");
+  write(
+    "pressure/memory",
+    "some avg10=0.25 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1\n",
+  );
+  write("meminfo", "MemTotal:       16000000 kB\nMemFree: 100 kB\nMemAvailable:    4000000 kB\n");
+  expect(readHostPressure(proc, "linux")).toEqual({
+    cpuSomeAvg10: 12.5,
+    memorySomeAvg10: 0.25,
+    memoryAvailablePercent: 25,
+  });
+  expect(readHostPressure(proc, "darwin")).toBeUndefined();
+  expect(readHostPressure(path.join(proc, "missing"), "linux")).toBeUndefined();
+  write("pressure/cpu", "no pressure here\n");
+  expect(readHostPressure(proc, "linux")).toBeUndefined();
+  write("pressure/cpu", "some avg10=1.00 avg60=3.00 avg300=1.00 total=1\n");
+  write("meminfo", "MemTotal: 0 kB\nMemAvailable: 0 kB\n");
+  expect(readHostPressure(proc, "linux")).toBeUndefined();
+  write("meminfo", "MemTotal: 100 kB\n");
+  expect(readHostPressure(proc, "linux")).toBeUndefined();
+});
+
+describe("experimental aggregate pressure gate", () => {
+  const calm: HostPressure = { cpuSomeAvg10: 2, memorySomeAvg10: 0, memoryAvailablePercent: 60 };
+
+  /** A pressure reader that counts how often the gate consulted it. */
+  const watched = (sample: () => HostPressure | undefined) => {
+    let reads = 0;
+    return { read: () => (reads++, sample()), reads: () => reads };
+  };
+  /** Waits for the gate to have judged the host a few more times. */
+  const judged = (probe: ReturnType<typeof watched>, more = 3) => {
+    const target = probe.reads() + more;
+    return until(() => probe.reads() >= target, 10_000);
+  };
+
+  function setup(workers = 8) {
+    const { directory } = fixture({ workers, memoryMiB: 16384 });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runs: Array<{ close: () => void; cancel: () => void }> = [];
+    const start = (
+      env: NodeJS.ProcessEnv,
+      readPressure?: () => HostPressure | undefined,
+      lines: string[] = [],
+      now?: () => number,
+    ) => {
+      const admission = createTestAdmission(
+        worktreeRoot(),
+        { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ...env },
+        (line) => lines.push(line),
+        { exclusiveSuite: true, readPressure, usageScope: SCOPE, now },
+      );
+      runs.push(admission);
+      let started = false;
+      const finished = admission.run(
+        { name: "suite", command: "unused", args: [], workers: 1 },
+        async () => {
+          started = true;
+          await gate;
+          return { status: 0 };
+        },
+      );
+      return { admission, finished, started: () => started, lines };
+    };
+    const finish = async (...pending: Array<Promise<unknown>>) => {
+      release();
+      await Promise.all(pending);
+      for (const run of runs) run.close();
+    };
+    return { directory, start, finish, release };
+  }
+  const enabled = { [AGGREGATE_PRESSURE_GATE_ENV]: "1", [AGGREGATE_PRESSURE_SETTLE_ENV]: "0" };
+
+  test("default: a second complete run waits however calm the host is", async () => {
+    const { directory, start, finish } = setup();
+    const probe = watched(() => calm);
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    const second = start({}, probe.read);
+    const wrongValue = start({ [AGGREGATE_PRESSURE_GATE_ENV]: "true" }, probe.read);
+    const waiting = (run: { lines: string[] }) =>
+      until(() => run.lines.some((line) => line.includes("exclusive resource held by worktree")));
+    expect(await waiting(second)).toBe(true);
+    expect(await waiting(wrongValue)).toBe(true);
+    expect(second.started()).toBe(false);
+    expect(wrongValue.started()).toBe(false);
+    expect(probe.reads()).toBe(0);
+    expect(queuedJobs(directory).filter((job) => job.state === "queued")).toHaveLength(2);
+    second.admission.cancel();
+    wrongValue.admission.cancel();
+    await finish(first.finished, second.finished, wrongValue.finished);
+  });
+
+  test("a calm host admits a second complete run beside the first, and no third", async () => {
+    const { directory, start, finish } = setup();
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    const lines: string[] = [];
+    const second = start(enabled, () => calm, lines);
+    expect(await until(second.started)).toBe(true);
+    expect(
+      lines.some((line) => line.startsWith("ADMITTING suite alongside another complete run")),
+    ).toBe(true);
+    // The two runs hold different complete-run locks.
+    const held = queuedJobs(directory).map((job) => job.resources);
+    expect(new Set(held).size).toBe(2);
+    const probe = watched(() => calm);
+    const third = start(enabled, probe.read);
+    // The gate says yes to the third run as well, so it moves to the overflow
+    // lock, which the second run holds: it queues there, again.
+    const queuedBehind = () =>
+      third.lines.filter((line) => line.includes("exclusive resource held by worktree")).length;
+    expect(await until(() => queuedBehind() >= 2)).toBe(true);
+    expect(probe.reads()).toBeGreaterThan(0);
+    expect(third.started()).toBe(false);
+    third.admission.cancel();
+    await finish(first.finished, second.finished, third.finished);
+  });
+
+  test("pressure above the threshold keeps the mutex until it clears", async () => {
+    const { start, finish } = setup();
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    let sample: HostPressure = { ...calm, cpuSomeAvg10: 35 };
+    const probe = watched(() => sample);
+    const second = start(enabled, probe.read);
+    expect(await judged(probe)).toBe(true);
+    expect(second.started()).toBe(false);
+    sample = { ...calm, cpuSomeAvg10: 19.9 };
+    expect(await until(second.started)).toBe(true);
+    await finish(first.finished, second.finished);
+  });
+
+  test("the threshold is tunable", async () => {
+    const { start, finish } = setup();
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    const probe = watched(() => calm);
+    const second = start({ ...enabled, [AGGREGATE_PRESSURE_MAX_ENV]: "1" }, probe.read);
+    expect(await judged(probe)).toBe(true);
+    expect(second.started()).toBe(false);
+    second.admission.cancel();
+    await finish(first.finished, second.finished);
+  });
+
+  test("a missing, failing or non-finite reading fails closed", async () => {
+    const { start, finish } = setup();
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    const probes = [
+      watched(() => undefined),
+      watched(() => {
+        throw new Error("EACCES");
+      }),
+      watched(() => ({ ...calm, cpuSomeAvg10: Number.NaN })),
+    ];
+    const runs = probes.map((probe) => start(enabled, probe.read));
+    for (const probe of probes) expect(await judged(probe)).toBe(true);
+    for (const run of runs) {
+      expect(run.started()).toBe(false);
+      run.admission.cancel();
+    }
+    await finish(first.finished, ...runs.map((run) => run.finished));
+  });
+
+  test("too little free memory keeps the mutex", async () => {
+    const { start, finish } = setup();
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    const lowMemory = watched(() => ({ ...calm, memoryAvailablePercent: 10 }));
+    const stalled = watched(() => ({ ...calm, memorySomeAvg10: 8 }));
+    const second = start(enabled, lowMemory.read);
+    const third = start(enabled, stalled.read);
+    expect(await judged(lowMemory)).toBe(true);
+    expect(await judged(stalled)).toBe(true);
+    expect(second.started()).toBe(false);
+    expect(third.started()).toBe(false);
+    second.admission.cancel();
+    third.admission.cancel();
+    await finish(first.finished, second.finished, third.finished);
+  });
+
+  test("calm must hold for the whole settle window, and one hot sample restarts it", async () => {
+    const { start, finish } = setup();
+    const first = start({});
+    expect(await until(first.started)).toBe(true);
+    // A fake wall clock makes the window exact; the gate reads it at most every 250 ms.
+    let clock = 1_000;
+    let sample: HostPressure = calm;
+    const probe = watched(() => sample);
+    const second = start(
+      { ...enabled, [AGGREGATE_PRESSURE_SETTLE_ENV]: "2500" },
+      probe.read,
+      [],
+      () => clock,
+    );
+    const tick = async (to: number, next?: HostPressure) => {
+      clock = to;
+      if (next) sample = next;
+      expect(await judged(probe, 1)).toBe(true);
+    };
+    expect(probe.reads()).toBe(1); // judged calm at 1000, synchronously on enqueue
+    await tick(2_000);
+    await tick(3_000);
+    expect(second.started()).toBe(false);
+    await tick(3_400, { ...calm, cpuSomeAvg10: 90 }); // one hot sample
+    await tick(3_800, calm); // calm again since 3800; calm since 1000 would already qualify
+    await tick(5_800);
+    expect(second.started()).toBe(false);
+    await tick(6_400);
+    expect(await until(second.started)).toBe(true);
+    await finish(first.finished, second.finished);
+  });
+
+  test("without a holder there is nothing to excuse and the gate never reads pressure", async () => {
+    const { start, finish } = setup();
+    const probe = watched(() => calm);
+    const only = start(enabled, probe.read);
+    expect(await until(only.started)).toBe(true);
+    await finish(only.finished);
+    expect(probe.reads()).toBe(0);
+  });
+
+  test("an affected or concurrent-allowed run takes no complete-run lock, gate or not", async () => {
+    const { directory } = fixture({ workers: 4, memoryMiB: 8192 });
+    const probe = watched(() => calm);
+    const admission = createTestAdmission(
+      worktreeRoot(),
+      { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ...enabled },
+      () => {},
+      { readPressure: probe.read, usageScope: SCOPE },
+    );
+    try {
+      let seen: ReturnType<typeof queuedJobs> = [];
+      await admission.run({ name: "suite", command: "unused", args: [], workers: 1 }, async () => {
+        seen = queuedJobs(directory);
+        return { status: 0 };
+      });
+      expect(JSON.parse(seen[0]!.resources)).toHaveLength(1);
+      expect(probe.reads()).toBe(0);
+    } finally {
+      admission.close();
+    }
+  });
 });

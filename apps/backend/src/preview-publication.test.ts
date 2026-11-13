@@ -510,12 +510,25 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
   });
 
   test("renewed certificates are picked up by re-binding on the same port", async () => {
-    const before = manager.status().certificate!.validTo;
-    await Bun.sleep(1_100);
-    certificates(dir);
-    await Bun.sleep(200);
-    expect(manager.status().listening?.port).toBe(port);
-    expect(manager.status().certificate!.validTo).not.toBe(before);
+    const logs = captureLogs();
+    try {
+      const before = manager.status().certificate!.validTo;
+      // A longer validity makes the renewal's `validTo` differ without waiting out
+      // the one-second resolution of certificate timestamps.
+      certificates(dir, undefined, { days: 3 });
+      // The 50 ms certificate check re-binds and then logs the reload.
+      for (
+        let attempt = 0;
+        attempt < 400 && !logs.records().some((record) => record.event === "certificate.reloaded");
+        attempt += 1
+      ) {
+        await Bun.sleep(10);
+      }
+      expect(manager.status().listening?.port).toBe(port);
+      expect(manager.status().certificate!.validTo).not.toBe(before);
+    } finally {
+      logs.restore();
+    }
   });
 
   test("a preview domain that shares a site with the application is served with a warning", async () => {

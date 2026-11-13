@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   state,
+  whenFileExists,
   write,
   writeIgnoredCursorTaskMarker,
   type JsonObject,
@@ -1567,24 +1568,35 @@ export function handlePromptTools(
         _meta: { totalTokens: 900, usage: { inputTokens: 850, outputTokens: 50 } },
       },
     });
-    setTimeout(
-      () => {
-        write({
-          jsonrpc: "2.0",
-          method: "_x.ai/session_notification",
-          params: {
-            sessionId: "fake-session",
-            update: {
-              sessionUpdate: "turn_completed",
-              usage: { reasoningTokens: 77 },
-            },
+    // The test creates `FAKE_ACP_LATE_USAGE_FILE` once it has seen the turn
+    // settle (or the next turn finish), so the carrier lands after exactly the
+    // point it is meant to, however long the host takes to get there.
+    const deliverLateCarrier = (): void => {
+      write({
+        jsonrpc: "2.0",
+        method: "_x.ai/session_notification",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "turn_completed",
+            usage: { reasoningTokens: 77 },
           },
-        });
-        // Long enough that a caller polling every 20ms reliably observes the
-        // turn settle first, so the test can assert both halves of the merge.
-      },
-      prompt.startsWith("USAGE_LATE_OVERLAP") ? 750 : 250,
-    );
+        },
+      });
+      // The bridge handles agent output in order, so a reader that sees this
+      // title knows the carrier above has already been processed.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "session_info_update", title: "late-usage-delivered" },
+        },
+      });
+    };
+    const lateUsageFile = process.env.FAKE_ACP_LATE_USAGE_FILE;
+    if (lateUsageFile) whenFileExists(lateUsageFile, deliverLateCarrier);
+    else deliverLateCarrier();
     return true;
   }
   // v2 turn-complete usage rides idle `state_update.usage`; session/prompt

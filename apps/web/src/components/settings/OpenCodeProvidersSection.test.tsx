@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  installControlledTimeout,
+  type ControlledTimeout,
+} from "../../../../../tests/helpers/controlled-timeout";
 import type {
   OpenCodeProviderAuthEntry,
   OpenCodeProviderAuthSnapshot,
@@ -61,6 +65,7 @@ afterAll(() => {
 });
 
 const { OpenCodeProvidersSection } = await import("./OpenCodeProvidersSection");
+const { OPENCODE_LOGIN_POLL_INTERVAL_MS } = await import("@/hooks/useOpenCodeProviderLogin");
 const { OpenCodeAuthRecoveryAction } =
   await import("@/components/opencode/OpenCodeAuthRecoveryAction");
 
@@ -89,7 +94,23 @@ const OPENAI = provider({
   ],
 });
 
+/** The login observers' poll, so a test runs a poll when it wants one rather than waiting 1.5 s. */
+let loginPoll: ControlledTimeout;
+
+/** Runs the poll each mounted login observer has armed, then lets its read land. */
+async function pollLogin() {
+  await waitFor(() => expect(loginPoll.pendingCount()).toBeGreaterThan(0));
+  await act(async () => {
+    loginPoll.advance();
+  });
+}
+
 beforeEach(() => {
+  // The section's own observer and the open row's can both be polling.
+  loginPoll = installControlledTimeout(OPENCODE_LOGIN_POLL_INTERVAL_MS, {
+    maxPending: 3,
+    label: "opencode login poll",
+  });
   calls.length = 0;
   listError = undefined;
   removeError = undefined;
@@ -105,6 +126,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Unmounting clears every observer's timer, so none may be left to drop.
+  expect(loginPoll.restore()).toBe(0);
   delete window.orkestratorGateway;
 });
 
@@ -179,11 +202,13 @@ describe("OpenCodeProvidersSection", () => {
       userCode: "ABCD-EFGH",
       needsCode: false,
     };
-    await waitFor(() => expect(screen.getByText("ABCD-EFGH")).toBeTruthy(), { timeout: 4_000 });
+    await pollLogin();
+    await waitFor(() => expect(screen.getByText("ABCD-EFGH")).toBeTruthy());
     expect(screen.getByText("Waiting for you to approve the sign-in…")).toBeTruthy();
 
     login = { state: "succeeded", operationId: "op-1", providerId: "openai" };
-    await screen.findByText(/Signed in to OpenAI\./, {}, { timeout: 4_000 });
+    await pollLogin();
+    await screen.findByText(/Signed in to OpenAI\./);
   });
 
   test("keeps pending OAuth cancellable when collapsed and after remount", async () => {
@@ -200,7 +225,8 @@ describe("OpenCodeProvidersSection", () => {
     );
     // Collapse before the section's next poll. Its global observer still owns a cancel path.
     fireEvent.click(within(row).getByRole("button", { name: "Sign in" }));
-    await screen.findByRole("button", { name: "Cancel sign-in to OpenAI" }, { timeout: 4000 });
+    await pollLogin();
+    await screen.findByRole("button", { name: "Cancel sign-in to OpenAI" });
     expect(
       (
         within(screen.getByRole("listitem", { name: "OpenCode Go" })).getByRole("button", {

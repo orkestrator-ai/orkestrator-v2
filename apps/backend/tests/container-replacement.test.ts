@@ -76,15 +76,21 @@ sleep 1
 exit 125
 `,
       async () => {
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-          const settled = await Promise.race([
-            pipeContainerPath("source", "/workspace", ["run", "helper"]),
-            new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 15_000)),
-          ]);
+        // Each attempt spawns its own producer and helper from the same fake
+        // script and shares no state, so the attempts overlap.
+        const settled = await Promise.all(
+          Array.from({ length: 4 }, () =>
+            Promise.race([
+              pipeContainerPath("source", "/workspace", ["run", "helper"]),
+              new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 15_000)),
+            ]),
+          ),
+        );
+        for (const attempt of settled) {
           // Whether the producer's message lands first is a race (the
           // helper's exit kills it), so only settling is asserted here; a
           // failed step asks the daemon itself (`dockerDaemonUnreachableNow`).
-          expect(settled).toMatchObject({ absent: false, producerFailed: true });
+          expect(attempt).toMatchObject({ absent: false, producerFailed: true });
         }
       },
     );
@@ -957,11 +963,14 @@ describe("inode capacity", () => {
 });
 
 describe("replacement copy failure classification", () => {
-  for (const [probe, code] of [
-    ["printf '29.7.2\\n'", "needs-attention"],
-    ["echo 'Cannot connect to the Docker daemon' >&2; exit 1", "daemon-unavailable"],
-    ["echo 'unrelated client failure' >&2; exit 1", "needs-attention"],
-    ["exec sleep 30", "daemon-unavailable"],
+  for (const [probe, code, probeTimeoutMs] of [
+    ["printf '29.7.2\\n'", "needs-attention", undefined],
+    ["echo 'Cannot connect to the Docker daemon' >&2; exit 1", "daemon-unavailable", undefined],
+    ["echo 'unrelated client failure' >&2; exit 1", "needs-attention", undefined],
+    // Only the hanging probe gets a short bound: it can only end as a timeout,
+    // while the instant fakes keep the production bound so a slow spawn cannot
+    // turn them into a false outage.
+    ["exec sleep 30", "daemon-unavailable", 500],
   ] as const) {
     test(`a copy stream failure probes Docker: ${probe}`, async () => {
       await withDockerScript(
@@ -970,7 +979,7 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${probe}
 `,
         async (log) => {
-          expect(String(await replacementCopyFailure("helper-failed"))).toContain(
+          expect(String(await replacementCopyFailure("helper-failed", probeTimeoutMs))).toContain(
             `ContainerLifecycleError:${code}`,
           );
           expect(await log.read()).toBe("version --format {{.Server.Version}}\n");

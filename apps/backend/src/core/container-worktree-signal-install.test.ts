@@ -136,7 +136,9 @@ function bash5(): string | null {
   return Number(version.stdout.trim()) >= 5 ? bash : null;
 }
 const bash = bash5();
-const scriptTest = bash ? test : test.skip;
+// Every script test owns a temporary directory, a private PATH of fakes and its
+// own process group, so they run concurrently.
+const scriptTest = bash ? test.concurrent : test.skip;
 
 describe("orkestrator-worktree-signal", () => {
   /** Fake `inotifywait`, `curl` and `setsid` in a private PATH; every ring is logged. */
@@ -144,6 +146,7 @@ describe("orkestrator-worktree-signal", () => {
     events: string,
     body: (dir: string, run: (mode: string, stdin?: string) => Promise<number>) => Promise<void>,
     timeoutMs = 20_000,
+    scriptEnv: Record<string, string> = {},
   ): Promise<void> {
     const dir = mkdtempSync(join(tmpdir(), "ork-worktree-signal-"));
     try {
@@ -177,6 +180,7 @@ describe("orkestrator-worktree-signal", () => {
               PATH: dir,
               ORKESTRATOR_WORKTREE_SIGNAL_ROOT: dir,
               ORKESTRATOR_WORKTREE_SIGNAL_CONFIG: join(dir, "config"),
+              ...scriptEnv,
             },
             timeoutMs,
           });
@@ -254,6 +258,49 @@ describe("orkestrator-worktree-signal", () => {
     30_000,
   );
 
+  /** Ring times (epoch ms) the fake `curl` recorded in `file`, oldest first. */
+  const ringTimes = (dir: string, file = "ring-times") =>
+    readFileSync(join(dir, file), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const [at, reason] = line.split(" ");
+        return { at: Number(at) * 1_000, reason: reason as WorktreeSignalReason };
+      })
+      .sort((a, b) => a.at - b.at);
+
+  scriptTest(
+    "rings at most once a second by default, delaying a second burst to the gap",
+    async () => {
+      await withFakes(
+        [
+          "echo 'Watches established.' >&2",
+          "echo 'E MODIFY'",
+          // The first burst rings after the 0.3 s quiet window; the second quiets
+          // at 0.75 s but must wait for the one-second gap after the first ring.
+          "sleep 0.45",
+          "echo 'E MODIFY'",
+          "sleep 1.2",
+        ].join("\n"),
+        async (dir, run) => {
+          writeFileSync(join(dir, "config"), 'url = "http://127.0.0.1:9/worktree-signal"\n');
+          expect(await run("watch")).toBe(0);
+          const changes = ringTimes(dir).filter((event) => event.reason === "change");
+          expect(changes).toHaveLength(2);
+          expect(changes[1]!.at - changes[0]!.at).toBeGreaterThanOrEqual(900);
+        },
+      );
+    },
+    30_000,
+  );
+
+  // The minute-long soak is compressed: the script's quiet window, maximum wait
+  // and minimum gap (all overridable) and the burst spacing shrink by this
+  // factor, and the recorded ring times are stretched back before they reach the
+  // receiver, so every assertion below is about the same 400 ms bursts over a
+  // minute. The real one-second gap is the test above.
+  const SOAK_SCALE = 4;
+
   scriptTest(
     "400 ms bursts over a minute stay qualified through the receiver and retain the tail",
     async () => {
@@ -261,24 +308,27 @@ describe("orkestrator-worktree-signal", () => {
       await withFakes(
         [
           "echo 'Watches established.' >&2",
-          "i=0; while [ $i -lt 155 ]; do echo 'E MODIFY'; sleep 0.4; i=$((i+1)); done",
+          `i=0; while [ $i -lt 155 ]; do echo 'E MODIFY'; sleep ${0.4 / SOAK_SCALE}; i=$((i+1)); done`,
           // Read the rings while still alive: an intentional exit sends lost.
-          "sleep 1.3",
+          `sleep ${1.3 / SOAK_SCALE}`,
           'cat "$ORKESTRATOR_WORKTREE_SIGNAL_ROOT/ring-times" > "$ORKESTRATOR_WORKTREE_SIGNAL_ROOT/before-exit"',
         ].join("\n"),
         async (dir, run) => {
           writeFileSync(join(dir, "config"), 'url = "http://127.0.0.1:9/worktree-signal"\n');
           expect(await run("watch")).toBe(0);
-          recorded = readFileSync(join(dir, "before-exit"), "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => {
-              const [at, reason] = line.split(" ");
-              return { at: Number(at) * 1_000, reason: reason as WorktreeSignalReason };
-            })
-            .sort((a, b) => a.at - b.at);
+          const times = ringTimes(dir, "before-exit");
+          const origin = times[0]!.at;
+          recorded = times.map((event) => ({
+            ...event,
+            at: origin + (event.at - origin) * SOAK_SCALE,
+          }));
         },
-        80_000,
+        30_000,
+        {
+          ORKESTRATOR_WORKTREE_SIGNAL_SETTLE: String(0.3 / SOAK_SCALE),
+          ORKESTRATOR_WORKTREE_SIGNAL_MAX_WAIT_US: String(1_000_000 / SOAK_SCALE),
+          ORKESTRATOR_WORKTREE_SIGNAL_MIN_GAP_US: String(1_000_000 / SOAK_SCALE),
+        },
       );
       const time = new ManualTime(recorded[0]!.at);
       let ring!: (reason: WorktreeSignalReason) => void;
@@ -329,7 +379,7 @@ describe("orkestrator-worktree-signal", () => {
         watcher.close();
       }
     },
-    90_000,
+    45_000,
   );
 
   scriptTest(

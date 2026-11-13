@@ -45,6 +45,8 @@ export async function startOwnedPreview(options: {
   outDir: string;
   port: number;
   timeoutMs?: number;
+  /** Grace each cleanup stage gives the preview's process group after a failed start. */
+  stopTimeoutMs?: number;
 }) {
   await assertPortAvailable(options.port);
   const identity = randomUUID();
@@ -83,7 +85,10 @@ export async function startOwnedPreview(options: {
   } catch (error) {
     await withCleanup(async () => {
       throw error;
-    }, [() => stopProcessGroup(child), () => rm(markerPath, { force: true })]);
+    }, [
+      () => stopProcessGroup(child, options.stopTimeoutMs),
+      () => rm(markerPath, { force: true }),
+    ]);
     throw error;
   }
 }

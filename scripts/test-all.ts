@@ -70,6 +70,17 @@ export interface CommandResult {
   outputBytes?: number;
   outputLimitExceeded?: boolean;
   timeoutReason?: "no-progress" | "absolute";
+  /**
+   * CPU the group's process tree used and the wall time that figure covers,
+   * sampled while it ran (see {@link startGroupCpuSampler}). Present only when
+   * the group asked for it with {@link TestGroup.measureCpu} and the platform
+   * can measure; absent means unmeasured, never zero.
+   */
+  cpu?: { ms: number; spanMs: number };
+  /** Average cores the group used, set by host admission for undisturbed groups. */
+  observedCores?: number;
+  /** Slots the group held while it ran, set together with {@link observedCores}. */
+  reservedSlots?: number;
 }
 
 export interface TestGroup {
@@ -79,6 +90,8 @@ export interface TestGroup {
   workers?: number;
   exclusive?: boolean;
   onSpawn?: (pid: number) => void;
+  /** Sample the process tree's CPU use (Linux only); host admission sets this. */
+  measureCpu?: boolean;
   command: string;
   args: string[];
   /** Extra variables layered over the inherited environment for this group. */
@@ -379,6 +392,89 @@ export function terminateActiveGroups(signal: NodeJS.Signals = "SIGTERM"): numbe
   return leaders.length;
 }
 
+/** Linux `USER_HZ`: `/proc/<pid>/stat` times are in 1/100 s on every mainstream architecture. */
+const PROC_TICK_MS = 10;
+export const GROUP_CPU_SAMPLE_INTERVAL_MS = 500;
+
+/**
+ * CPU milliseconds used so far by every live process whose process group is
+ * `pgid`, including the CPU of descendants those processes already reaped
+ * (`utime + stime + cutime + cstime` in `/proc/<pid>/stat`). Linux only: macOS
+ * has no per-process reaped-children counter, so it returns undefined there, as
+ * it does for anything unreadable. A process that exits and is reaped between
+ * two reads may be counted twice for one sample (an overestimate, the safe
+ * direction); CPU of processes that leave the group (`setsid`) is not counted.
+ */
+export function sampleGroupCpuMs(
+  pgid: number,
+  procRoot = "/proc",
+  platform: NodeJS.Platform = process.platform,
+): number | undefined {
+  if (platform !== "linux") return undefined;
+  let entries: string[];
+  try {
+    entries = readdirSync(procRoot);
+  } catch {
+    return undefined;
+  }
+  let ticks = 0;
+  let found = false;
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let text: string;
+    try {
+      text = readFileSync(path.join(procRoot, entry, "stat"), "utf8");
+    } catch {
+      continue; // exited since the directory listing
+    }
+    // The command name may contain spaces and parentheses; fields follow the last ")".
+    const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+    if (Number(fields[2]) !== pgid) continue;
+    const used = [11, 12, 13, 14].map((index) => Number(fields[index]));
+    if (used.some((value) => !Number.isSafeInteger(value) || value < 0)) continue;
+    found = true;
+    ticks += used[0]! + used[1]! + used[2]! + used[3]!;
+  }
+  return found ? ticks * PROC_TICK_MS : undefined;
+}
+
+/**
+ * Samples a process group's cumulative CPU while it runs. The reading taken
+ * after the group's leader exits is gone with the leader, so the result is the
+ * highest cumulative reading and the time it was taken: CPU over that span is an
+ * unbiased average, where dividing by the full wall time would undercount the
+ * unsampled tail.
+ */
+export function startGroupCpuSampler(
+  pgid: number,
+  options: {
+    read?: (pgid: number) => number | undefined;
+    now?: () => number;
+    intervalMs?: number;
+  } = {},
+): { stop: () => { ms: number; spanMs: number } | undefined } {
+  const read = options.read ?? ((id: number) => sampleGroupCpuMs(id));
+  const now = options.now ?? (() => performance.now());
+  const startedAt = now();
+  let best: { ms: number; at: number } | undefined;
+  const sample = () => {
+    try {
+      const ms = read(pgid);
+      if (ms !== undefined && (!best || ms >= best.ms)) best = { ms, at: now() };
+    } catch {
+      // Measurement is best effort and must never disturb the group.
+    }
+  };
+  const timer = setInterval(sample, options.intervalMs ?? GROUP_CPU_SAMPLE_INTERVAL_MS);
+  timer.unref();
+  return {
+    stop() {
+      clearInterval(timer);
+      return best && best.at > startedAt ? { ms: best.ms, spanMs: best.at - startedAt } : undefined;
+    },
+  };
+}
+
 export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promise<CommandResult> {
   return new Promise((resolve) => {
     const logDirectory = env[TEST_LOG_DIRECTORY_ENV] || createTestLogDirectory();
@@ -409,6 +505,11 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       // workers or fixtures it spawned, rather than leaving descendants alive.
       detached: process.platform !== "win32",
     });
+    // Only a detached child leads its own process group (not on Windows).
+    const cpuSampler =
+      group.measureCpu && child.pid && process.platform !== "win32"
+        ? startGroupCpuSampler(child.pid)
+        : undefined;
     if (child.pid) {
       liveGroupLeaders.add(child.pid);
       try {
@@ -507,6 +608,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
         .filter((error): error is Error => Boolean(error))
         .map((error) => error.message);
       failures.finish();
+      const cpu = cpuSampler?.stop();
       resolve({
         status: outputLimitExceeded || timeoutReason || errors.length > 0 ? 1 : childStatus,
         output: boundConsoleLines(
@@ -520,6 +622,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
         outputLimitExceeded,
         timeoutReason,
         infrastructureError: errors.length > 0 || childStatus === null,
+        ...(cpu ? { cpu } : {}),
       });
     };
     const finishChild = (status: number | null) => {
@@ -1386,8 +1489,14 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
         ).finally(() => running.delete(group.name));
         const completed = { group, result, elapsedMs: Date.now() - groupStartedAt };
         completedCount += 1;
+        // Appended only when host admission measured the group, so every other
+        // run keeps its finish line exactly.
+        const observed =
+          result.observedCores !== undefined && result.reservedSlots !== undefined
+            ? `, observed ${result.observedCores.toFixed(1)} cores of ${result.reservedSlots} slots`
+            : "";
         dependencies.log(
-          `${result.infrastructureError || result.timeoutReason || result.outputLimitExceeded ? "INCOMPLETE" : result.status === 0 ? "PASS" : "FAIL"} ${group.name} finished (${completedCount}/${groups.length}, ${formatDuration(completed.elapsedMs)})`,
+          `${result.infrastructureError || result.timeoutReason || result.outputLimitExceeded ? "INCOMPLETE" : result.status === 0 ? "PASS" : "FAIL"} ${group.name} finished (${completedCount}/${groups.length}, ${formatDuration(completed.elapsedMs)}${observed})`,
         );
         return completed;
       }),

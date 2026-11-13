@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCode2ContextUsage } from "./opencode2/usage.js";
@@ -88,7 +89,13 @@ describe("native agent progressive remainder", () => {
         },
       });
       await withService(
-        { prefix: "orkestrator-progressive-part-flicker-", provider: async () => stub.provider },
+        {
+          prefix: "orkestrator-progressive-part-flicker-",
+          provider: async () => stub.provider,
+          // Each revision here is a second read of the same key; the default 1 s
+          // spacing only paces recovery reads, which this test gates itself.
+          progressiveHydrationSettleMs: 25,
+        },
         async ({ service }) => {
           const identity = {
             environmentId: "env-1",
@@ -2161,6 +2168,14 @@ describe("native agent progressive remainder", () => {
           nativeSessionInvalidationMetrics.reset();
           const renewals = () => nativeSessionInvalidationMetrics.snapshot().discoveryRenewals;
           const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          // The discovery deadline is the one 2 s timer a held read arms. Catching
+          // it by that exact delay also pins the production value, and the test
+          // fires it instead of waiting it out.
+          const deadline = installControlledTimeout(2_000, { label: "discovery deadline" });
+          const fireDeadline = async () => {
+            await waitForCondition(() => deadline.pendingCount() === 1);
+            expect(deadline.advance()).toBe(1);
+          };
           try {
             if (cached) {
               await section();
@@ -2174,7 +2189,7 @@ describe("native agent progressive remainder", () => {
             announced.mockClear();
             held = true;
             await section();
-            await Bun.sleep(2_100);
+            await fireDeadline();
             const first = await section();
             expect(first?.availability).toBe(cached ? "stale" : "unavailable");
             expect(first?.error).toBe("Discovery timed out");
@@ -2200,7 +2215,7 @@ describe("native agent progressive remainder", () => {
             const reads = runtimeHealth.mock.calls.length;
             await section();
             await waitForCondition(() => runtimeHealth.mock.calls.length === reads + 1);
-            await Bun.sleep(2_100);
+            await fireDeadline();
             const repeated = await section();
             expect(repeated).toEqual(first);
             expect(renewals()).toEqual(
@@ -2234,6 +2249,7 @@ describe("native agent progressive remainder", () => {
             });
           } finally {
             release(health);
+            deadline.restore();
             announced.mockRestore();
             nativeSessionInvalidationMetrics.reset();
             nativeSessionInvalidationMetrics.setEnabled(wasEnabled);

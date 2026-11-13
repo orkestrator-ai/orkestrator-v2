@@ -20,6 +20,13 @@ import { startWorktreeWatcher } from "./worktree-watcher.js";
 const EVENTS_CAN_BE_LOST = process.platform === "darwin";
 const DETECTION_DEADLINE_MS = EVENTS_CAN_BE_LOST ? 180_000 : 15_000;
 const REPEAT_CHANGE_EVERY_MS = 1_000;
+/**
+ * The shared owner's minimum gap between local scans. The production 2 s default
+ * would make every detection below wait for it, so the service is given a gap that
+ * is still longer than the watcher's 50 ms settle plus a real scan. The default
+ * itself is pinned by the "production minimum gap" test.
+ */
+const SCAN_GAP_MS = 250;
 
 // This slow-tier file creates real repositories/worktrees and waits for
 // subprocess cleanup. Give that fixture work its own bounded host budget;
@@ -159,6 +166,7 @@ beforeAll(
       metrics,
       pollIntervalMs: 10 * 60_000,
       safetyNetIntervalMs: 10 * 60_000,
+      localScanMinGapMs: SCAN_GAP_MS,
       emit: eventSink((event, payload) => {
         if (event !== WORKTREE_SNAPSHOT_CHANGED_EVENT) return;
         events.push(payload as never);
@@ -320,13 +328,13 @@ describe("real Git through the shared owner", () => {
     try {
       expect(deliverRootEvent).toBeDefined();
       await until(() => scansStarted === scansFinished);
-      await sleep(LOCAL_SCAN_MIN_GAP_MS + 100);
+      await sleep(SCAN_GAP_MS + 100);
       await until(() => scansStarted === scansFinished);
       const scansBefore = scansStarted;
       const hintsBefore = hintedPaths.length;
       await fs.writeFile(path.join(linked, "node_modules", "pkg", "index.js"), "x\n");
       deliverRootEvent!("change", "node_modules/pkg/index.js");
-      await sleep(LOCAL_SCAN_MIN_GAP_MS + 100);
+      await sleep(SCAN_GAP_MS + 100);
       expect(scansStarted).toBe(scansBefore);
       expect(hintedPaths.length).toBe(hintsBefore);
       // Positive control: the same listener must still reach the owner, scan
@@ -360,7 +368,7 @@ describe("real Git through the shared owner", () => {
       (rows) => rows.some((row) => row.path === "gap-second.txt"),
     );
     // Half the gap: `until` polls, so the first scan ended a little earlier.
-    expect(Date.now() - firstPublished).toBeGreaterThanOrEqual(LOCAL_SCAN_MIN_GAP_MS / 2);
+    expect(Date.now() - firstPublished).toBeGreaterThanOrEqual(SCAN_GAP_MS / 2);
     const hits = metrics.snapshot().kinds["file-list-read"]?.cacheHits ?? 0;
     const rows = await readRows();
     expect(rows).toContainEqual({ path: "gap-second.txt", status: "?", additions: 1 });
@@ -420,5 +428,54 @@ describe("real Git through the shared owner", () => {
           ),
     );
     expect(await readRows()).toContainEqual({ path: "c-0.txt", status: "D", additions: 0 });
+  });
+});
+
+describe("production minimum gap", () => {
+  test("a service built without an override holds a hint back for the whole 2 s gap", async () => {
+    // A frozen monotonic clock makes the remaining gap exactly the configured gap,
+    // so the delay the owner asks for is the default, without waiting it out.
+    const delays: number[] = [];
+    let scans = 0;
+    let onChange: (hint?: unknown) => void = () => undefined;
+    const defaulted = new DiffStatsService({
+      metrics: new RecurringWorkMetrics(),
+      pollIntervalMs: 10 * 60_000,
+      safetyNetIntervalMs: 10 * 60_000,
+      monotonicNow: () => 10_000,
+      delay: (_callback, delayMs) => {
+        delays.push(delayMs);
+        return delays.length;
+      },
+      cancelDelay: () => undefined,
+      emit: eventSink(() => undefined),
+      startWatcher: (options) => {
+        onChange = options.onChange as typeof onChange;
+        return { watching: true, qualified: true, close: () => undefined };
+      },
+      scan: async () => {
+        scans++;
+        return {
+          stats: { additions: 0, deletions: 0, filesChanged: 0, truncated: false },
+          changes: [],
+        };
+      },
+    });
+    try {
+      defaulted.track({
+        environmentId: "env-default-gap",
+        kind: "local",
+        worktreePath: root,
+        comparisonRef: "main",
+      });
+      await until(() => scans === 1);
+      onChange({ fileList: true, tree: false, overflow: false });
+      await until(() => delays.length > 0);
+      expect(scans).toBe(1);
+      expect(delays).toEqual([LOCAL_SCAN_MIN_GAP_MS]);
+      expect(LOCAL_SCAN_MIN_GAP_MS).toBe(2_000);
+    } finally {
+      defaulted.shutdown();
+    }
   });
 });

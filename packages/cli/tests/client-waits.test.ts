@@ -39,8 +39,9 @@ function receipt(overrides: Partial<PublicReceipt>): PublicReceipt {
 async function fixture(
   receipts: PublicReceipt[],
   extra: Record<string, (call: number) => unknown> = {},
+  { virtualClock = true }: { virtualClock?: boolean } = {},
 ): Promise<{ box: ClientSandbox; gateway: FakeGateway }> {
-  const box = await createSandbox();
+  const box = await createSandbox({ virtualClock });
   let call = 0;
   const counters: Record<string, number> = {};
   const gateway = await startFakeGateway((request) => {
@@ -191,9 +192,11 @@ describe("waiting through a lost submission response", () => {
       lookupFailures?: number;
       successfulSubmission?: boolean;
       onLookup?: () => void;
+      /** Cases whose subject is real elapsed time keep the real clock. */
+      realClock?: boolean;
     } = {},
   ) {
-    const box = await createSandbox();
+    const box = await createSandbox({ virtualClock: !options.realClock });
     const lookups: Array<Record<string, unknown>> = [];
     let starts = 0;
     const gateway = await startFakeGateway(async (request) => {
@@ -352,7 +355,7 @@ describe("waiting through a lost submission response", () => {
   });
 
   test("submission and an absent-key lookup share one deadline", async () => {
-    const { box, lookups } = await lostStart([], [], { mutationDelay: 180 });
+    const { box, lookups } = await lostStart([], [], { mutationDelay: 180, realClock: true });
     const started = Date.now();
     const result = await box.run([...START, "--wait", "--timeout", "300ms"]);
     expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
@@ -361,7 +364,11 @@ describe("waiting through a lost submission response", () => {
   });
 
   test("a stalled lookup is bounded by the remaining deadline", async () => {
-    const { box } = await lostStart([], [], { mutationDelay: 120, lookupDelay: 600 });
+    const { box } = await lostStart([], [], {
+      mutationDelay: 120,
+      lookupDelay: 600,
+      realClock: true,
+    });
     const started = Date.now();
     const result = await box.run([...START, "--wait", "--timeout", "250ms"]);
     expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
@@ -369,7 +376,10 @@ describe("waiting through a lost submission response", () => {
   });
 
   test("recovery and final observation share the remaining deadline", async () => {
-    const { box } = await lostStart([admitted], [dispatched], { mutationDelay: 160 });
+    const { box } = await lostStart([admitted], [dispatched], {
+      mutationDelay: 160,
+      realClock: true,
+    });
     const started = Date.now();
     const result = await box.run([...START, "--wait", "--timeout", "300ms"]);
     expect(JSON.parse(result.out).error.code).toBe("deadline-exceeded");
@@ -380,6 +390,7 @@ describe("waiting through a lost submission response", () => {
     const { box } = await lostStart([], [dispatched, finished], {
       mutationDelay: 300,
       successfulSubmission: true,
+      realClock: true,
     });
     const result = await box.run([...START, "--wait", "--timeout", "400ms"]);
     expect(result.code).toBe(0);
@@ -450,9 +461,11 @@ describe("environment --wait through a lost submission response", () => {
       mutationDelay?: number;
       readDelay?: "run.get" | "environment.get";
       environment?: PublicEnvironmentSummary | null;
+      /** Cases whose subject is real elapsed time keep the real clock. */
+      realClock?: boolean;
     } = {},
   ) {
-    const box = await createSandbox();
+    const box = await createSandbox({ virtualClock: !options.realClock });
     const lookups: Array<Record<string, unknown>> = [];
     let submissions = 0;
     const gateway = await startFakeGateway(async (request) => {
@@ -661,7 +674,7 @@ describe("environment --wait through a lost submission response", () => {
         "environment.start",
         [running],
         [startReceipt({})],
-        { mutationDelay: 400, readDelay },
+        { mutationDelay: 400, readDelay, realClock: true },
       );
       const started = Date.now();
       const result = await box.run([...START, "--wait", "ready", "--timeout", "600ms"]);
@@ -764,6 +777,7 @@ describe("environment --wait through a lost submission response", () => {
     });
     const { box } = await lostEnvironmentMutation("environment.exec", [running], [running], {
       mutationDelay: 400,
+      realClock: true,
     });
     const started = Date.now();
     const result = await box.run([...EXEC, "--wait", "--timeout", "500ms", ...COMMAND]);
@@ -867,7 +881,7 @@ describe("transcript following", () => {
     "--node follow uses the leaf's knownToken capability (%s), not the hub's",
     async (leafSupportsToken) => {
       const leaf = "bk_leaf";
-      const box = await createSandbox();
+      const box = await createSandbox({ virtualClock: true });
       cleanups.push(() => box.cleanup());
       let polls = 0;
       const gateway = await startFakeGateway((request) => {

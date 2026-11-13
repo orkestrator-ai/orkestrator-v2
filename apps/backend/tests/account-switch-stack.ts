@@ -12,7 +12,7 @@
  * It says nothing about the provider's real words or real timing. Those stay in
  * docs/todo/manual-test/7568-manual-test-checklist.md (from retired to-do 1250).
  *
- * Run as its own process (`account-switch-resend-live.test.ts`), because it points
+ * Run as its own process (`account-switch-resend-runner.ts`), because it points
  * HOME at a throwaway directory and replaces the global `fetch`.
  */
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
+import { installVirtualTimeout, type VirtualTimeout } from "@/test/virtual-timeout";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -61,6 +62,7 @@ mock.module("@/lib/prompt-queue-sources", () => ({ createPromptQueueSources }));
 
 const {
   BOOT_ANNOUNCE_COALESCE_MS,
+  RESOURCE_COALESCE_MS,
   dispatchResourceChange,
   requestResourceResync,
   resetResourceSync,
@@ -101,7 +103,36 @@ const startTestStoreResourceSync = (options: Parameters<typeof startStoreResourc
     ...options,
   });
 
-const tick = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
+const realSetTimeout = globalThis.setTimeout;
+const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+
+/** Real macrotask turns a delivered change gets to finish the promise chains it started. */
+const SETTLE_TURNS = 5;
+
+/**
+ * Runs the promise and zero-delay work a delivered change started. Everything
+ * the bindings await here is a mock or a store update, so it settles within a
+ * few turns; reads on a real clock or real I/O are awaited with `waitForState`.
+ */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < SETTLE_TURNS; turn++) {
+    for (let microtask = 0; microtask < 20; microtask++) await Promise.resolve();
+    await realSleep(0);
+  }
+}
+
+/**
+ * resource-sync holds every announcement for its coalescing window before
+ * delivering it. That window runs on a virtual clock (installed per test), so
+ * letting `ms` pass delivers what falls due in it without waiting, and the
+ * assertion that follows sees the delivery's outcome rather than a sleep that
+ * merely outlasted it.
+ */
+let coalesceClock: VirtualTimeout | null = null;
+const tick = (ms = 80) => {
+  if (!coalesceClock) throw new Error("tick() needs the coalescing clock installed by beforeEach");
+  return coalesceClock.elapse(ms, settle);
+};
 
 function scopedManifest(
   overrides: Partial<ScopedResourceRevisionManifest> = {},
@@ -127,6 +158,7 @@ async function waitForState(
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+    await realSleep(5);
     await tick(5);
   }
 }
@@ -164,6 +196,9 @@ function pipeline(id: string, backendRevision: number) {
 }
 
 beforeEach(() => {
+  coalesceClock = installVirtualTimeout(RESOURCE_COALESCE_MS, {
+    label: "resource-sync coalescing",
+  });
   localStorage.clear();
   resetResourceSync();
   hydrateBuildPipeline.mockClear();
@@ -207,6 +242,8 @@ afterEach(() => {
   detach?.();
   detach = null;
   resetResourceSync();
+  expect(coalesceClock?.restore()).toBe(0);
+  coalesceClock = null;
 });
 
 describe("agent-mail binding", () => {
@@ -3083,7 +3120,7 @@ describe("authoritative resync", () => {
       // cannot prove no follow-up load is still queued. Settle past the
       // attach-time window so an extra manifest load is counted here instead
       // of after the test has already passed.
-      await tick(BOOT_ANNOUNCE_COALESCE_MS);
+      await realSleep(BOOT_ANNOUNCE_COALESCE_MS);
 
       expect(manifestCalls).toHaveLength(2);
       expect(manifestCalls[1]?.knownGeneration).toEqual(expect.any(String));

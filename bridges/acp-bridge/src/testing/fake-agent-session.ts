@@ -327,7 +327,11 @@ export function handleSessionMessage(message: JsonObject): boolean {
           },
         });
       const failDelayMs = Number(process.env.FAKE_ACP_FAIL_LOAD_DELAY_MS ?? "0");
-      if (Number.isSafeInteger(failDelayMs) && failDelayMs > 0) {
+      // The test, not a timer, decides when the load fails.
+      const failReleaseFile = process.env.FAKE_ACP_FAIL_LOAD_RELEASE_FILE;
+      if (failReleaseFile) {
+        whenFileExists(failReleaseFile, fail);
+      } else if (Number.isSafeInteger(failDelayMs) && failDelayMs > 0) {
         setTimeout(fail, failDelayMs);
       } else {
         fail();
@@ -546,8 +550,11 @@ export function handleSessionMessage(message: JsonObject): boolean {
       });
     // Holds `session/load` open so a second resume for the same ACP session
     // genuinely races the first rather than finding it already finished.
+    // `FAKE_ACP_LOAD_RELEASE_FILE` holds it until the test creates that file.
     const loadDelayMs = Number(process.env.FAKE_ACP_LOAD_DELAY_MS ?? "0");
-    if (Number.isSafeInteger(loadDelayMs) && loadDelayMs > 0) setTimeout(answer, loadDelayMs);
+    const loadReleaseFile = process.env.FAKE_ACP_LOAD_RELEASE_FILE;
+    if (loadReleaseFile) whenFileExists(loadReleaseFile, answer);
+    else if (Number.isSafeInteger(loadDelayMs) && loadDelayMs > 0) setTimeout(answer, loadDelayMs);
     else answer();
     return true;
   }

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import {
   nativeFetch,
+  sharedBridge,
   spawnBridge,
   temporaryDirectory,
   waitFor,
@@ -11,6 +12,12 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  // Tests that need neither a restart nor their own bridge settings share one
+  // of two bridges, each in its own session; the fake agent's switches are per
+  // test. `retry` backs off for 10 ms instead of seconds.
+  const retry = sharedBridge({ ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10" });
+  const plain = sharedBridge();
+
   test("reconciles stale pending tool parts after a restart", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(
@@ -154,17 +161,16 @@ describe("ACP bridge", () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "resource-retry-prompts.log");
     const promptBlocksFile = resolve(directory, "resource-retry-blocks.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -223,16 +229,15 @@ describe("ACP bridge", () => {
   test("retries a structured ACP resource-exhausted response", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "resource-rpc-retry-prompts.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -263,16 +268,15 @@ describe("ACP bridge", () => {
   test("fails visibly after four resource-exhausted retries", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "resource-retry-exhausted.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "5",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "5",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -308,18 +312,17 @@ describe("ACP bridge", () => {
   test("retries a flattened unavailable PING timeout with exponential backoff", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "unavailable-retry-prompts.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
-        FAKE_ACP_RETRIABLE_CODE: "unavailable",
-        FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -354,18 +357,17 @@ describe("ACP bridge", () => {
   test("retries a structured ACP unavailable PING timeout", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "unavailable-rpc-retry-prompts.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
-        FAKE_ACP_RETRIABLE_CODE: "unavailable",
-        FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -396,17 +398,17 @@ describe("ACP bridge", () => {
   test("preserves assistant text after an unavailable marker with no detail", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "unavailable-no-detail-prompts.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
-        FAKE_ACP_RETRIABLE_CODE: "unavailable",
-        FAKE_ACP_RETRIABLE_DETAIL: "\n\nActual successful response",
-      },
+    await plain.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "\n\nActual successful response",
     });
+    const { base, headers } = plain;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    plain.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -438,18 +440,17 @@ describe("ACP bridge", () => {
   test("fails visibly after four unavailable retries", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "unavailable-retry-exhausted.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "5",
-        FAKE_ACP_RETRIABLE_CODE: "unavailable",
-        FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "5",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -607,18 +608,17 @@ describe("ACP bridge", () => {
   test("Grok overload JSON-RPC sentence continues the same turn", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "grok-overload.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
-        FAKE_ACP_RETRIABLE_MESSAGE:
-          "Grok is temporarily overloaded. Please try again in a moment. (HTTP 503)",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      FAKE_ACP_RETRIABLE_MESSAGE:
+        "Grok is temporarily overloaded. Please try again in a moment. (HTTP 503)",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -641,15 +641,14 @@ describe("ACP bridge", () => {
   });
 
   test("shows a retried attempt as a settled card", async () => {
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
-      },
+    await retry.agentEnv({
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -680,20 +679,19 @@ describe("ACP bridge", () => {
     async (transport) => {
       const directory = await temporaryDirectory();
       const counterFile = resolve(directory, "resource-retry-usage-limit.log");
-      const { base, headers } = await spawnBridge({
-        env: {
-          ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-          FAKE_ACP_COUNTER_FILE: counterFile,
-          ...(transport === "RPC"
-            ? { FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1" }
-            : { FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1" }),
-          FAKE_ACP_RETRIABLE_DETAIL: "You've hit your usage limit",
-        },
+      await retry.agentEnv({
+        FAKE_ACP_COUNTER_FILE: counterFile,
+        ...(transport === "RPC"
+          ? { FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1" }
+          : { FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1" }),
+        FAKE_ACP_RETRIABLE_DETAIL: "You've hit your usage limit",
       });
+      const { base, headers } = retry;
       const created = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
       }).then((response) => response.json())) as { id: string };
+      retry.track(created.id);
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
@@ -717,20 +715,19 @@ describe("ACP bridge", () => {
   test("recovers a structured turn without replaying the interrupted attempt's output", async () => {
     const directory = await temporaryDirectory();
     const promptBlocksFile = resolve(directory, "structured-rpc-retry-blocks.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
-        FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
-        // The interrupted attempt streams a JSON prefix. Carrying it into the
-        // continuation would concatenate into a value that cannot parse.
-        FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL: '{"answer":"par',
-        FAKE_ACP_RESOURCE_EXHAUSTED_FINAL: '{"answer":"recovered"}',
-      },
+    await retry.agentEnv({
+      FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      // The interrupted attempt streams a JSON prefix. Carrying it into the
+      // continuation would concatenate into a value that cannot parse.
+      FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL: '{"answer":"par',
+      FAKE_ACP_RESOURCE_EXHAUSTED_FINAL: '{"answer":"recovered"}',
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -778,17 +775,16 @@ describe("ACP bridge", () => {
   });
 
   test("recovers a structured turn interrupted by a flattened resource-exhausted error", async () => {
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
-        FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL: '{"answer":"par',
-        FAKE_ACP_RESOURCE_EXHAUSTED_FINAL: '{"answer":"flattened-recovered"}',
-      },
+    await retry.agentEnv({
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL: '{"answer":"par',
+      FAKE_ACP_RESOURCE_EXHAUSTED_FINAL: '{"answer":"flattened-recovered"}',
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -881,19 +877,21 @@ describe("ACP bridge", () => {
   test("suppresses resource-exhausted retries for a turn cancelled while it was dispatching", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "resource-retry-cancel-dispatch.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
-        // Holds `session/load` open, so the respawn below keeps the prompt claim
-        // in its dispatching window long enough to cancel inside it.
-        FAKE_ACP_LOAD_DELAY_MS: "800",
-      },
+    const lifecycleFile = resolve(directory, "resource-retry-cancel-dispatch-lifecycle.log");
+    const releaseLoad = resolve(directory, "release-dispatch-load");
+    await retry.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+      // Holds `session/load` open, so the respawn below keeps the prompt claim
+      // in its dispatching window until the test has cancelled inside it.
+      FAKE_ACP_LOAD_RELEASE_FILE: releaseLoad,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
     });
+    const { base, headers } = retry;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    retry.track(created.id);
 
     // Kill the child so the next prompt has to respawn, which is what makes the
     // dispatching window wide instead of a single microtask.
@@ -920,12 +918,17 @@ describe("ACP bridge", () => {
         requestId: "resource-dispatch-1",
       }),
     });
-    await Bun.sleep(200);
+    // The replacement agent is loading the session: the claim is dispatching.
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (contents) => /^load:/m.test(contents),
+    );
     const cancelled = await nativeFetch(`${base}/session/${created.id}/cancel`, {
       method: "POST",
       headers,
     });
     expect(cancelled.status).toBe(202);
+    await fs.writeFile(releaseLoad, "");
     expect((await dispatched).status).toBe(202);
 
     const session = await waitFor(
@@ -945,11 +948,13 @@ describe("ACP bridge", () => {
   test("reattaches a detached session through session/load and reports a refusal", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "reattach-lifecycle.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    await plain.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const bridge = plain;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    plain.track(created.id);
 
     // Kill the agent underneath the bridge; the session must survive as state.
     const firstPid = Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]);
@@ -988,16 +993,16 @@ describe("ACP bridge", () => {
   test("refuses to reattach when the agent cannot reload sessions", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "no-load-lifecycle.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_NO_LOAD_SESSION: "1",
-      },
+    await plain.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_NO_LOAD_SESSION: "1",
     });
+    const bridge = plain;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    plain.track(created.id);
     process.kill(
       Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
       "SIGKILL",
@@ -1035,17 +1040,19 @@ describe("ACP bridge", () => {
   test("rejects a failed reattach and lets the same requestId be retried", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "failed-load-lifecycle.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_FAIL_LOAD_SESSION: "1",
-        FAKE_ACP_FAIL_LOAD_DELAY_MS: "800",
-      },
+    const releaseLoad = resolve(directory, "release-failed-load");
+    await plain.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_FAIL_LOAD_SESSION: "1",
+      // The load stays open until the test has looked at the claim.
+      FAKE_ACP_FAIL_LOAD_RELEASE_FILE: releaseLoad,
     });
+    const bridge = plain;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    plain.track(created.id);
     process.kill(
       Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
       "SIGKILL",
@@ -1074,6 +1081,7 @@ describe("ACP bridge", () => {
         headers: bridge.headers,
       }).then((response) => response.json()),
     ).toEqual({ dispatch: "unknown" });
+    await fs.writeFile(releaseLoad, "");
     const first = await firstPending;
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ error: "fake agent cannot load that session" });
@@ -1158,15 +1166,15 @@ describe("ACP bridge", () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "concurrent-prompts.log");
     const lifecycleFile = resolve(directory, "concurrent-lifecycle.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-      },
+    await plain.agentEnv({
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
     });
+    const { base, headers } = plain;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    plain.track(created.id);
     process.kill(
       Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
       "SIGKILL",

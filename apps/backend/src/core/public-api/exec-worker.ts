@@ -106,10 +106,12 @@ async function main() {
   child.stdin.on("error", () => {});
   if (input.stdinBase64) child.stdin.end(Buffer.from(input.stdinBase64, "base64")); else child.stdin.end();
   const timer = setTimeout(() => { timedOut = true; terminate(); }, input.timeoutMs);
+  // Tests may only shorten the cancel poll and heartbeat; production uses 1s.
+  const heartbeatMs = Math.max(50, Math.min(1000, Number(process.env.ORKESTRATOR_TEST_EXEC_HEARTBEAT_MS) || 1000));
   const heartbeat = setInterval(() => {
     if (!cancelled && fs.existsSync(cancelPath)) { cancelled = true; terminate(); }
     persist({ stdoutBytes: counts.stdout, stderrBytes: counts.stderr });
-  }, 1000);
+  }, heartbeatMs);
   const stop = () => { cancelled = true; terminate(); };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);

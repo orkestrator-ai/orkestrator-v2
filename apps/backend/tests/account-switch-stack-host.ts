@@ -1,6 +1,6 @@
 /**
  * Runs one `account-switch-stack` scenario in this process and prints its
- * evidence as one marked line of stdout. `account-switch-resend-live.test.ts` starts
+ * evidence as one marked line of stdout. `account-switch-resend-runner.ts` (run by `account-switch-claude-live.test.ts` and `account-switch-codex-live.test.ts`) starts
  * it with a throwaway HOME and asserts on the evidence.
  */
 import { execFileSync } from "node:child_process";

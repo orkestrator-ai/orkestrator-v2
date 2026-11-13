@@ -2362,7 +2362,7 @@ need it once cloned.
   [disk-usage.md](../development/disk-usage.md#project-git-mirrors).
 
 Qualified by `tests/unit/workspace-setup-git-mirror.test.ts` (the script against
-real repositories), `project-git-mirror.integration.test.ts` (build, refresh,
+real repositories), `project-git-mirror-*.integration.test.ts` (build, refresh,
 credentials, access kinds and accounts, concurrency, removal; a private remote
 over smart HTTP that the host's helper, `.netrc` and askpass each open is
 refused to the mirror), `project-git-mirror-access.test.ts` (which access a

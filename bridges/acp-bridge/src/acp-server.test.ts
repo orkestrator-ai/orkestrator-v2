@@ -7,23 +7,38 @@ import {
   children,
   nativeFetch,
   NativeAbortController,
+  sharedBridge,
   spawnBridge,
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  // Bridges for the tests that need no restart and no bridge-level variable;
+  // each of those opens its own session.
+  const grok = sharedBridge({ ACP_PROVIDER: "grok" });
+  const fixture = sharedBridge();
+
   // The fake agent records its own argv, so these assert the exact command line
   // the bridge builds. They cannot prove the real CLIs accept those flags —
   // `docs/development/upgrade-agents.md` carries that as a manual step for version bumps.
   async function readAgentArgs(
-    env: NodeJS.ProcessEnv,
     createBody?: Record<string, unknown>,
+    bridgeEnv?: NodeJS.ProcessEnv,
   ): Promise<string[]> {
     const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
-    });
+    let bridge: { base: string; headers: Record<string, string> };
+    let track = (_sessionId: string) => {};
+    if (bridgeEnv) {
+      bridge = await spawnBridge({
+        env: { ACP_PROVIDER: "grok", ...bridgeEnv, FAKE_ACP_ARGS_FILE: argsFile },
+      });
+    } else {
+      await grok.agentEnv({ FAKE_ACP_ARGS_FILE: argsFile });
+      bridge = grok;
+      track = (sessionId) => grok.track(sessionId);
+    }
+    const { base, headers } = bridge;
 
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -31,6 +46,7 @@ describe("ACP bridge", () => {
       ...(createBody ? { body: JSON.stringify(createBody) } : {}),
     });
     expect(created.status).toBe(201);
+    track(((await created.json()) as { id: string }).id);
 
     const recorded = await waitFor(
       async () => fs.readFile(argsFile, "utf8").catch(() => ""),
@@ -45,11 +61,7 @@ describe("ACP bridge", () => {
   }
 
   test("starts Grok ACP with automatic tool approval", async () => {
-    expect(await readAgentArgs({ ACP_PROVIDER: "grok" })).toEqual([
-      "--always-approve",
-      "agent",
-      "stdio",
-    ]);
+    expect(await readAgentArgs()).toEqual(["--always-approve", "agent", "stdio"]);
   });
 
   test("a session created read-only starts its agent without automatic approval", async () => {
@@ -57,7 +69,7 @@ describe("ACP bridge", () => {
     // from the first prompt would arrive after the agent had already been told
     // to approve its own tools. The read-only boundary also denies the network,
     // so Grok's web search and web fetch are switched off from the start.
-    expect(await readAgentArgs({ ACP_PROVIDER: "grok" }, { readOnly: true })).toEqual([
+    expect(await readAgentArgs({ readOnly: true })).toEqual([
       "--disable-web-search",
       "agent",
       "--no-leader",
@@ -72,8 +84,7 @@ describe("ACP bridge", () => {
     // its permission requests could never stop a search; the flag removes the
     // tools. Process authority applies even when the request names no policy.
     expect(
-      await readAgentArgs({
-        ACP_PROVIDER: "grok",
+      await readAgentArgs(undefined, {
         ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
       }),
     ).toEqual([
@@ -88,24 +99,21 @@ describe("ACP bridge", () => {
 
   test("any policy that denies the network starts Grok without web search", async () => {
     expect(
-      await readAgentArgs(
-        { ACP_PROVIDER: "grok" },
-        {
-          policy: {
-            id: "pipeline",
-            sandbox: "container",
-            approvals: "auto-approve",
-            projectResources: true,
-            capabilityPolicy: { deny: ["network"] },
-            networkAccess: "restricted",
-          },
+      await readAgentArgs({
+        policy: {
+          id: "pipeline",
+          sandbox: "container",
+          approvals: "auto-approve",
+          projectResources: true,
+          capabilityPolicy: { deny: ["network"] },
+          networkAccess: "restricted",
         },
-      ),
+      }),
     ).toEqual(["--disable-web-search", "--always-approve", "agent", "--no-leader", "stdio"]);
   });
 
   test("rejects a malformed read-only boundary at session creation", async () => {
-    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const { base, headers } = grok;
 
     const response = await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -118,13 +126,14 @@ describe("ACP bridge", () => {
   });
 
   test("rejects a malformed workflow-result attempt before claiming the turn", async () => {
-    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const { base, headers } = grok;
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({}),
     });
     const { id } = (await created.json()) as { id: string };
+    grok.track(id);
     for (const malformed of [
       { workflowResultTool: "submit_review_report" },
       { workflowResultTool: "anything", workflowResultKey: "11111111-1111-4111-8111-111111111111" },
@@ -156,9 +165,8 @@ describe("ACP bridge", () => {
 
   test("recreating a session under a stricter boundary restarts its agent", async () => {
     const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ACP_PROVIDER: "grok", FAKE_ACP_ARGS_FILE: argsFile },
-    });
+    await grok.agentEnv({ FAKE_ACP_ARGS_FILE: argsFile });
+    const { base, headers } = grok;
     const create = async (body: Record<string, unknown>) => {
       const response = await nativeFetch(`${base}/session/create`, {
         method: "POST",
@@ -166,7 +174,9 @@ describe("ACP bridge", () => {
         body: JSON.stringify(body),
       });
       expect(response.status).toBe(201);
-      return (await response.json()) as { id: string };
+      const session = (await response.json()) as { id: string };
+      grok.track(session.id);
+      return session;
     };
 
     const first = await create({ clientSessionKey: "tab-1" });
@@ -199,12 +209,13 @@ describe("ACP bridge", () => {
   });
 
   test("settles a tool left in flight when the agent process dies mid-turn", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-crash" }),
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -282,7 +293,8 @@ describe("ACP bridge", () => {
     }
     expect((await nativeFetch(`${hung.base}/global/health`)).ok).toBe(true);
 
-    const malformed = await spawnBridge({ env: { FAKE_ACP_MALFORMED_INITIALIZE: "1" } });
+    await fixture.agentEnv({ FAKE_ACP_MALFORMED_INITIALIZE: "1" });
+    const malformed = fixture;
     const response = await nativeFetch(`${malformed.base}/session/create`, {
       method: "POST",
       headers: malformed.headers,
@@ -368,7 +380,7 @@ describe("ACP bridge", () => {
   });
 
   test("keeps serving other sessions after one agent dies mid-turn", async () => {
-    const { base, headers, child } = await spawnBridge();
+    const { base, headers, child } = fixture;
     const [dying, healthy] = await Promise.all([
       nativeFetch(`${base}/session/create`, { method: "POST", headers }).then((response) =>
         response.json(),
@@ -377,6 +389,9 @@ describe("ACP bridge", () => {
         response.json(),
       ) as Promise<{ id: string }>,
     ]);
+
+    fixture.track(dying.id);
+    fixture.track(healthy.id);
 
     // This prompt kills its agent without answering.
     await nativeFetch(`${base}/session/${dying.id}/prompt`, {

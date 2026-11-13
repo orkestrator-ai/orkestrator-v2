@@ -14,31 +14,40 @@ type InstalledSdkManifest = {
   claudeCodeVersion?: string;
 };
 
+// Every test runs its own subprocess and temporary directory and shares no
+// state, so they run concurrently: each pays a cold SDK import.
 describe("Claude Agent SDK runtime compatibility", () => {
-  test("loads the real pinned SDK and constructs the query interface used by the bridge", async () => {
-    const packageRoot = join(import.meta.dir, "..");
-    const bridgeManifest = JSON.parse(
-      await readFile(join(packageRoot, "package.json"), "utf8"),
-    ) as PackageManifest;
-    const expectedSdkVersion = bridgeManifest.dependencies?.["@anthropic-ai/claude-agent-sdk"];
-    expect(expectedSdkVersion).toMatch(/^\d+\.\d+\.\d+$/);
+  test.concurrent(
+    "loads the real pinned SDK and constructs the query interface used by the bridge",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
+      const bridgeManifest = JSON.parse(
+        await readFile(join(packageRoot, "package.json"), "utf8"),
+      ) as PackageManifest;
+      const expectedSdkVersion = bridgeManifest.dependencies?.["@anthropic-ai/claude-agent-sdk"];
+      expect(expectedSdkVersion).toMatch(/^\d+\.\d+\.\d+$/);
 
-    const installedSdkRoot = join(packageRoot, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-    const installedManifest = JSON.parse(
-      await readFile(join(installedSdkRoot, "package.json"), "utf8"),
-    ) as InstalledSdkManifest;
-    expect(installedManifest.version).toBe(expectedSdkVersion);
-    expect(installedManifest.claudeCodeVersion).toMatch(/^\d+\.\d+\.\d+$/);
+      const installedSdkRoot = join(
+        packageRoot,
+        "node_modules",
+        "@anthropic-ai",
+        "claude-agent-sdk",
+      );
+      const installedManifest = JSON.parse(
+        await readFile(join(installedSdkRoot, "package.json"), "utf8"),
+      ) as InstalledSdkManifest;
+      expect(installedManifest.version).toBe(expectedSdkVersion);
+      expect(installedManifest.claudeCodeVersion).toMatch(/^\d+\.\d+\.\d+$/);
 
-    // Run in a separate process because session-manager-*.test.ts intentionally
-    // replaces this package with a module-level mock. The probe constructs and
-    // closes a real Query without iterating it, so it exercises package/native
-    // resolution without making an authenticated API request.
-    const probe = Bun.spawn(
-      [
-        process.execPath,
-        "-e",
-        `
+      // Run in a separate process because session-manager-*.test.ts intentionally
+      // replaces this package with a module-level mock. The probe constructs and
+      // closes a real Query without iterating it, so it exercises package/native
+      // resolution without making an authenticated API request.
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
           import { query } from "@anthropic-ai/claude-agent-sdk";
           const request = query({
             prompt: "local compatibility probe",
@@ -53,28 +62,30 @@ describe("Claude Agent SDK runtime compatibility", () => {
           await request.close();
           console.log(JSON.stringify(result));
         `,
-      ],
-      {
-        cwd: packageRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+        ],
+        {
+          cwd: packageRoot,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(probe.stdout).text(),
-      new Response(probe.stderr).text(),
-      probe.exited,
-    ]);
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
 
-    expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({
-      query: "function",
-      iterator: "function",
-      supportedModels: "function",
-      close: "function",
-    });
-  }, 15_000);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({
+        query: "function",
+        iterator: "function",
+        supportedModels: "function",
+        close: "function",
+      });
+    },
+    15_000,
+  );
 
   // -------------------------------------------------------------------------
   // Feature-detected entry points
@@ -88,14 +99,16 @@ describe("Claude Agent SDK runtime compatibility", () => {
   // what turns an SDK upgrade that drops one of them into a failing test rather
   // than a feature that quietly stops existing.
 
-  test("exposes every module-level and iterator-level entry point the bridge feature-detects", async () => {
-    const packageRoot = join(import.meta.dir, "..");
+  test.concurrent(
+    "exposes every module-level and iterator-level entry point the bridge feature-detects",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
 
-    const probe = Bun.spawn(
-      [
-        process.execPath,
-        "-e",
-        `
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
           import * as sdk from "@anthropic-ai/claude-agent-sdk";
           const request = sdk.query({
             prompt: "local compatibility probe",
@@ -122,87 +135,95 @@ describe("Claude Agent SDK runtime compatibility", () => {
           await request.close();
           console.log(JSON.stringify(result));
         `,
-      ],
-      {
-        cwd: packageRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+        ],
+        {
+          cwd: packageRoot,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(probe.stdout).text(),
-      new Response(probe.stderr).text(),
-      probe.exited,
-    ]);
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
 
-    expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({
-      module: {
-        listSessions: "function",
-        getSessionInfo: "function",
-        getSessionMessages: "function",
-        renameSession: "function",
-        forkSession: "function",
-      },
-      iterator: {
-        supportedAgents: "function",
-        rewindFiles: "function",
-        stopTask: "function",
-        getContextUsage: "function",
-        applyFlagSettings: "function",
-        getSettings: "function",
-      },
-    });
-  }, 15_000);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({
+        module: {
+          listSessions: "function",
+          getSessionInfo: "function",
+          getSessionMessages: "function",
+          renameSession: "function",
+          forkSession: "function",
+        },
+        iterator: {
+          supportedAgents: "function",
+          rewindFiles: "function",
+          stopTask: "function",
+          getContextUsage: "function",
+          applyFlagSettings: "function",
+          getSettings: "function",
+        },
+      });
+    },
+    15_000,
+  );
 
   // A tool-name rule the CLI does not recognise matches nothing: a renamed
   // tool silently leaves the read-only allowlist, and a waiting tool loses
   // the refusal that tells the coordinator why.
-  test("names only tools the SDK lists as built-in or as a legacy alias", async () => {
-    const packageRoot = join(import.meta.dir, "..");
-    const probe = Bun.spawn(
-      [
-        process.execPath,
-        "-e",
-        `
+  test.concurrent(
+    "names only tools the SDK lists as built-in or as a legacy alias",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
           import * as sdk from "@anthropic-ai/claude-agent-sdk";
           console.log(JSON.stringify({
             builtin: sdk.BUILTIN_TOOL_NAMES ?? null,
             aliases: sdk.LEGACY_TOOL_NAME_ALIASES ?? null,
           }));
         `,
-      ],
-      { cwd: packageRoot, stdout: "pipe", stderr: "pipe" },
-    );
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(probe.stdout).text(),
-      new Response(probe.stderr).text(),
-      probe.exited,
-    ]);
-    expect(exitCode, stderr).toBe(0);
-    const { builtin, aliases } = JSON.parse(stdout) as {
-      builtin: string[] | null;
-      aliases: Record<string, string> | null;
-    };
-    // Both are @alpha exports; an SDK that drops them skips the guard.
-    if (!builtin || !aliases) return;
-    const known = new Set([...builtin, ...Object.keys(aliases)]);
-    const unknown = [...READ_ONLY_TOOLS, ...WAITING_TOOLS].filter((name) => !known.has(name));
-    expect(unknown).toEqual([]);
-  }, 15_000);
+        ],
+        { cwd: packageRoot, stdout: "pipe", stderr: "pipe" },
+      );
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      const { builtin, aliases } = JSON.parse(stdout) as {
+        builtin: string[] | null;
+        aliases: Record<string, string> | null;
+      };
+      // Both are @alpha exports; an SDK that drops them skips the guard.
+      if (!builtin || !aliases) return;
+      const known = new Set([...builtin, ...Object.keys(aliases)]);
+      const unknown = [...READ_ONLY_TOOLS, ...WAITING_TOOLS].filter((name) => !known.has(name));
+      expect(unknown).toEqual([]);
+    },
+    15_000,
+  );
 
-  test("still accepts the listSessions option that scopes a bridge to its own worktree", async () => {
-    const packageRoot = join(import.meta.dir, "..");
+  test.concurrent(
+    "still accepts the listSessions option that scopes a bridge to its own worktree",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
 
-    // Every Orkestrator environment is a worktree of the same repository and
-    // this option defaults to `true`, so if it were ever dropped each bridge
-    // would silently start adopting its siblings' sessions again.
-    const probe = Bun.spawn(
-      [
-        process.execPath,
-        "-e",
-        `
+      // Every Orkestrator environment is a worktree of the same repository and
+      // this option defaults to `true`, so if it were ever dropped each bridge
+      // would silently start adopting its siblings' sessions again.
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
           import { listSessions } from "@anthropic-ai/claude-agent-sdk";
           const sessions = await listSessions({
             dir: process.cwd(),
@@ -211,38 +232,42 @@ describe("Claude Agent SDK runtime compatibility", () => {
           });
           console.log(JSON.stringify({ ok: Array.isArray(sessions) }));
         `,
-      ],
-      {
-        cwd: packageRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+        ],
+        {
+          cwd: packageRoot,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(probe.stdout).text(),
-      new Response(probe.stderr).text(),
-      probe.exited,
-    ]);
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
 
-    expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ ok: true });
-  }, 15_000);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ ok: true });
+    },
+    15_000,
+  );
 
-  test("routes AskUserQuestion through canUseTool under bypassPermissions", async () => {
-    const packageRoot = join(import.meta.dir, "..");
-    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-contract-"));
-    const executable = join(fixtureDir, "fake-claude");
-    const responseFile = join(fixtureDir, "response.json");
-    await copyFile(join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts"), executable);
-    await chmod(executable, 0o755);
+  test.concurrent(
+    "routes AskUserQuestion through canUseTool under bypassPermissions",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
+      const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-contract-"));
+      const executable = join(fixtureDir, "fake-claude");
+      const responseFile = join(fixtureDir, "response.json");
+      await copyFile(join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts"), executable);
+      await chmod(executable, 0o755);
 
-    try {
-      const probe = Bun.spawn(
-        [
-          process.execPath,
-          "-e",
-          `
+      try {
+        const probe = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `
             import { query } from "@anthropic-ai/claude-agent-sdk";
             let callbackCount = 0;
             const request = query({
@@ -271,74 +296,78 @@ describe("Claude Agent SDK runtime compatibility", () => {
             }
             console.log(JSON.stringify({ callbackCount, resultSeen }));
           `,
-        ],
-        {
-          cwd: packageRoot,
-          env: {
-            ...process.env,
-            CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
-            CLAUDE_SDK_CONTRACT_RESPONSE_FILE: responseFile,
+          ],
+          {
+            cwd: packageRoot,
+            env: {
+              ...process.env,
+              CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+              CLAUDE_SDK_CONTRACT_RESPONSE_FILE: responseFile,
+            },
+            stdout: "pipe",
+            stderr: "pipe",
           },
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
+        );
 
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(probe.stdout).text(),
-        new Response(probe.stderr).text(),
-        probe.exited,
-      ]);
-      expect(exitCode, stderr).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({ callbackCount: 1, resultSeen: true });
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(probe.stdout).text(),
+          new Response(probe.stderr).text(),
+          probe.exited,
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        expect(JSON.parse(stdout)).toEqual({ callbackCount: 1, resultSeen: true });
 
-      const captured = JSON.parse(await readFile(responseFile, "utf8")) as {
-        argv: string[];
-        response: {
-          subtype: string;
-          response: { behavior: string; updatedInput: { answers: Record<string, string> } };
+        const captured = JSON.parse(await readFile(responseFile, "utf8")) as {
+          argv: string[];
+          response: {
+            subtype: string;
+            response: { behavior: string; updatedInput: { answers: Record<string, string> } };
+          };
         };
-      };
-      // SDK 0.3.295 joins option values (`--permission-mode=bypassPermissions`);
-      // earlier releases pass the value as the next argument.
-      const modeIndex = captured.argv.indexOf("--permission-mode");
-      const permissionMode = captured.argv.includes("--permission-mode=bypassPermissions")
-        ? "bypassPermissions"
-        : modeIndex >= 0
-          ? captured.argv[modeIndex + 1]
-          : undefined;
-      expect(permissionMode).toBe("bypassPermissions");
-      expect(captured.response).toMatchObject({
-        subtype: "success",
-        response: {
-          behavior: "allow",
-          updatedInput: {
-            answers: { "Choose a deterministic answer": "Continue" },
+        // SDK 0.3.295 joins option values (`--permission-mode=bypassPermissions`);
+        // earlier releases pass the value as the next argument.
+        const modeIndex = captured.argv.indexOf("--permission-mode");
+        const permissionMode = captured.argv.includes("--permission-mode=bypassPermissions")
+          ? "bypassPermissions"
+          : modeIndex >= 0
+            ? captured.argv[modeIndex + 1]
+            : undefined;
+        expect(permissionMode).toBe("bypassPermissions");
+        expect(captured.response).toMatchObject({
+          subtype: "success",
+          response: {
+            behavior: "allow",
+            updatedInput: {
+              answers: { "Choose a deterministic answer": "Continue" },
+            },
           },
-        },
-      });
-    } finally {
-      await rm(fixtureDir, { recursive: true, force: true });
-    }
-  }, 15_000);
+        });
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 
   // The bridge continues a turn whose CLI was killed under it
   // (`killedClaudeProcessSignal`), and reads that from two fields the SDK
   // attaches to its exit error but does not document.
-  test("classifies a CLI killed mid-turn by its signal", async () => {
-    const packageRoot = join(import.meta.dir, "..");
-    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-killed-contract-"));
-    const executable = join(fixtureDir, "fake-claude");
-    await copyFile(join(import.meta.dir, "testing", "fake-killed-cli.ts"), executable);
-    await chmod(executable, 0o755);
+  test.concurrent(
+    "classifies a CLI killed mid-turn by its signal",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
+      const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-killed-contract-"));
+      const executable = join(fixtureDir, "fake-claude");
+      await copyFile(join(import.meta.dir, "testing", "fake-killed-cli.ts"), executable);
+      await chmod(executable, 0o755);
 
-    try {
-      for (const signal of ["SIGKILL", "SIGTERM"]) {
-        const probe = Bun.spawn(
-          [
-            process.execPath,
-            "-e",
-            `
+      try {
+        for (const signal of ["SIGKILL", "SIGTERM"]) {
+          const probe = Bun.spawn(
+            [
+              process.execPath,
+              "-e",
+              `
               import { query } from "@anthropic-ai/claude-agent-sdk";
               const request = query({
                 prompt: "Run the killed-process contract",
@@ -352,45 +381,49 @@ describe("Claude Agent SDK runtime compatibility", () => {
               }
               console.log(JSON.stringify(caught ?? null));
             `,
-          ],
-          {
-            cwd: packageRoot,
-            env: {
-              ...process.env,
-              CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
-              CLAUDE_SDK_CONTRACT_SIGNAL: signal,
+            ],
+            {
+              cwd: packageRoot,
+              env: {
+                ...process.env,
+                CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+                CLAUDE_SDK_CONTRACT_SIGNAL: signal,
+              },
+              stdout: "pipe",
+              stderr: "pipe",
             },
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-        );
-        const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(probe.stdout).text(),
-          new Response(probe.stderr).text(),
-          probe.exited,
-        ]);
-        expect(exitCode, stderr).toBe(0);
-        expect(JSON.parse(stdout)).toEqual({ errorClass: "process_killed_by_signal", signal });
+          );
+          const [stdout, stderr, exitCode] = await Promise.all([
+            new Response(probe.stdout).text(),
+            new Response(probe.stderr).text(),
+            probe.exited,
+          ]);
+          expect(exitCode, stderr).toBe(0);
+          expect(JSON.parse(stdout)).toEqual({ errorClass: "process_killed_by_signal", signal });
+        }
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
       }
-    } finally {
-      await rm(fixtureDir, { recursive: true, force: true });
-    }
-  }, 20_000);
+    },
+    20_000,
+  );
 
-  test("keeps streaming input open across a result while a background process runs", async () => {
-    const packageRoot = join(import.meta.dir, "..");
-    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-contract-"));
-    const executable = join(fixtureDir, "fake-claude");
-    const markerFile = join(fixtureDir, "background-marker.txt");
-    await copyFile(join(import.meta.dir, "testing", "fake-background-task-cli.ts"), executable);
-    await chmod(executable, 0o755);
+  test.concurrent(
+    "keeps streaming input open across a result while a background process runs",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
+      const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-contract-"));
+      const executable = join(fixtureDir, "fake-claude");
+      const markerFile = join(fixtureDir, "background-marker.txt");
+      await copyFile(join(import.meta.dir, "testing", "fake-background-task-cli.ts"), executable);
+      await chmod(executable, 0o755);
 
-    try {
-      const probe = Bun.spawn(
-        [
-          process.execPath,
-          "-e",
-          `
+      try {
+        const probe = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `
             import { query } from "@anthropic-ai/claude-agent-sdk";
             let releaseInput;
             async function* input() {
@@ -425,46 +458,50 @@ describe("Claude Agent SDK runtime compatibility", () => {
             }
             console.log(JSON.stringify({ resultSeen, taskCompleted }));
           `,
-        ],
-        {
-          cwd: packageRoot,
-          env: {
-            ...process.env,
-            CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
-            CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+          ],
+          {
+            cwd: packageRoot,
+            env: {
+              ...process.env,
+              CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+              CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+            },
+            stdout: "pipe",
+            stderr: "pipe",
           },
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
+        );
 
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(probe.stdout).text(),
-        new Response(probe.stderr).text(),
-        probe.exited,
-      ]);
-      expect(exitCode, stderr).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({ resultSeen: true, taskCompleted: true });
-      expect(await readFile(markerFile, "utf8")).toBe("completed");
-    } finally {
-      await rm(fixtureDir, { recursive: true, force: true });
-    }
-  }, 15_000);
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(probe.stdout).text(),
+          new Response(probe.stderr).text(),
+          probe.exited,
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        expect(JSON.parse(stdout)).toEqual({ resultSeen: true, taskCompleted: true });
+        expect(await readFile(markerFile, "utf8")).toBe("completed");
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 
-  test("delivers a root continuation and second result after a background notification", async () => {
-    const packageRoot = join(import.meta.dir, "..");
-    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-continuation-"));
-    const executable = join(fixtureDir, "fake-claude");
-    const markerFile = join(fixtureDir, "background-marker.txt");
-    await copyFile(join(import.meta.dir, "testing", "fake-background-task-cli.ts"), executable);
-    await chmod(executable, 0o755);
+  test.concurrent(
+    "delivers a root continuation and second result after a background notification",
+    async () => {
+      const packageRoot = join(import.meta.dir, "..");
+      const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-continuation-"));
+      const executable = join(fixtureDir, "fake-claude");
+      const markerFile = join(fixtureDir, "background-marker.txt");
+      await copyFile(join(import.meta.dir, "testing", "fake-background-task-cli.ts"), executable);
+      await chmod(executable, 0o755);
 
-    try {
-      const probe = Bun.spawn(
-        [
-          process.execPath,
-          "-e",
-          `
+      try {
+        const probe = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `
             import { query } from "@anthropic-ai/claude-agent-sdk";
             let releaseInput;
             async function* input() {
@@ -504,187 +541,201 @@ describe("Claude Agent SDK runtime compatibility", () => {
             }
             console.log(JSON.stringify({ sequence, resultCount }));
           `,
-        ],
-        {
-          cwd: packageRoot,
-          env: {
-            ...process.env,
-            CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
-            CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
-            CLAUDE_SDK_BACKGROUND_CONTINUATION: "1",
+          ],
+          {
+            cwd: packageRoot,
+            env: {
+              ...process.env,
+              CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+              CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+              CLAUDE_SDK_BACKGROUND_CONTINUATION: "1",
+            },
+            stdout: "pipe",
+            stderr: "pipe",
           },
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
-
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(probe.stdout).text(),
-        new Response(probe.stderr).text(),
-        probe.exited,
-      ]);
-      expect(exitCode, stderr).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({
-        sequence: ["result:1", "task_notification", "root_assistant", "result:2"],
-        resultCount: 2,
-      });
-      expect(await readFile(markerFile, "utf8")).toBe("completed");
-    } finally {
-      await rm(fixtureDir, { recursive: true, force: true });
-    }
-  }, 15_000);
-
-  test("background contract fixture rejects invalid setup and reports child failure", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-fixture-"));
-    const fixture = join(import.meta.dir, "testing", "fake-background-task-cli.ts");
-    const markerFile = join(fixtureDir, "background-marker.txt");
-
-    try {
-      const withoutMarker = Bun.spawn([process.execPath, fixture], {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) => key !== "CLAUDE_SDK_BACKGROUND_MARKER_FILE",
-          ),
-        ) as Record<string, string>,
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      expect(await withoutMarker.exited).toBe(2);
-
-      const malformed = Bun.spawn([process.execPath, fixture], {
-        env: { ...process.env, CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile },
-        stdin: new TextEncoder().encode("not-json\n"),
-        stdout: "ignore",
-        stderr: "pipe",
-      });
-      const malformedStderr = await new Response(malformed.stderr).text();
-      expect(await malformed.exited).toBe(3);
-      expect(malformedStderr).toBe("Malformed JSON input\n");
-
-      // A child that exits non-zero and one killed by a signal are different
-      // terminal shapes: the second reports a null exit code, so a fixture that
-      // only reads the code cannot describe what actually happened.
-      for (const [childMode, summary] of [
-        ["fail", "Contract task failed with exit code 17"],
-        ["signal", "Contract task failed with signal SIGKILL"],
-      ] as const) {
-        const failedChild = Bun.spawn([process.execPath, fixture], {
-          env: {
-            ...process.env,
-            CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
-            CLAUDE_SDK_BACKGROUND_CHILD_MODE: childMode,
-          },
-          stdin: "pipe",
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        failedChild.stdin.write(
-          `${JSON.stringify({
-            type: "user",
-            session_id: `contract-background-${childMode}-session`,
-          })}\n`,
         );
-        await failedChild.stdin.flush();
 
         const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(failedChild.stdout).text(),
-          new Response(failedChild.stderr).text(),
-          failedChild.exited,
+          new Response(probe.stdout).text(),
+          new Response(probe.stderr).text(),
+          probe.exited,
         ]);
         expect(exitCode, stderr).toBe(0);
-        const messages = stdout
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as Record<string, unknown>);
-        expect(messages).toContainEqual(
-          expect.objectContaining({
-            type: "system",
-            subtype: "task_notification",
-            task_id: "contract-background-task",
-            status: "failed",
-            summary,
-          }),
-        );
-        expect(messages.at(-1)).toMatchObject({
-          type: "system",
-          subtype: "background_tasks_changed",
-          tasks: [],
+        expect(JSON.parse(stdout)).toEqual({
+          sequence: ["result:1", "task_notification", "root_assistant", "result:2"],
+          resultCount: 2,
         });
-        expect(await readFile(markerFile, "utf8").catch(() => null)).toBeNull();
+        expect(await readFile(markerFile, "utf8")).toBe("completed");
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
       }
-    } finally {
-      await rm(fixtureDir, { recursive: true, force: true });
-    }
-  }, 20_000);
+    },
+    15_000,
+  );
 
-  test("contract fixture records one response and refuses to run unconfigured", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-fixture-"));
-    const fixture = join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts");
-    const responseFile = join(fixtureDir, "response.json");
+  test.concurrent(
+    "background contract fixture rejects invalid setup and reports child failure",
+    async () => {
+      const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-fixture-"));
+      const fixture = join(import.meta.dir, "testing", "fake-background-task-cli.ts");
+      const markerFile = join(fixtureDir, "background-marker.txt");
 
-    try {
-      // Without a destination it must exit rather than silently discard the
-      // capture the assertions depend on.
-      const unconfigured = Bun.spawn([process.execPath, fixture], {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) => key !== "CLAUDE_SDK_CONTRACT_RESPONSE_FILE",
+      try {
+        const withoutMarker = Bun.spawn([process.execPath, fixture], {
+          env: Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) => key !== "CLAUDE_SDK_BACKGROUND_MARKER_FILE",
+            ),
+          ) as Record<string, string>,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+        expect(await withoutMarker.exited).toBe(2);
+
+        const malformed = Bun.spawn([process.execPath, fixture], {
+          env: { ...process.env, CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile },
+          stdin: new TextEncoder().encode("not-json\n"),
+          stdout: "ignore",
+          stderr: "pipe",
+        });
+        const malformedStderr = await new Response(malformed.stderr).text();
+        expect(await malformed.exited).toBe(3);
+        expect(malformedStderr).toBe("Malformed JSON input\n");
+
+        // A child that exits non-zero and one killed by a signal are different
+        // terminal shapes: the second reports a null exit code, so a fixture that
+        // only reads the code cannot describe what actually happened.
+        for (const [childMode, summary] of [
+          ["fail", "Contract task failed with exit code 17"],
+          ["signal", "Contract task failed with signal SIGKILL"],
+        ] as const) {
+          const failedChild = Bun.spawn([process.execPath, fixture], {
+            env: {
+              ...process.env,
+              CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+              CLAUDE_SDK_BACKGROUND_CHILD_MODE: childMode,
+            },
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          failedChild.stdin.write(
+            `${JSON.stringify({
+              type: "user",
+              session_id: `contract-background-${childMode}-session`,
+            })}\n`,
+          );
+          await failedChild.stdin.flush();
+
+          const [stdout, stderr, exitCode] = await Promise.all([
+            new Response(failedChild.stdout).text(),
+            new Response(failedChild.stderr).text(),
+            failedChild.exited,
+          ]);
+          expect(exitCode, stderr).toBe(0);
+          const messages = stdout
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as Record<string, unknown>);
+          expect(messages).toContainEqual(
+            expect.objectContaining({
+              type: "system",
+              subtype: "task_notification",
+              task_id: "contract-background-task",
+              status: "failed",
+              summary,
+            }),
+          );
+          expect(messages.at(-1)).toMatchObject({
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: [],
+          });
+          expect(await readFile(markerFile, "utf8").catch(() => null)).toBeNull();
+        }
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
+  test.concurrent(
+    "contract fixture records one response and refuses to run unconfigured",
+    async () => {
+      const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-fixture-"));
+      const fixture = join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts");
+      const responseFile = join(fixtureDir, "response.json");
+
+      try {
+        // Without a destination it must exit rather than silently discard the
+        // capture the assertions depend on.
+        const unconfigured = Bun.spawn([process.execPath, fixture], {
+          env: Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) => key !== "CLAUDE_SDK_CONTRACT_RESPONSE_FILE",
+            ),
+          ) as Record<string, string>,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+        expect(await unconfigured.exited).toBe(2);
+
+        // Two identical control responses must leave one parseable document, not
+        // two concatenated ones that fail with an opaque syntax error.
+        const duplicate = {
+          type: "control_response",
+          response: {
+            request_id: "contract-question-request",
+            subtype: "success",
+            response: { behavior: "allow" },
+          },
+        };
+        const recorder = Bun.spawn([process.execPath, fixture], {
+          env: { ...process.env, CLAUDE_SDK_CONTRACT_RESPONSE_FILE: responseFile },
+          stdin: new TextEncoder().encode(
+            `${JSON.stringify(duplicate)}\n${JSON.stringify(duplicate)}\n`,
           ),
-        ) as Record<string, string>,
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      expect(await unconfigured.exited).toBe(2);
-
-      // Two identical control responses must leave one parseable document, not
-      // two concatenated ones that fail with an opaque syntax error.
-      const duplicate = {
-        type: "control_response",
-        response: {
-          request_id: "contract-question-request",
-          subtype: "success",
-          response: { behavior: "allow" },
-        },
-      };
-      const recorder = Bun.spawn([process.execPath, fixture], {
-        env: { ...process.env, CLAUDE_SDK_CONTRACT_RESPONSE_FILE: responseFile },
-        stdin: new TextEncoder().encode(
-          `${JSON.stringify(duplicate)}\n${JSON.stringify(duplicate)}\n`,
-        ),
-        stdout: "ignore",
-        stderr: "pipe",
-      });
-      const stderr = await new Response(recorder.stderr).text();
-      expect(await recorder.exited, stderr).toBe(0);
-      const captured = JSON.parse(await readFile(responseFile, "utf8")) as {
-        response: { request_id: string };
-      };
-      expect(captured.response.request_id).toBe("contract-question-request");
-    } finally {
-      await rm(fixtureDir, { recursive: true, force: true });
-    }
-  }, 15_000);
+          stdout: "ignore",
+          stderr: "pipe",
+        });
+        const stderr = await new Response(recorder.stderr).text();
+        expect(await recorder.exited, stderr).toBe(0);
+        const captured = JSON.parse(await readFile(responseFile, "utf8")) as {
+          response: { request_id: string };
+        };
+        expect(captured.response.request_id).toBe("contract-question-request");
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 
   // The bridge recognises the CLI's resume scan by its exact summary. If an
   // upgrade rewords it, those tasks fall back to one stopped card each.
-  test("the pinned CLI still settles resume orphans with the summary the bridge matches", async () => {
-    const sdkRoot = await realpath(
-      join(import.meta.dir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk"),
-    );
-    const scope = dirname(sdkRoot);
-    const nativePackage = (await readdir(scope)).find((name) =>
-      name.startsWith("claude-agent-sdk-"),
-    );
-    expect(nativePackage, `no native CLI package beside ${sdkRoot}`).toBeDefined();
-    const files = await readdir(join(scope, nativePackage!));
-    const binary = files.find((name) => name === "claude" || name === "claude.exe");
-    expect(binary, `no CLI binary in ${nativePackage}`).toBeDefined();
-    const bytes = Buffer.from(await Bun.file(join(scope, nativePackage!, binary!)).arrayBuffer());
-    // Both halves: the summary itself, and the scan marker that only that
-    // reconciliation uses, so a match elsewhere cannot pass this.
-    expect(bytes.includes(CLAUDE_RESUME_ORPHAN_SUMMARY)).toBe(true);
-    expect(bytes.includes("__orphan_summary")).toBe(true);
-  }, 30_000);
+  test.concurrent(
+    "the pinned CLI still settles resume orphans with the summary the bridge matches",
+    async () => {
+      const sdkRoot = await realpath(
+        join(import.meta.dir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk"),
+      );
+      const scope = dirname(sdkRoot);
+      const nativePackage = (await readdir(scope)).find((name) =>
+        name.startsWith("claude-agent-sdk-"),
+      );
+      expect(nativePackage, `no native CLI package beside ${sdkRoot}`).toBeDefined();
+      const files = await readdir(join(scope, nativePackage!));
+      const binary = files.find((name) => name === "claude" || name === "claude.exe");
+      expect(binary, `no CLI binary in ${nativePackage}`).toBeDefined();
+      const bytes = Buffer.from(await Bun.file(join(scope, nativePackage!, binary!)).arrayBuffer());
+      // Both halves: the summary itself, and the scan marker that only that
+      // reconciliation uses, so a match elsewhere cannot pass this.
+      expect(bytes.includes(CLAUDE_RESUME_ORPHAN_SUMMARY)).toBe(true);
+      expect(bytes.includes("__orphan_summary")).toBe(true);
+    },
+    30_000,
+  );
 });

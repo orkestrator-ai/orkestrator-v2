@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
@@ -5367,12 +5368,23 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
-    open();
-    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-    await waitFor(() => expect(reads).toBe(2));
-    expect(await screen.findByText("completed@example.test", {}, { timeout: 3_000 })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    // The panel's 2 s follow-up read runs on a controlled clock, not in real time.
+    const followUp = installControlledTimeout(2_000, { label: "sign-in follow-up read" });
+    try {
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      await waitFor(() => expect(reads).toBe(2));
+      await waitFor(() => expect(followUp.pendingCount()).toBe(1));
+      await act(async () => {
+        followUp.advance();
+      });
+      expect(await screen.findByText("completed@example.test")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+      expect(followUp.pendingCount()).toBe(0);
+    } finally {
+      followUp.restore();
+    }
   });
 
   test.each(["reject", "null"])(

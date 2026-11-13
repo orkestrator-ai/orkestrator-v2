@@ -6,7 +6,12 @@ import {
 } from "@orkestrator/protocol/transcript-artifact-commands";
 import * as backend from "@/lib/backend";
 import { invoke } from "@/lib/native/backend";
-import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
+import {
+  RESOURCE_COALESCE_MS,
+  dispatchResourceChange,
+  resetResourceSync,
+} from "@/lib/resource-sync";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
 import type { RichTranscriptScope } from "@/lib/chat/rich-identity";
 import {
   clearArtifactPublicationCache,
@@ -16,6 +21,9 @@ import {
   readArtifactLedger,
   useArtifactPublications,
 } from "./useArtifactPublications";
+
+/** The hook's first three retry delays (`RETRY_DELAYS_MS` in useArtifactPublications.ts). */
+const RETRY_BACKOFF_MS = [500, 1_500, 4_000] as const;
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -71,6 +79,36 @@ function serveLedger(getTotal: () => number) {
     return { publications, nextSequence: last !== null && last < total ? last : null };
   });
   return calls;
+}
+
+/**
+ * Delivers one resource change through resource-sync's coalescing timer
+ * without sleeping past it. The caller's next assertion therefore follows a
+ * delivery that has happened, not a wait that merely outlasted one.
+ */
+async function deliverResourceChange(change: Parameters<typeof dispatchResourceChange>[0]) {
+  const coalesce = installControlledTimeout(RESOURCE_COALESCE_MS, {
+    label: "resource-sync coalescing",
+  });
+  let armed = 0;
+  try {
+    act(() => {
+      dispatchResourceChange(change);
+      armed = coalesce.pendingCount();
+      coalesce.advance();
+    });
+  } finally {
+    expect(coalesce.restore()).toBe(0);
+  }
+  expect(armed).toBe(1);
+  await flushMicrotasks();
+}
+
+/** Lets promise chains started by a delivered change or an advanced timer finish. */
+async function flushMicrotasks() {
+  await act(async () => {
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+  });
 }
 
 beforeEach(() => {
@@ -179,8 +217,11 @@ describe("useArtifactPublications live updates", () => {
 
     // Another conversation's event is ignored.
     total = 2;
-    dispatchResourceChange({ resource: "transcript-artifact", id: "env-env-1:tab-2", revision: 1 });
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await deliverResourceChange({
+      resource: "transcript-artifact",
+      id: "env-env-1:tab-2",
+      revision: 1,
+    });
     expect(calls.length).toBe(before);
     expect(result.current).toHaveLength(1);
 
@@ -200,24 +241,29 @@ describe("useArtifactPublications live updates", () => {
     await waitFor(() => expect(result.current).toHaveLength(1));
     unmount();
     const before = calls.length;
-    dispatchResourceChange({
+    await deliverResourceChange({
       resource: "transcript-artifact",
       id: SCOPE.logicalSessionKey,
       revision: 3,
     });
-    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(calls.length).toBe(before);
   });
 });
 
 test("stable unresolved calls retry through empty and failed ledger reads without hints", async () => {
-  const times: number[] = [];
+  let reads = 0;
   invokeMock.mockImplementation(async (command: string) => {
     if (command !== TRANSCRIPT_ARTIFACT_COMMANDS.listPublications) return undefined;
-    times.push(Date.now());
-    if (times.length === 2) throw new Error("temporary transport failure");
-    return { publications: times.length >= 4 ? [publication(1)] : [], nextSequence: null };
+    reads++;
+    if (reads === 2) throw new Error("temporary transport failure");
+    return { publications: reads >= 4 ? [publication(1)] : [], nextSequence: null };
   });
+  // Each backoff delay is controlled separately. A retry is armed only after
+  // the previous read settles, so a delay having one timer pending proves both
+  // that the hook asked for exactly that delay and that no read has run since.
+  const [first, second, third] = RETRY_BACKOFF_MS.map((delay) =>
+    installControlledTimeout(delay, { label: `artifact retry backoff ${delay}` }),
+  );
   const messages = [
     {
       id: "m",
@@ -236,13 +282,32 @@ test("stable unresolved calls retry through empty and failed ledger reads withou
     },
   ] as import("@/lib/chat/native-message-types").NativeMessage[];
   const { result, unmount } = renderHook(() => useArtifactPublications(SCOPE, messages));
-  await waitFor(() => expect(result.current).toHaveLength(1), { timeout: 9000 });
-  expect(times).toHaveLength(4);
-  expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(450);
-  expect(times[2]! - times[1]!).toBeGreaterThanOrEqual(1400);
-  expect(times[3]! - times[2]!).toBeGreaterThanOrEqual(3900);
-  unmount();
-}, 12000);
+  try {
+    // The mount read and the first retry's timer are both armed on mount.
+    await waitFor(() => expect(first!.pendingCount()).toBe(1));
+    expect(reads).toBe(1);
+    await act(async () => {
+      first!.advance();
+    });
+    await waitFor(() => expect(second!.pendingCount()).toBe(1));
+    expect(reads).toBe(2);
+    expect(third!.pendingCount()).toBe(0);
+    await act(async () => {
+      second!.advance();
+    });
+    await waitFor(() => expect(third!.pendingCount()).toBe(1));
+    expect(reads).toBe(3);
+    await act(async () => {
+      third!.advance();
+    });
+    await waitFor(() => expect(result.current).toHaveLength(1));
+    expect(reads).toBe(4);
+    unmount();
+  } finally {
+    // Newest first: each clock restores the timer functions it replaced.
+    for (const clock of [third, second, first]) clock!.restore();
+  }
+});
 
 test("unmount fences a retry read and cannot repopulate the cache", async () => {
   let finish!: (value: unknown) => void;
@@ -271,11 +336,22 @@ test("unmount fences a retry read and cannot repopulate the cache", async () => 
       ],
     },
   ] as import("@/lib/chat/native-message-types").NativeMessage[];
-  const { unmount } = renderHook(() => useArtifactPublications(SCOPE, messages));
-  await waitFor(() => expect(reads).toBe(2), { timeout: 2000 });
+  // The first retry's backoff runs on a controlled clock instead of 500 real ms.
+  const retry = installControlledTimeout(RETRY_BACKOFF_MS[0], { label: "artifact retry backoff" });
+  let unmount!: () => void;
+  try {
+    ({ unmount } = renderHook(() => useArtifactPublications(SCOPE, messages)));
+    await waitFor(() => expect(retry.pendingCount()).toBe(1));
+    await act(async () => {
+      retry.advance();
+    });
+    await waitFor(() => expect(reads).toBe(2));
+  } finally {
+    retry.restore();
+  }
   unmount();
   finish({ publications: [publication(1)], nextSequence: null });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await flushMicrotasks();
   // Hold the remount's fresh read: its first paint exposes any stale write
   // to the cache by the unmounted subscriber, without relying on an epoch reset.
   invokeMock.mockImplementation(() => new Promise(() => undefined));

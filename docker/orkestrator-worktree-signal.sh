@@ -24,7 +24,7 @@ pidfile="$config.pid"
 settle="${ORKESTRATOR_WORKTREE_SIGNAL_SETTLE:-0.3}"
 max_wait_us="${ORKESTRATOR_WORKTREE_SIGNAL_MAX_WAIT_US:-1000000}"
 # Keep legitimate separated bursts below the receiver's flood threshold.
-min_gap_us=1000000
+min_gap_us="${ORKESTRATOR_WORKTREE_SIGNAL_MIN_GAP_US:-1000000}"
 # Convert fractional seconds without depending on an external calculator.
 printf -v settle_us '%.0f' "${settle}e6"
 exclude='(^|/)node_modules(/|$)|/\.git/(objects|logs|lfs|rr-cache|modules)(/|$)|/\.git/.*\.lock$'

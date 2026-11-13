@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, promises as fs, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { resolve } from "node:path";
 
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
@@ -10,6 +11,8 @@ import {
   nativeFetch,
   NativeAbortController,
   ONE_PIXEL_PNG,
+  sharedBridge,
+  type SpawnedBridge,
   spawnBridge,
   stopChild,
   temporaryDirectory,
@@ -22,7 +25,19 @@ import {
   expectNothingSecretLogged,
 } from "../../../tests/helpers/auth-secret-canaries.js";
 
+// Working directories for the shared bridges below, which are fixed before the
+// bridges start: a session's attachments and instruction files resolve against
+// the bridge's own directory. Each test keeps its files in a name of its own.
+function sharedWorkspace(prefix: string): string {
+  const directory = realpathSync(mkdtempSync(resolve(os.tmpdir(), prefix)));
+  afterAll(() => rmSync(directory, { recursive: true, force: true }));
+  return directory;
+}
+
 describe("ACP bridge", () => {
+  // The default fixture agent, for the tests that set no bridge-level variable.
+  const fixture = sharedBridge();
+
   test("reports Grok auth and the configured control MCP without exposing its token", async () => {
     const missingCredential = resolve(await temporaryDirectory(), "missing-auth.json");
     const { base, headers } = await spawnBridge({
@@ -104,247 +119,241 @@ describe("ACP bridge", () => {
     },
   );
 
-  test("concurrent attach and prompt create one deferred Grok session", async () => {
-    const directory = await temporaryDirectory();
-    const credential = resolve(directory, "auth.json");
-    const requests = resolve(directory, "requests.jsonl");
-    const releaseFile = resolve(directory, "release-new");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_PROVIDER: "grok",
-        GROK_AUTH_FILE: credential,
-        XAI_API_KEY: undefined,
-        GROK_AUTH_PROVIDER_COMMAND: undefined,
-        GROK_AUTH_METHOD_ID: undefined,
+  // Deferred Grok sessions: signed out until the test writes the credential file,
+  // which is removed before each test. One bridge serves them all; the working
+  // directory carries the repository rules the instruction-policy test looks for.
+  describe("deferred Grok sessions", () => {
+    const workspace = sharedWorkspace("acp-http-deferred-");
+    const credential = resolve(workspace, "auth.json");
+    writeFileSync(resolve(workspace, "AGENTS.md"), "DEFERRED REPOSITORY RULES");
+    const deferred = sharedBridge({
+      ACP_PROVIDER: "grok",
+      CWD: workspace,
+      GROK_AUTH_FILE: credential,
+      XAI_API_KEY: undefined,
+      GROK_AUTH_PROVIDER_COMMAND: undefined,
+      GROK_AUTH_METHOD_ID: undefined,
+    });
+    beforeEach(() => fs.rm(credential, { force: true }));
+
+    test("concurrent attach and prompt create one deferred Grok session", async () => {
+      const directory = await temporaryDirectory();
+      const requests = resolve(directory, "requests.jsonl");
+      const releaseFile = resolve(directory, "release-new");
+      await deferred.agentEnv({
         FAKE_ACP_SESSION_REQUEST_FILE: requests,
         FAKE_ACP_NEW_RELEASE_FILE: releaseFile,
-      },
+      });
+      const { base, headers } = deferred;
+      const { id } = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+        (r) => r.json(),
+      )) as { id: string };
+      deferred.track(id);
+      await fs.writeFile(credential, "{}");
+      // Start attach first, then wait until its session/new is in flight before
+      // the prompt joins it. This exercises shared startup rather than a warm child.
+      const attach = nativeFetch(`${base}/session/${id}/attach`, { method: "POST", headers });
+      await waitFor(
+        () => fs.readFile(requests, "utf8").catch(() => ""),
+        (value) => value.includes("session/new"),
+      );
+      const prompt = nativeFetch(`${base}/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "DIRECT:once", requestId: "concurrent-login" }),
+      });
+      // An empty config read returns 409 only once the prompt owns admission.
+      await waitFor(
+        () =>
+          nativeFetch(`${base}/session/${id}/config`, { method: "POST", headers, body: "{}" }).then(
+            (r) => r.status,
+          ),
+        (value) => value === 409,
+      );
+      await fs.writeFile(releaseFile, "release");
+      const [attached, accepted] = await Promise.all([attach, prompt]);
+      expect(attached.status).toBe(200);
+      expect(accepted.status).toBe(202);
+      const calls = (await fs.readFile(requests, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { method: string });
+      expect(calls.filter((call) => call.method === "session/new")).toHaveLength(1);
+      expect(calls.filter((call) => call.method === "session/load")).toHaveLength(0);
     });
-    const { id } = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
-      (r) => r.json(),
-    )) as { id: string };
-    await fs.writeFile(credential, "{}");
-    // Start attach first, then wait until its session/new is in flight before
-    // the prompt joins it. This exercises shared startup rather than a warm child.
-    const attach = nativeFetch(`${base}/session/${id}/attach`, { method: "POST", headers });
-    await waitFor(
-      () => fs.readFile(requests, "utf8").catch(() => ""),
-      (value) => value.includes("session/new"),
-    );
-    const prompt = nativeFetch(`${base}/session/${id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "DIRECT:once", requestId: "concurrent-login" }),
-    });
-    // An empty config read returns 409 only once the prompt owns admission.
-    await waitFor(
-      () =>
-        nativeFetch(`${base}/session/${id}/config`, { method: "POST", headers, body: "{}" }).then(
-          (r) => r.status,
-        ),
-      (value) => value === 409,
-    );
-    await fs.writeFile(releaseFile, "release");
-    const [attached, accepted] = await Promise.all([attach, prompt]);
-    expect(attached.status).toBe(200);
-    expect(accepted.status).toBe(202);
-    const calls = (await fs.readFile(requests, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { method: string });
-    expect(calls.filter((call) => call.method === "session/new")).toHaveLength(1);
-    expect(calls.filter((call) => call.method === "session/load")).toHaveLength(0);
-  });
 
-  test("retains a deferred session created before configuration fails and reloads it on retry", async () => {
-    const directory = await temporaryDirectory();
-    const credential = resolve(directory, "auth.json");
-    const requests = resolve(directory, "requests.jsonl");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_PROVIDER: "grok",
-        GROK_AUTH_FILE: credential,
-        XAI_API_KEY: undefined,
-        GROK_AUTH_PROVIDER_COMMAND: undefined,
-        GROK_AUTH_METHOD_ID: undefined,
+    test("retains a deferred session created before configuration fails and reloads it on retry", async () => {
+      const directory = await temporaryDirectory();
+      const requests = resolve(directory, "requests.jsonl");
+      await deferred.agentEnv({
         FAKE_ACP_SESSION_REQUEST_FILE: requests,
         FAKE_ACP_FAIL_MODEL_ONCE_FILE: resolve(directory, "failed-model"),
-      },
-    });
-    const { id } = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model: "grok-composer-2.5-fast" }),
-    }).then((r) => r.json())) as { id: string };
-    await fs.writeFile(credential, "{}");
-    const failed = await nativeFetch(`${base}/session/${id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "DIRECT:recover", requestId: "retry-startup" }),
-    });
-    expect(failed.status).toBe(500);
-    const snapshot = (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((r) =>
-      r.json(),
-    )) as { resumableSessionId?: string; status: string };
-    expect(snapshot.resumableSessionId).toBeTruthy();
-    expect(snapshot.status).toBe("idle");
-    // The same request id remains usable: session/new is not prompt dispatch,
-    // and the journal can prove the id never reached the agent.
-    expect(
-      await nativeFetch(`${base}/session/${id}/dispatch?requestId=retry-startup`, { headers }).then(
-        (r) => r.json(),
-      ),
-    ).toMatchObject({ dispatch: "absent" });
-    const retry = await nativeFetch(`${base}/session/${id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "DIRECT:recover", requestId: "retry-startup" }),
-    });
-    expect(retry.status).toBe(202);
-    await waitFor(
-      () =>
-        nativeFetch(`${base}/session/${id}/status`, { headers }).then((r) => r.json()) as Promise<{
-          status: string;
-        }>,
-      (value) => value.status === "idle",
-    );
-    const calls = (await fs.readFile(requests, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { method: string });
-    expect(calls.map((call) => call.method)).toEqual(["session/new", "session/load"]);
-  });
-
-  for (const readOnly of [false, true]) {
-    test(`deferred Grok sessions use effective instruction policy (readOnly ${readOnly})`, async () => {
-      const credential = resolve(await temporaryDirectory(), "auth.json");
-      const workspace = await temporaryDirectory();
-      await fs.writeFile(resolve(workspace, "AGENTS.md"), "DEFERRED REPOSITORY RULES");
-      const requestFile = resolve(await temporaryDirectory(), "requests.jsonl");
-      const { base, headers } = await spawnBridge({
-        env: {
-          ACP_PROVIDER: "grok",
-          CWD: workspace,
-          FAKE_ACP_SESSION_REQUEST_FILE: requestFile,
-          GROK_AUTH_FILE: credential,
-          XAI_API_KEY: undefined,
-          GROK_AUTH_PROVIDER_COMMAND: undefined,
-          GROK_AUTH_METHOD_ID: undefined,
-        },
       });
+      const { base, headers } = deferred;
+      const { id } = (await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: "grok-composer-2.5-fast" }),
+      }).then((r) => r.json())) as { id: string };
+      deferred.track(id);
+      await fs.writeFile(credential, "{}");
+      const failed = await nativeFetch(`${base}/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "DIRECT:recover", requestId: "retry-startup" }),
+      });
+      expect(failed.status).toBe(500);
+      const snapshot = (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((r) =>
+        r.json(),
+      )) as { resumableSessionId?: string; status: string };
+      expect(snapshot.resumableSessionId).toBeTruthy();
+      expect(snapshot.status).toBe("idle");
+      // The same request id remains usable: session/new is not prompt dispatch,
+      // and the journal can prove the id never reached the agent.
+      expect(
+        await nativeFetch(`${base}/session/${id}/dispatch?requestId=retry-startup`, {
+          headers,
+        }).then((r) => r.json()),
+      ).toMatchObject({ dispatch: "absent" });
+      const retry = await nativeFetch(`${base}/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "DIRECT:recover", requestId: "retry-startup" }),
+      });
+      expect(retry.status).toBe(202);
+      await waitFor(
+        () =>
+          nativeFetch(`${base}/session/${id}/status`, { headers }).then((r) =>
+            r.json(),
+          ) as Promise<{
+            status: string;
+          }>,
+        (value) => value.status === "idle",
+      );
+      const calls = (await fs.readFile(requests, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { method: string });
+      expect(calls.map((call) => call.method)).toEqual(["session/new", "session/load"]);
+    });
+
+    for (const readOnly of [false, true]) {
+      test(`deferred Grok sessions use effective instruction policy (readOnly ${readOnly})`, async () => {
+        const requestFile = resolve(await temporaryDirectory(), "requests.jsonl");
+        await deferred.agentEnv({ FAKE_ACP_SESSION_REQUEST_FILE: requestFile });
+        const { base, headers } = deferred;
+        const status = async (id: string) =>
+          (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((response) =>
+            response.json(),
+          )) as {
+            status: string;
+            error?: string;
+            readiness?: unknown;
+            resumableSessionId?: string;
+          };
+        const message = "Grok Build isn't signed in. Run grok login in a terminal to keep working.";
+
+        // Grok's `authenticate` would wait on an interactive sign-in here; the
+        // session is created without starting it.
+        const created = await nativeFetch(`${base}/session/create`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            readOnly,
+            policy: {
+              id: "interactive-host",
+              sandbox: "none",
+              approvals: "auto-approve",
+              projectResources: false,
+              networkAccess: "full",
+            },
+          }),
+        });
+        expect(created.ok).toBe(true);
+        const { id } = (await created.json()) as { id: string };
+        deferred.track(id);
+        expect(await status(id)).toMatchObject({
+          status: "idle",
+          readiness: {
+            state: "authentication-required",
+            message,
+            signIn: { kind: "terminal", hint: "Open a terminal and run grok login." },
+          },
+        });
+        expect((await status(id)).resumableSessionId).toBeUndefined();
+
+        const refused = await nativeFetch(`${base}/session/${id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "hello", requestId: "before-login" }),
+        });
+        expect(refused.status).toBe(401);
+        expect(await refused.json()).toEqual({ error: message, kind: "authentication-required" });
+
+        await fs.writeFile(credential, "{}");
+        expect((await status(id)).readiness).toBeUndefined();
+        const accepted = await nativeFetch(`${base}/session/${id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "DIRECT:signed in", requestId: "after-login" }),
+        });
+        expect(accepted.status).toBe(202);
+        const settled = await waitFor(
+          () => status(id),
+          (value) => value.status === "idle" && value.resumableSessionId !== undefined,
+        );
+        expect(settled.error).toBeUndefined();
+        const requests = (await fs.readFile(requestFile, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { method: string; meta?: { rules?: string } });
+        const rules = requests.find((request) => request.method === "session/new")?.meta?.rules;
+        if (readOnly) expect(rules).toBeUndefined();
+        else expect(rules).toContain("DEFERRED REPOSITORY RULES");
+      });
+    }
+
+    test("starts a deferred Grok session on the model chosen while signed out", async () => {
+      const { base, headers } = deferred;
       const status = async (id: string) =>
         (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((response) =>
           response.json(),
-        )) as { status: string; error?: string; readiness?: unknown; resumableSessionId?: string };
-      const message = "Grok Build isn't signed in. Run grok login in a terminal to keep working.";
-
-      // Grok's `authenticate` would wait on an interactive sign-in here; the
-      // session is created without starting it.
-      const created = await nativeFetch(`${base}/session/create`, {
+        )) as {
+          status: string;
+          resumableSessionId?: string;
+          composer: { selectedModelId?: string };
+        };
+      const { id } = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          readOnly,
-          policy: {
-            id: "interactive-host",
-            sandbox: "none",
-            approvals: "auto-approve",
-            projectResources: false,
-            networkAccess: "full",
-          },
-        }),
-      });
-      expect(created.ok).toBe(true);
-      const { id } = (await created.json()) as { id: string };
-      expect(await status(id)).toMatchObject({
-        status: "idle",
-        readiness: {
-          state: "authentication-required",
-          message,
-          signIn: { kind: "terminal", hint: "Open a terminal and run grok login." },
-        },
-      });
-      expect((await status(id)).resumableSessionId).toBeUndefined();
-
-      const refused = await nativeFetch(`${base}/session/${id}/prompt`, {
+        body: JSON.stringify({ model: "grok-build" }),
+      }).then((response) => response.json())) as { id: string };
+      deferred.track(id);
+      // A change made before a login exists is recorded without starting Grok.
+      const configured = await nativeFetch(`${base}/session/${id}/config`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ prompt: "hello", requestId: "before-login" }),
+        body: JSON.stringify({ modelId: "grok-composer-2.5-fast" }),
       });
-      expect(refused.status).toBe(401);
-      expect(await refused.json()).toEqual({ error: message, kind: "authentication-required" });
+      expect(configured.ok).toBe(true);
+      expect((await status(id)).composer.selectedModelId).toBe("grok-composer-2.5-fast");
 
       await fs.writeFile(credential, "{}");
-      expect((await status(id)).readiness).toBeUndefined();
-      const accepted = await nativeFetch(`${base}/session/${id}/prompt`, {
+      await nativeFetch(`${base}/session/${id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({ prompt: "DIRECT:signed in", requestId: "after-login" }),
       });
-      expect(accepted.status).toBe(202);
-      const settled = await waitFor(
+      const started = await waitFor(
         () => status(id),
         (value) => value.status === "idle" && value.resumableSessionId !== undefined,
       );
-      expect(settled.error).toBeUndefined();
-      const requests = (await fs.readFile(requestFile, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { method: string; meta?: { rules?: string } });
-      const rules = requests.find((request) => request.method === "session/new")?.meta?.rules;
-      if (readOnly) expect(rules).toBeUndefined();
-      else expect(rules).toContain("DEFERRED REPOSITORY RULES");
+      expect(started.composer.selectedModelId).toBe("grok-composer-2.5-fast");
     });
-  }
-
-  test("starts a deferred Grok session on the model chosen while signed out", async () => {
-    const credential = resolve(await temporaryDirectory(), "auth.json");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_PROVIDER: "grok",
-        GROK_AUTH_FILE: credential,
-        XAI_API_KEY: undefined,
-        GROK_AUTH_PROVIDER_COMMAND: undefined,
-        GROK_AUTH_METHOD_ID: undefined,
-      },
-    });
-    const status = async (id: string) =>
-      (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((response) =>
-        response.json(),
-      )) as {
-        status: string;
-        resumableSessionId?: string;
-        composer: { selectedModelId?: string };
-      };
-    const { id } = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model: "grok-build" }),
-    }).then((response) => response.json())) as { id: string };
-    // A change made before a login exists is recorded without starting Grok.
-    const configured = await nativeFetch(`${base}/session/${id}/config`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ modelId: "grok-composer-2.5-fast" }),
-    });
-    expect(configured.ok).toBe(true);
-    expect((await status(id)).composer.selectedModelId).toBe("grok-composer-2.5-fast");
-
-    await fs.writeFile(credential, "{}");
-    await nativeFetch(`${base}/session/${id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "DIRECT:signed in", requestId: "after-login" }),
-    });
-    const started = await waitFor(
-      () => status(id),
-      (value) => value.status === "idle" && value.resumableSessionId !== undefined,
-    );
-    expect(started.composer.selectedModelId).toBe("grok-composer-2.5-fast");
   });
 
   test("runtime health uses the shared envelope and answers unknown sessions in band", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const missing = await nativeFetch(`${base}/session/missing/runtime-health`, { headers });
     expect(missing.status).toBe(200);
     expect(await missing.json()).toEqual({
@@ -358,6 +367,7 @@ describe("ACP bridge", () => {
       headers,
     });
     const session = (await created.json()) as { id: string };
+    fixture.track(session.id);
     const health = await nativeFetch(`${base}/session/${session.id}/runtime-health`, { headers });
     expect(health.status).toBe(200);
     expect(await health.json()).toMatchObject({
@@ -368,7 +378,7 @@ describe("ACP bridge", () => {
   });
 
   test("refuses browser origins other than loopback and serves no CORS", async () => {
-    const { base } = await spawnBridge();
+    const { base } = fixture;
     const origin = "http://127.0.0.1:1420";
 
     // A loopback page with the credential is served, but nothing is echoed
@@ -383,6 +393,7 @@ describe("ACP bridge", () => {
     });
     expect(created.status).toBe(201);
     expect(created.headers.get("access-control-allow-origin")).toBeNull();
+    fixture.track(((await created.json()) as { id: string }).id);
 
     // An opaque origin is something any public page can mint through a
     // sandboxed iframe, so it is refused like any other foreign origin.
@@ -451,10 +462,11 @@ describe("ACP bridge", () => {
   });
 
   test("bounds one oversized response without failing the session", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    fixture.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -474,10 +486,11 @@ describe("ACP bridge", () => {
   });
 
   test("announces overflow when earlier stream chunks leave no room for the marker", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    fixture.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -511,10 +524,11 @@ describe("ACP bridge", () => {
     // later write lands on a pipe nobody drains while the bridge still has the
     // child attached. Writing there must never escape into the request handler
     // or take the bridge down with all of its other sessions.
-    const { base, headers, child } = await spawnBridge();
+    const { base, headers, child } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    fixture.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -544,6 +558,8 @@ describe("ACP bridge", () => {
 });
 
 describe("ACP provider commands", () => {
+  const COMMANDS_WORKSPACE = sharedWorkspace("acp-http-commands-");
+
   type Catalogue = {
     catalogueVersion?: number;
     status: string;
@@ -554,26 +570,39 @@ describe("ACP provider commands", () => {
     commands: Array<Record<string, unknown>>;
   };
 
-  async function commandBridge(options: { commands?: unknown[] } = {}) {
-    const workspace = await temporaryDirectory();
+  // Tests that stop and restart the bridge pass `restartable`, which gives them a
+  // bridge of their own on a state directory they can reopen. The rest share one
+  // bridge, each with its own session and its own inventory, log and lifecycle files.
+  const sharedCommands = sharedBridge({ ACP_PROVIDER: "grok", CWD: COMMANDS_WORKSPACE });
+
+  async function commandBridge(options: { commands?: unknown[]; restartable?: boolean } = {}) {
+    const restartable = options.restartable === true;
+    const scratch = await temporaryDirectory();
+    const workspace = restartable ? scratch : COMMANDS_WORKSPACE;
     const stateDirectory = await temporaryDirectory();
-    const commandsFile = resolve(workspace, "commands.json");
-    const blocksFile = resolve(workspace, "prompt-blocks.log");
-    const lifecycleFile = resolve(workspace, "lifecycle.log");
+    const commandsFile = resolve(scratch, "commands.json");
+    const blocksFile = resolve(scratch, "prompt-blocks.log");
+    const lifecycleFile = resolve(scratch, "lifecycle.log");
     if (options.commands) await fs.writeFile(commandsFile, JSON.stringify(options.commands));
-    const env = {
-      ACP_PROVIDER: "grok",
-      CWD: workspace,
+    const agentEnv = {
       FAKE_ACP_COMMANDS_FILE: commandsFile,
       FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
       FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
       FAKE_ACP_IMAGE_CAPABILITY: "true",
     };
-    const bridge = await spawnBridge({ stateDirectory, env });
+    const env = { ACP_PROVIDER: "grok", CWD: workspace, ...agentEnv };
+    let bridge: SpawnedBridge;
+    if (restartable) {
+      bridge = await spawnBridge({ stateDirectory, env });
+    } else {
+      await sharedCommands.agentEnv(agentEnv);
+      bridge = sharedCommands;
+    }
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    if (!restartable) sharedCommands.track(created.id);
     const session = `${bridge.base}/session/${created.id}`;
     const request = (path: string, init: RequestInit = {}) =>
       nativeFetch(`${session}${path}`, { ...init, headers: bridge.headers });
@@ -595,7 +624,9 @@ describe("ACP provider commands", () => {
     const starts = async () =>
       ((await fs.readFile(lifecycleFile, "utf8").catch(() => "")).match(/^start:/gm) ?? []).length;
     return {
-      ...bridge,
+      base: bridge.base,
+      headers: bridge.headers,
+      child: bridge.child,
       workspace,
       stateDirectory,
       env,
@@ -685,7 +716,7 @@ describe("ACP provider commands", () => {
   });
 
   test("a restored selected command attaches and revalidates before dispatch", async () => {
-    const bridge = await commandBridge({ commands: [review] });
+    const bridge = await commandBridge({ restartable: true, commands: [review] });
     const initial = await waitFor(bridge.catalogue, (value) => value.status === "ready");
     await stopChild(bridge.child);
     const restarted = await spawnBridge({ stateDirectory: bridge.stateDirectory, env: bridge.env });
@@ -1153,7 +1184,7 @@ describe("ACP provider commands", () => {
     });
 
     test("keeps compact journal outcomes after the live command is removed", async () => {
-      const bridge = await commandBridge({ commands: [compact] });
+      const bridge = await commandBridge({ restartable: true, commands: [compact] });
       await waitFor(bridge.catalogue, (value) => value.status === "ready");
       expect((await postCompact(bridge, { requestId: "compact-removed" })).status).toBe(202);
       await bridge.idle();
@@ -1230,7 +1261,7 @@ describe("ACP provider commands", () => {
     });
 
     test("after a restart attaches and revalidates against the re-reported list", async () => {
-      const bridge = await commandBridge({ commands: [compact] });
+      const bridge = await commandBridge({ restartable: true, commands: [compact] });
       await waitFor(bridge.catalogue, (value) => value.status === "ready");
       await stopChild(bridge.child);
       const restarted = await spawnBridge({

@@ -5,6 +5,28 @@ import type { LocalServerKind } from "./local-server-runtime.js";
 
 export const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
 export const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
+/** How often a stop waits to see a local server's port go quiet. */
+export const LOCAL_SERVER_EXIT_POLL_INTERVAL_MS = 100;
+/**
+ * Tests only: caps every local-server poll interval below at this many
+ * milliseconds. Unset, which is production, leaves each interval as declared.
+ */
+export const LOCAL_SERVER_POLL_OVERRIDE_ENV = "ORKESTRATOR_TEST_LOCAL_SERVER_POLL_MS";
+
+/** `defaultMs`, or the test override when that is a shorter positive whole number. */
+function localServerPollMs(defaultMs: number): number {
+  const override = Number(process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV]);
+  return Number.isInteger(override) && override >= 1 ? Math.min(defaultMs, override) : defaultMs;
+}
+
+/**
+ * How many polls cover a wait of `attempts` polls at `defaultMs`. A shorter
+ * interval polls more often over the same wait rather than giving up sooner;
+ * at the default interval this is exactly `attempts`.
+ */
+function pollsForBudget(attempts: number, defaultMs: number, intervalMs: number): number {
+  return Math.ceil((attempts * defaultMs) / intervalMs);
+}
 /**
  * Reusing a running bridge re-checks its health first. The first probe keeps
  * the historical 2s budget so a healthy bridge costs nothing extra; only a miss
@@ -171,9 +193,14 @@ export async function waitForHealth(
   const delay =
     dependencies.delay ??
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  // A caller that injects its own delay controls the schedule completely.
+  const intervalMs = dependencies.delay
+    ? LOCAL_SERVER_HEALTH_INTERVAL_MS
+    : localServerPollMs(LOCAL_SERVER_HEALTH_INTERVAL_MS);
+  const polls = pollsForBudget(attempts, LOCAL_SERVER_HEALTH_INTERVAL_MS, intervalMs);
+  for (let attempt = 0; attempt < polls; attempt += 1) {
     if (await checkHealth(port, pathName, headers)) return;
-    await delay(LOCAL_SERVER_HEALTH_INTERVAL_MS);
+    await delay(intervalMs);
   }
   throw new Error(`Server on port ${port} did not become healthy`);
 }
@@ -214,7 +241,11 @@ export async function confirmRunningServerHealth(
     }
     failedProbes += 1;
     if (!isAlive() || failedProbes >= LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS) break;
-    await delay(LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS);
+    await delay(
+      dependencies.delay
+        ? LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS
+        : localServerPollMs(LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS),
+    );
   }
   return { healthy: false, failedProbes };
 }
@@ -235,17 +266,21 @@ export async function waitForLocalServerHealth(
 }
 
 export async function waitForHttpServerExit(port: number, attempts = 50): Promise<void> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const intervalMs = localServerPollMs(LOCAL_SERVER_EXIT_POLL_INTERVAL_MS);
+  const polls = pollsForBudget(attempts, LOCAL_SERVER_EXIT_POLL_INTERVAL_MS, intervalMs);
+  for (let attempt = 0; attempt < polls; attempt += 1) {
     if (!(await isHttpServerReachable(port))) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error(`Server on port ${port} did not stop`);
 }
 
 export async function waitForUnhealthy(port: number, attempts = 50): Promise<void> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const intervalMs = localServerPollMs(LOCAL_SERVER_EXIT_POLL_INTERVAL_MS);
+  const polls = pollsForBudget(attempts, LOCAL_SERVER_EXIT_POLL_INTERVAL_MS, intervalMs);
+  for (let attempt = 0; attempt < polls; attempt += 1) {
     if (!(await checkHttpHealth(port))) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error(`Server on port ${port} did not stop`);
 }

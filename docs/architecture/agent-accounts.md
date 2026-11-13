@@ -1268,7 +1268,7 @@ planning, the goal verifier and graph describe sessions are not resent.
 
 ### Proving the resend without a billed turn
 
-`mise run verify:accounts:resend-live` (`apps/backend/tests/account-switch-resend-live.test.ts`,
+`mise run verify:accounts:resend-live` (`apps/backend/tests/account-switch-claude-live.test.ts` and `account-switch-codex-live.test.ts`,
 slow tier) runs a real `OrkestratorBackend`, the bridges' built `dist` and the pinned
 Claude and Codex CLIs in a throwaway HOME, with fixture logins for two accounts. Only
 the provider's servers are scripted: a local model endpoint, reached through

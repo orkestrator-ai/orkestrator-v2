@@ -10,10 +10,12 @@ import "./testing/unit-test-env.js";
 import {
   ONE_PIXEL_PNG,
   nativeFetch,
+  sharedBridge,
   spawnBridge,
   stopChild,
   temporaryDirectory,
   waitFor,
+  waitForExit,
 } from "./acp-test-harness.js";
 import { formatAcpRpcError } from "./acp-errors.js";
 import {
@@ -26,6 +28,11 @@ import {
   turnTerminalError,
 } from "./acp-prompt.js";
 import { PROMPT_TIMEOUT_MS, type AcpProcess, type SessionState } from "./acp-context.js";
+
+// One bridge for every test that neither restarts it, reads its state
+// directory, nor needs its own working directory; each opens its own session,
+// and the agent switches are per test.
+const shared = sharedBridge();
 
 describe("retriableProviderError and limits", () => {
   test.each([
@@ -349,11 +356,13 @@ describe("ACP bridge", () => {
   });
 
   test("ignores an agent's live echo of the user prompt", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_ECHO_USER_PROMPT: "1" } });
+    await shared.agentEnv({ FAKE_ACP_ECHO_USER_PROMPT: "1" });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -381,7 +390,7 @@ describe("ACP bridge", () => {
   });
 
   test("drives an ACP session and rehydrates a parked permission", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
 
     const unauthorized = await nativeFetch(`${base}/session/create`, { method: "POST" });
     expect(unauthorized.status).toBe(401);
@@ -391,6 +400,7 @@ describe("ACP bridge", () => {
     });
     expect(createdResponse.status).toBe(201);
     const created = (await createdResponse.json()) as { id: string };
+    shared.track(created.id);
 
     const promptResponse = await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -513,7 +523,7 @@ describe("ACP bridge", () => {
     expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
 
     first.child.kill("SIGTERM");
-    await Bun.sleep(200);
+    await waitForExit(first.child);
     const second = await spawnBridge({ stateDirectory });
     const restored = await readSession(second.base, second.headers);
     expect(restored.contextUsage).toMatchObject({
@@ -531,12 +541,13 @@ describe("ACP bridge", () => {
   });
 
   test("reads ACP v2 idle state_update.usage without PromptResponse.usage", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify({ clientSessionKey: "env-usage-state:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     const readSession = async () =>
       (await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
@@ -578,12 +589,13 @@ describe("ACP bridge", () => {
   });
 
   test("fails a structured turn when one response exhausts the per-message limit", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-many-structured" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -615,6 +627,8 @@ describe("ACP bridge", () => {
   });
 
   test("does not fail a structured turn whose back-to-back calls outnumber a row", async () => {
+    // Ends with the turn still running, and closing a session whose turn never
+    // answers its cancel waits out the whole cancel budget, so it gets its own bridge.
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -709,11 +723,12 @@ describe("ACP bridge", () => {
   });
 
   test("answers whether a request id was ever dispatched", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const dispatchStatus = (requestId: string) =>
       nativeFetch(
         `${bridge.base}/session/${created.id}/dispatch?requestId=${encodeURIComponent(requestId)}`,
@@ -810,17 +825,17 @@ describe("ACP bridge", () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "attach-load-barrier-lifecycle.log");
     const counterFile = resolve(directory, "attach-load-barrier-prompts.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_LOAD_DELAY_MS: "800",
-      },
+    await shared.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_LOAD_DELAY_MS: "800",
     });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     process.kill(
       Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
       "SIGKILL",
@@ -878,27 +893,27 @@ describe("ACP bridge", () => {
   });
 
   /**
-   * Spawns a bridge whose fake agent holds every composer RPC until the test
+   * Starts a session whose fake agent holds every composer RPC until the test
    * creates `release`, and logs each one it receives to `requests`. A race
    * between a patch and another request then always overlaps: two loopback
    * requests sent together are not guaranteed to, so the patch could finish
    * before the bridge even reads the other one.
    */
-  async function spawnHeldConfigBridge(name: string) {
+  async function startHeldConfigSession(name: string) {
     const directory = await temporaryDirectory();
     const requestFile = resolve(directory, `${name}-config-requests.log`);
     const releaseFile = resolve(directory, `${name}-release-config`);
     const promptFile = resolve(directory, `${name}-prompts.log`);
-    const { base, headers } = await spawnBridge({
-      env: {
-        FAKE_ACP_CONFIG_REQUEST_FILE: requestFile,
-        FAKE_ACP_HOLD_CONFIG_FILE: releaseFile,
-        FAKE_ACP_COUNTER_FILE: promptFile,
-      },
+    await shared.agentEnv({
+      FAKE_ACP_CONFIG_REQUEST_FILE: requestFile,
+      FAKE_ACP_HOLD_CONFIG_FILE: releaseFile,
+      FAKE_ACP_COUNTER_FILE: promptFile,
     });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     const session = `${base}/session/${created.id}`;
     const readLog = (file: string) => fs.readFile(file, "utf8").catch(() => "");
     return {
@@ -935,7 +950,7 @@ describe("ACP bridge", () => {
   }
 
   test("rejects a second composer patch that races one already applying", async () => {
-    const bridge = await spawnHeldConfigBridge("patch-race");
+    const bridge = await startHeldConfigSession("patch-race");
     const before = await bridge.composer();
     expect(before.selectedModelId).toBe("composer-2.5");
     expect(before.selectedReasoningId).toBe("medium");
@@ -969,7 +984,7 @@ describe("ACP bridge", () => {
   });
 
   test("rejects a prompt that races an in-flight composer patch", async () => {
-    const bridge = await spawnHeldConfigBridge("patch-then-prompt");
+    const bridge = await startHeldConfigSession("patch-then-prompt");
 
     const config = bridge.patch({ modelId: "gpt-5.5" });
     await bridge.whenConfigHeld();
@@ -996,15 +1011,15 @@ describe("ACP bridge", () => {
     const directory = await temporaryDirectory();
     const requestFile = resolve(directory, "turn-then-patch-config-requests.log");
     const holdTurnFile = resolve(directory, "release-turn");
-    const { base, headers } = await spawnBridge({
-      env: {
-        FAKE_ACP_CONFIG_REQUEST_FILE: requestFile,
-        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
-      },
+    await shared.agentEnv({
+      FAKE_ACP_CONFIG_REQUEST_FILE: requestFile,
+      FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
     });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     const session = `${base}/session/${created.id}`;
     const patch = () =>
       nativeFetch(`${session}/config`, {
@@ -1055,10 +1070,11 @@ describe("ACP bridge", () => {
   });
 
   test("fails an oversized structured turn rather than parsing a cut answer", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1080,10 +1096,11 @@ describe("ACP bridge", () => {
   });
 
   test("uses only the current turn when parsing structured output", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     const prompt = async (text: string, requestId: string) => {
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
@@ -1117,10 +1134,11 @@ describe("ACP bridge", () => {
   });
 
   test("answers Grok's use_tool permission for an Orkestrator tool without a person", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1141,7 +1159,7 @@ describe("ACP bridge", () => {
   });
 
   test("answers the agent's own permission requests under an auto-approve policy", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
@@ -1155,6 +1173,7 @@ describe("ACP bridge", () => {
         },
       }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1171,10 +1190,11 @@ describe("ACP bridge", () => {
   });
 
   test("holds use_tool for any other tool, reports waiting, and denies with the reject option", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1214,10 +1234,11 @@ describe("ACP bridge", () => {
   });
 
   test("records why a turn the agent cut short did not complete", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     const turn = async (prompt: string, requestId: string) => {
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
@@ -1252,10 +1273,11 @@ describe("ACP bridge", () => {
   });
 
   test("a turn the user cancelled is not recorded as a failure", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1280,10 +1302,11 @@ describe("ACP bridge", () => {
   });
 
   test("denies pending permission when cancelled", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1306,10 +1329,12 @@ describe("ACP bridge", () => {
   test("rejects a concurrent second turn that carries a different requestId", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "distinct-prompts.log");
-    const { base, headers } = await spawnBridge({ env: { FAKE_ACP_COUNTER_FILE: counterFile } });
+    await shared.agentEnv({ FAKE_ACP_COUNTER_FILE: counterFile });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
 
     // The first prompt parks on a permission, so the turn is still running.
     const [first, second] = await Promise.all([
@@ -1333,10 +1358,11 @@ describe("ACP bridge", () => {
   });
 
   test("keeps live approvals when a superseded agent process exits", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1379,12 +1405,12 @@ describe("ACP bridge", () => {
   test("drops approvals when the agent that parked them dies", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "approval-death.log");
-    const { base, headers } = await spawnBridge({
-      env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile },
-    });
+    await shared.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -1607,16 +1633,16 @@ describe("ACP bridge", () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "attach-busy-lifecycle.log");
     const holdTurnFile = resolve(directory, "release-turn");
-    const { base, headers } = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
-      },
+    await shared.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
     });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const startsBefore = (await fs.readFile(lifecycleFile, "utf8")).match(/^start:/gm)?.length ?? 0;
 
     expect(

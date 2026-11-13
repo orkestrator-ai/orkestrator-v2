@@ -1,4 +1,5 @@
 import { eventSink } from "../src/core/backend-emit.js";
+import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "../src/core/commands-server-health.js";
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
@@ -80,6 +81,13 @@ export async function createCommandFixtures() {
   if (!liveDocker) {
     process.env.DOCKER_HOST = `unix://${path.join(os.tmpdir(), `orkestrator-no-docker-${process.pid}.sock`)}`;
   }
+
+  // A real bridge start or stop polls its port on production intervals
+  // (200 ms readiness, 100 ms exit, 500 ms reuse retry), so most of a fixture
+  // test's wall time was spent between probes. The override shortens only the
+  // interval; the time a start or stop may take before it gives up is unchanged.
+  const originalLocalServerPoll = process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV];
+  process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV] = "20";
 
   const ptyProcesses: MockPtyProcess[] = [];
 
@@ -731,15 +739,27 @@ export async function createCommandFixtures() {
     return { context, updates, emitted };
   }
 
-  const localProjectForCreatePath = await createGitRepoOnBranch("main");
-  const LOCAL_PROJECT_FOR_CREATE = {
-    id: "project-1",
-    name: "Project",
-    gitUrl: localProjectForCreatePath,
-    localPath: localProjectForCreatePath,
-    addedAt: new Date(0).toISOString(),
-    order: 0,
-  };
+  // Building the repo costs five git spawns and only one test file reads it, so
+  // it is created on first use instead of on every import of this module.
+  let localProjectForCreate: Promise<{
+    id: string;
+    name: string;
+    gitUrl: string;
+    localPath: string;
+    addedAt: string;
+    order: number;
+  }> | null = null;
+  function getLocalProjectForCreate() {
+    localProjectForCreate ??= createGitRepoOnBranch("main").then((repoPath) => ({
+      id: "project-1",
+      name: "Project",
+      gitUrl: repoPath,
+      localPath: repoPath,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    }));
+    return localProjectForCreate;
+  }
 
   /**
    * A `fetchedAt` the catalog cache will accept as fresh.
@@ -1628,6 +1648,8 @@ exit 0
       shutdownRuntimes();
       if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
       else process.env.DOCKER_HOST = originalDockerHost;
+      if (originalLocalServerPoll === undefined) delete process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV];
+      else process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV] = originalLocalServerPoll;
       cancelScheduledEnvironmentCleanup(DEFAULT_DATA_DIR);
       closeEnvironmentCleanupStorage(DEFAULT_DATA_DIR);
       await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -1644,7 +1666,7 @@ exit 0
     GitRemoteTimeoutError,
     ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
     EnvironmentLifecycleTaskTracker,
-    LOCAL_PROJECT_FOR_CREATE,
+    getLocalProjectForCreate,
     RUNNING_CONTAINER_DOCKER_SCRIPT,
     FIXTURE_DOCKER_OWNER,
     ownedContainerInspect,

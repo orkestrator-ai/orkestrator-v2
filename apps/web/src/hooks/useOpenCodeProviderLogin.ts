@@ -3,7 +3,7 @@ import type { OpenCodeProviderLoginProgress } from "@orkestrator/protocol/openco
 import { useAccountMachine } from "@/components/settings/account-machine";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
-const POLL_INTERVAL_MS = 1_500;
+export const OPENCODE_LOGIN_POLL_INTERVAL_MS = 1_500;
 const IDLE: OpenCodeProviderLoginProgress = { state: "idle" };
 
 function messageOf(cause: unknown): string {
@@ -81,9 +81,9 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
       } catch {
         /* Retry transient read failures while observing backend state. */
       }
-      if (active) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      if (active) timer = setTimeout(() => void poll(), OPENCODE_LOGIN_POLL_INTERVAL_MS);
     };
-    timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+    timer = setTimeout(() => void poll(), OPENCODE_LOGIN_POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearTimeout(timer);

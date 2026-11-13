@@ -164,27 +164,36 @@ describe("packaged client entrypoint", () => {
   });
 });
 
+/*
+ * Each real-backend test owns its root, data directory and `--port 0` backend and
+ * only waits on subprocesses, so they run concurrently: the file then costs its
+ * slowest scenario (`setup-failure`) instead of the sum of all of them.
+ */
 describe("packaged client against a real backend", () => {
-  test("publishes a private instance descriptor without the credential and removes it on shutdown", async () => {
-    const root = await newScenarioRoot("descriptor");
-    directories.push(root);
-    const backend = await startIsolatedBackend({ root });
-    try {
-      const file = path.join(backend.dataDir, "backend-instance.json");
-      const mode = (await stat(file)).mode & 0o777;
-      expect(mode).toBe(0o600);
-      const text = await readFile(file, "utf8");
-      const token = JSON.parse(await readFile(backend.descriptor.authFile, "utf8")).token as string;
-      expect(text).not.toContain(token);
-      expect(backend.descriptor.pid).toBe(backend.process.pid);
-    } finally {
-      expect(await backend.stop()).toBe(0);
-    }
-    await expect(stat(path.join(backend.dataDir, "backend-instance.json"))).rejects.toThrow();
-  });
+  test.concurrent(
+    "publishes a private instance descriptor without the credential and removes it on shutdown",
+    async () => {
+      const root = await newScenarioRoot("descriptor");
+      directories.push(root);
+      const backend = await startIsolatedBackend({ root });
+      try {
+        const file = path.join(backend.dataDir, "backend-instance.json");
+        const mode = (await stat(file)).mode & 0o777;
+        expect(mode).toBe(0o600);
+        const text = await readFile(file, "utf8");
+        const token = JSON.parse(await readFile(backend.descriptor.authFile, "utf8"))
+          .token as string;
+        expect(text).not.toContain(token);
+        expect(backend.descriptor.pid).toBe(backend.process.pid);
+      } finally {
+        expect(await backend.stop()).toBe(0);
+      }
+      await expect(stat(path.join(backend.dataDir, "backend-instance.json"))).rejects.toThrow();
+    },
+  );
 
   for (const name of ["read-only", "local-lifecycle", "retry-and-retention", "setup-failure"]) {
-    test(`scenario: ${name}`, async () => {
+    test.concurrent(`scenario: ${name}`, async () => {
       const definition = SCENARIOS.find((scenario) => scenario.name === name)!;
       const root = await newScenarioRoot(name);
       const backend = await startIsolatedBackend({ root });
@@ -218,15 +227,17 @@ describe("packaged client against a real backend", () => {
   }
 });
 
-test("packaged scenario backend receives the sanitized isolated environment", async () => {
-  const root = await scratch();
-  const shell = path.join(root, "fixture-shell");
-  const capture = path.join(root, "startup-env.json");
-  // The login shell is the first child. Write only fixture paths and presence
-  // bits, never inherited credential contents.
-  await Bun.write(
-    shell,
-    `#!/bin/sh
+test.concurrent(
+  "packaged scenario backend receives the sanitized isolated environment",
+  async () => {
+    const root = await scratch();
+    const shell = path.join(root, "fixture-shell");
+    const capture = path.join(root, "startup-env.json");
+    // The login shell is the first child. Write only fixture paths and presence
+    // bits, never inherited credential contents.
+    await Bun.write(
+      shell,
+      `#!/bin/sh
 exec "$ORKESTRATOR_SCENARIO_BUN" -e '
   await Bun.write(process.env.ORKESTRATOR_SCENARIO_CAPTURE, JSON.stringify({
     credentialSource: Object.hasOwn(process.env, "ORKESTRATOR_CREDENTIAL_SOURCE"),
@@ -242,39 +253,40 @@ exec "$ORKESTRATOR_SCENARIO_BUN" -e '
   process.stdout.write(process.env.PATH);
 '
 `,
-  );
-  const { chmod } = await import("node:fs/promises");
-  await chmod(shell, 0o700);
-  const backend = await startIsolatedBackend({
-    root,
-    env: {
-      SHELL: shell,
-      ORKESTRATOR_SCENARIO_BUN: process.execPath,
-      ORKESTRATOR_SCENARIO_CAPTURE: capture,
-      ORKESTRATOR_CREDENTIAL_SOURCE: "claude",
-      ORKESTRATOR_AGENT_TEST_HOST_HOME: "host-home-must-not-survive",
-      ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "host-claude-must-not-survive",
-      ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR: "host-pi-must-not-survive",
-      CLAUDE_CONFIG_DIR: "host-claude",
-      CODEX_HOME: "host-codex",
-      XDG_DATA_HOME: "host-data",
-      ORKESTRATOR_AGENT_MCP_URL: "parent-url",
-      ORKESTRATOR_AGENT_MCP_TOKEN: "parent-token",
-    },
-  });
-  try {
-    expect(JSON.parse(await readFile(capture, "utf8"))).toEqual({
-      credentialSource: false,
-      hostHome: false,
-      hostClaude: false,
-      hostPi: false,
-      claude: path.join(root, "provider-homes", "claude"),
-      codex: path.join(root, "provider-homes", "codex"),
-      xdg: path.join(root, "provider-homes", "xdg-data"),
-      mcpUrl: false,
-      mcpToken: false,
+    );
+    const { chmod } = await import("node:fs/promises");
+    await chmod(shell, 0o700);
+    const backend = await startIsolatedBackend({
+      root,
+      env: {
+        SHELL: shell,
+        ORKESTRATOR_SCENARIO_BUN: process.execPath,
+        ORKESTRATOR_SCENARIO_CAPTURE: capture,
+        ORKESTRATOR_CREDENTIAL_SOURCE: "claude",
+        ORKESTRATOR_AGENT_TEST_HOST_HOME: "host-home-must-not-survive",
+        ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "host-claude-must-not-survive",
+        ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR: "host-pi-must-not-survive",
+        CLAUDE_CONFIG_DIR: "host-claude",
+        CODEX_HOME: "host-codex",
+        XDG_DATA_HOME: "host-data",
+        ORKESTRATOR_AGENT_MCP_URL: "parent-url",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "parent-token",
+      },
     });
-  } finally {
-    expect(await backend.stop()).toBe(0);
-  }
-});
+    try {
+      expect(JSON.parse(await readFile(capture, "utf8"))).toEqual({
+        credentialSource: false,
+        hostHome: false,
+        hostClaude: false,
+        hostPi: false,
+        claude: path.join(root, "provider-homes", "claude"),
+        codex: path.join(root, "provider-homes", "codex"),
+        xdg: path.join(root, "provider-homes", "xdg-data"),
+        mcpUrl: false,
+        mcpToken: false,
+      });
+    } finally {
+      expect(await backend.stop()).toBe(0);
+    }
+  },
+);

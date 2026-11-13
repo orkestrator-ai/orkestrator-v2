@@ -8,26 +8,50 @@ import {
   ONE_PIXEL_PNG,
   here,
   nativeFetch,
+  sharedBridge,
   spawnBridge,
+  type SpawnedBridge,
   stopChild,
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  // One bridge per bridge-level environment for every test that does not restart
+  // it, read its state directory or set its own bridge variable; each test opens
+  // its own session and sets the fake agent's switches with `agentEnv`.
+  const fixture = sharedBridge();
+  const grok = sharedBridge({ ACP_PROVIDER: "grok" });
+  // `GROK_FOLDER_TRUST=1` is the inherited value the bridge must override, so
+  // it is part of this bridge's environment, not of the others'.
+  const grokTrust = sharedBridge({
+    ACP_PROVIDER: "grok",
+    GROK_FOLDER_TRUST: "1",
+    ORKESTRATOR_BRIDGE_EXECUTION_POLICY: undefined,
+  });
+
   for (const scenario of ["trusted", "untrusted", "read-only", "coordinator", "probe"] as const) {
     test(`passes effective ${scenario} project trust through the actual Grok spawn`, async () => {
       const directory = await temporaryDirectory();
       const spawnFile = resolve(directory, "spawn.jsonl");
-      const bridge = await spawnBridge({
-        env: {
-          ACP_PROVIDER: "grok",
-          GROK_FOLDER_TRUST: "1",
-          FAKE_ACP_SPAWN_FILE: spawnFile,
-          ORKESTRATOR_BRIDGE_EXECUTION_POLICY:
-            scenario === "coordinator" ? "coordinator-read-only" : undefined,
-        },
-      });
+      // The execution policy is a bridge-level variable, so only that scenario
+      // needs a bridge of its own.
+      let bridge: SpawnedBridge;
+      let track: (sessionId: string) => void = () => {};
+      if (scenario === "coordinator") {
+        bridge = await spawnBridge({
+          env: {
+            ACP_PROVIDER: "grok",
+            GROK_FOLDER_TRUST: "1",
+            FAKE_ACP_SPAWN_FILE: spawnFile,
+            ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+          },
+        });
+      } else {
+        await grokTrust.agentEnv({ FAKE_ACP_SPAWN_FILE: spawnFile });
+        bridge = grokTrust;
+        track = (sessionId) => grokTrust.track(sessionId);
+      }
       const response =
         scenario === "probe"
           ? await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers })
@@ -46,6 +70,7 @@ describe("ACP bridge", () => {
               }),
             });
       expect(response.status).toBe(scenario === "probe" ? 200 : 201);
+      if (scenario !== "probe") track(((await response.clone().json()) as { id: string }).id);
       const launches = (await fs.readFile(spawnFile, "utf8"))
         .trim()
         .split("\n")
@@ -147,17 +172,16 @@ describe("ACP bridge", () => {
     test(`lists and resumes provider-owned ${acpProvider} sessions`, async () => {
       const directory = await temporaryDirectory();
       const lifecycleFile = resolve(directory, `${acpProvider}-resume-lifecycle.log`);
-      const bridge = await spawnBridge({
-        env: {
-          ACP_PROVIDER: acpProvider,
-          FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-          FAKE_ACP_REPLAY_HISTORY: "1",
-        },
+      const bridge = acpProvider === "grok" ? grok : fixture;
+      await bridge.agentEnv({
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_REPLAY_HISTORY: "1",
       });
       const created = (await nativeFetch(`${bridge.base}/session/create`, {
         method: "POST",
         headers: bridge.headers,
       }).then((response) => response.json())) as { id: string };
+      bridge.track(created.id);
 
       const firstListResponse = await nativeFetch(`${bridge.base}/session/list`, {
         headers: bridge.headers,
@@ -205,6 +229,7 @@ describe("ACP bridge", () => {
         sessionId: string;
         status: string;
       };
+      bridge.track(resumedMeta.sessionId);
       const resumed = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
         headers: bridge.headers,
       }).then((response) => response.json())) as {
@@ -243,7 +268,8 @@ describe("ACP bridge", () => {
 
   for (const env of ["FAKE_ACP_LIST_MISSING_CWD", "FAKE_ACP_LIST_WRONG_CWD"] as const) {
     test(`does not list ACP sessions with ${env}`, async () => {
-      const bridge = await spawnBridge({ env: { [env]: "1" } });
+      await fixture.agentEnv({ [env]: "1" });
+      const bridge = fixture;
       const response = await nativeFetch(`${bridge.base}/session/list`, {
         headers: bridge.headers,
       });
@@ -255,12 +281,11 @@ describe("ACP bridge", () => {
   test("stops paging when the agent repeats a cursor it already issued", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "looping-cursors.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIST_REPEAT_CURSOR: "1",
-        FAKE_ACP_LIST_COUNTER_FILE: counterFile,
-      },
+    await fixture.agentEnv({
+      FAKE_ACP_LIST_REPEAT_CURSOR: "1",
+      FAKE_ACP_LIST_COUNTER_FILE: counterFile,
     });
+    const bridge = fixture;
 
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
@@ -346,12 +371,13 @@ describe("ACP bridge", () => {
   }
 
   test("carries launch arguments across a rawInput patch that drops them", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-preserve-non-task:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
 
     expect(
       (
@@ -410,11 +436,12 @@ describe("ACP bridge", () => {
     { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure", durationMs: null },
   ] as const) {
     test(`settles Cursor's in-process child via ${terminal.prompt} as ${terminal.agentState}`, async () => {
-      const { base, headers } = await spawnBridge();
+      const { base, headers } = fixture;
       const created = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
       }).then((response) => response.json())) as { id: string };
+      fixture.track(created.id);
       const read = async () =>
         nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
           response.json(),
@@ -489,15 +516,13 @@ describe("ACP bridge", () => {
     test(`answers Cursor's cursor/task request for ${request.label} and settles it`, async () => {
       const directory = await temporaryDirectory();
       const responseFile = resolve(directory, "cursor-task-response.log");
-      const { base, headers } = await spawnBridge({
-        env: {
-          FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile,
-        },
-      });
+      await fixture.agentEnv({ FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile });
+      const { base, headers } = fixture;
       const created = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
       }).then((response) => response.json())) as { id: string };
+      fixture.track(created.id);
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
@@ -574,11 +599,12 @@ describe("ACP bridge", () => {
   // card an anonymous "Subagent task" with no prompt and no `agentId` — and
   // with no `agentId` the child's transcript can never be found.
   test("keeps the metadata of a foreground Task that settled before cursor/task", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
     const read = async () =>
       nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
         response.json(),
@@ -650,11 +676,12 @@ describe("ACP bridge", () => {
     },
   ] as const) {
     test(`ignores a cursor/task that ${ignored.reason}`, async () => {
-      const { base, headers } = await spawnBridge();
+      const { base, headers } = fixture;
       const created = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
       }).then((response) => response.json())) as { id: string };
+      fixture.track(created.id);
       const read = async () =>
         nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
           response.json(),
@@ -746,12 +773,13 @@ describe("ACP bridge", () => {
     { prompt: "BACKGROUNDSUBAGENTSTATUS", label: "past a completed launch result" },
   ] as const) {
     test(`tracks Grok's metadata-described sub-agent ${launch.label}`, async () => {
-      const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+      const { base, headers } = grok;
       const created = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
         body: JSON.stringify({ clientSessionKey: `env-grok-${launch.prompt}:tab-1` }),
       }).then((response) => response.json())) as { id: string };
+      grok.track(created.id);
 
       expect(
         (
@@ -841,11 +869,12 @@ describe("ACP bridge", () => {
   }
 
   test("shows Grok credit exhaustion on a failed sub-agent card", async () => {
-    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const { base, headers } = grok;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    grok.track(created.id);
     const read = () =>
       nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
         response.json(),
@@ -885,12 +914,13 @@ describe("ACP bridge", () => {
   });
 
   test("renders a placeholder when both file states exceed the inline limit", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-huge" }),
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -922,12 +952,13 @@ describe("ACP bridge", () => {
   });
 
   test("falls back to a bounded block diff when an edit exceeds the search distance", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-wide" }),
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
 
     const startedAt = Date.now();
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
@@ -965,12 +996,13 @@ describe("ACP bridge", () => {
   });
 
   test("ignores an empty supplied diff and renders the file states instead", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-empty" }),
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -1042,11 +1074,12 @@ describe("ACP bridge", () => {
   });
 
   test("surfaces Grok credit exhaustion instead of its generic ACP error", async () => {
-    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const { base, headers } = grok;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    grok.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -1110,17 +1143,17 @@ describe("ACP bridge", () => {
     // The turn stays open until the test releases it, so the probe after the
     // acceptance cannot race the agent ending the turn.
     const holdTurnFile = resolve(directory, "release-turn");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_LOAD_DELAY_MS: "800",
-        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
-      },
+    await fixture.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_LOAD_DELAY_MS: "800",
+      FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
     });
+    const bridge = fixture;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    fixture.track(created.id);
     process.kill(
       Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
       "SIGKILL",
@@ -1176,12 +1209,14 @@ describe("ACP bridge", () => {
   test("rejects unsupported vendor requests instead of acknowledging them", async () => {
     const directory = await temporaryDirectory();
     const responseFile = resolve(directory, "vendor-response.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_VENDOR_REQUEST_FILE: responseFile } });
+    await fixture.agentEnv({ FAKE_ACP_VENDOR_REQUEST_FILE: responseFile });
+    const bridge = fixture;
     const created = await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     });
     expect(created.status).toBe(201);
+    fixture.track(((await created.json()) as { id: string }).id);
     const response = await waitFor(
       () =>
         fs
@@ -1198,10 +1233,11 @@ describe("ACP bridge", () => {
   });
 
   test("recovers structured JSON after thinking or commentary in the text channel", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    fixture.track(created.id);
     const prompt = async (text: string, requestId: string) => {
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
@@ -1279,7 +1315,7 @@ describe("ACP bridge", () => {
   });
 
   test("normalizes Cursor ACP config into composer state and applies patches", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = fixture;
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
@@ -1297,6 +1333,7 @@ describe("ACP bridge", () => {
         modes: Array<{ id: string }>;
       };
     };
+    fixture.track(session.id);
     expect(session.composer.models.map((model) => model.id)).toEqual(["composer-2.5", "gpt-5.5"]);
     expect(session.composer.models[0]).toMatchObject({
       platform: "acp-fixture",
@@ -1338,7 +1375,7 @@ describe("ACP bridge", () => {
   });
 
   test("normalizes Grok ACP models and reasoning without leaking vendor wire", async () => {
-    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const { base, headers } = grok;
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
@@ -1353,6 +1390,7 @@ describe("ACP bridge", () => {
         selectedReasoningId?: string;
       };
     };
+    grok.track(session.id);
     expect(session.composer.selectedModelId).toBe("grok-build");
     expect(session.composer.selectedReasoningId).toBe("high");
     expect(session.composer.models[0]?.reasoning?.map((option) => option.id)).toEqual([

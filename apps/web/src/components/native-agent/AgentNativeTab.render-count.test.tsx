@@ -15,6 +15,11 @@ import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { Profiler } from "react";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { CHAT_COLUMN_SHIFT_SETTLE_MS } from "@/components/chat/chat-column-shift";
+import {
+  installControlledTimeout,
+  type ControlledTimeout,
+} from "../../../../../tests/helpers/controlled-timeout";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTabData,
@@ -282,9 +287,16 @@ const freshTab: NativeAgentTabData = {
 const unassignedTab: NativeAgentTabData = { environmentId: "env-1" };
 
 let commits = 0;
+/** The chat shells' slide-on timer, so a test does not wait out its 400 ms. */
+let shellClock: ControlledTimeout;
 
 beforeEach(() => {
   commits = 0;
+  // At most the tab's own shell and the one a floating notice layer adds.
+  shellClock = installControlledTimeout(CHAT_COLUMN_SHIFT_SETTLE_MS, {
+    maxPending: 2,
+    label: "chat column shift settle",
+  });
   identity = identityFor(OWN_TAB);
   served = transcript;
   humanPrompts = [];
@@ -310,6 +322,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Unmounting clears every shell's timer, so none may be left to drop.
+  expect(shellClock.restore()).toBe(0);
   appCommandStore(nativeAgentProjectionStore).getState().reset();
   appCommandStore(paneLayoutStore).setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
   appCommandStore(configStore).getState().updateGlobalConfig(initialGlobalConfig);
@@ -321,9 +335,9 @@ afterEach(() => {
 /**
  * A chat shell renders once more `CHAT_COLUMN_SHIFT_SETTLE_MS` after it
  * mounts, to turn its column slide on (`useChatColumnShiftStyle`). Until then
- * its root carries a zero slide duration. A quiet 40 ms interval can end
- * before that timer fires, and its commit then lands inside the next
- * measurement, so settling also waits for every mounted shell to finish.
+ * its root carries a zero slide duration. That timer runs on `shellClock`, and
+ * settling fires it, so its commit lands before the measurement starts rather
+ * than inside it. Settling also waits for every mounted shell to finish.
  */
 function chatShellSettling(): boolean {
   return Array.from(document.querySelectorAll<HTMLElement>("[style]")).some(
@@ -337,6 +351,7 @@ async function settle(): Promise<void> {
   while (previous !== commits || chatShellSettling()) {
     previous = commits;
     await act(async () => {
+      shellClock.advance();
       await new Promise((resolve) => setTimeout(resolve, 40));
     });
   }

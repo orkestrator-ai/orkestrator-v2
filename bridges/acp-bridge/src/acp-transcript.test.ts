@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import {
   BRIDGE_STARTUP_TIMEOUT_MS,
   nativeFetch,
+  sharedBridge,
   spawnBridge,
   stopChild,
   temporaryDirectory,
@@ -13,19 +14,26 @@ import {
 import { MAX_HISTORY_MESSAGE_IDS, MAX_MESSAGES } from "./acp-context.js";
 
 describe("ACP bridge", () => {
+  // One bridge for every test that neither restarts it nor reads its state
+  // directory; each opens its own session, which the helper closes afterwards.
+  // Some tests end with their turn still running, and closing then waits for
+  // the agent to answer `session/cancel` (2 s by default). Nothing here asserts
+  // on closing, so the wait is shortened rather than paid per test.
+  const shared = sharedBridge({ ACP_CLOSE_CANCEL_WAIT_MS: "200" });
+
   test("does not replay history into a transcript the bridge already holds", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "reconnect-replay.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_REPLAY_HISTORY: "1",
-      },
+    await shared.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_REPLAY_HISTORY: "1",
     });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
       method: "POST",
       headers: bridge.headers,
@@ -52,6 +60,7 @@ describe("ACP bridge", () => {
     });
     expect(resumed.status).toBe(201);
     const resumedMeta = (await resumed.json()) as { sessionId: string };
+    shared.track(resumedMeta.sessionId);
     const after = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as {
@@ -73,7 +82,8 @@ describe("ACP bridge", () => {
   });
 
   test("hydrates replayed history that carries no provider message ids", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_NO_MESSAGE_IDS: "1" } });
+    await shared.agentEnv({ FAKE_ACP_REPLAY_NO_MESSAGE_IDS: "1" });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -86,6 +96,7 @@ describe("ACP bridge", () => {
     });
     expect(resumed.status).toBe(201);
     const resumedMeta = (await resumed.json()) as { sessionId: string };
+    shared.track(resumedMeta.sessionId);
     const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as {
@@ -113,13 +124,10 @@ describe("ACP bridge", () => {
   });
 
   test("bounds remembered provider message ids during a large replay", async () => {
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_REPLAY_MESSAGE_COUNT: String(
-          Math.max(MAX_MESSAGES, MAX_HISTORY_MESSAGE_IDS) + 200,
-        ),
-      },
+    await shared.agentEnv({
+      FAKE_ACP_REPLAY_MESSAGE_COUNT: String(Math.max(MAX_MESSAGES, MAX_HISTORY_MESSAGE_IDS) + 200),
     });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -132,6 +140,7 @@ describe("ACP bridge", () => {
     });
     expect(resumed.status).toBe(201);
     const resumedMeta = (await resumed.json()) as { sessionId: string };
+    shared.track(resumedMeta.sessionId);
     const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as {
@@ -394,12 +403,13 @@ describe("ACP bridge", () => {
   });
 
   test("applies Cursor's cursor/task notification onto the matching Task launch", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -452,14 +462,14 @@ describe("ACP bridge", () => {
   test("acknowledges a cursor/task request instead of refusing it", async () => {
     const directory = await temporaryDirectory();
     const responseFile = resolve(directory, "cursor-task-response.log");
-    const { base, headers } = await spawnBridge({
-      env: { FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile },
-    });
+    await shared.agentEnv({ FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-request:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -513,12 +523,13 @@ describe("ACP bridge", () => {
   });
 
   test("keeps cursor/task launch args after a later generic Task rawInput patch", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-wipe:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -559,12 +570,13 @@ describe("ACP bridge", () => {
   });
 
   test("stamps Cursor updateTodos from cursor/update_todos onto the matching tool call", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-todos:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -615,14 +627,14 @@ describe("ACP bridge", () => {
   test("acknowledges a cursor/update_todos request instead of refusing it", async () => {
     const directory = await temporaryDirectory();
     const responseFile = resolve(directory, "cursor-todos-response.log");
-    const { base, headers } = await spawnBridge({
-      env: { FAKE_ACP_CURSOR_TODOS_REQUEST_FILE: responseFile },
-    });
+    await shared.agentEnv({ FAKE_ACP_CURSOR_TODOS_REQUEST_FILE: responseFile });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-todos-request:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -679,12 +691,13 @@ describe("ACP bridge", () => {
   });
 
   test("merges a later cursor/update_todos into the existing list", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-todos-merge:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -732,12 +745,13 @@ describe("ACP bridge", () => {
   });
 
   test("replaces the Cursor todo list when merge is false", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-todos-replace:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -880,12 +894,13 @@ describe("ACP bridge", () => {
   });
 
   test("creates a single updateTodos part when cursor/update_todos arrives before the tool_call", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-todos-first:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -926,12 +941,13 @@ describe("ACP bridge", () => {
   });
 
   test("stamps Grok todo_write rawInput onto a Todo Write part", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-todo-write:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -980,12 +996,13 @@ describe("ACP bridge", () => {
   });
 
   test("keeps each todo_write row on its own list when completions arrive late", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-todo-interleaved:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1042,12 +1059,13 @@ describe("ACP bridge", () => {
   });
 
   test("merges a later Grok todo_write when merge is omitted", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-todo-merge:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1096,12 +1114,13 @@ describe("ACP bridge", () => {
   });
 
   test("renders an ACP plan update as a single todo_list part", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-plan:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1151,12 +1170,13 @@ describe("ACP bridge", () => {
   });
 
   test("renders a v2 plan_update as a single todo_list part", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-plan-update:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1200,12 +1220,13 @@ describe("ACP bridge", () => {
   });
 
   test("folds a later ACP plan into the same Grok todo_write part", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-todo-and-plan:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1254,12 +1275,13 @@ describe("ACP bridge", () => {
   });
 
   test("retargets a synthetic ACP plan part when todo_write arrives later", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-plan-then-todo:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1305,12 +1327,13 @@ describe("ACP bridge", () => {
   });
 
   test("merges a later Grok todo_write into a synthetic ACP plan when merge is omitted", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-plan-then-merge:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1361,12 +1384,13 @@ describe("ACP bridge", () => {
   });
 
   test("replaces the ACP plan with an empty list", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-plan-empty:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1408,12 +1432,13 @@ describe("ACP bridge", () => {
   });
 
   test("creates a single Task part when cursor/task arrives before the tool_call", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-first:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1454,12 +1479,13 @@ describe("ACP bridge", () => {
   });
 
   test("opens the next row for a synthetic cursor/task once the trailing row is full", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-cap:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1497,59 +1523,14 @@ describe("ACP bridge", () => {
     ).toHaveLength(1);
   });
 
-  test("charges a cursor/task prompt so a near-cap transcript stays inside the byte budget", async () => {
-    const maximumTranscriptBytes = 1024 * 1024;
-    const { base, headers } = await spawnBridge({
-      env: { ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes) },
-    });
-    const created = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ clientSessionKey: "env-cursor-task-charge:tab-1" }),
-    }).then((response) => response.json())) as { id: string };
-
-    expect(
-      (
-        await nativeFetch(`${base}/session/${created.id}/prompt`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ prompt: "CURSORTASKCHARGE: fill then prompt" }),
-        })
-      ).status,
-    ).toBe(202);
-
-    const settled = await waitFor(
-      async () =>
-        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
-          response.json(),
-        ) as Promise<{
-          status: string;
-          error?: string;
-          messages: Array<{ parts: Array<Record<string, unknown>> }>;
-        }>,
-      (value) => value.status === "idle",
-    );
-    expect(settled.error).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(settled.messages))).toBeLessThanOrEqual(
-      maximumTranscriptBytes,
-    );
-    const charged = settled.messages
-      .flatMap((message) => message.parts)
-      .find((part) => part.toolUseId === "cursor-task-charge");
-    expect(charged).toMatchObject({
-      toolName: "task",
-      toolArgs: { description: "Charge the prompt", subagent_type: "explore" },
-    });
-    expect((charged?.toolArgs as { prompt?: string } | undefined)?.prompt?.length).toBe(64 * 1024);
-  });
-
   test("only accepts a real cursor/task duration, never a coerced null or blank", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-durations:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1621,14 +1602,14 @@ describe("ACP bridge", () => {
   test("keeps a null-duration cursor/task running and still reports it as activity", async () => {
     const directory = await temporaryDirectory();
     const holdTurnFile = resolve(directory, "release-turn");
-    const { base, headers } = await spawnBridge({
-      env: { FAKE_ACP_HOLD_TURN_FILE: holdTurnFile },
-    });
+    await shared.agentEnv({ FAKE_ACP_HOLD_TURN_FILE: holdTurnFile });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-held:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1699,12 +1680,13 @@ describe("ACP bridge", () => {
   });
 
   test("applies a cursor/task to its launch however many rows the turn has opened since", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-cursor-task-trimmed:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1750,12 +1732,13 @@ describe("ACP bridge", () => {
   });
 
   test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify({ clientSessionKey: "env-nested-subagent:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -1813,7 +1796,8 @@ describe("ACP bridge", () => {
   });
 
   test("fails active child markers replayed while adopting provider history", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_ACTIVE_SUBAGENT: "1" } });
+    await shared.agentEnv({ FAKE_ACP_REPLAY_ACTIVE_SUBAGENT: "1" });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as {
@@ -1829,6 +1813,7 @@ describe("ACP bridge", () => {
     });
     expect(resumedResponse.status).toBe(201);
     const resumedMeta = (await resumedResponse.json()) as { sessionId: string };
+    shared.track(resumedMeta.sessionId);
     const resumed = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as {
@@ -1847,11 +1832,12 @@ describe("ACP bridge", () => {
   });
 
   test("fails a pending Task launch abandoned when its parent turn ends", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2077,113 +2063,14 @@ describe("ACP bridge", () => {
     ).toBe(false);
   });
 
-  test("settles an evicted Cursor child without rebuilding a ghost launch part", async () => {
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_MAX_TRANSCRIPT_BYTES: "1048576",
-      },
-    });
-    const created = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    }).then((response) => response.json())) as { id: string };
-    const read = async () =>
-      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
-        response.json(),
-      ) as Promise<{
-        status: string;
-        baseIndex: number;
-        messages: Array<{ parts: Array<Record<string, unknown>> }>;
-      }>;
-
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
-    });
-    await waitFor(read, (value) => value.status === "idle");
-    expect(
-      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
-        response.json(),
-      ),
-    ).toEqual({ activity: "working" });
-
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "FINISHEVICTEDCURSORSUBAGENT" }),
-    });
-    const settled = await waitFor(read, (value) => value.status === "idle");
-    expect(settled.baseIndex).toBeGreaterThan(0);
-    expect(
-      settled.messages
-        .flatMap((message) => message.parts)
-        .some((part) => part.toolUseId === "cursor-subagent-1"),
-    ).toBe(false);
-    expect(
-      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
-        response.json(),
-      ),
-    ).toEqual({ activity: "idle" });
-  });
-
-  test("settles an evicted Cursor child from cursor/task without rebuilding a ghost launch part", async () => {
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_MAX_TRANSCRIPT_BYTES: "1048576",
-      },
-    });
-    const created = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    }).then((response) => response.json())) as { id: string };
-    const read = async () =>
-      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
-        response.json(),
-      ) as Promise<{
-        status: string;
-        baseIndex: number;
-        messages: Array<{ parts: Array<Record<string, unknown>> }>;
-      }>;
-
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
-    });
-    await waitFor(read, (value) => value.status === "idle");
-    expect(
-      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
-        response.json(),
-      ),
-    ).toEqual({ activity: "working" });
-
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "FINISHEVICTEDCURSORTASK" }),
-    });
-    const settled = await waitFor(read, (value) => value.status === "idle");
-    expect(settled.baseIndex).toBeGreaterThan(0);
-    expect(
-      settled.messages
-        .flatMap((message) => message.parts)
-        .some((part) => part.toolUseId === "cursor-subagent-1"),
-    ).toBe(false);
-    expect(
-      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
-        response.json(),
-      ),
-    ).toEqual({ activity: "idle" });
-  });
-
   test("normalizes failing tool calls into failed parts with an error message", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-fail" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2219,12 +2106,13 @@ describe("ACP bridge", () => {
   });
 
   test("preserves content output when a later patch updates only raw output", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-stream" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2251,12 +2139,13 @@ describe("ACP bridge", () => {
   });
 
   test("applies nullable and replacement tool update fields without stale metadata", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-patch" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2292,12 +2181,13 @@ describe("ACP bridge", () => {
   });
 
   test("combines every ACP file diff and counts only actual changed lines", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-multi" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2333,12 +2223,13 @@ describe("ACP bridge", () => {
   });
 
   test("renders a small edit to a large file as hunks, not the whole file", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-context" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2378,12 +2269,13 @@ describe("ACP bridge", () => {
   });
 
   test("renders separated changes and file boundaries as correctly positioned hunks", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-multi-hunk" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2415,12 +2307,13 @@ describe("ACP bridge", () => {
   });
 
   test("renders an edit with no changed lines as an empty hunk", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-noop-edit" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2449,12 +2342,13 @@ describe("ACP bridge", () => {
   });
 
   test("normalizes terminal and text tool content in protocol order", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-terminal" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2480,12 +2374,13 @@ describe("ACP bridge", () => {
   });
 
   test("starts a tool call on a fresh assistant message when it leads the turn", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-lead" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2523,12 +2418,13 @@ describe("ACP bridge", () => {
   });
 
   test("bounds tool arguments, outputs, and diffs to their display limits", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-big" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2565,12 +2461,13 @@ describe("ACP bridge", () => {
   });
 
   test("trims the oldest parts, and announces it, when one response exhausts the per-message limit", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-many" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2607,12 +2504,13 @@ describe("ACP bridge", () => {
   });
 
   test("opens the next row for back-to-back calls instead of trimming one", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-many-calls" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2646,12 +2544,13 @@ describe("ACP bridge", () => {
   });
 
   test("completes an early call on its own row however many rows have opened since", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-trimmed-tool" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2686,73 +2585,6 @@ describe("ACP bridge", () => {
     ]);
     expect(session.messages[1]?.parts[0]).toMatchObject({ toolUseId: "early-1" });
     expect(parts.at(-1)).toMatchObject({ toolUseId: "filler-519" });
-  });
-
-  test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
-    const { base, headers } = await spawnBridge({
-      // The floor is reached when two parts alone still exceed the budget, and
-      // at 16 MiB the per-part caps do not add up to that. Lowering the budget
-      // is the only way to exercise it; it can only ever move downwards.
-      env: { ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024) },
-    });
-    const created = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ clientSessionKey: "env-tools:tab-trim-to-text" }),
-    }).then((response) => response.json())) as { id: string };
-
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "TRIMTOTEXT: empty the message, then speak" }),
-    });
-    // Wait on `/activity`, which never bounds the transcript. A session read
-    // does (`boundTranscriptForRead`), and one landing between the two tool
-    // parts resets the write path's byte counter, so the trim waits for the
-    // next read; the chunk then follows an untrimmed tool call and opens a row
-    // of its own, leaving the trimmed message behind it (2410). The scenario
-    // needs the trim the agent's own updates trigger, before the chunk.
-    await waitFor(
-      async () =>
-        nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
-          response.json(),
-        ) as Promise<{ activity: string }>,
-      (value) => value.activity === "idle",
-    );
-    const session = (await nativeFetch(`${base}/session/${created.id}`, { headers }).then(
-      (response) => response.json(),
-    )) as {
-      status: string;
-      error?: string;
-      messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
-    };
-    expect(session.status).toBe("idle");
-
-    // The lowered budget evicts whole messages before it trims parts, so the
-    // prompt itself is gone and the assistant message is all that is left.
-    const assistant = session.messages.at(-1)!;
-    expect(session.error).toBeUndefined();
-    expect(assistant.role).toBe("assistant");
-    // Both tool parts went, so the notice is the message's *only* part and
-    // therefore also its last. The chunk that follows must start its own part:
-    // streaming into the notice would rewrite the announcement as agent output
-    // and lose it.
-    expect(assistant.parts).toHaveLength(2);
-    expect(assistant.parts[0]).toMatchObject({
-      type: "text",
-      content: expect.stringContaining("Earlier steps in this response were dropped"),
-    });
-    expect(assistant.parts[1]).toMatchObject({ type: "text", content: "Recovered summary." });
-    expect(assistant.content).toBe("Recovered summary.");
-
-    const window = (await nativeFetch(`${base}/session/${created.id}/messages`, { headers }).then(
-      (response) => response.json(),
-    )) as {
-      messageWindow: { truncated: boolean; omittedMessages?: number; omittedParts?: number };
-    };
-    expect(window.messageWindow.truncated).toBe(true);
-    expect(window.messageWindow.omittedMessages).toBeGreaterThan(0);
-    expect(window.messageWindow.omittedParts).toBeGreaterThan(0);
   });
 
   test("bounds an aggregate interactive transcript and preserves its trim across restart", async () => {
@@ -2859,11 +2691,12 @@ describe("ACP bridge", () => {
    * edge and let a build pipeline advance underneath it.
    */
   test("keeps reporting working when a transcript-limit failure retains a live child", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const read = async () =>
       nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
         response.json(),
@@ -2983,12 +2816,13 @@ describe("ACP bridge", () => {
   });
 
   test("settles a tool left in flight when a live turn ends, without a restart", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-hang" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -3020,12 +2854,13 @@ describe("ACP bridge", () => {
   });
 
   test("keeps a known tool state when an update carries an unrecognized status", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-odd" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -3052,12 +2887,13 @@ describe("ACP bridge", () => {
   });
 
   test("omits aggregate counts when any file diff has no countable stats", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-tools:tab-mixed" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -3087,10 +2923,11 @@ describe("ACP bridge", () => {
   });
 
   test("discards a chunk small enough to fit in what truncation left over", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
@@ -3130,10 +2967,11 @@ describe("ACP bridge", () => {
   });
 
   test("serves an incremental transcript window anchored to an absolute index", async () => {
-    const { base, headers } = await spawnBridge();
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    shared.track(created.id);
     for (const [index, text] of ["first", "second"].entries()) {
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
@@ -3182,5 +3020,219 @@ describe("ACP bridge", () => {
     ).then((response) => response.json())) as { messages: unknown[]; baseIndex: number };
     expect(garbage.baseIndex).toBe(0);
     expect(garbage.messages).toHaveLength(4);
+  });
+});
+
+// The lowered budget is a bridge-level setting, so these share a second bridge.
+describe("ACP bridge with a lowered transcript budget", () => {
+  const shared = sharedBridge({
+    ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024),
+    ACP_CLOSE_CANCEL_WAIT_MS: "200",
+  });
+
+  test("charges a cursor/task prompt so a near-cap transcript stays inside the byte budget", async () => {
+    const maximumTranscriptBytes = 1024 * 1024;
+    const { base, headers } = shared;
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-charge:tab-1" }),
+    }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORTASKCHARGE: fill then prompt" }),
+        })
+      ).status,
+    ).toBe(202);
+
+    const settled = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(settled.messages))).toBeLessThanOrEqual(
+      maximumTranscriptBytes,
+    );
+    const charged = settled.messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-charge");
+    expect(charged).toMatchObject({
+      toolName: "task",
+      toolArgs: { description: "Charge the prompt", subagent_type: "explore" },
+    });
+    expect((charged?.toolArgs as { prompt?: string } | undefined)?.prompt?.length).toBe(64 * 1024);
+  });
+
+  test("settles an evicted Cursor child without rebuilding a ghost launch part", async () => {
+    const { base, headers } = shared;
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
+    const read = async () =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{
+        status: string;
+        baseIndex: number;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      }>;
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+    });
+    await waitFor(read, (value) => value.status === "idle");
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "FINISHEVICTEDCURSORSUBAGENT" }),
+    });
+    const settled = await waitFor(read, (value) => value.status === "idle");
+    expect(settled.baseIndex).toBeGreaterThan(0);
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .some((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toBe(false);
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "idle" });
+  });
+
+  test("settles an evicted Cursor child from cursor/task without rebuilding a ghost launch part", async () => {
+    const { base, headers } = shared;
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
+    const read = async () =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{
+        status: string;
+        baseIndex: number;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      }>;
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+    });
+    await waitFor(read, (value) => value.status === "idle");
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "FINISHEVICTEDCURSORTASK" }),
+    });
+    const settled = await waitFor(read, (value) => value.status === "idle");
+    expect(settled.baseIndex).toBeGreaterThan(0);
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .some((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toBe(false);
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "idle" });
+  });
+
+  test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
+    // The floor is reached when two parts alone still exceed the budget, and
+    // at 16 MiB the per-part caps do not add up to that. Lowering the budget
+    // (this describe's bridge) is the only way to exercise it; it can only ever
+    // move downwards.
+    const { base, headers } = shared;
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-trim-to-text" }),
+    }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TRIMTOTEXT: empty the message, then speak" }),
+    });
+    // Wait on `/activity`, which never bounds the transcript. A session read
+    // does (`boundTranscriptForRead`), and one landing between the two tool
+    // parts resets the write path's byte counter, so the trim waits for the
+    // next read; the chunk then follows an untrimmed tool call and opens a row
+    // of its own, leaving the trimmed message behind it (2410). The scenario
+    // needs the trim the agent's own updates trigger, before the chunk.
+    await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ activity: string }>,
+      (value) => value.activity === "idle",
+    );
+    const session = (await nativeFetch(`${base}/session/${created.id}`, { headers }).then(
+      (response) => response.json(),
+    )) as {
+      status: string;
+      error?: string;
+      messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+    };
+    expect(session.status).toBe("idle");
+
+    // The lowered budget evicts whole messages before it trims parts, so the
+    // prompt itself is gone and the assistant message is all that is left.
+    const assistant = session.messages.at(-1)!;
+    expect(session.error).toBeUndefined();
+    expect(assistant.role).toBe("assistant");
+    // Both tool parts went, so the notice is the message's *only* part and
+    // therefore also its last. The chunk that follows must start its own part:
+    // streaming into the notice would rewrite the announcement as agent output
+    // and lose it.
+    expect(assistant.parts).toHaveLength(2);
+    expect(assistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(assistant.parts[1]).toMatchObject({ type: "text", content: "Recovered summary." });
+    expect(assistant.content).toBe("Recovered summary.");
+
+    const window = (await nativeFetch(`${base}/session/${created.id}/messages`, { headers }).then(
+      (response) => response.json(),
+    )) as {
+      messageWindow: { truncated: boolean; omittedMessages?: number; omittedParts?: number };
+    };
+    expect(window.messageWindow.truncated).toBe(true);
+    expect(window.messageWindow.omittedMessages).toBeGreaterThan(0);
+    expect(window.messageWindow.omittedParts).toBeGreaterThan(0);
   });
 });

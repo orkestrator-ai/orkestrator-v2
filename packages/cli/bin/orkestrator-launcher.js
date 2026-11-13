@@ -36,6 +36,7 @@ import path from "node:path";
 
 const MAX_BOOT_ATTEMPTS = 2;
 const READY_TIMEOUT_MS = Number(process.env.ORKESTRATOR_LAUNCHER_READY_TIMEOUT_MS ?? 120_000);
+const READY_POLL_MS = Number(process.env.ORKESTRATOR_LAUNCHER_READY_POLL_MS ?? 500);
 const RETRY_DELAY_MS = Number(process.env.ORKESTRATOR_LAUNCHER_RETRY_DELAY_MS ?? 2_000);
 const CRASH_DELAY_MS = Number(process.env.ORKESTRATOR_LAUNCHER_CRASH_DELAY_MS ?? 5_000);
 const STOP_TIMEOUT_MS = Number(process.env.ORKESTRATOR_LAUNCHER_STOP_TIMEOUT_MS ?? 10_000);
@@ -146,7 +147,7 @@ async function waitForReady(pid, version, exited) {
   while (Date.now() < deadline && !exited()) {
     const instance = readJson(layout.instance);
     if (instance && instance.pid === pid && instance.appVersion === version) return true;
-    await sleep(500);
+    await sleep(READY_POLL_MS);
   }
   return false;
 }

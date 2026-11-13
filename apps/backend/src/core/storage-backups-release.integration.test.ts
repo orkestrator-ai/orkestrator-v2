@@ -73,17 +73,23 @@ function stepGate(directory: string) {
 
 /**
  * The real supervisor and helper, with only the selected vacuum or checkpoint
- * taking `ms` longer, as it does when the disk is busy.
+ * taking `ms` longer, as it does when the disk is busy. The helper decides a step
+ * is slow from `performance.now()`, so the extra time is added to that clock
+ * instead of slept: the helper sees the same elapsed step without the test
+ * waiting for it.
  */
 function slowStepSpawn(operation: "vacuum" | "checkpoint", step: number, ms: number) {
   return (command: string, args: string[], options: SpawnOptions) => {
     const prelude = `
       const slowSqlite = require("bun:sqlite");
       const slowExec = slowSqlite.Database.prototype.exec;
+      const slowClock = performance.now.bind(performance);
+      let slowSkew = 0;
+      performance.now = () => slowClock() + slowSkew;
       let slowStep = 0;
       if (${JSON.stringify(operation)} === "vacuum") slowSqlite.Database.prototype.exec = function (sql, ...rest) {
         const result = slowExec.call(this, sql, ...rest);
-        if (String(sql).includes("incremental_vacuum") && ++slowStep === ${step}) Bun.sleepSync(${ms});
+        if (String(sql).includes("incremental_vacuum") && ++slowStep === ${step}) slowSkew += ${ms};
         return result;
       };
       if (${JSON.stringify(operation)} === "checkpoint") {
@@ -94,7 +100,7 @@ function slowStepSpawn(operation: "vacuum" | "checkpoint", step: number, ms: num
           const get = statement.get.bind(statement);
           statement.get = (...args) => {
             const result = get(...args);
-            if (++slowStep === ${step}) Bun.sleepSync(${ms});
+            if (++slowStep === ${step}) slowSkew += ${ms};
             return result;
           };
           return statement;

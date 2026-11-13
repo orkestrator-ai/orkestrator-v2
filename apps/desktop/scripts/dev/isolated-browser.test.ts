@@ -16,6 +16,13 @@ import {
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
 
+/**
+ * The default poll. A probe that starts just before the startup deadline is cut short
+ * and reports "Command timed out" instead of the deadline error, so a run that is meant
+ * to hit the deadline keeps the production cadence rather than racing it with a fast one.
+ */
+const STARTUP_DEADLINE_POLL_MS = 250;
+
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
@@ -99,7 +106,9 @@ if (task === "dev:test") {
             tabRequests?: string;
           },
       );
-  return { root, env, events };
+  // Spread into every run's options: the fakes are ready at once, so a short poll only saves
+  // waiting. A run that is meant to hit its startup deadline sets `STARTUP_DEADLINE_POLL_MS`.
+  return { root, env, events, statusPollMs: 20 };
 }
 
 /**
@@ -398,6 +407,7 @@ test("a profile that fails to start stops the run before its companions and is s
       profile: "qa-node-desk-test",
       companionProfiles: ["qa-node-leaf-test"],
       startupTimeoutMs: 400,
+      statusPollMs: STARTUP_DEADLINE_POLL_MS,
     }),
   ).rejects.toThrow("startup timed out");
   const events = await f.events();
@@ -860,6 +870,7 @@ for (const mode of ["startup-hang", "launcher-dies"]) {
         profile: "qa-main-ok",
         companionProfiles: ["qa-companion-failure"],
         startupTimeoutMs: 1500,
+        statusPollMs: STARTUP_DEADLINE_POLL_MS,
       }),
     ).rejects.toThrow(
       mode === "startup-hang" ? "startup timed out" : "exited during browser tests",

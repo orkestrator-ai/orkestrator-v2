@@ -5,32 +5,57 @@ import { resolve } from "node:path";
 import {
   NativeAbortController,
   nativeFetch,
+  sharedBridge,
   spawnBridge,
   temporaryDirectory,
   waitFor,
+  waitForExit,
 } from "./acp-test-harness.js";
+
+// One bridge for every test that neither restarts it nor sets a bridge-level
+// variable; each opens its own session, and the agent switches are per test.
+const shared = sharedBridge();
+
+/** Resolves once the agent has received `session/load`, so it is open for the next request to join. */
+function loadReceived(lifecycleFile: string): Promise<string> {
+  return waitFor(
+    () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+    (contents) => /^load:/m.test(contents),
+  );
+}
 
 describe("ACP bridge", () => {
   test("keeps provider session-list error text out of the response and logs", async () => {
     const providerError =
       "Cannot read /private/provider/history/session.jsonl: private session text";
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIST_ERROR: providerError } });
+    await shared.agentEnv({ FAKE_ACP_LIST_ERROR: providerError });
+    const bridge = shared;
     let output = "";
-    bridge.child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    bridge.child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Failed to read session history" });
-    await waitFor(
-      async () => output,
-      (value) => value.includes("http.route-failed"),
-    );
-    expect(output).not.toContain(providerError);
-    expect(output).not.toContain("/private/provider/history");
+    const collect = (chunk: Buffer) => (output += chunk.toString());
+    // Only this test's output counts, and the shared bridge outlives it.
+    bridge.child.stdout.on("data", collect);
+    bridge.child.stderr.on("data", collect);
+    try {
+      const response = await nativeFetch(`${bridge.base}/session/list`, {
+        headers: bridge.headers,
+      });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "Failed to read session history" });
+      await waitFor(
+        async () => output,
+        (value) => value.includes("http.route-failed"),
+      );
+      expect(output).not.toContain(providerError);
+      expect(output).not.toContain("/private/provider/history");
+    } finally {
+      bridge.child.stdout.off("data", collect);
+      bridge.child.stderr.off("data", collect);
+    }
   });
 
   test("reports an ACP agent without session listing instead of showing an empty history", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_NO_LIST_SESSION: "1" } });
+    await shared.agentEnv({ FAKE_ACP_NO_LIST_SESSION: "1" });
+    const bridge = shared;
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
@@ -39,7 +64,8 @@ describe("ACP bridge", () => {
   });
 
   test("does not list sessions when the agent can list but cannot load them", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_NO_LOAD_SESSION: "1" } });
+    await shared.agentEnv({ FAKE_ACP_NO_LOAD_SESSION: "1" });
+    const bridge = shared;
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
@@ -50,11 +76,13 @@ describe("ACP bridge", () => {
   test("loads an existing bridge session even when resume controls are omitted", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "resume-without-controls.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    await shared.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const firstPid = Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]);
     process.kill(firstPid, "SIGKILL");
     await waitFor(
@@ -78,7 +106,7 @@ describe("ACP bridge", () => {
   });
 
   test("applies the backend policy before loading a resumed ACP session", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string }> };
@@ -99,6 +127,7 @@ describe("ACP bridge", () => {
 
     expect(response.status).toBe(201);
     const resumed = (await response.json()) as { sessionId: string };
+    shared.track(resumed.sessionId);
     expect(
       await nativeFetch(`${bridge.base}/session/${resumed.sessionId}/status`, {
         headers: bridge.headers,
@@ -114,12 +143,11 @@ describe("ACP bridge", () => {
   test("pages the ACP session list and de-duplicates across pages", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "list-cursors.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIST_PAGES: "3",
-        FAKE_ACP_LIST_COUNTER_FILE: counterFile,
-      },
+    await shared.agentEnv({
+      FAKE_ACP_LIST_PAGES: "3",
+      FAKE_ACP_LIST_COUNTER_FILE: counterFile,
     });
+    const bridge = shared;
 
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
@@ -136,7 +164,12 @@ describe("ACP bridge", () => {
   });
 
   test("applies each racing resume's own controls to one adopted session", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LOAD_DELAY_MS: "400" } });
+    const lifecycleFile = resolve(await temporaryDirectory(), "resume-controls-race.log");
+    await shared.agentEnv({
+      FAKE_ACP_LOAD_DELAY_MS: "400",
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+    });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -155,9 +188,10 @@ describe("ACP bridge", () => {
     const first = resume("composer-2.5");
     // Lands while the first `session/load` is still open, so it joins the
     // in-flight adoption instead of starting a second one.
-    await Bun.sleep(100);
+    await loadReceived(lifecycleFile);
     const second = await resume("gpt-5.5");
     const winner = await first;
+    shared.track(winner.body.sessionId);
 
     expect(winner.status).toBe(201);
     expect(second.status).toBe(201);
@@ -175,9 +209,11 @@ describe("ACP bridge", () => {
   test("one aborted resume waiter does not kill the shared session/load", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "resume-abort.log");
-    const bridge = await spawnBridge({
-      env: { FAKE_ACP_LOAD_DELAY_MS: "400", FAKE_ACP_LIFECYCLE_FILE: lifecycleFile },
+    await shared.agentEnv({
+      FAKE_ACP_LOAD_DELAY_MS: "400",
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
     });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -189,7 +225,7 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: external.id }),
       signal: controller.signal,
     });
-    await Bun.sleep(100);
+    await loadReceived(lifecycleFile);
     const joined = nativeFetch(`${bridge.base}/session/resume`, {
       method: "POST",
       headers: bridge.headers,
@@ -200,18 +236,21 @@ describe("ACP bridge", () => {
     await expect(first).rejects.toBeDefined();
     const joinedResponse = await joined;
     expect(joinedResponse.status).toBe(201);
+    shared.track(((await joinedResponse.json()) as { sessionId: string }).sessionId);
     const lifecycle = await fs.readFile(lifecycleFile, "utf8");
     expect(lifecycle.match(/^start:/gm)).toHaveLength(2); // list probe + shared resume child
     expect(lifecycle.match(/^load:/gm)).toHaveLength(1);
   });
 
   test("omits model attribution entirely when the agent advertises no model", async () => {
-    const { base, headers } = await spawnBridge({ env: { FAKE_ACP_NO_MODEL_OPTION: "1" } });
+    await shared.agentEnv({ FAKE_ACP_NO_MODEL_OPTION: "1" });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-nomodel:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -241,11 +280,12 @@ describe("ACP bridge", () => {
   });
 
   test("lays Grok's per-server MCP status reports over the listed inventory", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const session = `${bridge.base}/session/${created.id}`;
     expect(
       (
@@ -436,7 +476,7 @@ describe("ACP bridge", () => {
     expect(noUsageSession.contextUsage?.sessionTokens).toBe(15_897);
 
     first.child.kill("SIGTERM");
-    await Bun.sleep(200);
+    await waitForExit(first.child);
     const second = await spawnBridge({ stateDirectory });
     const restored = await readSession(second.base, second.headers);
     expect(restored.contextUsage).toMatchObject({
@@ -462,12 +502,15 @@ describe("ACP bridge", () => {
   });
 
   test("merges a usage carrier that arrives after its turn already resolved", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const releaseCarrier = resolve(await temporaryDirectory(), "release-late-carrier");
+    await shared.agentEnv({ FAKE_ACP_LATE_USAGE_FILE: releaseCarrier });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify({ clientSessionKey: "env-usage-late:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     const readSession = async () =>
       (await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
@@ -498,6 +541,7 @@ describe("ACP bridge", () => {
     const settledDurationMs = settled.contextUsage?.durationMs;
     expect(settledDurationMs).toBeGreaterThanOrEqual(0);
 
+    await fs.writeFile(releaseCarrier, "release\n");
     const late = await waitFor(readSession, (value) => value.contextUsage?.reasoningTokens === 77);
     // The carrier belongs to the turn that just ended, so it fills that turn's
     // gap instead of being dropped or opening a new snapshot.
@@ -516,15 +560,18 @@ describe("ACP bridge", () => {
   });
 
   test("does not assign a previous turn's late carrier to a newer turn", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const releaseCarrier = resolve(await temporaryDirectory(), "release-late-carrier");
+    await shared.agentEnv({ FAKE_ACP_LATE_USAGE_FILE: releaseCarrier });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const readSession = async () =>
       nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
         (response) => response.json(),
-      ) as Promise<{ status: string; contextUsage?: Record<string, unknown> }>;
+      ) as Promise<{ status: string; title?: string; contextUsage?: Record<string, unknown> }>;
 
     await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -542,7 +589,12 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ prompt: "USAGE_NONE: no count available" }),
     });
     await waitFor(readSession, (value) => value.status === "idle");
-    await Bun.sleep(850);
+    // The agent holds the first turn's carrier until now, so it arrives after
+    // the second turn has settled. It sends a title right behind the carrier,
+    // and the bridge handles agent output in order, so the title proves the
+    // carrier has been processed before the absence below is checked.
+    await fs.writeFile(releaseCarrier, "release\n");
+    await waitFor(readSession, (value) => value.title === "late-usage-delivered");
 
     const afterLateCarrier = await readSession();
     expect(afterLateCarrier.contextUsage).toMatchObject({
@@ -556,11 +608,12 @@ describe("ACP bridge", () => {
   });
 
   test("finalizes reported usage when a prompt fails", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const readSession = async () =>
       nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
         (response) => response.json(),
@@ -592,11 +645,12 @@ describe("ACP bridge", () => {
   });
 
   test("finalizes reported usage when a prompt is cancelled", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const readSession = async () =>
       nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
         (response) => response.json(),
@@ -627,12 +681,13 @@ describe("ACP bridge", () => {
   });
 
   test("reads occupancy from a usage_update that uses type instead of sessionUpdate", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify({ clientSessionKey: "env-usage-typed:tab-1" }),
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     expect(
       (
@@ -667,7 +722,8 @@ describe("ACP bridge", () => {
   });
 
   test("hydrates usage replayed by session/load when the bridge holds no snapshot", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_USAGE: "1" } });
+    await shared.agentEnv({ FAKE_ACP_REPLAY_USAGE: "1" });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -680,6 +736,7 @@ describe("ACP bridge", () => {
     });
     expect(resumed.status).toBe(201);
     const resumedMeta = (await resumed.json()) as { sessionId: string };
+    shared.track(resumedMeta.sessionId);
     const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}/status`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as {
@@ -697,7 +754,8 @@ describe("ACP bridge", () => {
   });
 
   test("accumulates distinct usage-bearing turns replayed by session/load", async () => {
-    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_USAGE_TURNS: "2" } });
+    await shared.agentEnv({ FAKE_ACP_REPLAY_USAGE_TURNS: "2" });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -710,6 +768,7 @@ describe("ACP bridge", () => {
     });
     expect(resumed.status).toBe(201);
     const resumedMeta = (await resumed.json()) as { sessionId: string };
+    shared.track(resumedMeta.sessionId);
     const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}/status`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { contextUsage?: Record<string, unknown> };
@@ -729,16 +788,16 @@ describe("ACP bridge", () => {
   test("does not re-latch usage replayed into a session that already counted it", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "reconnect-usage-replay.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_REPLAY_USAGE: "1",
-      },
+    await shared.agentEnv({
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_REPLAY_USAGE: "1",
     });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     const readSession = async () =>
       nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
         (response) => response.json(),
@@ -777,7 +836,7 @@ describe("ACP bridge", () => {
   });
 
   test("answers attach for a session this bridge does not hold", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     // The backend reads 404 here as "nothing to warm" and lets the prompt
     // request answer authoritatively, so it must not be a hard failure.
     const response = await nativeFetch(`${bridge.base}/session/missing/attach`, {
@@ -835,11 +894,13 @@ describe("ACP bridge", () => {
   test("an environment-only session keeps its child across later attaches", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "env-only-attach.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    await shared.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const bridge = shared;
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
 
     const starts = async () =>
       (await fs.readFile(lifecycleFile, "utf8").catch(() => "")).match(/^start:/gm)?.length ?? 0;
@@ -859,9 +920,13 @@ describe("ACP bridge", () => {
   test("applies a racing resume's tab credential instead of inheriting the first", async () => {
     const directory = await temporaryDirectory();
     const requestFile = resolve(directory, "resume-race-mcp.log");
-    const bridge = await spawnBridge({
-      env: { FAKE_ACP_LOAD_DELAY_MS: "400", FAKE_ACP_SESSION_REQUEST_FILE: requestFile },
+    const lifecycleFile = resolve(directory, "resume-race-lifecycle.log");
+    await shared.agentEnv({
+      FAKE_ACP_LOAD_DELAY_MS: "400",
+      FAKE_ACP_SESSION_REQUEST_FILE: requestFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
     });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -878,13 +943,13 @@ describe("ACP bridge", () => {
       });
 
     const first = resume("token-a");
-    await Bun.sleep(100);
+    await loadReceived(lifecycleFile);
     const second = await resume("token-b");
     const winner = await first;
     expect([winner.status, second.status]).toEqual([201, 201]);
-    expect(((await second.json()) as { sessionId: string }).sessionId).toBe(
-      ((await winner.json()) as { sessionId: string }).sessionId,
-    );
+    const adopted = ((await winner.json()) as { sessionId: string }).sessionId;
+    shared.track(adopted);
+    expect(((await second.json()) as { sessionId: string }).sessionId).toBe(adopted);
 
     const loads = (await fs.readFile(requestFile, "utf8"))
       .trim()
@@ -898,7 +963,8 @@ describe("ACP bridge", () => {
   test("an already-loaded external session rebuilds with the later tab credential", async () => {
     const directory = await temporaryDirectory();
     const requestFile = resolve(directory, "resume-loaded-mcp.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_SESSION_REQUEST_FILE: requestFile } });
+    await shared.agentEnv({ FAKE_ACP_SESSION_REQUEST_FILE: requestFile });
+    const bridge = shared;
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -913,6 +979,7 @@ describe("ACP bridge", () => {
       }),
     });
     expect(first.status).toBe(201);
+    shared.track(((await first.json()) as { sessionId: string }).sessionId);
 
     const second = await nativeFetch(`${bridge.base}/session/resume`, {
       method: "POST",
@@ -935,7 +1002,8 @@ describe("ACP bridge", () => {
 });
 
 test("session/load hydration clears replay revisions before readers receive a summary", async () => {
-  const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_ROW_REVISION: "1" } });
+  await shared.agentEnv({ FAKE_ACP_REPLAY_ROW_REVISION: "1" });
+  const bridge = shared;
   const listed = (await nativeFetch(`${bridge.base}/session/list`, {
     headers: bridge.headers,
   }).then((result) => result.json())) as { sessions: Array<{ id: string; title?: string }> };
@@ -947,6 +1015,7 @@ test("session/load hydration clears replay revisions before readers receive a su
   });
   expect(response.status).toBe(201);
   const { sessionId } = (await response.json()) as { sessionId: string };
+  shared.track(sessionId);
   const summary = (await nativeFetch(
     `${bridge.base}/session/${sessionId}/transcript?version=2&limit=1`,
     { headers: bridge.headers },

@@ -1,26 +1,36 @@
-import { describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, promises as fs, realpathSync, rmSync } from "node:fs";
+import os from "node:os";
 import { resolve } from "node:path";
-import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import { nativeFetch, sharedBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+
+// The agent's file and terminal requests are confined to the bridge's working
+// directory, so the one shared Grok bridge runs in a directory the tests can
+// write their targets into (each test uses its own subdirectory).
+const WORKSPACE = realpathSync(mkdtempSync(resolve(os.tmpdir(), "acp-generalization-")));
+afterAll(() => rmSync(WORKSPACE, { recursive: true, force: true }));
+const shared = sharedBridge({ ACP_PROVIDER: "grok", CWD: WORKSPACE });
+
+async function workspaceSubdirectory(name: string): Promise<string> {
+  const directory = resolve(WORKSPACE, name);
+  await fs.mkdir(directory);
+  return directory;
+}
 
 describe("ACP protocol generalization", () => {
   test("advertises filesystem and terminal capabilities and authenticates", async () => {
     const directory = await temporaryDirectory();
     const initializeFile = resolve(directory, "initialize.jsonl");
     const authenticateFile = resolve(directory, "authenticate.jsonl");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_PROVIDER: "grok",
-        FAKE_ACP_INITIALIZE_REQUEST_FILE: initializeFile,
-        FAKE_ACP_AUTH_METHOD: "test-login",
-        FAKE_ACP_AUTH_REQUEST_FILE: authenticateFile,
-      },
+    await shared.agentEnv({
+      FAKE_ACP_INITIALIZE_REQUEST_FILE: initializeFile,
+      FAKE_ACP_AUTH_METHOD: "test-login",
+      FAKE_ACP_AUTH_REQUEST_FILE: authenticateFile,
     });
-    expect(
-      await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
-        (response) => response.status,
-      ),
-    ).toBe(201);
+    const { base, headers } = shared;
+    const response = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
+    expect(response.status).toBe(201);
+    shared.track(((await response.json()) as { id: string }).id);
     const initialize = JSON.parse(
       (
         await waitFor(
@@ -45,24 +55,23 @@ describe("ACP protocol generalization", () => {
   });
 
   test("refuses an unsupported negotiated protocol version", async () => {
-    const { base, headers } = await spawnBridge({
-      env: { ACP_PROVIDER: "grok", FAKE_ACP_PROTOCOL_VERSION: "2" },
-    });
+    await shared.agentEnv({ FAKE_ACP_PROTOCOL_VERSION: "2" });
+    const { base, headers } = shared;
     const response = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
     expect(response.status).toBe(500);
     expect(await response.text()).toContain("unsupported ACP protocol version 2");
   });
 
   test("serves filesystem and bounded terminal requests from the fake agent", async () => {
-    const directory = await temporaryDirectory();
+    const directory = await workspaceSubdirectory("serves-client-methods");
     const target = resolve(directory, "agent-written.txt");
-    const { base, headers } = await spawnBridge({
-      env: { ACP_PROVIDER: "grok", CWD: directory, FAKE_ACP_CLIENT_FILE: target },
-    });
+    await shared.agentEnv({ FAKE_ACP_CLIENT_FILE: target });
+    const { base, headers } = shared;
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
+    shared.track(created.id);
     expect(
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
@@ -90,17 +99,14 @@ describe("ACP protocol generalization", () => {
   // neither offered nor served them, whatever the agent then asks for.
   for (const denial of ["capabilities", "readOnly", "approvals"] as const) {
     test(`neither advertises nor serves writes and terminals under ${denial}`, async () => {
-      const directory = await temporaryDirectory();
+      const directory = await workspaceSubdirectory(`denied-${denial}`);
       const target = resolve(directory, "agent-written.txt");
       const initializeFile = resolve(directory, "initialize.jsonl");
-      const { base, headers } = await spawnBridge({
-        env: {
-          ACP_PROVIDER: "grok",
-          CWD: directory,
-          FAKE_ACP_CLIENT_FILE: target,
-          FAKE_ACP_INITIALIZE_REQUEST_FILE: initializeFile,
-        },
+      await shared.agentEnv({
+        FAKE_ACP_CLIENT_FILE: target,
+        FAKE_ACP_INITIALIZE_REQUEST_FILE: initializeFile,
       });
+      const { base, headers } = shared;
       const created = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
@@ -118,6 +124,7 @@ describe("ACP protocol generalization", () => {
           },
         }),
       }).then((response) => response.json())) as { id: string };
+      shared.track(created.id);
       expect(
         await nativeFetch(`${base}/session/${created.id}/prompt`, {
           method: "POST",

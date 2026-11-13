@@ -116,6 +116,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [upgrade-agents.md](development/upgrade-agents.md) | SDK/CLI bump runbook. Pins are test-enforced. "Other dependencies" covers non-agent packages, runtimes and image tools. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
+| [test-wait-review.md](development/test-wait-review.md) | Measured review of where slow tests wait (wall versus CPU per file), the changes made to remove or overlap those waits, and what was deliberately left alone. |
 | [disk-usage.md](development/disk-usage.md) | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [node-scopes.md](development/node-scopes.md) | Per-node stores, services and workspaces: `defineScopedStore` and the strict `scopedStoreHook` (no statics, no provider-less fallback), imperative sites, scoped services and change handlers, a node's workspace in the window's tree, tests with `renderInNodeScope` and `renderInAppCommandScope`, the window-store registry and the guards (`lib-backend-command-default`, `workspace-command-bound-call`). |
 | [linting.md](development/linting.md) | `bun fmt`/oxlint/`bun check` configuration, exclusions, severity policy and disable-directive rules. |

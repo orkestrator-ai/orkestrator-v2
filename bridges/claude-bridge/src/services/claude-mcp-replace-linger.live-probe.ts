@@ -273,9 +273,16 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
 }
 
 export async function runReplaceLingerProbe(): Promise<ReplaceLingerResult> {
-  const scenarios: ReplaceObservation[] = [];
-  for (const scenario of ["options", "dynamic", "settings"] as const)
-    scenarios.push(await runScenario(scenario));
+  // Each scenario has its own CLI, home and marker file, so they run side by
+  // side; all of them finish before a failure is reported.
+  const settled = await Promise.allSettled(
+    (["options", "dynamic", "settings"] as const).map((scenario) => runScenario(scenario)),
+  );
+  const failed = settled.find((entry) => entry.status === "rejected");
+  if (failed) throw (failed as PromiseRejectedResult).reason;
+  const scenarios = settled.map(
+    (entry) => (entry as PromiseFulfilledResult<ReplaceObservation>).value,
+  );
   return {
     claudeCode: claudeCodeVersion(),
     scenarios,

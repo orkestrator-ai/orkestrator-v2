@@ -333,7 +333,7 @@ export function artifactShellScript(input: {
  * The shell's policy: only its hashed script and style; it frames exactly the
  * one document URL (`frame-src`/`child-src` path-exact with no scheme source,
  * so data: and blob: documents, other capabilities on this origin and every
- * other URL are refused; qualified in content-server.engines.test.ts); it
+ * other URL are refused; qualified in content-server.engines-*.test.ts); it
  * loads nothing else; it is sandboxed (scripts and
  * its own origin only: no forms, popups, modals, downloads or top
  * navigation); and only the permitted application origins may frame it.

@@ -52,6 +52,7 @@ process.env.ACP_PROVIDER_CONFIG = JSON.stringify({
 });
 
 const { AcpProcess } = await import("../acp-context.js");
+const { termGraceMs } = await import("../acp-process-tree.js");
 
 function alive(pid: number): boolean {
   try {
@@ -109,12 +110,15 @@ if (process.argv.includes("--crash")) {
     const exited = once(bridge, "exit");
     bridge.kill("SIGKILL");
     await exited;
-    const runtimePath = new URL(
-      "../../../../apps/backend/src/core/local-server-runtime.ts",
-      import.meta.url,
-    ).href;
-    const { LocalServerRuntime } = await import(runtimePath);
-    const runtime = new LocalServerRuntime();
+    const backendCore = new URL("../../../../apps/backend/src/core/", import.meta.url).href;
+    const { LocalServerRuntime } = await import(`${backendCore}local-server-runtime.ts`);
+    const { reapProcessGroup } = await import(`${backendCore}process-tree.ts`);
+    // The runtime's grace is a constant; its reaper is an injection point, so
+    // the test shortens only the wait for the TERM-resistant descendant.
+    const runtime = new LocalServerRuntime({
+      reapProcessGroup: (pgid: number | undefined, options: { graceMs: number }) =>
+        reapProcessGroup(pgid, { ...options, graceMs: termGraceMs() }),
+    });
     // The real backend reaper must finish before a replacement is admitted.
     await runtime.reapAfterUnrequestedExit("grok:crash-fixture", bridge);
     process.stdout.write(

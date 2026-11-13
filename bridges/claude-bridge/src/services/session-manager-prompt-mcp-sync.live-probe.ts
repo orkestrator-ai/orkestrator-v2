@@ -53,6 +53,19 @@ const open = new Set<Query>();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Like `Promise.all`, but waits for every promise before rejecting: a failed
+ * scenario must not leave the others' CLIs running while the probe reports it.
+ */
+async function settleAll<T extends readonly unknown[]>(
+  promises: readonly [...{ [K in keyof T]: Promise<T[K]> }],
+): Promise<T> {
+  const settled = await Promise.allSettled(promises);
+  const failed = settled.find((entry) => entry.status === "rejected");
+  if (failed) throw (failed as PromiseRejectedResult).reason;
+  return settled.map((entry) => (entry as PromiseFulfilledResult<unknown>).value) as unknown as T;
+}
+
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -228,17 +241,25 @@ async function run(
     open.delete(control);
     control.close();
     await exited;
-    setClaudeHomeForTesting(null);
-    setClaudeAccountHomeForTesting(undefined);
+    // Only the account scenario overrides these process-wide seams; another
+    // scenario resetting them would redirect its reads to the real home.
+    if (scenario.host) {
+      setClaudeHomeForTesting(null);
+      setClaudeAccountHomeForTesting(undefined);
+    }
     await rm(root, { recursive: true, force: true });
   }
 }
 
-/** Every scenario, each on its own CLI. */
+/**
+ * Every scenario, each on its own CLI, temporary home and marker file, so they
+ * run side by side. Only the account scenario touches process-wide state
+ * (`claude-home`), and no other scenario reads it.
+ */
 export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservation>> {
-  return {
+  const scenarios: Record<string, Promise<McpSyncObservation>> = {
     // The update without the takeover: the launch server stays.
-    bare: await run((fixture) => ({
+    bare: run((fixture) => ({
       file: { alpha: fixture("alpha") },
       inline: { alpha: fixture("alpha") },
       declared: ["alpha"],
@@ -247,7 +268,7 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
         await runtime.control.setMcpServers!({});
       },
     })),
-    remove: await run((fixture) => ({
+    remove: run((fixture) => ({
       file: { alpha: fixture("alpha"), keep: fixture("keep") },
       inline: { alpha: fixture("alpha"), keep: fixture("keep") },
       declared: ["alpha", "keep"],
@@ -261,7 +282,7 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
         });
       },
     })),
-    rename: await run((fixture) => ({
+    rename: run((fixture) => ({
       file: { alpha: fixture("alpha") },
       inline: { alpha: fixture("alpha") },
       declared: ["alpha"],
@@ -278,7 +299,7 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
     // An edit of a server's configuration under the same name. The CLI
     // connects the new process; whether it stops the old one is upstream
     // behaviour (0039 item 8) the live test records.
-    replace: await run((fixture) => ({
+    replace: run((fixture) => ({
       file: { alpha: fixture("alpha") },
       inline: { alpha: fixture("alpha") },
       declared: ["alpha"],
@@ -299,7 +320,7 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
     // inline, shows whether the CLI reads the host file too. Then two host
     // edits, each picked up on the next turn as the bridge does: an addition,
     // and the removal of a server the account's copy still names.
-    account: await run((fixture) => ({
+    account: run((fixture) => ({
       host: { keep: fixture("keep"), hostsse: { type: "sse", url: "http://127.0.0.1:9/sse" } },
       file: { keep: fixture("keep"), extra: fixture("extra") },
       inline: {},
@@ -313,7 +334,7 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
       },
     })),
     // An SSE entry the bridge never passes inline; the CLI loads it itself.
-    fileOnly: await run((fixture) => ({
+    fileOnly: run((fixture) => ({
       file: { keep: fixture("keep"), remote: { type: "sse", url: "http://127.0.0.1:9/sse" } },
       inline: { keep: fixture("keep") },
       declared: ["keep", "remote"],
@@ -328,6 +349,9 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
       },
     })),
   };
+  const names = Object.keys(scenarios);
+  const observations = await settleAll(Object.values(scenarios));
+  return Object.fromEntries(names.map((name, index) => [name, observations[index]!]));
 }
 
 if (import.meta.main) {
@@ -339,9 +363,12 @@ if (import.meta.main) {
   }
   try {
     refuseRealDataDirClaudeCli();
-    console.log(
-      `${RESULT_SENTINEL}${JSON.stringify({ ...(await runMcpSyncProbe()), calls: await runMcpCallProbe(open) })}`,
-    );
+    // The call probe has a CLI, home and loopback model of its own.
+    const [observations, calls] = await settleAll([
+      runMcpSyncProbe(),
+      runMcpCallProbe(open),
+    ] as const);
+    console.log(`${RESULT_SENTINEL}${JSON.stringify({ ...observations, calls })}`);
   } catch (error) {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
     process.exitCode = 1;

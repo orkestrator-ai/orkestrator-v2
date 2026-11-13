@@ -362,6 +362,8 @@ export interface IsolatedBrowserOptions {
   startupTimeoutMs?: number;
   testTimeoutMs?: number;
   cleanupTimeoutMs?: number;
+  /** Pause between `dev:status` probes while a profile starts; defaults to 250 ms. */
+  statusPollMs?: number;
 }
 
 /** A foreground launcher is started concurrently, never awaited as a setup command. */
@@ -504,7 +506,7 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         ["launcher", "vite", "electron", "backend"].every((key) => snapshot.live?.[key])
       )
         return;
-      await Bun.sleep(250);
+      await Bun.sleep(options.statusPollMs ?? 250);
     }
   };
   const launchers: Array<{ name: string; handle: ReturnType<typeof launch> }> = [];

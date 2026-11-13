@@ -1,6 +1,6 @@
 /**
- * The script of the subork fake model (`suborks-fake-model.ts`, to-do 4340
- * tasks 1 and 4): what a compliant model does with each request a `/subork`
+ * The script of the subork fake model (`suborks-fake-model.ts`, 4340
+ * (retired) tasks 1 and 4): what a compliant model does with each request a `/subork`
  * call sends, on the caller's side and on each target's. Pure, so the rules
  * have unit tests that need no provider.
  *

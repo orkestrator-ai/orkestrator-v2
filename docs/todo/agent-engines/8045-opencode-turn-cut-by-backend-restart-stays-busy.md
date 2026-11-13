@@ -15,7 +15,7 @@ Analysed 2026-11-13 against `main` at `17d28238c`.
 
 **Context.** The branch runner (`apps/backend/src/core/agent-branch-runner.ts`) gives a turn "a provider restart cut short" one continuation, but only when the provider reports the session as `error` with `interruption: "restart"`. Pi's bridge reports that. OpenCode 2's `status()` (`apps/backend/src/core/opencode2/provider.ts`) answers `running` whenever `GET /api/session/active` names the session, before it looks at the session's outcome. The same read decides a native OpenCode tab's activity, so a tab whose turn was cut by a backend restart is probably affected the same way; that is not yet observed.
 
-**Investigation.** Found by `suborks-restart-live.spec.ts` (to-do 4340, retired) on 2026-11-13, on this Mac (macOS, Apple silicon), on a disposable `--no-agent-credentials --agent-platforms pi,opencode` profile with the pinned `opencode2` 2.2.6 and a scripted model that held both targets' requests open across the kill. Reproduced twice. On a profile kept after the failure (`ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1`):
+**Investigation.** Found by `suborks-restart-live.spec.ts` (4340 (retired) task 4) on 2026-11-13, on this Mac (macOS, Apple silicon), on a disposable `--no-agent-credentials --agent-platforms pi,opencode` profile with the pinned `opencode2` 2.2.6 and a scripted model that held both targets' requests open across the kill. Reproduced twice. On a profile kept after the failure (`ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1`):
 
 - The subork row in the profile's `orkestrator.sqlite` (`native-agent-suborks`) showed the OpenCode branch as above, seven minutes after the restart; the Pi branch was `completed` with `resultReminderSent: true`.
 - The profile's own OpenCode database (`data/opencode2/opencode.db`, table `session_v2`) had the reviewer session with `time_busy` set, `time_idle` empty, `time_suspended` set and `resume_attempts` 0. Its last assistant message had a `completed` time a few seconds after the kill (the server was stopped under it).
@@ -51,4 +51,4 @@ What is inferred and not observed: that the new server's `/api/session/active` l
 
 - [`docs/architecture/suborks.md`](../../architecture/suborks.md) (Lifecycle: "a restart never sends a turn twice").
 - [`docs/development/agent-testing.md`](../../development/agent-testing.md#suborks-on-every-provider-and-across-a-restart-fake-model).
-- 4340 (retired): the subork live qualification that added the restart spec; in Git history at `17d28238c`.
+- 4340 (retired): the subork live qualification that added the restart spec; its final state is in Git history at `14d8ce8db`.

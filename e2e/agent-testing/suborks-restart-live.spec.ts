@@ -1,5 +1,5 @@
 /**
- * A `/subork` call across a killed backend (to-do 4340 task 4), following
+ * A `/subork` call across a killed backend (4340 (retired) task 4), following
  * `goals-restart-live.spec.ts`. Opt-in: skipped unless
  * `ORKESTRATOR_AGENT_TEST_SUBORKS=1`. It `SIGKILL`s the profile's backend and
  * starts the profile again, so it runs last, on a profile it may restart.
@@ -31,7 +31,7 @@
  * caller and target, default `claude`): the target is asked to run
  * `sleep 40` before it answers, and the kill lands once its row is running.
  * Real turns cost tokens; it is on the manual-test checklist (7568, 4340
- * task 4):
+ * (retired) task 4):
  *
  *   mise run dev:test --profile qa-subork-restart --fixture --headless \
  *     --credential-source claude --agent-platforms claude

@@ -5,8 +5,8 @@ import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
 process.once("exit", enterPrivateTestTmpdir());
 
 /**
- * The subork qualification suite (`mise run test:agent:suborks`, to-do 4340
- * tasks 1 and 4): `suborks-live.spec.ts` (every provider as caller and target)
+ * The subork qualification suite (`mise run test:agent:suborks`, 4340
+ * (retired) tasks 1 and 4): `suborks-live.spec.ts` (every provider as caller and target)
  * and then `suborks-restart-live.spec.ts` (a call across a killed backend).
  * Files run in name order on one worker, so the spec that restarts the
  * profile runs last. Separate from the browser agent config so no other suite

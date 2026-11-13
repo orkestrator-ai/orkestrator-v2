@@ -1,6 +1,6 @@
 /**
  * Shared by `suborks-live.spec.ts` and `suborks-restart-live.spec.ts`
- * (to-do 4340 tasks 1 and 4): the scripted model's wiring into a profile's
+ * (4340 (retired) tasks 1 and 4): the scripted model's wiring into a profile's
  * own Pi and OpenCode settings, the tab layout, the `/subork` dispatch and the
  * waits on a call's durable row.
  *

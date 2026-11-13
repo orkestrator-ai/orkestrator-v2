@@ -1,6 +1,6 @@
 /**
- * `/subork` end to end on every provider, as a caller and as a target (to-do
- * 4340 task 1, `docs/architecture/suborks.md`). Opt-in: skipped unless
+ * `/subork` end to end on every provider, as a caller and as a target (4340
+ * (retired) task 1, `docs/architecture/suborks.md`). Opt-in: skipped unless
  * `ORKESTRATOR_AGENT_TEST_SUBORKS=1`.
  *
  * For each platform in `ORKESTRATOR_AGENT_TEST_SUBORK_PLATFORMS` that the
@@ -30,7 +30,7 @@
  * - **Live (`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE` unset).** Real models on
  *   the host's credentials, all six platforms by default, one target per
  *   call. Real turns cost tokens; this mode is on the manual-test checklist
- *   (7568, 4340 task 1). `ORKESTRATOR_AGENT_TEST_SUBORK_ENVIRONMENT=container`
+ *   (7568, 4340 (retired) task 1). `ORKESTRATOR_AGENT_TEST_SUBORK_ENVIRONMENT=container`
  *   runs it in a container environment instead of a local one.
  *
  * Live, against a profile started by hand:

@@ -40,7 +40,9 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`.
+were done; both are in Git history at `1fd391e3a`. 4340 was retired on
+2026-11-13, once its specs passed on scripted models and its Electron rerun
+was recorded; it is in Git history at `14d8ce8db`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.

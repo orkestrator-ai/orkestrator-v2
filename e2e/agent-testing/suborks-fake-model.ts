@@ -1,6 +1,6 @@
 /**
  * A loopback model for the subork specs (`suborks-live.spec.ts`,
- * `suborks-restart-live.spec.ts`, to-do 4340 tasks 1 and 4), so Pi and
+ * `suborks-restart-live.spec.ts`, 4340 (retired) tasks 1 and 4), so Pi and
  * OpenCode callers and targets run on a profile's real bridges and servers
  * with no login and nothing billed. Run with Bun (specs run under Node):
  * `bun suborks-fake-model.ts`. It prints its origin

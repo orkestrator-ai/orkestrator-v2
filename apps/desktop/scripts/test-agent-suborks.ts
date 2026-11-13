@@ -7,7 +7,7 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
  * `mise run test:agent:suborks`
  *
  * `/subork` on a disposable `dev:test --fixture` profile with no agent
- * credentials and only Pi and OpenCode enabled (to-do 4340 tasks 1 and 4).
+ * credentials and only Pi and OpenCode enabled (4340 (retired) tasks 1 and 4).
  * The specs point the profile's own Pi and OpenCode at
  * `suborks-fake-model.ts` on loopback. It runs `suborks-live.spec.ts` (each
  * provider asks itself and the other) and then `suborks-restart-live.spec.ts`

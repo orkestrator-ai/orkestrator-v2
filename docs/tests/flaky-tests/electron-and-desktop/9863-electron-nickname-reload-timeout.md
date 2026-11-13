@@ -91,7 +91,7 @@ connection or title code. Evidence: `output/agent-testing/svc0042-*/electron/res
 
 ## 4340 Electron rerun on macOS — 2026-11-13
 
-- **Branch and base:** Branch `electron-suite-rerun-4896909ed3cc-r1`, base `17d28238c` (to-do 4340 task 5, which changes no desktop or Electron spec code). `mise run flaky:recurrence -- 9863 --base 17d28238c`: open, record as a recurrence.
+- **Branch and base:** Branch `electron-suite-rerun-4896909ed3cc-r1`, base `17d28238c` (4340 (retired) task 5, which changes no desktop or Electron spec code). `mise run flaky:recurrence -- 9863 --base 17d28238c`: open, record as a recurrence.
 - **Original command:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340 mise run test:logged -- --name agent-electron -- mise run test:agent:electron` (one Playwright worker, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), on this Mac (macOS 27.2, Apple silicon) shared with nine other builds; the failure snapshot's CPU meter read 100 %.
 - **Failure:** `Timeout 5000ms exceeded while waiting on the predicate` at the `Workstation` poll after `secondWindow.reload()` (`electron-main.spec.ts:812`), test 52.4 s. Suite: 43 passed, 4 failed, 6 skipped, 25 not run (serial cases behind a failure), 25.9 min.
 - **Owning-file rerun:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340-solo-electron-main mise run test:logged -- --name solo-electron-main -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts` passed the complete unchanged owner (9 passed, 2 skipped, 173.6 s).

@@ -3808,8 +3808,12 @@ A worker on another node has no edge on the command node, so the remote sweep
 holds while that node's `get_agent_registry` entry says `goal.running`
 (`NodeCoordinatorRemote.workerState`), and the first read after the goal stops
 closes the delegation. An older node sends no `goal`, which reads as not
-running. `bun scripts/qa-remote-goal-hold.ts` checks this over a real node link
-with a leaf whose goal is held by its running check, and no agent turn.
+running. `mise run qa:remote-goal-hold` (`scripts/qa-remote-goal-hold.ts`,
+weekly in `.github/workflows/mixed-version-qualification.yml`) checks this over
+a real node link with a leaf whose goal is held by its running check, and no
+agent turn. `tests/unit/qa-remote-goal-hold.test.ts` runs the same seeded goal
+through the leaf's registry, `NodeCoordinatorRemote` and the coordinator in
+process, in the default suite.
 
 **Status reads.** `get_worker_goal` and `get_tab_state` report the goal through
 `goalForModel`, and `list_agents` adds its status and counts, so an `idle` tab whose

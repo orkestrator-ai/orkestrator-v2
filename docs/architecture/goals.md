@@ -207,7 +207,8 @@ Not proven live:
 - A worker on another node between two real turns. Its delegation holds while that
   node's registry says the goal is running: shown over a real node link on
   2026-11-13 with a leaf whose goal was held by its running check
-  (`scripts/qa-remote-goal-hold.ts`), not yet with a real agent's iterations
+  (`scripts/qa-remote-goal-hold.ts`, `mise run qa:remote-goal-hold`, weekly in
+  CI), not yet with a real agent's iterations
   (to-do 4860 (retired) task 2; the real-agent run is on the
   [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 

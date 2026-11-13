@@ -28,9 +28,9 @@ import { nodesClient } from "@orkestrator/protocol/contract/domains/nodes";
 import { until } from "../harness.ts";
 import { defineScenario, type ScenarioContext } from "../scenario.ts";
 import {
-  buildCommitCheck,
   coordinatorListNodes,
-  hasReadings,
+  listNodesChecks,
+  listNodesSettled,
   machineEvidence,
 } from "./coordinator-list-nodes.ts";
 import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
@@ -135,48 +135,20 @@ export default defineScenario({
 async function coordinatorListNodesChecks(ctx: ScenarioContext): Promise<void> {
   const project = await ctx.fixtures.project(ctx.command);
   await ctx.fixtures.pairedOn(ctx.command, ctx.leaf);
-  const servesLoad = ctx.leaf.has("get_machine_load");
-  // A backend takes its first reading 15 s after it starts.
+  const leaf = {
+    id: ctx.leaf.id,
+    version: ctx.leaf.version,
+    helloBuildCommit: ctx.leaf.hello.buildCommit,
+    servesLoad: ctx.leaf.has("get_machine_load"),
+  };
   const listed = await until(
-    `list_nodes to report ${ctx.leaf.label}'s ${servesLoad ? "first load reading" : "load answer"}`,
+    `list_nodes to report ${ctx.leaf.label}'s ${leaf.servesLoad ? "first load reading" : "load answer"}`,
     () => coordinatorListNodes(ctx.command, project.projectId),
-    (value) => {
-      const machine = value.nodes.find((entry) => entry.nodeId === ctx.leaf.id)?.machine;
-      return servesLoad
-        ? hasReadings(machine) && hasReadings(value.self.machine)
-        : machine?.status === "unavailable";
-    },
+    (value) => listNodesSettled(value, leaf),
     90_000,
   );
-  const leaf = listed.nodes.find((entry) => entry.nodeId === ctx.leaf.id);
-  ctx.check(
-    "NO-C6",
-    "a coordinator's list_nodes lists the leaf connected, at its version, with its copy of the project",
-    leaf?.available === true &&
-      leaf.state === "connected" &&
-      leaf.version === ctx.leaf.version &&
-      leaf.hasProject === true,
-    `${leaf?.state ?? "absent"} ${leaf?.version ?? "?"} hasProject ${String(leaf?.hasProject)}`,
-  );
-  ctx.check(
-    "NO-C7",
-    servesLoad
-      ? "list_nodes reports the leaf's OS, size and load readings, and this node's"
-      : "list_nodes shows an older leaf's load as older-version, over the real link",
-    servesLoad
-      ? hasReadings(leaf?.machine)
-      : leaf?.machine.status === "unavailable" && leaf.machine.reason === "older-version",
-    JSON.stringify(machineEvidence(leaf?.machine)).slice(0, 300),
-  );
-  // Only the leaf: `self` comes from the handler, which runs in this runner, so
-  // its buildCommit is the runner's BUILD_COMMIT and would always match.
-  const commit = buildCommitCheck(leaf, ctx.leaf.hello.buildCommit);
-  ctx.check(
-    "NO-C8",
-    "list_nodes reports the leaf's buildCommit as its hello does: present, and null when the build reports none",
-    commit.passed,
-    `leaf ${String(commit.observed)}, hello ${String(commit.expected)}`,
-  );
+  const { checks, leafEvidence } = listNodesChecks(listed, leaf);
+  for (const entry of checks) ctx.check(entry.id, entry.description, entry.passed, entry.detail);
   ctx.note("coordinator list_nodes", {
     self: {
       version: listed.self.version,
@@ -184,11 +156,6 @@ async function coordinatorListNodesChecks(ctx: ScenarioContext): Promise<void> {
       machine: machineEvidence(listed.self.machine),
     },
     command: { helloBuildCommit: ctx.command.hello.buildCommit ?? null },
-    leaf: {
-      version: leaf?.version ?? null,
-      buildCommit: commit.observed,
-      helloBuildCommit: commit.expected,
-      machine: machineEvidence(leaf?.machine),
-    },
+    leaf: leafEvidence,
   });
 }

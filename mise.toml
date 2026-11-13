@@ -208,6 +208,11 @@ description = "Run this checkout against a published release (default: the suppo
 raw_args = true
 run = "bun scripts/qualify-contract-mixed-versions.ts"
 
+[tasks."qa:remote-goal-hold"]
+description = "Two backends of this checkout: a remote worker between goal iterations must not wake its coordinator until the goal ends (scheduled weekly in CI)"
+raw_args = true
+run = "bun scripts/qa-remote-goal-hold.ts"
+
 [tasks.setup]
 description = "Install dependencies and build every native bridge"
 run = [

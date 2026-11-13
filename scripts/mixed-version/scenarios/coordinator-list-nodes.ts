@@ -103,8 +103,9 @@ export function gatewayInvoker(
 
 /** Call `list_nodes` as the coordinator of `projectId` on `command`. */
 export async function coordinatorListNodes(
-  command: PeerNode,
+  command: Pick<PeerNode, "origin" | "token">,
   projectId: string,
+  platform?: InvokerPlatform,
 ): Promise<ListNodesResult> {
   const handlers = new Map<string, () => Promise<{ structuredContent: unknown }>>();
   const server = {
@@ -116,7 +117,7 @@ export async function coordinatorListNodes(
       handlers.set(name, handler);
     },
   };
-  registerNodeTools(server as never, gatewayInvoker(command), {
+  registerNodeTools(server as never, gatewayInvoker(command, platform), {
     projectId,
     coordinatorId: "qualification",
     conversationId: "qualification",
@@ -190,5 +191,86 @@ export function machineEvidence(machine: ListedMachine | undefined): Record<stri
       cpuPercent: entry.cpuPercent,
       ramPercent: entry.ramPercent,
     })),
+  };
+}
+
+/** The leaf as NO-C6 to NO-C8 compare it: what its hello and its contract say. */
+export interface ListedLeafExpectation {
+  readonly id: string;
+  readonly version: string;
+  readonly helloBuildCommit: string | undefined;
+  /** Whether the leaf's release serves `get_machine_load`. */
+  readonly servesLoad: boolean;
+}
+
+/**
+ * Whether a `list_nodes` answer is settled enough to check: a leaf that
+ * serves its load has taken a reading (and so has this node), and an older
+ * one has answered as unavailable. A backend takes its first reading 15 s
+ * after it starts, so the scenario polls until this holds.
+ */
+export function listNodesSettled(value: ListNodesResult, leaf: ListedLeafExpectation): boolean {
+  const machine = value.nodes.find((entry) => entry.nodeId === leaf.id)?.machine;
+  return leaf.servesLoad
+    ? hasReadings(machine) && hasReadings(value.self.machine)
+    : machine?.status === "unavailable";
+}
+
+export interface ListNodesCheck {
+  readonly id: "NO-C6" | "NO-C7" | "NO-C8";
+  readonly description: string;
+  readonly passed: boolean;
+  readonly detail: string;
+}
+
+/**
+ * NO-C6 to NO-C8 over one settled `list_nodes` answer, and the evidence the
+ * scenario records. Only the leaf's `buildCommit` is checked: `self` comes
+ * from the handler, which runs in the runner, so its buildCommit is the
+ * runner's BUILD_COMMIT and would always match.
+ */
+export function listNodesChecks(
+  listed: ListNodesResult,
+  leaf: ListedLeafExpectation,
+): { checks: ListNodesCheck[]; leafEvidence: Record<string, unknown> } {
+  const entry = listed.nodes.find((node) => node.nodeId === leaf.id);
+  const commit = buildCommitCheck(entry, leaf.helloBuildCommit);
+  return {
+    checks: [
+      {
+        id: "NO-C6",
+        description:
+          "a coordinator's list_nodes lists the leaf connected, at its version, with its copy of the project",
+        passed:
+          entry?.available === true &&
+          entry.state === "connected" &&
+          entry.version === leaf.version &&
+          entry.hasProject === true,
+        detail: `${entry?.state ?? "absent"} ${entry?.version ?? "?"} hasProject ${String(entry?.hasProject)}`,
+      },
+      {
+        id: "NO-C7",
+        description: leaf.servesLoad
+          ? "list_nodes reports the leaf's OS, size and load readings, and this node's"
+          : "list_nodes shows an older leaf's load as older-version, over the real link",
+        passed: leaf.servesLoad
+          ? hasReadings(entry?.machine)
+          : entry?.machine.status === "unavailable" && entry.machine.reason === "older-version",
+        detail: JSON.stringify(machineEvidence(entry?.machine)).slice(0, 300),
+      },
+      {
+        id: "NO-C8",
+        description:
+          "list_nodes reports the leaf's buildCommit as its hello does: present, and null when the build reports none",
+        passed: commit.passed,
+        detail: `leaf ${String(commit.observed)}, hello ${String(commit.expected)}`,
+      },
+    ],
+    leafEvidence: {
+      version: entry?.version ?? null,
+      buildCommit: commit.observed,
+      helloBuildCommit: commit.expected,
+      machine: machineEvidence(entry?.machine),
+    },
   };
 }

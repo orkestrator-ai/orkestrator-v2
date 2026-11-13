@@ -34,7 +34,12 @@
  * passes, the goal completes, and the next read closes the delegation and
  * wakes the coordinator once, naming the node.
  *
+ *   mise run qa:remote-goal-hold -- [--report <file>] [--keep]
  *   bun scripts/qa-remote-goal-hold.ts [--report <file>] [--keep]
+ *
+ * Scheduled weekly by `.github/workflows/mixed-version-qualification.yml`.
+ * `tests/unit/qa-remote-goal-hold.test.ts` runs the seeded goal through the
+ * registry, `NodeCoordinatorRemote` and the coordinator in process.
  *
  * Exits 0 when every check passed, 1 when one failed, 2 on a setup error.
  * Only the two backends it started are signalled, through their handles.
@@ -98,17 +103,31 @@ export function waitForFileCheck(file: string): string {
   return `until [ -f ${quoted} ]; do sleep 1; done`;
 }
 
-/** Give the leaf's worker tab a running goal, with the leaf stopped. */
-async function seedGoal(
-  leaf: PeerNode,
+/** A worker tab's native session, keyed as the leaf's registry reads its goal (`AgentRegistry`). */
+export function workerSessionKey(worker: { environmentId: string; tabId: string }): {
+  key: string;
+  logicalSessionKey: string;
+} {
+  const logicalSessionKey = `env-${worker.environmentId}:${worker.tabId}`;
+  return {
+    key: nativeAgentSessionStorageKey(worker.environmentId, "claude", logicalSessionKey),
+    logicalSessionKey,
+  };
+}
+
+/**
+ * Give a worker tab a running goal in the stopped leaf's data directory.
+ * Answers the goal it stored.
+ */
+export async function seedGoal(
+  dataDir: string,
   worker: { environmentId: string; tabId: string },
   check: string,
-): Promise<void> {
-  const storage = new StorageService(path.join(leaf.dir, "data"));
+): Promise<NativeAgentGoal> {
+  const storage = new StorageService(dataDir);
   await storage.init();
   try {
-    const logicalSessionKey = `env-${worker.environmentId}:${worker.tabId}`;
-    const key = nativeAgentSessionStorageKey(worker.environmentId, "claude", logicalSessionKey);
+    const { key, logicalSessionKey } = workerSessionKey(worker);
     const session = await storage.getOrCreateNativeAgentSession(
       { key, environmentId: worker.environmentId, agent: "claude", logicalSessionKey },
       async () => `qualification-session-${Date.now()}`,
@@ -122,6 +141,7 @@ async function seedGoal(
     if ((updated?.goal as { goalId?: string } | undefined)?.goalId !== goal.goalId) {
       throw new Error("The leaf's session did not take the goal.");
     }
+    return goal;
   } finally {
     storage.close();
   }
@@ -190,7 +210,7 @@ export async function runGoalHold(options: { keep: boolean }): Promise<{
 
     const release = path.join(root, "release-goal-check");
     await leaf.stop();
-    await seedGoal(leaf, worker, waitForFileCheck(release));
+    await seedGoal(path.join(leaf.dir, "data"), worker, waitForFileCheck(release));
     await leaf.start();
     await leafAvailable(command, leaf);
 

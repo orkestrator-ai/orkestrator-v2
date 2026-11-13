@@ -235,9 +235,13 @@ allowlist in `apps/desktop/electron/backend-process.ts`:
   its 60 s tab timer) were removed after the busy live profile and the long
   soak (todo 0048 task 13), so naming them, or `all`, leaves them on their
   keyed drivers.
-- `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
-  itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
+
+Native observation sharing (stable-idle group backoff and busy-queue reuse of
+the sweep's answer) has no switch: `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`,
+which made every consumer read providers itself again, was removed on
+2026-11-13 once the live-provider qualification (to-do 0049, retired) ended
+(todo 0048 task 13).
 
 ## Inventory
 

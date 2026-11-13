@@ -205,6 +205,7 @@ export async function runContainerRebuildCase(
     );
   const deadline = startedAt + (context.rebuildTimeoutMs ?? 15 * 60_000);
   let environment: RebuildEnvironment | null = null;
+  let nextProgressAt = startedAt + 30_000;
   for (;;) {
     if (requestError) throw new Error(`the preserving rebuild was refused: ${requestError}`);
     environment = await context
@@ -213,6 +214,12 @@ export async function runContainerRebuildCase(
       })
       .catch(() => null);
     if (requestSettled && rebuildSettled(environment, context.containerId)) break;
+    if (Date.now() > nextProgressAt) {
+      nextProgressAt = Date.now() + 30_000;
+      context.progress(
+        `rebuild: status ${environment?.status ?? "unknown"}, setup ${environment?.setupPhase ?? "unknown"}`,
+      );
+    }
     if (Date.now() > deadline) {
       throw new Error(
         `the rebuild did not settle: status ${environment?.status ?? "unknown"}, ` +

@@ -273,16 +273,25 @@ export function bundleOpenCodeFake(run: typeof spawnSync = spawnSync): string {
 }
 
 export interface ContainerExec {
-  /** `docker exec` with these arguments; resolves to stdout, rejects on a non-zero exit. */
-  exec(args: string[], input?: string): string;
+  /** `docker exec` of `command`, as `user` when given; returns stdout, throws on a non-zero exit. */
+  exec(command: string[], options?: { user?: string; input?: string }): string;
   /** Whether the container is running (a stopped recovery copy is not). */
   running(): boolean;
 }
 
 function dockerContainerExec(containerId: string): ContainerExec {
   return {
-    exec: (args, input) =>
-      docker(["exec", ...(input === undefined ? [] : ["-i"]), containerId, ...args], input),
+    exec: (command, { user, input } = {}) =>
+      docker(
+        [
+          "exec",
+          ...(input === undefined ? [] : ["-i"]),
+          ...(user ? ["--user", user] : []),
+          containerId,
+          ...command,
+        ],
+        input,
+      ),
     running: () =>
       spawnSync("docker", ["container", "inspect", "-f", "{{.State.Running}}", containerId], {
         encoding: "utf8",
@@ -308,7 +317,7 @@ export async function installContainerFakeOpenCode(
   const source = options.source ?? bundleOpenCodeFake();
   const script = CONTAINER_OPENCODE_FAKE_SCRIPT;
   const asNode = (command: string, input?: string) =>
-    container.exec(["--user", "node", "sh", "-c", command], input);
+    container.exec(["sh", "-c", command], { user: "node", input });
   asNode(`umask 077; cat > ${script}`, source);
   const pid = asNode(
     `nohup bun ${script} --port ${CONTAINER_OPENCODE_FAKE_PORT} </dev/null >/dev/null 2>&1 & echo $!`,

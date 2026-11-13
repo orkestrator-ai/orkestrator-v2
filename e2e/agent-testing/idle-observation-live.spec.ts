@@ -1414,7 +1414,7 @@ test.describe("live idle observation", () => {
           // A provider without an "ask" composer mode asks only under the
           // execution policy, which a session takes when it is created: run
           // this case in a second environment created with `approvals: "ask"`.
-          const home = { environmentId, environmentName };
+          const home = { environmentId, environmentName, containerId, containerFake };
           let policyEnvironment: Environment | null = null;
           try {
             if (askMode) {
@@ -1424,7 +1424,8 @@ test.describe("live idle observation", () => {
                 projectId: fixture!.id,
                 name: `idle-ask-${platform}-${Date.now()}`,
                 networkAccessMode: "restricted",
-                environmentType: "local",
+                // The same kind as the run's own, so a container run asks in a container.
+                environmentType: IN_CONTAINER ? "containerized" : "local",
                 agentSettings: { executionPolicy: { approvals: "ask" } },
               });
               environmentId = policyEnvironment.id;
@@ -1519,6 +1520,9 @@ test.describe("live idle observation", () => {
                 .catch(() => undefined);
               environmentId = home.environmentId;
               environmentName = home.environmentName;
+              // The policy environment's container and fake went with it.
+              containerId = home.containerId;
+              containerFake = home.containerFake;
               await goToEnvironment();
             } else {
               await setControls(autoMode ? { approvalMode: autoMode.id } : {});

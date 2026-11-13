@@ -192,15 +192,15 @@ test("a profile with no opencode.json gets one for the run and none afterwards",
   }
 });
 
-type Exec = { args: string[]; input?: string };
+type Exec = { args: string[]; user?: string; input?: string };
 
 function fakeContainer(options: { pid?: string; readyAfter?: number; running?: boolean } = {}) {
   const calls: Exec[] = [];
   let curls = 0;
   const state = { running: options.running ?? true };
   const container: ContainerExec = {
-    exec(args, input) {
-      calls.push({ args, input });
+    exec(args, { user, input } = {}) {
+      calls.push({ args, user, input });
       if (args[0] === "curl") {
         curls += 1;
         if (curls <= (options.readyAfter ?? 0)) throw new Error("docker exec failed");
@@ -224,10 +224,10 @@ test("the container fake is written and served as node, and stopped only by its 
   });
   expect(handle.origin).toBe("container loopback :47124");
   const [write, start] = calls;
-  expect(write!.args.slice(0, 2)).toEqual(["--user", "node"]);
+  expect(write!.user).toBe("node");
   expect(write!.args.at(-1)).toContain(`cat > ${CONTAINER_OPENCODE_FAKE_SCRIPT}`);
   expect(write!.input).toBe("// bundled fake");
-  expect(start!.args.slice(0, 2)).toEqual(["--user", "node"]);
+  expect(start!.user).toBe("node");
   expect(start!.args.at(-1)).toContain(`bun ${CONTAINER_OPENCODE_FAKE_SCRIPT} --port 47124`);
   // Readiness polls the fake's own models route until it answers.
   expect(calls.filter((call) => call.args[0] === "curl")).toHaveLength(3);

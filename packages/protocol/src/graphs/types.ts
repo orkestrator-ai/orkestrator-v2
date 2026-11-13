@@ -27,6 +27,7 @@ import {
 } from "../review-results.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-workflow.js";
 import {
+  backfillLegacyReviewOutcome,
   STRUCTURED_REVIEW_MAX_FILES_REVIEWED,
   STRUCTURED_REVIEW_MAX_SOURCE_IDS,
   STRUCTURED_REVIEW_MAX_TEXT_BYTES,
@@ -332,6 +333,8 @@ const EXAMPLE_REVIEW_REPORT = {
     ],
     commandsNotRun: [],
     limitations: [],
+    outcome: "reviewed",
+    blockedReason: null,
   },
   whatChanged: {
     overview: "Adds a CSV export button to the reports page so users can download report rows.",
@@ -1111,7 +1114,13 @@ export function validateGraphArtifactValue(
     definition.builtIn && definition.name === "decision" && context.choices
       ? graphDecisionSchema(context.choices)
       : definition.schema;
-  const structural = validateGraphSchemaValue(schema, value);
+  // A review report from before `reviewScope.outcome` existed reads as reviewed.
+  const structural = validateGraphSchemaValue(
+    schema,
+    definition.validator === "structured-review-report"
+      ? backfillLegacyReviewOutcome(value)
+      : value,
+  );
   if (structural.length > 0) return structural;
   if (!definition.validator) return [];
   return graphBuiltInValidator(definition.validator).check(value, context).slice(0, MAX_ISSUES);

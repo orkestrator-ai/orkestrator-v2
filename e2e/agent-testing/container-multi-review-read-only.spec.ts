@@ -13,7 +13,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * A Multi Review with Claude read-only reviewers and a Claude consolidation in
  * a container environment, on the image's real `claude` CLI and a scripted
  * fake Messages API on the container's loopback: no login and no billed turn
- * (to-do 0190 task 3).
+ * (to-do 0190, task 3).
  *
  * The image ships neither bubblewrap nor socat, so every read-only turn runs
  * without the CLI's command sandbox, on the read-only command hook alone. The
@@ -25,6 +25,12 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * report, that the reviewers and consolidation carry the sandbox-off note in
  * the snapshot and in their inspectors, that the diff file holds what
  * `diffCommand` prints, and that no write reached the checkout.
+ *
+ * It also catches Agent Info's "No sandbox" while a reviewer turn runs (to-do
+ * 0190 task 3): the fake holds each reviewer's submission while a
+ * hold file exists in the container (`--hold`), the case opens Reviewer 1's
+ * transcript tab and its Agent Info, checks the reported policy and its
+ * reason, and only then releases the turns.
  *
  * Opt-in: `ORKESTRATOR_AGENT_TEST_DOCKER=1` and
  * `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1`, against a profile started
@@ -55,6 +61,7 @@ const ENABLED =
   process.env.ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW === "1";
 const CONTAINER_NAME = "fixture-container";
 const STEP_LOG = "/tmp/orkestrator-qa-review-steps.jsonl";
+const HOLD_FILE = "/tmp/orkestrator-qa-review-hold";
 const MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json";
 const FAKE_PORT = 47_123;
 const SETTLED = new Set(["ready", "interactive", "completed", "failed", "cancelled"]);
@@ -147,7 +154,7 @@ async function installFakeReviewApi(containerId: string): Promise<() => void> {
       path.join(import.meta.dirname, "container-fake-claude-review-api.ts"),
       "utf8",
     ),
-    serverArgs: ["--log", STEP_LOG],
+    serverArgs: ["--log", STEP_LOG, "--hold", HOLD_FILE],
     waitUntilReady: async () => {
       await expect
         .poll(
@@ -187,6 +194,22 @@ function stepLog(containerId: string): StepRecord[] {
     .map((line) => JSON.parse(line) as StepRecord);
 }
 
+/** Opens the container environment's Multi Review tab from a freshly loaded app. */
+async function openMultiReview(page: Page, status: Status) {
+  await page.goto(status.browserUrl);
+  const expand = page.getByRole("button", { name: /^Expand project / }).first();
+  const collapse = page.getByRole("button", { name: /^Collapse project / }).first();
+  await expect(expand.or(collapse)).toBeVisible({ timeout: 30_000 });
+  if (await expand.isVisible()) await expand.click();
+  await page.mouse.move(1100, 20);
+  await page.getByText(CONTAINER_NAME, { exact: true }).first().click();
+  await page.getByRole("button", { name: "Multi Review", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  return page.getByRole("tablist", { name: "Multi Review pipeline" }).first();
+}
+
 /** The last request of each scripted turn of `kind`: its answered steps, in order. */
 function finishedTurns(records: StepRecord[], kind: string) {
   return records
@@ -222,7 +245,13 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
   // An earlier run's log would be counted as this run's turns.
   docker(["exec", "--user", "node", containerId, "rm", "-f", STEP_LOG]);
   const undo = await installFakeReviewApi(containerId);
+  const release = () =>
+    spawnSync("docker", ["exec", "--user", "node", containerId, "rm", "-f", HOLD_FILE], {
+      timeout: 15_000,
+    });
   try {
+    // Held until Agent Info has been read: each reviewer stops before it submits.
+    docker(["exec", "--user", "node", containerId, "touch", HOLD_FILE]);
     docker([
       "exec",
       "--user",
@@ -243,6 +272,39 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
       reviewModel: reviewer,
       fixModel: reviewer,
     });
+
+    // Agent Info while a reviewer turn runs: the reported policy is the
+    // bridge's own for the running read-only turn.
+    await expect
+      .poll(() => stepLog(containerId).some((record) => record.step === "hold"), {
+        timeout: 5 * 60_000,
+        intervals: [2_000],
+      })
+      .toBe(true);
+    const held = await openMultiReview(page, status);
+    await held.getByRole("tab", { name: /^Reviewer 1 · claude,/ }).click();
+    await page.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).click();
+    await page.getByRole("button", { name: "Open agent information" }).click();
+    await expect(page.getByText(/^No sandbox, approvals denied/).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByText(/Claude's command sandbox cannot run commands in this container/).first(),
+    ).toBeVisible();
+    await testInfo.attach("reviewer-agent-info-running", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+    await page.keyboard.press("Escape");
+    expect(
+      (
+        await invoke<{ snapshot: MultiReviewWorkflow }>("get_multi_review_workflow", {
+          workflowId: started.id,
+        })
+      ).snapshot.reviewers[0]?.status,
+    ).toBe("running");
+    release();
+
     let workflow = started;
     await expect
       .poll(
@@ -310,18 +372,7 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
     expect(probe).toBe("no-probe");
 
     // What the user sees: the note on the reviewer's and the consolidation's inspector.
-    await page.goto(status.browserUrl);
-    const expand = page.getByRole("button", { name: /^Expand project / }).first();
-    const collapse = page.getByRole("button", { name: /^Collapse project / }).first();
-    await expect(expand.or(collapse)).toBeVisible({ timeout: 30_000 });
-    if (await expand.isVisible()) await expand.click();
-    await page.mouse.move(1100, 20);
-    await page.getByText(CONTAINER_NAME, { exact: true }).first().click();
-    await page.getByRole("button", { name: "Multi Review", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
-      timeout: 30_000,
-    });
-    const pipeline = page.getByRole("tablist", { name: "Multi Review pipeline" }).first();
+    const pipeline = await openMultiReview(page, status);
     const inspector = page.getByTestId("multi-review-inspector");
     for (const [name, node] of [
       ["reviewer", /^Reviewer 1 · claude,/],
@@ -336,6 +387,7 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
       });
     }
   } finally {
+    release();
     undo();
   }
 });

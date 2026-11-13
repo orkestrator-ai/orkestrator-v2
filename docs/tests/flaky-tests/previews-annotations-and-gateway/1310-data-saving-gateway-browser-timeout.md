@@ -329,3 +329,13 @@ exceeded its 60 s deadline in the component browser suite (load average about
 42) and again in a four-owner multi-worker rerun; the complete unchanged owner
 passed with one worker (61.3 s, with `PaneBreakpoint.spec.ts`).
 `flaky:recurrence 1310` reported `open`. Full run: [9953](../aggregate-validation-runs/9953-launch-override-marker-browser-owners.md).
+
+## WebKit macOS input review repair — 2026-11-13
+
+On `webkit-macos-input-9c0ac85051e8-r1` (base `17d28238c`, repair at `3d3370c35`), the rerun of the recorded `test:browser` command (on `ORKESTRATOR_E2E_PORT=1532`; another worktree's fixture server held port 1422) failed the mobile case at its 60 s deadline with `browserContext.close: Target page, context or browser has been closed` (2 failed, 154 skipped, 1728 passed, 27.7 m). `mise run flaky:recurrence 1310 --base 17d28238c` answered "open. Record the failure as a recurrence". The branch does not touch the gateway or data-saving code. The complete unchanged owner then passed both viewports alone with one worker (exit 0, 36.2 s):
+
+```sh
+ORKESTRATOR_E2E_PORT=1532 mise run test:logged -- --name data-saving-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1
+```
+
+No assertion, skip or timeout changed; root cause remains unconfirmed.

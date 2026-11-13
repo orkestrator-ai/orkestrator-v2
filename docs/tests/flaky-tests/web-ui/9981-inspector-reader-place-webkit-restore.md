@@ -81,3 +81,25 @@ branch `fix-ci-main-1727044b99e3-r1`, base `51456e887`
   the spec. The earlier Docker runs above remain the reproduction.
 
 Status stays open; no assertion or wait changed.
+
+## Chromium observation 2026-11-13 (qualification-tooling review repair)
+
+- **Branch and base:** `qualification-tooling-1ab05fd26c00-r1` at `ed9e17607`,
+  base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The fixture (`/pipeline-flow?scenario=fanout&longTranscript=report`)
+  holds 40 assistant text rows, so the branch's `NativeMessage.tsx` change
+  (system rows with compaction or retry parts) does not render in it.
+- **Command:** the seven chat and transcript specs together, Chromium,
+  `--workers=2`, on the shared Linux host at load about 90 (see
+  [9959](../aggregate-validation-runs/9959-qualification-tooling-review-runs-under-host-load.md)).
+- **Failure:** `[desktop-chromium] Build Pipeline with a review report keeps a reader's place across another node`,
+  at **line 223** (the settled offset ten frames after the return), not line
+  220: received 11,855, expected 11,655. The first visible frame matched.
+- **Owner rerun alone:** `bunx playwright test --config e2e/playwright.config.ts "e2e/InspectorTranscriptHide.spec.ts:183" --project=desktop-chromium --workers=1`
+  through `test:logged`: **failed the same way** (11,855 against 11,655), while
+  the plain Build Pipeline view passed. So this is not a flake by the
+  registry's definition; it is recorded here because it is the same test on
+  a different browser and line. Not run on an unloaded host.
+- **Recurrence check:** `mise run flaky:recurrence -- 9981 --base 17d28238c --registry-ref origin/main`
+  reported `open`.
+
+No assertion or wait was changed.

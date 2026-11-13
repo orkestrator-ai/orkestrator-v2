@@ -16,6 +16,7 @@ import {
   Hammer,
   ListChecks,
   MessageSquare,
+  Package,
   ScanSearch,
   Shield,
   ShieldCheck,
@@ -53,6 +54,8 @@ import {
   type LaunchAgent,
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
+import { aptPackagesNotice } from "@/lib/apt-packages-notice";
+import type { DeclaredAptPackages } from "@orkestrator/protocol/apt-packages";
 import type { EnvironmentType, NetworkAccessMode } from "@/types";
 import type { BuildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import {
@@ -277,6 +280,39 @@ function RootStepsNetworkWarning({ steps }: { steps: number }) {
   );
 }
 
+/**
+ * Shown under the network choice for a project whose default branch declares
+ * Debian packages (`aptPackages`): which ones setup installs and, under
+ * Restricted, that Debian's archive becomes reachable; or that setup will stop
+ * on a list the installer refuses.
+ */
+function AptPackagesNote({
+  aptPackages,
+  networkAccessMode,
+}: {
+  aptPackages: DeclaredAptPackages | null;
+  networkAccessMode: "restricted" | "full";
+}) {
+  const notice = aptPackagesNotice(aptPackages, networkAccessMode);
+  if (!notice) return null;
+  const warning = notice.tone === "warning";
+  const Icon = warning ? TriangleAlert : Package;
+  return (
+    <p
+      role="status"
+      className={cn(
+        "mt-2 flex items-start gap-2 rounded-md border px-3 py-2 text-[11px] leading-snug",
+        warning
+          ? "border-amber-500/35 bg-amber-500/10 text-amber-200"
+          : "border-zinc-700 bg-zinc-900/60 text-zinc-400",
+      )}
+    >
+      <Icon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+      <span>{notice.text}</span>
+    </p>
+  );
+}
+
 interface BuildLaunchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -302,6 +338,11 @@ interface BuildLaunchDialogProps {
    * `null` or absent when unknown: no warning.
    */
   rootSetupSteps?: number | null;
+  /**
+   * Debian packages the project's default branch declares
+   * (`useBuildLaunchOptions`); `null` or absent when unknown: no note.
+   */
+  aptPackages?: DeclaredAptPackages | null;
   /** Trigger that receives focus again after the dialog closes. */
   returnFocusRef?: RefObject<HTMLElement | null>;
   onConfirm: (selection: BuildLaunchSelection) => void;
@@ -750,6 +791,7 @@ export function BuildLaunchDialog({
   busy = false,
   localEnvironmentAvailable = true,
   rootSetupSteps = null,
+  aptPackages = null,
   returnFocusRef,
   onConfirm,
 }: BuildLaunchDialogProps) {
@@ -1197,6 +1239,10 @@ export function BuildLaunchDialog({
                   {networkAccessMode === "restricted" && (rootSetupSteps ?? 0) > 0 && (
                     <RootStepsNetworkWarning steps={rootSetupSteps ?? 0} />
                   )}
+                  <AptPackagesNote
+                    aptPackages={aptPackages}
+                    networkAccessMode={networkAccessMode}
+                  />
                 </div>
               )}
 

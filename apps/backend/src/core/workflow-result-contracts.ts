@@ -14,6 +14,7 @@ import {
 import { parseReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  backfillLegacyReviewOutcome,
   safeParseStructuredReviewReport,
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
@@ -507,6 +508,18 @@ function parses(parse: (value: unknown) => unknown, failure?: string) {
   };
 }
 
+/**
+ * The strict report schema over a value whose missing `reviewScope.outcome`
+ * pair is read as reviewed, as the domain contract reads it
+ * (`backfillLegacyReviewOutcome`).
+ */
+function reviewReportStructure(value: unknown): WorkflowResultValidationIssue[] {
+  return validateWorkflowJsonSchema(
+    STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+    backfillLegacyReviewOutcome(value),
+  );
+}
+
 function reviewReportDomain(value: unknown): WorkflowResultValidationIssue[] {
   const parsed = safeParseStructuredReviewReport(value, { allowLegacyTestResults: true });
   return parsed.success ? [] : parsed.error.issues.map(fromReviewIssue);
@@ -550,10 +563,12 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
     finalContent: finalReviewPreparation,
   }),
   builtInKind("review-report", () => STRUCTURED_REVIEW_REPORT_JSON_SCHEMA, {
+    structural: reviewReportStructure,
     validator: reviewReportDomain,
     finalContent: validateReviewNarratives,
   }),
   builtInKind("consolidated-review", () => STRUCTURED_REVIEW_REPORT_JSON_SCHEMA, {
+    structural: reviewReportStructure,
     validator: reviewReportDomain,
     finalContent: validateReviewNarratives,
     contextValidator: (value, slot) =>

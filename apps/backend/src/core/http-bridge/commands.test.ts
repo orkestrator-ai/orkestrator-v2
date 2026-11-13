@@ -191,24 +191,30 @@ describe("HTTP bridge command transport", () => {
     }
   });
 
-  test("a legacy session success does not recover another session's outdated-bridge fault", async () => {
+  test("a 200 answer without catalogueVersion is outdated-bridge, counted, never legacy rows", async () => {
+    // Only a bridge older than 2.21.0 answers so: every bridge from v2.21.0 on
+    // stamps every answer of this route with the version.
+    resetOutdatedBridgeCatalogueReadCounts();
     resetLogger();
     const logs = captureLogs();
-    const { provider } = httpProvider(
-      (url) =>
-        url.endsWith("/session/missing/commands")
-          ? new Response(null, { status: 404 })
-          : Response.json({ commands: [] }),
-      codexConnection,
-    );
     try {
-      for (let n = 0; n < 4; n += 1) {
-        await expect(provider.commandCatalogue!("missing")).rejects.toMatchObject({
+      const { provider, requests } = httpProvider(
+        () => Response.json({ commands: [{ name: "/legacy", source: "builtin" }] }),
+        codexConnection,
+      );
+      for (let read = 0; read < 2; read += 1) {
+        await expect(provider.commandCatalogue!("session-1")).rejects.toMatchObject({
           catalogueErrorCode: "outdated-bridge",
         });
-        await provider.commandCatalogue!("present");
       }
+      expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+        "/session/session-1/commands",
+        "/session/session-1/commands",
+      ]);
+      expect(outdatedBridgeCatalogueReadCounts()).toEqual({ codex: 2 });
       expect(logs.records().map((record) => record.event)).toEqual(["catalogue.outdated-bridge"]);
+      expect(logs.records()[0]?.fields).toMatchObject({ agent: "codex", readsSoFar: 1 });
+      expect(logs.lines.join("\n")).not.toContain("/legacy");
     } finally {
       logs.restore();
       resetOutdatedBridgeCatalogueReadCounts();
@@ -379,7 +385,9 @@ describe("HTTP bridge command transport", () => {
  * - every bridge served `GET /session/:id/commands` as `{ commands: [...] }`
  *   with no `catalogueVersion` (the route came in 5df7dec67, #599), had no
  *   `POST /session/:id/commands/refresh` and no `commandRevision` on its
- *   session snapshot;
+ *   session snapshot. Every bridge from v2.21.0 on stamps that route's answer
+ *   with `catalogueVersion: 1`, so an unversioned answer is an outdated bridge
+ *   like a 404, never rows;
  * - the legacy global routes: Claude `/plugins/commands` as
  *   `{ commands: string[] }` of `"/name - description"`, Codex
  *   `/global/slash-commands` as `{ commands: [records], cwd }`, Cursor
@@ -548,66 +556,55 @@ function providerRows(read: Awaited<ReturnType<typeof readCatalogue>>) {
 describe("mixed-version: new backend, old bridge", () => {
   for (const bridge of OLD_BRIDGES) {
     describe(bridge.agent, () => {
-      test("a pre-catalogue session route is read as legacy rows that run as typed text", async () => {
-        const { provider, requests } = oldBridgeProvider(bridge, {
-          "/session/session-1/commands": () =>
-            Response.json({ commands: bridge.legacySessionRows }),
-          ...(bridge.legacyGlobalBody
-            ? { [bridge.legacyRoute!]: () => Response.json(bridge.legacyGlobalBody) }
-            : {}),
-        });
-        const read = await readCatalogue(bridge, provider);
+      test("a pre-catalogue session route's unversioned rows are outdated-bridge; typed text still goes as text", async () => {
+        const warn = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const { provider, requests } = oldBridgeProvider(bridge, {
+            "/session/session-1/commands": () =>
+              Response.json({ commands: bridge.legacySessionRows }),
+            ...(bridge.legacyGlobalBody
+              ? { [bridge.legacyRoute!]: () => Response.json(bridge.legacyGlobalBody) }
+              : {}),
+          });
+          const read = await readCatalogue(bridge, provider);
 
-        // The session route answered, so the global list is never consulted.
-        expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-          "/session/session-1/commands",
-        ]);
-        expect(read.snapshot.state).toMatchObject({
-          status: "ready",
-          enhanced: false,
-          freshness: "ttl",
-        });
-        expect(read.snapshot.state.error).toBeUndefined();
-        expect(providerRows(read)).toEqual(
-          (bridge.legacySessionRows as Array<{ name: string }>).map(({ name }) => ({
-            id: `legacy:${name}`,
-            name,
-            executionKind: "provider-prompt",
+          // The session route answered, so the global list is never consulted.
+          expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+            "/session/session-1/commands",
+          ]);
+          expect(read.snapshot.state).toMatchObject({
+            status: "unavailable",
+            enhanced: false,
+            error: { code: "outdated-bridge" },
+          });
+          // None of the old bridge's rows reach the picker, under any identity.
+          expect(read.snapshot.commands).toEqual([]);
+          expect(read.picker.every((command) => command.executionKind === "session-action")).toBe(
+            true,
+          );
+
+          const [first] = bridge.legacySessionRows as Array<{ name: string }>;
+          if (!first) return;
+          const typed = await dispatch(bridge, read, provider, requests, `${first.name} src/a.ts`, {
+            kind: "typed",
+          });
+          expect(typed.plan).toMatchObject({ kind: "prompt", allowProviderCommands: true });
+          expect(typed.body).toMatchObject({ prompt: `${first.name} src/a.ts` });
+          expect(typed.body && "command" in typed.body).toBe(false);
+
+          // A selection the old bridge's rows used to carry cannot be verified,
+          // so nothing is sent.
+          const sentBefore = requests.length;
+          const chosen = await dispatch(bridge, read, provider, requests, `${first.name} x`, {
+            kind: "selected",
+            commandId: `legacy:${first.name}`,
             bindingRevision: "legacy",
-          })),
-        );
-
-        // No refresh route: an explicit refresh is honestly a re-read.
-        await expect(read.cache.refresh(read.key, "env-1", provider, "session-1")).resolves.toEqual(
-          { outcome: "reread" },
-        );
-        expect(read.cache.peek(read.key)!.state.lastRefresh?.outcome).toBe("reread");
-
-        const [first] = read.snapshot.commands;
-        if (!first) return;
-        // Choosing a legacy row from the picker sends the text, never a selection
-        // the old bridge would silently ignore.
-        const chosen = await dispatch(bridge, read, provider, requests, `${first.name} src/a.ts`, {
-          kind: "selected",
-          commandId: first.id!,
-          bindingRevision: first.bindingRevision!,
-        });
-        expect(chosen.plan).toMatchObject({ kind: "prompt", allowProviderCommands: true });
-        expect(chosen.body).toMatchObject({
-          prompt: `${first.name} src/a.ts`,
-          allowProviderCommands: true,
-        });
-        expect(chosen.body && "command" in chosen.body).toBe(false);
-
-        // A selection naming an enhanced identity the old bridge never minted
-        // cannot be matched, so nothing is sent.
-        const sentBefore = requests.length;
-        const guessed = await dispatch(bridge, read, provider, requests, `${first.name} x`, {
-          kind: "selected",
-          commandId: `${bridge.agent}:${first.name}`,
-        });
-        expect(guessed.plan).toMatchObject({ kind: "rejected", staleSelection: true });
-        expect(requests).toHaveLength(sentBefore);
+          });
+          expect(chosen.plan).toMatchObject({ kind: "rejected", staleSelection: true });
+          expect(requests).toHaveLength(sentBefore);
+        } finally {
+          warn.mockRestore();
+        }
       });
 
       test("a session-route 404 is outdated-bridge per read, never a global list, never sticky", async () => {
@@ -832,14 +829,25 @@ describe("mixed-version: new backend, old bridge", () => {
         const { provider } = oldBridgeProvider(bridge, {
           "/session/session-1/commands": () =>
             healthy
-              ? Response.json({ commands: [{ name: "/review", source: "project" }] })
-              : Response.json({ commands: { not: "a list" } }),
+              ? Response.json({
+                  catalogueVersion: 1,
+                  status: "ready",
+                  commands: [
+                    {
+                      name: "/review",
+                      id: `${bridge.agent}:/review`,
+                      executionKind: "provider-prompt",
+                      source: "project",
+                    },
+                  ],
+                })
+              : Response.json({ catalogueVersion: 1, commands: { not: "a list" } }),
         });
         const read = await readCatalogue(bridge, provider);
         healthy = false;
         await read.cache.readForDispatch(read.key, "env-1", provider, "session-1", true);
         expect(read.cache.peek(read.key)).toMatchObject({
-          commands: [{ id: "legacy:/review" }],
+          commands: [{ id: `${bridge.agent}:/review` }],
           state: { status: "stale", error: { code: "malformed" } },
         });
       });

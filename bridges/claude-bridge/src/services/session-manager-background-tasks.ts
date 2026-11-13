@@ -13,6 +13,10 @@ import { sessions } from "./session-manager-core.js";
 import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
 import type { ClaudeRuntime } from "./session-manager-runtime.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  backgroundTasksForSnapshot,
+  LIVE_BACKGROUND_TASK_STATUSES,
+} from "./background-task-snapshot.js";
 
 const log = createLogger("bridge.claude");
 
@@ -29,12 +33,8 @@ function provisionalBackgroundTaskId(toolUseId: string): string {
   return `${PROVISIONAL_BACKGROUND_TASK_PREFIX}${toolUseId}`;
 }
 
-/** Statuses from which a background task can still be doing work. */
-export const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>([
-  "pending",
-  "running",
-  "paused",
-]);
+// Defined beside the snapshot projection, which needs it without a cycle.
+export { LIVE_BACKGROUND_TASK_STATUSES };
 
 /**
  * The summary Claude Code puts on each task its resume scan marks.
@@ -736,14 +736,14 @@ export function emitBackgroundTaskSnapshot(session: SessionState): void {
   eventEmitter.emit({
     type: "session.updated",
     sessionId: session.id,
-    data: { backgroundTasks: session.backgroundTasks },
+    data: { backgroundTasks: backgroundTasksForSnapshot(session.backgroundTasks) },
   });
 }
 
 /**
  * Release a session's control handle, closing the underlying query if the SDK
- * exposes a way to. Called when the session is deleted or explicitly aborted —
- * the two points at which the user has said the background work should stop.
+ * exposes a way to. Called when the session is dropped or explicitly aborted —
+ * the points at which the user has said the background work should stop.
  */
 export function releaseQueryControl(session: SessionState): void {
   void releaseQueryControls(session);
@@ -767,8 +767,8 @@ export async function releaseQueryControls(session: SessionState): Promise<void>
 /**
  * Detach every query control the session owns and hand them to the caller.
  *
- * Deletion closes them best-effort through `releaseQueryControls`; tab close
- * closes them itself because it must report a close it could not confirm.
+ * `releaseQueryControls` closes them best-effort; tab close closes them itself
+ * because it must report a close it could not confirm.
  */
 export function takeQueryControls(
   session: SessionState,

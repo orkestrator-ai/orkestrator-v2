@@ -396,7 +396,7 @@ export async function claimPromptDispatch(
     return "duplicate";
   }
   if (session.deleting) {
-    throw sessionOperationError("conflict", "Session is being deleted");
+    throw sessionOperationError("conflict", "Session is being closed");
   }
   if (session.status === "running") {
     throw sessionOperationError("conflict", "Session is already processing a prompt");

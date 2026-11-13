@@ -1,6 +1,6 @@
 /**
  * The sidebar's empty states and drag card look the same on this window's
- * tree, another machine's section and the merged lists (to-do 2190, task 7),
+ * tree, another machine's section and the merged lists (to-do 2190 (retired), task 7),
  * and another machine's rows look the same from its summary and from its
  * warm or live scope (plan item 5007).
  */

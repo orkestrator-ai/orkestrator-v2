@@ -47,7 +47,7 @@ import {
   settleArtifactDispatchTurn,
   type ArtifactTurnDispatch,
 } from "./workflow-artifact-turns.js";
-import type { PlanUsageState } from "./plan-usage-cache.js";
+import type { PlanUsageState } from "./plan-usage/index.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";

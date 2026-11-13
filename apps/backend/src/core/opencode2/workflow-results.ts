@@ -1,6 +1,6 @@
 /**
  * Workflow results, structured output and Orkestrator's MCP connections on
- * OpenCode 2.x sessions (docs/todo/agent-engines/0008-opencode-v2.md, phase 5;
+ * OpenCode 2.x sessions (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), phase 5;
  * task 4: structured output moves to the workflow-result MCP tool).
  *
  * A result turn is the 1.x broker's, on 2.x mechanisms:

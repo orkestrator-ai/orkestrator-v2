@@ -306,6 +306,184 @@ describe("head-row recovery", () => {
     );
   });
 
+  /**
+   * A head row whose exact read the test releases by hand, so a newer revision
+   * can arrive while it is in flight: what happens once reading and parsing the
+   * row outlasts the gap between two revisions (to-do 7845 (retired), task 2).
+   */
+  function slowRecoveryProvider() {
+    let revision = 1;
+    let trimmed = false;
+    let complete = true;
+    // One gate per exact read, in the order the reads start.
+    const gates: Array<{ promise: Promise<void>; release: () => void }> = [];
+    const gate = (call: number) => {
+      while (gates.length <= call) {
+        let release!: () => void;
+        const promise = new Promise<void>((resolve) => (release = resolve));
+        gates.push({ promise, release });
+      }
+      return gates[call]!;
+    };
+    const full = (at: number) =>
+      row("response", `Update ${at}`, [
+        toolPart(0, "done"),
+        { type: "text", content: `Update ${at}` },
+      ]);
+    let reads = 0;
+    const messages = mock(async () => {
+      const at = revision;
+      await gate(reads++).promise;
+      return [full(at)];
+    });
+    const stub = createProviderStub("codex", {
+      messages,
+      transcriptSnapshot: async () => {
+        const current = full(revision);
+        return trimmed && !complete
+          ? {
+              messages: [{ ...current, parts: current.parts.slice(1) }],
+              complete: false,
+              omittedParts: 1,
+              sourceToken: `source-${revision}`,
+              historyEpoch: "1:1",
+              freshness: "current" as const,
+            }
+          : {
+              messages: [current],
+              complete: true,
+              sourceToken: `source-${revision}`,
+              historyEpoch: "1:1",
+              freshness: "current" as const,
+            };
+      },
+    });
+    return {
+      stub,
+      messages,
+      /** Lets exact read number `call` (from 0) answer. */
+      release: (call = 0) => gate(call).release(),
+      releaseAll: () => {
+        for (const { release } of gates) release();
+      },
+      stream: () => {
+        trimmed = true;
+        complete = false;
+        revision += 1;
+      },
+      finish: () => {
+        complete = true;
+        revision += 1;
+      },
+    };
+  }
+
+  async function withSlowRecovery(
+    name: string,
+    run: (context: {
+      provider: ReturnType<typeof slowRecoveryProvider>;
+      shown: () => Promise<{ content: string; parts: number }>;
+    }) => Promise<void>,
+    // By default only the first recovery starts within the test.
+    settleMs = 60_000,
+  ) {
+    const provider = slowRecoveryProvider();
+    await withService(
+      {
+        prefix: `orkestrator-7845-${name}-`,
+        provider: async () => provider.stub.provider,
+        progressiveHydrationSettleMs: settleMs,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: `env-env-1:${name}`,
+        };
+        await service.ensureSession(identity);
+        const shown = async () => {
+          const update = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          if (update.status !== "snapshot")
+            throw new Error(`expected a snapshot: ${update.status}`);
+          const head = update.value.messages[0] as Row;
+          return { content: head.content, parts: head.parts.length };
+        };
+        try {
+          await run({ provider, shown });
+        } finally {
+          provider.releaseAll();
+        }
+      },
+    );
+  }
+
+  test("a recovery a newer revision overtook still advances the view", async () => {
+    await withSlowRecovery("overtaken", async ({ provider, shown }) => {
+      expect(await shown()).toEqual({ content: "Update 1", parts: 2 });
+      provider.stream();
+      await shown();
+      await waitForCondition(() => provider.messages.mock.calls.length === 1);
+      // Revision 3 lands while the read of revision 2 is still in flight.
+      provider.stream();
+      expect(await shown()).toEqual({ content: "Update 1", parts: 2 });
+      provider.release();
+      // The read is newer than the view, which has not moved since it started.
+      await waitForCondition(async () => (await shown()).content === "Update 2");
+      expect(await shown()).toEqual({ content: "Update 2", parts: 2 });
+      expect(provider.messages).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("a recovery older than the view it would replace is not committed", async () => {
+    await withSlowRecovery("older", async ({ provider, shown }) => {
+      await shown();
+      provider.stream();
+      await shown();
+      await waitForCondition(() => provider.messages.mock.calls.length === 1);
+      // The turn ends while the read of revision 2 is in flight.
+      provider.finish();
+      expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
+      provider.release();
+      await Bun.sleep(20);
+      expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
+    });
+  });
+
+  test("an overtaken recovery does not replace a newer recovery that landed first", async () => {
+    await withSlowRecovery(
+      "out-of-order",
+      async ({ provider, shown }) => {
+        expect(await shown()).toEqual({ content: "Update 1", parts: 2 });
+        // Read 0 recovers revision 2 and stays in flight.
+        provider.stream();
+        await shown();
+        await waitForCondition(() => provider.messages.mock.calls.length === 1);
+        // Read 1 recovers revision 3 once the interval has passed.
+        provider.stream();
+        await shown();
+        await waitForCondition(() => provider.messages.mock.calls.length === 2);
+        // The newer read answers first, and the view shows revision 3.
+        provider.release(1);
+        await waitForCondition(async () => (await shown()).content === "Update 3");
+        // Revision 4 streams in, so a newer recovery is pending while the
+        // view holds revision 3.
+        provider.stream();
+        expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
+        // The read of revision 2 now answers. The view moved since it
+        // started, so committing it would take the view backwards.
+        provider.release(0);
+        await Bun.sleep(20);
+        expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
+      },
+      20,
+    );
+  });
+
   test("a cached summary still recovers while its token keeps moving", async () => {
     let revision = 0;
     const messages = mock(async () => [row("m0"), row("m1"), row("m2")]);

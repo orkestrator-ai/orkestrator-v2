@@ -172,7 +172,14 @@ export const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
  * turns it into a specific message instead of "the setup script failed".
  * `docker/workspace-setup.sh` prints these, so a new reason needs both sides.
  */
-export const SETUP_FAILURE_REASONS = ["root-steps-need-full-network"] as const;
+export const SETUP_FAILURE_REASONS = [
+  "root-steps-need-full-network",
+  // orkestrator-ai.json "aptPackages" (docker/orkestrator-apt-install.sh, to-do 7770).
+  "apt-packages-refused",
+  "apt-packages-unsupported-runtime",
+  "apt-packages-archive-unreachable",
+  "apt-packages-install-failed",
+] as const;
 export type SetupFailureReason = (typeof SETUP_FAILURE_REASONS)[number];
 export function setupFailureReasonOscSequence(reason: SetupFailureReason): string {
   return `\u001b]9999;setup_failure_reason=${reason}\u0007`;

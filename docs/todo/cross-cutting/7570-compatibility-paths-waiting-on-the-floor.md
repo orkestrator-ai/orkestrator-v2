@@ -226,6 +226,7 @@ have only shipped in betas or alphas.
 | `reauthenticate_agent_account` | `apps/web/src/lib/backend/agent-accounts.ts` | v2.37.2-beta |
 | Coordinator activity and launch-override unsupported latches | `apps/web/src/stores/coordinatorActivityStore.ts`, `coordinatorLaunchOverrideStore.ts` | v2.37.4-beta |
 | `legacyAutoSwitchEvent` (the `five-hour` reason sent as `limit` on the event stream) | `apps/backend/src/core/index.ts`, `packages/protocol/src/agent-account-auto-switch.ts` | v2.36.4-beta |
+| The CLI's Linux local-connection refusal for backend descriptors without `processIdentity` (#1848), registered 2026-11-13 by 7120 (retired) task 3. The refusal is permanent; what retires is the Register row and the `--url` workaround text in it | `descriptorProcessRefusal` (`packages/cli/src/client/targets.ts`) | v2.36.4-beta |
 
 **Investigation.** On 2026-11-11 the newest Stable release is still v2.36.1,
 which contains none of these. When the next Stable release is published, its
@@ -278,8 +279,8 @@ use. Nothing here is removable on 2026-11-11. The rollback switches the
 investigation found are tracked where they already were: the remaining
 `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` drivers in
 [0048](../transcripts-and-observation/0048-recurring-work-qualification.md)
-task 13 (with `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waited on 0049
-until it was retired on 2026-11-11), and
+task 13 (`ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waited on 0049
+until it was retired on 2026-11-11, was removed on 2026-11-13), and
 `ORKESTRATOR_EGRESS_FILTER=off` in 6101. The retired-command Register rows
 (195 to 200 at the time of writing) wait on the next Stable release and
 their counters.

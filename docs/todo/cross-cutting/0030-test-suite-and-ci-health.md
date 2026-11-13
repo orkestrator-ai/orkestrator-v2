@@ -179,7 +179,7 @@ one live check (an Electron spec with a hung `close()`).
   | `ACP bridge > latches a fatal error when active children exceed the bounded registry` | #1461 | Stale expectation: the activity route now reports `turnFailed`. | Expectation updated. |
   | `flaky test register > case numbers are unique…` | several runs | Concurrent branches took 1304 and 1316; already renumbered on `main`. | The guard now names the colliding files. |
 
-  Lint and typecheck passed throughout. The design-renderer sweep case (0248)
+  Lint and typecheck passed throughout. The design-renderer sweep case (0248, retired)
   failed until #1463 and passes since.
 
 - **CI.** `.github/workflows/ci.yml` runs on pushes to `main` and on pull
@@ -767,8 +767,8 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
   there when todo 0731 was retired on 2026-10-29.
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
   for runs CI cannot do.
-- [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test
-  temp-directory leaks.
+- 0023 (retired 2026-11-13; see [testing-guide.md](../../development/testing-guide.md)
+  and [disk usage](../../development/disk-usage.md)) for test temp-directory leaks.
 - Other residuals from the 2026-09-15 security review: restricted containers
   needed `NET_ADMIN`; a gateway runtime no longer has it
   ([egress gateway](../../architecture/container-lifecycle.md#egress-gateway-egress-gateway1)).

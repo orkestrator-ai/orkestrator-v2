@@ -1,6 +1,6 @@
 /**
  * The OpenCode session provider for one server generation
- * (docs/todo/agent-engines/0008-opencode-v2.md). `OpenCodeEnvironmentProvider`
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)). `OpenCodeEnvironmentProvider`
  * (`environment-provider.ts`) builds one per server and hands it every call.
  *
  * It drives OpenCode 2's `opencode serve` through {@link OpenCode2Client},

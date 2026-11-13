@@ -708,11 +708,11 @@ exit 1
 `,
         async (logPath) => {
           await expect(
-            commands.get("merge_pr_local")?.(
+            commands.get("merge_environment_pr")?.(
               { environmentId: environment.id, method: "squash", deleteBranch: false },
               context,
             ),
-          ).resolves.toEqual({ outcome: "merged" });
+          ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
           const ghLog = await fs.readFile(logPath, "utf8");
           expect(ghLog).toContain(
@@ -753,11 +753,11 @@ exit 1
 `,
       async (logPath) => {
         await expect(
-          commands.get("merge_pr_local")?.(
+          commands.get("merge_environment_pr")?.(
             { environmentId: environment.id, method: "squash", deleteBranch: false },
             context,
           ),
-        ).resolves.toEqual({ outcome: "merged" });
+        ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
         const ghLog = await fs.readFile(logPath, "utf8");
         const readyCommand = "pr ready https://github.com/acme/repo/pull/42";
@@ -795,7 +795,7 @@ exit 43
 `,
           async (logPath) => {
             await expect(
-              commands.get("merge_pr_local")?.(
+              commands.get("merge_environment_pr")?.(
                 { environmentId: environment.id, method: "squash", deleteBranch: false },
                 context,
               ),
@@ -841,11 +841,11 @@ exit 1
 `,
             async (logPath) => {
               await expect(
-                commands.get("merge_pr_local")?.(
+                commands.get("merge_environment_pr")?.(
                   { environmentId: environment.id, method: "squash", deleteBranch: false },
                   context,
                 ),
-              ).resolves.toEqual({ outcome: "merged" });
+              ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
               const ghLog = await fs.readFile(logPath, "utf8");
               expect(ghLog).not.toContain("pr ready");
@@ -895,11 +895,11 @@ exit 1
 `,
       async (logPath) => {
         await expect(
-          commands.get("merge_pr_local")?.(
+          commands.get("merge_environment_pr")?.(
             { environmentId: environment.id, method: "rebase", deleteBranch: true },
             context,
           ),
-        ).resolves.toEqual({ outcome: "merged" });
+        ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog).toContain("api repos/acme/repo/pulls/42");
@@ -939,11 +939,11 @@ exit 1
 `,
       async (logPath) => {
         await expect(
-          commands.get("merge_pr_local")?.(
+          commands.get("merge_environment_pr")?.(
             { environmentId: environment.id, deleteBranch: false },
             context,
           ),
-        ).resolves.toEqual({ outcome: "merged" });
+        ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog).toContain(
@@ -953,9 +953,14 @@ exit 1
     );
   });
 
-  shimTest(
-    "does not report a local API merge as successful without an explicit merged response",
-    async () => {
+  for (const [answer, name] of [
+    [
+      '{"merged":false,"message":"Merge is pending"}',
+      "does not report a local API merge as successful without an explicit merged response",
+    ],
+    ["not-json", "reports an unknown local API merge outcome when the response cannot be parsed"],
+  ] as const) {
+    shimTest(name, async () => {
       const worktreePath = await createTempDir("ork-electron-merge-unconfirmed-worktree-");
       const environment = createEnvironment({
         worktreePath,
@@ -963,43 +968,10 @@ exit 1
       });
       const { context } = createContext(environment);
       const commands = createCommandRegistry();
-
-      await withFakeGh(
-        `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
-  printf '%s\\n' 'false'
-  exit 0
-fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
-  printf '%s\\n' '{"merged":false,"message":"Merge is pending"}'
-  exit 0
-fi
-printf 'unexpected gh args: %s\\n' "$*" >&2
-exit 1
-`,
-        async () => {
-          await expect(
-            commands.get("merge_pr_local")?.(
-              { environmentId: environment.id, method: "squash", deleteBranch: false },
-              context,
-            ),
-          ).resolves.toEqual({ outcome: "unknown" });
-        },
+      // An unconfirmed merge asks the monitor to watch; its poll must not reach the host's `gh`.
+      const watch = spyOn(context.runtime.prMonitor.service, "requestMode").mockImplementation(
+        () => undefined,
       );
-    },
-  );
-
-  shimTest(
-    "reports an unknown local API merge outcome when the response cannot be parsed",
-    async () => {
-      const worktreePath = await createTempDir("ork-electron-merge-malformed-worktree-");
-      const environment = createEnvironment({
-        worktreePath,
-        prUrl: "https://github.com/acme/repo/pull/42",
-      });
-      const { context } = createContext(environment);
-      const commands = createCommandRegistry();
 
       await withFakeGh(
         `#!/bin/sh
@@ -1008,22 +980,23 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
-  printf '%s\\n' 'not-json'
+  printf '%s\\n' '${answer}'
   exit 0
 fi
 exit 1
 `,
         async () => {
           await expect(
-            commands.get("merge_pr_local")?.(
+            commands.get("merge_environment_pr")?.(
               { environmentId: environment.id, method: "squash", deleteBranch: false },
               context,
             ),
-          ).resolves.toEqual({ outcome: "unknown" });
+          ).resolves.toEqual({ outcome: "unknown", cleanupOutcome: "not-requested" });
+          expect(watch.mock.calls.map(([, mode]) => mode)).toEqual(["merge-pending"]);
         },
       );
-    },
-  );
+    });
+  }
 
   test("rejects local API merge when the environment has no PR URL", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-no-pr-worktree-");
@@ -1032,7 +1005,7 @@ exit 1
     const commands = createCommandRegistry();
 
     await expect(
-      commands.get("merge_pr_local")?.(
+      commands.get("merge_environment_pr")?.(
         { environmentId: environment.id, method: "squash", deleteBranch: false },
         context,
       ),
@@ -1056,7 +1029,7 @@ exit 1
 `,
       async (logPath) => {
         await expect(
-          commands.get("merge_pr_local")?.(
+          commands.get("merge_environment_pr")?.(
             { environmentId: environment.id, method: "fast-forward", deleteBranch: false },
             context,
           ),
@@ -1064,7 +1037,7 @@ exit 1
 
         environment.prUrl = "https://example.com/acme/repo/pull/42";
         await expect(
-          commands.get("merge_pr_local")?.(
+          commands.get("merge_environment_pr")?.(
             { environmentId: environment.id, method: "squash", deleteBranch: false },
             context,
           ),
@@ -1112,11 +1085,11 @@ exit 1
 `,
         async (logPath) => {
           await expect(
-            commands.get("merge_pr_local")?.(
+            commands.get("merge_environment_pr")?.(
               { environmentId: environment.id, method: "merge", deleteBranch: true },
               context,
             ),
-          ).resolves.toEqual({ outcome: "merged" });
+          ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
           const ghLog = await fs.readFile(logPath, "utf8");
           expect(ghLog).toContain(
@@ -1162,7 +1135,7 @@ exit 1
 `,
       async () => {
         await expect(
-          commands.get("merge_pr_local")?.(
+          commands.get("merge_environment_pr")?.(
             { environmentId: environment.id, method: "merge", deleteBranch: true },
             context,
           ),

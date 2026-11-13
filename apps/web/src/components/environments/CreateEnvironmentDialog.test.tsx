@@ -718,6 +718,25 @@ describe("CreateEnvironmentDialog root setup step warning", () => {
     expect(screen.queryByText(ROOT_WARNING) === null).toBe(true);
   });
 
+  test("declared Debian packages are named beside the network hint (to-do 7770)", async () => {
+    spyOn(backend, "getProjectSetupRequirements").mockImplementation(async () => ({
+      rootSteps: 0,
+      aptPackages: { packages: ["libvips-dev", "ffmpeg"], refused: [], invalid: false },
+    }));
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    const restricted =
+      "Setup installs 2 Debian packages from Debian's archive (libvips-dev, ffmpeg), so this environment can also reach deb.debian.org.";
+    await waitFor(() => expect(screen.getByText(restricted)).toBeTruthy());
+    expect(screen.getByText(RESTRICTED_HINT)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Full access" }));
+    expect(
+      screen.getByText(
+        "Setup installs 2 Debian packages from Debian's archive (libvips-dev, ffmpeg).",
+      ),
+    ).toBeTruthy();
+  });
+
   test("the warning does not change the network choice that is submitted", async () => {
     answer(1);
     const onCreate = renderDialog();

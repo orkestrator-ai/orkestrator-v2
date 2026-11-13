@@ -1172,6 +1172,10 @@ describe("suite verdict", () => {
       routing: summary("passed", undefined, "routing"),
       surfaces: summary("passed", undefined, "surfaces"),
       "gap-tools": summary("passed", undefined, "gap-tools"),
+      "graph-profiles": summary("passed", undefined, "graph-profiles"),
+      ask: summary("passed", undefined, "ask"),
+      identity: summary("passed", undefined, "identity"),
+      "account-switch": summary("passed", undefined, "account-switch"),
       peer: summary("passed", undefined, "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: passed }))).toMatchObject({
@@ -1216,12 +1220,16 @@ describe("suite verdict", () => {
       routing: summary("skipped", "no credential", "routing"),
       surfaces: summary("skipped", "no credential", "surfaces"),
       "gap-tools": summary("skipped", "no credential", "gap-tools"),
+      "graph-profiles": summary("skipped", "no credential", "graph-profiles"),
+      ask: summary("skipped", "no credential", "ask"),
+      identity: summary("skipped", "no credential", "identity"),
+      "account-switch": summary("skipped", "no credential", "account-switch"),
       peer: summary("skipped", "no credential", "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: skipped }))).toMatchObject({
       verdict: "skipped",
       reason:
-        "read-only: no credential; research: no credential; async: no credential; family: no credential; status: no credential; deliver-now: no credential; goal: no credential; routing: no credential; surfaces: no credential; gap-tools: no credential; peer: no credential",
+        "read-only: no credential; research: no credential; async: no credential; family: no credential; status: no credential; deliver-now: no credential; goal: no credential; routing: no credential; surfaces: no credential; gap-tools: no credential; graph-profiles: no credential; ask: no credential; identity: no credential; account-switch: no credential; peer: no credential",
     });
   });
 

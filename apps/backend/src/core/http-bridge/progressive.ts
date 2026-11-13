@@ -21,7 +21,7 @@ import {
   setBoundedMapEntry,
 } from "../agent-provider-runtime.js";
 import type { HttpBridgeAgent } from "./catalog.js";
-import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
+import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage/cache.js";
 import { claudeTurnActivityFromPayload, normalizeClaudeBackgroundTasks } from "./claude-runtime.js";
 import type { HttpBridgeRuntimeMetadata } from "./runtime-metadata.js";
 import {
@@ -32,6 +32,7 @@ import { snapshotNotices } from "./runtime-health.js";
 import {
   assertOk,
   boundedJson,
+  sessionSnapshotBudget,
   bridgeFetch,
   normalizeProviderAuthNotice,
   normalizeProviderReadiness,
@@ -263,9 +264,11 @@ export async function readHttpBridgeSessionState(input: {
   assertOk(sessionResponse, `${input.agent} session state read`);
   const payload =
     asRecord(
-      await boundedJson(sessionResponse, `${input.agent} session state read`, {
-        remaining: 512 * 1024,
-      }),
+      await boundedJson(
+        sessionResponse,
+        `${input.agent} session state read`,
+        sessionSnapshotBudget(input.agent, 512 * 1024),
+      ),
     ) ?? {};
   const rawStatus = payload.status;
   const status: ProviderStatus =

@@ -2,9 +2,12 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, readlink } from "node:fs/promises";
 import path from "node:path";
-import type {
-  AgentInteractionKind,
-  AgentInteractionRequest,
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  type AgentInteractionKind,
+  type AgentInteractionQuestionAnswer,
+  type AgentInteractionRequest,
+  type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentAuthState, NativeAgentNotice } from "@orkestrator/protocol/native-agent";
@@ -57,9 +60,22 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * has the root-changes approval accepted in the dialog (Claude only, see
  * `coordinator-live-surfaces.ts`); `gap-tools` calls each tool from the
  * coordinator gap review once against one worker
- * (`coordinator-live-gap-tools.ts`); `peer` drives two ordinary environments' mail with Wake peers on, and runs
- * last because it is the one case that changes the messaging defaults. Each
- * writes its own summary, and the platform's verdict combines them.
+ * (`coordinator-live-gap-tools.ts`); `graph-profiles` launches one-node graphs
+ * whose agent node has the reviewer, builder and (Claude only) researcher
+ * capability profile and checks the tier the launch picker showed against
+ * what the provider let the node do (`coordinator-live-graph-profiles.ts`);
+ * `ask` launches a worker and asks the user a question in the same turn, which
+ * the harness answers from the card (`coordinator-live-ask.ts`); `identity`
+ * checks each tab of one environment sees itself as `self`, that an
+ * `idle`-policy injection starts a turn and that a resume into another tab
+ * keeps the conversation under that tab's own credential
+ * (`coordinator-live-identity.ts`); `account-switch` has a coordinator set
+ * self-timers, read a seeded usage limit and switch to a fixture account, once
+ * by request and once under a timer's permission
+ * (`coordinator-live-account-switch.ts`); `peer` drives two ordinary
+ * environments' mail with Wake peers on, and runs last because it is the one
+ * case that changes the messaging defaults. Each writes its own summary, and
+ * the platform's verdict combines them.
  */
 export const COORDINATOR_LIVE_SCENARIOS = [
   "read-only",
@@ -72,6 +88,10 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "routing",
   "surfaces",
   "gap-tools",
+  "graph-profiles",
+  "ask",
+  "identity",
+  "account-switch",
   "peer",
 ] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];
@@ -821,16 +841,52 @@ export interface CoordinatorTurnProjection {
   contextUsage?: { turns?: Array<{ turnId: string }> };
   messages: CoordinatorTranscriptMessage[];
   interactions?: Array<
-    Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId" | "createdAt">
+    Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId" | "createdAt"> &
+      Partial<Pick<AgentInteractionRequest, "presentation">>
   >;
   notices?: NativeAgentNotice[];
 }
 
-/** How the harness answers an interaction that reached it. */
+/**
+ * How the harness answers an interaction that reached it: denied or cancelled
+ * when it escaped, or answered with `answers` when the scenario asked for the
+ * question (see {@link createTurnWatch}'s `answerQuestion`).
+ */
 export interface TurnAnswer {
   interactionId: string;
   sessionId: string;
-  action: "deny" | "cancel";
+  action: "deny" | "cancel" | "answer";
+  answers?: AgentInteractionQuestionAnswer[];
+}
+
+/** The resolution `resolve_native_agent_interaction` takes for one answer. */
+export function turnAnswerResolution(
+  item: TurnAnswer,
+  resolvedAt = Date.now(),
+): AgentInteractionResolution {
+  const { answers, ...rest } = item;
+  return {
+    version: AGENT_INTERACTION_CONTRACT_VERSION,
+    ...rest,
+    ...(item.action === "answer"
+      ? {
+          answer: {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            interactionId: item.interactionId,
+            sessionId: item.sessionId,
+            answers: answers ?? [],
+          },
+        }
+      : {}),
+    resolvedAt,
+  };
+}
+
+/** One question the harness answered because the scenario asked for it. Content-free. */
+export interface AnsweredQuestion {
+  kind: AgentInteractionKind;
+  createdAt: number;
+  answeredAt: number;
 }
 
 /**
@@ -849,10 +905,22 @@ export interface TurnAnswer {
  * it finished between two reads, and two reads keep a provider that drops to
  * idle between steps from being cut off.
  */
-export function createTurnWatch() {
+export function createTurnWatch(
+  options: {
+    /**
+     * Answers a pending question the scenario expects (the `ask` case): return
+     * the answers to send, or `undefined` to treat it as escaped. Never
+     * consulted for an approval, which always escapes.
+     */
+    answerQuestion?: (
+      request: NonNullable<CoordinatorTurnProjection["interactions"]>[number],
+    ) => AgentInteractionQuestionAnswer[] | undefined;
+  } = {},
+) {
   let sawActive = false;
   let idleReads = 0;
   const escaped = new Map<string, AgentInteractionKind>();
+  const answered = new Map<string, AnsweredQuestion>();
   return {
     observe(projection: CoordinatorTurnProjection | null): {
       settled: boolean;
@@ -863,7 +931,25 @@ export function createTurnWatch() {
       idleReads = phase === "idle" ? idleReads + 1 : 0;
       const answers: TurnAnswer[] = [];
       for (const request of projection?.interactions ?? []) {
-        if (request.state !== "pending" || escaped.has(request.id)) continue;
+        if (request.state !== "pending" || escaped.has(request.id) || answered.has(request.id))
+          continue;
+        const reply = APPROVAL_KINDS.has(request.kind)
+          ? undefined
+          : options.answerQuestion?.(request);
+        if (reply) {
+          answered.set(request.id, {
+            kind: request.kind,
+            createdAt: request.createdAt,
+            answeredAt: Date.now(),
+          });
+          answers.push({
+            interactionId: request.id,
+            sessionId: request.sessionId,
+            action: "answer",
+            answers: reply,
+          });
+          continue;
+        }
         escaped.set(request.id, request.kind);
         answers.push({
           interactionId: request.id,
@@ -880,6 +966,10 @@ export function createTurnWatch() {
     /** Kinds of every interaction that reached the harness pending, in arrival order. */
     escapedInteractions(): AgentInteractionKind[] {
       return [...escaped.values()];
+    },
+    /** Questions answered through `answerQuestion`, in arrival order. */
+    answeredQuestions(): AnsweredQuestion[] {
+      return [...answered.values()];
     },
   };
 }

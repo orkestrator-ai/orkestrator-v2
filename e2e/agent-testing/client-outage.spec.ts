@@ -20,6 +20,7 @@ import {
 } from "../../apps/desktop/electron/runtime-profile";
 import {
   BLANK_PATH,
+  installReactRefreshPreamble,
   retriesAreSpread,
   retryRungs,
   startOutageLink,
@@ -1042,6 +1043,7 @@ async function startDirectClient(
 ): Promise<void> {
   watchPage(page);
   await page.goto(new URL(BLANK_PATH, link.url).href);
+  await page.evaluate(installReactRefreshPreamble);
   await page.evaluate(
     async ({ baseUrl, token, sessionIds, transport, expectedOutput }) => {
       // Loading the module installs the page's own cookie-session gateway

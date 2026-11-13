@@ -151,6 +151,36 @@ describe("BackendVersionReminder", () => {
     },
   );
 
+  test("a page the server served says it is older, and drops a reload that did not help", async () => {
+    // Today's renderer served through an older backend (to-do 7120 (retired) task 4): a
+    // reload returns the same renderer, so the second notice offers none.
+    backendVersion = "0.0.1";
+    const reload = spyOn(window.location, "reload").mockImplementation(() => {});
+    try {
+      render(<BackendVersionReminder />);
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+      const [title, options] = lastWarning();
+      expect(title).toBe("This server runs an older Orkestrator");
+      expect(options.description).toContain(
+        "some features are unavailable until the server is updated",
+      );
+      expect(options.action?.label).toBe("Reload");
+      options.action!.onClick();
+      expect(reload).toHaveBeenCalledTimes(1);
+
+      // The reload came back to the same pair.
+      cleanup();
+      render(<BackendVersionReminder />);
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(2));
+      const [againTitle, again] = lastWarning();
+      expect(againTitle).toBe("This server runs an older Orkestrator");
+      expect(again.description).not.toContain("Reload");
+      expect(again.action).toBeUndefined();
+    } finally {
+      reload.mockRestore();
+    }
+  });
+
   test.each(["bundled", "remote"] as const)(
     "%s desktop client points to the app updater without a Reload action",
     async (connection) => {

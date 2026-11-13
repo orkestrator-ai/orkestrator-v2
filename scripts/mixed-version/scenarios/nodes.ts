@@ -11,12 +11,28 @@
  * - The leaf lists the command node among its controllers and answers a
  *   worker's details and its project's seed files.
  * - Both answer their machine profile.
+ * - With this checkout as the command node, a coordinator's `list_nodes` tool
+ *   (`coordinator-list-nodes.ts`) lists the leaf connected with its copy of
+ *   the project; a leaf that serves `get_machine_load` reports its OS, size
+ *   and load once it has a reading, and an older one is shown as
+ *   `older-version` over the real link; the leaf's `buildCommit` is present
+ *   and is the one its hello reports, `null` for a release before the field
+ *   and for a build from source (to-do 1030 (retired) tasks 2 and 7). `self` is not
+ *   checked: the handler runs in this runner, so its `self.buildCommit` is the
+ *   runner's own `BUILD_COMMIT`, not the command node's.
  *
  * Version 1 decodes each answer with the definitions' schemas (a node that
  * advertises `nodes`); version 0 sends today's untyped calls.
  */
 import { nodesClient } from "@orkestrator/protocol/contract/domains/nodes";
-import { defineScenario } from "../scenario.ts";
+import { until } from "../harness.ts";
+import { defineScenario, type ScenarioContext } from "../scenario.ts";
+import {
+  coordinatorListNodes,
+  listNodesChecks,
+  listNodesSettled,
+  machineEvidence,
+} from "./coordinator-list-nodes.ts";
 import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
 
 const NO_ARGS = undefined as never;
@@ -85,6 +101,7 @@ export default defineScenario({
             Number.isInteger(layout.revision) && Array.isArray(layout.machineOrder),
           );
         }
+        if (node.build.kind === "current") await coordinatorListNodesChecks(ctx);
       } else {
         const controllers = await nodes.list_controllers(NO_ARGS);
         ctx.check(
@@ -113,3 +130,32 @@ export default defineScenario({
     }
   },
 });
+
+/** NO-C6 to NO-C8: what a coordinator on this checkout's command node reads in `list_nodes`. */
+async function coordinatorListNodesChecks(ctx: ScenarioContext): Promise<void> {
+  const project = await ctx.fixtures.project(ctx.command);
+  await ctx.fixtures.pairedOn(ctx.command, ctx.leaf);
+  const leaf = {
+    id: ctx.leaf.id,
+    version: ctx.leaf.version,
+    helloBuildCommit: ctx.leaf.hello.buildCommit,
+    servesLoad: ctx.leaf.has("get_machine_load"),
+  };
+  const listed = await until(
+    `list_nodes to report ${ctx.leaf.label}'s ${leaf.servesLoad ? "first load reading" : "load answer"}`,
+    () => coordinatorListNodes(ctx.command, project.projectId),
+    (value) => listNodesSettled(value, leaf),
+    90_000,
+  );
+  const { checks, leafEvidence } = listNodesChecks(listed, leaf);
+  for (const entry of checks) ctx.check(entry.id, entry.description, entry.passed, entry.detail);
+  ctx.note("coordinator list_nodes", {
+    self: {
+      version: listed.self.version,
+      runnerBuildCommit: listed.self.buildCommit,
+      machine: machineEvidence(listed.self.machine),
+    },
+    command: { helloBuildCommit: ctx.command.hello.buildCommit ?? null },
+    leaf: leafEvidence,
+  });
+}

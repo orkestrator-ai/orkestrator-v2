@@ -17,7 +17,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { NativeAgentTurnPhase } from "@orkestrator/protocol/native-agent";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
+import { reviewerBlockedReason, reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
 import type { PrState } from "@/types";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -669,7 +669,9 @@ export function reviewerStatusLabel(
     case "completed":
       return "Complete";
     case "failed":
-      return reviewerCouldNotStart(reviewer) ? "Could not start" : "Failed";
+      if (reviewerCouldNotStart(reviewer)) return "Could not start";
+      // Its report said it could not review: a failure, never a clean review.
+      return reviewerBlockedReason(reviewer) !== null ? "Could not review" : "Failed";
     default:
       return "Stopped";
   }
@@ -752,8 +754,9 @@ export function reviewerStatusWord(
       }
       return { text: "reviewing", tone: "running" };
     case "failed":
-      return reviewerCouldNotStart(reviewer)
-        ? { text: "could not start", tone: "destructive" }
+      if (reviewerCouldNotStart(reviewer)) return { text: "could not start", tone: "destructive" };
+      return reviewerBlockedReason(reviewer) !== null
+        ? { text: "could not review", tone: "destructive" }
         : { text: "failed", tone: "destructive" };
     case "cancelled":
       return { text: "stopped", tone: "muted" };

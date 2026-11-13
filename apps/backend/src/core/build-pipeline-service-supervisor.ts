@@ -80,6 +80,7 @@ import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-informa
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 import {
   safeParseStructuredReviewReport,
+  structuredReviewBlockedFailure,
   stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
@@ -2166,6 +2167,18 @@ export class BuildPipelineSupervisor {
     });
     if (!parsed.success) {
       await this.recovery.repairStructuredReport(pipeline, provider, session, parsed.error);
+      return;
+    }
+    const blocked = structuredReviewBlockedFailure(parsed.data);
+    if (blocked !== null) {
+      // The reviewer could not review: a failed review stage, not a clean
+      // report that would send the build straight to Verify. The result is
+      // consumed so a retry of the stage asks for a new one, but only after
+      // the failure (with its outbox marker) is durable: consuming first
+      // would let a restart find a reviewing stage whose only result is gone.
+      await this.interactions.fail(pipeline.id, new Error(blocked), {
+        consumeResult: { sessionId: session.sdkSessionId, resultKey: requestId },
+      });
       return;
     }
     const report = stripStructuredReviewProvenance(parsed.data);

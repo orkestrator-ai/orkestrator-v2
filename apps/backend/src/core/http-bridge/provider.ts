@@ -71,7 +71,7 @@ import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
 import { cancelPromptDispatchHold, promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
-import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
+import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage/cache.js";
 import {
   claudeBackgroundObservation,
   claudeReadOnlySandboxObservation,
@@ -789,9 +789,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     if (sessionResponse.status === 404) return { status: "missing", messages: [] };
     assertOk(sessionResponse, `${this.agent} interactive session read`);
     const payload = asRecord(
-      await boundedJson(sessionResponse, `${this.agent} interactive session read`, {
-        remaining: 512 * 1024,
-      }),
+      await boundedJson(
+        sessionResponse,
+        `${this.agent} interactive session read`,
+        sessionSnapshotBudget(this.agent, 512 * 1024),
+      ),
     );
     const status = payload?.status;
     if (!payload || (status !== "idle" && status !== "running" && status !== "error")) {

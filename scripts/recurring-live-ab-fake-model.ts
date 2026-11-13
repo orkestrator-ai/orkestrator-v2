@@ -95,6 +95,8 @@ const CLEAN_REPORT = {
     commandsRun: [],
     commandsNotRun: [],
     limitations: ["A scripted fake model wrote this report; it read no code."],
+    outcome: "reviewed",
+    blockedReason: null,
   },
   whatChanged: {
     overview: "A fixture change made by the busy-profile driver.",

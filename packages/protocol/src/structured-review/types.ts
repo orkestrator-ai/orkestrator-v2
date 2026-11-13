@@ -38,6 +38,15 @@ export type ReviewOverallRisk = (typeof REVIEW_OVERALL_RISKS)[number];
 export const REVIEW_VERDICTS = ["yes", "with-fixes", "no"] as const;
 export type ReviewVerdictReady = (typeof REVIEW_VERDICTS)[number];
 
+/**
+ * Whether the reviewer could review the change at all. `blocked` means it could
+ * not (no working shell, an unreadable package, a provider fault) and its
+ * empty findings say nothing about the change; Orkestrator treats such a
+ * report as a failed reviewer rather than a clean one.
+ */
+export const REVIEW_SCOPE_OUTCOMES = ["reviewed", "blocked"] as const;
+export type ReviewScopeOutcome = (typeof REVIEW_SCOPE_OUTCOMES)[number];
+
 export interface ReviewCommit {
   sha: string;
   subject: string;
@@ -69,6 +78,16 @@ export interface ReviewScope {
   commandsRun: ReviewCommandResult[];
   commandsNotRun: ReviewSkippedCommand[];
   limitations: string[];
+  /**
+   * Whether the review happened. Absent on reports written before the field
+   * existed, which read as `reviewed`; read it through `structuredReviewOutcome`.
+   */
+  outcome?: ReviewScopeOutcome;
+  /**
+   * Why the reviewer could not review. Present, non-empty, exactly when
+   * `outcome` is `blocked`.
+   */
+  blockedReason?: string;
 }
 
 export interface ReviewCodeChange {

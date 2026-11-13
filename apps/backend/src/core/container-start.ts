@@ -284,10 +284,14 @@ export async function startDockerContainer(
     run("docker", [verb, containerId], { timeoutMs }).then(() => undefined);
   let collision: unknown = null;
   let network: string | null = null;
-  // The run of collisions this start met, logged once it ends either way.
-  const streak = { collisions: 0, fresh: 0, same: 0, ports: [] as number[] };
-  const logRun = (outcome: "started" | "exhausted" | "not-retryable" | "network-lost") => {
-    if (streak.collisions === 0) return;
+  // The run of collisions this start met, logged once it ends either way:
+  // `failed` when a later step failed for another reason.
+  const streak = { collisions: 0, fresh: 0, same: 0, ports: [] as number[], logged: false };
+  const logRun = (
+    outcome: "started" | "exhausted" | "not-retryable" | "network-lost" | "failed",
+  ) => {
+    if (streak.collisions === 0 || streak.logged) return;
+    streak.logged = true;
     const fields = {
       container: containerId.slice(0, 12),
       collisions: streak.collisions,
@@ -300,59 +304,68 @@ export async function startDockerContainer(
     if (outcome === "started") log.info("start.port-collision-run", fields);
     else log.warn("start.port-collision-run", fields);
   };
-  for (let retry = 0; ; retry += 1) {
-    try {
-      await attempt(retry === 0 ? (options.verb ?? "start") : "start");
-      break;
-    } catch (error) {
-      const message = messageOf(error);
-      const refused = bindMountRefusedError(message);
-      if (refused) throw refused;
-      if (!ADDRESS_IN_USE.test(message)) throw error;
-      const port = collidingHostPort(message);
-      const inspection = await inspectForStart(containerId, run);
-      if (!inspection) throw error;
-      // Restore the endpoint even when a fixed-port failure cannot be retried.
-      // Otherwise a later start can succeed without networking or published ports.
-      await restoreNetwork(containerId, inspection, run).catch(() => {
-        throw error;
-      });
-      streak.collisions += 1;
-      if (port !== null) streak.ports.push(port);
-      const retryKind = portCollisionRetry(message, inspection.bindings);
-      if (retryKind === "none") {
-        logRun("not-retryable");
-        throw error;
-      }
-      const sameRetry = retryKind === "same-port";
-      if (sameRetry ? streak.same >= PORT_HOLD_RETRIES : streak.fresh >= PORT_COLLISION_RETRIES) {
-        logRun("exhausted");
-        throw sameRetry ? backendPortHeldError(message) : error;
-      }
-      if (sameRetry) streak.same += 1;
-      else streak.fresh += 1;
-      collision = error;
-      network = inspection.network;
-      log.warn("start.port-collision-retrying", {
-        container: containerId.slice(0, 12),
-        port: port ?? null,
-        retry: streak.fresh + streak.same,
-        backendChosen: sameRetry,
-      });
-      if (sameRetry) {
-        await sleep(
-          PORT_HOLD_RETRY_DELAYS_MS[streak.same - 1] ?? PORT_HOLD_RETRY_DELAYS_MS.at(-1)!,
-        );
+  try {
+    await startWithRetries();
+  } catch (error) {
+    logRun("failed");
+    throw error;
+  }
+  async function startWithRetries(): Promise<void> {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await attempt(retry === 0 ? (options.verb ?? "start") : "start");
+        break;
+      } catch (error) {
+        const message = messageOf(error);
+        const refused = bindMountRefusedError(message);
+        if (refused) throw refused;
+        if (!ADDRESS_IN_USE.test(message)) throw error;
+        const port = collidingHostPort(message);
+        // Counted before inspection, so a run that ends there is still logged.
+        streak.collisions += 1;
+        if (port !== null) streak.ports.push(port);
+        const inspection = await inspectForStart(containerId, run);
+        if (!inspection) throw error;
+        // Restore the endpoint even when a fixed-port failure cannot be retried.
+        // Otherwise a later start can succeed without networking or published ports.
+        await restoreNetwork(containerId, inspection, run).catch(() => {
+          throw error;
+        });
+        const retryKind = portCollisionRetry(message, inspection.bindings);
+        if (retryKind === "none") {
+          logRun("not-retryable");
+          throw error;
+        }
+        const sameRetry = retryKind === "same-port";
+        if (sameRetry ? streak.same >= PORT_HOLD_RETRIES : streak.fresh >= PORT_COLLISION_RETRIES) {
+          logRun("exhausted");
+          throw sameRetry ? backendPortHeldError(message) : error;
+        }
+        if (sameRetry) streak.same += 1;
+        else streak.fresh += 1;
+        collision = error;
+        network = inspection.network;
+        log.warn("start.port-collision-retrying", {
+          container: containerId.slice(0, 12),
+          port: port ?? null,
+          retry: streak.fresh + streak.same,
+          backendChosen: sameRetry,
+        });
+        if (sameRetry) {
+          await sleep(
+            PORT_HOLD_RETRY_DELAYS_MS[streak.same - 1] ?? PORT_HOLD_RETRY_DELAYS_MS.at(-1)!,
+          );
+        }
       }
     }
+    if (collision === null) return;
+    // Never leave a container running without the network it was created on.
+    const after = await inspectForStart(containerId, run);
+    if (network && !after?.attached.includes(network)) {
+      logRun("network-lost");
+      await run("docker", ["stop", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
+      throw collision;
+    }
+    logRun("started");
   }
-  if (collision === null) return;
-  // Never leave a container running without the network it was created on.
-  const after = await inspectForStart(containerId, run);
-  if (network && !after?.attached.includes(network)) {
-    logRun("network-lost");
-    await run("docker", ["stop", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
-    throw collision;
-  }
-  logRun("started");
 }

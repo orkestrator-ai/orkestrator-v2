@@ -60,6 +60,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "Reconciling one environment's container operation failed; the next pass retries.",
       "replacement.copy-helper-stalled":
         "A rebuild copy step's helper was still running when its drain window after the `docker cp` producer closed ran out, so the step was abandoned and the helper removed. Fields: the producer's exit code, the bytes it sent and the window.",
+      "replacement.copy-helper-remove-failed":
+        "An abandoned rebuild copy step's helper container (`helper`, its name) could not be removed, so the step failed rather than settle while the helper may still mount the new storage.",
       "replacement.clear-terminals-failed":
         "Terminal sessions could not be cleared after a container replacement.",
       "recovery.clear-terminals-failed":
@@ -77,7 +79,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "copy-in.snapshot-busy":
         "Docker still refused a copy into a container as busy after every retry, so it failed.",
       "start.port-collision-run":
-        "A start that met host-port collisions ended: `collisions` is the run's length, with the fresh-port and same-port retries it used, the first and last colliding ports, and the `outcome` (started, exhausted, not-retryable or network-lost).",
+        "A start that met host-port collisions ended: `collisions` is the run's length, with the fresh-port and same-port retries it used, the first and last colliding ports, and the `outcome` (started, exhausted, not-retryable, network-lost, or failed when a later attempt, inspection or network restore failed for another reason).",
       "host-ports.owned-list-failed":
         "Docker could not list the host ports the backend chose for this owner's other containers, so a new rootless container's ports were chosen avoiding only this process's recent choices.",
       "writer-lease.lost": {

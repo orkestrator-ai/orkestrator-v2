@@ -126,7 +126,15 @@ describe("bind refusal classification", () => {
 function scriptedRun(
   results: Array<string | Error>,
   bindings: string,
-  options: { network?: string; networkId?: string; reattach?: boolean; backendLabel?: string } = {},
+  options: {
+    network?: string;
+    networkId?: string;
+    reattach?: boolean;
+    backendLabel?: string;
+    /** Fail every `inspect`, or every `network connect`. */
+    inspectFails?: boolean;
+    connectFails?: boolean;
+  } = {},
 ) {
   const calls: string[][] = [];
   const network = options.network ?? "ork-env-net";
@@ -135,6 +143,7 @@ function scriptedRun(
   const run = (async (_command: string, args: string[] = []) => {
     calls.push(args);
     if (args[0] === "inspect") {
+      if (options.inspectFails) throw new CommandFailedError("inspect failed");
       const networks = attached
         ? JSON.stringify({ [network]: { IPAddress: "172.19.0.2", NetworkID: options.networkId } })
         : "{}";
@@ -144,6 +153,7 @@ function scriptedRun(
       };
     }
     if (args[0] === "network" && args[1] === "connect") {
+      if (options.connectFails) throw new CommandFailedError("connect failed");
       attached = options.reattach !== false;
       return { stdout: "", stderr: "" };
     }
@@ -361,6 +371,68 @@ describe("startDockerContainer", () => {
           outcome: "exhausted",
         },
       },
+    ]);
+  });
+
+  test("a run ended by another failure is still logged, with its length", async () => {
+    const collision = new CommandFailedError(ROOTLESSKIT_IN_USE);
+    const unrelated = new CommandFailedError("Error response from daemon: no space left on device");
+    const fixture = scriptedRun([collision, unrelated], automaticOnly);
+    const logs = captureLogs();
+    await expect(
+      startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore()),
+    ).rejects.toBe(unrelated);
+    expect(
+      logs.records().filter((record) => record.event === "start.port-collision-run"),
+    ).toMatchObject([
+      {
+        level: "warn",
+        fields: { collisions: 1, freshPortRetries: 1, firstPort: 38917, outcome: "failed" },
+      },
+    ]);
+  });
+
+  for (const failing of ["inspectFails", "connectFails"] as const) {
+    test(`a collision whose ${failing === "inspectFails" ? "inspection" : "network restore"} fails is logged as a failed run`, async () => {
+      const collision = new CommandFailedError(ROOTLESSKIT_IN_USE);
+      const fixture = scriptedRun([collision], automaticOnly, { [failing]: true });
+      const logs = captureLogs();
+      await expect(
+        startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore()),
+      ).rejects.toBe(collision);
+      expect(
+        logs.records().filter((record) => record.event === "start.port-collision-run"),
+      ).toMatchObject([
+        { level: "warn", fields: { collisions: 1, freshPortRetries: 0, outcome: "failed" } },
+      ]);
+    });
+  }
+
+  test("a collision on a fixed port logs a not-retryable run", async () => {
+    const fixture = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE)], fixedAndAutomatic);
+    const logs = captureLogs();
+    await expect(
+      startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore()),
+    ).rejects.toThrow("address already in use");
+    expect(
+      logs.records().filter((record) => record.event === "start.port-collision-run"),
+    ).toMatchObject([
+      { level: "warn", fields: { collisions: 1, freshPortRetries: 0, outcome: "not-retryable" } },
+    ]);
+  });
+
+  test("a retried start left without its network logs a network-lost run", async () => {
+    const fixture = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE), ""], automaticOnly, {
+      reattach: false,
+    });
+    const logs = captureLogs();
+    await expect(
+      startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore()),
+    ).rejects.toThrow("address already in use");
+    expect(
+      logs.records().filter((record) => record.event === "start.port-collision-run"),
+    ).toMatchObject([
+      { level: "warn", fields: { collisions: 1, freshPortRetries: 1, outcome: "network-lost" } },
     ]);
   });
 

@@ -521,7 +521,14 @@ its container removed by name, and the step fails as `helper-input-stalled`
 (logged `replacement.copy-helper-stalled`), because on a rootless daemon a
 helper once never saw end of input and would otherwise have held the
 rebuild for the one-hour copy deadline
-([7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md)). Both were found by
+([7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md)).
+The step settles only after that removal has finished, because rollback
+removes the candidate's volumes next and Docker keeps a volume a container
+still mounts; a helper that could not be removed fails the step as
+`helper-remove-failed` (logged `replacement.copy-helper-remove-failed`). A
+producer that had already failed with its own answer (nothing to copy, a
+refused remount, no daemon) is classified by that answer, not as a stall of
+the helper it left waiting. The absent-path rule and the output discard were found by
 the live rebuild-fault suite (C15), which also covers a kill just before and
 just after the commit write. A step that failed because either side reached
 no daemon is reported as `daemon-unavailable` ("Docker stopped responding

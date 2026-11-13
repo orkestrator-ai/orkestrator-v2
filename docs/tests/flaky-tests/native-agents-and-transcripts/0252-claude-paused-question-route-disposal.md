@@ -192,3 +192,21 @@ public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.g
 - **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
 
 No assertion, deadline, retry or skip was changed. The cause remains unconfirmed.
+
+## Recurrence 2026-11-13 (qualification-tooling review repair)
+
+- **Branch and base:** `qualification-tooling-1ab05fd26c00-r1` at `ed9e17607`,
+  base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch's only renderer change draws compaction and retry
+  parts on system rows; it does not touch the spec or the Claude interaction
+  surfaces.
+- **Command:** `NODE_ENV= mise run test:logged -- --name browser-chat-specs -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts <seven chat and transcript specs> --workers=2`
+  on the shared Linux host at load about 90: 89 passed, 1 skipped, 2 failed.
+- **Failure:** desktop-chromium, `apiRequestContext.fetch: Request context disposed`
+  in the route callback at `e2e/ClaudeInteractions.spec.ts:100`.
+- **Owner rerun alone:** `bunx playwright test --config e2e/playwright.config.ts "e2e/ClaudeInteractions.spec.ts:100" --project=desktop-chromium --workers=1`
+  through `test:logged` and `scripts/loopback-network.ts`: passed.
+- **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 17d28238c --registry-ref origin/main`
+  reported `open`. The whole run is
+  [9959](../aggregate-validation-runs/9959-qualification-tooling-review-runs-under-host-load.md).
+
+No assertion, deadline, retry or skip was changed.

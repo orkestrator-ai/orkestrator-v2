@@ -155,3 +155,19 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+## Recurrence 2026-11-13 (qualification-tooling review repair)
+
+- **Branch and base:** `qualification-tooling-1ab05fd26c00-r1` at `ed9e17607`,
+  base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch changes nothing under `apps/backend`.
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  on the shared Linux host at load averages of 117 to 128 on 16 cores.
+- **Failure:** `raw StorageDatabase writers outside StorageService > name the store they write`
+  timed out at 7,648.39 ms.
+- **Complete unchanged owner:** `mise run test:logged -- --name alone-storage-writer-guards-raw.test -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts ./src/core/storage-writer-guards-raw.test.ts`
+  passed (2.8 s).
+- **Recurrence check:** `mise run flaky:recurrence -- 1309 --base 17d28238c --registry-ref origin/main`
+  reported `open`. The whole run is
+  [9959](../aggregate-validation-runs/9959-qualification-tooling-review-runs-under-host-load.md).
+
+No budget or assertion was changed.

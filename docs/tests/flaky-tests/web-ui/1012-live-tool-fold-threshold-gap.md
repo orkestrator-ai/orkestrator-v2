@@ -264,6 +264,16 @@ Observed on `mise run test:logged -- --name browser-rerun -- mise run test:brows
 
 Observed 2026-11-13 on `declarative-apt-packages-7e73967deb64-r1` at `a5191e523`, base `17d28238c` (`mise run flaky:recurrence -- 1012 --base 17d28238c` answered "open. Record the failure as a recurrence"). The branch changes the container package installer, setup, backend container creation, two launcher dialogs and docs; it changes no tool-group or transcript code. `mise run test:logged -- --name browser -- mise run test:browser` at host load about 47 on 16 cores: 4 failed, 154 skipped, 1726 passed (28.8 m). This case failed on mobile-chromium (received 9) and desktop-chromium (received 16) against `toBeLessThanOrEqual(2)`; `ToolGroupFold.spec.ts:201` (`a live group growing below a released reader preserves their place with no-preference motion`, desktop) also failed with `toBeGreaterThan(100)` receiving 19. The complete unchanged owner then passed with `e2e/CloseRetention.spec.ts`, one worker: `mise run test:logged -- --name browser-failed-rerun -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/CloseRetention.spec.ts --workers=1` (exit 0, 244.7 s). An earlier run of the same command at load about 100 hit the 1800 s group deadline after 725 of 1884 tests, with navigation timeouts across unrelated specs. Status stays open; no assertion, timeout or skip changed.
 
+## Rootless Docker copy review repairs — 2026-11-13
+
+Observed 2026-11-13 on `rootless-docker-copy-1c9f451a929a-r1` at `bbd23e34b`, base `17d28238c` (`mise run flaky:recurrence -- 1012 --base 17d28238c` answered "open. Record the failure as a recurrence"). The branch changes backend container code, a root unit test, scripts and docs; it changes no `apps/web` or `e2e` code. `mise run test:logged -- --name review-browser-rerun -- mise run test:browser` with 8 workers at load average about 1: 2 failed, 154 skipped, 1728 passed (21.1 m). Both mobile-chromium and desktop-chromium failed `expect(received).toBeLessThanOrEqual(2)` at line 170 (received 18 and 19). The complete unchanged owner then passed alone with one worker (exit 0, 92.2 s):
+
+```sh
+mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
 ## Recurrence — 2026-11-13 (container live evidence review repairs)
 
 Mobile and desktop `a live group crossing the fold threshold folds into its line with no-preference motion` (`e2e/ToolGroupFold.spec.ts:127`) failed both attempts in (a); the mobile failure is a `toBeLessThanOrEqual` on the fold gap. Both passed in (b) to (e). `mise run flaky:recurrence -- 1012 --base 17d28238c` answered open.

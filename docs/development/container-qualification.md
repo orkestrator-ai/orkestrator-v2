@@ -63,7 +63,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live copy refusal | `ORKESTRATOR_COPY_REFUSAL_TEST_IMAGE=<image with sleep>` and a rootless `DOCKER_HOST`, `./tests/docker-copy-refusal-docker.test.ts` | Every `docker cp` the backend runs against a runtime (project seed files, configured project files, the GitHub seed, the boot record) against a container with a read-only bind from a `nosuid`/`nodev` directory (`/tmp`, or `ORKESTRATOR_COPY_REFUSAL_NOSUID_DIR`) is the typed refusal ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 1) |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
-| Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
+| Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040, retired 2026-11-13; see [MCP verification status](../architecture/mcp-management.md#verification-status)) |
 | Live tmux transcript reopen | same command, `./tests/tmux-transcript-reopen-docker.test.ts` | A claude-tmux tab reopen through `docker exec` on a 37 MB transcript: one exec of one bounded page, equal to the local read, and bounded paging back to the first record (to-do 5120 task 2) |
 | Live container media streams | same command, `./tests/media-stream-container-docker.test.ts` | The file viewer's streamed read for a container environment: the backend's container reader on the image's Node, ranges from the content listener, confinement, foreign-container refusal and revocation (to-do 5800 task 1) |
 | Preview worker container cases | `docker/artifact-preview-worker/build.sh`, then `bun test --cwd apps/backend ./src/core/transcript-artifacts/<suite>.test.ts --parallel=1` for `preview-static-search-text`, `preview-print`, `preview-container`, `preview-escape`, `preview-runaway` and `preview-modules` | The artifact preview worker image under its seccomp profile: static text for Find, printing, escape and runaway bounds; each skips its container case with a warning when the image is missing, and `preview-static-search-text` and `preview-print` also when the image's bundle predates their step (search text, pdf.js). The Linux Engine workflow builds the worker and runs `preview-container` on both architectures |
@@ -73,6 +73,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
 | Real stack, terminal close | Included in `test:agent:docker`; any Docker fixture profile, no agent or login | Closing a container terminal ends its shell and its job in the container, and removes the shell's PID record (`container-terminal-close.spec.ts`, to-do 7081, retired 2026-11-10; see [Terminal close](../architecture/container-lifecycle.md#terminal-close)) |
+| Real stack, MCP save beside a terminal | Included in `test:agent:docker`; any Docker fixture profile whose `--agent-platforms` include `codex`, no agent or login | Saving an environment-private MCP server ("Save" and "Save and apply") leaves a running container terminal job alone: same shell and job, output keeps arriving, no container restart, the job exits 0 once released (`mcp-overlay-terminal.spec.ts`, to-do 0040 task 1, retired 2026-11-13; see [MCP verification status](../architecture/mcp-management.md#verification-status)) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
 | OpenCode seeded data (retired) | Retired with OpenCode 1.x: `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh` | Real OpenCode 1.x turns, diff, revert and unrevert with and without host seeds; no 2.x equivalent yet |
@@ -80,7 +81,8 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
 | Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`) | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring, no bypass-consent or auto-mode offer, and nothing of the tab left in the container after close (`container-claude-terminal-signal.spec.ts`). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port; start the profile with `--agent-tools-port` in the range one firewall rule admits, or `--agent-tools-port auto` to take a free one there ([agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port), [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)) |
-| Real stack, Claude read-only Multi Review | A Docker profile started with `--no-agent-credentials --agent-platforms claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:agent:docker`. No login and no billed turn: the image's `claude` answers from a scripted Messages API on the container's loopback (`container-fake-claude-review-api.ts`), staged as Claude managed settings, which reach every turn (the entrypoint rewrites the container's user settings file at start). On a host whose firewall drops container traffic to the profile, run the profile on `mise run docker:disposable -- start --host-loopback` (its `DOCKER_HOST` exported for both the profile and the spec) | A two-reviewer Multi Review with Claude reviewers and a Claude consolidation, every read-only turn without the CLI's command sandbox (the image ships neither bubblewrap nor socat): the review settles `ready`; reviewers and consolidation carry the sandbox-off note in the snapshot and the inspector, worded for a container; `ls` runs, the package's `diffCommand` and a write are refused by the hook, the reviewers read the sealed diff file instead, and that file matches `diffCommand`'s output (`container-multi-review-read-only.spec.ts`, to-do [0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)). Passed on beelink on 2026-11-10 in 51 s |
+| Real stack, Claude read-only Multi Review | A Docker profile started with `--no-agent-credentials --agent-platforms claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:agent:docker -- container-multi-review-read-only.spec.ts`. No login and no billed turn: the image's `claude` answers from a scripted Messages API on the container's loopback (`container-fake-claude-review-api.ts`), staged as Claude managed settings, which reach every turn (the entrypoint rewrites the container's user settings file at start). On a host whose firewall drops container traffic to the profile, run the profile on `mise run docker:disposable -- start --host-loopback` (its `DOCKER_HOST` exported for both the profile and the spec) | A two-reviewer Multi Review with Claude reviewers and a Claude consolidation, every read-only turn without the CLI's command sandbox (the image ships neither bubblewrap nor socat): the review settles `ready`; reviewers and consolidation carry the sandbox-off note in the snapshot and the inspector, worded for a container; `ls` runs, the package's `diffCommand` and a write are refused by the hook, the reviewers read the sealed diff file instead, and that file matches `diffCommand`'s output; while the reviewers are held before submitting (the fake's `--hold`), Reviewer 1's Agent Info says "No sandbox, approvals denied" with the container reason (`container-multi-review-read-only.spec.ts`, to-do [0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)). Passed on beelink on 2026-11-10 in 51 s, before the Agent Info step was added; the run with it is 0190's open task 3 |
+| Real stack, Codex read-only Multi Review | A Docker profile started fresh with `--no-agent-credentials --agent-platforms codex`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1 mise run test:agent:docker -- container-multi-review-codex-read-only.spec.ts` (alone: the other Docker fixture specs start Codex in `fixture-container`, and its app-server must first start after the spec has pointed it at the fake). No login and no billed turn: the spec writes the fake's `openai_base_url` and a made-up API key into the container's own `~/.codex` before the first Codex session and restores both afterwards, and the image's `codex` answers from a scripted Responses WebSocket on the container's loopback (`container-fake-codex-review-api.ts`). The containers must reach the profile's agent tools server, as in the Claude row | A two-reviewer Multi Review with Codex reviewers, consolidation and preparation, every read-only turn `danger-full-access` under `untrusted`: the review settles `ready`; reviewers and consolidation carry Codex's sandbox-off note; `cat` and `ls` run through the bridge's exec-policy rules, the package's `git diff`, a `touch` and an `apply_patch` are declined, the reviewers read the sealed diff file instead and submit through the `orkestrator` MCP server; nothing reaches the checkout and the rules file is in the container's Codex home (`container-multi-review-codex-read-only.spec.ts`, to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)). Not run yet: the reviewer turn itself passed on the host against the pinned Codex 0.167.0 (`live-read-only-reviewer-turn.test.ts`, 2026-11-13), and the container run is 7872's open task 1 |
 | Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the design export test (`export-container.test.ts`), the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
 
@@ -311,6 +313,114 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## `docker cp` busy probe, copy-stream stall and port-collision runs on beelink2 (2026-11-13)
+
+To-dos [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2, [7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md)
+tasks 1 and 2, and 7750 (retired 2026-11-13), run in worktree
+`orkestrator-v2-20261113-000432-1c9f451a929a` (branch
+`rootless-docker-copy-1c9f451a929a-r1`, from `main` at `17d28238c`).
+
+- **Host:** beelink2 (Omarchy, kernel 7.2.15-1-omarchy, x86_64), the host
+  whose 2026-11-09 run refused copies with `device or resource busy`, with
+  other pipelines' builds and tests running. Its overlayfs module has
+  `index=Y` (`CONFIG_OVERLAY_FS_INDEX=y`), so a second overlay mount of an
+  upper directory another live overlay mount still uses fails with `EBUSY`
+  unless the mount passes `index=off`; with the default off it only warns.
+- **Daemons:** `mise run docker:disposable -- start --name r7549` (rootless
+  Engine 29.9.2, slirp4netns, containerd image store), plus `r7549o`
+  (`--storage overlay2`) and `r7549l` (containerd store). The data roots were
+  in the default instance root under `~/.local/state`, not in the worktree.
+- **Images:** busybox, `oven/bun:1.4.4-debian`, a 78-layer busybox image and an
+  80-layer image with whiteouts, opaque directories and `USER 1000`, all
+  built or pulled in `r7549`; and the environment image itself
+  (`docker/Dockerfile` at this commit, 78 layers, 5.78 GB), built in `r7549`
+  and copied into `r7549o` and `r7549l` with `load-image`, so both a built and
+  a loaded image were probed on the containerd store.
+- **7549 task 2 probe: not reproduced.** `docker create` then `docker cp` of
+  a file into `/tmp/` (three times), the seed files' tar-stream form into `/`,
+  and a copy after a start and stop: every copy succeeded, for every image, on
+  both stores, with the runtime's named volumes, with a read-only bind, with
+  `--network none`, with six creates and copies running at once (36 copies),
+  right after each of three cycles of two daemon restarts, and with a
+  recursive file watcher on `r7549l`'s data root (the 2026-11-09 data root
+  was in a worktree the backend watches; this watcher could not enter the
+  directories owned by subordinate ids). The containerd snapshot mounts on
+  this daemon carry `userxattr,index=off` (`ctr snapshots mounts` inside the
+  daemon's namespace), which turns that `EBUSY` refusal off for them; the
+  2026-11-09 message showed `userxattr` before `lowerdir`, a different option
+  order, and its full option list was not recorded. An attempt to hold a
+  created container's snapshot mounted and so force the refusal failed:
+  the holding `mount -t overlay` was rejected with `EINVAL` inside the
+  daemon's namespace, while a plain overlay there mounted. So the 2026-11-09
+  cause is still unknown.
+- **7549 task 2 delivery, live:** `container-project-seed-docker.test.ts`
+  (`ORKESTRATOR_SEED_TEST_IMAGE` = the environment image) passed 1/1:
+  seed files copied into a created container through the new
+  `copyIntoContainer`, read back with the right owner and modes.
+  `docker-copy-refusal-docker.test.ts` (`ORKESTRATOR_COPY_REFUSAL_TEST_IMAGE`
+  = the environment image) passed 1/1: the `nosuid`/`nodev` refusal is still
+  typed on every copy path, which now goes through `copyIntoContainer`.
+- **7705 natural stall: not reproduced.** 75 runs of `docker cp <stopped
+  container>:<path> - | docker run --rm -i --network none busybox sh -c
+  'cat >/dev/null; echo ok'` on `r7549`, for a missing path (the producer
+  fails before the helper attaches), an empty directory and a one-file
+  directory: 30 on a settled daemon and 45 in three cycles started right
+  after two daemon restarts each. Every helper saw end of input and exited.
+- **7705 bound, live:** the backend's `pipeContainerPath` with a real
+  `docker cp` producer and a real `docker run --rm -i --name …` helper that
+  never finishes reading (`exec sleep 600`), drain window 3 s: the step
+  settled `stalled` after 3.2 s, and the helper container was gone from
+  `docker ps -a` 3 s later (removed by name). Before the change the same step
+  waits for `COPY_TIMEOUT_MS`, one hour.
+- **7705 drain window against the real helper (review round 2,
+  2026-11-13):** a legitimate copy must finish its post-input verification
+  (re-hashing the destination, sorting and joining the manifests,
+  `git fsck --connectivity-only`) inside the window, or it would fail as
+  `helper-input-stalled`. `tests/unit/migrate-copy-drain-window.test.ts`
+  (slow tier) runs the real `pipeContainerPath` into the real
+  `orkestrator-migrate.sh copy-stream` on the host, with a `docker` stand-in
+  that runs each side, for 3,000 1 KiB files, three 16 MiB files and a Git
+  repository (about 55 MB of archive). On beelink2 at load average 0.8 the
+  helper took 0.63 s after its input ended against a 138 s window (14.3 s of
+  streaming), and 0.83 s against 135 s with the whole run pinned to one CPU.
+  A one-off probe with 5,000 4 KiB files took 0.34 s after 24 s of
+  streaming. The helper's per-member work (a shell and a hash for each
+  member) happens while the stream flows, so its time after input is a small
+  fraction of the streaming time. The window now also adds the time the
+  stream took (`copyDrainWindowMs(bytes, streamedMs)`), so a host loaded
+  enough to stretch the verification has stretched the stream as well. A
+  first version of the probe stalled with the producer alive: the source
+  repository's background `git gc --auto` deleted loose objects mid-read, and
+  tar blocked on its "File removed before we read it" warnings because the
+  probe never read the producer's stderr. `pipeContainerPath` reads that
+  stream, and with it drained the same copy completed, so this was a probe
+  artifact, not a product stall. The test turns automatic gc off in its
+  fixture for that reason.
+- **7750 (retired), what it found** (retired here; its text is `git show
+  17d28238c:docs/todo/containers-and-environments/7750-rootless-automatic-port-collisions-outlast-retries.md`):
+  on 2026-11-11 on beelink2, disposable daemon `idle0049` (slirp4netns, host
+  loopback), two container starts in a row collided on four Docker-chosen
+  ports each (32792, 32794, 32800 then the fourth attempt; 32808, 32814,
+  32816 then the fourth) and failed with `port-conflict` after three retries;
+  the next attempt a minute later started at once. Built: the fresh-port
+  bound is ten (`PORT_COLLISION_RETRIES`), the same-port bound for
+  backend-chosen ports stays three (`PORT_HOLD_RETRIES`, one per pause), and
+  a start that met collisions logs `start.port-collision-run` once it ends.
+  `container-start.test.ts` replays that run (six collisions on six ports,
+  then a start) and a run longer than the bound.
+- **7750 (retired), live:** `container-start-docker.test.ts` with
+  `RUN_LIVE_DOCKER_TESTS=1` and `oven/bun:1.4.4-debian` passed 4, skipped 1
+  (the opt-in mount case) on `r7549`, with the fresh-port bound at ten. The
+  new `start.port-collision-run` line gave the run length in each case,
+  including `collisions=11 freshPortRetries=10 firstPort=32772
+  lastPort=32782 outcome=exhausted` for the container with Docker's
+  automatic mapping walking fourteen held ports.
+- **Cleanup.** Probe containers and volumes were removed as they were made;
+  the three daemons were stopped with `docker:disposable -- stop`, then this
+  checkout's instance root (its tools cache) and the probe files under
+  `output/` were removed.
 
 ## Tmux reopen, static search text and streamed reads in real containers (2026-11-13)
 

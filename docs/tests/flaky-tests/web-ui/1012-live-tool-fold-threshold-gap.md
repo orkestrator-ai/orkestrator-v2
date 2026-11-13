@@ -273,3 +273,9 @@ mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-netwo
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-13 (container live evidence review repairs)
+
+Mobile and desktop `a live group crossing the fold threshold folds into its line with no-preference motion` (`e2e/ToolGroupFold.spec.ts:127`) failed both attempts in (a); the mobile failure is a `toBeLessThanOrEqual` on the fold gap. Both passed in (b) to (e). `mise run flaky:recurrence -- 1012 --base 17d28238c` answered open.
+
+Branch `container-live-evidence-4156bad5e3b0-r1` at `eedd4f1ba`, base `17d28238c098b4443d1289df5c4ed75e7cc2802e`, Linux x86_64 (beelink2, shared with other worktrees' suites), Bun 1.4.4. The branch changes no file under `apps/web`, `packages`, `apps/desktop` or `e2e` (backend tests, the preview worker's seccomp profile, a CI workflow and docs only). Runs: (a) `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name address-browser-2 -- mise run test:browser` (one retry per test): 22 failed, 11 flaky, 154 skipped, 1,697 passed (41.1 m), host load average 22 to 50 on 16 cores; (b) the 13 failing owners together with `--workers=2`: 2 failed, 5 skipped, 249 passed (5.1 m); (c) to (e) `mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1` three times on a quiet host (load average 3 to 5): 1 failed, 38 passed (1.5 m); 3 failed, 36 passed (1.7 m); 1 failed, 38 passed (1.5 m). The complete owner never ran green alone in these four runs, and a different case failed each time, so this records intermittence in the unchanged owner, not a branch regression. The cause is unconfirmed. 

@@ -73,6 +73,38 @@ describe("container isolation", () => {
     expect(resolveSeccompProfile()).toBeDefined();
   });
 
+  // runc 1.5 (libpathrs) cannot start the worker without faccessat2; with it
+  // listed, runc stops answering lower-numbered syscalls the profile omits
+  // with ENOSYS, so clone3 must say ENOSYS itself or glibc cannot start a
+  // thread. Found on a rootless Engine 29.9.2 with runc 1.5.2 (to-do 7670 (retired)).
+  test("the seccomp profile starts on runc 1.5 and keeps glibc's clone fallback", () => {
+    type Rule = {
+      names: string[];
+      action: string;
+      errnoRet?: number;
+      args?: unknown[];
+      includes?: object;
+    };
+    const profile = JSON.parse(readFileSync(resolveSeccompProfile()!, "utf8")) as {
+      defaultAction: string;
+      syscalls: Rule[];
+    };
+    expect(profile.defaultAction).toBe("SCMP_ACT_ERRNO");
+    const unconditional = (rule: Rule) =>
+      Object.keys(rule.includes ?? {}).length === 0 && !rule.args?.length;
+    const allowed = new Set(
+      profile.syscalls
+        .filter((rule) => rule.action === "SCMP_ACT_ALLOW" && unconditional(rule))
+        .flatMap((rule) => rule.names),
+    );
+    for (const name of ["faccessat2", "close_range", "openat2", "pidfd_open"]) {
+      expect(allowed.has(name)).toBe(true);
+    }
+    const clone3 = profile.syscalls.filter((rule) => rule.names.includes("clone3"));
+    expect(clone3).toHaveLength(1);
+    expect(clone3[0]).toMatchObject({ action: "SCMP_ACT_ERRNO", errnoRet: 38 });
+  });
+
   let runner: TranscriptPreviewRunner | undefined;
   afterAll(async () => {
     await runner?.close();

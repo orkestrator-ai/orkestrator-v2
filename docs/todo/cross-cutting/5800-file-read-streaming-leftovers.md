@@ -2,11 +2,11 @@
 
 ## Task analysis
 
-Analysed 2026-11-11 against `main` at `14df96544` (first analysed 2026-11-05 against `5467f6ccb`). These are what was left when batch E-0580 of the efficiency report (part 0580, ST-21: "Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row") was finished and its report file deleted. It is still in history: `git show 5467f6ccb:docs/reports/efficiency-logging-database/0580-st-21-file-rpc-and-usage-report.md` reads it, and the commit before its deletion on this branch ends with its outcome table.
+Analysed 2026-11-13 against `main` at `17d28238c` (earlier 2026-11-11 against `14df96544`; first analysed 2026-11-05 against `5467f6ccb`). These are what was left when batch E-0580 of the efficiency report (part 0580, ST-21: "Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row") was finished and its report file deleted. It is still in history: `git show 5467f6ccb:docs/reports/efficiency-logging-database/0580-st-21-file-rpc-and-usage-report.md` reads it, and the commit before its deletion on this branch ends with its outcome table.
 
 ### Tasks
 
-1. **Live evidence for the streamed file reads** (report part 0580, task 1): show in a real browser that file viewer images and detached-transcript media load from the content origin, and fall back when they cannot. Status: open (the local environment, the reload, tab close, fallback and the environment-less stream were observed on 2026-11-11; the container environment and a detached transcript's audio or video in the renderer remain).
+1. **Live evidence for the streamed file reads** (report part 0580, task 1): show in a real browser that file viewer images and detached-transcript media load from the content origin, and fall back when they cannot. Status: done (the local environment, the reload, tab close, fallback and the environment-less stream were observed on 2026-11-11; the container environment through a real `docker exec` and a detached transcript's audio in real Chromium are covered by tests run on 2026-11-13).
 2. **How often large files are read this way** (report part 0580, Needs verification): make the measurement possible, by finding whether the gateway's metrics give per-command response bytes for the three base64 readers or adding a content-free size histogram for them. Status: done (the histogram landed and was read on a `dev:test` profile on 2026-11-11; reading it on a working profile over a few days is in 7568: 5800 task 2).
 3. **The base64 readers that remain** (report part 0580, task 1, "move large-file readers"): decide whether transcript images should move to stream URLs too. Status: blocked (waits on 7568: 5800 task 2).
 
@@ -29,17 +29,24 @@ Analysed 2026-11-11 against `main` at `14df96544` (first analysed 2026-11-05 aga
   - With every request to the content origin aborted in the page, the PNG fell back to a `data:image/png` URL and still decoded at 1750×1750 (one `read_environment_file_base64` answer of 12,922,377 bytes).
   - The environment-less stream, invoked directly through the gateway with the PNG's absolute path and no `environmentId`: 206 for `bytes=0-99`, 206 `bytes 0-8388607/9691771` for an open-ended range (the 8 MiB response cap), 404 after `transcript_media_close_stream`, and refused for `~/.bashrc`, outside the readable roots.
   - Screenshots (not committed): the streamed PNG and the inline SVG in the file viewer, and the PNG after fallback.
-- Not observed:
+- Not observed on 2026-11-11:
   - **The container environment.** This host's account cannot reach the host Docker daemon (`permission denied` on `/var/run/docker.sock`; the app shows "Docker Permission Required"), and the disposable daemon (`mise run docker:disposable`) can only copy an image in from that daemon, so the workspace image would have to be built inside it from nothing. The container path differs from the local one only in passing `containerId` to the stream.
   - **A detached transcript's audio or video in `FilePreview`.** The backend half (the environment-less stream) is observed above. A transcript rendered with no transcript scope and carrying an audio or video file part was not produced on the profile.
   - **An environment switch.** The profile had one fixture environment; the tab switch and the reload above cover an image leaving and returning to view.
+- 2026-11-13, the two remaining paths, on a host whose account still cannot reach the host Docker daemon. The environment image was built from `17d28238c` inside a disposable rootless Docker Engine 29.9.2 (`mise run docker:disposable`, then `docker/build.sh` against its socket), so nothing was copied from the host daemon:
+  - **The container environment**, `apps/backend/tests/media-stream-container-docker.test.ts` (opt-in, `RUN_LIVE_DOCKER_TESTS=1` and `ORKESTRATOR_QUALIFICATION_IMAGE`): the real `spawnDockerMediaReader` runs the container safe reader on the image's own Node inside a network-less container of that image. A valid 9,190,713-byte random-pixel PNG (1750×1750, over the 8 MiB range cap) in `/workspace/qa-media/`, opened as the file viewer's image tab opens it (environment id plus the short container id), was staged in 241 ms and served from the real content listener on `localhost`: 200 with every byte (SHA-256 equal), `bytes=0-99` 206 `bytes 0-99/9190713`, and an open-ended range 206 capped at 8 MiB. A WAV opened by its absolute `/workspace` path served 206. Inside the real container the reader refused a symbolic link to `/tmp` (`policy_denied`), a `../` escape (`policy_denied`), an HTML file (`unsupported_kind`) and a missing file (`not_found`), and the stream refused another container's id (`policy_denied`). Closing the stream answered 404 and released its staged bytes. Passed in three runs.
+  - **A detached transcript's audio**, a new case in `media-stream.browser.test.ts` (real Chromium, skipped without one): `TranscriptMediaStreams.open` with only an absolute host path, exactly what `FilePreview` sends for a detached transcript (`FilePreview.media-stream.test.tsx` pins that request), under a readable root. An `<audio>` element on an application-origin page (`127.0.0.1`) loaded it from the content origin (`localhost`), seeked to 1.6 s and played past 1.7 s through single-range requests all answered 206; a path outside the roots was refused; after the stream was closed a fresh load errored. Passed.
+  - **Not driven:** the file viewer's tab in a container environment of a running app. Its only difference from the local tab driven on 2026-11-11 is the `containerId` it passes (`environment-image-source.test.ts`, "a container image streams with its container id"), and the backend's container branch is what the test above runs for real.
 
 **Decisions.**
 
 - **How to verify?**
-  - **A `dev:test` profile with `--fixture`: open a PNG over 8 MiB and an SVG in the file viewer of a local and a container fixture environment, check the `<img>` source is the content origin for the PNG and a data URL for the SVG, reload, switch environments and back, and confirm the stream closes when the tab closes (recommended; the local half done 2026-11-11).**
+  - **A `dev:test` profile with `--fixture`: open a PNG over 8 MiB and an SVG in the file viewer of a local and a container fixture environment, check the `<img>` source is the content origin for the PNG and a data URL for the SVG, reload, switch environments and back, and confirm the stream closes when the tab closes (recommended for the local half; done 2026-11-11).**
     - Pros: the real listener, CSP and capability lifetime; no provider turn needed.
     - Cons: the container case needs the Docker fixture, which needs a host whose account can use Docker.
+  - **For the container and detached halves: an opt-in test of the backend's container read against the real image, and a real-Chromium case for the environment-less stream (chosen 2026-11-13).**
+    - Pros: repeatable on any host with a disposable daemon; asserts bytes, ranges, confinement and revocation directly.
+    - Cons: the container tab of a running app is not driven; its renderer difference is covered by a unit test.
   - **Add a Playwright case to the browser suite.**
     - Pros: repeatable.
     - Cons: the suite has no fixture image over the inline bound today; more to maintain for an occasional read.
@@ -97,6 +104,10 @@ Followed the recommended verification: a Playwright script against the profile, 
 ### Task 1: the capability left after a reload is not a defect
 
 It is bounded by the idle lifetime and the entry cap, and revoking at unload cannot be made reliable. Recorded as a decision above rather than changed.
+
+### Task 1: the container and detached halves as tests rather than a profile run
+
+This host's account cannot reach the host Docker daemon and the work allowed Docker only through a disposable daemon, so a `dev:test` profile with a container fixture was not started. The container read was run for real instead: the environment image was built inside the disposable daemon and `media-stream-container-docker.test.ts` drives the backend's own container reader against it. The detached transcript's renderer request is already pinned by `FilePreview.media-stream.test.tsx`, so the new browser case proves the rest of that path (the environment-less stream playing and seeking in real Chromium from the content origin). Both are kept as tests so they can be re-run.
 
 ### Task 2: a histogram rather than the existing totals alone
 

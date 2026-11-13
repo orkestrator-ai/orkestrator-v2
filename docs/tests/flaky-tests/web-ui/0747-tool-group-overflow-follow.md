@@ -1,7 +1,7 @@
 # Tool-group overflow follows an appended call in the aggregate
 
 - **ID:** 0747
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-24
 - **Test:** `a waiting group that fits its cap follows appended calls as it starts overflowing`
 - **Owning file:** `e2e/ToolGroupFold.spec.ts:245` (mobile Chromium).
@@ -380,3 +380,9 @@ instead of 0. `mise run flaky:recurrence -- 0747 --base "$(git merge-base HEAD o
   timeouts at 20x and under 80 burners, never by the recorded assertion.
 
 Status stays `resolved`.
+
+## Recurrence — 2026-11-13 (container live evidence review repairs)
+
+Desktop `a waiting group that fits its cap follows appended calls as it starts overflowing` (`e2e/ToolGroupFold.spec.ts:518`) failed in (b) and (d): `expect(locator).toBeVisible()` found no element. It passed in (a), (c) and (e). `mise run flaky:recurrence -- 0747 --base 17d28238c` answered that the base contains the fix (`e1b83430d7`) and that this is a real recurrence, so the case is reopened.
+
+Branch `container-live-evidence-4156bad5e3b0-r1` at `eedd4f1ba`, base `17d28238c098b4443d1289df5c4ed75e7cc2802e`, Linux x86_64 (beelink2, shared with other worktrees' suites), Bun 1.4.4. The branch changes no file under `apps/web`, `packages`, `apps/desktop` or `e2e` (backend tests, the preview worker's seccomp profile, a CI workflow and docs only). Runs: (a) `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name address-browser-2 -- mise run test:browser` (one retry per test): 22 failed, 11 flaky, 154 skipped, 1,697 passed (41.1 m), host load average 22 to 50 on 16 cores; (b) the 13 failing owners together with `--workers=2`: 2 failed, 5 skipped, 249 passed (5.1 m); (c) to (e) `mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1` three times on a quiet host (load average 3 to 5): 1 failed, 38 passed (1.5 m); 3 failed, 36 passed (1.7 m); 1 failed, 38 passed (1.5 m). The complete owner never ran green alone in these four runs, and a different case failed each time, so this records intermittence in the unchanged owner, not a branch regression. The cause is unconfirmed. 

@@ -51,6 +51,10 @@ Only tests whose complete unchanged owner passed alone appear here. Exact known-
 
 Every owner ran once with `--parallel=1 --only-failures --reporter=junit`; backend owners explicitly preloaded `../../tests/setup-node.ts`, while web used its DOM preloads. No assertion, deadline, skip or unrelated production code changed. All exact commands and retained JUnit locations are in [the validation report](../../../development/worktree-watcher-validation.md#isolated-owner-commands).
 
+## Recurrences
+
+- **2026-11-13, `agent-mail-store-size-bench.test.ts`:** agent mail store size benchmark > rejects malformed, empty, missing and nonpositive sizes failed again with the 5,000 ms test deadline (5,034.45 ms) in `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=6600000 ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS=6000000 mise run test:logged -- --name address-default-tests-2 -- mise run test`, on Linux x86_64 (beelink2, shared with other worktrees' runs), Bun 1.4.4, branch `container-live-evidence-4156bad5e3b0-r1` at `c52eeeb54`, observing base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. Backend: 18,150 pass, 144 skip, 1 fail across 1,280 files (515.22 s); root, bridges and codex protocol lockfile passed. The branch changes no file in the test's or its script's imports. Alone, `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/agent-mail-store-size-bench.test.ts --parallel=1` passed (13.2 s, through `test:logged`). `mise run flaky:recurrence -- 9926 --base 17d28238c` reported the case open. The test spawns six `bun` script runs in sequence under Bun's 5 s default; the cause is still unconfirmed.
+
 ## Evidence and limits
 
 - Original group logs: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/*.log.gz`.

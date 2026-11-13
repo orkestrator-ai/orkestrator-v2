@@ -178,7 +178,10 @@ host refused the namespace, with the kernel's own message (for example Ubuntu
 24.04's AppArmor restriction or a container's seccomp profile).
 `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
 `test:browser` fails on a Linux host other than the one it was qualified on
-(to-do 7020 task 2).
+(to-do 7020 task 2). On macOS the wrapper runs both suites unchanged on the host
+network and prints no line, because Docker Desktop keeps its networks inside its
+VM; it creates no namespace and changes nothing in the Mac's network
+configuration (qualified 2026-11-13, to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -1010,6 +1013,35 @@ and verifies the mail's file effect while another environment is active.
 Reloading must retain the delivered status without sending the carrier again.
 The native mail-steer suite separately exercises a turn changing between the
 active-run lookup and the provider's check of `expectedRunId`.
+
+The queued-steering inactive-path scenario has its own spec,
+`e2e/agent-testing/steer-inactive-live.spec.ts`, one case per platform. Codex
+runs on a real model under `ORKESTRATOR_AGENT_TEST_REVIEW=1`. Claude and
+Cursor run with no login and nothing billed under
+`ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1`: Claude's real CLI on a scripted
+loopback model, Cursor's real bridge over its fake SDK, which the case swaps in
+for `bridges/cursor-bridge/dist/index.js` and puts back afterwards. That entry
+is shared by every profile started from the checkout, so the swap holds an
+owner lock (`dist/index.qa-lock.json`) and a second run is refused while the
+first is alive; the bundle runs the fake only for the owning profile's bridges,
+and any other profile's launch runs the real entry kept as
+`dist/index.qa-real.js`. Claude's scripted model appends the marker once per
+delivered steer, so a duplicate delivery fails the case:
+
+```bash
+mise run dev:test --profile steer7 --fixture --no-agent-credentials --no-host-seed \
+  --agent-platforms claude,cursor --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=steer7 ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1 \
+  mise run test:logged -- --name steer-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/steer-inactive-live.spec.ts
+mise run dev:stop --profile steer7
+mise run dev:reset --profile steer7
+```
+
+`ORKESTRATOR_AGENT_TEST_STEER_PLATFORMS` narrows the scripted platforms, and
+`ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS=claude,cursor` runs them on the
+profile's real logins instead (billed).
 
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
@@ -3159,6 +3191,77 @@ ORKESTRATOR_AGENT_TEST_COORDINATOR_SLOW_REMOTE=1` to `bunx playwright test
 reads backend log lines from the profile's `logs/electron.log`, so it needs a
 `dev:test` profile rather than a standalone backend. The shim's timestamps use
 GNU `date`, so the spec runs on Linux.
+
+### Suborks on every provider and across a restart (fake model)
+
+`mise run test:agent:suborks` qualifies `/subork` (`docs/architecture/suborks.md`)
+on the real stack with no login and nothing billed (4340 (retired) tasks 1 and
+4). It passed on 2026-11-13 on macOS in 160 s. It starts a disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi,opencode` profile with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs both specs of
+`e2e/agent-testing/playwright.suborks.config.ts`, then stops and resets the
+profile. The specs point the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) and its isolated OpenCode `opencode.json` at
+`suborks-fake-model.ts` (one loopback server, base paths `/pi/v1` and
+`/opencode/v1`; script in `suborks-fake-model-script.ts`), and add the fake's
+provider to the profile's OpenCode allowlist. Everything else is real: the
+bridges and `opencode2 serve`, the agent tools server, the subork service,
+the branch runner, the workspace guard and the mail drain.
+
+- `suborks-live.spec.ts`: each enabled platform in turn types
+  `/subork ask <itself> and <the next>` in its own tab. The call's row must
+  hold one subork per target, `finished`, on the read-only tier the
+  enforcement matrix gives it and guarded below `enforced`; the delivery must
+  be `sent`; and the mail must wake the caller into one new turn that reads
+  both answers. The fake counts that the `/subork` turn started once, that
+  each target turn started and submitted, that a target offered `ask_agents`
+  (a Pi subork) tried it and was refused (depth 1), and that the caller was
+  woken exactly once.
+- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi, the fake holds
+  the target's requests open, and the backend is `SIGKILL`ed (after checking
+  its command line and start time) and the profile restarted with
+  `devTestRestartArgs`. The kill waits until every target's subork reads
+  `running` and checks that again just before the signal. After the restart
+  the held requests are released; the resumed row must settle with the
+  subork `finished`, one row, the delivery `sent`, the `/subork` turn not sent
+  again and exactly one wake, on the restarted OpenCode server. The fake
+  proves the target finished on the runner's continuation: a second target
+  turn started, the killed backend's held request was abandoned unread (its
+  submit is not counted), and the answer was submitted on a request that was
+  read.
+  An OpenCode target is left out of the default until
+  [8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
+  is fixed: its session stays busy in OpenCode's store after the kill, so the
+  subork stays `running` until the 45-minute bound.
+  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces it,
+  and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed run's
+  environment for inspection.
+
+Both specs wait for states rather than for changes since an earlier sample
+(`suborks-live-checks.ts`): a call counts as over only once its delivery has
+left `waiting` (it settles before its mail goes out), and the wake is found by
+position after the `/subork` request's row, so a wake already finished by the
+first poll still counts. The fake recognises OpenCode's own tool-less title
+requests and never counts them as turns. `suborks-fake-model-script.test.ts`,
+`suborks-fake-model.test.ts` (routes, hold, release, abandoned requests, 400
+and 413) and `suborks-live-checks.test.ts` run in the default suite. Claude, Codex, Cursor and Grok have no scripted model that
+reaches a profile's own bridge, so the scripted run covers Pi and OpenCode;
+both specs also run on real models without
+`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE`, on every platform the profile enables
+(`ORKESTRATOR_AGENT_TEST_SUBORK_PLATFORMS` narrows,
+`ORKESTRATOR_AGENT_TEST_SUBORK_ENVIRONMENT=container` moves the sweep into a
+container environment, `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_PLATFORM` picks
+the restart spec's platform). Those billed runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md); each
+spec's header has the commands. The content-free summaries are
+`output/agent-testing/<profile>/suborks/summary.json` and
+`restart-summary.json`. To run the scripted specs against a profile you
+started yourself, start it with the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_SUBORKS=1
+ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE=1` to `bunx playwright test --config
+e2e/agent-testing/playwright.suborks.config.ts`. The restart spec restarts that
+profile and both change its Pi and OpenCode settings for the run, so reset it
+afterwards.
 
 ### Live goal suite
 

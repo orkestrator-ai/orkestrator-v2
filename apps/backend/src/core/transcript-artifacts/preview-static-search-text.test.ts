@@ -7,7 +7,10 @@
  * (the staged Node bundle, the production default where Docker is available;
  * to-do 7670 (retired)). It skips with a warning unless Docker answers and the
  * image `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` (default the worker's own tag)
- * exists; build it with docker/artifact-preview-worker/build.sh.
+ * exists and its bundled worker reads search text; build it with
+ * docker/artifact-preview-worker/build.sh. An image prepared before to-do 5780
+ * carries the same tag without that step, so the case probes the bundle, as
+ * preview-print.test.ts probes for pdf.js, rather than trusting the tag.
  */
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -36,17 +39,41 @@ if (!CHROMIUM)
   );
 const browserTest = CHROMIUM ? test : test.skip;
 const IMAGE = process.env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE ?? DEFAULT_PREVIEW_WORKER_IMAGE;
-const imageInspect = spawnSync(
-  "docker",
-  ["image", "inspect", "--format", `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`, IMAGE],
-  { encoding: "utf8", timeout: 30_000 },
-);
-const imageContext = imageInspect.status === 0 ? imageInspect.stdout.trim() : null;
-if (imageContext === null)
+/**
+ * Whether the image's bundled worker has the static search-text step (it
+ * stores `result.searchText` from `staticHtmlDocumentText`). Probed with the
+ * image's own Node and no network, so a stale image skips instead of failing.
+ */
+const WORKER_BUNDLE = "/opt/artifact-preview-worker/preview-worker.mjs";
+const imageReadsSearchText =
+  spawnSync(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--entrypoint",
+      "node",
+      IMAGE,
+      "-e",
+      `const src = require("fs").readFileSync(${JSON.stringify(WORKER_BUNDLE)}, "utf8");` +
+        `process.exit(/staticHtmlDocumentText/.test(src) && /\\.searchText\\s*=/.test(src) ? 0 : 1);`,
+    ],
+    { stdio: "ignore", timeout: 60_000 },
+  ).status === 0;
+const imageContext = imageReadsSearchText
+  ? spawnSync(
+      "docker",
+      ["image", "inspect", "--format", `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`, IMAGE],
+      { encoding: "utf8", timeout: 30_000 },
+    ).stdout?.trim() || "(no label)"
+  : null;
+if (!imageReadsSearchText)
   console.warn(
-    `[preview-static-search-text.test] container case skipped: Docker or the worker image ${IMAGE} is unavailable (build it with docker/artifact-preview-worker/build.sh)`,
+    `[preview-static-search-text.test] container case skipped: Docker or a worker image ${IMAGE} that reads search text is unavailable (rebuild it with docker/artifact-preview-worker/build.sh)`,
   );
-const containerTest = imageContext !== null && CHROMIUM ? test : test.skip;
+const containerTest = imageReadsSearchText && CHROMIUM ? test : test.skip;
 
 let runner: TranscriptPreviewRunner;
 let operation = 0;
@@ -116,7 +143,7 @@ describe("container worker", () => {
     "reads the same text inside the prepared worker image",
     async () => {
       process.stderr.write(
-        `preview-static-search-text: container image ${IMAGE}, context ${imageContext || "(no label)"}\n`,
+        `preview-static-search-text: container image ${IMAGE}, context ${imageContext}\n`,
       );
       const container = new TranscriptPreviewRunner({
         isolation: "container",

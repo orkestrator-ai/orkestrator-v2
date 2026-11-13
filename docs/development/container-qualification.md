@@ -66,7 +66,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Live tmux transcript reopen | same command, `./tests/tmux-transcript-reopen-docker.test.ts` | A claude-tmux tab reopen through `docker exec` on a 37 MB transcript: one exec of one bounded page, equal to the local read, and bounded paging back to the first record (to-do 5120 task 2) |
 | Live container media streams | same command, `./tests/media-stream-container-docker.test.ts` | The file viewer's streamed read for a container environment: the backend's container reader on the image's Node, ranges from the content listener, confinement, foreign-container refusal and revocation (to-do 5800 task 1) |
-| Preview worker container cases | `docker/artifact-preview-worker/build.sh`, then `bun test --cwd apps/backend ./src/core/transcript-artifacts/<suite>.test.ts --parallel=1` for `preview-static-search-text`, `preview-print`, `preview-container`, `preview-escape`, `preview-runaway` and `preview-modules` | The artifact preview worker image under its seccomp profile: static text for Find, printing, escape and runaway bounds; each skips its container case with a warning when the image is missing |
+| Preview worker container cases | `docker/artifact-preview-worker/build.sh`, then `bun test --cwd apps/backend ./src/core/transcript-artifacts/<suite>.test.ts --parallel=1` for `preview-static-search-text`, `preview-print`, `preview-container`, `preview-escape`, `preview-runaway` and `preview-modules` | The artifact preview worker image under its seccomp profile: static text for Find, printing, escape and runaway bounds; each skips its container case with a warning when the image is missing, and `preview-static-search-text` and `preview-print` also when the image's bundle predates their step (search text, pdf.js). The Linux Engine workflow builds the worker and runs `preview-container` on both architectures |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`), design export into an Orkestrator container (`design-container-export.spec.ts`) |
@@ -401,10 +401,21 @@ mise run test:logged -- --name static-search-text-container -- bun test --cwd ap
   in an `<audio>` element from the content origin through ranged 206
   requests; a path outside the roots was refused; a closed stream no longer
   loaded. Passed.
+- **Follow-up (review, same change):** the tmux suite now also asserts that
+  a missing transcript and a cursor past the end each cost one exec and read
+  no transcript bytes; the static search-text container case skips with a
+  rebuild hint when the image's bundled worker lacks the search-text step
+  instead of failing on an image prepared before to-do 5780; and the Linux
+  Engine workflow (`container-live-qualification.yml`) builds the worker
+  image and runs `preview-container.test.ts` under the profile with
+  whichever runc the hosted runners ship, on amd64 and arm64. Those steps
+  had not run when this was written, so their runc version and result are
+  not recorded here.
 - **Not covered:** the file viewer and the claude-tmux tab of a running app
   in a container environment (both differ from the local paths driven on
   2026-11-11 and 2026-11-04 only in the container branch these suites run),
-  Docker Desktop and arm64 for the worker profile, which are in the
+  arm64 for the worker profile until the workflow's first run, Docker
+  Desktop for it, which is in the
   [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
   (7670 (retired) task 1), and a rootful daemon.
 - **Cleanup:** each suite removed its container (`docker ps -a` empty after

@@ -171,10 +171,29 @@ test.skipIf(!enabled)(
       expect(largestPage).toBeLessThanOrEqual(TMUX_TRANSCRIPT_PAGE_BYTES + HEADER_BYTES);
       expect(seen).toEqual(Array.from({ length: LINES }, (_, n) => `line-${n}`));
 
-      // A missing file and a cursor past the end answer without reading.
+      // A missing file and a cursor past the end each cost one exec of the
+      // window command and read no transcript bytes: the missing file answers
+      // with an exit status, the past-end cursor with the size header alone.
       const missing = session(backend, "/home/node/.claude/projects/-workspace/missing.jsonl");
-      expect((await missing.transcriptPage(context)).lines).toEqual([]);
-      spy.take();
+      const absent = await missing.transcriptPage(context);
+      expect(absent.lines).toEqual([]);
+      expect(absent.earlierCursor).toBeNull();
+      expect(absent.expired).toBeUndefined();
+      const missingRead = spy.take();
+      expect(missingRead.execs).toBe(1);
+      expect(missingRead.bytes).toBe(0);
+
+      const pastEnd = `${SESSION_ID}:${fileBytes + 1}`;
+      const beyond = await tab.transcriptPage(context, pastEnd);
+      const beyondRead = spy.take();
+      expect(beyond).toMatchObject({ lines: [], earlierCursor: null, expired: true });
+      expect(beyondRead.execs).toBe(1);
+      expect(beyondRead.bytes).toBeLessThanOrEqual(HEADER_BYTES);
+      expect(await reference.transcriptPage(context, pastEnd)).toMatchObject({
+        lines: [],
+        earlierCursor: null,
+        expired: true,
+      });
 
       process.stderr.write(
         `tmux-transcript-reopen-docker: file ${fileBytes} bytes; first pass ${firstPass.bytes} bytes in ${firstPass.execs} execs (${firstMs.toFixed(0)} ms); ` +

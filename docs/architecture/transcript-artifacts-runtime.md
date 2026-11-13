@@ -207,7 +207,10 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   is listed runc stops answering the lower-numbered syscalls the profile
   omits with ENOSYS, so glibc would not fall back from `clone3` to `clone`
   ([evidence](../development/container-qualification.md#tmux-reopen-static-search-text-and-streamed-reads-in-real-containers-2026-11-13)).
-  The profile is passed to `docker run`, never built into the image, so a
+  `clone` itself is allowed with no argument filter, because Chromium's
+  namespace sandbox creates user namespaces, so the profile checks no clone
+  flags; the dropped capabilities and `no-new-privileges` bound what a new
+  namespace can do. The profile is passed to `docker run`, never built into the image, so a
   change to it does not ask for the worker to be prepared again.
   No host environment is passed (only `HOME=/tmp`). The job package goes in
   on stdin and bounded results come back on stdout. This is the OS-level

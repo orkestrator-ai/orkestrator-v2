@@ -51,6 +51,8 @@ on:
       - "apps/backend/src/core/egress-gateway.ts"
       - "apps/backend/src/core/github-ranges-cache.ts"
       - "apps/backend/scripts/github-ranges-seed.ts"
+      - "docker/artifact-preview-worker/**"
+      - "apps/backend/src/core/transcript-artifacts/preview-container.test.ts"
 
 # Only pull request runs supersede each other. Scheduled and manual runs need
 # unique groups so a newer pending run cannot replace an older one.
@@ -290,6 +292,24 @@ jobs:
         env:
           ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/design/export-container.test.ts --parallel=1
+
+      # The artifact preview worker under its own seccomp profile on this
+      # runner's runc, on both architectures: the profile once stopped runc 1.5
+      # from starting the worker at all (2026-11-13, container-qualification.md).
+      # The default builder, not the Buildx container one, so the image lands in
+      # the daemon's store; the live case skips only when the image is missing,
+      # which a failed build step already reports.
+      - name: Build the preview worker image
+        if: ${{ !cancelled() }}
+        env:
+          BUILDX_BUILDER: default
+        run: bash docker/artifact-preview-worker/build.sh "orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}"
+
+      - name: Live preview worker under its seccomp profile
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
+        run: docker image inspect "$ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE" > /dev/null && mise run test:logged -- --name preview-worker-container -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1
 
       # Numbers only, compared by hand with the Docker Desktop figures
       # (container-qualification.md, "Exec cost and container change signals").

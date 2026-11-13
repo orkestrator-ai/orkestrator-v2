@@ -48,7 +48,7 @@
       "excludes": {}
     },
     {
-      "comment": "As in Docker's default profile: without CAP_SYS_ADMIN, clone3 answers ENOSYS so glibc falls back to clone, whose flags the rules here can inspect",
+      "comment": "As in Docker's default profile: without CAP_SYS_ADMIN, clone3 answers ENOSYS so glibc falls back to clone. This profile allows clone with no argument filter (the first rule, for Chromium's namespace sandbox), so the fallback admits every clone flag, namespace flags included; the boundary is the container's dropped capabilities, no-new-privileges and the rest of this profile, not a clone flag check",
       "names": ["clone3"],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 38,

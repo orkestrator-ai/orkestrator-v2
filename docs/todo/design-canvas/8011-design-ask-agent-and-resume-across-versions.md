@@ -46,4 +46,4 @@ Ask agent and Resume" in both directions of the desktop pairing.
 
 - [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests): the pairing spec and what it covers.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#what-must-work-across-the-window): the desktop-to-remote-backend pairing rule.
-- 0036 (retired 2026-11-13): the 2026-11-13 pairing evidence, "Renderer pairing with v2.22.3 (task 6)" in `git show f2c4cee71:docs/todo/design-canvas/0036-design-canvas-qualification.md`.
+- 0036 (retired 2026-11-13): the 2026-11-13 pairing evidence, "Renderer pairing with v2.22.3 (task 6)" in [`design-canvas.md` → Evidence of 2026-11-13](../../architecture/design-canvas.md#evidence-of-2026-11-13); the to-do's earlier record is `git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`.

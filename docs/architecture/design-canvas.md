@@ -623,10 +623,11 @@ numbers. The 2026-11-06 failures that prompted it are in the retired to-do
 ## Qualification
 
 To-do 0036 collected the evidence that the canvas works beyond its unit and
-browser tests; it was retired on 2026-11-13 and its full record, with every
-command, host and figure, is in Git history
-(`git show f2c4cee71:docs/todo/design-canvas/0036-design-canvas-qualification.md`).
-In short:
+browser tests; it was retired on 2026-11-13. Its record up to 2026-11-06,
+with every command, host and figure, is in Git history
+(`git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`);
+the 2026-11-13 runs that closed it are in
+[Evidence of 2026-11-13](#evidence-of-2026-11-13) below. In short:
 
 - **Live agents.** `design-live.spec.ts` passed for Codex (2026-10-18) and
   Claude (2026-10-21, twice): create, inspect, refine, capture,
@@ -660,3 +661,82 @@ Still to do by a person, in the
 the native menu key equivalents on macOS, a screen-reader pass, a slower
 laptop, the M5 Max retention run, and the decisions on library thumbnails
 and a cross-environment transfer UI.
+
+### Evidence of 2026-11-13
+
+0036 tasks 3 and 6, from `17d28238c`, on an Apple M5 Pro (18 cores, 64 GiB),
+macOS 27.2, Bun 1.4.4 and Playwright 1.65.0, shared with nine other builds
+(load averages 35 to 96, so no timing here is a reference figure). Every app
+ran on a disposable agent-test profile under a temporary root with HOME, the
+XDG roots and an allowlisted environment; every backend had its own temporary
+data directory on loopback, never ports 34121, 34122 or 45507, with no agent
+credentials and no provider turn. Nothing was signed with a Developer ID or
+notarised.
+
+**macOS packaged bundle (task 3).**
+
+- `mise run package:mac:unpacked:test` wrote
+  `release/packaged-test/mac-arm64/OrkestratorV2.app` with an ad-hoc
+  signature and no team identifier (`mac.identity` is `-` and
+  `CSC_IDENTITY_AUTO_DISCOVERY=false`, so no keychain was read).
+- `design-canvas-packaged-electron.spec.ts` first failed its resources check,
+  which assumed the Linux layout; `packagedResourcesPath` fixed it. It then
+  passed (31.0 s, Electron 45.2.3, Chromium 156.0.8078.80): `app.isPackaged`,
+  the `file://…/Contents/Resources/web/index.html` window, `userData` inside
+  the profile, open, drag, keyboard (Ctrl/⌘+0 included), export, download and
+  host import.
+- `--repeat-each=8` failed 4 of 8 at load 44–96 on two journey races (the
+  export step read **File name** before the preview filled it; a startup
+  dialog took the Expand click), fixed and recorded as flake
+  [9969](../tests/flaky-tests/design-canvas-and-artifacts/9969-design-electron-journey-file-name-and-expand-races.md).
+  Afterwards it passed 8 of 8 (20.3–30.3 s), and 2 of 2 in the final run.
+- Ctrl/⌘+0 passed in all 17 macOS packaged runs that reached it.
+- The product installs no `will-download` handler on the window's session
+  (only the artifact host's isolated session has one, and it cancels
+  downloads), so the Save dialog is Electron's own. The journey asserts that
+  before installing its own handler, in the Vite-served and both packaged
+  specs.
+- The app ran with `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1`; no window
+  reached the desktop.
+
+**Renderer pairing with v2.22.3 (task 6).**
+`design-canvas-renderer-pairing-electron.spec.ts` makes a headless backend of
+the other version the window's active connection with
+`connections.connect({ address, token })`, waits until `get_app_version` from
+the page answers that backend's version, then runs the shared Electron design
+journey, so every design command goes to that backend.
+
+| Direction | Renderer | Backend | Result |
+| --- | --- | --- | --- |
+| New renderer, old backend | this checkout's packaged-test macOS app (2.38.1-beta) | `orkestrator@2.22.3` from npm (`--ignore-scripts`), `serve` | passed 3 of 3 (34.3–40.4 s): open, drag, keyboard with Ctrl/⌘+0, export with the byte and digest check, download, host import |
+| Old renderer, new backend | the published v2.22.3 macOS app (Electron 44.7.0) from the GitHub release zip, unpacked with `ditto -x -k` | this checkout's `apps/backend/src/main.ts` (2.38.1-beta) | passed 3 of 3 (31.4–42.4 s): open, drag, keyboard, export with the byte and digest check, host import |
+
+- Against 2.22.3 the new renderer logged "Unknown backend command" for
+  commands newer than that release and showed the "backend is out of date"
+  notice, as designed; the canvas worked throughout.
+- Harness findings, not product defects: page commands fail authentication
+  until the window reloads onto the new connection, so the spec reloads until
+  the version answers; and an isolated backend with no agent makes the
+  renderer open its blocking "AI CLI Required" dialog, so each backend gets a
+  toolchain directory holding a stub `pi` that only exits 1. The 2.22.3
+  backend also left `git fsmonitor--daemon` processes behind on macOS; the
+  pairing backends now run with `core.fsmonitor=false`.
+- The v2.22.3 app has its Node inspect fuse off, so it was driven over CDP
+  (`--remote-debugging-port=0`) without main: no window size, no download save
+  path (the download step is skipped), and the page's CSS width stands in for
+  the window zoom factor. Two checks that predate it are skipped, neither of
+  which depends on the backend: the app-wide shortcuts dialog (#1240) and
+  Ctrl/⌘+0 resetting a focused canvas. In v2.22.3, ⌘0 left the canvas at 77%
+  in all three runs, the zoom-listener defect fixed on 2026-10-22, after
+  v2.22.3 shipped on 2026-10-17. Its window showed on the desktop during each
+  run.
+- Final run: `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE=<app>/Contents/MacOS/OrkestratorV2
+  mise run test:logged -- --name design-final -- bunx playwright test --config
+  e2e/agent-testing/playwright.packaged-electron.config.ts
+  design-canvas-packaged-electron.spec.ts
+  design-canvas-renderer-pairing-electron.spec.ts --repeat-each=2` passed 6 of
+  6 (237.4 s, load 50–75).
+- Not covered: Ask agent and Resume
+  ([8011](../todo/design-canvas/8011-design-ask-agent-and-resume-across-versions.md)),
+  the Linux packaged app in the pairing (the spec supports it; not run) and a
+  v2.22.3 AppImage.

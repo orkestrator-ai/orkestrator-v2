@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-13 against `main` at `17d28238c`. Moved from to-do 0036 task 9
-(0036 retired 2026-11-13; `git show f2c4cee71:docs/todo/design-canvas/0036-design-canvas-qualification.md`,
+(0036 retired 2026-11-13; `git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`,
 "Deferred until measured"), as that task recommended, so the qualification
 file could close while these stay gated on evidence.
 
@@ -121,7 +121,7 @@ file could close while these stay gated on evidence.
 
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Renderer", "Bounds", "Tests").
 - `scripts/benchmark-design.ts` (backend) and `e2e/perf/design-canvas-perf.ts` (client) are the measurements these tasks wait on.
-- 0036 (retired 2026-11-13): the client performance runs that made no case for these (`git show f2c4cee71:docs/todo/design-canvas/0036-design-canvas-qualification.md`).
+- 0036 (retired 2026-11-13): the client performance runs that made no case for these (`git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`).
 
 ## Replaces
 

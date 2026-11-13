@@ -36,7 +36,7 @@ import path from "node:path";
 
 const MAX_BOOT_ATTEMPTS = 2;
 const READY_TIMEOUT_MS = Number(process.env.ORKESTRATOR_LAUNCHER_READY_TIMEOUT_MS ?? 120_000);
-const READY_POLL_MS = Number(process.env.ORKESTRATOR_LAUNCHER_READY_POLL_MS ?? 500);
+const READY_POLL_MS = shorterInterval("ORKESTRATOR_LAUNCHER_READY_POLL_MS", 500);
 const RETRY_DELAY_MS = Number(process.env.ORKESTRATOR_LAUNCHER_RETRY_DELAY_MS ?? 2_000);
 const CRASH_DELAY_MS = Number(process.env.ORKESTRATOR_LAUNCHER_CRASH_DELAY_MS ?? 5_000);
 const STOP_TIMEOUT_MS = Number(process.env.ORKESTRATOR_LAUNCHER_STOP_TIMEOUT_MS ?? 10_000);
@@ -59,6 +59,25 @@ const layout = {
 
 function log(message) {
   console.error(`[launcher] ${new Date().toISOString()} ${message}`);
+}
+
+/**
+ * A test-only override that can only shorten `fallback`: a positive integer
+ * no larger than it. Anything else (empty, not a number, zero, negative,
+ * fractional or longer) keeps `fallback` and says so, rather than letting a
+ * typo poll every millisecond or stretch the cadence.
+ */
+function shorterInterval(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (raw.trim() !== "" && Number.isSafeInteger(value) && value > 0 && value <= fallback) {
+    return value;
+  }
+  log(
+    `ignoring ${name}=${JSON.stringify(raw.slice(0, 32))}: it must be a positive integer of at most ${fallback}; using ${fallback} ms`,
+  );
+  return fallback;
 }
 
 function readJson(file) {

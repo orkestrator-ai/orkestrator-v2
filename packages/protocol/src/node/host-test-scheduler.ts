@@ -182,24 +182,29 @@ export function createHostTestScheduler(
         "SELECT workers, memory FROM budget WHERE id=1",
       )
       .get()!;
-  const conflict = (a: string, b: string, aOwner: string, bOwner: string) => {
+  // Which of `a`'s resources `b` conflicts with: "*" when either side claims
+  // the whole host or the other's whole workspace, which no one label explains.
+  const conflictsOn = (a: string, b: string, aOwner: string, bOwner: string): string[] => {
     const left = JSON.parse(a) as string[],
       right = JSON.parse(b) as string[];
-    return (
+    if (
       left.includes("*") ||
       right.includes("*") ||
       left.includes(`workspace:${bOwner}:*`) ||
-      right.includes(`workspace:${aOwner}:*`) ||
-      left.some((value) =>
-        right.some(
-          (other) =>
-            value === other ||
-            (value.endsWith(":*") && other.startsWith(value.slice(0, -1))) ||
-            (other.endsWith(":*") && value.startsWith(other.slice(0, -1))),
-        ),
-      )
+      right.includes(`workspace:${aOwner}:*`)
+    )
+      return ["*"];
+    return left.filter((value) =>
+      right.some(
+        (other) =>
+          value === other ||
+          (value.endsWith(":*") && other.startsWith(value.slice(0, -1))) ||
+          (other.endsWith(":*") && value.startsWith(other.slice(0, -1))),
+      ),
     );
   };
+  const conflict = (a: string, b: string, aOwner: string, bOwner: string) =>
+    conflictsOn(a, b, aOwner, bOwner).length > 0;
   // Smallest reservation a job may start with. CPU slots are elastic: a job
   // starts with whatever is free above this floor. Memory and exclusive
   // resources are not elastic and must fit whole.
@@ -355,11 +360,12 @@ export function createHostTestScheduler(
         const budget = limits();
         const usedWorkers = running.reduce((sum, candidate) => sum + candidate.workers, 0);
         const usedMemory = running.reduce((sum, candidate) => sum + candidate.memory, 0);
-        const blocker = running.find(
+        const blockers = running.filter(
           (candidate) =>
             (!job.cohort || candidate.cohort !== job.cohort || candidate.owner !== job.owner) &&
             conflict(candidate.resources, job.resources, candidate.owner, job.owner),
         );
+        const blocker = blockers[0];
         const reason = blocker
           ? `exclusive resource held by worktree ${blocker.owner.slice(0, 12)} (PID ${blocker.pid})`
           : usedWorkers + floor(job) > budget.workers
@@ -378,6 +384,21 @@ export function createHostTestScheduler(
             job.state === "queued"
               ? `Waiting for ${reason}; ${usedWorkers}/${budget.workers} slots and ${usedMemory}/${budget.memory} MiB reserved; needs ${needs} slots and ${job.memory} MiB.`
               : undefined,
+          /**
+           * While queued, every resource of this job that a running job of
+           * another cohort holds ("*" for a whole-host or whole-workspace
+           * claim); empty when nothing exclusive is in the way.
+           */
+          blockedOn:
+            job.state === "queued"
+              ? [
+                  ...new Set(
+                    blockers.flatMap((candidate) =>
+                      conflictsOn(job.resources, candidate.resources, job.owner, candidate.owner),
+                    ),
+                  ),
+                ]
+              : [],
         };
       });
     },

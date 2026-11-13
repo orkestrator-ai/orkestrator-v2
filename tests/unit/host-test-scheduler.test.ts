@@ -14,6 +14,7 @@ import {
   AGGREGATE_PRESSURE_GATE_ENV,
   AGGREGATE_PRESSURE_MAX_ENV,
   AGGREGATE_PRESSURE_SETTLE_ENV,
+  AGGREGATE_SUITE_RESOURCE,
   createTestAdmission,
   groupUsageKey,
   readHostPressure,
@@ -902,9 +903,16 @@ const queuedJobs = (directory: string) => {
   const db = new Database(path.join(directory, "queue.sqlite"), { readonly: true });
   try {
     return db
-      .query<{ workers: number; minWorkers: number | null; resources: string; state: string }, []>(
-        "SELECT workers, minWorkers, resources, state FROM jobs ORDER BY sequence",
-      )
+      .query<
+        {
+          workers: number;
+          minWorkers: number | null;
+          memory: number;
+          resources: string;
+          state: string;
+        },
+        []
+      >("SELECT workers, minWorkers, memory, resources, state FROM jobs ORDER BY sequence")
       .all();
   } finally {
     db.close();
@@ -1052,17 +1060,23 @@ test("adaptive reservation sizes a group from its last runs, bounded by the plan
   };
   try {
     // No history: the plan, with no floor, exactly as without the switch.
-    expect(await reserved()).toMatchObject({ workers: 6, minWorkers: null });
+    expect(await reserved()).toMatchObject({ workers: 6, minWorkers: null, memory: 6144 });
     expect(lines.filter((line) => line.startsWith("RUNNING"))[0]).toMatch(
       /^RUNNING usage group \(6 worker slots; waited \d+\.\ds\)$/,
     );
     // Busiest of the last five runs, rounded up.
     for (const parallelism of [0.4, 2.2, 1.1]) scheduler.recordUsage(usageKeyFor(), parallelism);
-    expect(await reserved()).toMatchObject({ workers: 3, minWorkers: 1 });
+    // Only CPU slots adapt: the group still starts all six planned Bun
+    // workers, so memory, which is not elastic, is reserved for six.
+    expect(await reserved()).toMatchObject({ workers: 3, minWorkers: 1, memory: 6144 });
     expect(lines.filter((line) => line.startsWith("RUNNING"))[1]).toContain("(3 worker slots;");
     expect(lines.filter((line) => line.startsWith("RUNNING"))[1]).toContain(
       "adaptive: learned 3 of 6 planned",
     );
+    // A group that learned it needs one core still reserves memory for its plan.
+    const single = { ...usageGroup, name: "single core" };
+    for (let run = 0; run < 5; run += 1) scheduler.recordUsage(usageKeyFor(single), 0.2);
+    expect(await reserved(single)).toMatchObject({ workers: 1, minWorkers: 1, memory: 6144 });
     // Never above the plan.
     scheduler.recordUsage(usageKeyFor(), 40);
     expect(await reserved()).toMatchObject({ workers: 6, minWorkers: 2 });
@@ -1152,6 +1166,19 @@ describe("experimental aggregate pressure gate", () => {
   const judged = (probe: ReturnType<typeof watched>, more = 3) => {
     const target = probe.reads() + more;
     return until(() => probe.reads() >= target, 10_000);
+  };
+  /**
+   * A wall clock that counts its reads. The queue loop reads it on every pass,
+   * so a few more reads prove the gate condition was weighed a few more times.
+   */
+  const countedClock = () => {
+    let reads = 0;
+    const read = () => (reads++, Date.now());
+    const passes = (more = 5) => {
+      const target = reads + more;
+      return until(() => reads >= target, 10_000);
+    };
+    return { read, passes };
   };
 
   function setup(workers = 8) {
@@ -1333,6 +1360,97 @@ describe("experimental aggregate pressure gate", () => {
     await tick(6_400);
     expect(await until(second.started)).toBe(true);
     await finish(first.finished, second.finished);
+  });
+
+  test("a wait on another exclusive resource is not excused, however calm the host is", async () => {
+    const { directory, start, finish } = setup();
+    const other = "b".repeat(64);
+    const queueOn = createHostTestScheduler({ directory, workers: 8, memoryMiB: 16384 });
+    const [hostResource] = queueOn.resources(other, ["host:shared-device"]);
+    // Neither holder is a complete run: one holds an inherited host resource,
+    // the other the whole host. Each run below inherits that host resource.
+    const holders = [
+      { resources: [hostResource!], label: "an inherited host resource" },
+      { resources: ["*"], label: "a whole-host reservation" },
+    ];
+    try {
+      for (const holder of holders) {
+        const hold = queueOn.enqueue({
+          owner: other,
+          workers: 1,
+          memoryMiB: 1,
+          resources: holder.resources,
+        });
+        expect(queueOn.poll(hold).state).toBe("running");
+        const probe = watched(() => calm);
+        const clock = countedClock();
+        const lines: string[] = [];
+        const run = start(
+          { ...enabled, ORKESTRATOR_VALIDATION_RESOURCES: JSON.stringify([hostResource]) },
+          probe.read,
+          lines,
+          clock.read,
+        );
+        expect(
+          await until(() => lines.some((line) => line.includes("exclusive resource held by"))),
+        ).toBe(true);
+        // Give a gate that would wrongly open every chance to.
+        expect(await clock.passes()).toBe(true);
+        expect(probe.reads(), holder.label).toBe(0);
+        expect(
+          lines.some((line) => line.startsWith("ADMITTING")),
+          holder.label,
+        ).toBe(false);
+        expect(run.started(), holder.label).toBe(false);
+        // Still queued on the primary complete-run lock, not the overflow lock.
+        const queued = queuedJobs(directory).filter((job) => job.state === "queued");
+        expect(queued, holder.label).toHaveLength(1);
+        const suiteLocks = (JSON.parse(queued[0]!.resources) as string[]).filter(
+          (resource) => resource !== hostResource && !resource.startsWith("worktree:"),
+        );
+        expect(suiteLocks, holder.label).toEqual(
+          queueOn.resources(other, [AGGREGATE_SUITE_RESOURCE]),
+        );
+        run.admission.cancel();
+        await run.finished;
+        queueOn.release(hold);
+      }
+    } finally {
+      queueOn.close();
+      await finish();
+    }
+  });
+
+  test("a wait on both the suite lock and another resource is not excused", async () => {
+    const { directory, start, finish } = setup();
+    const other = "b".repeat(64);
+    const queueOn = createHostTestScheduler({ directory, workers: 8, memoryMiB: 16384 });
+    const [hostResource] = queueOn.resources(other, ["host:shared-device"]);
+    const first = start({ ORKESTRATOR_VALIDATION_RESOURCES: JSON.stringify([hostResource]) });
+    try {
+      expect(await until(first.started)).toBe(true);
+      const probe = watched(() => calm);
+      const clock = countedClock();
+      const lines: string[] = [];
+      const second = start(
+        { ...enabled, ORKESTRATOR_VALIDATION_RESOURCES: JSON.stringify([hostResource]) },
+        probe.read,
+        lines,
+        clock.read,
+      );
+      expect(
+        await until(() => lines.some((line) => line.includes("exclusive resource held by"))),
+      ).toBe(true);
+      expect(await clock.passes()).toBe(true);
+      // The overflow lock would not free the host resource, so there is nothing to excuse.
+      expect(probe.reads()).toBe(0);
+      expect(lines.some((line) => line.startsWith("ADMITTING"))).toBe(false);
+      expect(second.started()).toBe(false);
+      second.admission.cancel();
+      await finish(first.finished, second.finished);
+    } finally {
+      queueOn.close();
+    }
   });
 
   test("without a holder there is nothing to excuse and the gate never reads pressure", async () => {

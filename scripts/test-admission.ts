@@ -344,15 +344,19 @@ export function createTestAdmission(
           }
         }
         let ticketOverflow = overflow;
+        // Memory is not elastic: the group still starts every planned Bun
+        // worker however few CPU slots it learned it needs, so its memory
+        // estimate stays that of the plan.
+        const memoryMiB = group.exclusive
+          ? capacity.memoryMiB
+          : Math.min(capacity.memoryMiB, planned * 1024);
         const submit = () =>
           scheduler.enqueue({
             owner,
             cohort,
             workers,
             ...(minWorkers !== undefined ? { minWorkers } : {}),
-            memoryMiB: group.exclusive
-              ? capacity.memoryMiB
-              : Math.min(capacity.memoryMiB, workers * 1024),
+            memoryMiB,
             resources: group.exclusive
               ? ["*"]
               : [
@@ -392,17 +396,18 @@ export function createTestAdmission(
             );
           if (now() - queuedAt >= queueTimeout)
             throw new Error("Host capacity wait expired; tests did not run");
-          // Experimental gate: only a wait on another worktree's exclusive
-          // resource can be excused, and only while the host has been calm.
+          // Experimental gate: only a wait on another complete run's suite
+          // lock can be excused, and only while the host has been calm. A
+          // wait on any other exclusive resource (an inherited host resource,
+          // a whole-host reservation) is not one the overflow lock relieves.
           if (
             gateEnabled &&
             !group.exclusive &&
             suiteResources.length > 0 &&
             !ticketOverflow &&
             (overflow ||
-              ((status.queueReason ?? "").startsWith(
-                "Waiting for exclusive resource held by worktree",
-              ) &&
+              (status.blockedOn.length > 0 &&
+                status.blockedOn.every((resource) => suiteResources.includes(resource)) &&
                 gateOpens()))
           ) {
             if (!overflow) {

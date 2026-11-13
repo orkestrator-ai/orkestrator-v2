@@ -1775,8 +1775,10 @@ up and at least one slot, never above the planned worker count, with an elastic
 floor of a quarter of it, so a wait-bound group can start on a busy host with
 what is free instead of waiting for its whole plan. The `RUNNING` line says
 `adaptive: learned 3 of 6 planned` and shows the slots actually granted. The
-group still runs its planned number of Bun workers: only the admission estimate
-shrinks, so enable it only after reading a few finish lines. Without history, with
+group still runs its planned number of Bun workers: only the CPU-slot estimate
+shrinks. Its memory reservation stays that of the plan (1 GiB per planned
+worker, within the host budget), because memory is not elastic and every
+planned worker still starts. Enable it only after reading a few finish lines. Without history, with
 the variable unset or set to anything but `1`, and for the exclusive iOS group,
 the reservation, its queue request and the `RUNNING` line are exactly the static
 plan's. Rationale: the measured per-file data in
@@ -1808,7 +1810,11 @@ Linux, a kernel without PSI, a container that hides it), the lock behaves exactl
 as without the variable. Known limits: the pressure signal is host-wide, so a
 busy unrelated workload also blocks it; a run already waiting on the overflow
 lock does not move back to the first when that frees; and only a wait on another
-worktree's exclusive resource is excused, which is judged from the queue reason.
+complete run's lock is excused. The scheduler reports which of a queued job's
+resources running jobs hold, and the gate opens only when that is the
+complete-run lock alone: a wait on an inherited host resource, a whole-host
+(`*`) reservation, or the lock together with anything else stays queued on the
+first lock without reading pressure.
 
 ### Multi Review validation
 

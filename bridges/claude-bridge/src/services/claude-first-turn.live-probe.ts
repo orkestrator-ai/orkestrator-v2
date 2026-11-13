@@ -7,12 +7,18 @@
 // parked spare calls nothing. Prints one JSON document after `RESULT_SENTINEL`;
 // see to-do 0005, task 3.
 //
-//   bun src/services/claude-first-turn.live-probe.ts [runs] [concurrent]
+//   bun src/services/claude-first-turn.live-probe.ts [runs] [concurrent] [stall [turnDeadlineMs]]
 //
 // Every variant runs on a `Fixture` of its own: endpoint, request log, home and
 // bridge processes. `concurrent` runs the variants side by side, which is
 // enough for the structural checks the live test makes but distorts the
 // timings, so the measurement task leaves it off.
+//
+// `stall` is a fault mode for the live test's failure path: the endpoint takes
+// every model request and never answers it, so a turn fails on its deadline
+// with a CLI still running. Only one cold run is made. Every CLI's pid is
+// printed to stderr after `CLI_PID_SENTINEL`, and `STALLED_SENTINEL` once the
+// first model request is being held.
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -22,18 +28,31 @@ import {
   prewarm,
   query,
   type Options,
+  type Query,
   type SDKUserMessage,
   type SpareProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 
 const RESULT_SENTINEL = "__FIRST_TURN_RESULT__";
+const CLI_PID_SENTINEL = "__FIRST_TURN_CLI_PID__";
+const STALLED_SENTINEL = "__FIRST_TURN_STALLED__";
 const RUNS = Number(process.argv[2] ?? 5);
 const STDIO_SERVERS = ["alpha", "beta", "gamma"];
 const FIXTURE_SERVER = join(import.meta.dir, "session-manager-prompt-mcp-sync.live-fixture.ts");
 
 const CONCURRENT = process.argv[3] === "concurrent";
+const STALL = process.argv[4] === "stall";
+/** How long a turn may take once its model request is seen. */
+const TURN_DEADLINE_MS = positiveInteger(process.argv[5]) ?? 60_000;
+/** How long a child has after SIGTERM, and again after SIGKILL, before cleanup moves on. */
+const CHILD_STOP_GRACE_MS = 2_000;
 /** The one ambient variable a CLI keeps, read before the environment is cleared. */
 const HOST_PATH = process.env.PATH;
+
+function positiveInteger(value: string | undefined): number | undefined {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 const root = await mkdtemp(join(tmpdir(), "claude-first-turn-"));
 
@@ -46,8 +65,8 @@ interface Fixture {
   isolatedEnv: Record<string, string | undefined>;
   env: Record<string, string | undefined>;
   bridgeChildren: Set<ChildProcess>;
-  /** Settles as each CLI this fixture started exits; a CLI writes under its home while it does. */
-  cliExits: Promise<void>[];
+  /** Every CLI this fixture started that has not exited; a CLI writes under its home while it runs. */
+  cliChildren: Set<ChildProcess>;
   /** A working directory of this fixture; `mcpServers` become its folder `.mcp.json`. */
   directory: (name: string, mcpServers?: Record<string, unknown>) => Promise<string>;
   stop: () => Promise<void>;
@@ -94,6 +113,45 @@ function modelStream(id: string): string {
     .join("");
 }
 
+/**
+ * SIGTERM, then SIGKILL after `CHILD_STOP_GRACE_MS`. Settles when the child
+ * exits, or one more grace period after the SIGKILL whatever happens, so a
+ * child that ignores both cannot hold cleanup (and the failure it would
+ * report) forever.
+ */
+function stopChild(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+      return resolve();
+    }
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const done = () => {
+      for (const timer of timers) clearTimeout(timer);
+      resolve();
+    };
+    child.once("exit", done);
+    child.once("error", done);
+    timers.push(
+      setTimeout(() => {
+        child.kill("SIGKILL");
+        timers.push(setTimeout(done, CHILD_STOP_GRACE_MS));
+      }, CHILD_STOP_GRACE_MS),
+    );
+    child.kill("SIGTERM");
+  });
+}
+
+/** Rejects with `message` unless `promise` settles within `ms`. */
+function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 let fixtureCount = 0;
 
 async function createFixture(): Promise<Fixture> {
@@ -118,6 +176,11 @@ async function createFixture(): Promise<Fixture> {
       if (!path.endsWith("/messages")) return Response.json({ input_tokens: 1 });
       modelCalls += 1;
       onModelCall?.();
+      if (STALL) {
+        if (modelCalls === 1) console.error(STALLED_SENTINEL);
+        // Held until `stop` closes the endpoint.
+        return new Promise<Response>(() => undefined);
+      }
       return new Response(modelStream(`msg_${modelCalls}`), {
         headers: { "content-type": "text/event-stream" },
       });
@@ -134,6 +197,7 @@ async function createFixture(): Promise<Fixture> {
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   };
   const bridgeChildren = new Set<ChildProcess>();
+  const cliChildren = new Set<ChildProcess>();
   const fixture: Fixture = {
     requests,
     untilModelCall(start) {
@@ -151,7 +215,7 @@ async function createFixture(): Promise<Fixture> {
     isolatedEnv,
     env: { ...isolatedEnv, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     bridgeChildren,
-    cliExits: [],
+    cliChildren,
     async directory(name, mcpServers) {
       const path = join(root, label, name);
       await mkdir(path, { recursive: true });
@@ -159,21 +223,9 @@ async function createFixture(): Promise<Fixture> {
       return path;
     },
     async stop() {
-      await Promise.all(
-        [...bridgeChildren].map(
-          (child) =>
-            new Promise<void>((resolve) => {
-              if (child.exitCode !== null || child.signalCode !== null) return resolve();
-              const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-              child.once("exit", () => {
-                clearTimeout(timer);
-                resolve();
-              });
-              child.kill("SIGTERM");
-            }),
-        ),
-      );
-      await Promise.all(fixture.cliExits);
+      // A run closes its own CLI on the way out; any still here belongs to a
+      // run that failed before it could, or to a signal mid-run.
+      await Promise.all([...bridgeChildren, ...cliChildren].map(stopChild));
       endpoint.stop(true);
     },
   };
@@ -225,12 +277,11 @@ function launchOptions(fx: Fixture, extra: Partial<Options> = {}): Options {
         signal: spawnOptions.signal,
         stdio: ["pipe", "pipe", "ignore"],
       });
-      fx.cliExits.push(
-        new Promise<void>((resolve) => {
-          child.once("exit", () => resolve());
-          child.once("error", () => resolve());
-        }),
-      );
+      fx.cliChildren.add(child);
+      const forget = () => fx.cliChildren.delete(child);
+      child.once("exit", forget);
+      child.once("error", forget);
+      if (child.pid !== undefined) console.error(`${CLI_PID_SENTINEL}${child.pid}`);
       return child;
     },
     settingSources: ["user", "project", "local"],
@@ -325,41 +376,54 @@ function newestChildRssMb(): number {
   }
 }
 
+/** Waits for a turn's result, which has `TURN_DEADLINE_MS` once its model request is seen. */
+function turnEnd(result: Promise<void>): Promise<void> {
+  return withDeadline(result, TURN_DEADLINE_MS, `No turn result in ${TURN_DEADLINE_MS} ms`);
+}
+
 async function coldRun(fx: Fixture, cwd: string, extra: Partial<Options>) {
   const input = heldInput();
   const control = query({ prompt: input.stream, options: launchOptions(fx, { cwd, ...extra }) });
-  const frames = consume(control);
-  let result = frames.result();
-  const firstMs = await fx.untilModelCall(() => input.push("Say ok."));
-  await result;
-  result = frames.result();
-  const followUpMs = await fx.untilModelCall(() => input.push("Say ok again."));
-  await result;
-  control.close();
-  return { firstMs, followUpMs };
+  try {
+    const frames = consume(control);
+    let result = frames.result();
+    const firstMs = await fx.untilModelCall(() => input.push("Say ok."));
+    await turnEnd(result);
+    result = frames.result();
+    const followUpMs = await fx.untilModelCall(() => input.push("Say ok again."));
+    await turnEnd(result);
+    return { firstMs, followUpMs };
+  } finally {
+    control.close();
+  }
 }
 
 async function spareRun(fx: Fixture, cwd: string, extra: Partial<Options>) {
   const before = fx.requests.length;
   const startedAt = performance.now();
   const spare = await prewarm({ options: launchOptions(fx, extra) });
-  const parkMs = Math.round(performance.now() - startedAt);
-  // Parked long enough for any start-up call to show.
-  await Bun.sleep(1_500);
-  const parkedRequests = fx.requests.slice(before);
-  // The newest child is this variant's CLI only when no other variant starts one.
-  const parkedRssMb = CONCURRENT ? 0 : newestChildRssMb();
-  const input = heldInput();
-  const control = spare.claim({ prompt: input.stream, options: { cwd } });
-  const frames = consume(control);
-  let result = frames.result();
-  const firstMs = await fx.untilModelCall(() => input.push("Say ok."));
-  await result;
-  result = frames.result();
-  const followUpMs = await fx.untilModelCall(() => input.push("Say ok again."));
-  await result;
-  control.close();
-  return { parkMs, parkedRequests, parkedRssMb, firstMs, followUpMs };
+  let control: Query | undefined;
+  try {
+    const parkMs = Math.round(performance.now() - startedAt);
+    // Parked long enough for any start-up call to show.
+    await Bun.sleep(1_500);
+    const parkedRequests = fx.requests.slice(before);
+    // The newest child is this variant's CLI only when no other variant starts one.
+    const parkedRssMb = CONCURRENT ? 0 : newestChildRssMb();
+    const input = heldInput();
+    control = spare.claim({ prompt: input.stream, options: { cwd } });
+    const frames = consume(control);
+    let result = frames.result();
+    const firstMs = await fx.untilModelCall(() => input.push("Say ok."));
+    await turnEnd(result);
+    result = frames.result();
+    const followUpMs = await fx.untilModelCall(() => input.push("Say ok again."));
+    await turnEnd(result);
+    return { parkMs, parkedRequests, parkedRssMb, firstMs, followUpMs };
+  } finally {
+    if (control) control.close();
+    else spare.close();
+  }
 }
 
 async function compareSdk(fx: Fixture, name: string, cwd: string, extra: Partial<Options>) {
@@ -468,19 +532,21 @@ async function compareBridge(fx: Fixture, name: string, cwd: string) {
 async function sessionBinding(fx: Fixture, cwd: string) {
   const claimOnce = async (extra: Partial<Options>) => {
     let spare: SpareProcess | undefined;
+    let control: Query | undefined;
     try {
       spare = await prewarm({ options: launchOptions(fx, extra) });
       const input = heldInput();
-      const control = spare.claim({ prompt: input.stream, options: { cwd } });
+      control = spare.claim({ prompt: input.stream, options: { cwd } });
       const result = consume(control).result();
       input.push("Say ok.");
       const claimed = await spare.claimed;
-      await result.catch(() => undefined);
-      control.close();
+      await turnEnd(result).catch(() => undefined);
       return { sessionId: claimed.sessionId };
     } catch (error) {
-      spare?.close();
       return { refused: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (control) control.close();
+      else spare?.close();
     }
   };
   const asked = randomUUID();
@@ -520,6 +586,13 @@ try {
     <T>(work: (fx: Fixture) => Promise<T>) =>
     async () =>
       work(await createFixture());
+
+  if (STALL) {
+    // Fails on the turn deadline, then must still clean up and exit.
+    const fx = await createFixture();
+    await coldRun(fx, await fx.directory("bare"), {});
+    throw new Error("A stalled model request produced a result");
+  }
 
   // The first exec pages the binary in; it counts as neither mode. Variants
   // that overlap start their CLIs together, so there is nothing to page in first.

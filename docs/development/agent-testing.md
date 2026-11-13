@@ -3083,14 +3083,21 @@ the branch runner, the workspace guard and the mail drain.
   enforcement matrix gives it and guarded below `enforced`; the delivery must
   be `sent`; and the mail must wake the caller into one new turn that reads
   both answers. The fake counts that the `/subork` turn started once, that
-  each target turn started, and that the caller was woken exactly once.
+  each target turn started and submitted, that a target offered `ask_agents`
+  (a Pi subork) tried it and was refused (depth 1), and that the caller was
+  woken exactly once.
 - `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi, the fake holds
   the target's requests open, and the backend is `SIGKILL`ed (after checking
   its command line and start time) and the profile restarted with
-  `devTestRestartArgs`. After the restart the held requests are released;
-  the resumed row must settle with the subork `finished` (through the
-  runner's continuation turn), one row, the delivery `sent`, the `/subork`
-  turn not sent again and exactly one wake, on the restarted OpenCode server.
+  `devTestRestartArgs`. The kill waits until every target's subork reads
+  `running` and checks that again just before the signal. After the restart
+  the held requests are released; the resumed row must settle with the
+  subork `finished`, one row, the delivery `sent`, the `/subork` turn not sent
+  again and exactly one wake, on the restarted OpenCode server. The fake
+  proves the target finished on the runner's continuation: a second target
+  turn started, the killed backend's held request was abandoned unread (its
+  submit is not counted), and the answer was submitted on a request that was
+  read.
   An OpenCode target is left out of the default until
   [8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
   is fixed: its session stays busy in OpenCode's store after the kill, so the
@@ -3099,8 +3106,14 @@ the branch runner, the workspace guard and the mail drain.
   and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed run's
   environment for inspection.
 
-The fake recognises OpenCode's own tool-less title requests and never counts
-them as turns. Claude, Codex, Cursor and Grok have no scripted model that
+Both specs wait for states rather than for changes since an earlier sample
+(`suborks-live-checks.ts`): a call counts as over only once its delivery has
+left `waiting` (it settles before its mail goes out), and the wake is found by
+position after the `/subork` request's row, so a wake already finished by the
+first poll still counts. The fake recognises OpenCode's own tool-less title
+requests and never counts them as turns. `suborks-fake-model-script.test.ts`,
+`suborks-fake-model.test.ts` (routes, hold, release, abandoned requests, 400
+and 413) and `suborks-live-checks.test.ts` run in the default suite. Claude, Codex, Cursor and Grok have no scripted model that
 reaches a profile's own bridge, so the scripted run covers Pi and OpenCode;
 both specs also run on real models without
 `ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE`, on every platform the profile enables

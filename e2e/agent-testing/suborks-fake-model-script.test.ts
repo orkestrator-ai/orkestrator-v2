@@ -115,6 +115,93 @@ describe("a target's turn", () => {
     });
   });
 
+  test("tries ask_agents first when offered, as a Pi subork is", () => {
+    const turn = scriptedTurn("pi", {
+      messages: [{ role: "user", content: prompt }],
+      tools: tools("ask_agents", "submit_subork_answer"),
+    });
+    expect(turn.step).toEqual({
+      kind: "tool",
+      name: "ask_agents",
+      input: {
+        targets: [{ agent: "pi", name: `pi ${TAG} nested` }],
+        prompt: targetPrompt(TAG),
+        requestId: `subork-qa-nested-${TAG}`,
+      },
+    });
+    expect(turn.facts.recursion).toBeUndefined();
+  });
+
+  test("reports the refusal, then submits", () => {
+    const turn = scriptedTurn("pi", {
+      messages: [
+        { role: "user", content: prompt },
+        { role: "assistant", content: null },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "text",
+              text: "Suborks can't start suborks. Answer from what you can do yourself.",
+            },
+          ],
+        },
+      ],
+      tools: tools("ask_agents", "submit_subork_answer"),
+    });
+    expect(turn.step).toMatchObject({ kind: "tool", name: "submit_subork_answer" });
+    expect(turn.facts).toMatchObject({
+      role: "target",
+      recursion: "refused",
+      refusedBy: "credential",
+      turnStart: false,
+    });
+  });
+
+  test("a provider's own block is a refusal too", () => {
+    const turn = scriptedTurn("pi", {
+      messages: [
+        { role: "user", content: prompt },
+        { role: "assistant", content: null },
+        {
+          role: "tool",
+          content: "This review session is read-only. Extension tools are disabled.",
+        },
+      ],
+      tools: tools("ask_agents", "submit_subork_answer"),
+    });
+    expect(turn.facts).toMatchObject({ recursion: "refused", refusedBy: "provider" });
+    expect(turn.step).toMatchObject({ kind: "tool", name: "submit_subork_answer" });
+  });
+
+  test("reports a nested call that started", () => {
+    const turn = scriptedTurn("pi", {
+      messages: [
+        { role: "user", content: prompt },
+        { role: "assistant", content: null },
+        { role: "tool", content: '{"batchId":"b-1","suborks":[],"next":"wait"}' },
+      ],
+      tools: tools("ask_agents", "submit_subork_answer"),
+    });
+    expect(turn.facts.recursion).toBe("answered");
+    expect(turn.facts.refusedBy).toBeUndefined();
+  });
+
+  test("answers in prose after the refusal and its submission", () => {
+    const turn = scriptedTurn("pi", {
+      messages: [
+        { role: "user", content: prompt },
+        { role: "assistant", content: null },
+        { role: "tool", content: "Suborks can't start suborks." },
+        { role: "assistant", content: null },
+        { role: "tool", content: "ok" },
+      ],
+      tools: tools("ask_agents", "submit_subork_answer"),
+    });
+    expect(turn.step).toEqual({ kind: "text", text: suborkAnswer("pi", TAG) });
+    expect(turn.facts.recursion).toBeUndefined();
+  });
+
   test("answers in prose after its submission", () => {
     const turn = scriptedTurn("pi", {
       messages: [

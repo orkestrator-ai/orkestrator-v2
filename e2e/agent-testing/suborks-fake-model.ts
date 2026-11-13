@@ -12,14 +12,17 @@
  * `suborks-fake-model-script.ts`.
  *
  * Control routes, loopback only:
- * - `GET /__calls`: counts only (completions, refusals, tool calls by name,
- *   and the facts the script reports for each request). No prompt, header,
- *   body or argument is kept.
+ * - `GET /__calls`: counts only (completions, refusals, tool calls by name
+ *   whose answer was sent, held and abandoned requests, and the facts the
+ *   script reports for each request). No prompt, header, body or argument is
+ *   kept.
  * - `POST /__hold?tag=<tag>`: every target request carrying that tag is held
  *   open, with no answer, until `POST /__release` (or the server stops), so a
  *   spec can kill the backend while a subork's turn is in flight. Release
  *   answers the held requests and stops holding; later requests are answered
- *   at once.
+ *   at once. A held request whose client disconnects first (the killed
+ *   backend's) ends then, is counted as `abandoned`, and its tool call is not
+ *   counted.
  */
 import {
   FAKE_REPLY,
@@ -35,15 +38,16 @@ const MAX_TRACKED = 1_000;
 
 type Platform = (typeof SCRIPTED_PLATFORMS)[number];
 
-const counts = {
-  refused: 0,
-  completions: {} as Record<string, number>,
-  toolCalls: {} as Record<string, number>,
-  turns: [] as Array<TurnFacts & { platform: string }>,
-  held: [] as string[],
-};
-const holdTags = new Set<string>();
-const releases: Array<() => void> = [];
+export interface SuborkFakeCounts {
+  refused: number;
+  completions: Record<string, number>;
+  /** Tool calls by name, counted only when their answer was sent. */
+  toolCalls: Record<string, number>;
+  turns: Array<TurnFacts & { platform: string }>;
+  held: string[];
+  /** Held requests whose client went away first (a killed backend's). */
+  abandoned: number;
+}
 
 function chunk(id: string, delta: Record<string, unknown>, finish: string | null, usage?: object) {
   return `data: ${JSON.stringify({
@@ -107,12 +111,23 @@ function tally(record: Record<string, number>, key: string): void {
     record[key] = (record[key] ?? 0) + 1;
 }
 
-const server = Bun.serve({
-  hostname: "127.0.0.1",
-  port: 0,
-  // A held turn stays open for as long as the spec needs it.
-  idleTimeout: 0,
-  async fetch(request) {
+/**
+ * The fake's request handler and its counters, without a server, so the
+ * routes have unit tests (`suborks-fake-model.test.ts`).
+ */
+export function createSuborkFakeModel() {
+  const counts: SuborkFakeCounts = {
+    refused: 0,
+    completions: {},
+    toolCalls: {},
+    turns: [],
+    held: [],
+    abandoned: 0,
+  };
+  const holdTags = new Set<string>();
+  const releases: Array<() => void> = [];
+
+  async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/__calls") return Response.json(counts);
     if (request.method === "POST" && url.pathname === "/__hold") {
@@ -150,14 +165,41 @@ const server = Bun.serve({
     tally(counts.completions, platform);
     const turn = scriptedTurn(platform, { messages: body.messages, tools: body.tools });
     if (counts.turns.length < MAX_TRACKED) counts.turns.push({ platform, ...turn.facts });
-    if (turn.step.kind === "tool") tally(counts.toolCalls, turn.step.name);
     const tag = turn.facts.tag;
     if (turn.facts.role === "target" && tag && holdTags.has(tag)) {
       if (counts.held.length < MAX_TRACKED) counts.held.push(`${platform} ${tag}`);
-      await new Promise<void>((resolve) => releases.push(resolve));
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          request.signal.removeEventListener("abort", done);
+          const index = releases.indexOf(done);
+          if (index >= 0) releases.splice(index, 1);
+          resolve();
+        };
+        releases.push(done);
+        request.signal.addEventListener("abort", done);
+        if (request.signal.aborted) done();
+      });
+      if (request.signal.aborted) {
+        // Nobody reads this answer: a submit it carried never happened.
+        counts.abandoned += 1;
+        return new Response("client gone", { status: 499 });
+      }
     }
+    if (turn.step.kind === "tool") tally(counts.toolCalls, turn.step.name);
     return answer(turn.step, body.stream === true);
-  },
-});
+  }
 
-console.log(`http://127.0.0.1:${server.port}`);
+  return { fetch, counts };
+}
+
+if (import.meta.main) {
+  const model = createSuborkFakeModel();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    // A held turn stays open for as long as the spec needs it.
+    idleTimeout: 0,
+    fetch: model.fetch,
+  });
+  console.log(`http://127.0.0.1:${server.port}`);
+}

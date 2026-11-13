@@ -4,14 +4,16 @@
  * `ORKESTRATOR_AGENT_TEST_SUBORKS=1`. It `SIGKILL`s the profile's backend and
  * starts the profile again, so it runs last, on a profile it may restart.
  *
- * A tab types `/subork` and ends its turn on the handle. While its targets'
- * turns are in flight the backend is killed, the profile is stopped and
+ * A tab types `/subork` and ends its turn on the handle. Once every target's
+ * subork reads `running` (its turn sent to its provider and not over), checked
+ * again just before the signal, the backend is killed, the profile is stopped and
  * started again with the selection it was started with, and the spec signs in
  * again. The call's durable row is all that carries it across: the next
  * backend resumes the row, its targets settle and the answers are mailed once.
  * The case checks:
  *
- * - every subork on the row `finished` and the delivery is `sent`;
+ * - every subork on the row `finished` and the delivery is `sent` (waited
+ *   for: the call settles before its mail goes out);
  * - the caller was woken into a new turn that settles idle;
  * - the `/subork` turn ran once, and nothing after the restart re-sent it.
  *
@@ -22,14 +24,19 @@
  * lands mid-turn. The target's session is resumed by the runner's
  * continuation and the answer wakes the caller on the restarted OpenCode
  * server. `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` adds an
- * OpenCode target, which fails until to-do 8045 is fixed. The fake also proves the caller was woken
- * exactly once and that each target submitted after the restart, on the
- * runner's fresh connection: a credential the dead backend held is gone.
+ * OpenCode target, which fails until to-do 8045 is fixed. The fake also proves
+ * the caller was woken exactly once and that each target finished on the
+ * runner's continuation: every target started a second turn after the
+ * restart, the held request the killed backend sent was abandoned unanswered,
+ * and every target's answer was submitted on a request whose client read it.
  *
  * Live (`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE` unset, on the host's
  * credentials, `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_PLATFORM` for the
  * caller and target, default `claude`): the target is asked to run
- * `sleep 40` before it answers, and the kill lands once its row is running.
+ * `sleep 40` before it answers. The kill waits for the target to read
+ * `running`, then 10 s more for the model to reach its sleep, and refuses to
+ * go ahead (failing the run) if the target has settled by then: a target
+ * that finished before the kill would not test the restart.
  * Real turns cost tokens; it is on the manual-test checklist (7568, 4340
  * (retired) task 4):
  *
@@ -55,6 +62,7 @@ import {
   type Project,
 } from "./slash-command-live-support";
 import { suborkRequest } from "./suborks-fake-model-script";
+import { finishedCall, submitCount, targetsInFlight, wokenAfterCall } from "./suborks-live-checks";
 import {
   ALL_PLATFORMS,
   FAKE_MODEL_REF,
@@ -123,10 +131,11 @@ function runAsync(command: string, args: string[], timeoutMs: number) {
 
 /**
  * `SIGKILL`s this profile's backend, after proving it is this profile's (its
- * command line and start time), then stops the profile and starts it again
- * with the selection it was started with.
+ * command line and start time) and running `beforeKill` (which throws to
+ * refuse the kill), then stops the profile and starts it again with the
+ * selection it was started with.
  */
-async function crashAndRestart(): Promise<void> {
+async function crashAndRestart(beforeKill: () => Promise<void>): Promise<void> {
   const runtime = resolveRuntimeProfile({
     repositoryRoot,
     requestedId: profile,
@@ -160,6 +169,7 @@ async function crashAndRestart(): Promise<void> {
     started.status === 0 && Math.abs(Date.parse(started.stdout.trim()) - expectedStart!) < 1000,
     "Refusing to signal a reused backend PID",
   ).toBe(true);
+  await beforeKill();
   process.kill(backend!, "SIGKILL");
   const stop = await runAsync("mise", ["run", "dev:stop", "--profile", profile], 120_000);
   expect(stop.code, `dev:stop failed: ${stop.stderr}`).toBe(0);
@@ -235,10 +245,11 @@ test.describe("a /subork call across a killed backend", () => {
 
       await test.step("the call is running when the backend is killed", async () => {
         await sendSubork(invoke, identity, request, SCRIPTED ? FAKE_MODEL_REF : undefined);
+        // Every target's subork is `running`: its turn has reached its provider.
         await until(
-          "the subork call to be running",
+          "every target's turn to be sent to its provider",
           projection,
-          (view) => view?.suborks?.some((batch) => batch.status === "running") ?? false,
+          (view) => targetsInFlight(view, TARGETS) !== undefined,
           TIMEOUT_MS,
           describeProjection,
         );
@@ -251,6 +262,7 @@ test.describe("a /subork call across a killed backend", () => {
             TIMEOUT_MS,
           );
         } else {
+          // Time for the model to reach its `sleep 40`.
           await page.waitForTimeout(10_000);
         }
         const before = await projection();
@@ -259,7 +271,15 @@ test.describe("a /subork call across a killed backend", () => {
           status: batch.status,
           suborks: batch.suborks.map((subork) => subork.status),
         }));
-        await crashAndRestart();
+        await crashAndRestart(async () => {
+          // Checked again at the last moment: a target that settled already
+          // would not cross the restart, and the run would prove nothing.
+          const last = await projection();
+          expect(
+            targetsInFlight(last, TARGETS),
+            `a target is no longer in flight at the kill: ${describeProjection(last)}`,
+          ).toBeTruthy();
+        });
         await context.clearCookies();
         status = profileStatus(profile);
         invoke = await authenticatedInvoke(page, status, profile);
@@ -268,15 +288,15 @@ test.describe("a /subork call across a killed backend", () => {
       });
 
       await test.step("the restarted backend settles the call and wakes the caller", async () => {
+        // Settled and mailed: the mail goes out after the call settles.
         const settled = await until(
-          "the subork call to settle after the restart",
+          "the subork call to settle and its answers to be mailed after the restart",
           projection,
-          (view) => view?.suborks?.some((batch) => batch.status !== "running") ?? false,
+          (view) => finishedCall(view) !== undefined,
           TIMEOUT_MS,
           (view) => describeProjection(view, { lines: SCRIPTED }),
         );
-        const batch = settled!.suborks!.find((candidate) => candidate.status !== "running")!;
-        const rowsAtSettle = settled?.messages?.length ?? 0;
+        const batch = finishedCall(settled)!;
         expect(settled!.suborks, "the restart made a second call").toHaveLength(1);
         expect(batch.status).toBe("settled");
         for (const subork of batch.suborks) {
@@ -286,20 +306,18 @@ test.describe("a /subork call across a killed backend", () => {
         }
         expect(batch.suborks.map((subork) => subork.agent).sort()).toEqual([...TARGETS].sort());
         expect(batch.delivery, batch.deliveryDetail ?? "").toBe("sent");
+        // Found by position, so a wake already over by the first poll still counts.
         await until(
           "the caller to be woken by the answers",
           projection,
-          (view) => {
-            if (view?.turn.phase !== "idle") return false;
-            const rows = view.messages ?? [];
-            return SCRIPTED
-              ? rows.some(
-                  (row) =>
-                    row.role === "assistant" &&
-                    rowText(row).includes(`ANSWERS-RECEIVED ${tag} ${TARGETS.length}`),
-                )
-              : rows.length > rowsAtSettle && rows.at(-1)?.role === "assistant";
-          },
+          (view) =>
+            wokenAfterCall(view, tag) &&
+            (!SCRIPTED ||
+              (view!.messages ?? []).some(
+                (row) =>
+                  row.role === "assistant" &&
+                  rowText(row).includes(`ANSWERS-RECEIVED ${tag} ${TARGETS.length}`),
+              )),
           TIMEOUT_MS,
           describeProjection,
         );
@@ -317,17 +335,38 @@ test.describe("a /subork call across a killed backend", () => {
           expect(wakes, "the caller was woken more or less than once").toHaveLength(1);
           expect(wakes[0]?.answers?.sort()).toEqual([...TARGETS].sort());
           const targetStarts = turns.filter((turn) => turn.role === "target" && turn.turnStart);
+          const startsByTarget = Object.fromEntries(
+            TARGETS.map((target) => [
+              target,
+              targetStarts.filter((turn) => turn.platform === target).length,
+            ]),
+          );
           summary.fake = {
             held: calls.held.filter((entry) => entry.endsWith(tag)).length,
-            targetTurnStarts: Object.fromEntries(
-              TARGETS.map((target) => [
-                target,
-                targetStarts.filter((turn) => turn.platform === target).length,
-              ]),
-            ),
+            abandoned: calls.abandoned,
+            targetTurnStarts: startsByTarget,
             submits: calls.toolCalls,
             wakeTurns: wakes.length,
           };
+          // Each target finished on the runner's continuation: its first turn
+          // was held across the kill, and a second one started after it.
+          for (const target of TARGETS) {
+            expect(
+              startsByTarget[target],
+              `${target} did not start a continuation turn after the restart`,
+            ).toBeGreaterThanOrEqual(2);
+          }
+          // The killed backend's held requests (one per target) were never
+          // read, so they count no submit; every target still submitted on a
+          // request its client read.
+          expect(
+            calls.abandoned,
+            "a request held across the kill was answered to a client that read it",
+          ).toBeGreaterThanOrEqual(TARGETS.length);
+          expect(
+            submitCount(calls.toolCalls),
+            "a target's answer was not submitted after the restart",
+          ).toBeGreaterThanOrEqual(TARGETS.length);
         }
       });
       summary.result = "passed";

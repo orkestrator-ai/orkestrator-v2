@@ -11,7 +11,6 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { NativeAgentSuborkBatchView } from "@orkestrator/protocol/suborks";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { pointPiAt } from "./coordinator-two-node-support";
 import { startModel } from "./idle-observation-fake-models";
@@ -21,7 +20,8 @@ import {
   profileOpenCodeConfigFile,
 } from "./opencode-fake-provider";
 import { profileStatus, type Invoke, type Status } from "./slash-command-live-support";
-import type { TurnFacts } from "./suborks-fake-model-script";
+import type { SuborkFakeCounts } from "./suborks-fake-model";
+import type { Projection } from "./suborks-live-checks";
 
 export const ALL_PLATFORMS = ["claude", "codex", "opencode", "cursor", "grok", "pi"] as const;
 export type Platform = (typeof ALL_PLATFORMS)[number];
@@ -37,13 +37,7 @@ export function newTag(): string {
   return `QATAG${randomBytes(4).toString("hex").toUpperCase()}`;
 }
 
-export interface FakeCalls {
-  refused: number;
-  completions: Record<string, number>;
-  toolCalls: Record<string, number>;
-  turns: Array<TurnFacts & { platform: string }>;
-  held: string[];
-}
+export type FakeCalls = SuborkFakeCounts;
 
 export interface ScriptedModel {
   origin: string;
@@ -165,28 +159,7 @@ export async function openTabs(
   );
 }
 
-export type Row = { id?: string; role?: string; content?: unknown; parts?: unknown };
-export type Projection = {
-  turn: { phase: string; error?: string };
-  messages?: Row[];
-  suborks?: NativeAgentSuborkBatchView[];
-  notices?: unknown;
-  recoverableDispatch?: unknown;
-} | null;
-
-export function rowText(row: Row): string {
-  if (typeof row.content === "string") return row.content;
-  const parts = Array.isArray(row.parts)
-    ? row.parts
-    : Array.isArray(row.content)
-      ? row.content
-      : [];
-  return parts
-    .map((part) =>
-      part && typeof part === "object" ? String((part as { text?: unknown }).text ?? "") : "",
-    )
-    .join("\n");
-}
+export { rowText, type Projection, type Row } from "./suborks-live-checks";
 
 /** Types `/subork <request>` into the tab, as the composer sends it. */
 export async function sendSubork(
@@ -243,8 +216,13 @@ export function callFacts(calls: FakeCalls, tag: string): Record<string, number>
     if (turn.tag !== tag) continue;
     const key = `${turn.role}:${turn.platform}:${turn.turnStart ? "start" : "step"}`;
     facts[key] = (facts[key] ?? 0) + 1;
+    if (turn.recursion) {
+      const recursion = `recursion:${turn.platform}:${turn.recursion}${turn.refusedBy ? `:${turn.refusedBy}` : ""}`;
+      facts[recursion] = (facts[recursion] ?? 0) + 1;
+    }
   }
   facts.held = calls.held.filter((entry) => entry.endsWith(tag)).length;
+  facts.abandoned = calls.abandoned;
   return facts;
 }
 

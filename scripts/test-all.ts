@@ -898,6 +898,8 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/coordinator-node-mail-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-restart-fake-model.test.ts",
   "./e2e/agent-testing/suborks-fake-model-script.test.ts",
+  "./e2e/agent-testing/suborks-fake-model.test.ts",
+  "./e2e/agent-testing/suborks-live-checks.test.ts",
   "./e2e/agent-testing/coordinator-notice-fake-model-script.test.ts",
   "./e2e/agent-testing/coordinator-gap-tools-fake-model.test.ts",
   "./e2e/agent-testing/pi-profile-settings.test.ts",

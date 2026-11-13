@@ -14,9 +14,12 @@
  *   `requestId` derived from it, then ends the turn in prose.
  * - **Target, a subork's turn.** Its prompt opens with the subork
  *   instructions and its result instruction names `submit_subork_answer` and
- *   a result key. The fake submits `SUBORK-ANSWER <platform> <tag>` once, then
- *   replies in prose. A later request of the same session (the runner's
- *   reminder after a restart) carries a newer result key, which wins.
+ *   a result key. When the turn is offered `ask_agents` (a Pi subork is, as
+ *   its credential's refusal), the fake first tries to start a subork of its
+ *   own, and reports whether it was refused (depth is 1) and by whom. It then
+ *   submits `SUBORK-ANSWER <platform> <tag>` once and replies in prose. A
+ *   later request of the same session (the runner's reminder after a
+ *   restart) carries a newer result key, which wins.
  * - **A title request.** OpenCode asks its small model for a session title
  *   in a separate request that offers no tools; it gets a fixed title and is
  *   never counted as a turn.
@@ -54,6 +57,10 @@ const TARGETS = /\[targets:([a-z,]{1,80})\]/;
 const RESULT_KEY = /resultKey "?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"?/g;
 const CAPABILITY = /capability "([^"\s]{1,512})"/g;
 const ANSWER = /SUBORK-ANSWER ([a-z]+) (QATAG[0-9A-F]{8})/g;
+/** What the subork credential's `ask_agents` refusal says (`agent-tools-suborks.ts`). */
+const CREDENTIAL_REFUSAL = /can.t start suborks/i;
+/** What a started call returns (`SuborkAskResult`): only this counts as allowed. */
+const STARTED_CALL = /"batchId"\s*:/;
 
 /** The answer a target submits: its own platform and the run's tag. */
 export function suborkAnswer(platform: string, tag: string): string {
@@ -125,6 +132,18 @@ export interface TurnFacts {
   offersAskAgents: boolean;
   /** Wake only: the answers the mail carried, as `platform` names. */
   answers?: string[];
+  /**
+   * Target only, on the request after its own `ask_agents` attempt: `answered`
+   * when the result is a started call's (it names a `batchId`), otherwise
+   * `refused`.
+   */
+  recursion?: "refused" | "answered";
+  /**
+   * Who refused it: the subork credential's refusal tool (`credential`), or
+   * the provider before the call reached it (`provider`; Pi's read-only gate
+   * blocks every extension tool of a read-only session).
+   */
+  refusedBy?: "credential" | "provider";
 }
 
 export interface ScriptedTurn {
@@ -177,7 +196,32 @@ export function scriptedTurn(platform: string, request: ScriptedRequest): Script
     };
     const resultKey = lastMatch(RESULT_KEY, history);
     const name = offeredName(offered, SUBMIT_ANSWER_TOOL);
-    if (!resultKey || !name || toolResults > 0 || !tag) {
+    const askName = offeredName(offered, ASK_AGENTS_TOOL);
+    // Offered `ask_agents`, the first step tries it; the step after reads the
+    // refusal. Steps are counted by tool results, as a provider replays them.
+    const askSteps = askName ? 1 : 0;
+    if (askName && toolResults === 1) {
+      const result = messageText(after.find((message) => message?.role === "tool"));
+      facts.recursion = STARTED_CALL.test(result) ? "answered" : "refused";
+      if (facts.recursion === "refused") {
+        facts.refusedBy = CREDENTIAL_REFUSAL.test(result) ? "credential" : "provider";
+      }
+    }
+    if (askName && tag && toolResults === 0) {
+      return {
+        step: {
+          kind: "tool",
+          name: askName,
+          input: {
+            targets: [{ agent: platform, name: `${platform} ${tag} nested` }],
+            prompt: targetPrompt(tag),
+            requestId: `subork-qa-nested-${tag}`,
+          },
+        },
+        facts,
+      };
+    }
+    if (!resultKey || !name || toolResults > askSteps || !tag) {
       return {
         step: { kind: "text", text: tag ? suborkAnswer(platform, tag) : FAKE_REPLY },
         facts,

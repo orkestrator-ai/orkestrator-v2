@@ -336,13 +336,17 @@ branch runner, the workspace guard and the mail drain. It passed on 2026-11-13
   `submit_subork_answer`, and one mail woke the caller once with both answers
   (about 5 to 9 s from typing to the wake). The Pi subork is `enforced` and
   unguarded, the OpenCode one `provider-configured` and guarded. A Pi subork is
-  offered `ask_agents` as the result credential's refusal; an OpenCode subork
-  is not offered it at all.
-- With the backend `SIGKILL`ed while a Pi target's turn was in flight, the
-  restarted backend resumed the row, the target finished on the runner's
-  continuation turn, the `/subork` turn was not sent again and the answer woke
-  the OpenCode caller once on its restarted server. The same kill with an
-  OpenCode target left that target running (8045).
+  offered `ask_agents` as the result credential's refusal, and when it calls
+  the tool, Pi's own read-only gate blocks the call before it reaches the
+  agent tools server ("extension tools are disabled"), so no nested call
+  starts. An OpenCode subork is not offered it at all.
+- With the backend `SIGKILL`ed while a Pi target's turn was in flight (its
+  subork `running`, checked again just before the signal), the restarted
+  backend resumed the row, the target finished on the runner's continuation
+  turn (a second target turn; the request the killed backend sent was
+  abandoned unread), the `/subork` turn was not sent again and the answer
+  woke the OpenCode caller once on its restarted server. The same kill with
+  an OpenCode target left that target running (8045).
 
 In both, the script, not a model, decided to call the tool. Whether real models
 choose `ask_agents` for plain text, and how every provider behaves against a live

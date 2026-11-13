@@ -12,8 +12,11 @@
  * - the caller reached `ask_agents` and the call's row holds one subork per
  *   target, on the agent named, each `finished` with the read-only tier the
  *   enforcement matrix gives it (and the guard below `enforced`);
- * - the delivery is `sent`, and the caller was woken by it into a new turn
- *   that settles idle.
+ * - the delivery is `sent` (waited for: the call settles before its mail
+ *   goes out), and the caller was woken by it into a new turn that settles
+ *   idle: a user row after the `/subork` request, then an assistant row;
+ * - scripted, a target offered `ask_agents` (a Pi subork) tried it and was
+ *   refused: depth is 1.
  *
  * Two modes:
  *
@@ -23,8 +26,8 @@
  *   the spec points the profile's own Pi and OpenCode settings at. Each
  *   caller asks itself and the other, so a call has two targets on two
  *   providers. The fake also reports that each target submitted through
- *   `submit_subork_answer` and that the caller was woken exactly once, with
- *   both answers. Nothing logs in and nothing is billed. Claude, Codex,
+ *   `submit_subork_answer`, that a target offered `ask_agents` was refused it,
+ *   and that the caller was woken exactly once, with both answers. Nothing logs in and nothing is billed. Claude, Codex,
  *   Cursor and Grok have no scripted model that reaches a profile's own
  *   bridge, so the scripted run covers Pi and OpenCode only.
  * - **Live (`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE` unset).** Real models on
@@ -55,6 +58,7 @@ import {
   type Project,
 } from "./slash-command-live-support";
 import { suborkRequest } from "./suborks-fake-model-script";
+import { finishedCall, submitCount, wokenAfterCall } from "./suborks-live-checks";
 import {
   ALL_PLATFORMS,
   FAKE_MODEL_REF,
@@ -170,22 +174,24 @@ test.describe("/subork on every provider", () => {
           invoke<Projection>("get_native_agent_projection", { ...identity, messageLimit: 200 });
         const startedAt = Date.now();
         await test.step(`${caller} asks ${targets.join(" and ")}`, async () => {
+          const submitsBefore = model ? submitCount((await model.calls()).toolCalls) : 0;
           await sendSubork(
             invoke,
             identity,
             suborkRequest(targets, tag),
             SCRIPTED ? FAKE_MODEL_REF : undefined,
           );
+          // Settled and mailed: the mail goes out after the call settles.
           const settled = await until(
-            `${caller}'s subork call to settle`,
+            `${caller}'s subork call to settle and its answers to be mailed`,
             projection,
-            (view) => view?.suborks?.some((batch) => batch.status !== "running") ?? false,
+            (view) => finishedCall(view) !== undefined,
             CALL_TIMEOUT_MS,
             describeProjection,
           );
-          const batch = settled!.suborks!.find((candidate) => candidate.status !== "running")!;
+          const batch = finishedCall(settled)!;
           const settledAt = Date.now();
-          const rowsAtSettle = settled?.messages?.length ?? 0;
+          expect(settled!.suborks, "the /subork turn made more than one call").toHaveLength(1);
           expect(batch.status, "the call was stopped").toBe("settled");
           expect(batch.suborks.map((subork) => subork.agent).sort()).toEqual([...targets].sort());
           for (const subork of batch.suborks) {
@@ -202,21 +208,19 @@ test.describe("/subork on every provider", () => {
           }
           expect(batch.delivery, batch.deliveryDetail ?? "").toBe("sent");
 
-          // The mail wakes the caller into a new turn that settles.
+          // The mail wakes the caller into a new turn that settles. Found by
+          // position, so a wake already over by the first poll still counts.
           const woken = await until(
             `${caller} to be woken by the answers`,
             projection,
             (view) => {
-              if (view?.turn.phase !== "idle") return false;
-              const rows = view.messages ?? [];
-              if (SCRIPTED) {
-                return rows.some(
-                  (row) =>
-                    row.role === "assistant" &&
-                    rowText(row).includes(`ANSWERS-RECEIVED ${tag} ${targets.length}`),
-                );
-              }
-              return rows.length > rowsAtSettle && rows.at(-1)?.role === "assistant";
+              if (!wokenAfterCall(view, tag)) return false;
+              if (!SCRIPTED) return true;
+              return (view!.messages ?? []).some(
+                (row) =>
+                  row.role === "assistant" &&
+                  rowText(row).includes(`ANSWERS-RECEIVED ${tag} ${targets.length}`),
+              );
             },
             CALL_TIMEOUT_MS,
             describeProjection,
@@ -252,11 +256,24 @@ test.describe("/subork on every provider", () => {
             expect(new Set(targetStarts.map((turn) => turn.platform))).toEqual(new Set(targets));
             expect(wakes, "the caller was woken more or less than once").toHaveLength(1);
             expect(wakes[0]?.answers?.sort()).toEqual([...targets].sort());
+            // Depth is 1: a target offered `ask_agents` tried it, and was refused.
+            const offered = new Set(
+              targetStarts.filter((turn) => turn.offersAskAgents).map((turn) => turn.platform),
+            );
+            const recursion = turns.filter((turn) => turn.role === "target" && turn.recursion);
+            expect(
+              recursion.filter((turn) => turn.recursion !== "refused").map((turn) => turn.platform),
+              "a subork was allowed to start a subork",
+            ).toEqual([]);
+            expect(new Set(recursion.map((turn) => turn.platform))).toEqual(offered);
+            expect(
+              submitCount(calls.toolCalls),
+              "a target did not submit through submit_subork_answer",
+            ).toBeGreaterThanOrEqual(submitsBefore + targets.length);
             record.fake = {
               targetTurnStarts: targetStarts.length,
-              suborksOfferedAskAgents: targetStarts
-                .filter((turn) => turn.offersAskAgents)
-                .map((turn) => turn.platform),
+              suborksOfferedAskAgents: [...offered],
+              recursionRefused: recursion.map((turn) => `${turn.platform}:${turn.refusedBy}`),
               wakeTurns: wakes.length,
               refused: calls.refused,
             };

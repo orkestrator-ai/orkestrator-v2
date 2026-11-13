@@ -75,8 +75,9 @@ is walked once for all four guards. The guards live in `tests/source-guards/`:
 
 - **`sleep-before-negative-assertion`**: an awaited fixed sleep with a literal
   delay (`Bun.sleep(50)`, `sleep`, `delay`, `wait`, `pause`, a Promise-wrapped
-  `setTimeout`, `page.waitForTimeout`, `act` around a sleep, or a local helper
-  whose body is one) followed in the same block, before any other await, by a
+  `setTimeout`, `page.waitForTimeout`, `act` around a sleep, or a helper whose
+  body is one, defined locally or imported from a relative test-support module
+  such as `*-test-support.ts`) followed in the same block, before any other await, by a
   negative or exact-count assertion (`.not.*`, `toBe(0)`, `toBe(false)`,
   `toHaveLength(0)`, `toEqual([])`, `toHaveBeenCalledTimes`, `toBeNull`,
   `toBeUndefined`, `toBeFalsy`). Use `installControlledTimeout` or await the

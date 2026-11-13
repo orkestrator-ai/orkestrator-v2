@@ -341,9 +341,19 @@ interval read `getConfig().asyncUtilInterval` (default still 50), and
 - **File sizes.** `multi-review-service-part-*` (1.7k to 5.5k lines) and the
   `AgentNativeTab` pieces (4.3k to 4.8k lines each) are over the 2,000-line
   guideline, as were the originals (13.4k and 14.5k lines).
-- **Guard coverage.** Moving sleep helpers into support modules means the
-  `sleep-before-negative-assertion` guard no longer recognises them in the
-  content-server engine tests (baseline 5 became 3). The waits are unchanged.
+- **Guard coverage.** Moving `settle` and `pause` into
+  `content-server.engines-test-support.ts` first hid the engine parts' windows
+  from the `sleep-before-negative-assertion` guard (baseline 5 became 3). The
+  guard now follows sleep helpers imported from relative test-support modules,
+  so it counts the original five windows once per engine (3 in each `-1` part,
+  2 in each `-2` part). The waits are unchanged.
+- **Engine report.** With `ARTIFACT_ENGINE_REPORT` set, the nine engine parts
+  merge into one report from separate workers. The merge
+  (`content-server.engines-report-test-support.ts`) holds a lock file and
+  publishes by rename, so a part can no longer erase a sibling's results;
+  `content-server.engines-report.test.ts` races nine real writer processes.
+- **Account-switch resend.** `mise run verify:accounts:resend-live` passed with
+  all 20 concurrent scenarios run (none skipped) on Linux, in 32 s and 43 s.
 - **Unverified:** Firefox is not installed here and WebKit is missing host
   libraries, so those engine parts only skip or fail in the same way as before;
   macOS behaviour of the 4-lane sandbox probe; the `docker`-gated exec and

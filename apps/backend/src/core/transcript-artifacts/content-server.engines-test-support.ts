@@ -34,7 +34,7 @@
  */
 import { afterAll, beforeAll } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -51,6 +51,7 @@ import {
 } from "playwright-core";
 import { resolveDesignChromiumPath } from "../design/index.js";
 import { LoopbackArtifactContentServer } from "./content-server.js";
+import { mergeIntoEngineReport } from "./content-server.engines-report-test-support.js";
 import { TranscriptInteractivePreparer } from "./interactive-prepare.js";
 
 export const CANARY = `canary${Math.random().toString(36).slice(2, 12)}`;
@@ -724,24 +725,9 @@ export function registerEngineFixtures(engineName: string, onDecoyRequest: () =>
     const summary = JSON.stringify(report, null, 2);
     // Each engine part reports only its own engine, so merge into what its siblings wrote.
     const reportFile = process.env.ARTIFACT_ENGINE_REPORT;
-    if (reportFile)
-      writeFileSync(reportFile, JSON.stringify(mergedEngineReport(reportFile), null, 2));
+    if (reportFile) await mergeIntoEngineReport(reportFile, report);
     process.stderr.write(`[content-server.engines] results\n${summary}\n`);
   });
-}
-
-/** What this part's `report` adds to the report file its sibling parts already wrote. */
-function mergedEngineReport(reportFile: string): Record<string, Record<string, unknown>> {
-  let existing: Record<string, Record<string, unknown>> = {};
-  try {
-    existing = JSON.parse(readFileSync(reportFile, "utf8")) as typeof existing;
-  } catch {
-    // No sibling has written it yet.
-  }
-  const merged = { ...existing };
-  for (const [name, results] of Object.entries(report))
-    merged[name] = { ...merged[name], ...results };
-  return merged;
 }
 
 /**

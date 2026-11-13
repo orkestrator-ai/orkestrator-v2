@@ -207,6 +207,40 @@ describe("sleep-before-negative-assertion", () => {
     expect(lines(guard, source)).toEqual([6, 8, 10, 12, 14, 16]);
   });
 
+  test("follows sleep helpers imported from a relative test-support module", () => {
+    const support = [
+      "export async function settle(page: Page, ms = 1_500) { await page.waitForTimeout(ms); }",
+      "export const flush = () => new Promise((resolve) => setTimeout(resolve, 25));",
+      "export function waitUntil(condition: () => boolean) { return poll(condition); }",
+    ].join("\n");
+    const modules: Record<string, string> = {
+      "suite/engines-test-support.ts": support,
+      // Not a test-support module, so its helpers are not followed.
+      "suite/engines-shared.ts": support,
+    };
+    const source = [
+      'import { settle, flush as drain, waitUntil } from "./engines-test-support.js";',
+      'import { settle as plainSettle } from "./engines-shared.js";',
+      "test('a', async () => {",
+      "  await settle(page, 2_000);",
+      "  expect(hits).toEqual([]);",
+      "  await drain();",
+      "  expect(spy).not.toHaveBeenCalled();",
+      "  await waitUntil(() => done);",
+      "  expect(other).toBeNull();",
+      "  await plainSettle(page, 2_000);",
+      "  expect(more).toHaveLength(0);",
+      "});",
+    ].join("\n");
+    const scan = (readSource?: (relative: string) => string | null) =>
+      scanSource({ path: "suite/engines-1.test.ts", source, isBunTest: true, readSource }, [
+        guard,
+      ]).map((finding) => finding.line);
+    expect(scan((relative) => modules[relative] ?? null)).toEqual([4, 6]);
+    // A scan with no repository to read sees only the file itself.
+    expect(scan()).toEqual([]);
+  });
+
   test("does not flag positive assertions, awaited events, zero or named delays, or other blocks", () => {
     const source = [
       "const wait = mock(async (_ms: number) => {});",

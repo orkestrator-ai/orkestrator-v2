@@ -1867,7 +1867,7 @@ describe("group CPU observation", () => {
     expect(sampler.stop()).toBeUndefined();
   });
 
-  test("measureCpu reports the CPU a real busy tree used; without it nothing is measured", async () => {
+  test("measureCpu reports the CPU a real busy group used, descendants included; without it nothing is measured", async () => {
     const busy = `
       const end = Date.now() + 1_800;
       while (Date.now() < end) {}
@@ -1876,26 +1876,40 @@ describe("group CPU observation", () => {
       { name: "cpu fixture", command: process.execPath, args: ["-e", busy], measureCpu: true },
       isolatedRunnerEnvironment(),
     );
+    // The leader only waits; the spinning is done by a descendant in its process group,
+    // which is what a group's Bun or Turbo workers are.
+    const tree = `
+      const worker = Bun.spawn([process.execPath, "-e", ${JSON.stringify(busy)}]);
+      process.exitCode = await worker.exited;
+    `;
+    const measuredTree = await defaultRunGroup(
+      { name: "cpu fixture tree", command: process.execPath, args: ["-e", tree], measureCpu: true },
+      isolatedRunnerEnvironment(),
+    );
     const unmeasured = await defaultRunGroup(
       { name: "cpu fixture off", command: process.execPath, args: ["-e", busy] },
       isolatedRunnerEnvironment(),
     );
     try {
       expect(measured.status).toBe(0);
+      expect(measuredTree.status).toBe(0);
       expect(unmeasured.status).toBe(0);
       expect(unmeasured.cpu).toBeUndefined();
       if (process.platform === "linux") {
-        expect(measured.cpu).toBeDefined();
         // A single spinning thread: roughly one core, far from zero or from many,
         // even if a loaded host steals some of it.
-        const cores = measured.cpu!.ms / measured.cpu!.spanMs;
-        expect(cores).toBeGreaterThan(0.2);
-        expect(cores).toBeLessThan(2.5);
+        for (const result of [measured, measuredTree]) {
+          expect(result.cpu).toBeDefined();
+          const cores = result.cpu!.ms / result.cpu!.spanMs;
+          expect(cores).toBeGreaterThan(0.2);
+          expect(cores).toBeLessThan(2.5);
+        }
       } else {
         expect(measured.cpu).toBeUndefined();
+        expect(measuredTree.cpu).toBeUndefined();
       }
     } finally {
-      for (const result of [measured, unmeasured])
+      for (const result of [measured, measuredTree, unmeasured])
         if (result.logPath)
           await rm(path.dirname(result.logPath), { recursive: true, force: true });
     }

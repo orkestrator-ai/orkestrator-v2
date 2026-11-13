@@ -184,7 +184,12 @@ export function scanRepository(
     const source = index.read(relative);
     // Deleted from the working tree, or a symbolic link: nothing to scan.
     if (source === null) return;
-    const file: ScannedFile = { path: relative, source, isBunTest: BUN_TEST_FILE.test(relative) };
+    const file: ScannedFile = {
+      path: relative,
+      source,
+      isBunTest: BUN_TEST_FILE.test(relative),
+      readSource: (other) => index.read(other),
+    };
     for (const finding of scanSource(file, fileGuards))
       (findings[finding.guard][baselineKey(finding)] ??= []).push(finding);
   };

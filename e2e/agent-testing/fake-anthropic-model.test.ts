@@ -4,8 +4,16 @@ import {
   answerFor,
   fakeModelClaudeSettings,
   holdIdOf,
+  imageBlockCount,
   lastUserPrompt,
+  MAX_RETRY_FAILURES,
   MAX_STREAM_DELTAS,
+  offeredToolNames,
+  resolveStepTool,
+  retryOf,
+  scriptIdOf,
+  toolResultsSinceTurnPrompt,
+  turnPrompt,
   bashWordOf,
   endsWithToolResult,
   messageStreamFrames,
@@ -238,6 +246,91 @@ describe("endpoint", () => {
     const second = await (await post(model.origin, followUp)).text();
     expect(second).toContain('"text_delta"');
     expect(second).not.toContain('"name":"Bash"');
+  });
+
+  test("a script plays one tool call per step, then ends the turn with the prompt's answer", async () => {
+    model = await startFakeAnthropicModel(0, {
+      toolScripts: {
+        probe: [
+          { tool: "Write", input: { file_path: "a.txt", content: "x" } },
+          { tool: "*__submit_report", input: { text: "done" } },
+        ],
+      },
+    });
+    const prompt = "Probe the workspace [script:Probe]";
+    expect(scriptIdOf(prompt)).toBe("probe");
+    const offered = { tools: [{ name: "Write" }, { name: "mcp__orkestrator__submit_report" }] };
+    const step = (results: number) => ({
+      ...request([prompt]),
+      ...offered,
+      messages: [
+        ...request([prompt]).messages,
+        ...Array.from({ length: results }, (_, index) => [
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: `t${index}`, name: "X", input: {} }],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: `t${index}`, content: "ok" }],
+          },
+        ]).flat(),
+      ],
+    });
+    expect(turnPrompt(step(2))).toBe(prompt);
+    expect(toolResultsSinceTurnPrompt(step(2))).toBe(2);
+    expect(toolResultsSinceTurnPrompt(step(0))).toBe(0);
+    const first = await (await post(model.origin, step(0))).text();
+    expect(first).toContain('"name":"Write"');
+    const second = await (await post(model.origin, step(1))).text();
+    expect(second).toContain('"name":"mcp__orkestrator__submit_report"');
+    expect(second).toContain(JSON.stringify(JSON.stringify({ text: "done" })).slice(1, -1));
+    const last = await (await post(model.origin, step(2))).text();
+    expect(last).toContain(JSON.stringify(answerFor(prompt)).slice(1, -1));
+    expect(model.calls().map((call) => call.script)).toEqual([
+      { id: "probe", step: 0, tool: "Write" },
+      { id: "probe", step: 1, tool: "mcp__orkestrator__submit_report" },
+      { id: "probe", step: 2 },
+    ]);
+    expect(model.calls()[0]!.tools).toEqual(["Write", "mcp__orkestrator__submit_report"]);
+  });
+
+  test("a suffix step with no matching tool calls the bare name", () => {
+    expect(resolveStepTool({ tool: "*submit_report", input: {} }, ["Read"])).toBe("submit_report");
+    expect(resolveStepTool({ tool: "Bash", input: {} }, [])).toBe("Bash");
+  });
+
+  test("a retry prompt fails its first n calls with 500, then answers", async () => {
+    model = await startFakeAnthropicModel();
+    const prompt = "flaky [retry:once:2]";
+    expect(retryOf(prompt)).toEqual({ id: "once", failures: 2 });
+    expect(retryOf("[retry:many:99]")).toEqual({ id: "many", failures: MAX_RETRY_FAILURES });
+    expect((await post(model.origin, request([prompt]))).status).toBe(500);
+    expect((await post(model.origin, request([prompt]))).status).toBe(500);
+    const answered = await post(model.origin, request([prompt]));
+    expect(answered.status).toBe(200);
+    expect(await answered.text()).toContain(JSON.stringify(answerFor(prompt)).slice(1, -1));
+    expect(model.calls().map((call) => call.failedWith)).toEqual([500, 500, undefined]);
+  });
+
+  test("image blocks are counted, including those inside tool results", async () => {
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AA" },
+    };
+    const body = {
+      messages: [
+        { role: "user", content: [image, { type: "text", text: "look" }] },
+        { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [image] }] },
+      ],
+    };
+    expect(imageBlockCount(body)).toBe(2);
+    expect(imageBlockCount(request(["plain"]))).toBe(0);
+    expect(offeredToolNames({ tools: [{ name: "Read" }, { nameless: true }] })).toEqual(["Read"]);
+    model = await startFakeAnthropicModel();
+    await post(model.origin, { ...body, stream: true });
+    expect(model.calls()[0]!.images).toBe(2);
   });
 
   test("count_tokens and unknown routes answer without counting a call", async () => {

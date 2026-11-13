@@ -569,7 +569,7 @@ The CLI on the user's PATH is not used, and its own database is not read:
 Orkestrator's servers run the managed `opencode2` binary on their own
 database. Until 2026-11-11 sign-in ran on OpenCode 1.x's auth routes with
 `auth.json` as the store; see "OpenCode 1.x retired (2026-11-11)" in
-[0008-opencode-v2.md](../todo/agent-engines/0008-opencode-v2.md).
+0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 
 ## Credentials in auth answers
 

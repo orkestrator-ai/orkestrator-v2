@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (315 items): run each check under
+1. **Manual tests and live checks** (316 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (56 items): make each call
@@ -108,7 +108,7 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 66 | 7 |
+| Agent engines and provider SDKs | 67 | 7 |
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 26 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
@@ -117,7 +117,7 @@ agent can apply it.
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 27 | 3 |
-| **Total** | 315 | 56 |
+| **Total** | 316 | 56 |
 
 ## Outstanding work
 
@@ -201,7 +201,8 @@ agent can apply it.
   4. Task 13: billed OpenRouter, Cursor and ACP USD costs. Task 14: a real full disk for Claude and Pi shows the lost-write notice. Task 15: whether Grok's remote settings can override `GROK_STORAGE_MODE=local`.
   Record: pass/fail and what was shown per check, in 1031's Needs verification.
 
-- [ ] **[0008](../agent-engines/0008-opencode-v2.md) task 5: live coordinator suite on OpenCode 2.x.** On a host signed in to OpenCode with a real provider credential, run `mise run test:agent:coordinator --credential-source opencode` (OpenCode 2 is the only line since 2026-11-11, so no setting is needed). Check that each new coordinator conversation starts its own OpenCode server. Record: pass or fail per scenario, the 2.x pin, and any refusal or error text, in 0008's "Task 5: coordinators on 2.x" section.
+- [ ] **0008 (retired) task 5: live coordinator suite on OpenCode 2.x.** On a host signed in to OpenCode with a real provider credential, run `mise run test:agent:coordinator --credential-source opencode` (OpenCode 2 is the only line since 2026-11-11, so no setting is needed). Check that each new coordinator conversation starts its own OpenCode server. Record: pass or fail per scenario, the 2.x pin, and any refusal or error text, under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration). The design is in "Task 5: coordinators on 2.x" (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
+- [ ] **0008 (retired) Needs verification: OpenCode 2 turns on a real provider.** Every OpenCode 2 qualification so far used a scripted loopback model (host 2026-11-11, container 2026-11-13). On a disposable `mise run dev:test --profile oc2-real --fixture --credential-source opencode --agent-platforms opencode --headless` profile signed in to a real OpenCode provider, run `ORKESTRATOR_AGENT_TEST_PROFILE=oc2-real ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=opencode ORKESTRATOR_AGENT_TEST_IDLE_CASES=approval,steer,no-renderer mise run test:agent:browser -- e2e/agent-testing/idle-observation-live.spec.ts` (billed: a few short turns). Record: pass, fail or not-exercised per case, the provider and model, and any error text, under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration). Stop and reset the profile afterwards.
 - [ ] **0081 (retired) task 2: live tab label with a transcript annotation.** On a profile signed in to Codex (`mise run dev:test --profile titles-qa --fixture --credential-source codex --agent-platforms codex`), open a new Codex tab whose first prompt is a short request plus a transcript excerpt (or open one from the design dialog, as in 0038 (retired)'s live design-link run), send it, then reload. Record: the tab label before and after the reload. It should be the request text only, with no `<orke…` fence or quoted JSON. Reply to the coordinator. How it works: [Session titles](../../architecture/agent-engines.md#session-titles).
 - [ ] **1250 (retired) task 1: a real Claude weekly refusal.** With automatic switching on for Claude (two included accounts) on a `dev:test` profile with Debug logging, wait for a Claude account that really hits its weekly limit. Record: the turn's error text, the forced reading's `seven_day` utilization, the 429's `anthropic-ratelimit-unified-status` and `-representative-claim` headers if logged, `rate_limit_event.rate_limit_info.rateLimitType`, and whether the machine moved (`lastSwitch`). Reply to the coordinator. How it works: [Automatic switching](../../architecture/agent-accounts.md#automatic-switching).
 - [ ] **1250 (retired) task 2: a real Codex weekly refusal.** As task 1, for a Codex account at its weekly limit. Record: the refusal text, which window (primary or secondary) holds the 10,080-minute week, the `rateLimitsByLimitId` keys, and whether the machine moved. Reply to the coordinator.
@@ -709,7 +710,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **0062 (retired) task 4: report Pi's terminal default upstream if it fails.** If the terminal check above shows `pi` starting on `openai/gpt-5.5` and being refused, file a report with Pi upstream (its `defaultModelPerProvider` names `gpt-5.5` for `openai`, which a ChatGPT login refuses; `findInitialModel` reaches it before `openai-codex`). Record: the issue link, or "not filed: terminal passed", reply to the coordinator.
 - [ ] **[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9: apply the host firewall rule for Docker.** On the Linux host that ran `qa-1031-upgrade`, `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog blocked `close-retention-live.spec.ts`. Apply the rule that dialog shows (or choose another host for 1031 task 9's signed-in item). Record: the rule applied and the host, or the host chosen instead, in 1031 task 9.
 
-- [ ] **[0008](../agent-engines/0008-opencode-v2.md) task 7: review the OpenCode 2 mitigations now that it is the only line.** OpenCode 1.x was retired on 2026-11-11 at your request, so the default question is settled. Read "Task 2: owner decision (2026-11-08)" in 0008 and accept or reject each mitigation still in force: an exact pin, `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_DISABLE_FILEWATCHER` and an isolated `OPENCODE_DB` for storage; `switchModel`/`switchAgent` and session permissions under the dispatch lock; LSP and the `CLAUDE.md` fallback dropped; the backend-held steer guard; Orkestrator's own bounded steer journal; experimental MCP, instructions and log routes used at the exact pin. Record: your acceptance or rejection per mitigation in 0008's Assumptions and decisions.
+- [ ] **0008 (retired) task 7: review the OpenCode 2 mitigations now that it is the only line.** OpenCode 1.x was retired on 2026-11-11 at your request, so the default question is settled. Read "Task 2: owner decision (2026-11-08)" in 0008 (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`) and accept or reject each mitigation still in force: an exact pin, `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_DISABLE_FILEWATCHER` and an isolated `OPENCODE_DB` for storage; `switchModel`/`switchAgent` and session permissions under the dispatch lock; LSP and the `CLAUDE.md` fallback dropped; the backend-held steer guard; Orkestrator's own bounded steer journal; experimental MCP, instructions and log routes used at the exact pin. Record: your acceptance or rejection per mitigation under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration).
 - [ ] **1250 (retired) task 8: the cost of an automatic-switch notice.** After a real week with automatic switching on, count the automatic-switch notices and the main-coordinator turns they woke. Decide: keep waking every main coordinator (recommended), or deliver the notice without a wake so it is read at the coordinator's next turn. Record: the counts and the decision. Reply to the coordinator.
 - [ ] **[5980](../agent-engines/5980-pi-session-list-read-cost.md) task 1: approve the Pi bounded-listing request upstream.** Choose how to bound the cost of listing a large Pi history: ask Pi upstream for a bounded listing, with a limit and no `allMessagesText` when the caller does not want it (recommended); have the bridge read session files itself; or leave it. If you choose upstream, file the request with Pi (or approve an agent drafting it for you to file). Record: the choice, and the upstream issue link if filed, in 5980's Assumptions and decisions.
 

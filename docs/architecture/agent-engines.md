@@ -745,7 +745,8 @@ interpose a bridge process. The backend runs the managed `opencode2` binary
 `opencode serve` for the environment and talks to it directly. OpenCode 1.x and
 its SDK were retired on 2026-11-11: there is no 1.x server, no
 `@opencode-ai/sdk` dependency and no setting choosing between the lines
-([0008](../todo/agent-engines/0008-opencode-v2.md)).
+(to-do 0008, retired 2026-11-13; its history is in
+`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 
 **Where the server runs.**
 
@@ -856,6 +857,35 @@ OpenCode bump, re-check:
   under `apps/backend/src/core/opencode2/`.
 - The routes the client and the feature modules call (`GET /openapi.json` on a
   running server lists them).
+
+A bump is qualified on scripted models, with no login and nothing billed,
+in three layers ([upgrade-agents.md](../development/upgrade-agents.md) has
+the commands):
+
+- `mise run verify:opencode2:live`: every test under its own `opencode serve`
+  with a temporary `HOME`, `XDG_*` and `OPENCODE_DB`.
+- `mise run verify:opencode2:real-stack`: the idle-observation spec's
+  OpenCode cases (a missed final event, an approval card, a cut event
+  stream, a hidden document, a turn finishing with no renderer, composer
+  steer) in a local environment of a disposable profile.
+- `mise run verify:opencode2:container`: the same cases in a container
+  environment, with the scripted model served on the container's own
+  loopback and named in the profile's `opencode.json`, which each runtime
+  stages, plus a preserving rebuild after which a follow-up turn must settle
+  on the same session because `opencode2.db` came with it.
+
+All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
+2026-11-13, behind an egress gateway); the per-case figures are in
+[agent-testing.md](../development/agent-testing.md). The paths not yet run
+(a runtime without an egress gateway, concurrent sessions, a steer racing a
+card, steer through the public CLI) are to-do
+[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). The
+mitigations OpenCode 2 runs under (an exact pin, auto-update and file
+watchers off, an isolated database, model, agent and permission switches
+under the dispatch lock, the backend-held steer guard and its bounded
+journal, experimental routes used only at the exact pin) await the owner's
+review in the manual-test checklist; record that review, and any
+real-provider run, here.
 
 | Component                        | Purpose                                                           |
 | -------------------------------- | ----------------------------------------------------------------- |

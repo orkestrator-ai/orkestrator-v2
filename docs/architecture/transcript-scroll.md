@@ -112,8 +112,11 @@ upward input (`UPWARD_INPUT_HOLD_MS`, longer than the 250 ms input window
 because a loaded WebKit was seen compensating 555 ms after the wheel event),
 an offset below the last observed one that ends away from the end is the
 reader's departure, not growth to pin (`readerMovedUpUnobserved`). Movement
-long after the input, or with downward input, is still pinned. The spec now
-asserts that one tick leaves the end.
+long after the input, after downward input, or after a navigation that began
+since the input (return to latest, find, a glide) is still pinned: any
+navigation retires the hold, so a compensation that follows a reader's return
+to latest is not read as the earlier tick's departure. The spec now asserts
+that one tick leaves the end.
 
 ## Measured convergence
 

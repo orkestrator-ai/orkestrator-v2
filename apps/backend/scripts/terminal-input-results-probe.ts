@@ -22,7 +22,10 @@
  * result bytes, failures, refusals, socket closes, fallbacks, key-to-result
  * latency, whether the backend received and echoed exactly what was typed, and
  * whether input works after a reload. Never content. An engine that cannot
- * launch is reported as `unavailable`. It never touches a real data directory,
+ * launch is reported as `unavailable`. A run whose terminal channel is not
+ * ready within the page's startup deadline (a refused upgrade or subscription)
+ * is reported as `startup-failed` and the probe moves on to the next run, then
+ * exits 1. It never touches a real data directory,
  * backend, terminal or provider. JSON goes to stdout (or `--out`).
  */
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -34,7 +37,14 @@ import { parseArgs } from "node:util";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import { TERMINAL_WEBSOCKET_PATH } from "@orkestrator/protocol/terminal-websocket";
-import { chromium, firefox, webkit, type BrowserType, type Page } from "playwright-core";
+import {
+  chromium,
+  firefox,
+  webkit,
+  type Browser,
+  type BrowserType,
+  type Page,
+} from "playwright-core";
 
 import type { BackendHelloIdentity } from "../src/gateway.js";
 import { startGateway, type StartedGateway } from "./gateway-frame-costs.js";
@@ -94,9 +104,39 @@ export type RunResult = {
   inputAfterReload: boolean;
 };
 
+/** A run whose terminal channel never became ready (bounded by the page's startup deadline). */
+export type RunFailure = {
+  route: Route;
+  offer: "both" | "v1-only";
+  status: "startup-failed";
+  /** Which page load failed: the first, or the one after the reload. */
+  load: "initial" | "reload";
+  /** The page's content-free startup error (stage, deadline, counters). */
+  reason: string;
+};
+
 export type EngineResult =
   | { engine: string; status: "unavailable"; reason: string }
-  | { engine: string; status: "observed"; version: string; runs: RunResult[] };
+  | { engine: string; status: "observed"; version: string; runs: Array<RunResult | RunFailure> };
+
+class StartupFailed extends Error {
+  constructor(
+    readonly load: RunFailure["load"],
+    readonly reason: string,
+  ) {
+    super(reason);
+  }
+}
+
+/** The first line of a Playwright evaluate error, which carries the page's message. */
+export function startupFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const line = message.split("\n").find((part) => part.trim().length > 0) ?? "startup failed";
+  return line
+    .replace(/^page\.evaluate:\s*/, "")
+    .replace(/^Error:\s*/, "")
+    .trim();
+}
 
 /** Typing text of `count` keys; the same for every run, never reported. */
 export function keysFor(count: number, offset = 0): string {
@@ -255,16 +295,24 @@ type Targets = {
   route(route: Route): { page: URL; gateway: StartedGateway; path: string };
 };
 
+async function startProbe(page: Page, start: ProbePageStart, load: RunFailure["load"]) {
+  await page.waitForFunction(() => "__terminalProbe" in window);
+  try {
+    await page.evaluate(
+      (options) =>
+        (
+          window as unknown as { __terminalProbe: { start(o: unknown): Promise<void> } }
+        ).__terminalProbe.start(options),
+      start,
+    );
+  } catch (error) {
+    throw new StartupFailed(load, startupFailureReason(error));
+  }
+}
+
 async function startPage(page: Page, base: URL, start: ProbePageStart) {
   await page.goto(base.href, { waitUntil: "load" });
-  await page.waitForFunction(() => "__terminalProbe" in window);
-  await page.evaluate(
-    (options) =>
-      (
-        window as unknown as { __terminalProbe: { start(o: unknown): Promise<void> } }
-      ).__terminalProbe.start(options),
-    start,
-  );
+  await startProbe(page, start, "initial");
 }
 
 const drain = (page: Page) =>
@@ -288,70 +336,75 @@ async function run(
   targets: Targets,
   route: Route,
   offer: RunResult["offer"],
-): Promise<RunResult> {
+): Promise<RunResult | RunFailure> {
   const browser = await type.launch();
   try {
-    const { page: base, gateway, path: socketPath } = targets.route(route);
-    const context = await browser.newContext();
-    const session = (
-      gateway.gateway as unknown as { issueBrowserSession(): string }
-    ).issueBrowserSession();
-    await context.addCookies([
-      { name: "orkestrator_gateway_auth", value: session, url: base.origin },
-    ]);
-    const page = await context.newPage();
-    const start: ProbePageStart = {
-      path: socketPath,
-      sessionId: SESSION,
-      v1Only: offer === "v1-only",
-    };
-    targets.resetWrites();
-    await startPage(page, base, start);
-
-    const typed = keysFor(TYPED_KEYS);
-    const burst = keysFor(BURST_KEYS, TYPED_KEYS);
-    const initial = await drain(page);
-    await page.keyboard.type(typed, { delay: TYPING_DELAY_MS });
-    const afterTyping = await drain(page);
-    await page.keyboard.type(burst, { delay: 0 });
-    const afterBurst = await drain(page);
-    const writesIntact = targets.writes.join("") === typed + burst;
-    const echoIntact = await echoed(page, typed + burst);
-
-    targets.resetWrites();
-    await page.reload({ waitUntil: "load" });
-    await page.waitForFunction(() => "__terminalProbe" in window);
-    await page.evaluate(
-      (options) =>
-        (
-          window as unknown as { __terminalProbe: { start(o: unknown): Promise<void> } }
-        ).__terminalProbe.start(options),
-      start,
-    );
-    const reloadKeys = keysFor(RELOAD_KEYS, 7);
-    await page.keyboard.type(reloadKeys, { delay: TYPING_DELAY_MS });
-    const afterReload = await drain(page);
-    const inputAfterReload =
-      afterReload.settled === RELOAD_KEYS &&
-      afterReload.failed === 0 &&
-      targets.writes.join("") === reloadKeys &&
-      (await echoed(page, reloadKeys));
-    await context.close();
-    return {
-      route,
-      offer,
-      protocol: afterBurst.protocol,
-      typing: phaseBetween(initial, afterTyping),
-      noDelay: phaseBetween(afterTyping, afterBurst),
-      socketCloses: afterBurst.socketCloses,
-      fallbackRequired: afterBurst.fallbackRequired,
-      writesIntact,
-      echoIntact,
-      inputAfterReload,
-    };
+    return await observeRun(browser, targets, route, offer);
+  } catch (error) {
+    if (!(error instanceof StartupFailed)) throw error;
+    return { route, offer, status: "startup-failed", load: error.load, reason: error.reason };
   } finally {
     await browser.close();
   }
+}
+
+async function observeRun(
+  browser: Browser,
+  targets: Targets,
+  route: Route,
+  offer: RunResult["offer"],
+): Promise<RunResult> {
+  const { page: base, gateway, path: socketPath } = targets.route(route);
+  const context = await browser.newContext();
+  const session = (
+    gateway.gateway as unknown as { issueBrowserSession(): string }
+  ).issueBrowserSession();
+  await context.addCookies([
+    { name: "orkestrator_gateway_auth", value: session, url: base.origin },
+  ]);
+  const page = await context.newPage();
+  const start: ProbePageStart = {
+    path: socketPath,
+    sessionId: SESSION,
+    v1Only: offer === "v1-only",
+  };
+  targets.resetWrites();
+  await startPage(page, base, start);
+
+  const typed = keysFor(TYPED_KEYS);
+  const burst = keysFor(BURST_KEYS, TYPED_KEYS);
+  const initial = await drain(page);
+  await page.keyboard.type(typed, { delay: TYPING_DELAY_MS });
+  const afterTyping = await drain(page);
+  await page.keyboard.type(burst, { delay: 0 });
+  const afterBurst = await drain(page);
+  const writesIntact = targets.writes.join("") === typed + burst;
+  const echoIntact = await echoed(page, typed + burst);
+
+  targets.resetWrites();
+  await page.reload({ waitUntil: "load" });
+  await startProbe(page, start, "reload");
+  const reloadKeys = keysFor(RELOAD_KEYS, 7);
+  await page.keyboard.type(reloadKeys, { delay: TYPING_DELAY_MS });
+  const afterReload = await drain(page);
+  const inputAfterReload =
+    afterReload.settled === RELOAD_KEYS &&
+    afterReload.failed === 0 &&
+    targets.writes.join("") === reloadKeys &&
+    (await echoed(page, reloadKeys));
+  await context.close();
+  return {
+    route,
+    offer,
+    protocol: afterBurst.protocol,
+    typing: phaseBetween(initial, afterTyping),
+    noDelay: phaseBetween(afterTyping, afterBurst),
+    socketCloses: afterBurst.socketCloses,
+    fallbackRequired: afterBurst.fallbackRequired,
+    writesIntact,
+    echoIntact,
+    inputAfterReload,
+  };
 }
 
 async function probeEngine(
@@ -373,7 +426,7 @@ async function probeEngine(
         .find((line) => line.length > 0 && !line.startsWith("_wrapApiCall")) ?? "launch failed";
     return { engine: name, status: "unavailable", reason };
   }
-  const runs: RunResult[] = [];
+  const runs: Array<RunResult | RunFailure> = [];
   for (const route of ["direct", "relay", "latency"] as const) {
     for (const offer of ["both", "v1-only"] as const) {
       runs.push(await run(type, targets, route, offer));
@@ -382,7 +435,8 @@ async function probeEngine(
   return { engine: name, status: "observed", version, runs };
 }
 
-async function main(): Promise<void> {
+/** Prints the results; resolves false when any run's channel failed to start. */
+async function main(): Promise<boolean> {
   configureLogger({ level: "error" });
   const { values } = parseArgs({
     options: {
@@ -444,6 +498,10 @@ async function main(): Promise<void> {
     );
     if (values.out) await writeFile(values.out, `${output}\n`);
     else console.log(output);
+    return results.every(
+      (result) =>
+        result.status !== "observed" || result.runs.every((runResult) => !("status" in runResult)),
+    );
   } finally {
     for (const stop of stops.reverse()) await stop().catch(() => undefined);
     await rm(dir, { recursive: true, force: true });
@@ -451,6 +509,6 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  await main();
-  process.exit(0);
+  const ok = await main();
+  process.exit(ok ? 0 : 1);
 }

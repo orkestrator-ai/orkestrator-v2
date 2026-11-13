@@ -9,6 +9,10 @@
 import { TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-websocket";
 
 import { TerminalWebSocketClient } from "../../web/src/lib/native/terminal-websocket-client.ts";
+import {
+  CHANNEL_STARTUP_TIMEOUT_MS,
+  startChannel,
+} from "./terminal-input-results-probe-startup.ts";
 
 export type ProbePageStart = {
   /** The terminal endpoint's path on the page's own origin. */
@@ -16,6 +20,8 @@ export type ProbePageStart = {
   sessionId: string;
   /** Offer only v1, as a renderer from before input results does. */
   v1Only: boolean;
+  /** Fail startup when the channel is not ready by then (`CHANNEL_STARTUP_TIMEOUT_MS`). */
+  startupTimeoutMs?: number;
 };
 
 export type ProbePageCounts = {
@@ -115,9 +121,15 @@ async function start(options: ProbePageStart): Promise<void> {
   client.subscribe(options.sessionId, (payload) => {
     if (payload.bytes) output += decoder.decode(payload.bytes, { stream: true });
   });
-  await client.ready(options.sessionId);
-  client.observeSnapshot(options.sessionId, { generation: 1, revision: 0 });
-  await channelReady;
+  // Rejects (and disposes the client) when the upgrade or the subscription
+  // never succeeds, so the probe reports this route failed and moves on.
+  await startChannel(client, options.sessionId, channelReady, {
+    timeoutMs: options.startupTimeoutMs ?? CHANNEL_STARTUP_TIMEOUT_MS,
+    diagnostics: () => ({
+      socketCloses: counts.socketCloses,
+      fallbackRequired: counts.fallbackRequired,
+    }),
+  });
 
   const input = document.createElement("textarea");
   input.setAttribute("aria-label", "Terminal input");

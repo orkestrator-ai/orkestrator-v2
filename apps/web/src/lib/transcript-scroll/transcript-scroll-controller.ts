@@ -999,6 +999,9 @@ export class TranscriptScrollController {
     motion: Operation["motion"],
   ): Operation {
     this.dispatch({ type: "navigate", owner }, "superseded");
+    // A navigation started after the reader's upward input owns the viewport
+    // now; a later unobserved upward offset is not that input's departure.
+    this.upwardInputUntil = 0;
     const op: Operation = {
       generation: this.state.generation,
       owner,

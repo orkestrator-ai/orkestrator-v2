@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { keysFor, phaseBetween } from "../scripts/terminal-input-results-probe.js";
+import {
+  keysFor,
+  phaseBetween,
+  startupFailureReason,
+} from "../scripts/terminal-input-results-probe.js";
 import type { ProbePageCounts } from "../scripts/terminal-input-results-probe-page.ts";
 
 function counts(overrides: Partial<ProbePageCounts> = {}): ProbePageCounts {
@@ -79,5 +83,18 @@ describe("keysFor", () => {
     expect(keysFor(40)).toHaveLength(40);
     expect(keysFor(2, 36)).toBe("ab");
     expect(keysFor(52) + keysFor(316, 52)).toBe(keysFor(368));
+  });
+});
+
+describe("startupFailureReason", () => {
+  test("keeps the page's startup error and drops Playwright's prefix and stack", () => {
+    const error = new Error(
+      "page.evaluate: Error: Terminal channel startup failed at the channel stage: " +
+        "not ready within 15000 ms (socket closes 0, fallbacks 0)\n    at start (probe.js:1:1)",
+    );
+    expect(startupFailureReason(error)).toBe(
+      "Terminal channel startup failed at the channel stage: not ready within 15000 ms " +
+        "(socket closes 0, fallbacks 0)",
+    );
   });
 });

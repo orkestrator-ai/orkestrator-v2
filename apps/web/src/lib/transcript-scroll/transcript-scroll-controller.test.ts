@@ -162,10 +162,14 @@ describe("transcript at-bottom UI state", () => {
   // reports the shrink arrives before that movement's scroll event.
   function shrinkUnderFirstStep(
     view: ReturnType<typeof harness>,
-    deltaY: number,
+    input: number | (() => void),
     beforeCompensation = () => {},
   ) {
-    view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+    if (typeof input === "number") {
+      view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: input }));
+    } else {
+      input();
+    }
     view.grow(-200);
     view.scroller.scrollTop = 4210; // The tick's first step, clamped to the new end.
     view.scroller.dispatchEvent(new Event("scroll"));
@@ -222,6 +226,97 @@ describe("transcript at-bottom UI state", () => {
     shrinkUnderFirstStep(view, 190);
     expect(view.scroller.scrollTop).toBe(4200);
     expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  function press(view: ReturnType<typeof harness>, init: KeyboardEventInit) {
+    view.scroller.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+    );
+  }
+
+  function touchMove(view: ReturnType<typeof harness>, fromY: number, toY: number) {
+    const touchEvent = (type: string, clientY: number) => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, "touches", { value: [{ clientX: 100, clientY }] });
+      return event;
+    };
+    view.scroller.dispatchEvent(touchEvent("touchstart", fromY));
+    view.scroller.dispatchEvent(touchEvent("touchmove", toY));
+    view.scroller.dispatchEvent(new Event("touchend", { bubbles: true }));
+  }
+
+  for (const [label, init] of [
+    ["ArrowUp", { key: "ArrowUp" }],
+    ["PageUp", { key: "PageUp" }],
+    ["Home", { key: "Home" }],
+    ["Shift+Space", { key: " ", shiftKey: true }],
+  ] as const) {
+    test(`${label} arms the upward hold like a wheel tick`, () => {
+      controlledFrames();
+      const view = harness();
+      shrinkUnderFirstStep(view, () => press(view, init));
+      expect(view.scroller.scrollTop).toBe(4010);
+      expect(view.controller.wantsFollow).toBe(false);
+    });
+  }
+
+  test("a downward key clears the upward hold an earlier tick armed", () => {
+    controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, () => {
+      view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -190 }));
+      press(view, { key: "ArrowDown" });
+    });
+    expect(view.scroller.scrollTop).toBe(4200);
+    expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  test("a touch drag that scrolls up arms the upward hold", () => {
+    controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, () => touchMove(view, 100, 200));
+    expect(view.scroller.scrollTop).toBe(4010);
+    expect(view.controller.wantsFollow).toBe(false);
+  });
+
+  test("a touch drag that scrolls down clears the upward hold", () => {
+    controlledFrames();
+    const view = harness();
+    shrinkUnderFirstStep(view, () => {
+      view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -190 }));
+      touchMove(view, 200, 100);
+    });
+    expect(view.scroller.scrollTop).toBe(4200);
+    expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  test("a return to latest after upward input retires the hold", () => {
+    let clock = 1_000;
+    const nowSpy = spyOn(performance, "now").mockImplementation(() => clock);
+    disposals.push(() => nowSpy.mockRestore());
+    const frame = controlledFrames();
+    const view = harness();
+    view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -190 }));
+    view.scrollTo(2000);
+    expect(view.controller.wantsFollow).toBe(false);
+    clock = 1_300;
+    expect(view.controller.navigateToLatest()).toBe(true);
+    frame();
+    view.scrollTo(4400);
+    frame();
+    frame();
+    frame();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.wantsFollow).toBe(true);
+    // Still inside the wheel's hold: an unrelated compensation, its scroll
+    // event not yet delivered, must not read as the old tick's departure.
+    clock = 1_364;
+    view.grow(120);
+    view.scroller.scrollTop = 4390;
+    view.controller.notifyLayout("resize");
+    frame();
+    expect(view.controller.wantsFollow).toBe(true);
+    expect(view.scroller.scrollTop).toBe(4520);
   });
 
   for (const retirement of ["pause", "cancel", "supersede", "inactive", "converge"] as const) {

@@ -150,10 +150,15 @@ export type KeychainItemRemoval = { removed: number; warning: string | null };
 
 /**
  * Removes a profile's `safeStorage` key from the macOS login Keychain.
- * Electron stores it as the generic password "<app name> Safe Storage" with
- * account "<app name>", and a profile's app name is its `electronTitle`, so
- * every reset profile used to leave one behind. The item is named by title
- * alone, so two guards keep this to the profile's own item:
+ * Electron stores it as the generic password "<app name> Safe Storage", and a
+ * profile's app name is its `electronTitle`, so every reset profile used to
+ * leave one behind. The match is on that service alone: its account is not
+ * stable across Electron versions. Electron 45.2.3 writes "<app name> Key"
+ * (seen on a live macOS 27.2 run, to-do 0023), where earlier builds wrote
+ * "<app name>", and matching the old account deleted nothing while reporting
+ * success. The service already names this profile's title, so no other
+ * item can share it. The item is named by title alone, so two guards keep
+ * this to the profile's own item:
  *
  * - The title must be the one `dev:test` gives this profile id. A
  *   `profile.json` naming another title (the production app's, say) must
@@ -189,13 +194,7 @@ export function removeProfileKeychainItem(
   const service = `${profile.electronTitle} Safe Storage`;
   let removed = 0;
   for (let attempt = 0; attempt < MAX_KEYCHAIN_ITEM_DELETIONS; attempt += 1) {
-    const result = run("security", [
-      "delete-generic-password",
-      "-s",
-      service,
-      "-a",
-      profile.electronTitle,
-    ]);
+    const result = run("security", ["delete-generic-password", "-s", service]);
     if (result.status === 0) {
       removed += 1;
       continue;

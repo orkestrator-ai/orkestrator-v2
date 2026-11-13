@@ -192,24 +192,41 @@ describe("removeProfile", () => {
 });
 
 describe("profile Keychain item", () => {
-  /** A Keychain holding `items` copies of each named service. */
+  /**
+   * A Keychain holding `items` copies of each `<service>\n<account>` pair.
+   * Like `security`, a query without `-a` matches any account of the service,
+   * and each successful delete removes one item.
+   */
   function keychain(items: Record<string, number>): CommandRunner {
     return (command, args) => {
       if (command !== "security") return run(command, args);
       securityCalls.push(args);
       const service = args[args.indexOf("-s") + 1]!;
-      if ((items[service] ?? 0) === 0) {
-        return { status: KEYCHAIN_ITEM_NOT_FOUND_EXIT, stdout: "", stderr: "" };
-      }
-      items[service]! -= 1;
+      const account = args.includes("-a") ? args[args.indexOf("-a") + 1] : undefined;
+      const match = Object.keys(items).find((key) => {
+        const [itemService, itemAccount] = key.split("\n");
+        return (
+          itemService === service &&
+          (account === undefined || itemAccount === account) &&
+          items[key]! > 0
+        );
+      });
+      if (!match) return { status: KEYCHAIN_ITEM_NOT_FOUND_EXIT, stdout: "", stderr: "" };
+      items[match]! -= 1;
       return { status: 0, stdout: "", stderr: "" };
     };
   }
 
-  test("reset deletes only the profile's own Safe Storage item, after its state", async () => {
+  test("reset deletes only the profile's own Safe Storage items, after its state", async () => {
     const profile = await createProfile("keychain");
-    const service = `${profile.electronTitle} Safe Storage`;
-    const items = { [service]: 2, "Orkestrator AI Safe Storage": 1 };
+    const title = profile.electronTitle;
+    // Electron 45.2.3 names the account "<title> Key" (live macOS run, to-do
+    // 0023); earlier builds named it "<title>". Both are the profile's.
+    const current = `${title} Safe Storage\n${title} Key`;
+    const legacy = `${title} Safe Storage\n${title}`;
+    const production = "Orkestrator AI Safe Storage\nOrkestrator AI Key";
+    const sameAccount = `Other Service\n${title} Key`;
+    const items = { [current]: 1, [legacy]: 1, [production]: 1, [sameAccount]: 1 };
     let stateGoneFirst = true;
     const keychainRun = keychain(items);
     const result = await removeProfile(profile, {
@@ -226,14 +243,12 @@ describe("profile Keychain item", () => {
 
     expect(result).toMatchObject({ keychainItemsRemoved: 2, keychainWarning: null });
     expect(stateGoneFirst).toBe(true);
-    expect(items).toEqual({ [service]: 0, "Orkestrator AI Safe Storage": 1 });
+    expect(items).toEqual({ [current]: 0, [legacy]: 0, [production]: 1, [sameAccount]: 1 });
     expect(securityCalls).toEqual(
       Array.from({ length: 3 }, () => [
         "delete-generic-password",
         "-s",
         "Orkestrator AI — DEV [keychain] Safe Storage",
-        "-a",
-        "Orkestrator AI — DEV [keychain]",
       ]),
     );
   });

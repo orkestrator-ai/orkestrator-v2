@@ -6,18 +6,18 @@ Checked against `main` at `31d0fb06` (2026-10-17); items 1–3 worked on
 
 ## Task analysis
 
-Analysed 2026-11-11 against `main` at `498b68766` (earlier: 2026-10-27 at `863b5782`).
+Analysed 2026-11-13 against `main` at `17d28238c` (earlier: 2026-11-11 at `498b68766`, 2026-10-27 at `863b5782`).
 
 ### Tasks
 
 1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to 0247.
 2. **Surface permanently failing cleanup (Code 2)**: a `disk:report` row for ledger entries that stopped retrying. Status: done.
-3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: open (needs a macOS node, which this Linux node is not; run it with a throwaway *development* profile from `bun run --cwd apps/desktop dev --profile <id>`, not `dev:test`, see decision 15).
+3. **Keychain item removed by `dev:reset` (Code 3)**: the live macOS run. Status: done (2026-11-13 on arktech-mini, macOS 27.2): the run found that Electron 45.2.3 names the item's account `<title> Key`, so the shipped `-s … -a <title>` match removed nothing; `removeProfileKeychainItem` now matches the service alone, and the rerun's `dev:reset` printed `Removed 1 login Keychain item(s).` (decisions 18 and 19). The full launcher start, which waits on a person, is a checklist item.
 4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: done (2026-11-01): no guard; the invariant is documented and pinned by a test (decision 9).
 5. **Retrying exhausted entries (open question)**: should an entry at the attempt cap ever be retried? Status: done (2026-11-01): one more cycle per backend version that never attempted it (decision 10).
 6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: done (2026-11-01): defer external stray deletion until durable ownership proof exists (decision 14).
 
-The folder index row now says what remains: task 3's macOS run.
+Every task is done. The one human-only remainder (task 3 through the real `dev` launcher) is in the manual-test checklist.
 
 ### 1. Test temp-dir leaks
 
@@ -48,6 +48,8 @@ The folder index row now says what remains: task 3's macOS run.
 **Investigation.** The code is in place: `removeProfileKeychainItem` (`apps/desktop/scripts/dev/profile-cleanup.ts:161-190`, `delete-generic-password` at `:186`), `keychainRoots` (`:229`, `:316`, `:371`, `:471`) and `runtimeProfileElectronTitle` (`apps/desktop/electron/runtime-profile.ts:178`). The file has not changed since `7809191f`.
 
 Rechecked 2026-11-11 at `498b68766` on beelink (Linux): the code is unchanged, but the steps were wrong. They started a `dev:test` profile, and `dev:test` is the `agent-test` flavor, which on macOS runs with Chromium's `use-mock-keychain` switch (`chromiumSwitchesForRuntime`, `apps/desktop/electron/runtime-profile.ts`), so it never creates a login Keychain item and the check could never pass. Only the `development` flavor (`apps/desktop/scripts/dev.ts`, started as `bun run --cwd apps/desktop dev --profile <id>`) uses the real Keychain. `dev:stop` and `dev:reset` read the stored `profile.json`, so they act on a development profile of that id too, and its title is the same `runtimeProfileElectronTitle(id)`. The steps in item 3 below now start that script directly (decision 15). The run itself still needs a macOS node.
+
+**Outcome.** Run on 2026-11-13 on arktech-mini (macOS 27.2, build 26B123, arm64; Electron 45.2.3; Bun from `mise exec`) at `main` `17d28238c`; the evidence is under [Keychain run](#keychain-run-macos-2026-11-13). The first `dev:reset` left the item and printed nothing about it, because the item's account is `<title> Key`; after the fix the same steps removed it. No macOS prompt appeared at any step.
 
 **Decisions.**
 
@@ -265,9 +267,11 @@ What remains is a live macOS run of the Keychain change.
    Linux host (omarchy-hp) against a seeded throwaway data directory printed
    `1 stopped retrying, 1 retrying (pending: worktree 1, branch 1; last errors: worktree: EACCES)`.
 3. Remove a profile's `safeStorage` Keychain item when `dev:reset` removes the
-   profile. **Code done 2026-10-26; live macOS run owed.** Electron stores the
-   key as the generic password `<app name> Safe Storage`, account
-   `<app name>` (`ElectronBrowserMainParts::PostCreateMainMessageLoop`), and
+   profile. **Code done 2026-10-26; live macOS run done and fixed
+   2026-11-13.** Electron stores the key as the generic password
+   `<app name> Safe Storage`; the account was believed to be `<app name>`
+   (`ElectronBrowserMainParts::PostCreateMainMessageLoop`), but Electron
+   45.2.3 writes `<app name> Key` (the 2026-11-13 run), and
    a profile's app name is its `electronTitle`. On 2026-10-17 the run host had
    292 such items. Agent-test profiles on macOS no longer create one
    (`use-mock-keychain`, see
@@ -275,8 +279,9 @@ What remains is a live macOS run of the Keychain change.
    `development` profiles still do.
 
    Built: `removeProfileKeychainItem` (`apps/desktop/scripts/dev/profile-cleanup.ts`)
-   runs `security delete-generic-password -s "<title> Safe Storage" -a "<title>"`
-   until it exits 44 (not found), at most 8 times, each call bounded to 15 s
+   runs `security delete-generic-password -s "<title> Safe Storage"` (until
+   2026-11-13 also `-a "<title>"`, which never matched Electron 45's
+   `<title> Key` account; decision 19) until it exits 44 (not found), at most 8 times, each call bounded to 15 s
    so a locked Keychain's unlock dialog cannot stall unattended start-up
    pruning. `removeProfile` calls it
    only after the profile state is removed, so `dev:reset`, `dev:prune` and
@@ -296,7 +301,8 @@ What remains is a live macOS run of the Keychain change.
    under another root, a locked Keychain, and the prune outcome. The suite's command runner now records `security` calls, so
    no test can reach a host Keychain.
 
-   Still owed (needs a macOS host; omarchy-hp and beelink are Linux): start a
+   Done 2026-11-13 (see [Keychain run](#keychain-run-macos-2026-11-13)); it
+   found and fixed an account mismatch. The steps as first written: start a
    development profile with
    `bun run --cwd apps/desktop dev --profile qa-keychain-0023`
    (main awaits `safeStorage` before its first window, which creates the
@@ -323,8 +329,33 @@ What remains is a live macOS run of the Keychain change.
 
 ### Qualification
 
-Only the macOS Keychain run in item 3. Tasks 4–6 are covered by unit tests;
+The macOS Keychain run in item 3 was done on 2026-11-13. Tasks 4–6 are covered by unit tests;
 no live backend was run for them (decision 13 says why none is owed). The 2026-10-17 results are below.
+
+## Keychain run (macOS, 2026-11-13)
+
+arktech-mini, macOS 27.2 (26B123) arm64, Electron 45.2.3 (the version
+`bun.lock` resolves, unpacked from the host's Electron download cache into
+this worktree's `node_modules`), at `main` `17d28238c`. Throwaway profile
+`qa-keychain-0023-125021`, title `Orkestrator AI — DEV [qa-keychain-0023-125021]`.
+Only that title's items were queried or deleted; the production item was not
+read (decision 18).
+
+| Step | Observed |
+| --- | --- |
+| Before: `security find-generic-password -s "<title> Safe Storage" -a "<title>"` | Exit 44: no item, and no profile directory. |
+| Create the profile with the launcher's own `resolveRuntimeProfile` and `initializeProfile` (flavor `development`) | `profile.json` and sentinel under `~/Library/Application Support/orkestrator-v2-dev/profiles/qa-keychain-0023-125021/`. |
+| Real Electron with `app.setName("<title>")` at module top level (as `main.ts` does) and `userData` the profile's `data`, then `safeStorage.encryptString` | Exit 0 after 1 s, round trip true, no prompt. |
+| `find-generic-password -s "<title> Safe Storage" -a "<title>"` | Exit 44. |
+| `find-generic-password -s "<title> Safe Storage"` | Exit 0: class `genp` in `login.keychain-db`, service `<title> Safe Storage`, **account `<title> Key`**. |
+| `mise run dev:reset --profile qa-keychain-0023-125021`, code at `17d28238c` | Exit 0: `Reset profile …: removed 0 exact-owner Docker container(s), 0 volume(s), 0 network(s) and disposable profile state.` No Keychain text, no warning. The item was still there (exit 0). |
+| Fix: `removeProfileKeychainItem` deletes by `-s "<title> Safe Storage"` alone (decision 19); `profile-cleanup.test.ts`'s fake Keychain now keys on service and account | The new test passes, and fails with the old `-a "<title>"` argument restored. |
+| Recreate the same profile, run Electron again (it reused the existing item), then `mise run dev:reset --profile qa-keychain-0023-125021` with the fix | Exit 0: `… disposable profile state. It can be recreated with mise run dev:test. Removed 1 login Keychain item(s).` |
+| After: `find-generic-password -s "<title> Safe Storage"`, and `-a "<title> Key"` | Both exit 44. |
+
+The empty reset skeleton (`<profile>/data`) was then removed by its exact
+path with `rmdir`. The throwaway scripts stayed in the ignored
+`output/agent-testing/keychain-0023/`.
 
 ## Full-suite temp sweep (2026-10-26)
 
@@ -667,6 +698,39 @@ needs a macOS node, so nothing in this file could be run here.
     `environment-move.test.ts`) use `orkestrator-`/`ork-env-move-` prefixes
     only tests create. Chose to leave them: the name is the same proof the
     other sweeps accept. No change was made.
+
+Decisions made on 2026-11-13 on arktech-mini (macOS 27.2) against `main` at
+`17d28238c`, while running task 3.
+
+18. **How the run made the Keychain item (task 3).** Options: (a) the real
+    launcher, `bun run --cwd apps/desktop dev --profile <id>`; (b) the
+    launcher's own profile functions plus a minimal Electron main that names
+    the app as `main.ts` does and calls `safeStorage`. Chose (b) for the
+    agent run, and moved (a) to the manual-test checklist. (a) on a fresh
+    development profile reads the production `config.json` (the dev worktree
+    location), opens the first-run agent platform chooser, downloads
+    toolchains, raises the macOS Files and Folders prompts and starts a
+    backend with the real home directory before `safeStorage` is reached
+    (`main.ts`); each of those needs a person or breaks this run's rules
+    against reading the production data directory and agent homes. (b)
+    exercises everything the task is about: Electron's item naming (the
+    same `app.setName` call, the same Electron build), the `security` exit
+    codes and the real `dev:reset`. Cons: the window, backend and launcher
+    path were not part of the run. The production item was not queried even
+    read-only, because the ticket allowed touching only the item the
+    throwaway profile created; the unit test "reset deletes only the
+    profile's own Safe Storage items" covers it.
+19. **How to match the item (task 3, revisits decision 5).** Options: (a)
+    service and account, with the account `<title> Key`; (b) service and each
+    known account (`<title>` and `<title> Key`), one loop per account; (c)
+    the service alone. Chose (c). Decision 5's premise, that Electron names
+    the account after the app, is false for Electron 45.2.3, and (a) or (b)
+    would silently leak again the next time Electron changes it, which is
+    exactly how the shipped code failed: it reported success. The service,
+    `<title> Safe Storage`, already names the profile's own title, and the
+    title and owner-root guards are unchanged, so no other item can share
+    it. Cons: an item some other program wrote under that exact service
+    would also be removed; nothing does.
 
 ## Related
 

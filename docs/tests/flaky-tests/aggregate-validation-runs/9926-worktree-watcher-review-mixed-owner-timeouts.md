@@ -60,3 +60,22 @@ Every owner ran once with `--parallel=1 --only-failures --reporter=junit`; backe
 - The cause is unconfirmed. Timeouts and late child/SQLite errors do not establish slow spawning, a particular product race, or a need to raise a timeout. The original failed/incomplete aggregate remains evidence.
 - Thirteen complete owners remained non-green alone. The report retains every failed name and available count; these owners are not classified here as newly confirmed flakes.
 - The final-source aggregate attempt at `8948619686981e7b237f879192ac6ffc86b227c6` expired admission with exit 75 before any tests ran; it supplies no test counts or full-suite pass.
+
+## Recurrence 2026-11-13: agent mail store size benchmark
+
+- **Test:** `agent mail store size benchmark > rejects malformed, empty, missing and nonpositive sizes`
+  (`apps/backend/tests/agent-mail-store-size-bench.test.ts`).
+- **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; head `83a9be859` on
+  `rootless-docker-copy-1c9f451a929a-r1`, which changes neither the test nor
+  its script nor anything the script imports. `mise run flaky:recurrence -- 9926 --base 17d28238c098b4443d1289df5c4ed75e7cc2802e`
+  answered open: record as a recurrence.
+- **Host:** beelink2, Linux x86_64, Bun 1.4.4, load average about 104.
+- **Aggregate:** `mise run test:logged -- --name address-default-tests -- mise run test`;
+  backend `test:workspace` 18163 pass, 1 fail (this test, deadline 5,000 ms
+  exceeded at 5011.33 ms) across 1279 files in 748.48 s. The runner's
+  rerun-alone step was still queued for host capacity at the 1800 s group
+  deadline.
+- **Alone:** `NODE_ENV=test mise run test:logged -- --name rerun-agent-mail-bench-2 -- bun --no-env-file --cwd=apps/backend test --preload ../../tests/setup-node.ts tests/agent-mail-store-size-bench.test.ts`
+  passed (3 tests, 10.7 s). One earlier alone run at the same load failed
+  the same way: the test spawns the benchmark six times, and one spawn took
+  about 1.8 s on that host.

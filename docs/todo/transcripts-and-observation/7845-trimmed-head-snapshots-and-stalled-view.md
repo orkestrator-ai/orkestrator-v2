@@ -6,9 +6,9 @@ Analysed 2026-11-11 against `main` at `14df96544`, with the measurements of to-d
 
 ### Tasks
 
-1. **Find why a recovered head row over about a million characters reaches readers as whole snapshots**, and send deltas again or bound the cost. Status: open.
-2. **Find why the view stops moving once the row passes about 1.7 million characters**, and make a streaming view advance at least every few seconds. Status: open.
-3. **Measure before and after with the loopback spec's `trimmed-head` scenario.** Status: open (depends on 1 and 2).
+1. **Find why a recovered head row over about a million characters reaches readers as whole snapshots**, and send deltas again or bound the cost. Status: done (2026-11-13).
+2. **Find why the view stops moving once the row passes about 1.7 million characters**, and make a streaming view advance at least every few seconds. Status: done (2026-11-13).
+3. **Measure before and after with the loopback spec's `trimmed-head` scenario.** Status: done (2026-11-13).
 
 ### 1. Whole snapshots for a recovered head row over about a million characters
 
@@ -72,7 +72,54 @@ Analysed 2026-11-11 against `main` at `14df96544`, with the measurements of to-d
 
 ## Current state
 
-Found 2026-11-11 by 6260 task 3. The one-second recovery interval is right and stays; what fails is delivery to readers above about a million characters, and then the view itself above about 1.7 million.
+Found 2026-11-11 by 6260 task 3. The one-second recovery interval is right and stays; what failed was delivery to readers above about a million characters, and then the view itself above about 1.7 million. Both causes were confirmed and fixed on 2026-11-13 (commit `c4ca3aeee`), and the `trimmed-head` measurement after the fix is below. Nothing agent-buildable is left.
+
+### Confirmed causes
+
+- **Task 1, the 2 MiB key bound.** `native-agent-transcript-delta-bases.test.ts`, "a viewer one view behind a head row over a million characters gets a small patch": a head row of about 3 MB encoded that grows on every read. Before the fix the viewer one view behind got a `snapshot` (the ring had been emptied by `record`, because the superseded view alone cost more than `NATIVE_TRANSCRIPT_DELTA_MAX_KEY_BYTES`); after it, a `delta` whose only change is a part-level patch of the head row, under 4 KB. Two `TranscriptDeltaBases` unit tests pin the new bound ("a base over the key bound replaces the ring rather than emptying it", "a recovered head row over a million characters keeps its base under the default bounds"). All three fail with the old `record` and pass with the fix.
+- **Task 2, recoveries discarded as stale.** `native-agent-service-projection-hashing.test.ts`, "a recovery a newer revision overtook still advances the view": the provider fake holds the exact `messages` read until a newer part-trimmed revision has been polled. Before the fix the view stayed on the previous recovered transcript (the result was dropped because the source token had moved and the recovery entry had been replaced); after it, the view shows the overtaken recovery's transcript at once, and the newer revision's recovery replaces it on its own schedule. "A recovery older than the view it would replace is not committed" pins the other side: a complete snapshot that lands while the read is in flight is not overwritten by it.
+
+### Measurement after the fix (task 3)
+
+Measured 2026-11-13 on beelink (Linux) at `c4ca3aeee`, profile `e10-7845`, started with `--fixture --headless --no-agent-credentials --no-host-seed --agent-platforms claude` and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; stopped and reset afterwards. Command, per run: `ORKESTRATOR_AGENT_TEST_E10_BASELINE=1 E10_SCENARIO=trimmed-head mise run test:logged -- --name e10-trimmed-head -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts conditional-reads-live.spec.ts`, the second run with `E10_READY_CHARS=1300000`; both passed. The "before" rows are 6260's runs at `91cd5308e` (`git show 1fd391e3a:docs/todo/transcripts-and-observation/6260-projection-hashing-measurements.md`); they were not re-run, because the code they measured is unchanged up to this fix. Nine other builds shared the host, so the millisecond columns are indicative only; the answer counts and bytes do not depend on load.
+
+| Run | Window (characters streamed) | Recovery reads | Bridge time per recovery read, mean | Renderer transcript answers per viewer | Renderer bytes per viewer |
+| --- | --- | --- | --- | --- | --- |
+| Before | One viewer, 0.60–1.04 M | 20 in 20.002 s | 7.9 ms | 13 delta, 40 unchanged | 0.76 MB |
+| After | One viewer, 0.60–1.03 M | 20 in 20.001 s | 4.4 ms | 20 delta, 41 unchanged | 0.95 MB |
+| Before | Two viewers, 1.04–1.80 M | 20 in 20.008 s | 12.4 ms | 20 snapshot, 29–33 unchanged | 63 MB |
+| After | Two viewers, 1.03–1.62 M | 20 in 20.002 s | 9.2 ms | 20 delta, 40 unchanged | 0.88–0.95 MB |
+| Before, late start | One viewer, 1.30–1.73 M | 20 in 20.003 s | 15.4 ms | 6 snapshot, 1 delta, 38 unchanged | 17.5 MB |
+| After, late start | One viewer, 1.30–1.73 M | 20 in 20.002 s | 12.9 ms | 20 delta, 40 unchanged | 0.86 MB |
+| Before, late start | Two viewers, 1.73–2.48 M | 20 in 20.009 s | 28.0 ms | 1 snapshot, 39–40 unchanged | 4.8 MB |
+| After, late start | Two viewers, 1.73–2.49 M | 20 in 20.003 s | 21.4 ms | 20 delta, 38–39 unchanged | 0.87 MB |
+
+Over whole 150 s turns after the fix: 138 and 137 recovery reads, reaching 2.98 M and 2.88 M characters. The renderer's round trip was p50 9–11 ms in the default run and 28–34 ms in the late run.
+
+What this answers:
+
+- **Task 1.** Every recovered transcript now reaches every reader as a delta, with one viewer or two, at every size measured (up to 2.49 M characters): about 0.9 MB per viewer in 20 s instead of 17.5–63 MB. With patches the grown head row travels as its appended text.
+- **Task 2.** The view moves once per recovery (20 changes in 20 s per viewer) past 1.7 million characters, where it had moved once in 20 s.
+- The one-second interval still holds: 20 recovery reads in 20 s, and a second reader adds none.
+- The single-base bound (8 MiB) was not reached: a head row of about 4 million characters would reach it, and its readers would get snapshots again. That is a stated bound, not open work.
+
+## Assumptions and decisions
+
+### Task 1: keep the newest base instead of charging only dropped rows
+
+The recommended option was to charge a superseded view only for the rows its successor dropped and let a grown row replace its predecessor. Implemented the second half as stated and kept the charge honest: a base is still charged for every row its successor does not share by object, because the old copy of a grown row is real memory. Instead, the per-key bound now sheds older bases but always keeps the newest one, so a grown row's base replaces the ring rather than emptying it, and a new single-base bound, `NATIVE_TRANSCRIPT_DELTA_MAX_BASE_BYTES` (8 MiB), keeps memory explicitly bounded; the 32 MiB total bound is unchanged. Raising the per-key bound was rejected as the to-do says: it moves the cliff and raises what every streaming session may hold. The delta's size was the open question in the recommended option's cons; the part-level patches clients already negotiate (`patchTranscriptDelta`) answer it once the base is kept, so no protocol change was needed.
+
+### Task 2: compare what the view shows, not tokens
+
+Implemented the recommended option. Each cached view carries a content sequence that moves only when its content does (a held preview, an `unchanged` answer and an artifact overlay keep it). A recovery records the sequence when its read starts and, if a newer revision has superseded it, commits only when the view still shows the same content and a newer recovery is still pending, so it never replaces a complete transcript that landed meanwhile. A superseded recovery that found nothing fuller leaves the retries to the newer one. Not chosen: dropping the held preview after a stale result, which would show the part-trimmed head (the start of the row cut off) while it streams.
+
+### Task 2: no outcome counter
+
+The Investigation suggested logging why each recovery ended, or reproducing it with the provider fake. The provider-fake test reproduces and pins the cause deterministically, and the loopback measurement shows the result, so no counter or log line was added.
+
+### Task 3: after-fix runs only
+
+Ran both recommended runs (default and `E10_READY_CHARS=1300000`) after the fix. The before figures are 6260's runs of the same scenario, unchanged code up to this fix, so they were not taken again on a host shared with nine other builds.
 
 ## Related
 

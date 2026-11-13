@@ -134,7 +134,7 @@ test("the packaged app writes the essential log and reports a clean quit and a k
   const executablePath = packagedAppExecutable(repositoryRoot, process.env);
   expect(
     existsSync(executablePath),
-    `No packaged app at ${executablePath}. Run \`mise run package:mac:unpacked:test\` first.`,
+    `No packaged app at ${executablePath}. Run \`mise run package:${process.platform === "darwin" ? "mac" : "linux"}:unpacked:test\` first.`,
   ).toBe(true);
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-exit-marker-"));
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];

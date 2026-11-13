@@ -28,8 +28,9 @@
  * offset once every entry that had finished before it in the recording has
  * finished, and substitutes each recorded revision with the one the replay's
  * own command printed. It never aborts. A schedule with a write it cannot
- * make (recorded without its content, being over 64 KiB or neither text nor
- * bytes, or outside the test's directories) is refused before anything runs
+ * make (recorded without its content, being over 64 KiB, neither text nor
+ * bytes, or made through a descriptor rather than a path; or outside the
+ * test's directories) is refused before anything runs
  * (`IncompleteScheduleError`), since leaving the write out would replay a
  * different repository and workload.
  *
@@ -282,12 +283,12 @@ export function incompleteWrites(
 ): string[] {
   return entries.flatMap((entry, index) => {
     if ("argv" in entry) return [];
-    if (!entry.write.startsWith(`${recordedRoot}/`))
-      return [`entry ${index} writes outside the recorded test's directories`];
     if (entry.content === undefined && entry.contentBase64 === undefined)
       return [
         `entry ${index} is a write recorded without its content (${entry.skipped ?? "none"})`,
       ];
+    if (!entry.write.startsWith(`${recordedRoot}/`))
+      return [`entry ${index} writes outside the recorded test's directories`];
     return [];
   });
 }

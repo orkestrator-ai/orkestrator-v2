@@ -17,6 +17,10 @@ trigger is in what the services do between those commands. The smallest case
 that still loses events is test 1 cut after its clone, committed as
 `scripts/lost-child-event/in-process.ts` and run by `scratch.ts`. Finding the
 in-process trigger is the new task 3.
+Updated 2026-11-13 after review: `reduction.ts replay` refuses a schedule with
+a write it cannot make, and the probe attributes to a child only the pipes
+and sockets opened across its spawn (see the two review subsections under
+"Assumptions and decisions"). Task statuses are unchanged.
 
 ### Tasks
 
@@ -271,6 +275,23 @@ Test 1 lost events at the same rate with the watch host stubbed (7 in 100 runs a
 ### Task 2: task 3 was added for the in-process ingredient (2026-11-13, rework)
 
 The reduction ends in this repository's backend, so it is not yet a report Bun's maintainers can run. Finding the ingredient is agent work with a concrete next step, so it is a new task here rather than a manual item.
+
+### Task 2: a replay refuses a schedule with a write it cannot make (2026-11-13, review)
+
+Review found that a write recorded without its content (over 64 KiB) was counted as skipped while the replay still exited 0 when every command's exit status matched, so a replay could report itself faithful for a different repository. Options:
+
+- **Refuse such a schedule before running anything (chosen).**
+  - Pros: an incomplete schedule can never produce replay evidence; nothing runs, so there is nothing to tell apart afterwards.
+  - Cons: a test whose writes are too large to record cannot be replayed until the bound is raised.
+- **Run it and exit 1 at the end.**
+  - Pros: the run's timings are still printed.
+  - Cons: the run is not the recorded workload, so its counts mean nothing, yet they are printed as if they did.
+
+`probe.ts` now marks such a write `skipped` (`too-large`, `unsupported-content`, or `unsupported-target` for a write through a descriptor, which it used to drop without a trace), and `replay` throws `IncompleteScheduleError` for it, or for a write outside the recorded test's directories, naming entry indexes only. `tests/unit/lost-child-event-scripts.test.ts` pins this with a fake runner, which spawns nothing. Test 1's three recordings in the rework hold 7 writes, all from the harness and the test under the recorded root and each a few bytes; their replay summaries were not kept, so whether any was counted as skipped then is not recorded. The replay rows above stand on their 0 mismatches; a re-recording would now be refused if a write had been skipped.
+
+### Task 1: the probe attributes only pipes and sockets to a child (2026-11-13, review)
+
+Review found that `track()` took every descriptor that appeared across the spawn as the child's stdio. On macOS, `openFds()`'s own listing holds a directory descriptor that appears in what it reads and is closed when it returns (checked: `/dev/fd` lists it, `fstat` then fails), so a spawn that reused that number hid one of the child's ends from the diff, and a later listing's own descriptor could pass for one; on Linux a pidfd would count too. Bun's `node:child_process` exposes no descriptor on the child's streams (`_handle` and `fd` are absent, checked on Bun 1.4.4), so reading them from the handles, the review's first suggestion, is not possible. Instead `openFds()` keeps only descriptors still open after the listing, `stdioFdsSince()` keeps only pipes and sockets, and a `LOST_CLOSE` record carries `fdsAttributed`, false when the count is not the child's number of piped streams. The `sleep 7` control still reads as before, with three attributed ends (`stdin` already closed polls `NVAL`, the output ends `none`). The macOS and Linux loss records above were taken with the old diff: an end recorded there as polling `IN|HUP` was an open, readable descriptor at EOF, but that it was the child's stdout end, rather than another descriptor opened at the same moment, is not proven for those records.
 
 ### Task 2: the reduction started on Linux before the macOS half of task 1 (2026-11-11)
 

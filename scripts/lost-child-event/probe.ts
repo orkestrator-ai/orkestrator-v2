@@ -32,6 +32,7 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import type { ChildProcess } from "node:child_process";
 import { appendFileSync, fstatSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const mac = process.platform === "darwin";
 if (!mac && process.platform !== "linux") throw new Error("macOS and Linux only");
@@ -179,7 +180,7 @@ export type ScheduleWrite = {
   content?: string;
   contentBase64?: string;
   /** Why the content was not recorded; a replay refuses a schedule with one. */
-  skipped?: "too-large" | "unsupported-content";
+  skipped?: "too-large" | "unsupported-content" | "unsupported-target";
   open: number[];
 };
 export type ScheduleEntry = ScheduleCommand | ScheduleWrite;
@@ -202,13 +203,21 @@ function openNow(): number[] {
 
 /**
  * Records a file write for the replay; a no-op unless recording. Writes over
- * 64 KiB, or of content that is neither a string nor bytes, are recorded as
- * `skipped` without content, and `reduction.ts replay` refuses such a
- * schedule: without that write it would not be the recorded workload.
+ * 64 KiB, of content that is neither a string nor bytes, or to a descriptor
+ * or file handle rather than a path, are recorded as `skipped` without
+ * content, and `reduction.ts replay` refuses such a schedule: without that
+ * write it would not be the recorded workload.
  */
 export function recordWrite(file: unknown, data: unknown): void {
-  if (!recording || typeof file !== "string") return;
-  const entry: ScheduleWrite = { at: Date.now(), write: file, open: openNow() };
+  if (!recording) return;
+  const target =
+    typeof file === "string" ? file : file instanceof URL ? fileURLToPath(file) : undefined;
+  const entry: ScheduleWrite = { at: Date.now(), write: target ?? "", open: openNow() };
+  if (target === undefined) {
+    entry.skipped = "unsupported-target";
+    schedule.push(entry);
+    return;
+  }
   const bytes =
     typeof data === "string"
       ? Buffer.byteLength(data)

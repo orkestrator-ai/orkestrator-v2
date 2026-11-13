@@ -6,6 +6,7 @@ import {
   fstatSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -14,9 +15,13 @@ import path from "node:path";
 import { openFds, stdioFdsSince, type ScheduleEntry } from "../../scripts/lost-child-event/probe";
 import {
   IncompleteScheduleError,
+  incompleteWrites,
+  readSchedule,
   replay,
   type ReplayRunner,
 } from "../../scripts/lost-child-event/reduction";
+
+const PROBE = path.resolve(import.meta.dirname, "../../scripts/lost-child-event/probe.ts");
 
 // The lost-child-event scripts (to-do 6900) are run by hand against a scratch
 // worktree; these pin the parts whose mistakes would make their evidence say
@@ -118,6 +123,48 @@ describe("lost-child-event replay", () => {
     writeFileSync(file, `${JSON.stringify([{ at: 0, cwd: REPO, argv: ["git", "status"] }])}\n`);
     await expect(replay(file, 1, fakeRunner([]), directory)).rejects.toThrow("predates version 2");
   });
+});
+
+describe("lost-child-event schedule recording", () => {
+  test("records a write it cannot keep as skipped, so the replay refuses it", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "lost-child-event-test-"));
+    temporary.push(directory);
+    const scheduleFile = path.join(directory, "schedule.json");
+    const root = path.join(directory, "run");
+    const script = `
+      const { holdUntilClosed, recordWrite } = await import(${JSON.stringify(PROBE)});
+      const root = ${JSON.stringify(root)};
+      recordWrite(root + "/repos/r/small", "dirty\\n");
+      recordWrite(root + "/repos/r/bytes", new Uint8Array([1, 2, 3]));
+      recordWrite(root + "/repos/r/large", "x".repeat(64 * 1024 + 1));
+      recordWrite(root + "/repos/r/object", { not: "content" });
+      recordWrite(7, "through a descriptor");
+      await holdUntilClosed(0);
+    `;
+    const child = spawn(process.execPath, ["-e", script], {
+      env: {
+        ...process.env,
+        LOST_CHILD_PROBE_SCHEDULE: scheduleFile,
+        LOST_CHILD_PROBE_OUT: path.join(directory, "probe.jsonl"),
+      },
+      stdio: "ignore",
+    });
+    const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+    expect(code).toBe(0);
+    const entries = readSchedule(readFileSync(scheduleFile, "utf8"));
+    expect(entries.map((entry) => ("skipped" in entry ? entry.skipped : "kept"))).toEqual([
+      "kept",
+      "kept",
+      "too-large",
+      "unsupported-content",
+      "unsupported-target",
+    ]);
+    expect(incompleteWrites(entries, root)).toEqual([
+      "entry 2 is a write recorded without its content (too-large)",
+      "entry 3 is a write recorded without its content (unsupported-content)",
+      "entry 4 is a write recorded without its content (unsupported-target)",
+    ]);
+  }, 20_000);
 });
 
 describe("lost-child-event probe descriptors", () => {

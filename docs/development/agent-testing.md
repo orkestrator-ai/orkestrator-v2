@@ -1409,10 +1409,13 @@ the app's own process tree with SIGKILL
 ([logging.md](../architecture/logging.md#health-summary-and-the-clean-exit-marker)).
 It does not drive the native save dialog. Outcomes and durations go to
 `output/agent-testing/electron-packaged/evidence-exit-marker-packaged.json`. A pass took
-10 s on arktech-mini (2026-11-13).
+10 s on arktech-mini (macOS, 2026-11-13) and 4.5 s on beelink (Linux x64, against
+`mise run package:linux:unpacked:test`, 2026-11-13). There `scripts/download-bun.sh`
+needs `shasum`, which Arch Linux ships in `/usr/bin/core_perl`, off a non-interactive
+shell's `PATH`; add that directory to `PATH` before building.
 
 ```bash
-mise run package:mac:unpacked:test
+mise run package:mac:unpacked:test   # on Linux: mise run package:linux:unpacked:test
 ORKESTRATOR_AGENT_TEST_RUN_ID=exit-marker-packaged \
 mise run test:logged -- --name exit-marker-packaged -- bunx playwright test \
   --config e2e/agent-testing/playwright.packaged-electron.config.ts exit-marker-packaged-electron.spec.ts

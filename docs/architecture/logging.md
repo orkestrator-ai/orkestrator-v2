@@ -827,7 +827,9 @@ profile: the desktop's essential log file appears under `logs/essential/` with m
 `0600`, a bundle read through `plan_diagnostics_bundle` and `read_diagnostics_bundle`
 arrives whole and holds it, a normal quit is followed by `previous-run` `clean`
 (`info`), and a SIGKILL of the app's process tree by `previous-run` `crashed` (`warn`).
-It passed on an unsigned local macOS build (macOS 27.2, arm64) on 2026-11-13. The native
+It passed on an unsigned local macOS build (macOS 27.2, arm64) on 2026-11-13, and the
+same day on a `package:linux:unpacked:test` build on beelink (Arch Linux, kernel 7.1.8,
+x64): mode `0600`, a 9,246-byte bundle in one piece, `clean` then `crashed`. The native
 save dialog a release candidate shows for the bundle is a manual check.
 
 ## The diagnostics bundle
@@ -914,7 +916,9 @@ checks both paths between two `dev:test` profiles, with the leaf's bundle made a
 the leaf's bundle arrived whole through Settings (planned in 1.4 s, saved in 0.3 s) and
 through `--node` (1.8 s), and the command node refused the leaf's plan. It passed again
 the same day once that check required exit status 3 with `not-found` (planned in 0.4 s,
-saved in 0.2 s, `--node` in 0.3 s). Two profiles on
+saved in 0.2 s, `--node` in 0.3 s), and a third time on fresh profiles for the
+review of that change (planned in 0.4 s, saved in 0.1 s, `--node` in 0.3 s; the other
+node's plan refused with exit status 3 and `not-found`). Two profiles on
 one host share loopback, so a real network route between machines is not covered.
 
 ## Command failures

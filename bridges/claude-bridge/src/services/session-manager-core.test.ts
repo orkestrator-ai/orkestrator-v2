@@ -807,7 +807,7 @@ describe("rate_limit_event", () => {
     }
   });
 
-  test("ignores a structured response while its session is being deleted", async () => {
+  test("ignores a structured response while its session is being closed", async () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
     let parsed = false;
     const getStructuredUsage = mock(

@@ -192,3 +192,7 @@ public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.g
 - **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
 
 No assertion, deadline, retry or skip was changed. The cause remains unconfirmed.
+
+## Recurrence (2026-11-13)
+
+On desktop this time, `a paused Claude question stays paused across a reload, then resumes and answers` (`e2e/ClaudeInteractions.spec.ts:100`) failed with `apiRequestContext.fetch: Request context disposed`. `mise run test:logged -- --name browser-rerun2 -- mise run test:browser` on beelink (Linux) at load about 12 to 30, base `17d28238c098b4443d1289df5c4ed75e7cc2802e` (`mise run flaky:recurrence` answered open), branch `remove-dead-bridge-be98778b92d1-r1` at `3d8c39043` (7571 removals), which changes none of the spec's components. The component suite reported 1,726 passed, 4 failed and 154 skipped (21.2 min). The four failures were this case and its sibling cases 1012, 0252 and 6460. The unchanged owners (`ToolGroupFold.spec.ts`, `ClaudeInteractions.spec.ts`, `CloseRetention.spec.ts`) then passed together with one worker: `mise run test:logged -- --name browser-owners-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/ClaudeInteractions.spec.ts e2e/CloseRetention.spec.ts --workers=1` (251.8 s). Evidence: `orkestrator-test-run.qZ6kD5/browser-rerun2.log.gz` under the host temporary directory.

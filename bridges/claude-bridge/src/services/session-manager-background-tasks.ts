@@ -13,6 +13,10 @@ import { sessions } from "./session-manager-core.js";
 import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
 import type { ClaudeRuntime } from "./session-manager-runtime.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  backgroundTasksForSnapshot,
+  LIVE_BACKGROUND_TASK_STATUSES,
+} from "./background-task-snapshot.js";
 
 const log = createLogger("bridge.claude");
 
@@ -29,12 +33,8 @@ function provisionalBackgroundTaskId(toolUseId: string): string {
   return `${PROVISIONAL_BACKGROUND_TASK_PREFIX}${toolUseId}`;
 }
 
-/** Statuses from which a background task can still be doing work. */
-export const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>([
-  "pending",
-  "running",
-  "paused",
-]);
+// Defined beside the snapshot projection, which needs it without a cycle.
+export { LIVE_BACKGROUND_TASK_STATUSES };
 
 /**
  * The summary Claude Code puts on each task its resume scan marks.
@@ -736,7 +736,7 @@ export function emitBackgroundTaskSnapshot(session: SessionState): void {
   eventEmitter.emit({
     type: "session.updated",
     sessionId: session.id,
-    data: { backgroundTasks: session.backgroundTasks },
+    data: { backgroundTasks: backgroundTasksForSnapshot(session.backgroundTasks) },
   });
 }
 

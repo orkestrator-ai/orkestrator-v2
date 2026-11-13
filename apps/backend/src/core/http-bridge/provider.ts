@@ -789,9 +789,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     if (sessionResponse.status === 404) return { status: "missing", messages: [] };
     assertOk(sessionResponse, `${this.agent} interactive session read`);
     const payload = asRecord(
-      await boundedJson(sessionResponse, `${this.agent} interactive session read`, {
-        remaining: 512 * 1024,
-      }),
+      await boundedJson(
+        sessionResponse,
+        `${this.agent} interactive session read`,
+        sessionSnapshotBudget(this.agent, 512 * 1024),
+      ),
     );
     const status = payload?.status;
     if (!payload || (status !== "idle" && status !== "running" && status !== "error")) {

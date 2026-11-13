@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
+import { backgroundTasksForSnapshot } from "../services/background-task-snapshot.js";
 import { claudeReportedPolicy, claudeTurnPolicy } from "../services/claude-query-config.js";
 import { claudeSandboxRefusal } from "../services/claude-execution-sandbox.js";
 import {
@@ -434,7 +435,8 @@ session.get("/:id", async (c) => {
       sessionData.status === "running" && sessionData.latestTurnGeneration !== undefined
         ? String(sessionData.latestTurnGeneration)
         : undefined,
-    backgroundTasks: sessionData.backgroundTasks ?? {},
+    // Bounded: the backend polls this resource every two seconds per tab.
+    backgroundTasks: backgroundTasksForSnapshot(sessionData.backgroundTasks),
     retainedContinuationRequestIds: Array.from(sessionData.retainedContinuationRequestIds ?? []),
     completionBlockedByBackgroundTasks: sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,

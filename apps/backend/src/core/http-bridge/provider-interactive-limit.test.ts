@@ -30,6 +30,28 @@ function bridge(connection: BridgeConnection, body: Record<string, unknown>) {
 const messagesUrls = (requests: Array<{ url: string }>) =>
   requests.map((request) => request.url).filter((url) => url.includes("/messages"));
 
+describe("interactive session resource budget", () => {
+  test("accepts a Claude session resource past 512 KiB", async () => {
+    // The same resource the observe and steer reads take at 16 MiB; a long
+    // background-task history outgrew the 512 KiB this read used to allow.
+    const { provider } = httpProvider((url) => {
+      const { pathname } = new URL(url);
+      if (pathname.endsWith("/messages")) return Response.json({ messages: rows(1) });
+      if (pathname.endsWith("/runtime-health") || pathname.endsWith("/init")) {
+        return new Response(null, { status: 404 });
+      }
+      return Response.json({
+        status: "idle",
+        revision: 1,
+        structuredOutput: { report: "x".repeat(600 * 1024) },
+      });
+    }, claudeConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+    expect(snapshot.status).toBe("idle");
+  });
+});
+
 describe("interactive snapshot read limit (TX-2)", () => {
   for (const connection of [claudeConnection, codexConnection, piConnection]) {
     describe(connection.agent, () => {

@@ -274,6 +274,9 @@ export function fetchSessionSnapshot(
   return bridgeFetch(connection, sessionSnapshotPath(connection.agent, sessionId), {}, fetchImpl);
 }
 
+/** The most a Claude bridge's whole session resource may decode to. */
+export const CLAUDE_SESSION_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
+
 /**
  * Byte budget for a `sessionSnapshotPath` read.
  *
@@ -281,13 +284,19 @@ export function fetchSessionSnapshot(
  * it carries `structuredOutput` (arbitrary agent-authored JSON) and
  * `backgroundTasks`, neither of which the dedicated `/status` responses return.
  * Those have no useful small bound, so Claude gets the same allowance the
- * transcript read uses; every other bridge keeps the default.
+ * transcript read uses; every other bridge keeps `otherAgents`, the default
+ * unless the caller has always allowed its `/status` read more.
+ *
+ * Every reader of Claude's session resource must take its budget from here. A
+ * reader that set its own smaller cap failed the tab outright ("claude session
+ * state read is oversized") once a long session's background-task history
+ * outgrew it, while the steer and observe reads of the same resource worked.
  */
-export function sessionSnapshotBudget(agent: ProviderAgent): { remaining: number } {
-  return {
-    remaining:
-      agent === "claude" ? 16 * 1024 * 1024 : AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
-  };
+export function sessionSnapshotBudget(
+  agent: ProviderAgent,
+  otherAgents: number = AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
+): { remaining: number } {
+  return { remaining: agent === "claude" ? CLAUDE_SESSION_SNAPSHOT_MAX_BYTES : otherAgents };
 }
 
 /**

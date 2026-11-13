@@ -73,6 +73,7 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  structuredReviewBlockedFailure,
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
@@ -5063,6 +5064,27 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           session,
           parsed.error,
         );
+        return;
+      }
+      const blocked = structuredReviewBlockedFailure(parsed.data);
+      if (blocked !== null) {
+        // A consolidator that could not review its inputs fails the review,
+        // as the graph engine does. Its empty findings must never read as a
+        // clean report that makes the review ready or queues the auto-PR.
+        // No report is kept, so a retry consolidates again on a fresh session.
+        // The failure and the result's outbox marker commit together before
+        // the slot is consumed.
+        session.status = "failed";
+        session.error = blocked;
+        session.completedAt = nowIso();
+        workflow.phase = "failed";
+        workflow.error = blocked;
+        settleStepRuntime(workflow, "consolidate");
+        delete workflow.activeRequest;
+        this.stageWorkflowResultConsumption(workflow, request);
+        await this.save(workflow, token);
+        await this.consumePendingResults(workflow, token);
+        await this.release(workflow, token);
         return;
       }
       const provenance = deriveConsolidatedProvenance(parsed.data, workflow.reviewers);

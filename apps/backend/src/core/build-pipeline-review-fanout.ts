@@ -56,6 +56,7 @@ import type {
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  structuredReviewBlockedFailure,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
@@ -1529,6 +1530,11 @@ export class BuildPipelineReviewFanout {
     if (!parsed.success) {
       return this.prepareConsolidationRepair(pipeline, state, parsed.error);
     }
+    // A consolidator that could not review its inputs fails the stage, as the
+    // graph engine does. Its empty findings must never read as a clean review
+    // that sends the build straight to Verify.
+    const blocked = structuredReviewBlockedFailure(parsed.data);
+    if (blocked !== null) return { kind: "failed", error: blocked };
     const provenance = deriveConsolidatedProvenance(parsed.data, state.reviewers);
     if (provenance.issues.length > 0) {
       return this.prepareConsolidationRepair(

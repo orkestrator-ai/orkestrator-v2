@@ -28,7 +28,10 @@ import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import { GraphTypeLibrary, type GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
-import type { ReviewContractValidationIssue } from "@orkestrator/protocol/structured-review";
+import {
+  structuredReviewBlockedFailure,
+  type ReviewContractValidationIssue,
+} from "@orkestrator/protocol/structured-review";
 import {
   resolveUnattendedReviewerInteractions,
   unattendedBranchInteraction,
@@ -567,6 +570,24 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       workLabel: "work",
       stageLabel: "step",
     });
+  }
+
+  /**
+   * A review report that says the reviewer could not review fails the step
+   * rather than becoming an artifact: downstream nodes (consolidation) would
+   * otherwise count its empty findings as a clean review.
+   */
+  resultFailure(_branch: AgentBranchRecord, data: unknown): string | null {
+    const results = this.results;
+    if (!results || data === null || typeof data !== "object") return null;
+    const values = data as Record<string, unknown>;
+    for (const slot of results.slots) {
+      if (slot.definition.validator !== "structured-review-report") continue;
+      if (!Object.hasOwn(values, slot.port.name)) continue;
+      const failure = structuredReviewBlockedFailure(values[slot.port.name]);
+      if (failure !== null) return failure;
+    }
+    return null;
   }
 
   /**

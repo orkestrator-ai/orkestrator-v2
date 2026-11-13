@@ -145,8 +145,18 @@ export function parseAskReport(text: string): { choice: string } | { error: stri
 export interface AskQuestionMoment {
   /** The worker's delegation was in the coordinator's snapshot of that read. */
   delegationOpen: boolean;
-  /** The coordinator had gone idle between the dispatch and that read. */
+  /**
+   * The coordinator's phase read idle for two reads in a row between the
+   * dispatch and that read. One idle read is not a turn end: a provider can
+   * drop to idle between two steps of the same turn.
+   */
   idleBefore: boolean;
+  /**
+   * Coordinator turns finalized (a fresh `contextUsage.turns` id) between the
+   * dispatch and that read. Catches a turn that ended, and the next that
+   * started, between two reads, which no phase sample shows.
+   */
+  turnsEndedBefore: number;
 }
 
 export function evaluateAskScenario(input: {
@@ -205,10 +215,17 @@ export function evaluateAskScenario(input: {
     },
     {
       name: "asked-in-the-same-turn",
-      passed: input.moment !== undefined && !input.moment.idleBefore,
-      ...(input.moment?.idleBefore
-        ? { detail: "the coordinator went idle between the launch and the question" }
-        : {}),
+      passed:
+        input.moment !== undefined &&
+        !input.moment.idleBefore &&
+        input.moment.turnsEndedBefore === 0,
+      ...(input.moment && input.moment.turnsEndedBefore > 0
+        ? {
+            detail: `${input.moment.turnsEndedBefore} coordinator turn(s) finalized between the dispatch and the question`,
+          }
+        : input.moment?.idleBefore
+          ? { detail: "the coordinator went idle between the launch and the question" }
+          : {}),
     },
     {
       name: "answer-reported",

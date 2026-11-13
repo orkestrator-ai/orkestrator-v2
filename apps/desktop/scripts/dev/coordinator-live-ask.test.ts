@@ -103,6 +103,13 @@ type Script = {
   askBeforeLaunch?: boolean;
   /** The coordinator ends its turn after the launch and asks in a later one. */
   splitTurns?: boolean;
+  /**
+   * As `splitTurns`, but the launch turn ends and the next starts between two
+   * reads: no read shows idle, only the launch turn's usage record shows it.
+   */
+  splitTurnsBetweenReads?: boolean;
+  /** One read shows idle between the launch and the question, in the same turn. */
+  transientIdle?: boolean;
   /** The option labels the model used. */
   labels?: string[];
   /** The coordinator never asks. */
@@ -130,6 +137,8 @@ function fixture(script: Script = {}) {
   let workerPhase = "working";
   let workerReads = 0;
   let wakeReads = 0;
+  /** Finalized turns' usage records; one predates the scenario. */
+  const turnIds = ["earlier-turn"];
 
   const launch = () => {
     environments.push({ id: "worker", name: `ask-${token}` });
@@ -164,8 +173,24 @@ function fixture(script: Script = {}) {
       if (step === 3) launch();
     } else if (script.splitTurns) {
       if (step === 1) launch();
-      if (step === 2) phase = "idle";
+      if (step === 2) {
+        phase = "idle";
+        turnIds.push("launch-turn");
+      }
       if (step === 4) {
+        phase = "working";
+        ask();
+      }
+    } else if (script.splitTurnsBetweenReads) {
+      if (step === 1) launch();
+      if (step === 2) {
+        turnIds.push("launch-turn");
+        ask();
+      }
+    } else if (script.transientIdle) {
+      if (step === 1) launch();
+      if (step === 2) phase = "idle";
+      if (step === 3) {
         phase = "working";
         ask();
       }
@@ -180,6 +205,7 @@ function fixture(script: Script = {}) {
         content: `Asked.\n${ASK_REPORT_MARKER} ${JSON.stringify({ choice: script.reported ?? chosen })}`,
       });
       phase = "idle";
+      turnIds.push("question-turn");
     }
   };
 
@@ -232,6 +258,7 @@ function fixture(script: Script = {}) {
             turn: { phase: wakeReads > 0 ? "working" : phase },
             messages: [...messages],
             interactions: interactions.map((item) => ({ ...item })),
+            contextUsage: { turns: turnIds.map((turnId) => ({ turnId })) },
           };
         } else {
           workerReads += 1;
@@ -324,6 +351,19 @@ describe("ask scenario orchestration", () => {
   test("a question asked in a later turn than the launch fails", async () => {
     const { checks } = await run({ splitTurns: true });
     expect(failed(checks)).toEqual(["asked-in-the-same-turn"]);
+  });
+
+  test("a later-turn question fails even when no read caught the coordinator idle", async () => {
+    const { checks } = await run({ splitTurnsBetweenReads: true });
+    expect(failed(checks)).toEqual(["asked-in-the-same-turn"]);
+    expect(checks.find((item) => item.name === "asked-in-the-same-turn")?.detail).toContain(
+      "1 coordinator turn(s) finalized",
+    );
+  });
+
+  test("one idle read between the launch and the question, in the same turn, still qualifies", async () => {
+    const { checks } = await run({ transientIdle: true });
+    expect(checks.filter((item) => !item.passed)).toEqual([]);
   });
 
   test("a coordinator that reports the other option fails", async () => {

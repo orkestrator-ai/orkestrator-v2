@@ -3566,9 +3566,15 @@ the second option, so a model that takes the first or its own recommendation
 is caught, then lets the worker's wake run and settle. It passes when there is
 exactly one `launch_environment` call with `delivery: "async"`, exactly one
 question was answered, the worker's delegation was already open when the
-question reached the harness, the coordinator did not go idle between the
-launch and the question, the reported choice is the answered option, and no
-approval or other question reached the harness. A question that does not
+question reached the harness, the question came in the launch's own turn, the
+reported choice is the answered option, and no
+approval or other question reached the harness. "The launch's own turn" is
+judged from turn identity first: no coordinator turn may have been finalized
+(a new `contextUsage.turns` id) between the dispatch and the question, which
+catches a turn that ended, and the next that started, between two reads. The
+phase is a second signal, counted only when it reads idle twice in a row, the
+rule the turn watch settles on, because a provider can drop to idle for one
+read between two steps of the same turn. A question that does not
 offer both labels is not answered: it is cancelled and fails as escaped. Pi
 and Cursor raise no question interactions, so they are skipped with that
 reason (`ASK_QUESTION_SUPPORT`); Codex parks a question only with

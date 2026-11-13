@@ -44,7 +44,17 @@ export async function runAskScenario(input: {
   };
   let moment: AskQuestionMoment | undefined;
   let dispatchedAt = Number.POSITIVE_INFINITY;
+  /**
+   * Turn ids the coordinator had finalized before the dispatch, from the read
+   * `coordinatorTurn` takes just before it dispatches. A bridge publishes a
+   * turn's usage record when it finalizes the turn, so an id outside this set
+   * is a turn that ended after the dispatch: durable evidence that survives a
+   * turn ending and the next starting between two reads.
+   */
+  let baselineTurnIds: Set<string> | undefined;
+  const endedTurnIds = new Set<string>();
   let sawActive = false;
+  let idleReads = 0;
   let idleBefore = false;
   /** The observation whose read first carried the question. */
   let questionObservation: number | undefined;
@@ -54,16 +64,28 @@ export async function runAskScenario(input: {
       if (answers && !moment) {
         // The delegation is read in the same pass as this projection; it is
         // checked once that pass's observation is recorded (below).
-        moment = { delegationOpen: false, idleBefore };
+        moment = { delegationOpen: false, idleBefore, turnsEndedBefore: endedTurnIds.size };
         questionObservation = watch.observations.length;
       }
       return answers;
     },
     onProjection: (projection) => {
       if (Date.now() < dispatchedAt || moment) return;
+      const turnIds = (projection?.contextUsage?.turns ?? []).map((turn) => turn.turnId);
+      if (!baselineTurnIds) {
+        // The pre-dispatch read: the turn has not started yet.
+        baselineTurnIds = new Set(turnIds);
+        return;
+      }
+      for (const id of turnIds) if (!baselineTurnIds.has(id)) endedTurnIds.add(id);
+      // Idle counts as the turn ending only once it holds for two reads, the
+      // rule `coordinatorTurn` settles on: a provider can drop to idle for one
+      // read between two steps of the same turn.
       const phase = projection?.turn.phase ?? "idle";
-      if (phase !== "idle") sawActive = true;
-      else if (sawActive) idleBefore = true;
+      if (phase !== "idle") {
+        sawActive = true;
+        idleReads = 0;
+      } else if (sawActive && ++idleReads >= 2) idleBefore = true;
     },
   });
   const name = askWorkerName(probe);

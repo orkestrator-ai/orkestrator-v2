@@ -458,3 +458,33 @@ reported `open`: record it as a recurrence.
 - **Hypothesis (unconfirmed):** as above, the asynchronous daemon start can
   lose the race with the follow-up `status` call when the host is loaded; a
   one-file rerun straight after a loaded aggregate is not free of that load.
+
+## macOS diagnostics and lost-child-event review preparation recurrence — 2026-11-13
+
+`mise run flaky:recurrence 1253 --base 17d28238c098b4443d1289df5c4ed75e7cc2802e`
+reported `open`: record it as a recurrence.
+
+- **Branch / base:** `macos-bun-diagnostics-6631cdfc10e4-r1` at `068e81e88`,
+  merge base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch changes
+  docs, e2e specs and configs, `scripts/lost-child-event/` and the source-guard
+  baseline; nothing under `apps/backend`. The failure triage gave
+  `undetermined` with reason `global-change` (the changed path it named was
+  `e2e/agent-testing/playwright.diagnostics-across-nodes.config.ts`); the owner,
+  `git-fsmonitor.ts` and `ProjectGitService` are unchanged.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups; 231.2 s).
+- **Failure:** the same signature as the 2026-11-11 and 2026-11-12
+  recurrences: `git fsmonitor > project-home status auto-starts and preserves
+  the configured daemon` failed at 11,299.27 ms because `git fsmonitor--daemon
+  status` rejected at `git-fsmonitor.test.ts:281` after `status` returned.
+- **Suite counts:** backend 18,299 tests across 1,279 files (180.65 s), 1
+  fail; web 14,732 tests across 1,015 files, 14,722 pass; cli 535 tests across
+  40 files; root, bridges and the Codex protocol lockfile groups passed.
+- **Isolated reruns:** the runner's own one-file rerun straight after the
+  aggregate also failed (16.8 s). On the same host at load average about 3, the
+  address-findings stage ran the unchanged owner alone twice on `857cc2a7b`
+  (`mise run test:logged -- --name fsmonitor-alone-N -- bun --cwd=apps/backend
+  test src/core/git-fsmonitor.test.ts --parallel=1`): both passed (9.3 s and
+  12.5 s).
+- **Hypothesis (unconfirmed):** as above, the asynchronous daemon start loses
+  the race with the follow-up `status` call on a loaded host.

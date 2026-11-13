@@ -4,7 +4,7 @@ import type {
   ReviewScopedFile,
   StructuredReviewReport,
 } from "./types.js";
-import { parseStructuredReviewReport } from "./validation.js";
+import { parseStructuredReviewReport, structuredReviewBlockedReason } from "./validation.js";
 
 function text(value: string): string {
   return value.length > 0 ? value : "Not provided.";
@@ -75,6 +75,7 @@ export function formatStructuredReviewReport(value: unknown): string {
     allowLegacyTestResults: true,
   });
   const commit = report.reviewScope.commit;
+  const blockedReason = structuredReviewBlockedReason(report);
   const failures =
     report.testResults.failures.length > 0
       ? report.testResults.failures
@@ -89,6 +90,7 @@ export function formatStructuredReviewReport(value: unknown): string {
 
   return [
     "## Review Scope",
+    ...(blockedReason === null ? [] : [bullet("Could not review", blockedReason)]),
     bullet("Target branch", report.reviewScope.targetBranch),
     bullet("Base ref", report.reviewScope.baseRef),
     bullet("Commit created", commit ? `${text(commit.sha)} — ${text(commit.subject)}` : "None."),

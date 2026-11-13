@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { pipelineCriteriaStatusWord } from "@orkestrator/protocol/build-pipeline-criteria";
 import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import { DELIVERY_POLICY_LABELS, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import { reviewerBlockedReason } from "@orkestrator/protocol/review-fanout";
 import {
   CircleDot,
   ClipboardList,
@@ -114,8 +115,20 @@ export function pipelineNodeStatusLabel(
     return reviewerStatusLabel(node.reviewer, pipeline.reviewFanout?.reviewers ?? []);
   }
   if (node.startFailed && node.state === "failed") return "Could not start";
+  if (nodeCouldNotReview(node)) return "Could not review";
   if (node.placeholder) return "Not started yet";
   return STATE_LABEL[node.state];
+}
+
+/**
+ * A reviewer whose report said it could not review. Its session keeps the
+ * reviewer's error after the fan-out retires, so the node reads it from there.
+ */
+function nodeCouldNotReview(node: PipelineFlowNode): boolean {
+  return (
+    node.state === "failed" &&
+    reviewerBlockedReason({ status: "failed", error: node.error }) !== null
+  );
 }
 
 /** The user skipped this step: its session, or the validation run it shows. */
@@ -241,17 +254,19 @@ export function pipelineNodeView({
         ? reviewerStatusWord(node.reviewer)
         : node.startFailed && node.state === "failed"
           ? { text: "could not start", tone: "destructive" }
-          : node.state === "running"
-            ? { text: "running", tone: "running" }
-            : node.state === "paused"
-              ? { text: "paused", tone: "warning" }
-              : node.state === "failed"
-                ? { text: "failed", tone: "destructive" }
-                : node.state === "cancelled"
-                  ? { text: "stopped", tone: "muted" }
-                  : node.kind === "ticket"
-                    ? pipelineCriteriaStatusWord(pipeline)
-                    : undefined;
+          : nodeCouldNotReview(node)
+            ? { text: "could not review", tone: "destructive" }
+            : node.state === "running"
+              ? { text: "running", tone: "running" }
+              : node.state === "paused"
+                ? { text: "paused", tone: "warning" }
+                : node.state === "failed"
+                  ? { text: "failed", tone: "destructive" }
+                  : node.state === "cancelled"
+                    ? { text: "stopped", tone: "muted" }
+                    : node.kind === "ticket"
+                      ? pipelineCriteriaStatusWord(pipeline)
+                      : undefined;
   return {
     id: node.id,
     kind: node.kind,
@@ -281,7 +296,11 @@ export function pipelineNodeView({
       node.hasValidation && (node.validationRun ?? pipeline.validationRun)
         ? validationChips(node.validationRun ?? pipeline.validationRun)
         : undefined,
-    error: node.error,
+    // A reviewer that could not review shows its own reason under that status.
+    error:
+      (node.state === "failed"
+        ? reviewerBlockedReason({ status: "failed", error: node.error })
+        : null) ?? node.error,
     idleIcon: PIPELINE_IDLE_ICON[node.kind],
     placeholder: node.placeholder,
     superseded: node.superseded,

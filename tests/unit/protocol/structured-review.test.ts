@@ -18,8 +18,12 @@ import {
   safeParseReviewReconciliation,
   safeParseStructuredReviewFindings,
   safeParseStructuredReviewReport,
+  REVIEW_BLOCKED_ERROR_PREFIX,
   stripStructuredReviewProvenance,
+  structuredReviewBlockedFailure,
+  structuredReviewBlockedReason,
   structuredReviewFindings,
+  structuredReviewOutcome,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewFindingPool,
   type ReviewReconciliation,
@@ -653,6 +657,93 @@ describe("structured review report contract", () => {
     expect(parsed.issues[0]).not.toHaveProperty("alternativeFixes");
     expect(parsed.issues[0]).not.toHaveProperty("reviewModels");
     expect(parsed.issues[0]).not.toHaveProperty("reviewSourceIds");
+  });
+});
+
+describe("structured review outcome", () => {
+  const withScope = (scope: Record<string, unknown>) => ({
+    ...emptyReport,
+    reviewScope: { ...emptyReport.reviewScope, ...scope },
+  });
+
+  test("reads a report written before the outcome existed as reviewed", () => {
+    const parsed = parseStructuredReviewReport(emptyReport);
+    expect(parsed.reviewScope).not.toHaveProperty("outcome");
+    expect(structuredReviewOutcome(parsed)).toBe("reviewed");
+    expect(structuredReviewBlockedReason(parsed)).toBeNull();
+    expect(structuredReviewBlockedFailure(emptyReport)).toBeNull();
+  });
+
+  test("accepts the strict wire shape and drops the null reason", () => {
+    const parsed = parseStructuredReviewReport(
+      withScope({ outcome: "reviewed", blockedReason: null }),
+    );
+    expect(parsed.reviewScope.outcome).toBe("reviewed");
+    expect(parsed.reviewScope).not.toHaveProperty("blockedReason");
+    expect(structuredReviewBlockedReason(parsed)).toBeNull();
+  });
+
+  test("carries a blocked outcome and its reason", () => {
+    const value = withScope({
+      outcome: "blocked",
+      blockedReason: "  No shell command could run: bwrap could not create a namespace.  ",
+    });
+    const parsed = parseStructuredReviewReport(value);
+    expect(structuredReviewOutcome(parsed)).toBe("blocked");
+    expect(structuredReviewBlockedReason(parsed)).toBe(
+      "No shell command could run: bwrap could not create a namespace.",
+    );
+    expect(structuredReviewBlockedFailure(value)).toBe(
+      `${REVIEW_BLOCKED_ERROR_PREFIX}No shell command could run: bwrap could not create a namespace.`,
+    );
+    expect(formatStructuredReviewReport(value)).toContain(
+      "- Could not review: No shell command could run",
+    );
+    expect(formatStructuredReviewReport(emptyReport)).not.toContain("Could not review");
+  });
+
+  test("requires a reason for a blocked outcome and none for a reviewed one", () => {
+    for (const scope of [
+      { outcome: "blocked" },
+      { outcome: "blocked", blockedReason: null },
+      { outcome: "blocked", blockedReason: "   " },
+      { outcome: "reviewed", blockedReason: "Could not look." },
+      { blockedReason: "Could not look." },
+    ]) {
+      const result = safeParseStructuredReviewReport(withScope(scope));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([
+          "$.reviewScope.blockedReason",
+        ]);
+      }
+    }
+  });
+
+  test("rejects an outcome outside the enum and a non-string reason", () => {
+    const outcome = safeParseStructuredReviewReport(withScope({ outcome: "skipped" }));
+    expect(outcome.success).toBe(false);
+    if (!outcome.success) expect(outcome.error.issues[0]?.path).toBe("$.reviewScope.outcome");
+    const reason = safeParseStructuredReviewReport(
+      withScope({ outcome: "blocked", blockedReason: 3 }),
+    );
+    expect(reason.success).toBe(false);
+    if (!reason.success) expect(reason.error.issues[0]?.code).toBe("invalid_type");
+  });
+
+  test("asks the provider for both fields under the strict schema", () => {
+    const scope = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.reviewScope;
+    expect(scope.required).toContain("outcome");
+    expect(scope.required).toContain("blockedReason");
+    expect(scope.properties.outcome).toMatchObject({ enum: ["reviewed", "blocked"] });
+    expect(scope.properties.blockedReason).toMatchObject({
+      anyOf: [{ type: "string" }, { type: "null" }],
+    });
+  });
+
+  test("ignores a value that is not a valid report", () => {
+    expect(structuredReviewBlockedFailure({ reviewScope: { outcome: "blocked" } })).toBeNull();
+    expect(structuredReviewBlockedFailure(null)).toBeNull();
   });
 });
 

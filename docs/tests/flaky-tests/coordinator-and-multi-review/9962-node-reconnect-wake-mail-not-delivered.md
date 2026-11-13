@@ -73,3 +73,20 @@ the send itself rather than adding microtask rounds.
   `orkestrator-test-run.raSa3l/review-default-tests-rerun3.log.gz` under the
   host temporary directory. The `notice-failed` line suggests the reconnect
   notice's send rejected rather than arrived late.
+
+## Recurrence — 2026-11-13 (structured review contract branch)
+
+- **Branch:** `reviewer-failure-c64fd66ac37e-r1` at `b3807407a`, base
+  `17d28238c`. `mise run flaky:recurrence -- 9962 --base 17d28238c` returned
+  "open. Record the failure as a recurrence". The branch changes the
+  structured review contract and review handling, not node coordination or
+  agent mail.
+- **Command:** the aggregate's workspace group run directly
+  (`bunx turbo run build test:workspace ... --concurrency=2`,
+  `ORKESTRATOR_BACKEND_TEST_WORKERS=4`) at load average about 100 on 16
+  cores. Full command and counts are in
+  [9998](../previews-annotations-and-gateway/9998-proxy-buffer-reservation-release-timeout-under-load.md).
+- **Failure:** the same assertion at `coordinator-node-reconnect-wakes.test.ts:390`,
+  Expected length 1, Received length 0 (59.10 ms).
+- **Isolated rerun:** the owning file passed alone with one worker, in the
+  same run as the gateway file.

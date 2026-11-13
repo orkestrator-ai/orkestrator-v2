@@ -19,6 +19,12 @@ export const DOCKER_LABEL_OPERATION_ID = "orkestrator-operation-id";
 export const DOCKER_LABEL_RUNTIME_GENERATION = "orkestrator-runtime-generation";
 /** Network policy version a container was created with (step 09). */
 export const DOCKER_LABEL_NETWORK_POLICY = "orkestrator-network-policy";
+/**
+ * `1` on a restricted runtime created for a project that declared Debian
+ * packages (`aptPackages`, to-do 7770): its allowlist also names Debian's
+ * archive (`DEBIAN_ARCHIVE_DOMAINS`). Fixed at creation, like the policy.
+ */
+export const DOCKER_LABEL_DEBIAN_ARCHIVE = "orkestrator-debian-archive";
 /** Staged portable-input revision a container binds (step 08). */
 export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
 /**

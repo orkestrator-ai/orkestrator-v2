@@ -395,7 +395,7 @@ describe("MCP runtime network hints", () => {
       await withDockerScript(
         `#!/bin/sh
 case "$1" in
-  inspect) printf '${label}\\n' ;;
+  inspect) case "$*" in *orkestrator-debian-archive*) printf '<no value>\\n' ;; *) printf '${label}\\n' ;; esac ;;
   create) printf 'probe-container\\n' ;;
   cp) cat '${tarPath}' ;;
 esac
@@ -429,6 +429,7 @@ function allowlistDocker(options: {
   running?: boolean;
   runningMarker?: string;
   mirror?: boolean;
+  debianArchive?: boolean;
   gitUrl?: string;
   statusUnavailable?: boolean;
   policy?: 2 | 3;
@@ -441,7 +442,7 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   network) printf '172.30.0.0/16\\t172.30.0.1\\n' ;;
   inspect) ${options.runningMarker ? `if [ -e '${options.runningMarker}' ]; then running=true; else running=false; fi` : `running=${options.running === false ? "false" : "true"}`}
-    printf '${options.policy ?? 2}\\t${IMAGE_ID}\\t%s\\t${options.mirror ? "mirror" : ""}\\nGIT_URL=${options.gitUrl ?? "https://git.example.com/project.git"}\\n' "$running" ;;
+    printf '${options.policy ?? 2}\\t${IMAGE_ID}\\t%s\\t${options.mirror ? "mirror" : ""}\\t${options.debianArchive ? "1" : ""}\\nGIT_URL=${options.gitUrl ?? "https://git.example.com/project.git"}\\n' "$running" ;;
   create) printf 'probe-container\\n' ;;
   cp) cat '${options.tarPath}' ;;
   rm) exit 0 ;;
@@ -457,6 +458,47 @@ esac
 exit 0
 `;
 }
+
+describe("Debian's archive for declared packages (to-do 7770)", () => {
+  test("only a runtime created to install packages has deb.debian.org in its list", () => {
+    const config = { global: { allowedDomains: ["global.example"], enabledAgentPlatforms: [] } };
+    expect(configuredAllowedDomains({ allowedDomains: [] }, config as never)).toEqual([
+      "global.example",
+    ]);
+    expect(
+      configuredAllowedDomains({ allowedDomains: [] }, config as never, { debianArchive: true }),
+    ).toEqual(["global.example", "deb.debian.org"]);
+    // A saved list that already names it is not doubled.
+    expect(
+      configuredAllowedDomains({ allowedDomains: ["deb.debian.org"] }, config as never, {
+        debianArchive: true,
+      }),
+    ).toEqual(["deb.debian.org"]);
+  });
+
+  test("a live edit keeps the archive on the runtime labelled for it", async () => {
+    const { context, dir } = await allowlistContext(["one.example"]);
+    const tarPath = await manifestTar({ "network-policy": 2, "network-refresh": 1 });
+    const configured = allowedDomainsRevision(["one.example", "deb.debian.org"]);
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        debianArchive: true,
+        before: allowedDomainsRevision(["one.example"]),
+        after: configured,
+        marker: path.join(dir, "applied"),
+      }),
+      async (log) => {
+        const before = await environmentNetworkPolicy("env-lifecycle", context);
+        expect(before.configured.domainsRevision).toBe(configured);
+        expect(before.domains).toBe("pending");
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("applied");
+        expect(await log.read()).toContain("--set-domains one.example,deb.debian.org");
+      },
+    );
+  });
+});
 
 describe("allowlist edits in place", () => {
   for (const policy of [2, 3] as const) {

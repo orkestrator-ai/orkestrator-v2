@@ -18,6 +18,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `orkestrator-git-credential.sh` | Git credential helper that reads the GitHub token file |
 | `opencode-cli.sh`       | A terminal's `opencode`: the image's OpenCode 2.x with the server's database |
 | `verify-playwright.cjs` | Launches Chromium; run at build time and on demand       |
+| `orkestrator-apt-install.sh` | Root-owned installer for `orkestrator-ai.json`'s `aptPackages` (`apt-packages=1`) |
 | `verify-root-boundary.sh` | Build-time check that root uses nothing `node` can write |
 | `tests/root-boundary-smoke.sh` | Plants files as `node` in a built image; root must run none |
 
@@ -85,6 +86,13 @@ Prebuilt bridge servers, so a container never builds them at runtime:
 Keep `COPY --chown=node:node patches /opt/bridge-build/patches` before the
 filtered `bun install`: Bun validates root `patchedDependencies` even when the
 filtered workspaces do not install the patched packages themselves.
+
+The image's apt sources are `https://deb.debian.org` from the firewall-script
+layer on (the image's own installs above it ran over HTTP), so a restricted
+container can reach Debian's archive on TCP 443 with the egress filter's SNI
+check. Keep the base image's `/usr/sbin/policy-rc.d`: the build fails without
+it, because it stops a declared package's maintainer script starting a
+service ([declared-system-packages.md](../docs/architecture/declared-system-packages.md)).
 
 Layer order is by how often a layer changes, rarest first, because a changed
 layer re-pulls every layer after it: agent CLIs and the browser, then starship
@@ -176,11 +184,14 @@ Users and isolation:
   `final-image-smoke.sh`) plants files as `node` in a built image and fails if
   any root process runs them.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly two things: the image entrypoint
+  passwordless sudo for exactly three things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
   policy once, root-owned, runs the firewall step as root and only then drops
-  to `node`) and `/usr/local/bin/run-root-setup.sh` (only when the recorded
-  mode is `full`). There is no grant for `init-firewall.sh`. The container
+  to `node`), `/usr/local/bin/run-root-setup.sh` (only when the recorded
+  mode is `full`) and `/usr/local/bin/orkestrator-apt-install`, which
+  installs only validated Debian package names (`aptPackages`; under
+  Restricted only behind an egress gateway; see
+  [declared-system-packages.md](../docs/architecture/declared-system-packages.md)). There is no grant for `init-firewall.sh`. The container
   boundary, not a reusable root shell, is what isolates an agent. Runtime
   allowlist edits use `docker exec --user root /usr/local/bin/update-firewall.sh`
   in the container that owns the network namespace: the runtime's egress
@@ -266,7 +277,10 @@ whichever container owns the network namespace.
   providers. Pi's
   list is necessarily partial: it fronts the user's own model providers, so a
   self-hosted endpoint or a regional mirror is a host only the user knows and
-  belongs in `allowedDomains` rather than being guessed at.
+  belongs in `allowedDomains` rather than being guessed at. A gateway
+  runtime created for a project that declares `aptPackages` also gets
+  `deb.debian.org` (label `orkestrator-debian-archive=1`,
+  [declared-system-packages.md](../docs/architecture/declared-system-packages.md)).
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
   Anthropic API, the VS Code marketplace, Context7, and

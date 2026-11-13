@@ -739,6 +739,101 @@ run_project_root_setup() {
     return "$root_exit"
 }
 
+# Debian packages orkestrator-ai.json's "aptPackages" field declares (to-do
+# 7770), one per line: the non-empty strings of an array. Prints nothing for an
+# absent or null field, and returns 1 when the field is not an array of
+# strings.
+project_apt_packages() {
+    local kind
+    kind=$(jq -r '.aptPackages | type' "$1" 2>/dev/null || echo null)
+    case "$kind" in
+        null) return 0 ;;
+        array) ;;
+        *) return 1 ;;
+    esac
+    jq -e '.aptPackages | all(type == "string")' "$1" >/dev/null 2>&1 || return 1
+    jq -r '.aptPackages[] | select(. != "")' "$1" 2>/dev/null
+}
+
+# The package install, through the root-owned installer. It is the authority on
+# what may be installed (names, count, denylist, dependencies) and where (a
+# restricted container needs its egress gateway); this only reports.
+run_apt_install() {
+    if [ ! -x /usr/local/bin/orkestrator-apt-install ]; then
+        echo "  This image has no package installer. Rebuild the environment on a current image."
+        return 6
+    fi
+    sudo -n /usr/local/bin/orkestrator-apt-install "$@"
+}
+
+# Installs the "aptPackages" of orkestrator-ai.json ($1) before any other
+# setup step. Returns 0 when none are declared or all are installed, and
+# prints the setup failure reason marker (SETUP_FAILURE_REASONS in
+# apps/backend/src/core/container-scripts.ts) otherwise.
+run_project_apt_packages() {
+    local config="$1"
+    local listing
+    if ! listing=$(project_apt_packages "$config"); then
+        echo ""
+        echo -e "${RED}System packages cannot be installed${NC}"
+        echo "  orkestrator-ai.json's \"aptPackages\" must be a list of Debian package"
+        echo "  names, such as [\"libvips-dev\", \"ffmpeg\"]."
+        printf '\033]9999;setup_failure_reason=apt-packages-refused\007'
+        return 1
+    fi
+    local -a packages=()
+    local name
+    while IFS= read -r name; do
+        if [ -n "$name" ]; then packages+=("$name"); fi
+    done <<< "$listing"
+    if [ "${#packages[@]}" -eq 0 ]; then
+        echo "  No system packages declared"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}=== Installing System Packages ===${NC}"
+    echo ""
+    echo "  From Debian's archive (deb.debian.org): ${packages[*]}"
+    echo ""
+
+    local apt_exit=0
+    run_apt_install "${packages[@]}" || apt_exit=$?
+    echo ""
+    if [ "$apt_exit" -eq 0 ]; then
+        echo -e "${GREEN}System packages installed${NC}"
+        return 0
+    fi
+    echo -e "${RED}System packages were not installed (code $apt_exit)${NC}"
+    case "$apt_exit" in
+        3)
+            echo "  A package in \"aptPackages\" was refused; the reason is above. Packages that"
+            echo "  could change the container's protections (sudo, firewalls, SSH servers)"
+            echo "  are never installed, nor is anything an install would bring in from them."
+            printf '\033]9999;setup_failure_reason=apt-packages-refused\007'
+            ;;
+        4)
+            echo "  This container's firewall runs inside it, so a package's install scripts,"
+            echo "  which run as root, could change it. Rebuild the environment on a current"
+            echo "  image, which puts the firewall in a separate egress gateway, or set its"
+            echo "  network access to Full."
+            printf '\033]9999;setup_failure_reason=apt-packages-unsupported-runtime\007'
+            ;;
+        5)
+            echo "  Debian's archive (deb.debian.org) could not be reached. Orkestrator opens it"
+            echo "  for environments whose project declared packages when the container was"
+            echo "  created; add deb.debian.org to this environment's allowed domains, or"
+            echo "  rebuild it, then retry setup."
+            printf '\033]9999;setup_failure_reason=apt-packages-archive-unreachable\007'
+            ;;
+        *)
+            echo "  apt-get failed; its output is above."
+            printf '\033]9999;setup_failure_reason=apt-packages-install-failed\007'
+            ;;
+    esac
+    return "$apt_exit"
+}
+
 # Project seed files bound read-only. Under rootless Docker node cannot open an
 # owner-only one; the root entrypoint then relayed it into node's own
 # /run/orkestrator-inputs (network-policy-entrypoint.sh, relay_staged_inputs).
@@ -837,8 +932,10 @@ if [ -f /workspace/orkestrator-ai.json ]; then
     cat /workspace/orkestrator-ai.json
     echo ""
 
-    # Root steps run as the root user before the regular setup steps.
+    # Declared packages first, then root steps, both before the regular
+    # setup steps.
     cd /workspace
+    run_project_apt_packages /workspace/orkestrator-ai.json || exit $?
     run_project_root_setup /workspace/orkestrator-ai.json /etc/orkestrator/network-mode || exit $?
 
     # Parse the setupContainer field (string or array) - runs for container environments

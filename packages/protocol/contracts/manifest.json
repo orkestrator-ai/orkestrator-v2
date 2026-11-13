@@ -3181,7 +3181,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:b5e6f162985adfad2d7e0edad0c532fab4c62d1dd510f7a165b8cf96881a5173"
+      "resultDigest": "sha256:77c108d126722841fed73b70743867289bb0b864d71d616c98efbd45780cd9e3"
     },
     "get_docker_system_stats": {
       "domain": "docker",
@@ -4243,7 +4243,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
-      "resultDigest": "sha256:014a712f937f130a0091b19670a99bf5a1d62ebace0a672f192c473feea79f27"
+      "resultDigest": "sha256:0ab86fef49dbb1603b7fdcded89965e89d97809f5fc294482f6fc7f6c96c28f3"
     },
     "get_project_usage_limits": {
       "domain": "accounts",

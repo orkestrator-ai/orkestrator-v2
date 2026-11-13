@@ -16,9 +16,10 @@
 # Root processes, started as the backend starts them (CONTAINER_ROOT_PATH in
 # apps/backend/src/core/container-scripts.ts): a uid-0 `orkroot` terminal
 # (interactive zsh behind a pseudo-terminal), the host repair, project-files
-# and provider-stop shells, update-firewall.sh, and the stop drain. The drain
-# and firewall script also run once with the image PATH, as an older backend
-# would, to prove the scripts' own PATH reset.
+# and provider-stop shells, update-firewall.sh, the declared-package installer
+# and the stop drain. The drain, firewall script and installer also run once
+# with the image PATH, as an older backend would, to prove the scripts' own
+# PATH reset.
 #
 # Also proves npm globals still install and run for node.
 #
@@ -77,7 +78,7 @@ plant_command() {
     fi
 }
 for dir in /usr/local/share/npm-global/bin /home/node/.opencode/bin /usr/local/bin /usr/local/sbin; do
-    for name in awk ps cat date sleep wc readlink chgrp chmod pkill iptables ipset ip getent mktemp install id stat find sed grep; do
+    for name in awk ps cat date sleep wc readlink chgrp chmod pkill iptables ipset ip getent mktemp install id stat find sed grep env rm apt-get apt-cache dpkg dpkg-query; do
         plant_command "$dir/$name"
     done
 done
@@ -255,6 +256,19 @@ root_exec sh -c "pkill -TERM -f 'no-such-root-boundary-[p]rocess' || true" && ec
 root_exec /usr/local/bin/update-firewall.sh --list >/dev/null 2>&1 || true
 docker exec --user root "$RUN" /usr/local/bin/update-firewall.sh --list >/dev/null 2>&1 || true
 echo "ran  update-firewall.sh (fixed PATH, image PATH)"
+
+# The declared-package installer (to-do 7770), through node's own sudo grant
+# as workspace-setup.sh calls it, and as root with the image PATH. With no
+# network it refuses a bad name, then gets as far as apt-get update.
+docker exec --user node "$RUN" sudo -n /usr/local/bin/orkestrator-apt-install 'bad;name' >/dev/null 2>&1 \
+    && fail "orkestrator-apt-install accepted a bad name"
+status=0
+docker exec --user node "$RUN" sudo -n /usr/local/bin/orkestrator-apt-install hello >/dev/null 2>&1 || status=$?
+[ "$status" = 5 ] || fail "orkestrator-apt-install (sudo) ended with $status, not 5 (archive unreachable)"
+status=0
+docker exec --user root "$RUN" /usr/local/bin/orkestrator-apt-install hello >/dev/null 2>&1 || status=$?
+[ "$status" = 5 ] || fail "orkestrator-apt-install (image PATH) ended with $status, not 5"
+echo "ran  orkestrator-apt-install (node sudo, image PATH)"
 
 # The stop drain last: it signals every workload process.
 docker exec --user root "$RUN" /usr/local/bin/orkestrator-drain.sh 1 \

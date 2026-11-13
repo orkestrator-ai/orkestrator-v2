@@ -1194,11 +1194,14 @@ Users and isolation:
   (`docker/verify-root-boundary.sh`) fails when `node` can write anything on
   those paths. The rules are in [`docker/AGENTS.md`](docker/AGENTS.md).
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly two things: the image entrypoint
+  passwordless sudo for exactly three things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
   policy once, root-owned, runs the firewall step as root and only then drops
-  to `node`) and `/usr/local/bin/run-root-setup.sh` (only when the recorded
-  mode is `full`). There is no grant for `init-firewall.sh`. The container
+  to `node`), `/usr/local/bin/run-root-setup.sh` (only when the recorded
+  mode is `full`) and `/usr/local/bin/orkestrator-apt-install`, which
+  installs only validated Debian package names (`aptPackages`; under
+  Restricted only behind an egress gateway; see
+  [declared-system-packages.md](docs/architecture/declared-system-packages.md)). There is no grant for `init-firewall.sh`. The container
   boundary, not a reusable root shell, is what isolates an agent. Runtime
   allowlist edits use `docker exec --user root /usr/local/bin/update-firewall.sh`
   in the container that owns the network namespace: the runtime's egress
@@ -1288,6 +1291,9 @@ else is rejected outright. `full` mode skips the firewall entirely.
   and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
+  A gateway runtime created for a project that declares `aptPackages` also
+  gets `deb.debian.org`, recorded as its `orkestrator-debian-archive=1` label
+  ([declared-system-packages.md](docs/architecture/declared-system-packages.md)).
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, mise, the
   Anthropic API, the VS Code marketplace, Context7, and Playwright's CDN. It

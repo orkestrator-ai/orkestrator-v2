@@ -8,6 +8,7 @@ import type { BackendClient } from "./client";
  * Plan item 3002: every `lib/backend/<x>.ts` exports `createXApi(client)`, and
  * each function it returns sends through that client, never the window's
  * command scope (`@/lib/native/backend` `invoke`, mocked by `tests/setup.ts`).
+ * The two fixed-node files have no factory; the last block pins their binding.
  */
 
 const commandInvoke = invoke as unknown as ReturnType<typeof mock>;
@@ -95,6 +96,45 @@ describe("lib/backend factories", () => {
         );
         if (!ALSO_COMMAND_NODE.has(fnName))
           expect(commandInvoke.mock.calls, `${fnName} leaves the command scope alone`).toEqual([]);
+      }
+    });
+  }
+});
+
+/** Exports of the fixed-node files that are helpers, not commands. */
+const FIXED_NODE_HELPERS = new Set(["nodeErrorText"]);
+
+function commandName(fnName: string): string {
+  return fnName.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+// The fixed-node files have no factory to hand a client to, so pin their
+// binding instead (7571 task 14): `command-nodes.ts` sends through
+// `portalBackendClient` and `self-improvement.ts` through
+// `commandBackendClient`, and both of those are the window's command scope
+// (`@/lib/native/backend` `invoke`). A function rebound to another node's
+// client, or to `invokeOnMachine`, would leave that mock untouched.
+describe("lib/backend fixed-node files", () => {
+  for (const file of Array.from(FIXED_NODE_FILES).sort()) {
+    test(`${file} sends every command through the window's command scope`, async () => {
+      const module = (await import(path.join(directory, file))) as Record<string, unknown>;
+      expect(typeof module[factoryName(file)], `${file} has no factory`).toBe("undefined");
+      const functions = Object.entries(module).filter(
+        (entry): entry is [string, (...args: unknown[]) => unknown] =>
+          typeof entry[1] === "function" && !FIXED_NODE_HELPERS.has(entry[0]),
+      );
+      expect(functions.length).toBeGreaterThan(0);
+
+      for (const [fnName, fn] of functions) {
+        commandInvoke.mockClear();
+        await call(
+          fn,
+          Array.from({ length: Math.max(fn.length, 1) }, () => ({})),
+        );
+        expect(
+          commandInvoke.mock.calls.map((call) => call[0]),
+          `${fnName} reaches the command scope`,
+        ).toEqual([commandName(fnName)]);
       }
     });
   }

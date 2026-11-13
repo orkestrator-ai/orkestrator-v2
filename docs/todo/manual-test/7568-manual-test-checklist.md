@@ -15,7 +15,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 1. **Manual tests and live checks** (310 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (54 items): make each call
+2. **Decisions, approvals and outward actions** (55 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -83,12 +83,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 25 | 10 |
 | Coordinator and Multi Review | 80 | 6 |
-| Cross-cutting | 76 | 20 |
+| Cross-cutting | 76 | 21 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 26 | 3 |
-| **Total** | 310 | 54 |
+| **Total** | 310 | 55 |
 
 ## Outstanding work
 
@@ -757,6 +757,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 7: claim or release the unmounted dialog and uncalled admin commands.** `NetworkWhitelistDialog.tsx` is never mounted; `set_workflow_result_tools_rollout` and `graph_capability_ceiling_set` have never been called by a client. Say whether any of them is wanted; the recommendation is to delete whatever nobody claims within a release. Record: the answer in 7571's Assumptions and decisions.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 11: keep or delete the root `conductor.json`.** Nothing in the repository references it. Say whether anyone still opens this repository in Conductor; if not, an agent deletes it. Record: the answer in 7571's Assumptions and decisions.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 13: decide the Linear integration.** `connect_linear` and `disconnect_linear` have no UI caller. Choose one: remove the Linear integration as a whole if nothing uses it (recommended) or keep it and give it UI. Record: the choice in 7571's Assumptions and decisions.
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 15: port or keep the `import_legacy_build_pipelines` seeding command.** The renderer import it served is gone; only `e2e/agent-testing/container-app-wiring.spec.ts`, `e2e/agent-testing/pipeline-delete.spec.ts` and `scripts/mixed-version/scenarios/pipelines.ts` still call it to seed pipelines. Choose one: port those callers to another seeding path and remove the command, with a `pipelines` domain bump and a version-1 adapter (recommended; needs a real-stack run of the two e2e specs), or keep it as a documented test seeding entry point (no work, but a public command that writes arbitrary pipeline snapshots stays). Record: the choice in 7571's Assumptions and decisions.
 
 #### MCP
 

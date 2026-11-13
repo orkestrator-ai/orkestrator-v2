@@ -31,7 +31,7 @@ decisions); every part that needs a person is on the
 12. **Commands kept only for tests**: `merge_pr_local` and `refresh_environment_diff_stats` removed, their tests ported. Status: done.
 13. **Linear connection commands**: `connect_linear` and `disconnect_linear` have no UI caller. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
 14. **Uncalled renderer API factories**: `createCommandNodesApi` and `createSelfImprovementApi` removed. Status: done.
-15. **`import_legacy_build_pipelines`**: the backend half of task 8; e2e specs seed pipelines through it. Status: open.
+15. **`import_legacy_build_pipelines`**: the backend half of task 8; e2e specs seed pipelines through it. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
 
 ### 1. Bridge full-payload SSE mode
 
@@ -323,7 +323,8 @@ Linear connection, and whether any backend path still posts to Linear.
 wiring uses them: command-node commands always go to the command node over
 the portal, and self-improvement is the window's own backend. Both files
 now export plain functions bound to `portalBackendClient` and
-`commandBackendClient`; `factories.test.ts` skips them, and plan item
+`commandBackendClient`; `factories.test.ts` checks that every exported
+command reaches the window's command scope instead, and plan item
 [3002](../../../plans/unified/3002-lib-backend-client-parameter.md) records it.
 
 **Investigation.** None further.
@@ -347,7 +348,9 @@ fixture, or a test-only storage seed through the CLI), port the three
 callers, run the two e2e specs against an isolated profile, then remove the
 command, its schema and its backend tests in `commands-state-sync.test.ts`.
 
-**Decisions.**
+**Decisions.** The choice is on the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md); the
+port and removal above are agent work once it is made.
 
 - **Port the seeding, then remove the command (recommended).**
   - Pros: no public command exists only for tests.

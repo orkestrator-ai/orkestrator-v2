@@ -313,7 +313,7 @@ coordinator exactly which tabs to resume.
 ## Related
 
 - [agent-accounts.md](agent-accounts.md#machines) ("Preferred login"; to-do 0722's decision (c), retired 2026-11-10), why a switch is the user's act.
-- [0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md).
+- [agent-accounts.md](agent-accounts.md), to-do 0003 (retired 2026-11-13).
 - [0024-coordinator-live-conformance.md](../development/coordinator-live-conformance.md), where task 4's scenario would live.
 - [Manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md): the human-only parts of to-do 1000 (the billed run of task 4's scenario; the real-provider check of task 5's usage-limit signals), cited as `1000 (retired)`. Record their results in this file.
 - `docs/architecture/scheduled-jobs.md` (Self-timers), `docs/architecture/agent-accounts.md` (Coordinator switching), `docs/architecture/coordinator.md`.

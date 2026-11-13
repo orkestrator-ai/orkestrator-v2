@@ -186,7 +186,7 @@ What it costs, on the two repositories measured:
 | `<main checkout>/.turbo/cache` (shared by every worktree) | Turborepo, `cacheMaxAge` 7 days and `cacheMaxSize` 10 GB in `turbo.json` | Start of each `turbo run` |
 | `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start; `dev:prune --older-than` for the empty directories a reset or prune leaves | Stopped profiles whose checkout no longer exists |
 | Worktrees a dev profile registered in an outside repository | `dev:reset`, `dev:prune`, start-up pruning | With the profile; branches only when merged |
-| A profile's macOS `safeStorage` key, the login Keychain item `<electronTitle> Safe Storage` | `dev:reset`, `dev:prune`, start-up pruning | After the profile state is gone; only the title `dev:test` gives that profile id |
+| A profile's macOS `safeStorage` key, the login Keychain item `<electronTitle> Safe Storage` | `dev:reset`, `dev:prune`, start-up pruning | After the profile state is gone; only the title `dev:test` gives that profile id, and only for the profile under the default development root. Matched by service alone: Electron 45.2.3 names the account `<electronTitle> Key`, earlier builds `<electronTitle>` (checked live on macOS 27.2 on 2026-11-13, when the old account match was found to remove nothing). Only `development` profiles make one: agent-test profiles use Chromium's mock Keychain on macOS |
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
 | Per-environment bridge state, worktrees, local branches, containers, volumes and networks | Environment deletion and its reconciler | At deletion; failed steps retried with backoff. See [environment-deletion.md](../architecture/environment-deletion.md) |
 | Isolated graph branch worktrees, `<environment>/.orkestrator/graph-branches/<run>/…`, and their branches `orkestrator-graph/<run>/…` (item 403) | The graph run service's branch janitor; `select-workspace`; environment deletion | A branch's worktree when its activation finishes (complete, failed, cancelled or superseded); the run's branches and anything left when the run ends; a select's candidates at once; finished runs that still list some at backend start-up. At most 16 branch worktrees run at once per environment |
@@ -289,3 +289,56 @@ after that age. Other entries disqualify a directory from this exception.
 Automatic pruning and ordinary `dev:prune` keep a profile if a linked worktree
 has modified or untracked files. Inspect the reported path before using
 `dev:prune --force` or `dev:reset`, which can discard those files.
+
+## A development profile's macOS Keychain item
+
+Electron keeps a profile's `safeStorage` key in the login Keychain as the
+generic password `<electronTitle> Safe Storage`, where the title is
+`Orkestrator AI — DEV [<profile id>]`. Only `development` profiles (started
+with `bun run --cwd apps/desktop dev --profile <id>`; `mise run dev --profile`
+passes `--profile` to turbo instead) create one: `dev:test` profiles run with
+Chromium's mock Keychain on macOS. `removeProfileKeychainItem`
+(`apps/desktop/scripts/dev/profile-cleanup.ts`) deletes it after the profile
+state is gone, on `dev:reset`, `dev:prune` and start-up pruning, matching the
+service alone. It runs only on macOS, only when the stored title is the one
+that id gets, and only for the profile under the default development root.
+Each `security` call is bounded to 15 s, and any answer other than "deleted"
+or "not found" (exit 44) becomes a warning that does not fail the removal.
+
+The account cannot be part of the match. Electron 45.2.3 names it
+`<electronTitle> Key`; earlier builds used `<electronTitle>`. The code
+first shipped (to-do 0023, retired) matched the old account, so every reset
+reported success and left the item behind. Every item under the service is
+deleted, whatever its account: the service embeds the profile's own title,
+which only that profile's Electron writes, so the profile owns every account
+under it, and matching a list of known accounts would break again on the next
+rename.
+
+`security delete-generic-password -s <service>` deletes one matching item per
+call, which is why the function loops (at most 8 calls) until it exits 44.
+Checked on 2026-11-13 on macOS 27.2 in a throwaway keychain file (created
+with `security create-keychain`, passed explicitly, then deleted; the login
+Keychain and the search list were untouched): with three items under one
+service (accounts `<title>`, `<title> Key` and an unrelated one) and one
+under another service, three calls exited 0, the fourth exited 44, and the
+other service's item remained.
+
+Checked live on 2026-11-13 on macOS 27.2 (26B123, arm64) with Electron
+45.2.3, with throwaway profile `qa-keychain-0023-125021`. Its item was
+created by real Electron with `app.setName(<title>)` (as `main.ts` does) and
+`safeStorage`, without the full app, because a fresh development profile's
+first start waits on the platform chooser and the macOS privacy prompts.
+
+- Before the fix, `mise run dev:reset --profile <id>` exited 0, printed no
+  Keychain text and no warning, and left the item.
+- After it, the reset printed `Removed 1 login Keychain item(s).`, and
+  `security find-generic-password -s "<title> Safe Storage"` exited 44.
+- No macOS prompt appeared at any step.
+
+To check by hand:
+
+```bash
+security find-generic-password -s "Orkestrator AI — DEV [<id>] Safe Storage"  # exit 0, attributes only
+mise run dev:reset --profile <id>                                             # "Removed 1 login Keychain item(s)."
+security find-generic-password -s "Orkestrator AI — DEV [<id>] Safe Storage"  # exit 44
+```

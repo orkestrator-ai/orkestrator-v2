@@ -152,8 +152,11 @@ pipelines' Docker work.
   1,886 veth and bridge lines between 03:40 and 04:05 UTC, the window of the
   Electron run.
 - The Electron suite was not rerun: those specs open windows on the host
-  display, which on beelink is the user's live desktop. Follow-up is task 5
-  of [to-do 4340](../../../todo/agent-engines/4340-suborks-live-qualification.md).
+  display, which on beelink is the user's live desktop. Follow-up was task 5
+  of to-do 4340 (retired; in Git history at `14d8ce8db`): on 2026-11-13 the suite
+  was rerun on a Mac with no Docker network churn and no failure had an
+  `ERR_NETWORK_CHANGED` line (43 passed, 4 failed for other recorded causes:
+  flakes 9863, 0272 and 1303, and a missing production bundle).
 
 ## 2026-11-04: the to-do 2181 qualification, and a measured way past it
 

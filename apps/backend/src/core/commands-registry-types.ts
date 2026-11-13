@@ -11,7 +11,7 @@ import type { AnyCommandDef, ArgsOf, ResultOf } from "@orkestrator/protocol/cont
 import type { CommandContext, CommandHandler, CommandInvocation } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
-import type { PlanUsageRead } from "./plan-usage.js";
+import type { PlanUsageRead } from "./plan-usage/index.js";
 
 /** The handler of a command registered with its definition: its arguments are already decoded. */
 export type DefinedCommandHandler<C extends AnyCommandDef> = (

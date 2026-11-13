@@ -1903,7 +1903,7 @@ printf "continued"
         expect(count("cp")).toBe(3);
         expect(count("cat")).toBe(3);
         expect(count("du") + count("head") + count("wc") + count("printf")).toBe(0);
-        // About 5 per directory, from about 15 (to-do 6740 task 3).
+        // About 5 per directory, from about 15 (to-do 6740 (retired), task 3).
         expect(started.length).toBe(1 + 3 * 5);
         // The listing the stamp records is what find lists from the source root.
         const listing = readFileSync(copied, "utf8").split("\0").filter(Boolean).sort();

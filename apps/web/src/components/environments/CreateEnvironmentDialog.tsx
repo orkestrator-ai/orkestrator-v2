@@ -46,6 +46,7 @@ import {
   Loader2,
   MessageSquareText,
   Network,
+  Package,
   Plus,
   Shield,
   Trash2,
@@ -119,7 +120,8 @@ import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentMo
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { useProjectRootSetupSteps } from "@/hooks/useBuildLaunchOptions";
+import { useProjectSetupRequirements } from "@/hooks/useBuildLaunchOptions";
+import { aptPackagesNotice } from "@/lib/apt-packages-notice";
 
 const log = createLogger("web.environment");
 
@@ -543,10 +545,12 @@ export function CreateEnvironmentDialog({
     effectiveDefaultEnvironmentType,
   );
   // Root setup steps run only with full network access; warn under Restricted.
-  const rootSetupSteps = useProjectRootSetupSteps(
+  // Declared Debian packages are installed from Debian's archive; say so.
+  const setupRequirements = useProjectSetupRequirements(
     projectId ?? "",
     open && environmentType === "containerized",
   );
+  const rootSetupSteps = setupRequirements?.rootSteps ?? null;
   const [environmentName, setEnvironmentName] = useState("");
   const [worktreeBaseDir, setWorktreeBaseDir] = useState<string | null>(null);
   const [launchAgent, setLaunchAgent] = useState(true);
@@ -645,6 +649,10 @@ export function CreateEnvironmentDialog({
   const [isDraggingAttachments, setIsDraggingAttachments] = useState(false);
   const [pendingAttachmentOperations, setPendingAttachmentOperations] = useState(0);
   const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("full");
+  const aptNotice = aptPackagesNotice(
+    setupRequirements?.aptPackages,
+    networkAccessMode === "full" ? "full" : "restricted",
+  );
   const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
@@ -1877,6 +1885,25 @@ export function CreateEnvironmentDialog({
                           : "Unrestricted internet access"}
                       </p>
                     )}
+                    {aptNotice ? (
+                      <p
+                        role="status"
+                        className={cn(
+                          "flex items-start gap-1.5 text-xs",
+                          aptNotice.tone === "warning" ? "text-amber-300" : "text-muted-foreground",
+                        )}
+                      >
+                        {aptNotice.tone === "warning" ? (
+                          <TriangleAlert
+                            className="mt-px h-3.5 w-3.5 shrink-0"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Package className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        )}
+                        <span>{aptNotice.text}</span>
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </TabsContent>

@@ -417,11 +417,30 @@ export const useHttpsGitRemoteCommand = defineCommand({
 });
 
 /**
+ * The Debian packages a project's `orkestrator-ai.json` declares in
+ * `aptPackages` (`@orkestrator/protocol/apt-packages`): the names setup would
+ * install, those the installer refuses outright, and whether the field cannot
+ * be installed as written.
+ */
+export const DeclaredAptPackagesSchema = Schema.Struct({
+  packages: mutableArray(Schema.String),
+  refused: mutableArray(
+    Schema.Struct({
+      name: Schema.String,
+      reason: Schema.Literals(["malformed", "denied"]),
+    }),
+  ),
+  invalid: Schema.Boolean,
+});
+
+/**
  * What the project's `orkestrator-ai.json` asks of a new container, so a
  * launcher can warn before it creates one that cannot finish setup:
  * `rootSteps` counts the default branch's `root` steps (which run only with
- * full network access), read from this machine's checkout without fetching.
- * `null` when the machine cannot tell. Advisory; setup itself decides.
+ * full network access), and `aptPackages` lists the Debian packages it
+ * declares (to-do 7770; absent from an older backend), both read from this
+ * machine's checkout without fetching. `null` when the machine cannot tell.
+ * Advisory; setup itself decides.
  */
 export const getProjectSetupRequirementsCommand = defineCommand({
   domain: projectsDomain,
@@ -430,7 +449,10 @@ export const getProjectSetupRequirementsCommand = defineCommand({
   access: "workspace",
   read: true,
   args: Schema.Struct({ projectId: Schema.String }),
-  result: Schema.Struct({ rootSteps: Schema.NullOr(Schema.Number) }),
+  result: Schema.Struct({
+    rootSteps: Schema.NullOr(Schema.Number),
+    aptPackages: Schema.optionalKey(Schema.NullOr(DeclaredAptPackagesSchema)),
+  }),
   critical: [],
 });
 

@@ -41,12 +41,12 @@ const ADMIN = new Set(["changes_get_diagnostics"]);
 const INTERNAL = new Set(["pr_monitor_agent_turn_completed", "pr_monitor_probe_environment"]);
 
 const DOMAINS = [
-  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 23, version: 1 },
+  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 22, version: 2 },
   {
     domain: pullRequestsDomain,
     commands: PULL_REQUESTS_COMMANDS as readonly AnyCommandDef[],
-    count: 40,
-    version: 2,
+    count: 39,
+    version: 3,
   },
 ];
 
@@ -90,8 +90,8 @@ describe("git and pull-requests definitions", () => {
   it("lists both clients in DOMAIN_CLIENTS with their adapters", () => {
     expect(DOMAIN_CLIENTS).toContain(gitClient);
     expect(DOMAIN_CLIENTS).toContain(pullRequestsClient);
-    expect(gitClient.versions).toEqual([1, 0]);
-    expect(pullRequestsClient.versions).toEqual([2, 1, 0]);
+    expect(gitClient.versions).toEqual([2, 1, 0]);
+    expect(pullRequestsClient.versions).toEqual([3, 2, 1, 0]);
   });
 
   it("drops unknown keys of a formerly strict command, refuses an unknown critical one", () => {
@@ -238,14 +238,14 @@ function fakeNode(domains: NegotiatedDomains | undefined, answer: (command: stri
 }
 
 describe("git client", () => {
-  it("version 1: enveloped calls with their critical keys, decoded results", async () => {
-    const node = fakeNode({ git: { min: 1, max: 1 } }, () => ({
+  it("version 2: enveloped calls with their critical keys, decoded results", async () => {
+    const node = fakeNode({ git: { min: 1, max: 2 } }, () => ({
       kind: "disabled",
       reasonKey: "changes.restore.disabled",
       extra: "kept",
     }));
     const client = createDomainClient(gitClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     const args = { measurementId: "m1", pathIds: ["p1"] };
     await expect(client.api().changes_prepare_restore(args) as Promise<unknown>).resolves.toEqual({
       kind: "disabled",
@@ -256,7 +256,7 @@ describe("git client", () => {
       {
         command: changesPrepareRestoreCommand.name,
         args,
-        envelope: { domain: "git", version: 1, critical: ["pathIds"] },
+        envelope: { domain: "git", version: 2, critical: ["pathIds"] },
       },
     ]);
     expect(node.invoked).toEqual([]);
@@ -278,7 +278,7 @@ describe("git client", () => {
   });
 
   it("refuses a node whose range does not overlap", () => {
-    const node = fakeNode({ git: { min: 2, max: 3 } }, () => null);
+    const node = fakeNode({ git: { min: 3, max: 4 } }, () => null);
     const client = createDomainClient(gitClient, node.options);
     expect(() => client.api()).toThrow();
   });

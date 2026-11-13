@@ -1,7 +1,7 @@
 /**
  * One OpenCode 2.x tool call (`Session.Message.Assistant.Tool`) as a shared
  * transcript part: a tool card, an edit card with its diff, or a sub-agent
- * card (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 4).
+ * card (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan phase 4).
  *
  * The 2.x state machine is `streaming` (input still arriving, as a partial
  * JSON string) → `running` → `completed` | `error`. A settled call carries

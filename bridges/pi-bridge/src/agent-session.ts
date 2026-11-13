@@ -1613,10 +1613,9 @@ export async function resumeSession(
 /**
  * Fork a session at one of its messages.
  *
- * Production forks go through `AgentSessionRuntime.fork`, preserving Pi's
+ * Every fork goes through `AgentSessionRuntime.fork`, preserving Pi's
  * extension hooks. A prompt is cut before (Pi returns its text as an editable
  * draft); a response is kept with its tool results (`resolveHistoryTarget`).
- * Dependency-injected legacy test sessions retain the low-level fallback.
  *
  * `messageId` is a transcript message id or a Pi entry id. A fork with no id
  * branches at the newest user message, which is what "fork from here" means on
@@ -1634,21 +1633,6 @@ export async function forkSession(
   if (messageId?.trim() && !target) throw new HistoryTargetError();
   if (!target) throw new Error("This session has no user message to fork from");
   const entryId = target.entryId;
-  if (!state.runtime) {
-    // Dependency-injected test/legacy sessions do not own the replacement
-    // runtime. Production attachments always do and take `runtime.fork` below.
-    const forkedFile = session.sessionManager.createBranchedSession(entryId);
-    if (!forkedFile) throw new Error("Pi session runtime is unavailable for forking");
-    const forked = await resumeSession(forkedFile, {
-      ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
-      ...(state.composer.selectedReasoningId
-        ? { reasoningId: state.composer.selectedReasoningId }
-        : {}),
-    });
-    forked.policy = state.policy;
-    await overlayCommandChanges(forked, { inheritFrom: state.piSessionId });
-    return forked;
-  }
   const forked = newSessionState(undefined, state.policy);
   forked.sessionFile = state.sessionFile;
   forked.composer = structuredClone(state.composer);

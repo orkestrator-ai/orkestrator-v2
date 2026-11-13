@@ -72,3 +72,30 @@ step: `expect(locator).toHaveText("QA design bake-off")` on
 5 s. Its trace has no `net::ERR_NETWORK_CHANGED`, so it is not flake 2340. The same case
 passed in the other six full runs of the suite that night (runs 1 to 5 and 7). It was not
 rerun alone. The cause remains unconfirmed.
+
+## Recurrence, dead-code removal review (7571), 2026-11-13
+
+Branch `remove-dead-bridge-be98778b92d1-r1` (base `17d28238c`, head
+`c89a22b10`) failed the case at a new step in review preparation's
+`mise run test:agent:browser:isolated`: line 311 expected acknowledgement
+buttons for both `build` and `pr` but received only `build`. A teardown
+`ArtifactBoundError` then followed, because the failure's `trace.zip` exceeded
+the 64 MiB sanitization limit. The address stage reproduced it with the
+complete unchanged owner alone (one worker) on a disposable credential-free
+profile:
+
+```sh
+NODE_ENV= mise run dev:test --profile graph-ack-7571 --fixture --headless --no-agent-credentials --agent-platforms codex
+NODE_ENV= ORKESTRATOR_AGENT_TEST_PROFILE=graph-ack-7571 ORKESTRATOR_AGENT_TEST_RUN_ID=graph-ack-7571-b bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/graph-designer-editing.spec.ts --workers=1
+```
+
+Three runs of that command on head `bbac0b251` gave pass (22.5 s), fail and
+pass (21.8 s); the failure had the same trace-size error. The failed run's
+`04-taint-pending.png` shows compile reporting `input-unbound
+describe-pr.brief` ("nothing feeds it"). So one canvas connection, probably
+`approve|outlet:approved` → `describe-pr|in:brief` at line 288, did not land,
+and no taint reached `pr`. This is the same family as the undo symptom above:
+a canvas edge gesture that silently has no effect. The branch changes no graph
+designer, canvas or graph compiler code. No assertion, timeout or skip was
+changed. Artifacts: `output/agent-testing/graph-ack-7571-b/browser/` (not
+committed).

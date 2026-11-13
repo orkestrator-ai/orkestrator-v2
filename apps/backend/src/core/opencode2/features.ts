@@ -1,6 +1,6 @@
 /**
  * The session features of an OpenCode 2.x provider beyond prompt dispatch
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 5): the
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan phase 5): the
  * model catalogue and effort, attachments, slash commands, Plan/Build, compact,
  * undo/redo, fork, the resume list, titles, to-dos and sign-in status.
  *

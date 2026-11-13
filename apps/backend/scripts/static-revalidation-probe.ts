@@ -1,6 +1,7 @@
 /**
  * Which validators do real browser engines send when they revalidate a static
- * file the gateway served (to-do 6160)? The gateway answers a date-only
+ * file the gateway served (to-do 6160, retired; the results are in
+ * docs/architecture/remote-gateway.md)? The gateway answers a date-only
  * revalidation (`If-Modified-Since` with no `If-None-Match`) only after running
  * the on-the-fly compression, so the question is whether any client we ship
  * takes that path.

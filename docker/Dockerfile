@@ -471,6 +471,8 @@ RUN test "$(/usr/local/bin/bun --version)" = "1.4.4" \
 
 # Copy and set up firewall scripts
 COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh /usr/local/bin/
+# The declared-package installer (orkestrator-ai.json "aptPackages", to-do 7770).
+COPY docker/orkestrator-apt-install.sh /usr/local/bin/orkestrator-apt-install
 COPY docker/orkestrator-egress-gateway.sh /usr/local/bin/orkestrator-egress-gateway
 # The gateway's name checks: Perl from the base system (perl-base, already in
 # the image for the log writer), so no new package or download to pin.
@@ -479,9 +481,22 @@ COPY docker/firewall-domains.sh /usr/local/lib/orkestrator/firewall-domains.sh
 COPY docker/default-allowed-domains /usr/local/lib/orkestrator/default-allowed-domains
 USER root
 # The root entrypoint runs the firewall before privileges drop, so node's
-# only grants are that entrypoint (which records the policy once) and the
-# full-mode root setup. An egress gateway runs the same image as root.
+# only grants are that entrypoint (which records the policy once), the
+# full-mode root setup and the declared-package installer, which takes only
+# validated package names. An egress gateway runs the same image as root.
+#
+# apt reaches Debian's archive over HTTPS from here on: a restricted
+# container's allowlist opens TCP 443 for a bare domain, and the gateway's name
+# check reads the TLS SNI. The archive is signed either way; the image's own
+# apt layers above ran before this and are unaffected. The base image's
+# policy-rc.d (which refuses every service start) must stay, so an installed
+# package never starts a daemon.
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh /usr/local/bin/orkestrator-egress-gateway && \
+  chown root:root /usr/local/bin/orkestrator-apt-install && chmod 0755 /usr/local/bin/orkestrator-apt-install && \
+  bash -n /usr/local/bin/orkestrator-apt-install && \
+  sed -i 's#http://deb.debian.org/#https://deb.debian.org/#g' /etc/apt/sources.list.d/debian.sources && \
+  ! grep -q '^URIs:.*http://' /etc/apt/sources.list.d/debian.sources && \
+  test -x /usr/sbin/policy-rc.d && \
   chown root:root /usr/local/bin/orkestrator-egress-filter && chmod 0755 /usr/local/bin/orkestrator-egress-filter && \
   perl -c /usr/local/bin/orkestrator-egress-filter && \
   chown -R root:root /usr/local/lib/orkestrator && chmod 0755 /usr/local/lib/orkestrator && \
@@ -490,6 +505,7 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /
     'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS ORKESTRATOR_EGRESS"' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/network-policy-entrypoint.sh *' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/run-root-setup.sh *' \
+    'node ALL=(root) NOPASSWD: /usr/local/bin/orkestrator-apt-install *' \
     > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 

@@ -1,5 +1,5 @@
 /**
- * How a host OpenCode 2.x server is launched (docs/todo/agent-engines/0008-opencode-v2.md,
+ * How a host OpenCode 2.x server is launched (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`),
  * build plan phases 2 and 3). Pure launch description plus the files it needs;
  * the process itself is started by the local-server supervisor.
  *

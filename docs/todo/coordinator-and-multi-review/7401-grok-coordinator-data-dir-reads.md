@@ -31,7 +31,7 @@ check is `@orkestrator/protocol/node/coordinator-read-boundary`.
 **Investigation.** Grok 1.0.52 was observed not to ask before shell commands
 (the reason for the profile); whether its reads ask is unobserved. Grok is
 signed out on the qualifying hosts
-([0024](0024-coordinator-live-conformance.md) task 1), so no probe was run.
+(0024 (retired) task 1, now on the manual-test checklist), so no probe was run.
 
 Done 2026-11-11: `scripts/coordinator-probes/grok-web-tools-probe.mjs` has a
 `data-dir-reads` variant. It launches Grok exactly as the bridge launches a
@@ -154,6 +154,6 @@ does not need, in exchange for never printing a path from the person's machine.
 ## Related
 
 - [6080](6080-x1-coordinator-trust-boundary-follow-ups.md) task 3
-- [0024](0024-coordinator-live-conformance.md)
+- [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
 - [`coordinator.md`](../../architecture/coordinator.md#provider-qualification): Grok's boundary.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: running the Grok probe signed in) moved there on 2026-11-10.

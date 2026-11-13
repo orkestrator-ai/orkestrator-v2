@@ -140,3 +140,24 @@ owners` (3572 ms). The runner's one-file rerun of the complete owner passed
 (8.3 s). Same symptom as the 2026-11-06 follow-up: the checker's `lsof` (2 s
 `timeoutMs`) did not finish under load. Evidence:
 `orkestrator-test-run.tVTJUs/` under the host temporary directory.
+
+## Recurrence — 2026-11-13 (macOS cleanup evidence branch)
+
+Base `17d28238c098b4443d1289df5c4ed75e7cc2802e`, head `af012d9dd`
+(`macos-cleanup-evidence-125021e7b566-r1`), which changes only
+`apps/desktop/scripts/dev/profile-cleanup.ts`, its test and documentation,
+not `preview-listener-ownership.ts`, its test or `command-capture.ts`.
+`mise run flaky:recurrence -- 4843 --base 17d28238c` answered `open`. In
+`mise run test:logged -- --name address-default-tests -- mise run test`
+(macOS 27.2, 18 CPUs, other worktrees' aggregate runs holding the host's
+exclusive resource) `LoopbackListenerOwnership on this host > attributes a
+real :: listener and refuses another environment` expected
+`this-environment` and received `unattributed` (192.57 ms) at
+`preview-listener-ownership.test.ts:451`; it was the run's only failure. The
+runner's own one-file rerun waited on host capacity and hit its 600 s budget
+with no verdict. The complete owner then passed alone in 1.1 s with
+`mise run test:logged -- --name preview-listener-ownership -- mise exec --
+bun --cwd=apps/backend test src/core/preview-listener-ownership.test.ts
+--parallel=1 --only-failures`. Evidence: `orkestrator-test-run.vVypqX/`
+under the host temporary directory. No assertion, timeout, skip or
+implementation changed.

@@ -2,6 +2,7 @@ import { idleObservationModel, asyncQuestionPrompt } from "./idle-observation-li
 import { finalReply, scriptedStep } from "./idle-observation-fake-claude";
 import { describe, expect, test } from "bun:test";
 import {
+  borrowEnvironmentScope,
   requireRecoveredBackoff,
   IDLE_OBSERVATION_CASES,
   backgroundOutputEvidence,
@@ -312,4 +313,90 @@ test("async question prompt requests both replies the watcher expects", () => {
   expect(finalReply("Answers to your questions:\n- Choose a codeword?: IDLEQA_BETA")).toBe(
     "CODEWORD_CHOSEN=IDLEQA_BETA",
   );
+});
+
+describe("borrowEnvironmentScope", () => {
+  interface Fake {
+    origin: string;
+  }
+  /** The spec's `let` bindings, as the approval case reads and writes them. */
+  const bindings = (initial: {
+    environmentId: string;
+    environmentName: string;
+    containerId: string | null;
+    containerFake: Fake | null;
+  }) => {
+    let { environmentId, environmentName, containerId, containerFake } = initial;
+    return {
+      read: () => ({ environmentId, environmentName, containerId, containerFake }),
+      write: (scope: typeof initial) => {
+        ({ environmentId, environmentName, containerId, containerFake } = scope);
+      },
+      /** What `prepareEnvironment` does in the ask-policy environment of a container run. */
+      enterPolicyEnvironment: () => {
+        environmentId = "env-ask";
+        environmentName = "idle-ask";
+        containerId = "container-ask";
+        containerFake = { origin: "http://127.0.0.1:47124" };
+      },
+    };
+  };
+
+  test("restores the run's container and fake after the policy environment is deleted", () => {
+    const homeFake = { origin: "http://127.0.0.1:47124/home" };
+    const scope = bindings({
+      environmentId: "env-home",
+      environmentName: "idle-home",
+      containerId: "container-home",
+      containerFake: homeFake,
+    });
+    const borrowed = borrowEnvironmentScope(scope.read, scope.write);
+    scope.enterPolicyEnvironment();
+    expect(scope.read().containerId).toBe("container-ask");
+    borrowed.restore();
+    const restored = scope.read();
+    expect(restored).toEqual({
+      environmentId: "env-home",
+      environmentName: "idle-home",
+      containerId: "container-home",
+      containerFake: homeFake,
+    });
+    // The same handle, so a later rebuild stops the fake it really started.
+    expect(restored.containerFake).toBe(homeFake);
+  });
+
+  test("a local run restores no container and no fake", () => {
+    const scope = bindings({
+      environmentId: "env-home",
+      environmentName: "idle-home",
+      containerId: null,
+      containerFake: null,
+    });
+    const borrowed = borrowEnvironmentScope(scope.read, scope.write);
+    scope.enterPolicyEnvironment();
+    borrowed.restore();
+    expect(scope.read()).toEqual({
+      environmentId: "env-home",
+      environmentName: "idle-home",
+      containerId: null,
+      containerFake: null,
+    });
+  });
+
+  test("the snapshot is taken at the borrow and survives repeated restores", () => {
+    const scope = bindings({
+      environmentId: "env-home",
+      environmentName: "idle-home",
+      containerId: "container-home",
+      containerFake: null,
+    });
+    const borrowed = borrowEnvironmentScope(scope.read, scope.write);
+    expect(Object.isFrozen(borrowed.home)).toBe(true);
+    scope.enterPolicyEnvironment();
+    borrowed.restore();
+    scope.enterPolicyEnvironment();
+    borrowed.restore();
+    expect(scope.read().containerId).toBe("container-home");
+    expect(scope.read().containerFake).toBeNull();
+  });
 });

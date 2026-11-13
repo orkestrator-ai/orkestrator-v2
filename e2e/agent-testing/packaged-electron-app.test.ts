@@ -131,6 +131,7 @@ describe("packaged Electron app launch", () => {
     expect(packaged.testMatch).toEqual([
       "design-canvas-packaged-electron.spec.ts",
       "design-canvas-renderer-pairing-electron.spec.ts",
+      "exit-marker-packaged-electron.spec.ts",
       "log-controls-packaged-electron.spec.ts",
       "packaged-native-shortcuts-electron.spec.ts",
       "packaged-security-electron.spec.ts",
@@ -141,6 +142,7 @@ describe("packaged Electron app launch", () => {
     expect(electron.testMatch).not.toContain("design-canvas-renderer-pairing-electron.spec.ts");
     expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("watcher-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("exit-marker-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("packaged-native-shortcuts-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });

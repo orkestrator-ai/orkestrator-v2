@@ -11,11 +11,18 @@ the trigger. Corrected the same day: the schedule replays did not rebuild the
 test's repository, so they rule nothing out (see "Task 2: the first replays
 were not the recorded workload" below); `reduction.ts` now does, and the abort
 step was re-run on it.
+Reworked 2026-11-13 against `main` at `17d28238c`: task 2 done. The faithful
+replay of test 1's commands loses nothing, standalone or in process, so the
+trigger is in what the services do between those commands. The smallest case
+that still loses events is test 1 cut after its clone, committed as
+`scripts/lost-child-event/in-process.ts` and run by `scratch.ts`. Finding the
+in-process trigger is the new task 3.
 
 ### Tasks
 
 1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: done (Linux 2026-11-11: 47 lost `close` events in 100 runs; macOS 2026-11-13: 4 lost `exit` and 3 lost `close` events in 100 runs).
-2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: open (2026-11-13: test 1 alone still loses events; a watch helper and aborts racing the exit do not trigger it standalone; the first replays of test 1's commands were not faithful and are void, so next, record test 1 again and replay it faithfully with `reduction.ts replay`, with and without the harness, before deleting service calls).
+2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: done (2026-11-13). Faithful replays of test 1's 98 commands lost nothing: 0 in 98,000 children standalone and 0 in 9,800 inside `bun test` next to the harness. The smallest losing case is test 1 cut after its clone, with the watch host stubbed: `scripts/lost-child-event/in-process.ts`, which `scratch.ts` runs on the old pipe capture: 4 children lost in 3 of 350 runs, every one the 67th or 68th. No standalone form reproduces.
+3. **Find the in-process trigger**: find what test 1's service calls do around its 66th to 68th child that a replay of the same commands lacks, then rebuild that ingredient standalone. Status: open (start from the `mock.module` contrast in task 2).
 
 ### 1. Reproduce on the old pipe capture
 
@@ -118,6 +125,36 @@ So on macOS the trigger is neither a watch helper nor an abort racing the exit. 
 
 The scripts are committed as `scripts/lost-child-event/` (`probe.ts`, `preload.ts`, `reduction.ts`) so the next step can start from them. `reduction.ts` is also what to attach to the upstream report as the non-reproducing reduction.
 
+**macOS, 2026-11-13, rework: the faithful replay and the reduction.** On arktech-mini again (Bun 1.4.4), host load average 4 to 46 from the other builds; no CPU hogs. The scratch pipe capture was rebuilt as in task 1, in a throwaway worktree under this build's git-ignored `output/agent-testing/`, removed afterwards. Three recordings of test 1 alone gave the same schedule each time: 98 commands, 7 file writes and 25 printed revisions, over 565 ms. A 20-iteration `reduction.ts replay` of it had 0 mismatches. Rows counted in runs ran one `bun test` process per run, one at a time; rows counted in iterations ran in one process. All used the strict probe:
+
+| Step | Children | Lost | Runs with a loss |
+| --- | --- | --- | --- |
+| Test 1 alone on the scratch pipe capture (baseline, host load 4 to 8) | 9,872 | **8**: 7 `exit` (`merge-base` 5, `rev-parse` 2), 1 `close` | 8 of 100 |
+| Test 1's schedule replayed standalone, 1,000 iterations in one process (`reduction.ts replay`) | 98,000 | 0; 0 mismatches | — |
+| The replay inside `bun test` through the scratch `runCommand`, the public API harness created first and left idle (a scratch test file calling the exported `replay`) | 9,800 | 0; every run passed with 0 mismatches | 0 of 100 |
+| The same, with the backend's real watch host watching the replay's directory | 9,800 | 0 | 0 of 100 |
+| The replay standalone with the event loop held in a busy-wait of 0 to 30 ms every 5 to 15 ms (`replay --block=30`, 300 iterations) | 29,400 | 0 | — |
+| 4260's pattern with the same blocking (`pattern 1500 --block=30`) | 9,154 | 0 | — |
+| Test 1 with the watch host stubbed out (`mock.module` on `watch-host.ts`) | 9,903 | **7**: 4 `exit`, 3 `close`; 5 of the 6 with a recorded position were the 67th or 68th child | 6 of 100 |
+| The same, with a 1 ms event-loop lag sampler | 10,116 | **12**, in 11 runs; 8 of them the 66th to 72nd child | 11 of 100 |
+| The clone race alone: harness, one commit, then `set_environment_diff_base` and a `git clone` repeated 10 times a run | 9,660 | 0 | 0 of 60 |
+| Test 1 cut after its clone and `cat-file`, watch host stubbed (77 children a run) | 7,686 | **3**, all the 67th or 68th | 2 of 100 |
+| The same, again, beside the next row | 11,538 | **4** | 4 of 150 |
+| The same cut, with `runCommand` replaced through `mock.module` by `pipe-runner.ts` instead of edited in place (three runs) | 7,700 + 11,550 + 11,550 | 0 | 0 of 400 |
+| The same cut, with `pipe-runner.ts` spliced into the scratch `command-capture.ts` | 11,536 | **4** `exit`, all the 67th or 68th | 4 of 150 |
+| A shorter rewrite of that cut (no step timings, fewer reads) through `scratch.ts`, twice | 11,548 + 11,550 | **1** `exit`, the 67th | 1 of 300 |
+| The committed reduction: the cut copied verbatim from test 1 (`in-process.ts`) through `scratch.ts`, 200 then 150 runs (host load 3 to 8) | 15,392 + 11,534 | **4**: 3 `exit`, 1 `close`, all the 67th or 68th | 3 of 350 |
+| The same file copied into the worktree's `apps/backend/src/core` (`scratch.ts --in-tree`), beside the 150 | 11,542 | **2**: 1 `exit`, 1 `close`, the 67th and 68th | 1 of 150 |
+
+What this settles:
+
+- **The commands alone do not lose events.** The replay runs the same 98 commands with the same writes, identity, revisions, dependencies and offsets, and every command exits as recorded; it lost nothing in 117,600 children. So test 1's service calls between its commands are part of the trigger.
+- **Neither the watch host nor a blocked event loop is the ingredient.** Test 1 loses events at the same rate with the watch host stubbed, and for 10 of the sampler's 12 losses the event loop never stalled more than 5 ms from 5 ms before to 40 ms after the lost child's spawn (the other two, one run's 99th child, saw 27 ms; runs without a loss show the same small gaps). Busy-waits in the standalone replay lost nothing.
+- **The loss sits at one point in the test.** Nearly every lost child is the 66th to 68th: a `rev-parse`, `config` or `merge-base` of the diff scan the service starts in the background while the test resets the override and clones. A lost `exit` is a zombie, 7 to 136 ms after spawn (22 of 29 within 30 ms), that Bun never reaps, even 30 s later; a lost `close` is an EOF our end polls as `IN|HUP` that is never delivered. Repeating the clone race on its own does not lose events, so the history before it matters too.
+- **The rate is low, and one contrast stands out.** Every form with `pipe-runner.ts` spliced into `command-capture.ts` lost a child in about 1 run in 100 (9 runs in 950 across the rows above), whatever the file's location or step timings. The form that swapped the runner in through `mock.module` lost nothing in 400 runs, about a 2% chance at that rate: suggestive, not proof. It also loaded the backend through dynamic imports and dropped test 1's step timings and some of its reads, so it names candidates for task 3 rather than one cause.
+
+The committed reduction is two files. `in-process.ts` is test 1 copied verbatim up to its clone and `cat-file`, with its step timings, static imports and the watch host stubbed. `scratch.ts` adds a detached worktree of HEAD under the git-ignored `output/agent-testing/`, installs it, copies this directory over the worktree's copy, splices `pipe-runner.ts` into that worktree's `command-capture.ts`, runs `in-process.ts` once per process, prints the totals and removes the worktree.
+
 **Decisions.**
 
 - **How to reduce?**
@@ -127,29 +164,57 @@ The scripts are committed as `scripts/lost-child-event/` (`probe.ts`, `preload.t
   - **Add the remaining real-test ingredients to the standalone script.**
     - Pros: the result is directly reportable.
     - Cons: about 1.2 million children across macOS and Linux without a loss, and no signal yet about which ingredient to add.
-- **Where to run the next step?** (2026-11-13)
+- **Where to run the next step?** (2026-11-13; moot after the rework: the faithful replay ran on macOS, and Linux is task 3's)
   - **Linux on beelink2, deleting the test's service calls one at a time (recommended).**
     - Pros: about one loss in two runs there, so 20 runs a step suffice.
     - Cons: the faithful replay still has to run first (record test 1 there with the preload, then `reduction.ts replay` and the in-test replay, with and without the harness), and the macOS symptom (a lost `exit`) is checked only at the end.
   - **macOS on arktech-mini.**
     - Pros: tests the platform-specific lost `exit` directly.
     - Cons: 8 runs in 100 with a loss, so each step needs about 100 runs (about 10 minutes) to tell zero from the baseline.
-- **Which call to delete first?** (2026-11-13)
+- **Which call to delete first?** (2026-11-13; superseded: the rework cut test 1 from its end and stopped at the clone, below which the loss stopped)
   - **Replace the diff-stats service's scans (`readFileList` with `refresh`, `diffStats.sync`) with the recorded commands, keeping the harness's commands and storage (recommended).**
     - Pros: they spawn most of the children, and their admission pool and retargeting are what a replay lacks.
     - Cons: the scans also drive the test's assertions, which must be dropped for that step.
   - **Drop the harness commands (`set_environment_diff_base` and the rest) first.**
     - Pros: smaller change to the test.
     - Cons: those commands start the scans, so the step removes both at once and says less.
+- **How to commit a reduction that needs the pipe capture?** (2026-11-13, rework)
+  - **Commit the runner as `pipe-runner.ts` and splice it into a throwaway worktree with `scratch.ts` (recommended, done).**
+    - Pros: reproduces (3 of 350 runs); one command; `runCommand` on every branch stays on file capture.
+    - Cons: needs a full worktree and `bun install` per session; the splice markers have to follow `command-capture.ts`.
+  - **Swap the runner in with `mock.module`, with no worktree.**
+    - Pros: runs in the checkout itself.
+    - Cons: lost nothing in 400 runs, so it is not shown to reproduce.
+  - **Keep the pipe capture only in a scratch copy, as before.**
+    - Pros: nothing pipe-based in the repository.
+    - Cons: nothing to run or attach; the verification of this to-do asked for a committed reduction.
+
+### 3. Find the in-process trigger
+
+**Problem.** The committed reduction still needs this repository's backend, so it cannot go into an upstream report as it is, and the replay that would have been reportable loses nothing.
+
+**Context.** Task 2's table: the same commands replayed faithfully lose nothing; test 1 cut after its clone loses a child in about 1 run in 100 on macOS, nearly always the 67th or 68th; and a rewrite of that cut lost nothing in 400 runs when `runCommand` was swapped through `mock.module` rather than spliced. Linux has not run `in-process.ts`; there the real test lost about one child in two runs (task 1).
+
+**Investigation.** Not started. Next, run `scratch.ts` on beelink2 to see whether Linux loses the same children more often. Then, on the splice form, change one difference from the `mock.module` form at a time (the module swap, dynamic imports, the dropped reads), with enough runs to tell zero from the baseline. Then record what the service does in process between the 60th and 70th spawn (timers, `fs.promises` calls, SQLite statements, stream reads) and add those to `reduction.ts replay` one kind at a time. Running `scratch.ts` on beelink2 first would make each step cheaper, if Linux shows the same position.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **Linux on beelink2 (recommended).**
+    - Pros: a higher rate than macOS (task 1), so fewer runs a step.
+    - Cons: `in-process.ts` has not been run there, and the macOS lost `exit` is checked only at the end.
+  - **macOS on arktech-mini.**
+    - Pros: the reduction is measured there.
+    - Cons: about 1 run in 100 loses an event, so telling zero from the baseline needs about 500 runs (about 25 minutes) a step.
 
 ## Current state
 
-Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is open: on macOS the loss is not triggered by a watch helper or by aborts; whether it needs test 1's service calls or only its commands waits on a faithful replay, which the probe and `reduction.ts` now support. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
+Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is done: the faithful replay of test 1's commands loses nothing, and the smallest losing case, test 1 cut after its clone, is committed as `scripts/lost-child-event/in-process.ts` with `scratch.ts` to run it. Task 3, finding the in-process ingredient, is open. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
 
 ## Constraints and rationale
 
 - Run on an isolated checkout or throwaway directory only; never against the real data directory.
-- Do not leave the pipe capture on any pushed branch.
+- Do not put the pipe capture back into `runCommand` (`packages/protocol/src/node/command-capture.ts`) on any pushed branch. The reduction's own copy, `scripts/lost-child-event/pipe-runner.ts`, is imported by nothing in the product and is spliced only into a throwaway worktree, by `scratch.ts`.
 - Do not add CPU hogs on the user's command node without asking.
 
 ## Assumptions and decisions
@@ -193,7 +258,19 @@ The probe records outcomes, revisions, identity, dependencies and writes only wh
 
 ### Task 2: the scripts are committed, the pipe capture is not (2026-11-13)
 
-4260 kept its probe in the to-do's text. The probe now has a macOS and a Linux path, a preload and two reduction modes, which is more than a to-do should carry, and the upstream report needs a file to attach. They live in `scripts/lost-child-event/`, run nothing at build or test time, and never touch `runCommand`. The pipe capture itself stays out of the repository, as the constraint below requires; the scratch copy is described in task 1.
+4260 kept its probe in the to-do's text. The probe now has a macOS and a Linux path, a preload and two reduction modes, which is more than a to-do should carry, and the upstream report needs a file to attach. They live in `scripts/lost-child-event/`, run nothing at build or test time, and never touch `runCommand`. The pipe capture itself stayed out of the repository then; the rework below changed that for the reduction only.
+
+### Task 2: the reduction carries its own pipe runner (2026-11-13, rework)
+
+The verification of this to-do asked for a committed reduction, and the only case that loses events needs the pipe capture. So the runner is committed as `pipe-runner.ts`, and `scratch.ts` splices it into a throwaway worktree's `command-capture.ts` (task 2's last decision has the options). The constraint above was narrowed from "the pipe capture" to "the pipe capture in `runCommand`", which is what it protects: no branch's `runCommand` goes back to pipes.
+
+### Task 2: the watch host is stubbed in the reduction (2026-11-13, rework)
+
+Test 1 lost events at the same rate with the watch host stubbed (7 in 100 runs against 8), and the stub keeps FSEvents, which is unreliable on the shared host (to-do 7551), out of the case. `in-process.ts` therefore stubs it with `mock.module`, which affects only the watch host, not the capture.
+
+### Task 2: task 3 was added for the in-process ingredient (2026-11-13, rework)
+
+The reduction ends in this repository's backend, so it is not yet a report Bun's maintainers can run. Finding the ingredient is agent work with a concrete next step, so it is a new task here rather than a manual item.
 
 ### Task 2: the reduction started on Linux before the macOS half of task 1 (2026-11-11)
 
@@ -203,7 +280,7 @@ Task 2 depended on task 1 for a reproduction to reduce from. The Linux half give
 
 - To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and filing the report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
-- `scripts/lost-child-event/`: the strict probe, its `bun test` preload and the standalone reductions (`pattern`, `replay`)
+- `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reductions (`reduction.ts`: `pattern`, `replay`, `--block`); the in-process reduction (`in-process.ts`) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`)
 
 ## Replaces
 

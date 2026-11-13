@@ -20,9 +20,9 @@ const outputRoot = path.join(
 
 /**
  * Diagnostics export from a leaf node over two running `dev:test` profiles,
- * the second attached to the first (to-do 6141 task 4). Opt-in and not part
- * of the smoke suite. See `diagnostics-across-nodes-live.spec.ts` for the
- * commands.
+ * the second attached to the first (to-do 6141 (retired) task 4). Opt-in
+ * and not part of the smoke suite. See `diagnostics-across-nodes-live.spec.ts`
+ * for the commands.
  */
 export default defineConfig({
   testDir: import.meta.dirname,

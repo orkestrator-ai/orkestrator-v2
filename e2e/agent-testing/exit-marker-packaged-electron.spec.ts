@@ -1,9 +1,9 @@
 /**
- * The clean exit marker and the essential log in the packaged app (to-do 6141
- * task 3, docs/architecture/logging.md, "Health summary and the clean exit
- * marker"): the app's own executable, `app.asar` and the bundled Bun backend,
- * with the data directory a packaged build resolves. `dev:test` covered these
- * paths only through the development bundle.
+ * The clean exit marker and the essential log in the packaged app (to-do
+ * 6141 (retired) task 3, docs/architecture/logging.md, "Health summary and
+ * the clean exit marker"): the app's own executable, `app.asar` and the
+ * bundled Bun backend, with the data directory a packaged build resolves.
+ * `dev:test` covered these paths only through the development bundle.
  *
  * Three launches of one disposable profile:
  *
@@ -17,7 +17,8 @@
  * 3. The next start writes `previous-run` with `outcome: "crashed"`.
  *
  * The native save dialog a release candidate shows for the bundle is not
- * driven here (a person checks it: manual-test checklist, 6141 task 3).
+ * driven here (a person checks it: manual-test checklist,
+ * from 6141 (retired) task 3).
  *
  * Build the app first (`mise run package:mac:unpacked:test`, or
  * `package:linux:unpacked:test`); `mise run test:agent:electron:packaged` runs

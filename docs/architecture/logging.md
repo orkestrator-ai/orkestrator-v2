@@ -912,7 +912,9 @@ to the command node (`not-found`) and every piece has to go to the same node.
 checks both paths between two `dev:test` profiles, with the leaf's bundle made about
 1 MiB (five 256 KiB pieces) by a synthetic debug log. It passed on macOS on 2026-11-13:
 the leaf's bundle arrived whole through Settings (planned in 1.4 s, saved in 0.3 s) and
-through `--node` (1.8 s), and the command node refused the leaf's plan. Two profiles on
+through `--node` (1.8 s), and the command node refused the leaf's plan. It passed again
+the same day once that check required exit status 3 with `not-found` (planned in 0.4 s,
+saved in 0.2 s, `--node` in 0.3 s). Two profiles on
 one host share loopback, so a real network route between machines is not covered.
 
 ## Command failures

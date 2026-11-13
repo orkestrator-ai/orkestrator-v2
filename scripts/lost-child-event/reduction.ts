@@ -7,6 +7,8 @@
  *   bun scripts/lost-child-event/reduction.ts pattern [iterations=1000] [--host] [--abort=MS]
  *   bun scripts/lost-child-event/reduction.ts replay <schedule.json> [iterations=100]
  *
+ * Either mode takes `--block=MS` (`startBlocking`).
+ *
  * `pattern`: each iteration dirties a Git repository and runs `status`,
  * `rev-parse`, `merge-base`, `for-each-ref` and `diff` at once, then
  * `checkout`; every tenth also runs a `git clone`. `--host` adds a long-lived
@@ -58,7 +60,7 @@ const positional = rest.filter((arg) => !arg.startsWith("--"));
 const abortMs = Number(
   [...flags].find((flag) => flag.startsWith("--abort="))?.slice("--abort=".length) ?? 0,
 );
-const root = mkdtempSync(path.join(os.tmpdir(), "bun-lost-child-event-"));
+let root = "";
 
 type RunOptions = {
   /** May be picked for `--abort`. Only the measured workload is. */
@@ -67,7 +69,7 @@ type RunOptions = {
   /** Keep up to 4 KiB of stdout (for a revision the command prints). */
   captureStdout?: boolean;
 };
-type Outcome = {
+export type Outcome = {
   code: number | null;
   signal: string | null;
   aborted: boolean;
@@ -254,7 +256,24 @@ function readSchedule(text: string): ScheduleEntry[] {
   return parsed.entries;
 }
 
-async function replay(file: string, iterations: number): Promise<number> {
+/** Runs one replayed command; `run` by default, or a capture under test. */
+export type ReplayRunner = (
+  argv: string[],
+  cwd: string | undefined,
+  options: { env?: Record<string, string>; captureStdout?: boolean },
+) => Promise<Pick<Outcome, "code" | "timedOut" | "stdout">>;
+
+/**
+ * Replays a schedule file `iterations` times under `parent` (a fresh
+ * directory each time). Exported so a scratch `bun test` file can replay it
+ * inside the test runner, through the capture under test.
+ */
+export async function replay(
+  file: string,
+  iterations: number,
+  runner: ReplayRunner = run,
+  parent: string = root,
+): Promise<number> {
   const schedule = readSchedule(readFileSync(file, "utf8"));
   const commands = schedule.filter((entry): entry is ScheduleCommand => "argv" in entry);
   // The recorded run's root: the directory holding its `repos/` and `origins/`.
@@ -267,7 +286,7 @@ async function replay(file: string, iterations: number): Promise<number> {
     console.log(JSON.stringify({ kind: "REPLAY_MISMATCH", iteration, index, ...detail }));
   };
   for (let iteration = 0; iteration < iterations; iteration++) {
-    const base = mkdtempSync(path.join(root, "replay-"));
+    const base = mkdtempSync(path.join(parent, "replay-"));
     const remap = (value: string) => value.split(recordedRoot).join(base);
     /** Recorded revision → the replay's own. */
     const revisions = new Map<string, string>();
@@ -305,7 +324,7 @@ async function replay(file: string, iterations: number): Promise<number> {
       const cwd = entry.cwd ? remap(entry.cwd) : undefined;
       if (cwd) mkdirSync(cwd, { recursive: true });
       counts.commands++;
-      done[index] = run(argv, cwd, { env: entry.env, captureStdout: Boolean(entry.oid) }).then(
+      done[index] = runner(argv, cwd, { env: entry.env, captureStdout: Boolean(entry.oid) }).then(
         (outcome) => {
           const label = commandLabel(entry.argv);
           if (entry.exit !== undefined && (outcome.timedOut || outcome.code !== entry.exit))
@@ -330,13 +349,42 @@ async function replay(file: string, iterations: number): Promise<number> {
   return counts.mismatches;
 }
 
-let failures = 0;
-try {
-  if (mode === "pattern") failures = await pattern(Number(positional[0] ?? 1000));
-  else if (mode === "replay") failures = await replay(positional[0]!, Number(positional[1] ?? 100));
-  else throw new Error(`unknown mode ${mode}: use pattern or replay`);
-  await holdUntilClosed(30_000);
-} finally {
-  rmSync(root, { recursive: true, force: true });
+const blockMs = Number(
+  [...flags].find((flag) => flag.startsWith("--block="))?.slice("--block=".length) ?? 0,
+);
+
+/**
+ * `--block=MS`: every 5 to 15 ms, holds the event loop in a busy-wait of 0 to
+ * MS ms, as the backend's synchronous work (SQLite, sync file reads) does, so
+ * children exit while the loop is not polling.
+ */
+function startBlocking(): () => void {
+  if (blockMs <= 0) return () => undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = () => {
+    const until = performance.now() + Math.random() * blockMs;
+    while (performance.now() < until) {
+      // Busy-wait: the loop is held, as by synchronous work.
+    }
+    timer = setTimeout(tick, 5 + Math.random() * 10);
+  };
+  timer = setTimeout(tick, 5);
+  return () => clearTimeout(timer);
 }
-process.exit(failures > 0 ? 1 : 0);
+
+if (import.meta.main) {
+  root = mkdtempSync(path.join(os.tmpdir(), "bun-lost-child-event-"));
+  const stopBlocking = startBlocking();
+  let failures = 0;
+  try {
+    if (mode === "pattern") failures = await pattern(Number(positional[0] ?? 1000));
+    else if (mode === "replay")
+      failures = await replay(positional[0]!, Number(positional[1] ?? 100));
+    else throw new Error(`unknown mode ${mode}: use pattern or replay`);
+    stopBlocking();
+    await holdUntilClosed(30_000);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  process.exit(failures > 0 ? 1 : 0);
+}

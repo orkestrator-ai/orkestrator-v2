@@ -2158,7 +2158,7 @@ qualified; the evidence file is written either way.
 
 `e2e/agent-testing/diagnostics-across-nodes-live.spec.ts` exports a leaf's
 diagnostics bundle from a command node, between two running `dev:test` profiles
-(to-do 6141 task 4, [logging.md](../architecture/logging.md#the-diagnostics-bundle)).
+(to-do 6141 (retired) task 4, [logging.md](../architecture/logging.md#the-diagnostics-bundle)).
 It turns on Save Logs to Disk on the leaf and writes a synthetic debug log of plain
 words there, so the bundle spans several 256 KiB pieces. Through Settings (the leaf's
 machine chip, Debug, Export diagnostics, Save bundle) and through

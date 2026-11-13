@@ -1,5 +1,5 @@
 /**
- * Diagnostics export from a leaf node (to-do 6141 task 4,
+ * Diagnostics export from a leaf node (to-do 6141 (retired) task 4,
  * docs/architecture/logging.md, "The diagnostics bundle"): two running
  * `dev:test` profiles on this host, the second attached to the first as its
  * leaf over the leaf's real gateway. A plan is held by the backend that built

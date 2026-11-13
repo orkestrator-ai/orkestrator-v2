@@ -23,7 +23,7 @@
  * Recording a revision adds a `data` listener to the child's stdout, so a
  * recording run is not a measuring run; count losses from runs without it.
  *
- * Used by `preload.ts` (inside `bun test`) and by `reduction.ts`.
+ * Used by `preload.ts` (inside `bun test`), `reduction.ts` and `pipe-runner.ts`.
  */
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import type { ChildProcess } from "node:child_process";
@@ -106,6 +106,8 @@ function groupAlive(pid: number): boolean {
 
 type Tracked = {
   label: string;
+  /** Its position among this process's tracked children, from 1. */
+  seq: number;
   pid: number;
   /** The test it started in, numbered by `preload.ts`. */
   test: number;
@@ -199,6 +201,7 @@ export function track(
   if (child.pid === undefined) return;
   const t: Tracked = {
     label: commandLabel(argv),
+    seq: tracked.length + 1,
     pid: child.pid,
     test: probeState.test,
     spawnAt: Date.now(),
@@ -261,6 +264,7 @@ function scan(): void {
       record({
         kind: "LOST_EXIT",
         label: t.label,
+        seq: t.seq,
         test: t.test,
         zombieAfterSpawnMs: t.zombieAt - t.spawnAt,
         groupAlive: groupAlive(t.pid),
@@ -272,6 +276,7 @@ function scan(): void {
       record({
         kind: "LOST_CLOSE",
         label: t.label,
+        seq: t.seq,
         test: t.test,
         exitAfterSpawnMs: t.exitAt - t.spawnAt,
         groupAlive: groupAlive(t.pid),

@@ -2,14 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `96ee1eb3e`.
+Analysed 2026-11-13 against `main` at `17d28238c` (first analysed 2026-11-04 against `96ee1eb3e`).
 
 ### Tasks
 
-1. **Live six-provider sweep**: write the opt-in live spec (recommended below) that runs `/subork` end to end on every provider, as a caller and as a target, on a host or a container environment, skipped unless its switch is set. Running it on real logins is in the manual-test checklist (7568, 4340 task 1). Status: open.
-2. **Plain-text form**: if the live check (7568, 4340 task 2) shows a provider answering a plain-words request with its own sub-agents instead of `ask_agents`, sharpen the tool description. Status: blocked (waits on 7568: 4340 task 2).
-4. **Backend restart with real turns**: write the opt-in restart spec, following `goals-restart-live.spec.ts`, that kills the backend mid-subork and confirms delivery. Running it on real logins is in the manual-test checklist (7568, 4340 task 4). Status: open.
-5. **Electron agent suite on a quiet host**: rerun `test:agent:electron` for this branch where Docker is not churning the host's interfaces. Status: open.
+1. **Live six-provider sweep**: write the opt-in live spec (recommended below) that runs `/subork` end to end on every provider, as a caller and as a target, on a host or a container environment, skipped unless its switch is set. Running it on real logins is in the manual-test checklist (7568, 4340 task 1). Status: done (2026-11-13: `suborks-live.spec.ts`, passing on scripted models).
+2. **Plain-text form**: if the live check (7568, 4340 task 2) shows a provider answering a plain-words request with its own sub-agents instead of `ask_agents`, sharpen the tool description. Status: done (2026-11-13: moved whole into the checklist item, with this task's decision, so no agent work waits here).
+4. **Backend restart with real turns**: write the opt-in restart spec, following `goals-restart-live.spec.ts`, that kills the backend mid-subork and confirms delivery. Running it on real logins is in the manual-test checklist (7568, 4340 task 4). Status: done (2026-11-13: `suborks-restart-live.spec.ts`, passing on scripted models; the OpenCode-target defect it found is to-do 8045).
+5. **Electron agent suite on a quiet host**: rerun `test:agent:electron` for this branch where Docker is not churning the host's interfaces. Status: done (2026-11-13, see task 5 Investigation).
 
 ### 1. Live six-provider sweep
 
@@ -17,7 +17,9 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `docs/architecture/suborks.md` describes the path. A subork uses the same plan-turn and result-tool path as a goal's verifier, which passed live on all six providers (`docs/architecture/goals.md`, Qualification), so a surprise is more likely in `ask_agents` being reached and in the wake than in the subork's turn.
 
-**Investigation.** No live model has run it. On 2026-11-04 `native-agent-suborks-opencode.live.test.ts` ran the pinned `opencode serve` (1.19.5) against a scripted model on loopback, as caller and as target, and passed. That test was removed with OpenCode 1.x on 2026-11-11 (`git show 5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`); its OpenCode 2 port, `apps/backend/src/core/opencode2/opencode2-suborks.live.test.ts` (in `mise run verify:opencode2:live`), ran the pinned `opencode2 serve` (2.2.6) the same way on 2026-11-11 and passed, with the caller on its per-tab MCP server and the subork offered no editing tool, no `subagent` and only its result connection's tools. It found that a reviewer-session subork on OpenCode was offered `orkestrator_ask_agents` and the environment-wide ticket tools, and the same change denies both (see Assumptions and decisions). The other five providers have no real-process run. Worth watching: Codex and Grok tool approval for `ask_agents`; whether each provider surfaces the handle; the mail wake after a real turn end; `suborkLatestAction` against each provider's real rows, because the fake rows are hand-written.
+**Investigation.** 2026-11-13: `e2e/agent-testing/suborks-live.spec.ts` and `mise run test:agent:suborks` (a disposable `--no-agent-credentials --agent-platforms pi,opencode` profile, `suborks-fake-model.ts` on loopback) passed on this Mac: Pi and OpenCode each asked itself and the other, every subork finished on its expected tier (Pi `enforced`, OpenCode `provider-configured` and guarded), the delivery was `sent` and the caller was woken once with both answers, 5 to 9 s from typing to the wake. The first run failed only because the fake took OpenCode's tool-less title request for a second `/subork` turn; the fake now answers such requests as titles. The same spec runs live on all six without `ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE`.
+
+No live model has run it. On 2026-11-04 `native-agent-suborks-opencode.live.test.ts` ran the pinned `opencode serve` (1.19.5) against a scripted model on loopback, as caller and as target, and passed. That test was removed with OpenCode 1.x on 2026-11-11 (`git show 5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`); its OpenCode 2 port, `apps/backend/src/core/opencode2/opencode2-suborks.live.test.ts` (in `mise run verify:opencode2:live`), ran the pinned `opencode2 serve` (2.2.6) the same way on 2026-11-11 and passed, with the caller on its per-tab MCP server and the subork offered no editing tool, no `subagent` and only its result connection's tools. It found that a reviewer-session subork on OpenCode was offered `orkestrator_ask_agents` and the environment-wide ticket tools, and the same change denies both (see Assumptions and decisions). The other five providers have no real-process run. Worth watching: Codex and Grok tool approval for `ask_agents`; whether each provider surfaces the handle; the mail wake after a real turn end; `suborkLatestAction` against each provider's real rows, because the fake rows are hand-written.
 
 **Decisions.** Where to run it:
 - A new `e2e/agent-testing` spec driven by `test:agent:browser:isolated` (recommended). Pros: repeatable at the next provider bump, like `goals-*-live.spec.ts`. Cons: spends real turns on each run.
@@ -41,7 +43,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `goals-restart-live.spec.ts` is the pattern. Agent tool credentials are held in process, so a subork that submits after a restart depends on the runner's reminder turn to get a fresh connection.
 
-**Investigation.** Not run.
+**Investigation.** 2026-11-13: `e2e/agent-testing/suborks-restart-live.spec.ts`, in the same suite, passed with an OpenCode caller and a Pi target: the fake held the target's request, the backend was `SIGKILL`ed and the profile restarted; the row was resumed, the Pi target finished on the runner's continuation turn, the `/subork` turn was not sent again and the answer woke the OpenCode caller once. With an OpenCode target (reproduced twice) the target stayed `running` after the restart: OpenCode's store keeps the session busy and the backend reads it as running until the 45-minute bound. That is to-do 8045, and `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces it.
 
 **Decisions.** No material choice: follow `goals-restart-live.spec.ts`.
 

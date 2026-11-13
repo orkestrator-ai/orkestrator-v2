@@ -3061,6 +3061,64 @@ reads backend log lines from the profile's `logs/electron.log`, so it needs a
 `dev:test` profile rather than a standalone backend. The shim's timestamps use
 GNU `date`, so the spec runs on Linux.
 
+### Suborks on every provider and across a restart (fake model)
+
+`mise run test:agent:suborks` qualifies `/subork` (`docs/architecture/suborks.md`)
+on the real stack with no login and nothing billed (4340 (retired) tasks 1 and
+4). It passed on 2026-11-13 on macOS in 160 s. It starts a disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi,opencode` profile with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs both specs of
+`e2e/agent-testing/playwright.suborks.config.ts`, then stops and resets the
+profile. The specs point the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) and its isolated OpenCode `opencode.json` at
+`suborks-fake-model.ts` (one loopback server, base paths `/pi/v1` and
+`/opencode/v1`; script in `suborks-fake-model-script.ts`), and add the fake's
+provider to the profile's OpenCode allowlist. Everything else is real: the
+bridges and `opencode2 serve`, the agent tools server, the subork service,
+the branch runner, the workspace guard and the mail drain.
+
+- `suborks-live.spec.ts`: each enabled platform in turn types
+  `/subork ask <itself> and <the next>` in its own tab. The call's row must
+  hold one subork per target, `finished`, on the read-only tier the
+  enforcement matrix gives it and guarded below `enforced`; the delivery must
+  be `sent`; and the mail must wake the caller into one new turn that reads
+  both answers. The fake counts that the `/subork` turn started once, that
+  each target turn started, and that the caller was woken exactly once.
+- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi, the fake holds
+  the target's requests open, and the backend is `SIGKILL`ed (after checking
+  its command line and start time) and the profile restarted with
+  `devTestRestartArgs`. After the restart the held requests are released;
+  the resumed row must settle with the subork `finished` (through the
+  runner's continuation turn), one row, the delivery `sent`, the `/subork`
+  turn not sent again and exactly one wake, on the restarted OpenCode server.
+  An OpenCode target is left out of the default until
+  [8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
+  is fixed: its session stays busy in OpenCode's store after the kill, so the
+  subork stays `running` until the 45-minute bound.
+  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces it,
+  and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed run's
+  environment for inspection.
+
+The fake recognises OpenCode's own tool-less title requests and never counts
+them as turns. Claude, Codex, Cursor and Grok have no scripted model that
+reaches a profile's own bridge, so the scripted run covers Pi and OpenCode;
+both specs also run on real models without
+`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE`, on every platform the profile enables
+(`ORKESTRATOR_AGENT_TEST_SUBORK_PLATFORMS` narrows,
+`ORKESTRATOR_AGENT_TEST_SUBORK_ENVIRONMENT=container` moves the sweep into a
+container environment, `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_PLATFORM` picks
+the restart spec's platform). Those billed runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md); each
+spec's header has the commands. The content-free summaries are
+`output/agent-testing/<profile>/suborks/summary.json` and
+`restart-summary.json`. To run the scripted specs against a profile you
+started yourself, start it with the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_SUBORKS=1
+ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE=1` to `bunx playwright test --config
+e2e/agent-testing/playwright.suborks.config.ts`. The restart spec restarts that
+profile and both change its Pi and OpenCode settings for the run, so reset it
+afterwards.
+
 ### Live goal suite
 
 `mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`

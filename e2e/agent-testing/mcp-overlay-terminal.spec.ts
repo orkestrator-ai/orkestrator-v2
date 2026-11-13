@@ -168,6 +168,8 @@ test("Docker fixture saving an environment-private MCP server leaves a running c
     rows: 40,
   });
   let saved = false;
+  // The body's own failure, reported after cleanup (not from a `finally`).
+  let failure: { error: unknown } | undefined;
   try {
     await invoke("start_terminal_session", { sessionId });
     const output = async () =>
@@ -252,6 +254,25 @@ test("Docker fixture saving an environment-private MCP server leaves a running c
         .toBe(false);
       operations.push(operation);
 
+      // The apply outcome matches the button. "Save" never schedules runtime
+      // work; "Save and apply" may (an agent session another spec left in the
+      // container), but neither the save nor any runtime it reached failed.
+      expect(operation.applyIntent, `${applyIntent} was recorded as asked`).toBe(applyIntent);
+      if (applyIntent === "save") {
+        expect(operation.apply.state, "save schedules no apply").toBe("not-requested");
+        expect(operation.apply.runtimes, "save touches no runtime").toEqual([]);
+      } else {
+        expect(operation.apply.state, `${applyIntent} did not fail to apply`).not.toBe("failed");
+        expect(
+          operation.apply.runtimes.filter((runtime) => runtime.state === "failed").length,
+          `no runtime failed to adopt ${applyIntent}`,
+        ).toBe(0);
+        if (operation.apply.runtimes.length === 0 && operation.apply.omitted === 0)
+          expect(operation.apply.state, "with no runtime there is nothing to apply").toBe(
+            "not-requested",
+          );
+      }
+
       // The job is the same process, its output still arrives, and the
       // container was not restarted under it.
       const before = await latestTick();
@@ -312,20 +333,41 @@ test("Docker fixture saving an environment-private MCP server leaves a running c
       }),
       contentType: "application/json",
     });
-  } finally {
-    containerExec(containerId, 'rm -f "$1"', [release]);
-    await invoke("detach_terminal", { sessionId }).catch(() => undefined);
-    if (saved) {
-      const source = (await snapshot()).sources.find((item) => item.sourceId === "codex:user");
-      if (source?.overlay)
-        await invoke<McpOverlayResolutionResult>("resolve_mcp_environment_overlay", {
-          resolution: {
-            targetId: target!.targetId,
-            sourceId: source.sourceId,
-            expectedRevision: source.revision,
-            action: { kind: "reset" },
-          },
-        });
-    }
+  } catch (error) {
+    failure = { error };
+  }
+  // Each cleanup step runs even when an earlier one fails (a broken container
+  // is the regression this spec guards), and a cleanup failure never replaces
+  // the assertion that failed above. When the body passed, a failed cleanup
+  // still fails the test: the shared shard fixture would be left dirty.
+  {
+    const cleanupFailures: string[] = [];
+    const cleanup = async (step: string, run: () => unknown) => {
+      try {
+        await run();
+      } catch {
+        cleanupFailures.push(step);
+      }
+    };
+    await cleanup("remove the release file", () =>
+      containerExec(containerId, 'rm -f "$1"', [release]),
+    );
+    await cleanup("detach the terminal", () => invoke("detach_terminal", { sessionId }));
+    if (saved)
+      await cleanup("reset the overlay", async () => {
+        const source = (await snapshot()).sources.find((item) => item.sourceId === "codex:user");
+        if (source?.overlay)
+          await invoke<McpOverlayResolutionResult>("resolve_mcp_environment_overlay", {
+            resolution: {
+              targetId: target!.targetId,
+              sourceId: source.sourceId,
+              expectedRevision: source.revision,
+              action: { kind: "reset" },
+            },
+          });
+      });
+    if (failure) throw failure.error;
+    if (cleanupFailures.length > 0)
+      throw new Error(`cleanup failed: ${cleanupFailures.join(", ")}`);
   }
 });

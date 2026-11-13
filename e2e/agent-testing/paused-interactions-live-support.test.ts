@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AgentInteractionQuestion } from "@orkestrator/protocol/agent-interactions";
 import {
+  approvalKindProblem,
   approvalOption,
   raiseAndProtect,
   withEnvironmentCleanup,
@@ -171,4 +172,25 @@ test("a failed provider drains its sibling before returning to cleanup", async (
   await pending;
   expect(protectedSibling).toBe(true);
   expect(returned).toBe(true);
+});
+
+test("the Grok approval case accepts only a command approval", () => {
+  expect(approvalKindProblem("grok-approval", "command-approval")).toBeUndefined();
+  // A generic permission is what Grok raised before its mapping; the generic
+  // approval set would have accepted it.
+  expect(approvalKindProblem("grok-approval", "permission")).toBe(
+    "grok-approval: raised permission, expected command-approval",
+  );
+  expect(approvalKindProblem("grok-approval", "file-approval")).toBe(
+    "grok-approval: raised file-approval, expected command-approval",
+  );
+});
+
+test("cases that name no kind accept any approval, and nothing else", () => {
+  for (const kind of ["command-approval", "file-approval", "permission"]) {
+    expect(approvalKindProblem("pi-approval", kind)).toBeUndefined();
+  }
+  expect(approvalKindProblem("pi-approval", "question")).toBe(
+    "pi-approval: question is not an approval",
+  );
 });

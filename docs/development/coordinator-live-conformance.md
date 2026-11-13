@@ -1,83 +1,17 @@
-# Coordinator live conformance
+# Coordinator live conformance: evidence and rationale
 
-Checked against `main` at `00a0cb82` (2026-10-25).
-
-## Task analysis
-
-Analysed 2026-10-27 against `main` at `863b5782`.
-
-### Tasks
-
-6. **Cursor and Grok mailbox identity**: `self` in `list_mailboxes`, `idle` injection starting a turn, Cursor resume with a new `agentMcp`, Grok token rotation. Agent part: add the recommended `identity` scenario to the live suite (two tabs, one `idle`-policy injection, one resume with a rotated `agentMcp`) and the recommended Grok bridge unit test that two sessions keep separate children and credentials across a rotation. Running the scenario on Cursor and Grok moved to 7568. Status: partly done (Cursor launch-and-wake passed; the scenario and the unit test are open).
-7. **Stale pin references**: the file's pin notes predate the 2026-10-23 agent bump. Status: open (doc hygiene; the live runs it was to ride with moved to 7568, so correct the pin lines on their own).
-8. **Completed items still listed**: Code items 1 to 5 and all three Verify entries. Status: done.
-
-### 6. Cursor and Grok mailbox identity
-
-**Split 2026-11-10.** The scenario code and the Grok unit test stay here; the
-live runs on Cursor and Grok are in 7568 (0024 task 6).
-
-**Problem.** Four identity behaviours are unproven live on Cursor and Grok: each tab of one environment sees itself as `self`; `idle` injection starts a turn; a Cursor resume with a new `agentMcp` keeps the same SDK agent; and a rotated Grok tab token reloads only that session's child.
-
-**Context.** This came from the retired `agent-mail-cursor-grok.md` plan. The third bullet's launch-and-wake half is done for Cursor (2026-10-18).
-
-**Investigation.** None of the five scenarios (`coordinator-live.ts:56`) checks these, and nothing under `apps/desktop/scripts/dev/coordinator-live*` or `e2e/agent-testing/` calls `list_mailboxes`. `self` is computed in the backend from the tab-scoped credential (`apps/backend/src/core/agent-tools-messaging.ts:169`), so it is provider-neutral once the credential is per tab. Cursor rotation has unit coverage ("a rotated tab MCP token detaches and resumes the same agent", `bridges/cursor-bridge/src/agent-session.test.ts:1084`, plus `agent-session-mcp-reattach.test.ts`). Grok rebuilds a child for a later tab credential ("an already-loaded external session rebuilds with the later tab credential", `bridges/acp-bridge/src/acp-session.test.ts:874`), and it refuses an attach-time rebuild mid-turn (`bridges/acp-bridge/src/acp-http.ts:472`). Sibling-session isolation has no explicit test. `defaultInjectPolicy` accepts `"idle"` (`packages/protocol/src/agent-mail.ts:133`).
-
-**Decisions.**
-
-- **How to cover them?**
-  - **Add a small `identity` scenario to the live suite (two tabs, one `idle`-policy injection, one resume with a rotated `agentMcp`) and run it on Cursor now, Grok later (recommended).**
-    - Pros: repeatable; every platform gets it for free; Cursor is signed in on the qualifying hosts.
-    - Cons: new harness code and tests; rotation has to be driven through backend commands.
-  - **One-off manual check with a `dev:test` profile and the `orkestrator` CLI.**
-    - Pros: no code.
-    - Cons: not repeatable, and there is no checked evidence format.
-  - **Retire `self` and `idle` as provider-neutral, and keep only the two rotation checks.**
-    - Pros: drops two checks the backend owns; less to run.
-    - Cons: `idle` injection starting a turn depends on each bridge's prompt path, so it is not wholly neutral.
-- **Grok sibling isolation?**
-  - **Add a bridge unit test that two sessions keep separate children and credentials across a rotation (recommended).**
-    - Pros: cheap, needs no login, and closes the isolation half before any live run.
-    - Cons: it is a code change outside this research pass.
-  - **Rely on the live check only.**
-    - Pros: tests the real CLI.
-    - Cons: blocked on Grok sign-in.
-
-### 7. Stale pin references
-
-**Problem.** The file states pins that no longer hold, which misleads anyone reading its evidence.
-
-**Context.** The "Current state" section says the Grok "pin is now 1.0.52", and the 2026-10-25 runs are described as "same pins" (Codex 0.162.1, Grok 1.0.52).
-
-**Investigation.** `28590e68` (2026-10-23) set Claude 2.1.309, Codex 0.164.0, Grok 1.0.67, OpenCode 1.19.4 and Pi 1.4.0 (`packages/toolchain/src/manifest.ts:6`). It is an ancestor of `00a0cb82`, so the 2026-10-25 runs used those pins, not the ones stated. The 2026-10-22 runs (`b83ae534`) predate the bump. The Grok matcher's "checked against 1.0.46" is therefore two bumps behind.
-
-**Decisions.**
-
-- **When to correct it?**
-  - **Correct the pin lines in the next change that records a live run (recommended).**
-    - Pros: one edit alongside new evidence; the README allows correcting items.
-    - Cons: the wrong pins stay visible until then.
-  - **Correct them now in a doc-only change.**
-    - Pros: accurate immediately.
-    - Cons: a separate change only for wording.
-
-### 8. Completed items still listed
-
-**Problem.** Code items 1 to 5 and the three Verify entries are all done or resolved, but they still take up most of "Outstanding work".
-
-**Context.** The README says to update or remove an item in the change that finishes it, and to move durable behaviour into `architecture/` or `development/`. Much of this content is already in `agent-testing.md` (the "Live coordinator suite" section) and `coordinator.md`.
-
-**Investigation.** Every Code item says Done or Fixed with tests (for example `acp-policy-denial.test.ts`, `live-refused-calls.test.ts`), and the Cursor label work is closed with four of four passes. The "Constraints and rationale" and "Assumptions and decisions" sections hold the durable reasoning.
-
-**Decisions.**
-
-- **What to do with them?**
-  - **Leave them until the file's last live item closes, then move the rationale to `agent-testing.md`/`coordinator.md` and delete the file (recommended).**
-    - Pros: one move; live-run authors keep the history while rerunning.
-    - Cons: the file stays long.
-  - **Prune the done items now into the architecture docs.**
-    - Pros: the outstanding list shows only open work.
-    - Cons: a large doc move while live work is still adding evidence here.
+Status: Living — the evidence log and design rationale of the live
+coordinator suite. Folded in from to-do 0024 (retired 2026-11-13, once its
+last agent tasks were built; read it with
+`git show 17d28238c:docs/todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md`).
+How to run the suite and what each scenario checks is under
+[Live coordinator suite](agent-testing.md#live-coordinator-suite); the tiers it
+qualifies are in [`coordinator.md`](../architecture/coordinator.md#provider-qualification).
+The live runs still owed (Grok on every scenario, Claude on Linux, Pi's
+review part, the `family` and `peer` tiles on the other platforms, Grok mail
+approvals and the Cursor and Grok identity runs) are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+cited as `0024 (retired)`; record their results under "Qualification" below.
 
 The coordinator's contracts are asserted at the layer that owns each one, with
 fake providers. The opt-in live suite now shows, per real provider, that the
@@ -88,22 +22,27 @@ environments wakes each side with Wake peers on. Its first full runs passed on
 Claude, Codex, OpenCode and Cursor, and (2026-10-23) all four scenarios
 passed on Pi once the agent-test profile started on the host's Pi default
 model (todo 0054, retired on 2026-10-29; see
-[credentials-and-models.md](../../development/credentials-and-models.md#default-model)).
+[credentials-and-models.md](credentials-and-models.md#default-model)).
 Since 2026-10-25 the suite also has a `status` scenario (a coordinator-launched
 Multi Review's `ready` and `fix-done` wakes, and a delegated worker held on an
 approval) and judges every echoed mail carrier through the renderer's tile
 parser. Both passed live on 2026-10-25 on Claude, Codex, OpenCode and Cursor,
 and on Pi except its Multi Review, which a Pi model-selection gap breaks
-(to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults))). The live runs
+(to-do 0172 (retired 2026-11-10; see [coordinator.md](../architecture/coordinator.md#launch-defaults))). The live runs
 still owed (Grok on every scenario, Claude on Linux, Pi's review part, the
 `family` and `peer` tiles on the other platforms, Grok mail approvals and the
 Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
-2026-11-10; the identity scenario's code stays here (task 6).
+2026-11-10. The identity scenario and the Grok sibling-isolation test were
+built on 2026-11-13 (see "Decisions made when the to-do was retired").
 
 ## Current state
 
-- The live suite runs five scenarios per platform: `read-only`, `async`,
-  `family`, `status` and `peer` (`--scenario` narrows a run).
+- The live suite runs fourteen scenarios per platform: `read-only`,
+  `research`, `async`, `family`, `status`, `deliver-now`, `goal`, `routing`,
+  `surfaces`, `gap-tools`, `ask`, `identity`, `account-switch` and `peer`
+  (`--scenario` narrows a run; `COORDINATOR_LIVE_SCENARIOS` is the list). The
+  history below covers the first five; each later one is described under
+  "Live coordinator suite" in [`agent-testing.md`](agent-testing.md#live-coordinator-suite).
   `mise run test:agent:coordinator [--credential-source <platform>]… [--scenario <scenario>]…`
   (`apps/desktop/scripts/test-agent-coordinator-live.ts`) starts one disposable
   `dev:test --fixture` profile per platform and runs
@@ -124,7 +63,7 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
   (`owner-supervisor.ts`, shared with `test:agent:browser:isolated`), so an
   owner killed outright still stops and resets the profile. How a run works and what it writes is under "Live
   coordinator suite" in
-  [`agent-testing.md`](../../development/agent-testing.md#live-coordinator-suite).
+  [`agent-testing.md`](agent-testing.md#live-coordinator-suite).
 - The cheap halves, all in `apps/backend/src/core/` unless noted:
   - `coordinator-conformance.test.ts`: the policy names capabilities, the
     `enforced` set is exactly `claude`, `codex`, `pi`, every platform has
@@ -157,14 +96,19 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
   - The Grok approval matcher (`bridges/acp-bridge/src/acp-session.ts`)
     allows a mail tool named `orkestrator__<tool>` or carrying
     `_meta["x.ai/tool"]` with namespace `orkestrator`. It was checked against
-    Grok 1.0.46 naming; the pin is now 1.0.52
-    (`packages/toolchain/src/manifest.ts`).
+    Grok 1.0.46 naming. The pin has moved since (1.0.52 for the 2026-10-17 to
+    2026-10-23 runs, 1.0.67 from `28590e68` on 2026-10-23, 1.0.77 on
+    2026-11-13; `packages/toolchain/src/manifest.ts`), and no live Grok run has
+    rechecked the naming since: Grok's runs are on the manual-test checklist.
 - A fresh coordinator composer selects plan mode (Claude's projection reports
   `composer.selectedModeId: "plan"`), and the renderer sends that mode with
   every coordinator turn. In plan mode Claude refuses to attempt any mutation,
   so the suite sends its turn with `mode: "build"`.
 
-## Outstanding work
+## How the suite was built and qualified
+
+Every item here is done; the live runs still owed are on the manual-test
+checklist.
 
 ### Code
 
@@ -182,7 +126,7 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
    messages arrive in one carrier with no notice; a silent worker yields one
    notice; one wake per delegation; the fourth or fifth identical
    `read_messages` carries `repeatedRead`; nothing reached the harness. How
-   it gets there is in [`agent-testing.md`](../../development/agent-testing.md#live-coordinator-suite)
+   it gets there is in [`agent-testing.md`](agent-testing.md#live-coordinator-suite)
    and under "Constraints and rationale" below.
 2. **Tie qualification to the suite.** Done (2026-10-22).
    `coordinator-conformance.test.ts` now imports `COORDINATOR_LIVE_PLATFORMS`
@@ -205,7 +149,7 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
      cells in that shape.
    - Final fix: the bridge now shows those cells in the live transcript
      (to-do 0026 item 11, retired; see "Codex refused cells" in
-     [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)),
+     [`coordinator-read-only-decisions.md`](../architecture/coordinator-read-only-decisions.md)),
      so the case reads them there under the same rule, and no longer reads
      rollout files. Codex's `exec` rows answer only through that rule
      (`transcriptCellEvidence`), never as ordinary calls.
@@ -286,14 +230,15 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
 ### Qualification
 
 Live runs need credentials and an isolated profile; see
-[0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)
 for prerequisites and how to batch them with other provider runs.
 
 - **Read-only, async and worker-mail family scenarios.** Run on macOS on
   2026-10-18 (branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`,
   merged with `main` at `68dc1c8d`), one disposable profile per platform,
   default messaging settings, Grok at `advisory`. Pins as in
-  `packages/toolchain/src/manifest.ts` (Codex 0.162.1, Grok 1.0.52). Evidence
+  `packages/toolchain/src/manifest.ts` at `68dc1c8d` (Claude 2.1.296, Codex
+  0.162.1, Grok 1.0.52, OpenCode 1.19.0, Pi 1.2.0). Evidence
   is `output/agent-testing/<profile>/coordinator/<platform>-<scenario>.json`
   (local, ignored).
 
@@ -330,16 +275,18 @@ for prerequisites and how to batch them with other provider runs.
     seen pending while the coordinator was busy and the prompt queued.
   - No coordinator ran `sleep` or called `list_environments` in any async or
     family run; the only `read_messages` calls were the poll turn's five.
-    Recorded as D4 in [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+    Recorded as D4 in [`coordinator-read-only-decisions.md`](../architecture/coordinator-read-only-decisions.md)
     (to-do 0026, retired) and in todo 0028 (retired on 2026-10-29; the poll guard is in
-    [`coordinator.md`](../../architecture/coordinator.md#control-mcp), "Control MCP").
+    [`coordinator.md`](../architecture/coordinator.md#control-mcp), "Control MCP").
   - Earlier read-only history: first full run 2026-10-16 (Claude and OpenCode
     passed; Codex failed on hosted search and phantom denials, both fixed;
     Pi and Cursor skipped; Grok ended on its first denial, fixed by the
     policy-denial continuation). Claude on Linux has not run.
 - **2026-10-22 runs** (macOS, branch
   `todo-0024-coordinator-live-conformance-b710209f6694` on `main` at
-  `b83ae534`, one disposable profile per run, same pins):
+  `b83ae534`, one disposable profile per run, the same pins as the
+  2026-10-18 runs: Claude 2.1.296, Codex 0.162.1, Grok 1.0.52, OpenCode
+  1.19.0, Pi 1.2.0; the 2026-10-23 Pi rerun below, on `459d2944`, too):
 
   | Platform | Read-only | Async | Family | Peer |
   | --- | --- | --- | --- | --- |
@@ -404,7 +351,9 @@ for prerequisites and how to batch them with other provider runs.
 - **2026-10-25 runs** (macOS, branch
   `todo-0024-coordinator-live-conformance-4756fe9bd8ee` on `main` at
   `00a0cb82`, the suite as committed in `38532577`, one disposable profile
-  per run, same pins). The host was busy with other worktrees' test runs
+  per run). These runs were not on the earlier pins: `28590e68` (2026-10-23),
+  an ancestor of `00a0cb82`, set Claude 2.1.309, Codex 0.164.0, Grok 1.0.67,
+  OpenCode 1.19.4 and Pi 1.4.0. The host was busy with other worktrees' test runs
   (load average about 50) and still started cleanly.
 
   | Platform | Async | Status: review part | Status: approval part | Mail tiles |
@@ -412,8 +361,8 @@ for prerequisites and how to batch them with other provider runs.
   | Claude (macOS) | Passed | Passed | Passed | Passed in `async` (batched), `family`, `status` and `peer` |
   | OpenCode | Passed | Passed | Passed | Passed in `async` (batched) and `status` |
   | Cursor | Passed | Passed | Not applicable (never asks) | Passed in `async` (batched) and `status` |
-  | Pi | Passed | Failed: the review's rows resolved to a refused model (to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults))) | Passed | Passed in `async` (batched) and `status` |
-  | Codex | Passed on rerun (first try missed `queued-before-mail`, flake [0920](../../tests/flaky-tests/coordinator-and-multi-review/0920-live-coordinator-async-queued-overlap.md)) | Passed | Passed | Passed in `async` (batched, both runs) and `status` |
+  | Pi | Passed | Failed: the review's rows resolved to a refused model (to-do 0172 (retired 2026-11-10; see [coordinator.md](../architecture/coordinator.md#launch-defaults))) | Passed | Passed in `async` (batched) and `status` |
+  | Codex | Passed on rerun (first try missed `queued-before-mail`, flake [0920](../tests/flaky-tests/coordinator-and-multi-review/0920-live-coordinator-async-queued-overlap.md)) | Passed | Passed | Passed in `async` (batched, both runs) and `status` |
   | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Skipped (same) |
 
   - Claude `status` (run `qa-coordinator-2026-10-25T16-20-48-792Z`, profile
@@ -455,7 +404,7 @@ for prerequisites and how to batch them with other provider runs.
     first catalogue model, `openai/gpt-4`, which this host's ChatGPT-backed
     Pi login refuses (OpenAI 400), while Pi tabs start on the host's saved
     `openai/gpt-6.1-sol`. Filed as
-    to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults)); the suite
+    to-do 0172 (retired 2026-11-10; see [coordinator.md](../architecture/coordinator.md#launch-defaults)); the suite
     was not changed to dodge it. All three `async` runs passed every check,
     tiles included (3 messages, 2 carrier rows, one batched). Grok was
     signed out on this host and skipped correctly.
@@ -475,7 +424,8 @@ for prerequisites and how to batch them with other provider runs.
     `command-approval`; the `waiting` notice came 21 s after the approval
     was seen, and the worker reported after the denial.
 - **Worker-mail family scenario**: covered by the `family` columns above.
-- **Re-runs still owed**: in 7568 (0024 tasks 1 to 5).
+- **Re-runs still owed**: on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+  cited as `0024 (retired)` tasks 1 to 5.
 - **Peer scenario** between two ordinary environments with Wake peers turned
   on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
   column above), and on Pi on 2026-10-23. Grok is in the re-runs owed.
@@ -498,7 +448,7 @@ for prerequisites and how to batch them with other provider runs.
     their mail tools did not prompt; OpenCode's worker ended its turn without
     mailing (its finished notice stood in), so OpenCode's mail-tool
     exemption was not exercised by that run.
-  - Still owed: the Grok `status` run, in 7568 (0024 task 5).
+  - Still owed: the Grok `status` run, on the manual-test checklist (`0024 (retired)` task 5).
 - **Status wakes**, once per qualified platform with default settings: a
   coordinator-launched Multi Review reaching `ready`, then (after
   `address_multi_review`) its fix finishing, then `completed`, wakes the
@@ -531,8 +481,8 @@ for prerequisites and how to batch them with other provider runs.
   - Live (2026-10-25, "2026-10-25 runs" above): passed on Claude, Codex and
     OpenCode (both parts) and Cursor (review part; the approval part does
     not apply). Pi passed the approval part; its review part failed on
-    to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults)).
-  - Still owed: Pi's review part and Grok, in 7568 (0024 tasks 3 and 1).
+    to-do 0172 (retired 2026-11-10; see [coordinator.md](../architecture/coordinator.md#launch-defaults)).
+  - Still owed: Pi's review part and Grok, on the manual-test checklist (`0024 (retired)` tasks 3 and 1).
 - **Mail tiles per platform**: each platform echoes the injected carrier as its
   user row, single and batched, and the coordinator transcript shows one
   collapsed tile per message with no raw carrier text.
@@ -558,8 +508,8 @@ for prerequisites and how to batch them with other provider runs.
     and Pi in `async` (batched) and `status` (single). No platform echoed a
     carrier the renderer would show raw.
   - Still owed: Grok on every scenario and the `family`/`peer` tile
-    confirmation on Codex, OpenCode, Cursor and Pi, in 7568 (0024 tasks 1
-    and 4).
+    confirmation on Codex, OpenCode, Cursor and Pi, on the manual-test
+    checklist (`0024 (retired)` tasks 1 and 4).
 - **Cursor and Grok mailbox identity:**
   - two tabs in one environment each see themselves as `self` in
     `list_mailboxes`;
@@ -572,6 +522,17 @@ for prerequisites and how to batch them with other provider runs.
     agent rather than creating a second one that orphans the conversation;
   - a rotated Grok tab token reloads only that session's CLI child and never
     reaches process environment or a sibling session.
+  - Code done (2026-11-13, to-do 0024 task 6): the `identity` scenario
+    (`coordinator-live-identity.ts`; the `identity` case under "Live coordinator suite" in
+    [`agent-testing.md`](agent-testing.md#live-coordinator-suite)) checks the first,
+    second and fourth bullets on every platform, with the resume driven as the
+    first tab's conversation resumed in a third tab, whose own credential is
+    the new `agentMcp`. The Grok bridge test
+    `bridges/acp-bridge/src/acp-session-sibling-isolation.test.ts` covers the
+    fifth without a login: two sessions get separate children and bearers, a
+    rotation reloads only its own session's child, and no token reaches a
+    child's environment. The Cursor and Grok runs of the scenario are on the
+    manual-test checklist (`0024 (retired)` task 6).
 
 ### Acceptance for the unified level
 
@@ -586,7 +547,7 @@ A platform is at the unified level when:
   picker before the first send.
 
 Until then, the tier table under "Provider qualification" in `coordinator.md`
-is the truth, and this file is the backlog.
+is the truth, and the manual-test checklist holds the runs still owed.
 
 ## Constraints and rationale
 
@@ -641,7 +602,7 @@ is the truth, and this file is the backlog.
   (`homeMailGateFailures`). Approving is left out, because an approved message
   legitimately writes to the checkout. Those steps have been checked without a
   provider turn; their first live run is
-  [6080](6080-x1-coordinator-trust-boundary-follow-ups.md) task 1. The prompt forbids
+  [6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 1. The prompt forbids
   launching workers, and any worker launched anyway is deleted after the
   checkout has been measured. A worker's `git worktree add` changes refs, so the
   digest still catches it. A job on the home itself writes after the turn
@@ -912,14 +873,14 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
 
 ## Related
 
-- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+- [`coordinator-read-only-decisions.md`](../architecture/coordinator-read-only-decisions.md)
   (to-do 0026, retired 2026-11-11).
-- [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-- [`coordinator.md`](../../architecture/coordinator.md) ("Worker delegation",
-  "Tests that exist today"), [`agent-messaging.md`](../../architecture/agent-messaging.md)
+- [0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+- [`coordinator.md`](../architecture/coordinator.md) ("Worker delegation",
+  "Tests that exist today"), [`agent-messaging.md`](../architecture/agent-messaging.md)
   ("Routes", "Budgets", "Mail tools and approval settings", "Provider notes"),
-  [`agent-testing.md`](../../development/agent-testing.md).
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1 to 5, the Cursor and Grok runs of task 6) moved there on 2026-11-10.
+  [`agent-testing.md`](agent-testing.md).
+- [Manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md): the human-only parts of to-do 0024 (tasks 1 to 5, the Cursor and Grok runs of task 6), cited as `0024 (retired)`. Record their results in this file.
 
 ## Replaces
 
@@ -930,3 +891,36 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
   live Grok approval check)
 - `docs/plans/agent-mail-cursor-grok.md` (the manual verification row and the
   failure modes to watch)
+
+## Decisions made when the to-do was retired
+
+Made on 2026-11-13 while building to-do 0024 tasks 6 and 7.
+
+- **How the identity checks are covered (task 6).** Options: (a) an
+  `identity` scenario in the live suite, run on every platform; (b) a one-off
+  manual check with the `orkestrator` CLI; (c) retire `self` and `idle` as
+  provider-neutral and keep only the two rotation checks. Chose (a), as
+  recommended: it is repeatable, every platform gets it, and `idle`
+  injection starting a turn depends on each bridge's prompt path. The case
+  needs no coordinator: one harness-made environment with three layout tabs
+  (a mailbox exists only for a layout tab), user mail to the second tab under
+  `idle` (user mail follows the tab's policy alone, so the default `off` would
+  hold it), and the first tab's conversation resumed in the third tab. There
+  is no command that rotates a tab's token in place: a tab's Agent MCP
+  credential is minted once per environment and tab and cached until a
+  backend restart, so a resume into another tab is the observable form of "a
+  resume with a new `agentMcp`". It proves the same provider session and the
+  first turn's code word under the third tab's own `self`; whether Cursor kept
+  the same SDK agent object is visible only inside the bridge, where
+  `agent-session.test.ts` ("a rotated tab MCP token detaches and resumes the
+  same agent") covers it. Orchestration is tested over a scripted transport
+  (`coordinator-live-identity.test.ts`).
+- **Grok sibling isolation (task 6).** Options: a bridge unit test against
+  the fake ACP agent, or the live check only. Chose the unit test, as
+  recommended: it needs no login and closes the isolation half before any
+  live run. The fake agent now records each child's pid on its session
+  requests and can scan its own environment for a prefix, so the test can
+  tell siblings apart and prove no token is inherited.
+- **Pin lines (task 7).** Options: correct them with the next live run, or
+  now. The live runs moved to the checklist, so they were corrected now, in
+  this file's Facts and Qualification sections.

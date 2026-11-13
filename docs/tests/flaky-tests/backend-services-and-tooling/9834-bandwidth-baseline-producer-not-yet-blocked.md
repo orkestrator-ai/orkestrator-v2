@@ -1,7 +1,7 @@
 # Bandwidth baseline's blocked producer still writing 500 ms in, under load (`apps/backend/src/remote-bandwidth-baseline.test.ts`)
 
 - **ID:** 9834
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Base:** `263eea27df362cf541cb9bde9adf7ec4fec1f5fd`.
 - **Observed head:** branch `test-core-count-2ea1f7178998-r1` at `ee178dafc`
@@ -34,3 +34,26 @@ filling them when `before` is read. A fix would wait for the producer to stop
 (for example `produced` unchanged across consecutive drain checks, or the
 throttle reporting its queue full) before taking `before`, rather than
 raising the sleep. No test, assertion, timeout or skip was changed.
+
+## Resolution (2026-11-13)
+
+- **Root cause:** the test read `before` after a fixed 500 ms sleep and then
+  asserted nothing more was produced in the next 200 ms. Backpressure engages
+  only once the throttle's 64 KiB queue and both sockets' kernel buffers are
+  full; with the test's process starved of CPU, filling them takes longer
+  than 500 ms, so the producer was legitimately still writing when `before`
+  was read.
+- **Fix:** `apps/backend/src/remote-bandwidth-baseline.test.ts` waits until
+  `produced` has stayed unchanged for 100 ms (`waitForQuietCounter`, failing
+  with `counter still changing after 4000 ms` inside the test's 5 s budget)
+  before reading `before`; the 200 ms unchanged check, the buffer bounds and
+  the resume check are unchanged. A producer that is never backpressured never
+  goes quiet: with the throttle's 64 KiB read bound removed, the test fails
+  with `counter still changing after 4000 ms`.
+- **Reproduced:** yes — the unchanged test under
+  `bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd apps/backend ./src/remote-bandwidth-old-repro.test.ts -t "backpressures the producer" --rerun-each=10`
+  (a copy of the file as of `74f4e1efc`) failed 5 of 10 with the recorded
+  `expect(produced).toBe(before)` mismatch at about 700 ms; the fixed file
+  passed under the same condition.
+- **Stress:** `mise run test:logged -- --name bandwidth-new-contention2 -- bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd apps/backend ./src/remote-bandwidth-baseline.test.ts -t "backpressures the producer" --rerun-each=20`
+  passed 20 of 20; the whole file with `--rerun-each=5` passed alone.

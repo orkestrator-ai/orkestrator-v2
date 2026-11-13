@@ -114,6 +114,26 @@ describe("useBuildLaunchOptions", () => {
     expect(result.current.defaults.rootSetupSteps).toBe(2);
   });
 
+  test("passes the project's declared Debian packages to the launcher", async () => {
+    const aptPackages = { packages: ["libvips-dev"], refused: [], invalid: false };
+    getProjectSetupRequirementsMock.mockImplementation(async () => ({ rootSteps: 0, aptPackages }));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
+    expect(result.current.defaults.aptPackages).toBeNull();
+    await flushPromises();
+
+    expect(result.current.defaults.aptPackages).toEqual(aptPackages);
+    expect(result.current.defaults.rootSetupSteps).toBe(0);
+  });
+
+  test("a machine that predates declared packages leaves them unknown", async () => {
+    getProjectSetupRequirementsMock.mockImplementation(async () => ({ rootSteps: 1 }));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
+    await flushPromises();
+
+    expect(result.current.defaults.rootSetupSteps).toBe(1);
+    expect(result.current.defaults.aptPackages).toBeNull();
+  });
+
   test("a machine that cannot answer leaves the root setup steps unknown", async () => {
     getProjectSetupRequirementsMock.mockImplementation(async () => {
       throw new Error("Unknown backend command: get_project_setup_requirements");

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { constants as fsConstants, fstatSync, promises as fs } from "node:fs";
 import path from "node:path";
 import {
   INPUT_LIMITS,
@@ -8,6 +9,11 @@ import {
   type InputSourceRoots,
   type StagingOptions,
 } from "../src/core/portable-inputs";
+import {
+  darwinDescriptorClone,
+  platformDescriptorClone,
+  type DescriptorClone,
+} from "../src/core/portable-inputs-clone";
 import { tempDir } from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];
@@ -16,6 +22,7 @@ afterEach(async () => {
 });
 
 const linux = process.platform === "linux";
+const darwin = process.platform === "darwin";
 
 async function write(file: string, content: string | Buffer) {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -243,7 +250,7 @@ describe("portable input staging by reflink", () => {
 
   test("a staged file stays independent of its source in both directions", async () => {
     const { dataDir, roots, home } = await fixture();
-    const canClone = linux && (await reflinks(dataDir));
+    const canClone = linux ? await reflinks(dataDir) : darwin ? await apfsClones(dataDir) : false;
     const staged = await stagePortableInputs(
       dataDir,
       "isolated",
@@ -272,5 +279,187 @@ describe("portable input staging by reflink", () => {
         "utf8",
       ),
     ).toBe("changed on the host");
+  });
+});
+
+/** Whether `directory` is on a volume `fclonefileat` can clone on (APFS). */
+async function apfsClones(directory: string): Promise<boolean> {
+  const clone = darwinDescriptorClone();
+  if (!clone) return false;
+  const source = path.join(directory, ".probe-source");
+  await fs.writeFile(source, "probe");
+  const handle = await fs.open(source, "r");
+  try {
+    await clone(handle.fd, `${source}-clone`);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await handle.close();
+    await fs.rm(source, { force: true });
+    await fs.rm(`${source}-clone`, { force: true });
+  }
+}
+
+/** BSD file flags of `file` (`stat -f %f`), 0 when none are set. */
+function fileFlags(file: string): number {
+  return Number(execFileSync("stat", ["-f", "%f", file], { encoding: "utf8" }).trim());
+}
+
+function xattrNames(file: string): string[] {
+  return execFileSync("xattr", [file], { encoding: "utf8" }).split("\n").filter(Boolean);
+}
+
+describe("portable input staging by APFS clone (macOS)", () => {
+  test("only Linux and macOS have a descriptor clone", () => {
+    expect(platformDescriptorClone(undefined, "win32")).toBeUndefined();
+    expect(platformDescriptorClone(undefined, "linux")).toBeFunction();
+    expect(darwinDescriptorClone("linux")).toBeUndefined();
+    // Outside Bun there is no `bun:ffi`: staging copies rather than failing.
+    expect(
+      darwinDescriptorClone("darwin", () => {
+        throw new Error("Cannot find module 'bun:ffi'");
+      }),
+    ).toBeUndefined();
+  });
+
+  test.skipIf(!darwin)(
+    "clones from the checked descriptor, not the path, as a plain file",
+    async () => {
+      const root = await tempDir("ork-inputs-apfs-");
+      cleanup.push(root);
+      if (!(await apfsClones(root))) return;
+      const clone = darwinDescriptorClone()!;
+      const source = path.join(root, "source");
+      await fs.writeFile(source, "checked bytes");
+      execFileSync("xattr", ["-w", "org.orkestrator.probe", "planted", source]);
+      execFileSync("chflags", ["nodump", source]);
+      const handle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        // A file swapped in at the path after the check must not be staged.
+        await fs.writeFile(path.join(root, "swap"), "unchecked bytes");
+        await fs.rename(path.join(root, "swap"), source);
+        const destination = path.join(root, "clone");
+        await clone(handle.fd, destination);
+        expect(await fs.readFile(destination, "utf8")).toBe("checked bytes");
+        expect(fileFlags(destination)).toBe(0);
+        expect(xattrNames(destination)).not.toContain("org.orkestrator.probe");
+        // An existing destination is never replaced.
+        await fs.writeFile(destination, "existing");
+        await expect(clone(handle.fd, destination)).rejects.toMatchObject({ code: "EEXIST" });
+        expect(await fs.readFile(destination, "utf8")).toBe("existing");
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  test.skipIf(!darwin)("an immutable source still clones to a removable file", async () => {
+    const root = await tempDir("ork-inputs-apfs-uchg-");
+    cleanup.push(root);
+    if (!(await apfsClones(root))) return;
+    const source = path.join(root, "source");
+    await fs.writeFile(source, "locked");
+    execFileSync("chflags", ["uchg", source]);
+    try {
+      const handle = await fs.open(source, "r");
+      const destination = path.join(root, "clone");
+      try {
+        await darwinDescriptorClone()!(handle.fd, destination);
+      } finally {
+        await handle.close();
+      }
+      expect(fileFlags(destination)).toBe(0);
+      await fs.chmod(destination, 0o600);
+      await fs.rm(destination);
+    } finally {
+      execFileSync("chflags", ["nouchg", source]);
+    }
+  });
+
+  test.skipIf(!darwin)("staging on APFS clones every file staged byte for byte", async () => {
+    const { dataDir, roots } = await fixture();
+    if (!(await apfsClones(dataDir))) return;
+    const staged = await stagePortableInputs(dataDir, "apfs", new Set(["claude"] as const), roots);
+    // CLAUDE.md, commands/review.md and the two plugin files; settings.json is
+    // filtered and the skill guarded, so both are read and written instead.
+    expect(staged.clonedFiles).toBe(4);
+    const files = await contents(staged.directory);
+    expect(files["claude-config/plugins/market/b.js"]).toBe("b".repeat(8192));
+    expect(files["claude-config/settings.json"]).not.toContain("SENTINEL");
+    for (const name of Object.keys(files)) {
+      expect((await fs.stat(path.join(staged.directory, name))).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  test("the descriptor clone gets the checked file's descriptor", async () => {
+    const { dataDir, roots, home } = await fixture();
+    const seen: Array<{ destination: string; ino: number }> = [];
+    const recording: DescriptorClone = async (fd, destination) => {
+      seen.push({ destination, ino: fstatSync(fd).ino });
+      throw Object.assign(new Error("not supported"), { code: "ENOTSUP" });
+    };
+    await stagePortableInputs(
+      dataDir,
+      "fd",
+      new Set(["claude"] as const),
+      roots,
+      new Date(),
+      INPUT_LIMITS,
+      {
+        cloneDescriptor: recording,
+      },
+    );
+    // One attempt, then the source's device is refused for the rest of the run.
+    expect(seen).toHaveLength(1);
+    const relative = seen[0]!.destination.replace(/^.*\/claude-config\//, "");
+    expect(seen[0]!.ino).toBe((await fs.lstat(path.join(home, ".claude", relative))).ino);
+  });
+
+  test("a volume that cannot clone (HFS+, another device) falls back to a copy", async () => {
+    const { dataDir, roots } = await fixture();
+    let attempts = 0;
+    const staged = await stagePortableInputs(
+      dataDir,
+      "apfs-fallback",
+      new Set(["claude"] as const),
+      roots,
+      new Date(),
+      INPUT_LIMITS,
+      {
+        cloneDescriptor: async (_fd, destination) => {
+          attempts += 1;
+          await fs.writeFile(destination, "");
+          throw Object.assign(new Error("not supported"), { code: "ENOTSUP" });
+        },
+      },
+    );
+    expect(attempts).toBe(1);
+    expect(staged.clonedFiles).toBe(0);
+    const files = await contents(staged.directory);
+    expect(files["claude-config/plugins/market/a.js"]).toBe("a".repeat(4096));
+    expect(files["claude-config/CLAUDE.md"]).toBe("memory");
+    expect(staged.providers[0]!.skipped).toEqual({});
+  });
+
+  test("cloneFiles: false never asks the descriptor clone", async () => {
+    const { dataDir, roots } = await fixture();
+    let attempts = 0;
+    const staged = await stagePortableInputs(
+      dataDir,
+      "no-clone",
+      new Set(["claude"] as const),
+      roots,
+      new Date(),
+      INPUT_LIMITS,
+      {
+        cloneFiles: false,
+        cloneDescriptor: async () => {
+          attempts += 1;
+        },
+      },
+    );
+    expect(attempts).toBe(0);
+    expect(staged.clonedFiles).toBe(0);
   });
 });

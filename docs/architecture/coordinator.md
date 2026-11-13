@@ -626,6 +626,11 @@ on `self` and on each node:
   `packages/protocol/src/unknown-command.ts`) and `error`.
   Last-known figures are never shown. `detail` is fixed wording, so a node's
   error text does not reach the coordinator.
+  The mixed-version runner's `nodes` module runs this `list_nodes` against a
+  real leaf of any published release
+  (`mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`):
+  a leaf from before `get_machine_load` reads as `older-version`, and each
+  node's `buildCommit` matches its hello.
 - **Who sees it.** Read-only, for main coordinators and side agents
   (`list_nodes` is under `discovery`). The answer is parsed down to the fields
   above; no hostname, account, path or process detail crosses. The operator
@@ -3786,6 +3791,13 @@ settles the delegation once. A worker's own mail is that wake as usual. Otherwis
 the notice names the outcome (`Its goal is limited (iteration-cap) after 3 of 3
 iterations`) and `get_worker_goal`. A coordinator's own pause or clear of a running
 goal ends the wait too, so that wake arrives at once.
+
+A worker on another node has no edge on the command node, so the remote sweep
+holds while that node's `get_agent_registry` entry says `goal.running`
+(`NodeCoordinatorRemote.workerState`), and the first read after the goal stops
+closes the delegation. An older node sends no `goal`, which reads as not
+running. `bun scripts/qa-remote-goal-hold.ts` checks this over a real node link
+with a leaf whose goal is held by its running check, and no agent turn.
 
 **Status reads.** `get_worker_goal` and `get_tab_state` report the goal through
 `goalForModel`, and `list_agents` adds its status and counts, so an `idle` tab whose

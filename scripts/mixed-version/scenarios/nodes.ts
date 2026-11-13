@@ -11,12 +11,21 @@
  * - The leaf lists the command node among its controllers and answers a
  *   worker's details and its project's seed files.
  * - Both answer their machine profile.
+ * - With this checkout as the command node, a coordinator's `list_nodes` tool
+ *   (`coordinator-list-nodes.ts`) lists the leaf connected with its copy of
+ *   the project; a leaf that serves `get_machine_load` reports its OS, size
+ *   and load once it has a reading, and an older one is shown as
+ *   `older-version` over the real link; each machine's `buildCommit` is the
+ *   one its hello reports, `null` for a release before the field and for a
+ *   build from source (to-do 1030 tasks 2 and 7).
  *
  * Version 1 decodes each answer with the definitions' schemas (a node that
  * advertises `nodes`); version 0 sends today's untyped calls.
  */
 import { nodesClient } from "@orkestrator/protocol/contract/domains/nodes";
-import { defineScenario } from "../scenario.ts";
+import { until } from "../harness.ts";
+import { defineScenario, type ScenarioContext } from "../scenario.ts";
+import { coordinatorListNodes, hasReadings, machineEvidence } from "./coordinator-list-nodes.ts";
 import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
 
 const NO_ARGS = undefined as never;
@@ -85,6 +94,7 @@ export default defineScenario({
             Number.isInteger(layout.revision) && Array.isArray(layout.machineOrder),
           );
         }
+        if (node.build.kind === "current") await coordinatorListNodesChecks(ctx);
       } else {
         const controllers = await nodes.list_controllers(NO_ARGS);
         ctx.check(
@@ -113,3 +123,62 @@ export default defineScenario({
     }
   },
 });
+
+/** NO-C6 to NO-C8: what a coordinator on this checkout's command node reads in `list_nodes`. */
+async function coordinatorListNodesChecks(ctx: ScenarioContext): Promise<void> {
+  const project = await ctx.fixtures.project(ctx.command);
+  await ctx.fixtures.pairedOn(ctx.command, ctx.leaf);
+  const servesLoad = ctx.leaf.has("get_machine_load");
+  // A backend takes its first reading 15 s after it starts.
+  const listed = await until(
+    `list_nodes to report ${ctx.leaf.label}'s ${servesLoad ? "first load reading" : "load answer"}`,
+    () => coordinatorListNodes(ctx.command, project.projectId),
+    (value) => {
+      const machine = value.nodes.find((entry) => entry.nodeId === ctx.leaf.id)?.machine;
+      return servesLoad
+        ? hasReadings(machine) && hasReadings(value.self.machine)
+        : machine?.status === "unavailable";
+    },
+    90_000,
+  );
+  const leaf = listed.nodes.find((entry) => entry.nodeId === ctx.leaf.id);
+  ctx.check(
+    "NO-C6",
+    "a coordinator's list_nodes lists the leaf connected, at its version, with its copy of the project",
+    leaf?.available === true &&
+      leaf.state === "connected" &&
+      leaf.version === ctx.leaf.version &&
+      leaf.hasProject === true,
+    `${leaf?.state ?? "absent"} ${leaf?.version ?? "?"} hasProject ${String(leaf?.hasProject)}`,
+  );
+  ctx.check(
+    "NO-C7",
+    servesLoad
+      ? "list_nodes reports the leaf's OS, size and load readings, and this node's"
+      : "list_nodes shows an older leaf's load as older-version, over the real link",
+    servesLoad
+      ? hasReadings(leaf?.machine)
+      : leaf?.machine.status === "unavailable" && leaf.machine.reason === "older-version",
+    JSON.stringify(machineEvidence(leaf?.machine)).slice(0, 300),
+  );
+  ctx.check(
+    "NO-C8",
+    "list_nodes reports each machine's buildCommit as its hello does: null when the build reports none",
+    (leaf?.buildCommit ?? null) === (ctx.leaf.hello.buildCommit ?? null) &&
+      listed.self.buildCommit === (ctx.command.hello.buildCommit ?? null),
+    `leaf ${String(leaf?.buildCommit)}, self ${String(listed.self.buildCommit)}`,
+  );
+  ctx.note("coordinator list_nodes", {
+    self: {
+      version: listed.self.version,
+      buildCommit: listed.self.buildCommit,
+      machine: machineEvidence(listed.self.machine),
+    },
+    leaf: {
+      version: leaf?.version ?? null,
+      buildCommit: leaf?.buildCommit ?? null,
+      helloBuildCommit: ctx.leaf.hello.buildCommit ?? null,
+      machine: machineEvidence(leaf?.machine),
+    },
+  });
+}

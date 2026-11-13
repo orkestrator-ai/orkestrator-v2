@@ -4,16 +4,18 @@
 
 Analysed 2026-10-31 against `main` at `931e55417`. Tasks 3 and 4 rechecked
 2026-11-01 against `main` at `93b99bfba`: both problems were still as described.
+Tasks 2 and 7 run 2026-11-13 against `main` at `17d28238c`; tasks 5 and 6
+rechecked the same day: neither can start yet.
 
 ### Tasks
 
 1. **Rolling sampler, three windows, machine facts, `list_nodes`, coordinator guidance**: built. Status: done (2026-10-31).
-2. **Live check across two real machines**: `list_nodes` on a real command node with a real leaf, including a leaf on an older release. Status: open.
+2. **Live check across two linked nodes**: `list_nodes` on a real command node with a real leaf, including a leaf on an older release. Status: done (2026-11-13, over a real node link on one host).
 3. **Native Linux and Windows check**: real OS strings and readings on those platforms. Status: done for Linux (2026-11-01); the Windows check moved to the manual-test checklist on 2026-11-10.
 4. **Older-node detection elsewhere matches the wrong wording**: two existing checks look for `Unknown command:`, while a real backend answers `Unknown backend command:`. Status: done (2026-11-01).
-5. **Keep history across a backend restart**: decide once coordinators are seen using the 24-hour figure. Status: open (deferred).
-6. **Retire the older-node path**: remove it when the support window allows. Status: open.
-7. **`list_nodes` reports each real node's build commit**: an older or development node reports `buildCommit: null` and still lists normally, checked on task 2's two `dev:test` profiles (one from a commit before `buildCommit` existed). Moved from to-do 4840 (deleted 2026-11-06). Status: open. The check that real release builds report their own commit, on two real machines, moved to the manual-test checklist on 2026-11-10.
+5. **Keep history across a backend restart**: decide once coordinators are seen using the 24-hour figure. Status: blocked (waits on a recurrence: a coordinator seen misled by short 24-hour coverage).
+6. **Retire the older-node path**: remove it when the support window allows. Status: blocked (waits on the support floor reaching 2.36.0, the first Stable release with `get_machine_load`).
+7. **`list_nodes` reports each real node's build commit**: an older or development node reports `buildCommit: null` and still lists normally, checked on task 2's linked nodes (one from a release before `buildCommit` existed). Moved from to-do 4840 (deleted 2026-11-06). Status: done (2026-11-13). The check that real release builds report their own commit, on two real machines, moved to the manual-test checklist on 2026-11-10.
 
 ### 1. Rolling sampler, three windows, machine facts, `list_nodes`, coordinator guidance
 
@@ -25,13 +27,22 @@ Analysed 2026-10-31 against `main` at `931e55417`. Tasks 3 and 4 rechecked
 
 **Decisions.** See [Assumptions and decisions](#assumptions-and-decisions).
 
-### 2. Live check across two real machines
+### 2. Live check across two linked nodes
 
-**Problem.** The node path is covered by a real Control MCP call with a fake remote node behind `invoke_on_node`, and the routing rules by unit tests. No real node link has carried `get_machine_load`, and no real older leaf has answered it.
+**Problem.** The node path was covered by a real Control MCP call with a fake remote node behind `invoke_on_node`, and the routing rules by unit tests. No real node link had carried `get_machine_load`, and no real older leaf had answered it.
 
 **Context.** `readNodeMachineLoad` asks through `invoke_on_node` with a 2 s limit. The older-node branch relies on the wire wording `Unknown backend command: get_machine_load` (`OrkestratorBackend.invoke`, passed on by `gateway-handlers.ts`), read from the code rather than seen over a real link.
 
-**Investigation.** Not run: it needs a second machine or a second backend attached as a leaf. The figure a leaf reports is its own, so clock differences between machines do not matter; coverage and age are durations.
+**Investigation.** Run on 2026-11-13 on beelink (Omarchy 4.5.0, 16 threads, 62.3 GiB) with the mixed-version runner's `nodes` module (`scripts/mixed-version/scenarios/nodes.ts`, checks NO-C6 to NO-C8): a command node of this checkout attaches a leaf over its real gateway, and the coordinator's production `list_nodes` handler runs with its invoker sending each command to that command node's gateway (`scripts/mixed-version/scenarios/coordinator-list-nodes.ts`). Each backend has its own data directory, HOME and loopback port, a constructed environment and the `agent-test` runtime with no toolchain or credentials. Runs, all `--topology current-command --scenarios nodes`, each 13/13 checks:
+
+| Leaf | What `list_nodes` reported for it |
+| --- | --- |
+| This checkout (`--old-version current`) | `status: "ok"`, `Omarchy 4.5.0 (like arch)`, 16 cores, 62.3 GB, first reading covering 15 s in all three windows |
+| Release 2.36.1 (npm) | the same figures from the leaf's own sampler, version `2.36.1` |
+| Release 2.34.4-beta (npm, before `get_machine_load`) | `status: "unavailable"`, `reason: "older-version"`: the real older leaf's `Unknown backend command: get_machine_load` crossed the link and was recognised |
+| Release 2.36.4-beta (npm) | figures as above |
+
+In every run the leaf was `connected`, at its own version, with `hasProject: true`. Both nodes run on one host, so they report the same OS and similar figures. The figure a leaf reports is its own, so clock differences between machines do not matter; coverage and age are durations.
 
 **Decisions.**
 - **How to run it?**
@@ -133,12 +144,19 @@ No real release has carried it yet.
 [`releasing.md`](../../development/releasing.md). Task 2's two-machine run can
 take this check at the same time.
 
-**Investigation.** Steps (the release-build half, on two real machines, is on
-the manual-test checklist):
+**Investigation.** Run with task 2 on 2026-11-13 (check NO-C8: each node's
+`buildCommit` in `list_nodes` equals what its hello reports):
 
-1. On task 2's two `dev:test` profiles, link as leaves one built from a commit
-   before `buildCommit` existed and one running the current development build.
-   Check that both report `buildCommit: null` and still list normally.
+- A leaf on release 2.36.1, built before `buildCommit` existed (`533acf703`
+  is not in `v2.36.1`): `buildCommit: null`, listed normally with its version
+  and load.
+- A leaf running this checkout from source: `buildCommit: null`, listed
+  normally.
+- The command node, from source: `self.buildCommit: null`.
+- A leaf on release 2.36.4-beta, the first with the field: `buildCommit`
+  `209b1249b965618855d928d9fde3cdeaaa2b9373`, the commit `v2.36.4-beta` points
+  to. That is the published npm package on one host; the desktop release and
+  CLI on two real machines stay on the manual-test checklist.
 
 **Decisions.**
 
@@ -152,7 +170,7 @@ the manual-test checklist):
 
 ## Current state
 
-`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink); a real node link is unproved (task 2), and the Windows check is on the manual-test checklist. Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`).
+`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink), and since 2026-11-13 a real node link on beelink: a current, a 2.36.1 and a 2.36.4-beta leaf report their load, a 2.34.4-beta leaf reads as `older-version`, and `buildCommit` is `null` for builds that report none (tasks 2 and 7). The Windows check and the release-build commit check on two real machines are on the manual-test checklist. Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`). What is left waits: task 5 on a coordinator misled by short coverage, task 6 on the support window. To rerun: `mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`.
 
 ## Constraints and rationale
 
@@ -198,8 +216,32 @@ Never shown. An offline or timed-out node has `status: "unavailable"` and no fig
 
 `isUnknownCommandError` accepts only `Unknown backend command: <name>`, with nothing name-like straight after it, so `get_machine_load_v2` is not `get_machine_load`. `readNodeMachineLoad` used to accept the shorter `Unknown command:` too. That was dropped, because no backend has sent it, and accepting it let the test network's wrong wording pass unnoticed. A peer that did send it gets reason `error`, which also fails nothing. `isUnknownViewCommandError` now delegates to the same function, so it no longer matches a longer command name either. The e2e fake host (`e2e/fixtures/close-retention-host.ts`) still answers `Unknown command:`. It was left alone because it feeds the web client's own handling, and changing what it sends is a separate change. `0395`'s note that an older leaf answers `Unknown command:` was corrected to match.
 
+### Task 2: how the two-node check ran (2026-11-13)
+
+The ticket named two linked `dev:test` profiles, one on an older build. A
+profile runs only this checkout, so the older side could not be one. The
+check was added to the mixed-version runner instead
+(`scripts/qualify-contract-mixed-versions.ts`), whose leaf can be any
+published release installed from npm with `--ignore-scripts`. Its backends
+are what a `dev:test` profile's backend is (`agent-test` runtime, private
+data directory and HOME, no fixed port) without Electron. A tag worktree of
+an older commit was tried and dropped: it needs a full install and runs
+source, not what a user installs. The runner's `--profiles` mode still
+runs the same module against two live profiles of this checkout.
+
+### Task 2: calling the coordinator's tool, not the operator command
+
+The backend `list_nodes` command has no `machine` or `buildCommit`; the
+coordinator's Control MCP tool adds them. The module runs that tool's
+production handler (`registerNodeTools`) with an invoker that sends each
+command to the command node's gateway, which is what the Control MCP
+server's in-process invoker does. The 2 s per-node limit and its abort still
+apply. It runs only when this checkout is the command node, because an older
+command node would run its own handler.
+
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md): recurring-work qualification.
 - [1000](1000-coordinator-self-timers-and-account-switching.md): the routed read tools this follows.
+- [`scripts/mixed-version/scenarios/nodes.ts`](../../../scripts/mixed-version/scenarios/nodes.ts): the two-node `list_nodes` check (tasks 2 and 7).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows part of task 3, the user part of task 7: release builds on two real machines) moved there on 2026-11-10.

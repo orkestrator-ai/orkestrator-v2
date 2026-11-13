@@ -47,6 +47,8 @@ export type Role = "command" | "leaf";
 export interface HelloView {
   readonly appVersion?: string;
   readonly nodeMode?: string;
+  /** The commit the backend was built from; absent on a build that reports none. */
+  readonly buildCommit?: string;
   readonly capabilities?: Readonly<Record<string, number>>;
   readonly domains?: Readonly<Record<string, { readonly min: number; readonly max: number }>>;
 }

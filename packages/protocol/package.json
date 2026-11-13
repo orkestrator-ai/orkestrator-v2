@@ -339,7 +339,6 @@
     "./node/bridge-transcript-bounds": "./src/node/bridge-transcript-bounds.ts",
     "./node/bridge-transcript-text": "./src/node/bridge-transcript-text.ts",
     "./node/transcript-budget": "./src/node/transcript-budget.ts",
-    "./node/event-ring": "./src/node/event-ring.ts",
     "./node/bounded-wait": "./src/node/bounded-wait.ts",
     "./node/transcript-window": "./src/node/transcript-window.ts",
     "./unknown-command": "./src/unknown-command.ts",

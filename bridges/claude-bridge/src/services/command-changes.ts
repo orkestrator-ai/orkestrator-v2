@@ -80,10 +80,13 @@ export function commandChangeJournal(sdkSessionId: string): CommandChangeJournal
   return journal;
 }
 
-export async function deleteCommandChangeJournal(sdkSessionId: string): Promise<void> {
-  const journal = commandChangeJournal(sdkSessionId);
-  journals.delete(sdkSessionId);
-  await journal?.remove();
+/**
+ * Forget every cached journal, so a test that removed one's file gets a fresh
+ * journal for the same id. Nothing in the bridge deletes a journal: closing a
+ * session keeps its history.
+ */
+export function forgetCommandChangeJournalsForTests(): void {
+  journals.clear();
 }
 
 /**

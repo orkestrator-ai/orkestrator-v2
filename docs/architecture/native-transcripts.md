@@ -303,15 +303,30 @@ produces, so the window is measured whole.
 A part-trimmed head (one row larger than the whole window, reported by
 `omittedParts`) also recovers through this read, at most once a second per
 view however many readers share it; while a recovery is pending the view keeps
-the last recovered transcript. Measured on 2026-11-11 with a loopback model
-(the conditional-reads spec's `trimmed-head` scenario, see
+the last recovered transcript. A recovery that a newer revision overtook
+while its read was in flight is still committed when the view has not moved
+since the read started and the newer revision's recovery is pending, so the
+view advances once per recovery even when reading the row outlasts the gap
+between revisions; it never replaces a complete transcript that landed
+meanwhile.
+
+The recovered head row grows on every read, so no two views share it. The
+ring of superseded views that serves a reader one view behind
+(`native-agent-transcript-delta-bases.ts`) is bounded per key at 2 MiB, but
+always keeps its newest base, up to 8 MiB for that one base, and the grown
+row reaches a reader that negotiated patches as its appended text.
+
+Measured with a loopback model (the conditional-reads spec's `trimmed-head`
+scenario, see
 [agent-testing.md](../development/agent-testing.md#live-conditional-reads-loopback-models)):
-exactly one recovery read a second with one reader or two, and the view moved
-about once a second while that row stayed under about a million characters.
-Past that, each recovered transcript reached readers as a whole snapshot of
-about 3 MB, and past about 1.7 million characters the view stopped moving
-until the turn ended (to-do
-[7845](../todo/transcripts-and-observation/7845-trimmed-head-snapshots-and-stalled-view.md)).
+exactly one recovery read a second with one reader or two. Before 2026-11-13,
+past about a million characters each recovered transcript reached readers as
+a whole snapshot of about 3 MB (17.5 to 63 MB per viewer in 20 s), and past
+about 1.7 million characters the view stopped moving until the turn ended.
+After the fix, every recovered transcript reached every reader as a delta, 20
+view changes in 20 s per viewer up to 2.49 million characters, at about
+0.9 MB per viewer in 20 s (to-do 7845 (retired); its figures are in
+`git show b2ca5530b:docs/todo/transcripts-and-observation/7845-trimmed-head-snapshots-and-stalled-view.md`).
 
 ### Deferred display bodies
 

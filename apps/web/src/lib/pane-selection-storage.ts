@@ -137,10 +137,6 @@ function parseBuildPipelineHandoffResolution(
       }
     }
   }
-  // Legacy records stored a single pipelineId per environment.
-  if (typeof value.pipelineId === "string" && value.pipelineId.length > 0) {
-    pipelineIds.push(value.pipelineId);
-  }
   if (pipelineIds.length === 0) return null;
   return { environmentId, pipelineIds };
 }

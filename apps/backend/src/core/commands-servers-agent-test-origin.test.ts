@@ -20,7 +20,7 @@ import { createEnvironment, createProject, StorageService } from "./storage.js";
  * at the loopback model, after the account environment so nothing inherited
  * or account-derived sends the CLI elsewhere, and never touches another
  * platform's bridge or a production backend's. The gate itself is unit-tested
- * in `plan-usage-agent-test-origin.test.ts`; this file proves the wiring.
+ * in `plan-usage/agent-test-origin.test.ts`; this file proves the wiring.
  */
 
 const ORIGIN = "http://127.0.0.1:43124";

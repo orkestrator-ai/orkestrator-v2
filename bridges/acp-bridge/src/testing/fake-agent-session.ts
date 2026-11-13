@@ -600,6 +600,9 @@ function recordSessionRequest(message: JsonObject): void {
     path,
     `${JSON.stringify({
       method: message.method,
+      // Which child received it, so a test can tell sibling sessions apart.
+      pid: process.pid,
+      ...(typeof params.sessionId === "string" ? { sessionId: params.sessionId } : {}),
       mcpServers: params.mcpServers,
       ...(isObject(params._meta) ? { meta: params._meta } : {}),
     })}\n`,

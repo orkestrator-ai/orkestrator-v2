@@ -94,7 +94,7 @@ export function admitPrompt(
     return undefined;
   }
   if (session.deleting) {
-    throw sessionOperationError("conflict", "Session is being deleted");
+    throw sessionOperationError("conflict", "Session is being closed");
   }
   if (session.status === "running" && !ownsClaimedDispatch) {
     throw new Error("Session is already processing a prompt");

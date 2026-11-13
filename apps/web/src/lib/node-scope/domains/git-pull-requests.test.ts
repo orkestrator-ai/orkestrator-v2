@@ -58,10 +58,10 @@ describe("git and pull-requests clients over a lib/backend client", () => {
 
   test("a pre-contract node (no domains) takes version 0 too", async () => {
     const { client, invokeRaw } = fakeClient(() => null, null);
-    await gitDomain(client).refresh_environment_diff_stats({ environmentId: "env-1" });
+    await gitDomain(client).changes_refresh({ resourceKey: "k" });
     await pullRequests(client).pr_monitor_watch({ environmentId: "env-1", mode: "normal" });
     expect(invokeRaw.mock.calls).toEqual([
-      ["refresh_environment_diff_stats", { environmentId: "env-1" }],
+      ["changes_refresh", { resourceKey: "k" }],
       ["pr_monitor_watch", { environmentId: "env-1", mode: "normal" }],
     ] as never);
   });

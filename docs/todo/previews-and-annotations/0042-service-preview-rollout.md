@@ -2257,7 +2257,7 @@ adoption now rejects a renderer write-back.
 - [Environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2) (to-do 0018, retired 2026-11-11):
   egress policy must keep published loopback ports and relay stdio working.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) (support
-  window), [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md)
+  window), 0023 (retired 2026-11-13; see [environment deletion](../../architecture/environment-deletion.md))
   (deletion-time cleanup), [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md)
   (gated runs).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 2, 3 and 12, the real-provider OAuth part of task 5, the pass-rule approval of task 6, the maintainer's fallback and legacy-annotation calls of task 8) moved there on 2026-11-10.

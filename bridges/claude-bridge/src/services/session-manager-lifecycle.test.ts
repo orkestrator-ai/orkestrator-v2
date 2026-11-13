@@ -18,7 +18,6 @@ import {
   createOrRecoverSession,
   createSession,
   deleteSession,
-  deleteSessionDurably,
   getLastIdleTranscriptSweep,
   getPromptDispatchState,
   dispatchJournalProvesAbsent,
@@ -440,7 +439,7 @@ describe("session lifecycle", () => {
       prepare: (session: ReturnType<typeof createSession>) => {
         session.deleting = true;
       },
-      message: "Session is being deleted",
+      message: "Session is being closed",
     },
     {
       name: "running",
@@ -594,36 +593,6 @@ describe("session lifecycle", () => {
       expect(session.dispatchedRequestIds?.has("initial-prompt:env-1:tab-join-failure")).toBe(
         false,
       );
-    } finally {
-      await releaseTemporaryClaudeHome(directory);
-    }
-  });
-
-  test("durable deletion waits for an invalidated claim to roll back on disk", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-delete-"));
-    setClaudeHomeForTesting(directory);
-    try {
-      const session = createSession("launch");
-      track(session.id);
-      const sdkSessionId = session.id.slice("session-".length);
-      let releasePersistence: (() => void) | undefined;
-      const persistenceGate = new Promise<void>((resolve) => {
-        releasePersistence = resolve;
-      });
-      const dispatch = mock(async () => {});
-
-      const claim = claimPromptDispatch(session.id, "initial-prompt:env-1:tab-delete", dispatch, {
-        beforePersistence: () => persistenceGate,
-      });
-      const deletion = deleteSessionDurably(session.id);
-      expect(session.deleting).toBe(true);
-
-      releasePersistence!();
-      await expect(claim).rejects.toMatchObject({ code: "conflict" });
-      await expect(deletion).resolves.toBe(true);
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
-      expect(getSession(session.id)).toBeUndefined();
     } finally {
       await releaseTemporaryClaudeHome(directory);
     }

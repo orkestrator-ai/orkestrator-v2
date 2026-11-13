@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1011,
-    "defined": 1011,
+    "commands": 1009,
+    "defined": 1009,
     "untyped": 0,
     "events": 45
   },
@@ -50,7 +50,7 @@
       "min": 1
     },
     "git": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "graphs": {
@@ -102,7 +102,7 @@
       "min": 1
     },
     "pull-requests": {
-      "version": 2,
+      "version": 3,
       "min": 1
     },
     "system": {
@@ -5573,15 +5573,6 @@
       "argsDigest": "sha256:d1c8462ea7f141d3c336820024377ac7170d2b0d3ddc91296454c9d93c052b78",
       "resultDigest": "sha256:f83f03c2072cf3964fe6889c7bd48e9e98cb060b446ff252a89679445d000719"
     },
-    "merge_pr_local": {
-      "domain": "pull-requests",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": ["deleteBranch", "method"],
-      "argsDigest": "sha256:144b2125777aab743bf1579b4b598c46a14f3def1c9599c729b62c5a30c8b183",
-      "resultDigest": "sha256:f83f03c2072cf3964fe6889c7bd48e9e98cb060b446ff252a89679445d000719"
-    },
     "move_container_file": {
       "domain": "files",
       "since": 1,
@@ -6418,15 +6409,6 @@
       "critical": ["expectedContainerId", "expectedRevision", "keepRecoveryCopy", "operationId"],
       "argsDigest": "sha256:cac0e9d25111f53afb60b84295c961937f0c05fc91fa6e23aeac95fe72d3733d",
       "resultDigest": "sha256:d53181f71d5554335901e0fe8ba8af7322369b097aefbe939525abd6489d3c8c"
-    },
-    "refresh_environment_diff_stats": {
-      "domain": "git",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "refresh_host_agent_model_catalog": {
       "domain": "agent-servers",

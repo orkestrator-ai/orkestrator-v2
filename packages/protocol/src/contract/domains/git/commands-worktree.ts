@@ -45,17 +45,6 @@ export const getEnvironmentDiffStatsCommand = defineCommand({
   critical: [],
 });
 
-export const refreshEnvironmentDiffStatsCommand = defineCommand({
-  domain: gitDomain,
-  name: "refresh_environment_diff_stats",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ environmentId: Schema.String }),
-  result: Schema.Void,
-  critical: [],
-});
-
 /** A container's changed files against `targetBranch`. */
 export const getGitStatusCommand = defineCommand({
   domain: gitDomain,
@@ -172,7 +161,6 @@ export const getEnvironmentCommitAncestryCommand = defineCommand({
 
 export const WORKTREE_GIT_COMMANDS = [
   getEnvironmentDiffStatsCommand,
-  refreshEnvironmentDiffStatsCommand,
   getGitStatusCommand,
   getLocalGitStatusCommand,
   listEnvironmentDiffBaseBranchesCommand,

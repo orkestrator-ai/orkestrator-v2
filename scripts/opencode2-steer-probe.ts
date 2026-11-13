@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Live probe of OpenCode 2.x steering semantics (docs/todo/agent-engines/0008-opencode-v2.md, task 10).
+ * Live probe of OpenCode 2.x steering semantics (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), task 10).
  *
  * Starts a pinned 2.x `opencode serve` in a disposable HOME/XDG/OPENCODE_DB with a
  * scripted local OpenAI-compatible model, so it makes no billed or remote model calls,
@@ -13,7 +13,7 @@
  *   6. what `queue` does on an idle session, and how a malformed input id is refused.
  *
  * It reports what it observed; it asserts nothing. Results for 2.2.6 are recorded in
- * docs/todo/agent-engines/0008-opencode-v2.md (task 10, "Spike results").
+ * to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`) (task 10, "Spike results").
  *
  * Usage: OPENCODE2_CLI_PATH=/path/to/opencode bun scripts/opencode2-steer-probe.ts [--json]
  * The binary must be a 2.x build (e.g. unpacked from `npm pack @opencode/cli-<platform>@<v>`).

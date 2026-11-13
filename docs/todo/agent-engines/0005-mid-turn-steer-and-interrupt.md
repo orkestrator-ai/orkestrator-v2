@@ -18,7 +18,7 @@ task 7 built and run 2026-11-13 against `17d28238c`.
 2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: done (live read landed in #1331; the probe cache and its bound added 2026-11-01).
 3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: closed, not adopted (measured 2026-11-01; see "`prewarm()` not adopted").
 4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
-5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by [0008](0008-opencode-v2.md) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x never could steer, and was retired on 2026-11-11, so every OpenCode session is a 2.x session and can steer (see 0008 "OpenCode 1.x retired (2026-11-11)"). Live qualification of 2.x steer belongs to 0008 task 7, done for host environments on 2026-11-11 (a composer steer through the app on a scripted model, and the live provider and steer tests on Linux). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
+5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by 0008 (retired) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x never could steer, and was retired on 2026-11-11, so every OpenCode session is a 2.x session and can steer (see 0008 "OpenCode 1.x retired (2026-11-11)"). Live qualification of 2.x steer belongs to 0008 task 7, done for host environments on 2026-11-11 (a composer steer through the app on a scripted model, and the live provider and steer tests on Linux). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
 7. **Inactive-path steer qualification on Claude and Cursor**: parameterise the Codex inactive-path steer spec by platform for Claude and Cursor (steer, switch away, return, reload). Status: done (2026-11-13: `e2e/agent-testing/steer-inactive-live.spec.ts` runs it for Codex on a real model and for Claude and Cursor on scripted models; both passed; see "Inactive-path steer on scripted models"). The runs with real Claude and Cursor logins are in 7568.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: done (2026-11-10, loopback model; see "One warm CLI through the app"). The same reads with a real login moved to 7568 (2026-11-10).
@@ -377,8 +377,10 @@ at-most-once dispatch.
   preview (#2009), with the backend-held guard of its task 10 in place of an
   upstream precondition. 1.x sessions could not steer; 1.x was retired on
   2026-11-11, so every OpenCode session can. Its live qualification is
-  [0008-opencode-v2.md](0008-opencode-v2.md) task 7 (host environments done
-  2026-11-11; containers open there).
+  0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`) task 7 (host environments done
+  2026-11-11, containers 2026-11-13). Steer through the public CLI and the
+  coordinator's deliver-now is still refused for OpenCode:
+  [7905](7905-opencode2-untested-paths.md) task 4.
 - **Grok steer** stays off. ACP v1 has no mid-turn input, and the Grok
   interjection extension stays behind its unsafe flag until an ACP equivalent
   exists.

@@ -1,6 +1,7 @@
 import { nativeWebPlatform } from "../../tests/register-dom";
 import { describe, expect, test } from "bun:test";
 import {
+  fakePortArgument,
   startPiFakeModel,
   PI_FAKE_MODEL_REF,
   piAssistantMessage,
@@ -193,3 +194,10 @@ test("HTTP routes reject bad requests and return streamed and non-streamed tool 
     await server.stop(true);
   }
 }, 15000);
+
+test("the fixed port a container run asks for, and any free port otherwise", () => {
+  expect(fakePortArgument(["bun", "fake.js", "--port", "47124"])).toBe(47_124);
+  expect(fakePortArgument(["bun", "fake.js"])).toBe(0);
+  expect(fakePortArgument(["bun", "fake.js", "--port", "nope"])).toBe(0);
+  expect(fakePortArgument(["bun", "fake.js", "--port", "70000"])).toBe(0);
+});

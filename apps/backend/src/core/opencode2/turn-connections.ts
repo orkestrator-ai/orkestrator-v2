@@ -1,6 +1,6 @@
 /**
  * Which Orkestrator MCP connections an OpenCode 2.x turn uses
- * (docs/todo/agent-engines/0008-opencode-v2.md, phase 5; owner decision 2 of
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), phase 5; owner decision 2 of
  * 2026-11-09).
  *
  * 1.x keeps one environment-wide `orkestrator` registration, so three

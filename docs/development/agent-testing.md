@@ -1149,8 +1149,20 @@ scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
 overrides the list). Start the profile with `--fixture --no-agent-credentials
 --agent-platforms opencode --headless`.
-`ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
-container environment from the profile's development image. On a host whose
+`ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude or OpenCode
+in a new container environment from the profile's development image. For
+OpenCode the spec writes the fake provider, at the container's loopback
+address, into the profile's `opencode.json` before it creates the
+environment (each runtime stages that file), serves the bundled fake as
+`node` on `127.0.0.1:47124` inside the container, and restores the file after
+the environment is deleted; its `rebuild` case (container and OpenCode only)
+runs a preserving rebuild and requires `opencode2.db` to name the session on
+both runtimes and a follow-up turn to settle on the same session with the
+earlier rows kept. `mise run verify:opencode2:container` runs the OpenCode
+cases that way (`missed-final`, `approval`, `reconnect`, `hidden`,
+`no-renderer`, `steer` and `rebuild`; start the profile with
+`--fixture --fixture-environments local,container --no-agent-credentials
+--agent-platforms opencode --headless`). On a host whose
 firewall drops container traffic to the profile (beelink's ufw, to-do
 [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
 run that profile and the spec on `mise run docker:disposable -- start
@@ -1202,6 +1214,21 @@ each is one sample, not a p95:
   mode (#1182), the backend read the idle group on every sweep (17 of 17, none
   skipped) and the page kept reading every 1.5 s or so (largest gap 2.9 s), so
   an older bridge keeps the baseline cadence on both sides.
+- OpenCode 2.2.6 in a container (2026-11-13, beelink, Linux x86_64, on a
+  disposable rootless daemon with host loopback, the runtime behind its
+  egress gateway; `mise run verify:opencode2:container`, run `oc2c-run3`,
+  to-do 0008 (retired) task 7): all seven cases passed. A warm-up shell turn
+  settled on the page 19 ms after the backend; with every frame for the
+  environment dropped the view found the finished turn 13.9 s late (inside
+  the 17.5 s bound, as on the host); an "ask"-policy permission card parked
+  in 39 ms and approving it settled the turn; reconnect and hidden settled
+  in 1.6 s and 1.4 s; with no renderer the backend aggregate went idle
+  536 ms after the turn; a composer steer was accepted in 2.1 s and the turn
+  ended on its reply; and a preserving rebuild took 20.3 s, after which
+  `opencode2.db` still named the session (its rows had been in the WAL
+  before, checkpointed after) and a follow-up turn settled in 7.9 s on the
+  same session with the earlier prompt shown once. OpenCode has no
+  observation stream, so the backend read the idle group on every sweep.
 - Codex's full detach wait (2026-11-11): with no renderer, the thread read
   `attached` before the wait and `detached` 34.9 min into it, and a turn sent
   from outside the view then re-attached it on the same session.

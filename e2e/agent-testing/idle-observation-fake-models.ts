@@ -2,12 +2,14 @@
  * Wiring for `idle-observation-live.spec.ts`'s fake-model mode
  * (`ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1`, todo 0049): starts the scripted
  * loopback models and points the profile's own isolated Claude settings or
- * Codex config at them, or installs the Claude model inside a container.
+ * Codex config at them, or installs the Claude model, or OpenCode's
+ * chat-completions model (todo 0008 (retired) task 7), inside a container.
  * Every change is undone by the returned `stop`. Never a real provider home:
  * the paths are under the profile's data directory, or the container's.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
@@ -146,20 +148,7 @@ export async function startLocalFakeModel(
   const model = await startModel(options.script ?? FAKE_SCRIPTS[platform], options);
   try {
     if (platform === "opencode") {
-      // Adds one provider and makes it the only one; every other key is kept.
-      const earlier = existsSync(file) ? readFileSync(file, "utf8") : undefined;
-      writeFileSync(
-        file,
-        mergeOpenCodeFakeProvider(earlier, {
-          // The same `provider/modelId` as Pi's (`PI_FAKE_MODEL_REF`).
-          provider: PI_FAKE_PROVIDER,
-          providerName: "Idle observation fake",
-          baseUrl: model.origin,
-          model: PI_FAKE_MODEL,
-          modelName: "Idle observation 1",
-        }),
-        { mode: 0o600 },
-      );
+      writeOpenCodeFakeConfig(file, model.origin);
     } else if (platform === "pi") {
       // Adds one provider; any the profile already has are kept.
       const earlier = existsSync(file)
@@ -209,6 +198,166 @@ export async function startLocalFakeModel(
       }
     },
   };
+}
+
+/**
+ * Merge the fake provider into an OpenCode configuration file. Adds one
+ * provider and makes it the only one; every other key is kept.
+ */
+function writeOpenCodeFakeConfig(file: string, baseUrl: string): void {
+  const earlier = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  writeFileSync(
+    file,
+    mergeOpenCodeFakeProvider(earlier, {
+      // The same `provider/modelId` as Pi's (`PI_FAKE_MODEL_REF`).
+      provider: PI_FAKE_PROVIDER,
+      providerName: "Idle observation fake",
+      baseUrl,
+      model: PI_FAKE_MODEL,
+      modelName: "Idle observation 1",
+    }),
+    { mode: 0o600 },
+  );
+}
+
+/** Where the OpenCode fake serves inside a container (todo 0008 (retired) task 7). */
+export const CONTAINER_OPENCODE_FAKE_PORT = 47_124;
+/** Its base URL as the container's OpenCode server sees it. */
+export const CONTAINER_OPENCODE_FAKE_BASE_URL = `http://127.0.0.1:${CONTAINER_OPENCODE_FAKE_PORT}/v1`;
+/** The bundled fake inside the container; a name no product process has. */
+export const CONTAINER_OPENCODE_FAKE_SCRIPT = "/tmp/orkestrator-qa-fake-opencode-model.js";
+
+/**
+ * Point the profile's global OpenCode configuration at the fake a container
+ * serves on its own loopback (todo 0008 (retired) task 7). A container's OpenCode
+ * server reads the profile's `opencode.json` through the read-only
+ * `/opencode-config` input, which the backend stages when it creates a
+ * runtime (`portable-inputs.ts`), so call this before the environment is
+ * created and keep it until the environment, and every runtime a rebuild
+ * creates, is gone. `stop` restores the file.
+ */
+export function pointProfileOpenCodeAtContainerFake(dataDir: string): FakeModelHandle {
+  const file = profileOpenCodeConfigFile(dataDir);
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const restore = snapshotFixtureFiles([file]);
+  try {
+    writeOpenCodeFakeConfig(file, CONTAINER_OPENCODE_FAKE_BASE_URL);
+  } catch (error) {
+    restore();
+    throw error;
+  }
+  return {
+    origin: `profile configuration -> container loopback :${CONTAINER_OPENCODE_FAKE_PORT}`,
+    stop: async () => restore(),
+  };
+}
+
+/**
+ * The OpenCode fake as one self-contained file, the way
+ * `container-fake-engines.spec.ts` bundles its bridges: the script imports
+ * the Claude fake's turn script and the shared Pi helpers, which the
+ * container does not have.
+ */
+export function bundleOpenCodeFake(run: typeof spawnSync = spawnSync): string {
+  const directory = mkdtempSync(path.join(tmpdir(), "orkestrator-qa-fake-opencode-"));
+  try {
+    const outfile = path.join(directory, "fake.js");
+    const built = run(
+      "bun",
+      ["build", FAKE_PI, "--target=bun", "--format=esm", `--outfile=${outfile}`],
+      { encoding: "utf8", timeout: 60_000 },
+    );
+    if (built.status !== 0) throw new Error("bundling the OpenCode fake model failed");
+    return readFileSync(outfile, "utf8");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+export interface ContainerExec {
+  /** `docker exec` of `command`, as `user` when given; returns stdout, throws on a non-zero exit. */
+  exec(command: string[], options?: { user?: string; input?: string }): string;
+  /** Whether the container is running (a stopped recovery copy is not). */
+  running(): boolean;
+}
+
+function dockerContainerExec(containerId: string): ContainerExec {
+  return {
+    exec: (command, { user, input } = {}) =>
+      docker(
+        [
+          "exec",
+          ...(input === undefined ? [] : ["-i"]),
+          ...(user ? ["--user", user] : []),
+          containerId,
+          ...command,
+        ],
+        input,
+      ),
+    running: () =>
+      spawnSync("docker", ["container", "inspect", "-f", "{{.State.Running}}", containerId], {
+        encoding: "utf8",
+        timeout: 15_000,
+      }).stdout?.trim() === "true",
+  };
+}
+
+/**
+ * Serve the scripted chat-completions model on a container's loopback for
+ * its OpenCode server (todo 0008 (retired) task 7). The configuration that points
+ * OpenCode at it comes from the profile ({@link pointProfileOpenCodeAtContainerFake}).
+ * The fake runs as `node`; its PID is recorded at spawn and checked against
+ * its command line before it is signalled, so nothing else in the container
+ * can be stopped by it. `stop` does nothing once the container no longer
+ * runs: the process went with it.
+ */
+export async function installContainerFakeOpenCode(
+  containerId: string,
+  options: { container?: ContainerExec; source?: string; readyTimeoutMs?: number } = {},
+): Promise<FakeModelHandle> {
+  const container = options.container ?? dockerContainerExec(containerId);
+  const source = options.source ?? bundleOpenCodeFake();
+  const script = CONTAINER_OPENCODE_FAKE_SCRIPT;
+  const asNode = (command: string, input?: string) =>
+    container.exec(["sh", "-c", command], { user: "node", input });
+  asNode(`umask 077; cat > ${script}`, source);
+  const pid = asNode(
+    `nohup bun ${script} --port ${CONTAINER_OPENCODE_FAKE_PORT} </dev/null >/dev/null 2>&1 & echo $!`,
+  ).trim();
+  const stop = async () => {
+    if (!container.running()) return;
+    if (/^\d+$/.test(pid)) {
+      // Signal only the recorded PID, and only while it still runs this script.
+      asNode(
+        `if tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null | grep -qF ${script}; then kill ${pid}; fi; rm -f ${script}`,
+      );
+    } else {
+      asNode(`rm -f ${script}`);
+    }
+  };
+  try {
+    if (!/^\d+$/.test(pid)) throw new Error("the container's loopback model reported no PID");
+    const deadline = Date.now() + (options.readyTimeoutMs ?? 15_000);
+    for (;;) {
+      try {
+        container.exec([
+          "curl",
+          "-fsS",
+          "-o",
+          "/dev/null",
+          `${CONTAINER_OPENCODE_FAKE_BASE_URL}/models`,
+        ]);
+        break;
+      } catch {
+        if (Date.now() > deadline) throw new Error("the container's loopback model never answered");
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  } catch (error) {
+    await stop().catch(() => undefined);
+    throw error;
+  }
+  return { origin: `container loopback :${CONTAINER_OPENCODE_FAKE_PORT}`, stop };
 }
 
 function docker(args: string[], input?: string): string {

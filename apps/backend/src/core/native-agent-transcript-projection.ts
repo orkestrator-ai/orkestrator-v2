@@ -259,6 +259,8 @@ interface ProjectedProgressiveTranscript {
   ledgerRevision?: number;
   /** Ids in `value.revisedMessages` sent because a publication reached them. */
   ledgerRevisedIds?: readonly string[];
+  /** The content sequence of the view this projection keeps unchanged, if it keeps one. */
+  keptContentSequence?: number;
 }
 
 /**
@@ -320,6 +322,13 @@ type ProgressiveTranscriptEntry = {
   historyEndIndex?: number;
   ledgerRevision?: number;
   ledgerRevisedIds?: readonly string[];
+  /**
+   * Moves only when the view's content does, not when a held preview, an
+   * `unchanged` answer or an artifact overlay re-commits the same content
+   * under a new token. A head-row recovery compares it to decide whether what
+   * it read is still no older than what the view shows (to-do 7845 (retired), task 2).
+   */
+  contentSequence: number;
 };
 
 /** One deferred detail: an inline body, an image path or a provider locator. */
@@ -505,6 +514,8 @@ export class NativeAgentTranscriptProjection {
   private readonly sessionTitles: NativeAgentSessionTitles;
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
+  /** Source of `ProgressiveTranscriptEntry.contentSequence`; only ever increases. */
+  private progressiveContentSequence = 0;
   private progressiveTranscriptBytes = 0;
   /** Views the newest one superseded, for readers who are behind; has its own bounds. */
   private readonly transcriptDeltaBases = new TranscriptDeltaBases();
@@ -2239,6 +2250,8 @@ export class NativeAgentTranscriptProjection {
         if (this.host.isStopped() || this.progressiveHydrations.get(key) !== entry) return;
         entry.attempts += 1;
         this.recordProgressiveHydrationReadStart(key, settleMs);
+        // What the view shows as this read starts. The read is no older than it.
+        const shownSequence = this.progressiveTranscriptCache.get(key)?.contentSequence;
         const promise = this.fillIncompleteProgressiveSnapshot(
           provider,
           sessionId,
@@ -2247,13 +2260,30 @@ export class NativeAgentTranscriptProjection {
         )
           .catch(() => snapshot)
           .then((hydrated) => {
-            if (
-              this.host.isStopped() ||
-              this.progressiveHydrations.get(key) !== entry ||
-              this.progressiveSourceTokens.get(key) !== snapshot.sourceToken
-            )
-              return;
+            if (this.host.isStopped()) return;
+            const pending = this.progressiveHydrations.get(key);
+            const current =
+              pending === entry && this.progressiveSourceTokens.get(key) === snapshot.sourceToken;
+            /*
+             * A newer revision arrived while this read was in flight. Once
+             * reading and parsing the exact row outlasts the gap between two
+             * revisions, that is every read, and discarding them all froze
+             * the view on the last recovery that finished in a quiet gap
+             * (to-do 7845 (retired), task 2). The read is still newer than what the view
+             * shows if the view has not moved since it started, and a newer
+             * revision's recovery is still pending (so the view is a held
+             * preview, not a complete snapshot): commit it, and let that
+             * recovery replace it.
+             */
+            const newerThanShown =
+              !current &&
+              pending !== undefined &&
+              shownSequence !== undefined &&
+              this.progressiveTranscriptCache.get(key)?.contentSequence === shownSequence;
+            if (!current && !newerThanShown) return;
             if (hydrated === snapshot) {
+              // The newer revision's recovery owns the retries.
+              if (!current) return;
               // The preview is safer than freezing a stale, fuller revision.
               // Keep retrying exact recovery in the background, but only the
               // first attempt is allowed to hold the visible transcript.
@@ -2744,6 +2774,7 @@ export class NativeAgentTranscriptProjection {
         : { historyEndIndex: previous.historyEndIndex }),
       ...(previous.ledgerRevision === undefined ? {} : { ledgerRevision: previous.ledgerRevision }),
       ...(previous.ledgerRevisedIds ? { ledgerRevisedIds: previous.ledgerRevisedIds } : {}),
+      keptContentSequence: previous.contentSequence,
     };
   }
 
@@ -2953,6 +2984,7 @@ export class NativeAgentTranscriptProjection {
         sourceToken: this.progressiveSourceTokens.get(key),
         value,
         bytes,
+        contentSequence: projection.keptContentSequence ?? ++this.progressiveContentSequence,
         ...(projection.historyStartIndex === undefined
           ? {}
           : { historyStartIndex: projection.historyStartIndex }),

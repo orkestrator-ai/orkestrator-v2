@@ -1,7 +1,7 @@
 /**
  * QA stand-in for OpenAI's Responses WebSocket that takes a Multi Review
  * through the real `codex` CLI, with no login and no billed request (to-do
- * 7872 (retired) task 1). It runs on its own: inside an environment container
+ * 7872 task 1). It runs on its own: inside an environment container
  * on its loopback, copied in by `container-multi-review-codex-read-only.spec.ts`,
  * or on the host for `live-read-only-reviewer-turn.test.ts` in the Codex
  * bridge.

@@ -13,7 +13,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * A Multi Review with Claude read-only reviewers and a Claude consolidation in
  * a container environment, on the image's real `claude` CLI and a scripted
  * fake Messages API on the container's loopback: no login and no billed turn
- * (to-do 0190 (retired), task 3).
+ * (to-do 0190, task 3).
  *
  * The image ships neither bubblewrap nor socat, so every read-only turn runs
  * without the CLI's command sandbox, on the read-only command hook alone. The
@@ -27,7 +27,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * `diffCommand` prints, and that no write reached the checkout.
  *
  * It also catches Agent Info's "No sandbox" while a reviewer turn runs (to-do
- * 0190 (retired) task 3): the fake holds each reviewer's submission while a
+ * 0190 task 3): the fake holds each reviewer's submission while a
  * hold file exists in the container (`--hold`), the case opens Reviewer 1's
  * transcript tab and its Agent Info, checks the reported policy and its
  * reason, and only then releases the turns.

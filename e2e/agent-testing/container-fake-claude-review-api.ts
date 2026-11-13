@@ -1,7 +1,7 @@
 /**
  * QA stand-in for the Anthropic Messages API that takes a whole Multi Review
  * through the image's real `claude` CLI, with no login and no billed request
- * (to-do 0190 (retired), task 3). It runs inside the environment container on its
+ * (to-do 0190, task 3). It runs inside the environment container on its
  * loopback, copied in and started by `container-fake-claude-install.ts`.
  *
  *   bun container-fake-claude-review-api.ts --port 47123 [--log <file>]
@@ -36,7 +36,7 @@
  * With `--hold <file>`, a reviewer's request whose answer would be its
  * submission waits while that file exists (at most {@link HOLD_LIMIT_MS}),
  * after logging a `hold` record once, so the turn is still running while a
- * spec reads Agent Info (to-do 0190 (retired) task 3). Removing the file
+ * spec reads Agent Info (to-do 0190 task 3). Removing the file
  * releases every held turn.
  */
 

@@ -7,7 +7,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**
- * The Codex read-only container canary (to-do 7872 (retired), task 1): a
+ * The Codex read-only container canary (to-do 7872, task 1): a
  * Multi Review with Codex reviewers, consolidation and preparation in a
  * container environment, on the image's real `codex` and a scripted fake
  * Responses API on the container's loopback. No login and no billed turn.
@@ -34,11 +34,13 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * --no-agent-credentials --agent-platforms codex`. The container's Codex
  * reads the fake's `openai_base_url` and the fixture API key when its
  * app-server starts, so no Codex session may have run in `fixture-container`
- * before the case. Its containers must reach the profile's agent tools
- * server, where the reviewers submit: on a Linux host whose firewall drops
- * that traffic, run the profile on `mise run docker:disposable -- start
- * --host-loopback` (its `DOCKER_HOST` in this process's environment as
- * well), or use `--agent-tools-port` with a firewall rule
+ * before the case: run it alone, `mise run test:agent:docker --
+ * container-multi-review-codex-read-only.spec.ts`, because other Docker
+ * fixture specs start Codex there. Its containers must reach the profile's
+ * agent tools server, where the reviewers submit: on a Linux host whose
+ * firewall drops that traffic, run the profile on `mise run
+ * docker:disposable -- start --host-loopback` (its `DOCKER_HOST` in this
+ * process's environment as well), or use `--agent-tools-port` with a firewall rule
  * ([agent-testing.md](../../docs/development/agent-testing.md)).
  *
  * The fake's base URL goes into the container's own `~/.codex/config.toml`

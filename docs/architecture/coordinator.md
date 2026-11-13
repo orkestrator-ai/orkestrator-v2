@@ -1420,11 +1420,11 @@ denied" and the container reason); that part has not run yet, because the
 host it was written on could not run Docker, and the display is pinned by
 `AgentInfoButton.reviewers.test.tsx`. Stock Ubuntu with AppArmor's
 `bwrap-userns-restrict` passed in CI's restricted AppArmor phase
-(`conformance-apparmor-live.test.ts`, 2026-11-11). The Agent Info run and
-Windows are live checks in the
-[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
-(source: to-do 0190, retired 2026-11-13; its record is
-`git show 17d28238c:docs/todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md`).
+(`conformance-apparmor-live.test.ts`, 2026-11-11). The Agent Info run is the
+open part of to-do
+[0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)
+task 3, and Windows is a live check in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
 `enforced` on such a host, an administrator chooses one of:
@@ -1565,10 +1565,8 @@ scripted reviewer on the container's loopback, is
 `ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1`; see
 [container qualification](../development/container-qualification.md)). It has
 not run yet: its run on a Docker host whose containers reach the profile's
-agent tools server is a live check in the
-[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
-(source: to-do 7872, retired 2026-11-13; its record is
-`git show 17d28238c:docs/todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md`).
+agent tools server is the open part of to-do
+[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md).
 
 ### Changing qualification
 

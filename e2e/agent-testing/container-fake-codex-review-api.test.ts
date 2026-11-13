@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { nativeWebPlatform } from "../../tests/register-dom";
 import { validateWorkflowResult } from "../../apps/backend/src/core/workflow-result-contracts";
 import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
 import { reviewReport as claudeReviewReport } from "./container-fake-claude-review-api";
@@ -16,6 +17,7 @@ import {
   reviewReport,
   reviewSlot,
   reviewStep,
+  serveFakeCodexReviewApi,
   stepOfCall,
   stepRecord,
   validationPlan,
@@ -382,5 +384,126 @@ describe("the scripted conversation", () => {
       type: "message",
       content: [{ type: "output_text", text: "Done." }],
     });
+  });
+});
+
+type ServerEvent = { type: string; response?: { id?: string }; item?: Record<string, unknown> };
+
+async function openSocket(url: string): Promise<WebSocket> {
+  const socket = new WebSocket(url);
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => resolve(), { once: true });
+    socket.addEventListener("error", () => reject(new Error("socket failed")), { once: true });
+  });
+  return socket;
+}
+
+/** Sends one frame and collects every event up to its `response.completed`. */
+function exchange(socket: WebSocket, frame: string): Promise<ServerEvent[]> {
+  return new Promise((resolve, reject) => {
+    const events: ServerEvent[] = [];
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("no response.completed"));
+    }, 5_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeEventListener("message", onMessage);
+    };
+    const onMessage = (message: MessageEvent) => {
+      const event = JSON.parse(String(message.data)) as ServerEvent;
+      events.push(event);
+      if (event.type === "response.completed") {
+        cleanup();
+        resolve(events);
+      }
+    };
+    socket.addEventListener("message", onMessage);
+    socket.send(frame);
+  });
+}
+
+describe("the Responses WebSocket", () => {
+  const { fetch, Response } = nativeWebPlatform;
+
+  test("answers each response.create with created, one output item and completed", async () => {
+    const lines: string[] = [];
+    const server = serveFakeCodexReviewApi({
+      log: (line) => lines.push(line),
+      ResponseType: Response,
+    });
+    const url = `ws://127.0.0.1:${server.port}/v1/responses`;
+    const first = await openSocket(url);
+    const second = await openSocket(url);
+    try {
+      // Only a WebSocket upgrade is served.
+      const plain = await fetch(`http://127.0.0.1:${server.port}/v1/responses`);
+      expect(plain.status).toBe(404);
+      await plain.text();
+
+      const reviewer = JSON.stringify({
+        type: "response.create",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: reviewerPrompt }],
+          },
+        ],
+      });
+      // A frame that is not JSON, or not a response.create, is ignored: the
+      // next answer belongs to the frame after it.
+      first.send("not json");
+      first.send(JSON.stringify({ type: "session.update" }));
+      const prewarm = await exchange(
+        first,
+        JSON.stringify({ ...JSON.parse(reviewer), generate: false }),
+      );
+      expect(prewarm.map((event) => event.type)).toEqual([
+        "response.created",
+        "response.completed",
+      ]);
+      expect(prewarm[1]!.response?.id).toBe(prewarm[0]!.response?.id);
+
+      const sampled = await exchange(first, reviewer);
+      expect(sampled.map((event) => event.type)).toEqual([
+        "response.created",
+        "response.output_item.done",
+        "response.completed",
+      ]);
+      expect(sampled[0]!.response?.id).toMatch(/^resp_/);
+      expect(sampled[2]!.response?.id).toBe(sampled[0]!.response?.id);
+      const item = sampled[1]!.item!;
+      expect(item).toMatchObject({ type: "custom_tool_call", name: "exec" });
+      expect(stepOfCall(item.call_id as string)).toBe("package");
+
+      // With no prompt_cache_key each socket is its own conversation: the
+      // first socket continues to its next step, the second starts with no slot.
+      const continued = await exchange(
+        first,
+        JSON.stringify({
+          type: "response.create",
+          input: [
+            cellOutput(
+              item.call_id as string,
+              `${RESULT_MARKER}${JSON.stringify({ ran: true, exitCode: 0, pkg })}`,
+            ),
+          ],
+        }),
+      );
+      expect(stepOfCall(continued[1]!.item!.call_id as string)).toBe("list");
+      const other = await exchange(second, JSON.stringify({ type: "response.create" }));
+      expect(other[1]!.item).toMatchObject({ type: "message" });
+
+      expect(lines.map((line) => JSON.parse(line))).toEqual([
+        { kind: "review-report", step: "package", answered: [] },
+        { kind: "review-report", step: "list", answered: [{ step: "package", error: false }] },
+      ]);
+      expect(lines.join("\n")).not.toContain(KEY);
+    } finally {
+      first.close();
+      second.close();
+      await server.stop(true);
+    }
   });
 });

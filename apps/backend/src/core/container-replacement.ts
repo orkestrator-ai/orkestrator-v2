@@ -125,6 +125,39 @@ export const REPLACEMENT_PHASES = [
 const COPY_TIMEOUT_MS = 60 * 60_000;
 /** How long killed `docker` clients get to report closing before the step fails. */
 const PIPE_SETTLE_GRACE_MS = 5_000;
+/** How long `docker rm -f` of an abandoned copy helper may take. */
+const HELPER_REMOVE_TIMEOUT_MS = 30_000;
+/**
+ * How long the helper may keep running once the `docker cp` producer has
+ * closed: a base for its final checks (it waits up to 60 s for its own
+ * listings), time for the bytes it was sent at a slow extraction rate, and as
+ * long again as the stream itself took. On a rootless daemon a helper once
+ * never saw end of input after its producer exited and would have held the
+ * rebuild for the whole {@link COPY_TIMEOUT_MS} (to-do 7705); with this a
+ * stalled step fails in minutes. 5 GiB gets about 7.5 minutes plus its
+ * streaming time.
+ *
+ * The streaming term is what keeps a slow legitimate copy inside the window.
+ * The helper's work after its input ends (re-hashing the destination in
+ * batches, sorting and joining the manifests, `git fsck`) is cheaper than the
+ * work it does while the stream flows (a shell and a hash per member), and a
+ * loaded host slows both alike. The real helper's post-input time, measured
+ * against this window, is pinned by `tests/unit/migrate-copy-drain-window.test.ts`.
+ */
+export const COPY_DRAIN_BASE_MS = 2 * 60_000;
+export const COPY_DRAIN_BYTES_PER_SECOND = 16 * 1024 * 1024;
+
+/**
+ * The drain window for a step whose producer sent `bytes` over `streamedMs`
+ * (from spawning the producer to its close).
+ */
+export function copyDrainWindowMs(bytes: number, streamedMs = 0): number {
+  return (
+    COPY_DRAIN_BASE_MS +
+    Math.ceil((Math.max(0, bytes) / COPY_DRAIN_BYTES_PER_SECOND) * 1000) +
+    Math.max(0, Math.ceil(streamedMs))
+  );
+}
 /** Capacity headroom on top of the estimated copy size. */
 const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
 
@@ -240,12 +273,14 @@ function helperArguments(
   mounts: string[],
   script: string[],
   interactive: boolean,
+  name?: string,
 ): string[] {
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
   return [
     "run",
     "--rm",
     ...(interactive ? ["-i"] : []),
+    ...(name ? ["--name", name] : []),
     "--network",
     "none",
     ...CONTAINER_ROOT_USER_ARGS,
@@ -275,13 +310,21 @@ function helperArguments(
  * Either side saying it reached no daemon is reported as such, so the failure
  * names the outage rather than the files.
  */
-export async function pipeContainerPath(
-  containerId: string,
-  sourcePath: string,
-  consumerArgs: string[],
-  options: { timeoutMs?: number; settleGraceMs?: number } = {},
-): Promise<
-  | { absent: true }
+export interface PipeContainerPathOptions {
+  timeoutMs?: number;
+  settleGraceMs?: number;
+  /** Overrides {@link copyDrainWindowMs}; tests pass a short one. */
+  drainWindowMs?: (bytes: number, streamedMs: number) => number;
+  /** The helper container's name, removed when the step is abandoned. */
+  consumerContainer?: string;
+}
+
+export type PipeContainerPathResult =
+  | {
+      absent: true;
+      /** The abandoned helper could not be removed; it may still mount the destination. */
+      helperRemovalFailed?: boolean;
+    }
   | {
       absent: false;
       output: string;
@@ -289,9 +332,35 @@ export async function pipeContainerPath(
       daemonUnavailable: boolean;
       /** The daemon refused the copy: a read-only bind it cannot remount (`docker-copy-refusal.ts`). */
       refused?: boolean;
-    }
-> {
+      /** The producer closed and the helper did not finish within the drain window. */
+      stalled?: boolean;
+      /** The abandoned helper could not be removed; it may still mount the destination. */
+      helperRemovalFailed?: boolean;
+    };
+
+/**
+ * Removes an abandoned copy helper, answering whether it is gone. One that is
+ * already gone (`--rm` removed it once its client was killed) counts as removed.
+ */
+async function removeCopyHelper(name: string): Promise<boolean> {
+  try {
+    await runCommand("docker", ["rm", "-f", name], { timeoutMs: HELPER_REMOVE_TIMEOUT_MS });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && /no such container/i.test(error.message)) return true;
+    log.warn("replacement.copy-helper-remove-failed", { helper: name });
+    return false;
+  }
+}
+
+export async function pipeContainerPath(
+  containerId: string,
+  sourcePath: string,
+  consumerArgs: string[],
+  options: PipeContainerPathOptions = {},
+): Promise<PipeContainerPathResult> {
   return new Promise((resolve) => {
+    const streamStarted = Date.now();
     const producer = spawnCommand("docker", ["cp", `${containerId}:${sourcePath}`, "-"]);
     const consumer = spawnCommand("docker", consumerArgs);
     let producerErr = "";
@@ -300,15 +369,73 @@ export async function pipeContainerPath(
     let producerCode: number | null = null;
     let consumerCode: number | null = null;
     let settleTimer: ReturnType<typeof setTimeout> | undefined;
-    const timer = setTimeout(() => {
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    let bytes = 0;
+    let stalled = false;
+    let abandoned = false;
+    let settled = false;
+    // The abandoned helper's removal. The step settles only once it has
+    // finished: rollback removes the candidate's volumes next, and a helper
+    // still mounting one would make Docker keep it.
+    let helperRemoval: Promise<boolean> | undefined;
+    const settle = (result: PipeContainerPathResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(settleTimer);
+      clearTimeout(drainTimer);
+      void (helperRemoval ?? Promise.resolve(true)).then((removed) =>
+        resolve(removed ? result : { ...result, helperRemovalFailed: true }),
+      );
+    };
+    // What the producer itself said when it failed. Its own answer (nothing to
+    // copy, a refusal, no daemon) outranks a stall: the helper was only left
+    // waiting on a stream that had already failed.
+    const producerAnswer = () => {
+      const failed = producerCode !== null && producerCode !== 0;
+      return {
+        absent: failed && isDockerPathNotFound(producerErr),
+        daemonUnavailable:
+          (failed && isDockerDaemonUnreachable(producerErr)) ||
+          (consumerCode !== null && consumerCode !== 0 && isDockerDaemonUnreachable(consumerErr)),
+        refused: failed && isDockerCopyRemountRefused(producerErr),
+      };
+    };
+    const abandonedResult = (): PipeContainerPathResult => {
+      const answer = producerAnswer();
+      if (answer.absent) return { absent: true };
+      return {
+        absent: false,
+        output: "",
+        producerFailed: true,
+        daemonUnavailable: answer.daemonUnavailable,
+        ...(answer.refused ? { refused: true } : {}),
+        ...(stalled ? { stalled: true } : {}),
+      };
+    };
+    // Kill both clients and the helper container: killing `docker run` does
+    // not stop the container, whose input may never end. Settles as failed if
+    // neither client is seen to close.
+    const abandon = () => {
+      if (abandoned || settled) return;
+      abandoned = true;
+      // Called by the deadline or the drain window, never before both exist.
+      clearTimeout(timer);
+      clearTimeout(drainTimer);
       producer.kill("SIGKILL");
       consumer.kill("SIGKILL");
+      if (options.consumerContainer) {
+        helperRemoval = removeCopyHelper(options.consumerContainer);
+      }
       settleTimer = setTimeout(
-        () =>
-          resolve({ absent: false, output: "", producerFailed: true, daemonUnavailable: false }),
+        () => settle(abandonedResult()),
         options.settleGraceMs ?? PIPE_SETTLE_GRACE_MS,
       );
-    }, options.timeoutMs ?? COPY_TIMEOUT_MS);
+    };
+    const timer = setTimeout(abandon, options.timeoutMs ?? COPY_TIMEOUT_MS);
+    producer.stdout.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+    });
     producer.stdout.pipe(consumer.stdin);
     // Once nothing reads the stream (the helper died, or its stdin broke),
     // `pipe` leaves the producer's stdout paused with data unread. Discard the
@@ -330,24 +457,47 @@ export async function pipeContainerPath(
     });
     const finish = () => {
       if (producerCode === null || consumerCode === null) return;
-      clearTimeout(timer);
-      clearTimeout(settleTimer);
-      if (producerCode !== 0 && isDockerPathNotFound(producerErr)) {
-        resolve({ absent: true });
+      if (stalled) {
+        settle(abandonedResult());
         return;
       }
-      resolve({
+      const answer = producerAnswer();
+      if (answer.absent) {
+        settle({ absent: true });
+        return;
+      }
+      settle({
         absent: false,
         output,
         producerFailed: producerCode !== 0,
-        daemonUnavailable:
-          (producerCode !== 0 && isDockerDaemonUnreachable(producerErr)) ||
-          (consumerCode !== 0 && isDockerDaemonUnreachable(consumerErr)),
-        refused: producerCode !== 0 && isDockerCopyRemountRefused(producerErr),
+        daemonUnavailable: answer.daemonUnavailable,
+        refused: answer.refused,
       });
+    };
+    // Once the producer has closed, the helper has its whole input (or none
+    // is coming): give it the drain window to finish, then abandon the step.
+    const startDrain = () => {
+      // End the helper's input explicitly; `pipe` does once the stream ends,
+      // but not after an unpipe.
+      if (!consumer.stdin.destroyed && !consumer.stdin.writableEnded) consumer.stdin.end();
+      if (consumerCode !== null || drainTimer !== undefined || abandoned) return;
+      const streamedMs = Date.now() - streamStarted;
+      const windowMs = (options.drainWindowMs ?? copyDrainWindowMs)(bytes, streamedMs);
+      drainTimer = setTimeout(() => {
+        if (consumerCode !== null) return;
+        stalled = true;
+        log.warn("replacement.copy-helper-stalled", {
+          producerCode: producerCode ?? null,
+          bytes,
+          streamedMs,
+          drainMs: windowMs,
+        });
+        abandon();
+      }, windowMs);
     };
     producer.on("close", (code) => {
       producerCode = code ?? 1;
+      startDrain();
       finish();
     });
     consumer.on("close", (code) => {
@@ -358,6 +508,7 @@ export async function pipeContainerPath(
     });
     producer.on("error", () => {
       producerCode = 1;
+      startDrain();
       finish();
     });
     consumer.on("error", () => {
@@ -381,6 +532,8 @@ export async function runCopyStep(
   step: CopyStep,
   source: { containerId: string; storage: ContainerStorageIdentity },
   candidate: ContainerStorageIdentity,
+  /** Pipe timings for a streamed step; tests pass short ones. */
+  pipeTimings: Pick<PipeContainerPathOptions, "drainWindowMs" | "settleGraceMs"> = {},
 ): Promise<CopyResult> {
   const destinationVolume = volumeNamed(candidate, step.target.role);
   const destination = `/storage/${step.target.role}${step.target.subdir ? `/${step.target.subdir}` : ""}`;
@@ -408,6 +561,8 @@ export async function runCopyStep(
     const result = parseCopyOutput(stdout);
     return !result.ok && isDockerDaemonUnreachable(stdout) ? DAEMON_UNAVAILABLE_COPY : result;
   }
+  // Named so an abandoned step can remove the helper, whose input may never end.
+  const helperName = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;
   const piped = await pipeContainerPath(
     source.containerId,
     step.source.path,
@@ -417,11 +572,17 @@ export async function runCopyStep(
       destinationMount,
       ["copy-stream", destination, "1", ...(step.select ?? [])],
       true,
+      helperName,
     ),
+    { ...pipeTimings, consumerContainer: helperName },
   );
+  if (!piped.absent && piped.daemonUnavailable) return DAEMON_UNAVAILABLE_COPY;
+  // A helper left behind may still mount the candidate's volume: never treat
+  // that step as done, even when there was nothing to copy.
+  if (piped.helperRemovalFailed) return HELPER_REMOVE_FAILED;
   if (piped.absent) return { ok: true, files: 0, bytes: 0, absent: true };
-  if (piped.daemonUnavailable) return DAEMON_UNAVAILABLE_COPY;
   if (piped.refused) return COPY_REFUSED;
+  if (piped.stalled) return { ok: false, reason: "helper-input-stalled" };
   if (piped.producerFailed) return { ok: false, reason: "source-read-failed" };
   return parseCopyOutput(piped.output);
 }
@@ -430,6 +591,8 @@ export async function runCopyStep(
 const DAEMON_UNAVAILABLE_COPY = { ok: false, reason: "daemon-unavailable" } as const;
 /** A copy step Docker refused: the source container has a bind it cannot remount. */
 const COPY_REFUSED = { ok: false, reason: "source-copy-refused" } as const;
+/** An abandoned step whose helper container could not be removed. */
+const HELPER_REMOVE_FAILED = { ok: false, reason: "helper-remove-failed" } as const;
 
 /** Classify a failed copy before rollback, including a stream cut without daemon wording. */
 export async function replacementCopyFailure(reason: string): Promise<ContainerLifecycleError> {
@@ -444,6 +607,12 @@ export async function replacementCopyFailure(reason: string): Promise<ContainerL
     return lifecycleError(
       "daemon-unavailable",
       "Docker stopped responding while the environment's files were being copied. The original container was kept unchanged; rebuild again once Docker is running.",
+    );
+  }
+  if (reason === HELPER_REMOVE_FAILED.reason) {
+    return lifecycleError(
+      "needs-attention",
+      "A copy step stalled and its helper container could not be removed. The original container was kept unchanged; the new storage may be kept as a recovery copy while the helper still uses it.",
     );
   }
   return lifecycleError(

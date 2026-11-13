@@ -50,8 +50,23 @@ const DAEMON_PATH_NOT_FOUND = /error response from daemon: could not find the fi
  */
 const ARCHIVE_REMOUNT_REFUSED = /remount-ro .*operation not permitted/i;
 
+/**
+ * The daemon's archive path could not mount a container that is not running:
+ * `failed to mount <data-root>/rootfs/overlayfs/<id>: … fstype: overlay, …
+ * err: device or resource busy` (rootless Engine 29.9.2, containerd image
+ * store, kernel 7.2.15, 2026-11-09; to-do 7549 task 2). Only the daemon's
+ * own answer about that mount counts.
+ */
+const ARCHIVE_SNAPSHOT_BUSY =
+  /error response from daemon: failed to mount [^\n]*device or resource busy/i;
+
 export function isDockerCopyRemountRefused(text: string): boolean {
   return ARCHIVE_REMOUNT_REFUSED.test(text);
+}
+
+/** The daemon could not mount a stopped or created container's filesystem for a copy: it was busy. */
+export function isDockerCopySnapshotBusy(text: string): boolean {
+  return ARCHIVE_SNAPSHOT_BUSY.test(text);
 }
 
 /** The CLI reached no daemon, or lost the one it was waiting on. */

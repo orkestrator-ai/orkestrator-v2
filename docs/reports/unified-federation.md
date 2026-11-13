@@ -1836,7 +1836,7 @@ Still not observed; each is required before the phase that depends on it:
   approved by the user on 2026-11-07, in one combined PR. iOS relies on
   [4002](../../plans/unified/4002-hydration-tiers-and-budgets.md)'s lower
   budgets, 2-minute suspend, suspend-on-hidden and the memory-warning hook.
-- `nextHopProtocol` on a real LAN and over Tailscale Serve (todo 5380 task 2).
+- `nextHopProtocol` on a real LAN and over Tailscale Serve (todo 5380 (retired) task 2, now on the manual-test checklist, 7568).
 - That a notification click from a hidden realm fails to bring it forward
   (inferred from `question-desktop-notification.ts:58-69`); the question
   notification path of 0002 needs an agent that asks, which needs a provider

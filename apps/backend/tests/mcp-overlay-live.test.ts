@@ -1,5 +1,5 @@
 /**
- * Real-Docker qualification for container MCP delivery (todo 0040): the
+ * Real-Docker qualification for container MCP delivery (todo 0040, retired): the
  * entrypoint's Cursor copy, the narrow container writer, and the environment
  * overlay across a real stop and start and a replacement container.
  *

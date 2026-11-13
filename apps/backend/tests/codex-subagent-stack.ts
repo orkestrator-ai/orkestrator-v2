@@ -209,7 +209,7 @@ export async function startSubagentStack(): Promise<SubagentStack> {
    * a hint to look again.
    */
   async function* bridgeEvents(signal: AbortSignal): AsyncGenerator<void> {
-    const response = await fetch(`http://127.0.0.1:${bridge!.port}/event/subscribe`, {
+    const response = await fetch(`http://127.0.0.1:${bridge!.port}/event/subscribe?observe=1`, {
       headers: { Authorization: `Bearer ${token}` },
       signal,
     });

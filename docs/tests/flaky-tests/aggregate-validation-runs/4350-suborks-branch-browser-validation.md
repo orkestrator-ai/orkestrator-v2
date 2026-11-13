@@ -4,7 +4,7 @@
 - **Status:** open
 - **Date observed:** 2026-11-04
 - **Branch:** `subork-agent-command-19d44fc3d0c3-r1` (todo
-  [4340](../../../todo/agent-engines/4340-suborks-live-qualification.md)),
+  4340 (retired; in Git history at `14d8ce8db`)),
   commit `821ae0912`.
 - **Host:** beelink, Linux 7.1.8, 16 logical CPUs, Playwright 1.64.0
   Chromium. Load average 52–55 during the runs (other worktrees' builds).

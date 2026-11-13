@@ -1,6 +1,6 @@
 /**
  * OpenCode 2.x transcript windows, history pages and revised rows
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 4).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan phase 4).
  *
  * The authoritative source is `GET /api/session/:id/message`, newest first,
  * paged by an opaque cursor. Live events are only hints over it (AGENTS.md

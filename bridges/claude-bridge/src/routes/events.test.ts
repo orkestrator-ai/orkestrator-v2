@@ -1,4 +1,4 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
 import { SSEStreamingApi } from "hono/streaming";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -19,13 +19,8 @@ globalThis.TransformStream = TransformStream as typeof globalThis.TransformStrea
 import events, {
   createBoundedSseWriter,
   createEventsRouter,
-  createReplayBuffer,
-  createReplayRetention,
   createSseConnectionClosure,
-  getReplayFrames,
-  parseReplayCursor,
-  serializeEvent,
-  serializeEventData,
+  parseEventCursor,
 } from "./events.js";
 import { eventEmitter } from "../services/event-emitter.js";
 
@@ -163,24 +158,6 @@ describe("createBoundedSseWriter", () => {
     await first;
   });
 
-  test("uses a frame's known byte count rather than measuring its data again", async () => {
-    const { write, overflowReasons, releaseFirst } = stallingWriter({
-      maxPendingBytes: 8,
-    });
-    const byteLength = spyOn(Buffer, "byteLength");
-    try {
-      // The data is one byte, but the count the sender supplied is what counts.
-      const first = write({ event: "a", data: "1", dataBytes: 1 });
-      await write({ event: "a", data: "2", dataBytes: 50 });
-      expect(overflowReasons).toHaveLength(1);
-      expect(byteLength).not.toHaveBeenCalled();
-      releaseFirst();
-      await first;
-    } finally {
-      byteLength.mockRestore();
-    }
-  });
-
   test("accepts a single oversized frame when idle", async () => {
     const written: string[] = [];
     let overflowed = 0;
@@ -300,282 +277,16 @@ describe("createSseConnectionClosure", () => {
   });
 });
 
-describe("replay retention", () => {
-  test("drops an idle ring and re-arms it for the next subscriber", async () => {
-    const clear = mock(() => undefined);
-    const retention = createReplayRetention({ clear }, 5);
-    const release = retention.acquire();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(clear).not.toHaveBeenCalled();
-    expect(retention.shouldRetain()).toBe(true);
-
-    release();
-    await waitFor(() => clear.mock.calls.length === 1);
-    expect(retention.shouldRetain()).toBe(false);
-
-    const releaseAgain = retention.acquire();
-    expect(retention.shouldRetain()).toBe(true);
-    expect(retention.liveSubscribers).toBe(1);
-    releaseAgain();
-  });
-});
-
-describe("serializeEventData", () => {
-  test("serializes an event once and reuses the string for later subscribers", () => {
-    const event = {
-      type: "message.updated" as const,
-      sessionId: "s-1",
-      data: { message: { id: "m-1" } },
-    };
-
-    const first = serializeEventData(event);
-    expect(first).toBe('{"sessionId":"s-1","message":{"id":"m-1"}}');
-
-    // The payload mutating after the first serialization must not change what
-    // later subscribers send: the frame was snapshotted at emit time.
-    event.data.message.id = "mutated";
-    expect(serializeEventData(event)).toBe(first);
-  });
-
-  test("measures an event's encoded bytes once with its serialization", () => {
-    const event = {
-      type: "message.updated" as const,
-      sessionId: "s-é",
-      data: { message: { id: "m-1", text: "ééé" } },
-    };
-    const first = serializeEvent(event);
-    expect(first.dataBytes).toBe(Buffer.byteLength(first.data));
-    expect(first.dataBytes).toBeGreaterThan(first.data.length);
-
-    const byteLength = spyOn(Buffer, "byteLength");
-    try {
-      expect(serializeEvent(event)).toBe(first);
-      expect(byteLength).not.toHaveBeenCalled();
-    } finally {
-      byteLength.mockRestore();
-    }
-  });
-
-  test("serializes each event object independently", () => {
-    const first = serializeEventData({ type: "session.idle", sessionId: "a", data: {} });
-    const second = serializeEventData({ type: "session.idle", sessionId: "b", data: {} });
-    expect(first).toBe('{"sessionId":"a"}');
-    expect(second).toBe('{"sessionId":"b"}');
-  });
-
-  test("preserves an explicit prompt-suggestion removal on the wire", () => {
-    expect(
-      serializeEventData({
-        type: "session.updated",
-        sessionId: "s-1",
-        data: { promptSuggestion: null },
-      }),
-    ).toBe('{"sessionId":"s-1","promptSuggestion":null}');
-  });
-});
-
-describe("SSE replay ring", () => {
-  test("returns frames after a cursor through the requested ceiling", () => {
-    const before = eventEmitter.currentRevision;
-    eventEmitter.emit({
-      type: "session.updated",
-      sessionId: "replay-one",
-      data: { status: "running" },
-    });
-    eventEmitter.emit({
-      type: "session.idle",
-      sessionId: "replay-two",
-    });
-    const through = eventEmitter.currentRevision;
-
-    const replay = getReplayFrames(
-      {
-        generation: eventEmitter.generation,
-        revision: before,
-      },
-      through,
-    );
-    expect(replay.resetRequired).toBe(false);
-    expect(replay.frames.map((frame) => frame.revision)).toEqual([before + 1, before + 2]);
-    expect(replay.frames.map((frame) => frame.event)).toEqual(["session.updated", "session.idle"]);
-  });
-
-  test("requires a reset for stale-generation and future cursors", () => {
-    const through = eventEmitter.currentRevision;
-    expect(
-      getReplayFrames(
-        {
-          generation: "dead-bridge-generation",
-          revision: through,
-        },
-        through,
-      ),
-    ).toEqual({ frames: [], resetRequired: true });
-    expect(
-      getReplayFrames(
-        {
-          generation: eventEmitter.generation,
-          revision: through + 1,
-        },
-        through,
-      ),
-    ).toEqual({ frames: [], resetRequired: true });
-  });
-
+describe("parseEventCursor", () => {
   test("parses only bounded generation-aware cursors", () => {
-    expect(parseReplayCursor(`${eventEmitter.generation}:42`)).toEqual({
+    expect(parseEventCursor(`${eventEmitter.generation}:42`)).toEqual({
       generation: eventEmitter.generation,
       revision: 42,
     });
-    expect(parseReplayCursor("42")).toBeNull();
-    expect(parseReplayCursor("generation:-1")).toBeNull();
-    expect(parseReplayCursor("generation:9007199254740992")).toBeNull();
-    expect(parseReplayCursor("bad/generation:1")).toBeNull();
-  });
-
-  test("requires a reset once a cursor falls outside the retained frame window", () => {
-    const before = eventEmitter.currentRevision;
-    for (let index = 0; index <= 512; index += 1) {
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId: `replay-window-${index}`,
-        data: { status: "running" },
-      });
-    }
-    const replay = getReplayFrames(
-      {
-        generation: eventEmitter.generation,
-        revision: before,
-      },
-      eventEmitter.currentRevision,
-    );
-    expect(replay).toEqual({ frames: [], resetRequired: true });
-  });
-
-  test("evicts by encoded-byte weight independently of the frame cap", () => {
-    const generation = "byte-window";
-    const secondEvent = {
-      type: "session.idle" as const,
-      sessionId: "second",
-      data: { value: "retained" },
-    };
-    const secondBytes =
-      Buffer.byteLength(serializeEventData(secondEvent)) + Buffer.byteLength(secondEvent.type);
-    const replay = createReplayBuffer({
-      maxFrames: 10,
-      maxBytes: secondBytes,
-    });
-
-    replay.append(
-      {
-        type: "session.updated",
-        sessionId: "first",
-        data: { value: "evicted" },
-      },
-      1,
-      generation,
-    );
-    replay.append(secondEvent, 2, generation);
-
-    expect(replay.getFrames({ generation, revision: 0 }, 2, generation)).toEqual({
-      frames: [],
-      resetRequired: true,
-    });
-    expect(
-      replay
-        .getFrames({ generation, revision: 1 }, 2, generation)
-        .frames.map((frame) => frame.revision),
-    ).toEqual([2]);
-  });
-});
-
-describe("SSE replay collapse", () => {
-  const generation = "collapse";
-  const updated = (sessionId: string, id: string, text: string) => ({
-    type: "message.updated" as const,
-    sessionId,
-    data: { message: { id, text } },
-  });
-  const patched = (sessionId: string, messageId: string, revision: number) => ({
-    type: "message.patched" as const,
-    sessionId,
-    data: { messageId, partCount: 1, changedParts: [], revision },
-  });
-
-  test("a full snapshot collapses the message's earlier snapshots and patches", () => {
-    const replay = createReplayBuffer();
-    replay.append(updated("s", "m-1", "base"), 1, generation);
-    replay.append(patched("s", "m-1", 2), 2, generation);
-    replay.append(patched("s", "m-1", 3), 3, generation);
-    replay.append(updated("s", "m-2", "other message"), 4, generation);
-    replay.append(patched("s", "m-2", 2), 5, generation);
-    replay.append(updated("s", "m-1", "whole"), 6, generation);
-
-    const { frames, resetRequired } = replay.getFrames({ generation, revision: 0 }, 6, generation);
-    expect(resetRequired).toBe(false);
-    expect(frames.map((frame) => [frame.revision, frame.event, frame.superseded === true])).toEqual(
-      [
-        [1, "message.updated", true],
-        [2, "message.patched", true],
-        [3, "message.patched", true],
-        [4, "message.updated", false],
-        [5, "message.patched", false],
-        [6, "message.updated", false],
-      ],
-    );
-    expect(frames[0]?.data).toBe("{}");
-    expect(frames[5]?.data).toContain('"text":"whole"');
-    // Each collapsed frame keeps its own cursor.
-    expect(frames.map((frame) => frame.id)).toEqual(
-      [1, 2, 3, 4, 5, 6].map((revision) => `${generation}:${revision}`),
-    );
-  });
-
-  test("patches after the newest snapshot are kept", () => {
-    const replay = createReplayBuffer();
-    replay.append(updated("s", "m-1", "one"), 1, generation);
-    replay.append(updated("s", "m-1", "two"), 2, generation);
-    replay.append(patched("s", "m-1", 3), 3, generation);
-    const { frames } = replay.getFrames({ generation, revision: 1 }, 3, generation);
-    expect(frames.map((frame) => frame.superseded === true)).toEqual([false, false]);
-  });
-
-  test("does not collapse the same message id across sessions", () => {
-    const replay = createReplayBuffer();
-    replay.append(updated("a", "m-1", "a's"), 1, generation);
-    replay.append(updated("b", "m-1", "b's"), 2, generation);
-    const { frames } = replay.getFrames({ generation, revision: 0 }, 2, generation);
-    expect(frames.map((frame) => frame.superseded === true)).toEqual([false, false]);
-  });
-
-  test("a collapsed frame frees its ring weight", () => {
-    const replay = createReplayBuffer();
-    const big = "x".repeat(10_000);
-    replay.append(updated("s", "m-1", big), 1, generation);
-    const afterFirst = replay.stats().bytes;
-    replay.append(updated("s", "m-1", big), 2, generation);
-    expect(replay.stats().frames).toBe(2);
-    expect(replay.stats().bytes).toBeLessThan(afterFirst + 1_000);
-  });
-
-  test("a skipped revision makes an older cursor require a reset", () => {
-    const replay = createReplayBuffer();
-    replay.append(updated("s", "m-1", "kept"), 1, generation);
-    replay.skip(2);
-    expect(replay.getFrames({ generation, revision: 1 }, 2, generation)).toEqual({
-      frames: [],
-      resetRequired: true,
-    });
-    expect(replay.getFrames({ generation, revision: 2 }, 2, generation)).toEqual({
-      frames: [],
-      resetRequired: false,
-    });
-    replay.append(updated("s", "m-1", "next"), 3, generation);
-    expect(
-      replay
-        .getFrames({ generation, revision: 2 }, 3, generation)
-        .frames.map((frame) => frame.revision),
-    ).toEqual([3]);
+    expect(parseEventCursor("42")).toBeNull();
+    expect(parseEventCursor("generation:-1")).toBeNull();
+    expect(parseEventCursor("generation:9007199254740992")).toBeNull();
+    expect(parseEventCursor("bad/generation:1")).toBeNull();
   });
 });
 
@@ -591,10 +302,20 @@ describe("GET /subscribe (SSE)", () => {
     }
   });
 
-  test("opens with a connected event and forwards emitted events to the stream", async () => {
+  test("refuses a subscription that does not ask for observation mode", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const response = await app.request("/subscribe");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "observe=1 is required: this bridge serves only the observation stream",
+    });
+    expect(eventEmitter.subscriberCount).toBe(subscribersBefore);
+  });
+
+  test("opens with a connected event and forwards content-free frames", async () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const controller = new AbortController();
-    const res = await app.request("/subscribe", { signal: controller.signal });
+    const res = await app.request("/subscribe?observe=1", { signal: controller.signal });
 
     expect(res.status).toBe(200);
     const reader = res.body?.getReader();
@@ -602,24 +323,24 @@ describe("GET /subscribe (SSE)", () => {
 
     try {
       const initial = await readUntil(reader!, (b) => b.includes("event: connected"));
-      expect(initial).toContain("event: connected");
       expect(initial).toContain('"status":"connected"');
+      expect(initial).toContain('"observe":true');
+      expect(initial).toContain('"resetRequired":false');
+      expect(initial).toContain(`id: ${eventEmitter.currentCursor}`);
+      expect(initial).not.toContain("event: replay.required");
 
-      // After we read "connected", the server's `await stream.writeSSE(...)`
-      // resolves and the next line — `eventEmitter.subscribe(...)` — runs.
-      // Wait for that subscribe to register before emitting, otherwise the
-      // event is broadcast to zero subscribers and we hang forever.
-      await waitFor(() => eventEmitter.subscriberCount > 0);
-
+      await waitFor(() => eventEmitter.subscriberCount > subscribersBefore);
       eventEmitter.emit({
         type: "session.updated",
-        sessionId: "s-events-test",
-        data: { status: "running" },
+        sessionId: "observed-live",
+        data: { backgroundTasks: { t: { id: "t", outputTail: "private output" } } },
       });
 
-      const forwarded = await readUntil(reader!, (b) => b.includes("event: session.updated"));
-      expect(forwarded).toContain('"sessionId":"s-events-test"');
-      expect(forwarded).toContain('"status":"running"');
+      const live = await readUntil(reader!, (b) => b.includes("observed-live"));
+      expect(live).toContain("event: session.updated");
+      expect(live).toContain(`id: ${eventEmitter.currentCursor}`);
+      expect(live).toContain('data: {"sessionId":"observed-live"}');
+      expect(live).not.toContain("private output");
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
@@ -631,10 +352,10 @@ describe("GET /subscribe (SSE)", () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const firstController = new AbortController();
     const secondController = new AbortController();
-    const firstResponse = await app.request("/subscribe", {
+    const firstResponse = await app.request("/subscribe?observe=1", {
       signal: firstController.signal,
     });
-    const secondResponse = await app.request("/subscribe", {
+    const secondResponse = await app.request("/subscribe?observe=1", {
       signal: secondController.signal,
     });
     const firstReader = firstResponse.body?.getReader();
@@ -652,15 +373,17 @@ describe("GET /subscribe (SSE)", () => {
       eventEmitter.emit({
         type: "message.updated",
         sessionId: "shared-session",
-        data: { message: { id: "message-1" } },
+        data: { message: { id: "message-1", text: "secret transcript text" } },
       });
 
       const [firstEvent, secondEvent] = await Promise.all([
         readUntil(firstReader!, (buffer) => buffer.includes("event: message.updated")),
         readUntil(secondReader!, (buffer) => buffer.includes("event: message.updated")),
       ]);
-      expect(firstEvent).toContain('"sessionId":"shared-session"');
-      expect(secondEvent).toContain('"sessionId":"shared-session"');
+      for (const frames of [firstEvent, secondEvent]) {
+        expect(frames).toContain('data: {"sessionId":"shared-session"}');
+        expect(frames).not.toContain("secret transcript text");
+      }
     } finally {
       firstController.abort();
       secondController.abort();
@@ -672,154 +395,52 @@ describe("GET /subscribe (SSE)", () => {
     }
   });
 
-  test("an observation subscriber gets content-free frames, replayed ones included", async () => {
+  test("a current cursor resumes without a reset and is echoed back", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    eventEmitter.emit({ type: "session.idle", sessionId: "before-current-cursor" });
+    const cursor = eventEmitter.currentCursor;
+    const controller = new AbortController();
+    const response = await app.request(`/subscribe?observe=1&since=${encodeURIComponent(cursor)}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    try {
+      const frames = await readUntil(reader!, (buffer) => buffer.includes("event: connected"));
+      expect(frames).toContain(`id: ${cursor}`);
+      expect(frames).toContain('"resetRequired":false');
+      expect(frames).not.toContain("event: replay.required");
+      expect(frames).not.toContain("before-current-cursor");
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("a cursor behind the current revision requires a reset, echoing the cursor first", async () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const before = eventEmitter.currentRevision;
     eventEmitter.emit({
       type: "message.updated",
-      sessionId: "observed-replay",
+      sessionId: "missed-while-disconnected",
       data: { message: { id: "m-1", text: "secret transcript text" } },
     });
     const controller = new AbortController();
-    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
-    const response = await app.request(`/subscribe?observe=1&since=${cursor}`, {
+    const cursor = `${eventEmitter.generation}:${before}`;
+    const response = await app.request(`/subscribe?observe=1&since=${encodeURIComponent(cursor)}`, {
       signal: controller.signal,
     });
     const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-    try {
-      const replayed = await readUntil(reader!, (buffer) => buffer.includes("observed-replay"));
-      expect(replayed).toContain('"observe":true');
-      expect(replayed).toContain("event: message.updated");
-      expect(replayed).toContain('data: {"sessionId":"observed-replay"}');
-      expect(replayed).not.toContain("secret transcript text");
-
-      await waitFor(() => eventEmitter.subscriberCount > subscribersBefore);
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId: "observed-live",
-        data: { backgroundTasks: { t: { id: "t", outputTail: "private output" } } },
-      });
-      const live = await readUntil(reader!, (buffer) => buffer.includes("observed-live"));
-      expect(live).toContain(`id: ${eventEmitter.generation}:`);
-      expect(live).toContain('data: {"sessionId":"observed-live"}');
-      expect(live).not.toContain("private output");
-    } finally {
-      controller.abort();
-      await reader?.cancel().catch(() => {});
-      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
-    }
-  });
-
-  test("replays collapsed frames as cursor frames before the newest snapshot", async () => {
-    const subscribersBefore = eventEmitter.subscriberCount;
-    const before = eventEmitter.currentRevision;
-    eventEmitter.emit({
-      type: "message.updated",
-      sessionId: "collapse-route",
-      data: { message: { id: "m-route", text: "first snapshot" } },
-    });
-    eventEmitter.emit({
-      type: "message.patched",
-      sessionId: "collapse-route",
-      data: { messageId: "m-route", partCount: 1, changedParts: [], revision: 2 },
-    });
-    eventEmitter.emit({
-      type: "message.updated",
-      sessionId: "collapse-route",
-      data: { message: { id: "m-route", text: "latest snapshot" } },
-    });
-    const through = eventEmitter.currentRevision;
-    const controller = new AbortController();
-    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
-    const response = await app.request(`/subscribe?since=${cursor}`, {
-      signal: controller.signal,
-    });
-    const reader = response.body?.getReader();
-    try {
-      const frames = await readUntil(reader!, (buffer) => buffer.includes("latest snapshot"));
-      expect(frames).toContain('"replayed":3');
-      expect(frames).not.toContain("first snapshot");
-      expect(frames).not.toContain("event: message.patched");
-      const cursorFrame = (revision: number) =>
-        `event: bridge.cursor\ndata: {}\nid: ${eventEmitter.generation}:${revision}`;
-      expect(frames).toContain(cursorFrame(before + 1));
-      expect(frames).toContain(cursorFrame(before + 2));
-      expect(frames.indexOf(cursorFrame(before + 2))).toBeLessThan(
-        frames.indexOf("latest snapshot"),
-      );
-      expect(frames).toContain(`id: ${eventEmitter.generation}:${through}`);
-    } finally {
-      controller.abort();
-      await reader?.cancel().catch(() => {});
-      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
-    }
-  });
-
-  test("an observation subscriber's replay is unchanged by the collapse", async () => {
-    const subscribersBefore = eventEmitter.subscriberCount;
-    const before = eventEmitter.currentRevision;
-    eventEmitter.emit({
-      type: "message.updated",
-      sessionId: "collapse-observed",
-      data: { message: { id: "m-observed", text: "one" } },
-    });
-    eventEmitter.emit({
-      type: "message.patched",
-      sessionId: "collapse-observed",
-      data: { messageId: "m-observed", partCount: 1, changedParts: [], revision: 2 },
-    });
-    eventEmitter.emit({
-      type: "message.updated",
-      sessionId: "collapse-observed",
-      data: { message: { id: "m-observed", text: "two" } },
-    });
-    const controller = new AbortController();
-    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
-    const response = await app.request(`/subscribe?observe=1&since=${cursor}`, {
-      signal: controller.signal,
-    });
-    const reader = response.body?.getReader();
-    try {
-      const last = `id: ${eventEmitter.generation}:${before + 3}`;
-      const frames = await readUntil(reader!, (buffer) => buffer.includes(last));
-      expect(frames).not.toContain("bridge.cursor");
-      const observed = (type: string, revision: number) =>
-        `event: ${type}\ndata: {"sessionId":"collapse-observed"}\nid: ${eventEmitter.generation}:${revision}`;
-      expect(frames).toContain(observed("message.updated", before + 1));
-      expect(frames).toContain(observed("message.patched", before + 2));
-      expect(frames).toContain(observed("message.updated", before + 3));
-    } finally {
-      controller.abort();
-      await reader?.cancel().catch(() => {});
-      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
-    }
-  });
-
-  test("replays retained frames from a query cursor", async () => {
-    const subscribersBefore = eventEmitter.subscriberCount;
-    const before = eventEmitter.currentRevision;
-    eventEmitter.emit({
-      type: "session.updated",
-      sessionId: "query-replay-session",
-      data: { status: "running" },
-    });
-    const controller = new AbortController();
-    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
-    const response = await app.request(`/subscribe?since=${cursor}`, {
-      signal: controller.signal,
-    });
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-
     try {
       const frames = await readUntil(reader!, (buffer) =>
-        buffer.includes('"sessionId":"query-replay-session"'),
+        buffer.includes("event: replay.required"),
       );
-      expect(frames).toContain(`id: ${eventEmitter.generation}:${before}`);
-      expect(frames).toContain("event: connected");
-      expect(frames).toContain("event: session.updated");
-      expect(frames).not.toContain("event: replay.required");
+      // The connected frame keeps the client's own position; only the gap
+      // frame moves it to the current revision.
+      expect(frames.indexOf(`id: ${cursor}`)).toBeLessThan(frames.indexOf("replay.required"));
+      expect(frames).toContain('"resetRequired":true');
+      expect(frames).toContain(`"through":"${eventEmitter.currentCursor}"`);
+      expect(frames).not.toContain("missed-while-disconnected");
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
@@ -831,7 +452,7 @@ describe("GET /subscribe (SSE)", () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const controller = new AbortController();
     const currentCursor = encodeURIComponent(eventEmitter.currentCursor);
-    const response = await app.request(`/subscribe?since=${currentCursor}`, {
+    const response = await app.request(`/subscribe?observe=1&since=${currentCursor}`, {
       headers: { "Last-Event-ID": "stale-generation:7" },
       signal: controller.signal,
     });
@@ -859,9 +480,10 @@ describe("GET /subscribe (SSE)", () => {
     ]) {
       const subscribersBefore = eventEmitter.subscriberCount;
       const controller = new AbortController();
-      const response = await app.request(`/subscribe?since=${encodeURIComponent(cursor)}`, {
-        signal: controller.signal,
-      });
+      const response = await app.request(
+        `/subscribe?observe=1&since=${encodeURIComponent(cursor)}`,
+        { signal: controller.signal },
+      );
       const reader = response.body?.getReader();
       try {
         const frames = await readUntil(reader!, (buffer) =>
@@ -876,49 +498,13 @@ describe("GET /subscribe (SSE)", () => {
     }
   });
 
-  test("requires authoritative rehydration when a route cursor is outside the window", async () => {
+  test("delivers events emitted during the handshake once each, in revision order", async () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const before = eventEmitter.currentRevision;
-    for (let index = 0; index <= 512; index += 1) {
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId: `route-window-${index}`,
-        data: { status: "running" },
-      });
-    }
+    eventEmitter.emit({ type: "session.idle", sessionId: "before-handshake" });
     const controller = new AbortController();
     const response = await app.request(
-      `/subscribe?since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
-      { signal: controller.signal },
-    );
-    const reader = response.body?.getReader();
-
-    try {
-      const frames = await readUntil(reader!, (buffer) =>
-        buffer.includes("event: replay.required"),
-      );
-      expect(frames).toContain('"resetRequired":true');
-      expect(frames).not.toContain(`"sessionId":"route-window-0"`);
-    } finally {
-      controller.abort();
-      await reader?.cancel().catch(() => {});
-      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
-    }
-  });
-
-  test("delivers events emitted while retained replay is flushing in revision order", async () => {
-    const subscribersBefore = eventEmitter.subscriberCount;
-    const before = eventEmitter.currentRevision;
-    for (let index = 0; index < 100; index += 1) {
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId: `replay-backlog-${index}`,
-        data: { status: "running" },
-      });
-    }
-    const controller = new AbortController();
-    const response = await app.request(
-      `/subscribe?since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
+      `/subscribe?observe=1&since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
       { signal: controller.signal },
     );
     const reader = response.body?.getReader();
@@ -928,24 +514,22 @@ describe("GET /subscribe (SSE)", () => {
       for (let index = 1; index <= 3; index += 1) {
         eventEmitter.emit({
           type: "session.idle",
-          sessionId: `emitted-during-replay-${index}`,
+          sessionId: `emitted-during-handshake-${index}`,
         });
       }
       const frames = await readUntil(reader!, (buffer) =>
-        buffer.includes('"sessionId":"emitted-during-replay-3"'),
+        buffer.includes('"sessionId":"emitted-during-handshake-3"'),
       );
       for (let index = 1; index <= 3; index += 1) {
         expect(
-          frames.match(new RegExp(`"sessionId":"emitted-during-replay-${index}"`, "g")),
+          frames.match(new RegExp(`"sessionId":"emitted-during-handshake-${index}"`, "g")),
         ).toHaveLength(1);
       }
       const revisions = [
         ...frames.matchAll(new RegExp(`^id: ${eventEmitter.generation}:(\\d+)$`, "gm")),
       ].map((match) => Number(match[1]));
-      expect(revisions.length).toBeGreaterThan(100);
-      expect(
-        revisions.every((revision, index) => index === 0 || revision > revisions[index - 1]!),
-      ).toBe(true);
+      // connected (the client's cursor), replay.required, then the three live frames.
+      expect(revisions).toEqual([before, before + 1, before + 2, before + 3, before + 4]);
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
@@ -953,20 +537,11 @@ describe("GET /subscribe (SSE)", () => {
     }
   });
 
-  test("aborting without draining a replay handshake removes the subscriber", async () => {
+  test("aborting without draining a handshake removes the subscriber", async () => {
     const subscribersBefore = eventEmitter.subscriberCount;
-    const before = eventEmitter.currentRevision;
-    const payload = "x".repeat(256 * 1024);
-    for (let index = 0; index < 80; index += 1) {
-      eventEmitter.emit({
-        type: "message.updated",
-        sessionId: `stalled-replay-${index}`,
-        data: { message: { payload, index } },
-      });
-    }
     const controller = new AbortController();
     const response = await app.request(
-      `/subscribe?since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
+      `/subscribe?observe=1&since=${encodeURIComponent("stale-generation:1")}`,
       { signal: controller.signal },
     );
 
@@ -985,7 +560,7 @@ describe("GET /subscribe (SSE)", () => {
     // handshake-write failure without replacing Hono internals.
     mutableEmitter.generation = "invalid\ngeneration";
     try {
-      const response = await app.request("/subscribe");
+      const response = await app.request("/subscribe?observe=1");
       await response.text();
       await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
     } finally {
@@ -997,7 +572,7 @@ describe("GET /subscribe (SSE)", () => {
     const boundedApp = new Hono();
     boundedApp.route("/", createEventsRouter({ maxPendingFrames: 1 }));
     const subscribersBefore = eventEmitter.subscriberCount;
-    const response = await boundedApp.request("/subscribe");
+    const response = await boundedApp.request("/subscribe?observe=1");
     const reader = response.body?.getReader();
     expect(reader).toBeDefined();
 
@@ -1018,7 +593,7 @@ describe("GET /subscribe (SSE)", () => {
     const boundedApp = new Hono();
     boundedApp.route("/", createEventsRouter({ maxPendingFrames: 1 }));
     const subscribersBefore = eventEmitter.subscriberCount;
-    const response = await boundedApp.request("/subscribe");
+    const response = await boundedApp.request("/subscribe?observe=1");
 
     await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
     eventEmitter.emit({ type: "session.updated", sessionId: "handshake-overflow-1" });
@@ -1038,7 +613,7 @@ describe("GET /subscribe (SSE)", () => {
       }),
     );
     const subscribersBefore = eventEmitter.subscriberCount;
-    const response = await boundedApp.request("/subscribe");
+    const response = await boundedApp.request("/subscribe?observe=1");
 
     await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
     eventEmitter.emit({
@@ -1070,7 +645,9 @@ describe("GET /subscribe (SSE)", () => {
     const controller = new AbortController();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const response = await keepaliveApp.request("/subscribe", { signal: controller.signal });
+      const response = await keepaliveApp.request("/subscribe?observe=1", {
+        signal: controller.signal,
+      });
       reader = response.body!.getReader();
       await readUntil(reader, (buffer) => buffer.includes("event: connected"));
       await waitFor(() => intervals.mock.calls.some((call) => call[1] === intervalMs));
@@ -1101,7 +678,7 @@ describe("GET /subscribe (SSE)", () => {
     keepaliveApp.route("/", createEventsRouter({ keepaliveIntervalMs: 5 }));
     const subscribersBefore = eventEmitter.subscriberCount;
     const controller = new AbortController();
-    const response = await keepaliveApp.request("/subscribe", {
+    const response = await keepaliveApp.request("/subscribe?observe=1", {
       signal: controller.signal,
     });
     const reader = response.body?.getReader();

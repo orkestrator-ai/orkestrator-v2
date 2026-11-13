@@ -4,6 +4,7 @@ import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import type { DeclaredAptPackages } from "@orkestrator/protocol/apt-packages";
 import type {
   ProjectArrangement,
   ProjectArrangementIntent,
@@ -205,7 +206,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    */
   async function getProjectSetupRequirements(
     projectId: string,
-  ): Promise<{ rootSteps: number | null }> {
+  ): Promise<{ rootSteps: number | null; aptPackages?: DeclaredAptPackages | null }> {
     return projects().get_project_setup_requirements({ projectId });
   }
 

@@ -14,15 +14,19 @@
  *   mise run build:cli
  *   bun scripts/qualify-standalone-service.ts [options]
  *
- *   --from <version>         release the service is installed with (default 2.30.0-beta)
- *   --to <version>           published release it updates itself to (default 2.31.0-beta)
+ * On Linux, `scripts/qualify-host-upgrades-container.ts` runs it as a lingering
+ * user in a disposable systemd container on a disposable Docker daemon.
+ *
+ *   --from <version>         release the service is installed with (default 2.38.0-beta)
+ *   --to <version>           published release it updates itself to (default 2.38.1-beta)
  *   --broken <version>       version of the deliberately broken release a private
  *                            registry serves (default <to>.990; <to> must be a prerelease)
  *   --engines-bun <path>     a Bun older than <engines-to>'s `engines.bun`; enables the
  *                            engines phase
- *   --engines-from <version> release that Bun installs (default 2.29.0-beta, >=1.4.3)
+ *   --engines-from <version> release that Bun installs (default 2.29.0-beta, >=1.4.3, the
+ *                            last release before `engines.bun` became >=1.4.4)
  *   --engines-to <version>   release whose `engines.bun` it does not meet
- *                            (default 2.30.0-beta, >=1.4.4)
+ *                            (default <to>; every release since 2.30.0-beta needs >=1.4.4)
  *   --phases <list>          comma-separated subset of cancel,update,rollback,engines
  *   --report <file>          write the evidence as JSON
  *   --keep                   leave the temporary directory (the units are always removed)
@@ -113,12 +117,12 @@ export async function qualifyStandaloneService(
       return index >= 0 && args[index + 1] !== undefined ? args[index + 1]! : fallback;
     }
 
-    const FROM = option("--from", "2.30.0-beta");
-    const TO = option("--to", "2.31.0-beta");
+    const FROM = option("--from", "2.38.0-beta");
+    const TO = option("--to", "2.38.1-beta");
     const BROKEN = option("--broken", TO.includes("-") ? `${TO}.990` : "");
     const ENGINES_BUN = option("--engines-bun", "");
     const ENGINES_FROM = option("--engines-from", "2.29.0-beta");
-    const ENGINES_TO = option("--engines-to", "2.30.0-beta");
+    const ENGINES_TO = option("--engines-to", TO);
     const PHASES = new Set(
       option("--phases", `cancel,update,rollback${ENGINES_BUN ? ",engines" : ""}`).split(","),
     );
@@ -302,9 +306,14 @@ export async function qualifyStandaloneService(
     }
     const installed: Service[] = [];
 
-    function descriptor(
-      service: Service,
-    ): { generation: string; pid: number; appVersion: string } | null {
+    function descriptor(service: Service): {
+      generation: string;
+      pid: number;
+      appVersion: string;
+      url?: string;
+      authFile?: string;
+      processIdentity?: string;
+    } | null {
       try {
         return JSON.parse(
           readFileSync(path.join(service.dataDir, "backend-instance.json"), "utf8"),
@@ -411,17 +420,6 @@ export async function qualifyStandaloneService(
         );
       }
       interruption.signal.throwIfAborted();
-      const added = await ork([
-        "connection",
-        "add",
-        name,
-        "--data-dir",
-        dataDir,
-        "--no-check",
-        "--json",
-      ]);
-      if (added.code !== 0)
-        throw new SetupError(`connection add failed: ${added.stderr.slice(-300)}`);
       const home = path.join(temporary, `${name}-home`);
       mkdirSync(home, { recursive: true });
       writeUnitEnvironment(service, {
@@ -430,11 +428,21 @@ export async function qualifyStandaloneService(
         ORKESTRATOR_CONTROL_MCP_DISABLED: "1",
       });
       await loadUnit(service, false);
-      const ready = await waitReady(service, version, null).catch(() => null);
+      const booted = await waitFor(
+        `${name} to publish its descriptor`,
+        () => {
+          const current = descriptor(service);
+          return current?.appVersion === version ? current : null;
+        },
+        6 * 60_000,
+      ).catch(() => null);
+      const connection = booted ? await connect(service, booted) : null;
+      const ready = connection ? await waitReady(service, version, null).catch(() => null) : null;
       if (
         !check(name, `service install of ${version} from npm starts and serves`, ready !== null, {
           unit: unit.name,
           manager: unit.manager,
+          connection,
         })
       ) {
         throw new Error(
@@ -442,6 +450,39 @@ export async function qualifyStandaloneService(
         );
       }
       return service;
+    }
+
+    /**
+     * Saves the client connection once the first backend has published its
+     * descriptor. A data-directory connection follows the descriptor through
+     * restarts, but on Linux the client refuses a descriptor without a process
+     * identity, which releases before 2.30.0-beta (the engines phase's
+     * 2.29.0-beta) do not publish. Those get an endpoint connection to the
+     * descriptor's own URL and auth file instead; the engines phase never
+     * restarts its backend, so nothing is lost.
+     */
+    async function connect(
+      service: Service,
+      booted: NonNullable<ReturnType<typeof descriptor>>,
+    ): Promise<"data-dir" | "endpoint"> {
+      const endpoint =
+        process.platform === "linux" &&
+        !booted.processIdentity &&
+        typeof booted.url === "string" &&
+        typeof booted.authFile === "string";
+      const added = await ork([
+        "connection",
+        "add",
+        service.connection,
+        ...(endpoint
+          ? ["--url", booted.url!, "--credential-file", booted.authFile!]
+          : ["--data-dir", service.dataDir]),
+        "--no-check",
+        "--json",
+      ]);
+      if (added.code !== 0)
+        throw new SetupError(`connection add failed: ${added.stderr.slice(-300)}`);
+      return endpoint ? "endpoint" : "data-dir";
     }
 
     /** Sets (or replaces) environment variables in this run's own unit file. */

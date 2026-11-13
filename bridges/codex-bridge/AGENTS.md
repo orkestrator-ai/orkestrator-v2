@@ -384,12 +384,13 @@ replay shows it as the card, never as a message the user typed. See
   tab may have been unmounted; `/session/:id/approvals` is the authoritative
   rehydration path and reconcile must call it.
 - SSE frames carry `id: <revision>`. The `connected` frame must echo the
-  **client's own cursor**, not the latest revision: a browser EventSource adopts
-  every id it sees, so anchoring at the latest would permanently skip the frames it
-  just asked to be replayed if the socket died mid-handshake.
-- Subscribe *before* computing an SSE replay, buffering into an array, then flush
-  past the replayed range. Replaying first and subscribing second drops anything
-  emitted in between — the exact gap the cursor exists to close.
+  **client's own cursor**, not the latest revision: a client adopts every id it
+  sees, so anchoring at the latest would let a socket that died mid-handshake
+  reconnect looking caught up, never told of its gap. The stream keeps no
+  replay, so a cursor that is not current gets `session.reconcile-required`.
+- Subscribe *before* checking the cursor, buffering into an array, then flush
+  past it. Checking first and subscribing second drops anything emitted in
+  between — the exact gap the cursor exists to detect.
 - Recordings (`CODEX_BRIDGE_RECORD_NOTIFICATIONS`, armed by
   `CODEX_BRIDGE_RECORD_CONFIRM=1`) contain prompts, file contents and absolute
   paths. Always run `scripts/scrub-codex-recording.ts` and read the diff before

@@ -170,4 +170,36 @@ describe("GitHub ranges seed", () => {
       { event: "github-ranges.seed-not-copied", fields: { refusal: "read-only-bind-remount" } },
     ]);
   });
+  test("a seed copy the daemon refuses as busy is retried, then delivered or logged as that refusal", async () => {
+    const dir = await tempDir("ork-github-seed-busy-");
+    cleanup.push(dir);
+    const seed = path.join(dir, "github-ranges.txt");
+    await fs.writeFile(seed, "# github-ranges 2026-10-26T00:00:00.000Z\n192.30.252.0/22\n");
+    const busy =
+      'Error response from daemon: failed to mount /d/rootfs/overlayfs/1: mount source: "overlay", fstype: overlay, flags: 0, data: "workdir=w", err: device or resource busy';
+    const scripted = (failures: number) => {
+      let calls = 0;
+      const run = (async () => {
+        calls += 1;
+        if (calls <= failures) throw new CommandFailedError(busy, { stderr: busy });
+        return { stdout: "", stderr: "" };
+      }) as unknown as Parameters<typeof copyGithubRangesSeed>[2];
+      return { run, calls: () => calls };
+    };
+    const noPause = async () => undefined;
+    const transient = scripted(1);
+    expect(await copyGithubRangesSeed("abc123", seed, transient.run, noPause)).toBe(true);
+    expect(transient.calls()).toBe(2);
+
+    const stuck = scripted(Number.POSITIVE_INFINITY);
+    const logs = captureLogs();
+    try {
+      expect(await copyGithubRangesSeed("abc123", seed, stuck.run, noPause)).toBe(false);
+    } finally {
+      logs.restore();
+    }
+    expect(logs.records().filter((r) => r.event === "github-ranges.seed-not-copied")).toMatchObject(
+      [{ fields: { refusal: "snapshot-busy" } }],
+    );
+  });
 });

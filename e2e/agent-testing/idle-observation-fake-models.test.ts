@@ -7,8 +7,14 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  CONTAINER_OPENCODE_FAKE_BASE_URL,
+  CONTAINER_OPENCODE_FAKE_SCRIPT,
+  type ContainerExec,
   type FakeModelHandle,
+  bundleOpenCodeFake,
   fakeModelSettingsFile,
+  installContainerFakeOpenCode,
+  pointProfileOpenCodeAtContainerFake,
   startLocalFakeModel,
   startModel,
   withFakeModelCleanup,
@@ -146,4 +152,123 @@ test("OpenCode's fake provider is merged into the profile's own opencode.json an
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a container run points the profile's opencode.json at the container's loopback, then restores it", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "idle-fake-opencode-container-"));
+  const file = fakeModelSettingsFile("opencode", directory);
+  mkdirSync(path.dirname(file), { recursive: true });
+  const original = '{"mcp":{"kept":{"type":"local","command":["true"]}}}\n';
+  writeFileSync(file, original);
+  try {
+    const handle = pointProfileOpenCodeAtContainerFake(directory);
+    const written = JSON.parse(readFileSync(file, "utf8")) as {
+      mcp: Record<string, unknown>;
+      provider: Record<string, { options: { baseURL: string } }>;
+      enabled_providers: string[];
+    };
+    // The container's server reaches its own loopback, never the host's.
+    expect(written.provider["idleqa-fake"]!.options.baseURL).toBe(CONTAINER_OPENCODE_FAKE_BASE_URL);
+    expect(CONTAINER_OPENCODE_FAKE_BASE_URL).toBe("http://127.0.0.1:47124/v1");
+    expect(written.enabled_providers).toEqual(["idleqa-fake"]);
+    expect(Object.keys(written.mcp)).toEqual(["kept"]);
+    await handle.stop();
+    expect(readFileSync(file, "utf8")).toBe(original);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a profile with no opencode.json gets one for the run and none afterwards", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "idle-fake-opencode-container-"));
+  const file = fakeModelSettingsFile("opencode", directory);
+  try {
+    const handle = pointProfileOpenCodeAtContainerFake(directory);
+    expect(readFileSync(file, "utf8")).toContain(CONTAINER_OPENCODE_FAKE_BASE_URL);
+    await handle.stop();
+    expect(() => readFileSync(file, "utf8")).toThrow();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+type Exec = { args: string[]; user?: string; input?: string };
+
+function fakeContainer(options: { pid?: string; readyAfter?: number; running?: boolean } = {}) {
+  const calls: Exec[] = [];
+  let curls = 0;
+  const state = { running: options.running ?? true };
+  const container: ContainerExec = {
+    exec(args, { user, input } = {}) {
+      calls.push({ args, user, input });
+      if (args[0] === "curl") {
+        curls += 1;
+        if (curls <= (options.readyAfter ?? 0)) throw new Error("docker exec failed");
+        return "";
+      }
+      const command = args.at(-1) ?? "";
+      if (command.includes("nohup")) return `${options.pid ?? "4321"}\n`;
+      return "";
+    },
+    running: () => state.running,
+  };
+  return { calls, container, state };
+}
+
+test("the container fake is written and served as node, and stopped only by its recorded PID", async () => {
+  const { calls, container } = fakeContainer({ readyAfter: 2 });
+  const handle = await installContainerFakeOpenCode("c1", {
+    container,
+    source: "// bundled fake",
+    readyTimeoutMs: 5_000,
+  });
+  expect(handle.origin).toBe("container loopback :47124");
+  const [write, start] = calls;
+  expect(write!.user).toBe("node");
+  expect(write!.args.at(-1)).toContain(`cat > ${CONTAINER_OPENCODE_FAKE_SCRIPT}`);
+  expect(write!.input).toBe("// bundled fake");
+  expect(start!.user).toBe("node");
+  expect(start!.args.at(-1)).toContain(`bun ${CONTAINER_OPENCODE_FAKE_SCRIPT} --port 47124`);
+  // Readiness polls the fake's own models route until it answers.
+  expect(calls.filter((call) => call.args[0] === "curl")).toHaveLength(3);
+  await handle.stop();
+  const stop = calls.at(-1)!.args.at(-1)!;
+  expect(stop).toContain("/proc/4321/cmdline");
+  expect(stop).toContain(`grep -qF ${CONTAINER_OPENCODE_FAKE_SCRIPT}`);
+  expect(stop).toContain("kill 4321");
+  expect(stop).not.toMatch(/pkill|killall/);
+});
+
+test("stopping the container fake does nothing once its container no longer runs", async () => {
+  const { calls, container, state } = fakeContainer();
+  const handle = await installContainerFakeOpenCode("c1", { container, source: "x" });
+  const before = calls.length;
+  state.running = false;
+  await handle.stop();
+  expect(calls.length).toBe(before);
+});
+
+test("a fake that never answers is stopped and the install fails", async () => {
+  const { calls, container } = fakeContainer({ readyAfter: Number.POSITIVE_INFINITY });
+  await expect(
+    installContainerFakeOpenCode("c1", { container, source: "x", readyTimeoutMs: 1 }),
+  ).rejects.toThrow("never answered");
+  expect(calls.at(-1)!.args.at(-1)).toContain("kill 4321");
+});
+
+test("a start that reports no PID signals nothing and removes the script", async () => {
+  const { calls, container } = fakeContainer({ pid: "oops" });
+  await expect(installContainerFakeOpenCode("c1", { container, source: "x" })).rejects.toThrow(
+    "no PID",
+  );
+  const last = calls.at(-1)!.args.at(-1)!;
+  expect(last).toBe(`rm -f ${CONTAINER_OPENCODE_FAKE_SCRIPT}`);
+});
+
+test("the OpenCode fake bundles into one file the container can run alone", () => {
+  const source = bundleOpenCodeFake();
+  // Nothing left to resolve from this repository inside the container.
+  expect(source).not.toMatch(/from\s+["']\.{1,2}\//);
+  expect(source).toContain("chat/completions");
+  expect(source).toContain("--port");
 });

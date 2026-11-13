@@ -15,10 +15,12 @@ const log = createLogger("docker");
  *   which cannot see host listeners, and RootlessKit's own bind on the host
  *   then fails with `address already in use`. Docker draws a fresh port on
  *   the next start, so the start is retried, up to
- *   {@link PORT_COLLISION_RETRIES} times. Containers created on a rootless
+ *   {@link PORT_COLLISION_RETRIES} times, and the run's length is logged
+ *   (`start.port-collision-run`). Containers created on a rootless
  *   daemon now get host ports the backend chose instead
  *   (`container-host-ports.ts`); a collision on one of those keeps its port,
- *   so it is retried after a pause ({@link PORT_HOLD_RETRY_DELAYS_MS}) for the
+ *   so it is retried after a pause ({@link PORT_HOLD_RETRY_DELAYS_MS}, one
+ *   per {@link PORT_HOLD_RETRIES}) for the
  *   short-lived holder to go. A collision on a port the
  *   user fixed is theirs to resolve and is never retried. The failed start
  *   also detaches the container from its network (Docker 29.9, observed
@@ -225,12 +227,16 @@ async function restoreNetwork(
 }
 
 /**
- * How many times a start that collided on an automatic port is retried.
- * Rootless dockerd hands out automatic ports in sequence, so a retry draws
- * the next port in the same busy neighbourhood; short-lived outbound sockets
- * held two consecutive ports in a 2026-11-09 run (to-do 7549 task 3).
+ * How many times a start that collided on a port Docker chose is retried.
+ * Rootless dockerd hands out automatic ports in sequence from the kernel's
+ * ephemeral range, which outbound sockets share, so a retry draws the next
+ * port in the same busy neighbourhood. Short-lived outbound sockets held two
+ * consecutive ports in a 2026-11-09 run (to-do 7549 task 3) and four in a row,
+ * twice, on a busy host on 2026-11-11 (to-do 7750 (retired)). Each retry is
+ * one `inspect`, at most one `network connect` and one `start`, with no pause,
+ * so ten bound a start that can never succeed to a few seconds of Docker calls.
  */
-export const PORT_COLLISION_RETRIES = 3;
+export const PORT_COLLISION_RETRIES = 10;
 
 /**
  * Pauses before retrying a collision on a backend-chosen port, one per retry.
@@ -238,6 +244,9 @@ export const PORT_COLLISION_RETRIES = 3;
  * holder (short-lived loopback connections, observed 2026-11-11) to go.
  */
 export const PORT_HOLD_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000];
+
+/** How many times a collision on a backend-chosen port is retried: one per pause. */
+export const PORT_HOLD_RETRIES = PORT_HOLD_RETRY_DELAYS_MS.length;
 
 /**
  * A backend-chosen port still held after every same-port retry. The port is
@@ -252,7 +261,7 @@ export function backendPortHeldError(message: string): ContainerLifecycleError {
       : `Host port ${port}, which Orkestrator chose for this environment,`;
   return new ContainerLifecycleError(
     "port-conflict",
-    `${which} is still held by another program after ${PORT_COLLISION_RETRIES} retries. Stop that program and start the environment again, or rebuild the environment so it is given new ports.`,
+    `${which} is still held by another program after ${PORT_HOLD_RETRIES} retries. Stop that program and start the environment again, or rebuild the environment so it is given new ports.`,
   );
 }
 
@@ -275,45 +284,88 @@ export async function startDockerContainer(
     run("docker", [verb, containerId], { timeoutMs }).then(() => undefined);
   let collision: unknown = null;
   let network: string | null = null;
-  for (let retry = 0; ; retry += 1) {
-    try {
-      await attempt(retry === 0 ? (options.verb ?? "start") : "start");
-      break;
-    } catch (error) {
-      const message = messageOf(error);
-      const refused = bindMountRefusedError(message);
-      if (refused) throw refused;
-      if (!ADDRESS_IN_USE.test(message)) throw error;
-      const inspection = await inspectForStart(containerId, run);
-      if (!inspection) throw error;
-      // Restore the endpoint even when a fixed-port failure cannot be retried.
-      // Otherwise a later start can succeed without networking or published ports.
-      await restoreNetwork(containerId, inspection, run).catch(() => {
-        throw error;
-      });
-      const retryKind = portCollisionRetry(message, inspection.bindings);
-      if (retryKind === "none") throw error;
-      if (retry >= PORT_COLLISION_RETRIES) {
-        throw retryKind === "same-port" ? backendPortHeldError(message) : error;
-      }
-      collision = error;
-      network = inspection.network;
-      log.warn("start.port-collision-retrying", {
-        container: containerId.slice(0, 12),
-        port: collidingHostPort(message) ?? null,
-        retry: retry + 1,
-        backendChosen: retryKind === "same-port",
-      });
-      if (retryKind === "same-port") {
-        await sleep(PORT_HOLD_RETRY_DELAYS_MS[retry] ?? PORT_HOLD_RETRY_DELAYS_MS.at(-1)!);
+  // The run of collisions this start met, logged once it ends either way:
+  // `failed` when a later step failed for another reason.
+  const streak = { collisions: 0, fresh: 0, same: 0, ports: [] as number[], logged: false };
+  const logRun = (
+    outcome: "started" | "exhausted" | "not-retryable" | "network-lost" | "failed",
+  ) => {
+    if (streak.collisions === 0 || streak.logged) return;
+    streak.logged = true;
+    const fields = {
+      container: containerId.slice(0, 12),
+      collisions: streak.collisions,
+      freshPortRetries: streak.fresh,
+      samePortRetries: streak.same,
+      firstPort: streak.ports[0] ?? null,
+      lastPort: streak.ports.at(-1) ?? null,
+      outcome,
+    };
+    if (outcome === "started") log.info("start.port-collision-run", fields);
+    else log.warn("start.port-collision-run", fields);
+  };
+  try {
+    await startWithRetries();
+  } catch (error) {
+    logRun("failed");
+    throw error;
+  }
+  async function startWithRetries(): Promise<void> {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await attempt(retry === 0 ? (options.verb ?? "start") : "start");
+        break;
+      } catch (error) {
+        const message = messageOf(error);
+        const refused = bindMountRefusedError(message);
+        if (refused) throw refused;
+        if (!ADDRESS_IN_USE.test(message)) throw error;
+        const port = collidingHostPort(message);
+        // Counted before inspection, so a run that ends there is still logged.
+        streak.collisions += 1;
+        if (port !== null) streak.ports.push(port);
+        const inspection = await inspectForStart(containerId, run);
+        if (!inspection) throw error;
+        // Restore the endpoint even when a fixed-port failure cannot be retried.
+        // Otherwise a later start can succeed without networking or published ports.
+        await restoreNetwork(containerId, inspection, run).catch(() => {
+          throw error;
+        });
+        const retryKind = portCollisionRetry(message, inspection.bindings);
+        if (retryKind === "none") {
+          logRun("not-retryable");
+          throw error;
+        }
+        const sameRetry = retryKind === "same-port";
+        if (sameRetry ? streak.same >= PORT_HOLD_RETRIES : streak.fresh >= PORT_COLLISION_RETRIES) {
+          logRun("exhausted");
+          throw sameRetry ? backendPortHeldError(message) : error;
+        }
+        if (sameRetry) streak.same += 1;
+        else streak.fresh += 1;
+        collision = error;
+        network = inspection.network;
+        log.warn("start.port-collision-retrying", {
+          container: containerId.slice(0, 12),
+          port: port ?? null,
+          retry: streak.fresh + streak.same,
+          backendChosen: sameRetry,
+        });
+        if (sameRetry) {
+          await sleep(
+            PORT_HOLD_RETRY_DELAYS_MS[streak.same - 1] ?? PORT_HOLD_RETRY_DELAYS_MS.at(-1)!,
+          );
+        }
       }
     }
-  }
-  if (collision === null) return;
-  // Never leave a container running without the network it was created on.
-  const after = await inspectForStart(containerId, run);
-  if (network && !after?.attached.includes(network)) {
-    await run("docker", ["stop", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
-    throw collision;
+    if (collision === null) return;
+    // Never leave a container running without the network it was created on.
+    const after = await inspectForStart(containerId, run);
+    if (network && !after?.attached.includes(network)) {
+      logRun("network-lost");
+      await run("docker", ["stop", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
+      throw collision;
+    }
+    logRun("started");
   }
 }

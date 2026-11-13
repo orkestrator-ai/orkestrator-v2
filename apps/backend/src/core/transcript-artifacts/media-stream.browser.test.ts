@@ -2,11 +2,13 @@
  * Streamed media in a real Chromium: an application-origin page (127.0.0.1)
  * plays and seeks a `<video>` whose source is a media capability on the
  * content origin (localhost), through several single-range requests, with
- * no application cookie reaching the content origin. Skipped without
- * Chromium.
+ * no application cookie reaching the content origin. A detached transcript's
+ * audio, opened as `FilePreview` opens it (an absolute host path and no
+ * environment, under the readable roots), plays the same way (to-do 5800
+ * task 1). Skipped without Chromium.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,6 +20,7 @@ import { chromium, type Browser } from "playwright-core";
 import { resolveDesignChromiumPath } from "../design/index.js";
 import { LoopbackArtifactContentServer } from "./content-server.js";
 import { syntheticWav } from "./fixtures/synthetic-wav.js";
+import { TranscriptMediaStreams } from "./media-stream.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM) console.warn("[media-stream.browser.test] skipped: no Chromium executable");
@@ -25,14 +28,17 @@ const browserTest = CHROMIUM ? test : test.skip;
 const COOKIE_CANARY = `canary-cookie-${Math.random().toString(36).slice(2)}`;
 const RANGE_CAP = 4096;
 
-function appServer(mediaUrl: () => string): Promise<{ server: Server; origin: string }> {
+function appServer(
+  mediaUrl: () => string,
+  element: "video" | "audio" = "video",
+): Promise<{ server: Server; origin: string }> {
   const server = createServer((_request, response) => {
     response.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "set-cookie": `ork_session=${COOKIE_CANARY}; Path=/; SameSite=Lax`,
     });
     response.end(`<!doctype html><html><body>
-      <video id="player" controls preload="metadata" muted src="${mediaUrl()}"></video>
+      <${element} id="player" controls preload="metadata" muted src="${mediaUrl()}"></${element}>
       <script>
         window.events = [];
         const player = document.getElementById("player");
@@ -191,6 +197,120 @@ describe("streamed media in Chromium", () => {
       );
       expect(failed).toBe(true);
       await fresh.close();
+    },
+    60_000,
+  );
+  browserTest(
+    "a detached transcript's audio plays from an environment-less stream and stops when closed",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "media-browser-detached-"));
+      const allowed = path.join(root, "allowed");
+      const outside = path.join(root, "outside");
+      let detachedContent: LoopbackArtifactContentServer | undefined;
+      let streams: TranscriptMediaStreams | undefined;
+      let detachedApp: Server | undefined;
+      try {
+        mkdirSync(allowed);
+        mkdirSync(outside);
+        const wav = syntheticWav(2);
+        const file = path.join(allowed, "voice-note.wav");
+        writeFileSync(file, wav);
+        writeFileSync(path.join(outside, "elsewhere.wav"), wav);
+        const server = await LoopbackArtifactContentServer.start({
+          frameAncestors: [],
+          mediaRangeResponseMaxBytes: RANGE_CAP,
+        });
+        detachedContent = server;
+        streams = new TranscriptMediaStreams({
+          server: () => server,
+          getEnvironment: async () => null,
+          stagingRoot: path.join(root, "staging"),
+          spawnContainerReader: () => {
+            throw new Error("a detached host path never starts a container reader");
+          },
+          readableHostRoots: async () => [allowed],
+        });
+        // What FilePreview sends for a detached transcript: no environmentId.
+        const opened = await streams.open({ path: file });
+        expect(opened).toMatchObject({ mimeType: "audio/wav", byteLength: wav.byteLength });
+        await expect(
+          streams.open({ path: path.join(outside, "elsewhere.wav") }),
+        ).rejects.toMatchObject({ error: { code: "policy_denied" } });
+
+        const started = await appServer(() => opened.url, "audio");
+        detachedApp = started.server;
+        const context = await browser!.newContext();
+        const statuses: number[] = [];
+        const ranges: string[] = [];
+        context.on("request", (request) => {
+          if (new URL(request.url()).origin !== server.origin()) return;
+          void request
+            .allHeaders()
+            .then((headers) => ranges.push(headers.range ?? ""))
+            .catch(() => undefined);
+        });
+        context.on("response", (response) => {
+          if (new URL(response.url()).origin === server.origin()) statuses.push(response.status());
+        });
+        const page = await context.newPage();
+        await page.goto(started.origin);
+        await page.waitForFunction(
+          () => (document.getElementById("player") as HTMLAudioElement).readyState >= 1,
+          undefined,
+          { timeout: 15_000 },
+        );
+        expect(
+          await page.evaluate(
+            () => (document.getElementById("player") as HTMLAudioElement).duration,
+          ),
+        ).toBeGreaterThan(1.9);
+        await page.evaluate(() => {
+          (document.getElementById("player") as HTMLAudioElement).currentTime = 1.6;
+        });
+        await page.waitForFunction(
+          () => (window as unknown as { events: string[] }).events.includes("seeked"),
+          undefined,
+          { timeout: 15_000 },
+        );
+        await page.evaluate(() => (document.getElementById("player") as HTMLAudioElement).play());
+        await page.waitForFunction(
+          () => (document.getElementById("player") as HTMLAudioElement).currentTime > 1.7,
+          undefined,
+          { timeout: 15_000 },
+        );
+        expect(
+          await page.evaluate(() => (window as unknown as { events: string[] }).events),
+        ).not.toContain("error");
+        expect(statuses.length).toBeGreaterThanOrEqual(2);
+        expect(statuses.every((status) => status === 206)).toBe(true);
+        expect(ranges.every((range) => /^bytes=\d+-\d*$/.test(range))).toBe(true);
+        await context.close();
+
+        // Unmounting the preview closes the stream; a fresh load then fails.
+        streams.close(opened.streamId);
+        expect(streams.size()).toBe(0);
+        const fresh = await browser!.newContext();
+        const freshPage = await fresh.newPage();
+        await freshPage.goto(started.origin);
+        const failed = await freshPage.evaluate(
+          (url) =>
+            new Promise<boolean>((resolve) => {
+              const element = document.createElement("audio");
+              element.preload = "metadata";
+              element.addEventListener("loadedmetadata", () => resolve(false));
+              element.addEventListener("error", () => resolve(true));
+              element.src = url;
+            }),
+          opened.url,
+        );
+        expect(failed).toBe(true);
+        await fresh.close();
+      } finally {
+        await streams?.dispose();
+        await detachedContent?.close();
+        detachedApp?.close();
+        rmSync(root, { recursive: true, force: true });
+      }
     },
     60_000,
   );

@@ -1,6 +1,6 @@
 /**
  * The action-critical state of one OpenCode 2.x session and its full
- * interactive snapshot (docs/todo/agent-engines/0008-opencode-v2.md, build
+ * interactive snapshot (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build
  * plan phase 4).
  *
  * Read from the server on every call, never from mounted state, so an

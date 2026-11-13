@@ -278,7 +278,7 @@ export type PrDetection = typeof PrDetectionSchema.Type;
 
 const MergeOutcomeSchema = Schema.Literals(["merged", "pending", "unknown"]);
 
-/** `merge_pr` / `merge_pr_local`: merged, accepted but not yet merged, or unknown. */
+/** `merge_pr`: merged, accepted but not yet merged, or unknown. */
 export const MergePrResultSchema = Schema.Struct({ outcome: MergeOutcomeSchema }).annotate({
   identifier: "MergePrResult",
 });

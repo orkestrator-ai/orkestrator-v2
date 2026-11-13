@@ -1,6 +1,6 @@
 # Loopback wrapper's SIGHUP child never prints "forwarded" under load (`tests/unit/loopback-network.test.ts`)
 
-- **ID:** 9995
+- **ID:** 9943
 - **Status:** open
 - **Date observed:** 2026-11-13
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`.

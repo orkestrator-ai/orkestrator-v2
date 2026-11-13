@@ -156,9 +156,13 @@ export type KeychainItemRemoval = { removed: number; warning: string | null };
  * stable across Electron versions. Electron 45.2.3 writes "<app name> Key"
  * (seen on a live macOS 27.2 run; docs/development/disk-usage.md), where
  * earlier builds wrote "<app name>", and matching the old account deleted
- * nothing while reporting success. The service already names this profile's
- * title, so no other item can share it. The item is named by title alone, so two guards keep
- * this to the profile's own item:
+ * nothing while reporting success. So every item under the service is
+ * deleted, whatever its account: the service embeds this profile's
+ * `electronTitle`, which only this profile's Electron writes, so the
+ * profile owns every account under it (deliberately; matching known
+ * accounts would break again on the next rename). Each `security` call
+ * deletes one item, hence the bounded loop. The service is named by title
+ * alone, so two guards keep this to the profile's own service:
  *
  * - The title must be the one `dev:test` gives this profile id. A
  *   `profile.json` naming another title (the production app's, say) must

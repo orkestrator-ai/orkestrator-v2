@@ -308,7 +308,20 @@ or "not found" (exit 44) becomes a warning that does not fail the removal.
 The account cannot be part of the match. Electron 45.2.3 names it
 `<electronTitle> Key`; earlier builds used `<electronTitle>`. The code
 first shipped (to-do 0023, retired) matched the old account, so every reset
-reported success and left the item behind.
+reported success and left the item behind. Every item under the service is
+deleted, whatever its account: the service embeds the profile's own title,
+which only that profile's Electron writes, so the profile owns every account
+under it, and matching a list of known accounts would break again on the next
+rename.
+
+`security delete-generic-password -s <service>` deletes one matching item per
+call, which is why the function loops (at most 8 calls) until it exits 44.
+Checked on 2026-11-13 on macOS 27.2 in a throwaway keychain file (created
+with `security create-keychain`, passed explicitly, then deleted; the login
+Keychain and the search list were untouched): with three items under one
+service (accounts `<title>`, `<title> Key` and an unrelated one) and one
+under another service, three calls exited 0, the fourth exited 44, and the
+other service's item remained.
 
 Checked live on 2026-11-13 on macOS 27.2 (26B123, arm64) with Electron
 45.2.3, with throwaway profile `qa-keychain-0023-125021`. Its item was

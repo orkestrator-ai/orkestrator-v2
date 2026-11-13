@@ -77,3 +77,23 @@ controlled.
 position and the terminal's size`, failed deterministically with a strict mode
 violation because `getByRole('tab', { name: /Shell/ })` also matched the new
 environment tab. The same change scoped that lookup to the `Split panes` tablist.
+
+## Recurrence 2026-11-13
+
+- **Branch:** `reviewer-failure-c64fd66ac37e-r1` at `4ed678dcc`, base
+  `17d28238c`. `mise run flaky:recurrence -- 6460 --base 17d28238c` returned
+  "open. Record the failure as a recurrence". The branch's one change to
+  `PipelineFlowGraph.tsx` is a "could not review" status for a failed node
+  whose error carries the reviewer-blocked prefix; the nested-rewinds
+  scenario has no such node.
+- **Test:** `nested rewind history retains every transcript and validation across reload`
+  (`e2e/PipelineFlow.spec.ts:781`, desktop), at load average about 80 to 105.
+- **Runs:** failed in the two-worker run of `MultiReviewFlow.spec.ts` and
+  `PipelineFlow.spec.ts` (see
+  [1120](../coordinator-and-multi-review/1120-multireview-flow-parallel-reload-timeouts.md)),
+  then in a one-worker rerun of the failed set, then in two of three
+  `--repeat-each=3 --workers=1 --project=desktop-chromium` runs of this test
+  alone (1 passed, 1.8 min). Every failure was a `locator.click` on a
+  `getByRole('tablist', { name: 'Build pipeline' })` tab timing out at 30 s,
+  and each stopped at a different step (`:788` after the reload, `:806` near
+  the end), the same symptom this case lists at `:776` and `:809`.

@@ -226,6 +226,7 @@ have only shipped in betas or alphas.
 | `reauthenticate_agent_account` | `apps/web/src/lib/backend/agent-accounts.ts` | v2.37.2-beta |
 | Coordinator activity and launch-override unsupported latches | `apps/web/src/stores/coordinatorActivityStore.ts`, `coordinatorLaunchOverrideStore.ts` | v2.37.4-beta |
 | `legacyAutoSwitchEvent` (the `five-hour` reason sent as `limit` on the event stream) | `apps/backend/src/core/index.ts`, `packages/protocol/src/agent-account-auto-switch.ts` | v2.36.4-beta |
+| The CLI's Linux local-connection refusal for backend descriptors without `processIdentity` (#1848), registered 2026-11-13 by 7120 (retired) task 3. The refusal is permanent; what retires is the Register row and the `--url` workaround text in it | `descriptorProcessRefusal` (`packages/cli/src/client/targets.ts`) | v2.36.4-beta |
 
 **Investigation.** On 2026-11-11 the newest Stable release is still v2.36.1,
 which contains none of these. When the next Stable release is published, its

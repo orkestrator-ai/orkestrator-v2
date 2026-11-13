@@ -34,13 +34,19 @@ export interface VersionReminder {
   action: "reload" | "update" | null;
 }
 
-/** The reminder for a mismatch, or null when the versions match. */
+/**
+ * The reminder for a mismatch, or null when the versions match.
+ *
+ * The wording names the side that is older, because that is the side that
+ * needs updating. Versions decide only this text, never behaviour.
+ */
 export function describeVersionReminder({
   skew,
   clientVersion,
   backendVersion,
   clientKind,
   hostCanUpdate = false,
+  reloadTried = false,
 }: {
   skew: AppVersionSkew;
   clientVersion: string;
@@ -48,30 +54,65 @@ export function describeVersionReminder({
   clientKind: VersionClientKind;
   /** The backend's host reports an updater that can install an update now. */
   hostCanUpdate?: boolean;
+  /**
+   * The user already reloaded for this exact pair and the page came back with
+   * the same versions, so another reload cannot help (a renderer the server
+   * does not bundle, such as a development or hosted one).
+   */
+  reloadTried?: boolean;
 }): VersionReminder | null {
   if (skew === "same") return null;
+  const olderBackendAction = hostCanUpdate ? ("update" as const) : null;
   if (clientKind === "backend-served") {
+    if (skew === "backend-older") {
+      return {
+        title: "This server runs an older Orkestrator",
+        description:
+          `It runs Orkestrator ${backendVersion}, and this page is ${clientVersion}; some features are unavailable until the server is updated.` +
+          (reloadTried ? "" : " Reload to load the server's own version."),
+        action: reloadTried ? olderBackendAction : "reload",
+      };
+    }
+    if (skew === "client-older") {
+      return reloadTried
+        ? {
+            title: "Orkestrator versions differ",
+            description: `This page is Orkestrator ${clientVersion}, but the server runs ${backendVersion}, and reloading did not load the matching version.`,
+            action: null,
+          }
+        : {
+            title: "Orkestrator has been updated",
+            description: `This page is Orkestrator ${clientVersion}, but the server now runs ${backendVersion}. Reload to use the matching version.`,
+            action: "reload",
+          };
+    }
     return {
-      title: "Orkestrator has been updated",
-      description: `This page is Orkestrator ${clientVersion}, but the server now runs ${backendVersion}. Reload to use the matching version.`,
-      action: "reload",
+      title: "Orkestrator versions differ",
+      description:
+        `This page is Orkestrator ${clientVersion}, but the server runs ${backendVersion}.` +
+        (reloadTried ? "" : " Reload to use the server's version."),
+      action: reloadTried ? null : "reload",
     };
   }
   if (skew === "backend-older") {
     return {
       title: "The Orkestrator backend is out of date",
       description: hostCanUpdate
-        ? `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update it from here; until then some views may not display correctly.`
-        : `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update Orkestrator on the computer running the backend; until then some views may not display correctly.`,
-      action: hostCanUpdate ? "update" : null,
+        ? `The backend you're connected to runs an older Orkestrator (${backendVersion}) than this app (${clientVersion}); some features are unavailable until it is updated. Update it from here.`
+        : `The backend you're connected to runs an older Orkestrator (${backendVersion}) than this app (${clientVersion}); some features are unavailable until it is updated. Update Orkestrator on the computer running the backend.`,
+      action: olderBackendAction,
     };
   }
   if (skew === "client-older") {
     return clientKind === "hosted"
       ? {
           title: "This web app is out of date",
-          description: `This web app is Orkestrator ${clientVersion}, but the backend runs ${backendVersion}. Reload to get the latest web app.`,
-          action: "reload",
+          description:
+            `This web app is Orkestrator ${clientVersion}, but the backend runs ${backendVersion}.` +
+            (reloadTried
+              ? " Reloading did not load a newer web app; try again later."
+              : " Reload to get the latest web app."),
+          action: reloadTried ? null : "reload",
         }
       : {
           title: "Update Orkestrator",

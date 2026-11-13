@@ -16,7 +16,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done for the opt-in preview (share dropped with 1.19.1; the remaining rebuilds and capability gates are recorded under task 5, phases 4 and 5, including session features). Live qualification remains task 7.
 5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: done (2026-11-11: with 1.x retired the provider serves every OpenCode session, and the routing between the lines, the persisted protocol marker and the preview setting are gone; earlier: phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; on 2026-11-10 archive from the resume picker for 2.x conversations, see "Task 5: archive from the resume picker (2026-11-10)"; open: phase 6's default switch (task 7; its qualification was done for host environments on 2026-11-11); the live-model run of the coordinator suite on 2.x moved to the manual-test checklist (7568, 0008 task 5) on 2026-11-10; see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store; moving the live tests off `--pure` moved to task 7).
-7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification", on scripted models, then making 2.x the default for new sessions once the owner has accepted the recorded mitigations. Status: open. The host qualification is done (2026-11-11, Linux x64, 2.2.6, scripted models; see "Task 7: qualification on Linux (2026-11-11)"). The default switch is settled: on 2026-11-11 the owner made 2.x the only line and 1.x was retired. Left: the container half of the qualification (a 2.x turn in a container on Linux amd64, its inactive path and a preserving rebuild carrying `opencode2.db`), which needs a container fake-model path for OpenCode that the idle-observation spec has only for Claude.
+7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification", on scripted models, then making 2.x the default for new sessions once the owner has accepted the recorded mitigations. Status: done (2026-11-13). The host qualification was done on 2026-11-11 (Linux x64, 2.2.6, scripted models; see "Task 7: qualification on Linux (2026-11-11)"). The default switch is settled: on 2026-11-11 the owner made 2.x the only line and 1.x was retired. The container half was done on 2026-11-13 against `main` at `17d28238c` (Linux x86_64, 2.2.6, a scripted model on the container's loopback): a container turn, its inactive path and a preserving rebuild carrying `opencode2.db`; see "Task 7: container qualification (2026-11-13)". The owner's review of the mitigations is in the manual-test checklist (7568, 0008 task 7).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: done (2026-11-11). Every feature has a disposition (see "Task 8: Session V2 dispositions (2026-11-11)"), and sign-in moved to `/api/integration` and `/api/credential` when 1.x was retired; see "OpenCode 1.x retired (2026-11-11)".
 9. **Transport for the 2.x provider: `opencode acp` behind the ACP bridge, or the `/api/*` HTTP server**: the existing plan assumed the HTTP API; 2.x also ships a full ACP agent. Status: done (2026-11-08): ACP is ruled out because it cannot steer and the owner requires steering; the provider uses the HTTP API.
 10. **Steer spike on 2.2.6**: prove the backend-held steer guard (task 5) against the real binary before the provider is built. Status: done (2026-11-08, `scripts/opencode2-steer-probe.ts`; see "Spike results").
@@ -179,7 +179,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 
 **Context.** The "Qualification" list; live runs are batched in `cross-cutting/0031-live-provider-and-platform-qualification.md`. Making 2.x the default needs the owner's acceptance of the mitigations under "Task 2: owner decision (2026-11-08)", which is in the manual-test checklist (7568, 0008 task 7); the qualification checks themselves need no decision.
 
-**Investigation.** Rechecked 2026-11-11: the 2.x live set is `mise run verify:opencode2:live` (fifteen `opencode2/opencode2-*.live.test.ts` files, `RUN_LIVE_OPENCODE2=1`, scripted loopback model, isolated `HOME`/`XDG_*`/`OPENCODE_DB`), beside the 1.x `verify:opencode:live`. The real-stack half is `idle-observation-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` on fake models, run by `mise run verify:opencode2:real-stack` against a running profile. Item-by-item evidence is under "Qualification" and "Task 7: qualification on Linux (2026-11-11)".
+**Investigation.** Rechecked 2026-11-11: the 2.x live set is `mise run verify:opencode2:live` (fifteen `opencode2/opencode2-*.live.test.ts` files, `RUN_LIVE_OPENCODE2=1`, scripted loopback model, isolated `HOME`/`XDG_*`/`OPENCODE_DB`), beside the 1.x `verify:opencode:live`. The real-stack half is `idle-observation-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` on fake models, run by `mise run verify:opencode2:real-stack` against a running profile. Item-by-item evidence is under "Qualification" and "Task 7: qualification on Linux (2026-11-11)". Containers (2026-11-13): `mise run verify:opencode2:container` runs the same spec with `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` and adds a `rebuild` case; evidence in "Task 7: container qualification (2026-11-13)".
 
 **Decisions.**
 
@@ -912,8 +912,9 @@ Before any 2.x pin reaches production:
 
 Status on 2026-11-11 (host environments, Linux x64, 2.2.6): every item is met
 or has a recorded replacement; the evidence per item is in "Task 7:
-qualification on Linux (2026-11-11)". Containers are not yet qualified the
-same way (task 7).
+qualification on Linux (2026-11-11)". Containers were qualified the same way
+on 2026-11-13 (Linux x86_64, 2.2.6), with a preserving rebuild added; see
+"Task 7: container qualification (2026-11-13)".
 
 ### Recheck procedure
 
@@ -1022,7 +1023,13 @@ same way (task 7).
 - Containers (2026-11-09): a preserving rebuild carrying `opencode2.db`, a
   runtime without an egress gateway, Linux amd64, and the
   inactive-environment path for a running 2.x turn in a container. See
-  "Task 5 and 6: container server and GitHub-token plugin".
+  "Task 5 and 6: container server and GitHub-token plugin". Done on
+  2026-11-13 on Linux x86_64 behind an egress gateway, the rebuild and the
+  inactive path included ("Task 7: container qualification (2026-11-13)").
+  A runtime without an egress gateway (an older image, or
+  `ORKESTRATOR_EGRESS=in-container`) was not run; it moved to
+  [7905](7905-opencode2-untested-paths.md) with the other untested paths
+  below.
 
 ## Assumptions and decisions
 
@@ -2705,6 +2712,115 @@ Decisions:
     qualification list, which names no container check.
   - Recommendation: leave it open, done with the next container qualification
     pass.
+
+### Task 7: container qualification (2026-11-13)
+
+Worked against `main` at `17d28238c` on beelink (Linux x86_64), with the
+pinned 2.2.6 binary in a development image built inside a disposable rootless
+Docker daemon with host loopback (`mise run docker:disposable -- start
+--host-loopback`; beelink's ufw drops container traffic to a profile's
+agent-tools port), a headless `dev:test` profile started with `--fixture
+--fixture-environments local,container --no-agent-credentials
+--agent-platforms opencode --headless --no-host-seed` and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, no credentials and no billed turn.
+The runtime ran behind its egress gateway, restricted network.
+
+What was built:
+
+- **A container fake-model path for OpenCode.** The idle-observation spec's
+  chat-completions fake (`idle-observation-fake-pi.ts`, which OpenCode
+  already used on the host) takes `--port`, is bundled into one file and
+  served as `node` on the container's loopback at `127.0.0.1:47124`
+  (`installContainerFakeOpenCode` in `idle-observation-fake-models.ts`); its
+  PID is recorded at spawn and checked against its command line before it is
+  signalled. The container's OpenCode server reads the profile's global
+  `opencode.json` through the read-only `/opencode-config` input, which the
+  backend stages when it creates a runtime, so the spec writes the fake
+  provider there, with the container-loopback address, before the
+  environment is created and restores it after the environment is deleted
+  (`pointProfileOpenCodeAtContainerFake`). The fake's provider package
+  (`@ai-sdk/openai-compatible`) went through the root-owned package cache
+  like any configured provider.
+- **A `rebuild` case** (`idle-observation-container-rebuild.ts`), container
+  and OpenCode only: a turn settles; `opencode2.db` on the persistent mount
+  must exist and name the session; a preserving rebuild
+  (`recreate_environment`, `intent: "preserve"`, bound to the reviewed
+  runtime) must produce a new runtime whose setup settles; the database must
+  exist there and still name the session; a follow-up turn must settle on
+  the same session id with the earlier prompt shown once and its reply kept,
+  and a fresh page must show both replies. The fake is stopped before the
+  rebuild and served again in the new runtime, because `/tmp` does not
+  survive one.
+- **`mise run verify:opencode2:container`**, the container counterpart of
+  `verify:opencode2:real-stack` (cases `missed-final`, `approval`,
+  `reconnect`, `hidden`, `no-renderer`, `steer` and `rebuild`).
+
+Found and fixed on the way (test only): the `approval` case created its
+"ask"-policy environment as a local one even in a container run, and its
+restore put back only the environment's id, so later cases would have acted
+on the deleted environment's container. It now creates the same kind as the
+run's own and restores the container id and its fake with it.
+
+Final run (`oc2c-run3`, at `54e0f199e`), all seven cases passed:
+
+| Case | Result |
+| --- | --- |
+| warm-up | A 5 s shell turn in the container: sidebar `working` then `idle`, the page settled 19 ms after the backend. |
+| `missed-final` | Every frame naming the environment dropped; the view found the finished turn 13.9 s after the backend, inside the 17.5 s lost-announcement bound and over the 3 s budget, as on the host (14.1 to 14.4 s). The next announced turn settled in 16 ms. The backend read the idle group on every sweep (17 reads, 0 skips): OpenCode has no observation stream. |
+| `approval` | Under an environment policy of approvals "ask" (OpenCode offers no "ask" composer mode), a permission card parked in 39 ms, survived 10 s hidden, and approving it settled the turn (26 ms page lag). |
+| `reconnect` | One event stream cut and the browser offline through the turn; back online, settled in 1.6 s. |
+| `hidden` | No reads while hidden; settled 1.4 s after becoming visible. |
+| `no-renderer` | The only page closed during a running shell turn; the backend aggregate went idle 536 ms after the projection did, and a new client rehydrated the finished turn with the prompt shown once. |
+| `steer` | A queued prompt steered from the strip during a running shell call was accepted in 2.1 s; the turn ended on the steer's reply, never the first prompt's, before and after a reload. |
+| `rebuild` | Before: `opencode2.db` 4,096 bytes with the session's rows still in its WAL (619 lines naming it). Rebuild: 20.3 s to a new runtime with settled setup. After: 335,872 bytes (checkpointed), 20 lines naming the session; the follow-up turn settled in 7.9 s on the same session with the earlier prompt once and its reply kept, and a fresh page showed both. |
+
+Earlier runs on the same profile: the first failed before any turn (the
+installer passed `--user node` after the container id); the second passed
+`missed-final`, `reconnect`, `hidden`, `no-renderer` and `steer` and failed
+`approval` on the local-environment defect above, which also left `rebuild`
+skipped. The profile was stopped and reset and the daemon removed afterwards.
+
+Not run: a runtime without an egress gateway, concurrent sessions on one
+server and a steer racing a permission or form prompt (all agent-buildable,
+[7905](7905-opencode2-untested-paths.md)); real providers (manual-test
+checklist, 7568, 0008 Needs verification). The negative path of the rebuild case (a lost
+database) is proved by its unit tests, not by a live run that destroys one.
+
+Decisions:
+
+- **Where the container's fake model runs.**
+  - **Inside the container, on its loopback (implemented).** Pros: the
+    restricted firewall always admits the container's own loopback, and no
+    host firewall is in the way; the same choice the Claude container fake
+    made. Cons: the fake must be bundled into one file and served again
+    after a rebuild.
+  - **On the host, reached through the host gateway.** Pros: one process for
+    the whole run, survives a rebuild. Cons: beelink's ufw drops that
+    traffic, and the restricted allowlist would need a host entry.
+  - Recommendation: inside the container.
+- **How the container's OpenCode learns the fake provider.**
+  - **The profile's own `opencode.json`, staged into each runtime
+    (implemented).** Pros: it is the path a user's custom provider takes, so
+    the staging, the plugin-free merge and the root-owned package cache are
+    exercised too; a rebuilt runtime is staged again automatically. Cons: it
+    has to be in place before the environment is created and kept until the
+    environment is gone.
+  - **Write it into the container's configuration directory.** Pros: no host
+    file touched. Cons: root rebuilds that directory from the read-only host
+    input before every server start, so a write there is lost, and changing
+    it would mean editing the root-owned launch.
+  - Recommendation: the profile's file.
+- **How the rebuild case decides the database survived.**
+  - **The session id in the file on both runtimes, plus a follow-up turn on
+    the same session with the earlier rows (implemented).** Pros: the file
+    check is content-free and direct; the turn proves the new runtime's
+    server resumed the conversation from it, since a lost database makes
+    OpenCode start a new session. Cons: a byte search for an id is coarse,
+    and the WAL has to be read too.
+  - **Query the database with SQLite.** Pros: exact row counts. Cons: ties
+    the test to 2.x's schema, and opening a live WAL database read-only
+    needs its shared-memory file.
+  - Recommendation: the id and the follow-up turn.
 
 ### Task 8: Session V2 dispositions (2026-11-11)
 

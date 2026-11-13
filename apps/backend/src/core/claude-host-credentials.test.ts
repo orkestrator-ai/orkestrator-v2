@@ -1,13 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
   hostClaudeSignedOut,
+  isKeychainFile,
   probeKeychainItemCommand,
   type KeychainItemPresence,
 } from "./claude-host-credentials.js";
+
+// The real `security` and `mkfifo` run below; Bun's 5 s default is too tight
+// for them under aggregate load.
+setDefaultTimeout(30_000);
 
 /**
  * A host Claude sign-out may remove the host's login from containers, so the
@@ -94,7 +100,19 @@ describe("hostClaudeSignedOut on Linux", () => {
   });
 });
 
+const pinnedKeychain = () => path.join(home, "Library", "Keychains", "login.keychain-db");
+
+/** A file that starts like a keychain, which is all the reading checks for. */
+async function writeKeychainFile(file = pinnedKeychain()): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, Buffer.concat([Buffer.from("kych"), Buffer.alloc(64)]));
+}
+
 describe("hostClaudeSignedOut on macOS", () => {
+  beforeEach(async () => {
+    await writeKeychainFile();
+  });
+
   test("signed out only when every Keychain lookup reports the record missing", async () => {
     const both = keychain(["absent", "absent"]);
     expect(
@@ -156,6 +174,152 @@ describe("hostClaudeSignedOut on macOS", () => {
     ).toBe(true);
     expect(probe.calls[0]?.[2]).toBe("Claude Code-credentials-abcd1234");
   });
+
+  // `security` exits 44 for a keychain path with no keychain behind it
+  // (measured, see `SECURITY_ITEM_NOT_FOUND_EXIT`), so that 44 must not count.
+  test("a pinned-only lookup with no keychain file is not a sign-out", async () => {
+    for (const make of [
+      async () => fs.rm(pinnedKeychain()),
+      async () => fs.writeFile(pinnedKeychain(), ""),
+      async () => fs.writeFile(pinnedKeychain(), "not a keychain file at all"),
+      async () => {
+        await fs.rm(pinnedKeychain());
+        await fs.mkdir(pinnedKeychain());
+      },
+    ]) {
+      await fs.rm(pinnedKeychain(), { recursive: true, force: true });
+      await writeKeychainFile();
+      await make();
+      const probe = keychain(["absent"]);
+      expect(await hostClaudeSignedOut("darwin", home, undefined, {}, probe.probe)).toBe(false);
+      expect(probe.calls).toEqual([]);
+    }
+  });
+
+  test("with no pinned keychain file the default search list alone decides", async () => {
+    await fs.rm(pinnedKeychain());
+    const absent = keychain(["absent"]);
+    expect(
+      await hostClaudeSignedOut(
+        "darwin",
+        home,
+        undefined,
+        { allowDefaultKeychainSearchList: true },
+        absent.probe,
+      ),
+    ).toBe(true);
+    expect(absent.calls).toEqual([["find-generic-password", "-s", "Claude Code-credentials"]]);
+    expect(
+      await hostClaudeSignedOut(
+        "darwin",
+        home,
+        undefined,
+        { allowDefaultKeychainSearchList: true },
+        keychain(["present"]).probe,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("isKeychainFile", () => {
+  test("only a file starting with the keychain magic is a keychain", async () => {
+    const file = path.join(root, "k.keychain-db");
+    expect(await isKeychainFile(file)).toBe(false);
+    await fs.writeFile(file, "kyc");
+    expect(await isKeychainFile(file)).toBe(false);
+    await fs.writeFile(file, "kych");
+    expect(await isKeychainFile(file)).toBe(true);
+    expect(await isKeychainFile(root)).toBe(false);
+  });
+
+  // A FIFO with no writer blocks a plain open forever; the reading must not.
+  test.skipIf(process.platform === "win32")(
+    "a FIFO is not a keychain, and the sign-out reading does not wait on it",
+    async () => {
+      const fifo = path.join(root, "fifo");
+      execFileSync("mkfifo", [fifo], { timeout: 10_000 });
+      await fs.mkdir(path.dirname(pinnedKeychain()), { recursive: true });
+      await fs.rm(pinnedKeychain(), { force: true });
+      await fs.symlink(fifo, pinnedKeychain());
+      const probe = keychain(["absent"]);
+      const settled = await Promise.race([
+        Promise.all([
+          isKeychainFile(fifo),
+          isKeychainFile(pinnedKeychain()),
+          hostClaudeSignedOut("darwin", home, undefined, {}, probe.probe),
+        ]),
+        Bun.sleep(5_000).then(() => "blocked" as const),
+      ]);
+      expect(settled).toEqual([false, false, false]);
+      expect(probe.calls).toEqual([]);
+    },
+  );
+});
+
+/**
+ * The real `security` against a keychain this test creates and deletes, in a
+ * HOME of its own so the search-list change `create-keychain` makes lands
+ * there. It never names a real keychain, and never looks a record up without
+ * an explicit keychain path, which would search the user's login keychain.
+ */
+describe.skipIf(process.platform !== "darwin")("security against a temporary keychain", () => {
+  const saved = { HOME: process.env.HOME, CFFIXED_USER_HOME: process.env.CFFIXED_USER_HOME };
+  let keychainFile: string;
+
+  function security(...args: string[]): void {
+    execFileSync("security", args, { stdio: "ignore", env: { ...process.env } });
+  }
+
+  beforeEach(async () => {
+    await fs.mkdir(path.join(home, "Library", "Preferences"), { recursive: true });
+    await fs.mkdir(path.join(home, "Library", "Keychains"), { recursive: true });
+    process.env.HOME = home;
+    process.env.CFFIXED_USER_HOME = home;
+    keychainFile = pinnedKeychain();
+    security("create-keychain", "-p", "throwaway-not-a-secret", keychainFile);
+  });
+
+  afterEach(() => {
+    try {
+      security("delete-keychain", keychainFile);
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  test("exit 44 means the record is missing, and a missing keychain answers 44 too", async () => {
+    const service = `orkestrator-4580-probe-${process.pid}`;
+    expect(await isKeychainFile(keychainFile)).toBe(true);
+    const lookup = (file: string) =>
+      probeKeychainItemCommand(["find-generic-password", "-s", service, file]);
+    expect(await lookup(keychainFile)).toBe("absent");
+    security("add-generic-password", "-s", service, "-a", "probe", "-w", "throwaway", keychainFile);
+    expect(await lookup(keychainFile)).toBe("present");
+    security("delete-generic-password", "-s", service, keychainFile);
+    expect(await lookup(keychainFile)).toBe("absent");
+    // Why the reading checks the file before trusting a 44.
+    expect(await lookup(path.join(home, "Library", "Keychains", "absent.keychain-db"))).toBe(
+      "absent",
+    );
+  });
+
+  test("a pinned lookup reads signed out only while the keychain lacks Claude's record", async () => {
+    expect(await hostClaudeSignedOut("darwin", home)).toBe(true);
+    security(
+      "add-generic-password",
+      "-s",
+      "Claude Code-credentials",
+      "-a",
+      "probe",
+      "-w",
+      "throwaway",
+      keychainFile,
+    );
+    expect(await hostClaudeSignedOut("darwin", home)).toBe(false);
+  });
 });
 
 describe.skipIf(process.platform === "win32")("probeKeychainItemCommand", () => {
@@ -176,7 +340,8 @@ describe.skipIf(process.platform === "win32")("probeKeychainItemCommand", () => 
     expect(await probeKeychainItemCommand(["find-generic-password"])).toBe("present");
     await fakeSecurity("echo 'security: The specified item could not be found.' >&2; exit 44");
     expect(await probeKeychainItemCommand(["find-generic-password"])).toBe("absent");
-    // A locked keychain, a missing keychain file or any other failure.
+    // A locked keychain or any other failure. (A missing keychain file
+    // answers 44 itself; `hostClaudeSignedOut` checks the file first.)
     await fakeSecurity("exit 51");
     expect(await probeKeychainItemCommand(["find-generic-password"])).toBe("unknown");
     await fakeSecurity("exit 50");

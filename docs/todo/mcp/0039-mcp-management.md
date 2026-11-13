@@ -539,7 +539,7 @@ two-machine run, so it is not dropped. The stale "every container target
 
 **Problem.** With a Claude agent account, `syncClaudeAccountSettings` copies host `mcpServers` into the account's `.claude.json` one way before launch, overwriting servers added inside the account home, and nothing says so. Since a CLI runtime outlives turns, when a running account session sees an editor write is unclear, and the running-CLI sync cannot report a server that only the account's file loaded as stale.
 
-**Context.** Linked to [0003](../agent-engines/0003-agent-accounts-and-sign-in.md). Codex account homes link `config.toml` instead (`CODEX_SHARED_ENTRIES`).
+**Context.** Linked to 0003 (retired 2026-11-13; see [agent-accounts.md](../../architecture/agent-accounts.md#shared-entries)). Codex account homes link `config.toml` instead (`CODEX_SHARED_ENTRIES`).
 
 **Investigation.** `syncClaudeAccountSettings` is at `apps/backend/src/core/agent-accounts-homes.ts:267`, still a full replace of `mcpServers` (`:279-281`), called at `:363` before launch; `CODEX_SHARED_ENTRIES` is at `:46`. The behaviour the file describes is unchanged.
 
@@ -2202,8 +2202,8 @@ instead because it fitted in the same bridge change.
   and its container session half is a 7568 item.
 - [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,
   remote backends and environment-private configuration.
-- [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md) and
-  [`agent-accounts.md`](../../architecture/agent-accounts.md).
+- [`agent-accounts.md`](../../architecture/agent-accounts.md) (to-do 0003, retired
+  2026-11-13).
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) for older
   bridges.
 - [`mcp-management.md`](../../architecture/mcp-management.md),

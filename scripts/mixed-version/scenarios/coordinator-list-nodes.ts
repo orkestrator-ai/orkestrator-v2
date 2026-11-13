@@ -1,6 +1,6 @@
 /**
  * A coordinator's `list_nodes` tool against a real command node (to-do 1030
- * tasks 2 and 7): the production tool handler
+ * (retired) tasks 2 and 7): the production tool handler
  * (`apps/backend/src/core/control-mcp/nodes.ts`), with its invoker sending
  * each command to the node's gateway, which is what the Control MCP server's
  * invoker does in process. The per-node load read keeps its 2 s limit and its

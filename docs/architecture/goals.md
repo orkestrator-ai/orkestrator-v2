@@ -208,8 +208,8 @@ Not proven live:
   node's registry says the goal is running: shown over a real node link on
   2026-11-13 with a leaf whose goal was held by its running check
   (`scripts/qa-remote-goal-hold.ts`), not yet with a real agent's iterations
-  ([4860](../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md)
-  task 2; the real-agent run is on the manual-test checklist).
+  (to-do 4860 (retired) task 2; the real-agent run is on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 Known problems found on the way, not caused by goals and not fixed here: Grok's shell
 fails to spawn in Orkestrator sessions, and a typed `/compact` delivered through the

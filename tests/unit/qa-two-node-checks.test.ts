@@ -1,5 +1,5 @@
 /**
- * The pure parts of the two-node checks of to-dos 1030 (tasks 2, 7) and 4860 (task 2): the
+ * The pure parts of the two-node checks of to-dos 1030 (retired; tasks 2, 7) and 4860 (retired; task 2): the
  * goal `scripts/qa-remote-goal-hold.ts` gives the leaf's worker (a goal the
  * leaf's own goal service accepts as running, held by a check that waits for
  * a file), and how the mixed-version `nodes` module reads a coordinator's

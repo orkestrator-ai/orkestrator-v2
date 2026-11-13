@@ -17,7 +17,7 @@
  *   and load once it has a reading, and an older one is shown as
  *   `older-version` over the real link; the leaf's `buildCommit` is present
  *   and is the one its hello reports, `null` for a release before the field
- *   and for a build from source (to-do 1030 tasks 2 and 7). `self` is not
+ *   and for a build from source (to-do 1030 (retired) tasks 2 and 7). `self` is not
  *   checked: the handler runs in this runner, so its `self.buildCommit` is the
  *   runner's own `BUILD_COMMIT`, not the command node's.
  *

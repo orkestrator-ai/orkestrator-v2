@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Real-stack check of the remote goal hold (to-do 4860 task 2;
+ * Real-stack check of the remote goal hold (to-do 4860 (retired) task 2;
  * `docs/architecture/goals.md`, "Verifier and other surfaces";
  * `docs/architecture/coordinator.md`, "Status wakes").
  *

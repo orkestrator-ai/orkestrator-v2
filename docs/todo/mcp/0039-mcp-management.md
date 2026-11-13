@@ -43,7 +43,7 @@ only the canary flip, which waits on an upstream fix, is left.
 6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor's cells moved to the manual-test checklist (7568) on 2026-11-10: they need a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in.
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task; the real-model full run is a 7568 item, 0039 task 7).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
-9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into [0040](0040-mcp-environment-delivery.md) task 3).
+9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into 0040's task 3, now the 7568 item "0040 (retired) task 3").
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun: it is a 7568 item, 0039 task 12).
 13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's; the real-login run is a 7568 item, 0039 task 13).
@@ -476,7 +476,7 @@ It passed in 141 s, with every probe judged from the probe servers' own logs:
 
 **Problem.** The item asks for the "read-only container catalogue (ok, absent, oversized, offline)" through the Docker suite and a remote browser check. The container part describes behaviour that no longer exists.
 
-**Context.** [0040](0040-mcp-environment-delivery.md) made container targets writable (environment overlay, persistent project writes), and owns container sessions and the remote-browser check. The matrix's "every container target (read-only by design)" line is also out of date.
+**Context.** 0040 (retired; see [Containers](../../architecture/mcp-management.md#containers)) made container targets writable (environment overlay, persistent project writes), and owns container sessions and the remote-browser check. The matrix's "every container target (read-only by design)" line is also out of date.
 
 **Investigation.** `CONTAINER_READ_ONLY_REASON` is retired (0040). No Docker-fixture spec under `e2e/agent-testing/` exercises the MCP catalogue (`mise run test:agent:docker` greps `Docker fixture`; only `browser-gateway.spec.ts` among those mentions MCP, for OAuth credential staging). 0031's two-machine row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:199`) lists this file for the remote check.
 
@@ -492,8 +492,8 @@ It passed in 141 s, with every probe judged from the probe servers' own logs:
 
 **Outcome (2026-11-06): closed here, doc only.** The recommended option.
 The container half described read-only behaviour that no longer exists and
-is [0040](0040-mcp-environment-delivery.md)'s (live container sessions, task
-1; the overlay UI, task 2, done). The remote-browser half was compared with
+was 0040's (retired 2026-11-13; see [Containers](../../architecture/mcp-management.md#containers)):
+live container sessions, task 1; the overlay UI, task 2, done. The remote-browser half was compared with
 0040's task 3, which checks the URL location hint, the container sign-in
 reason and that no callback is offered, but not host-target rows. So the
 backend-host part, "correct backend paths and operation recovery" for a
@@ -1041,10 +1041,10 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   went red with the panel left stale
   (7221 (closed 2026-11-09; see [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action))).
 - **Containers and remote.** Moved to
-  [0040](0040-mcp-environment-delivery.md) on 2026-11-06 (task 9): container
-  targets are writable now and 0040 owns their qualification, and the remote
+  0040 (retired; see [Containers](../../architecture/mcp-management.md#containers)) on 2026-11-06 (task 9): container
+  targets are writable now and 0040 owned their qualification, and the remote
   browser check of host-target paths and operation recovery is part of
-  0040's task 3.
+  0040's task 3, now the 7568 item "0040 (retired) task 3".
 
 ## OpenCode 1.19.4 configuration loader (2026-10-25)
 
@@ -1499,7 +1499,7 @@ qualification, not renewed evidence for the SSE cell.
 Not writable on these targets, so not probed: Codex system and managed
 files, OpenCode inline, managed and `OPENCODE_CONFIG` layers (none present),
 injected `orkestrator` servers, and every container target (read-only at the
-time; container targets are writable since 0040, which owns their
+time; container targets are writable since 0040 (retired), which owned their
 qualification). Cursor's project scope without the policy override stays excluded
 and was not probed.
 
@@ -2200,8 +2200,11 @@ instead because it fitted in the same bridge change.
   item 7: its rules and evidence are under "Claude plugins" in
   [`mcp-management.md`](../../architecture/mcp-management.md#verification-status),
   and its container session half is a 7568 item.
-- [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,
-  remote backends and environment-private configuration.
+- 0040 (retired 2026-11-13) for containers, remote backends and
+  environment-private configuration: the behaviour is in
+  [`mcp-management.md`](../../architecture/mcp-management.md#containers), its
+  evidence under [Verification status](../../architecture/mcp-management.md#verification-status),
+  and its human-only checks in the manual-test checklist.
 - [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md) and
   [`agent-accounts.md`](../../architecture/agent-accounts.md).
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) for older
@@ -2225,10 +2228,10 @@ instead because it fitted in the same bridge change.
 ## Replaces
 
 - `docs/improvements/mcp.md` (investigation; its environment and persistence
-  findings are in [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md))
+  findings are in 0040 (retired; see [Containers](../../architecture/mcp-management.md#containers)))
 - `docs/improvements/mcp/plan/00-index.md` (release gates, deferred
   follow-ups; the container gate is in
-  [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md))
+  0040 (retired; see [Containers](../../architecture/mcp-management.md#containers)))
 - `docs/improvements/mcp/plan/01-compatibility-and-decisions.md` (live probes)
 - `docs/improvements/mcp/plan/02-contracts-and-validation.md` (done)
 - `docs/improvements/mcp/plan/03-targets-and-inventory.md` (row join,
@@ -2247,7 +2250,7 @@ instead because it fitted in the same bridge change.
 - `docs/improvements/mcp/plan/12-ui-and-user-flows.md` (browser passes)
 - `docs/improvements/mcp/plan/14-validation-and-rollout.md` (matrix, live,
   browser and inactive-environment evidence; container and remote parts are in
-  [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md))
+  0040 (retired; see [Containers](../../architecture/mcp-management.md#containers)))
 - `docs/plans/sdk-coverage/07-mcp-inventory-and-management.md` (live-inventory
   polish and browser QA; its "stop parsing `~/.claude.json`" task is
   superseded, because that parse now feeds the inline set on purpose)

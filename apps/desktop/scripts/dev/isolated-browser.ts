@@ -206,6 +206,7 @@ export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
     "e2e/agent-testing/container-multi-review-read-only.spec.ts",
     "e2e/agent-testing/container-claude-terminal-signal.spec.ts",
     "e2e/agent-testing/container-approval-stop.spec.ts",
+    "e2e/agent-testing/mcp-overlay-terminal.spec.ts",
   ],
 ];
 

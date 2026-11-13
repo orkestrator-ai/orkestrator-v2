@@ -80,6 +80,7 @@ export default defineConfig({
     "mcp-apply-live.spec.ts",
     "claude-warm-runtime-live.spec.ts",
     "mcp-overlay-recovery.spec.ts",
+    "mcp-overlay-terminal.spec.ts",
     "mcp-ui-matrix.spec.ts",
     "rich-transcripts-live.spec.ts",
     "idle-observation-live.spec.ts",

@@ -21,7 +21,7 @@ import {
 import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   commandChangeJournal,
-  deleteCommandChangeJournal,
+  forgetCommandChangeJournalsForTests,
   overlayCommandChanges,
   setCommandChangeProbeForTests,
 } from "./command-changes.js";
@@ -260,8 +260,9 @@ describe("command change persistence", () => {
     } finally {
       mockSdkGetSessionMessages.mockImplementation(async () => []);
       // `remove()` alone would leave a removed journal cached for this id,
-      // and a removed journal ignores every later append; this evicts it too.
-      await deleteCommandChangeJournal(PERSISTED_SDK_ID);
+      // and a removed journal ignores every later append; so evict it too.
+      await commandChangeJournal(PERSISTED_SDK_ID)!.remove();
+      forgetCommandChangeJournalsForTests();
     }
   });
 

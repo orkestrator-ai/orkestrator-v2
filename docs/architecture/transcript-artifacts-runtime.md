@@ -198,8 +198,20 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   keeps the two in step) runs with `--network none
   --read-only --tmpfs /tmp --memory 1g --cpus 2 --pids-limit 128 --user
   pwuser --cap-drop ALL --security-opt no-new-privileges`, a seccomp profile
-  that adds only `chroot` to Playwright's published profile so Chromium's
-  sandbox can start, and no repository, home, credential or socket mounts.
+  based on Playwright's published one, and no repository, home, credential
+  or socket mounts. The profile adds `chroot` so Chromium's sandbox can
+  start, and, since 2026-11-13, the newer syscalls Docker's default profile
+  allows (`faccessat2`, `close_range`, `openat2`, `pidfd_open`,
+  `pidfd_send_signal`) with `clone3` answering ENOSYS as it does there.
+  runc 1.5 cannot start the container without `faccessat2`, and once that
+  is listed runc stops answering the lower-numbered syscalls the profile
+  omits with ENOSYS, so glibc would not fall back from `clone3` to `clone`
+  ([evidence](../development/container-qualification.md#tmux-reopen-static-search-text-and-streamed-reads-in-real-containers-2026-11-13)).
+  `clone` itself is allowed with no argument filter, because Chromium's
+  namespace sandbox creates user namespaces, so the profile checks no clone
+  flags; the dropped capabilities and `no-new-privileges` bound what a new
+  namespace can do. The profile is passed to `docker run`, never built into the image, so a
+  change to it does not ask for the worker to be prepared again.
   No host environment is passed (only `HOME=/tmp`). The job package goes in
   on stdin and bounded results come back on stdout. This is the OS-level
   network boundary and the only boundary that runs authored JavaScript by

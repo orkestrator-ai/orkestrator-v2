@@ -52,7 +52,11 @@ import {
   type StagedDefaultsWriter,
 } from "./mcp-management/index.js";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
-import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
+import {
+  DOCKER_LABEL_DEBIAN_ARCHIVE,
+  DOCKER_LABEL_INPUTS_REVISION,
+  DOCKER_LABEL_NETWORK_POLICY,
+} from "./constants.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
 import { observeContainerBoot } from "./container-readiness.js";
@@ -489,9 +493,14 @@ export function containerNetworkView(
             (await imageCapabilities(runtime?.imageId, context))?.["network-policy"] ?? 0,
             process.env.ORKESTRATOR_NETWORK_POLICY,
           );
+    const debianArchive = runtime?.containerId
+      ? (await containerLabel(runtime.containerId, DOCKER_LABEL_DEBIAN_ARCHIVE)) === "1"
+      : false;
     return {
       mode: "restricted",
-      allowedDomains: containerAllowedDomains(environment, config, policyVersion),
+      allowedDomains: containerAllowedDomains(environment, config, policyVersion, {
+        debianArchive,
+      }),
       policyVersion,
     };
   };

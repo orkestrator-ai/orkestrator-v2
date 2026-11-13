@@ -804,7 +804,11 @@ export interface SessionState {
    * that are being rewritten underneath it.
    */
   rewindInProgress?: boolean;
-  /** True after durable deletion has claimed the session and before removal. */
+  /**
+   * True once a close has claimed the session: the fence every prompt, dispatch
+   * claim and late turn callback checks. Kept on the dropped state so no late
+   * work revives it.
+   */
   deleting?: boolean;
   /**
    * Rows this process changed most recently. A late update can land on a row

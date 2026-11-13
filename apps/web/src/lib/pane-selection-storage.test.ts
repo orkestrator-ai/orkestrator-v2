@@ -141,19 +141,18 @@ describe("read/clear", () => {
     expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-33")).toBe(true);
   });
 
-  test("reads a legacy single-pipelineId handoff record", () => {
+  test("ignores a single-pipelineId handoff record", () => {
     localStorage.setItem(
       "orkestrator.window-build-pipeline-handoff.v1",
       JSON.stringify({
         version: 1,
-        entries: [{ environmentId: "env-1", pipelineId: "pipeline-legacy" }],
+        entries: [{ environmentId: "env-1", pipelineId: "pipeline-old-shape" }],
       }),
     );
 
-    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-legacy")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-old-shape")).toBe(false);
 
     markWindowBuildPipelineHandoffResolved("env-1", "pipeline-new");
-    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-legacy")).toBe(true);
     expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-new")).toBe(true);
   });
 

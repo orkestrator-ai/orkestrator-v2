@@ -322,6 +322,30 @@ describe("BuildLaunchDialog", () => {
       expect(screen.queryByText(/root setup step/) === null).toBe(true);
     });
 
+    test("names the project's Debian packages and the archive Restricted then reaches", () => {
+      renderDialog({ aptPackages: { packages: ["libvips-dev"], refused: [], invalid: false } });
+      expect(screen.getByRole("status").textContent).toBe(
+        "Setup installs a Debian package from Debian's archive (libvips-dev), so this environment can also reach deb.debian.org.",
+      );
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      expect(screen.getByRole("status").textContent).toBe(
+        "Setup installs a Debian package from Debian's archive (libvips-dev).",
+      );
+    });
+
+    test("warns when the project's Debian packages will be refused", () => {
+      renderDialog({
+        aptPackages: {
+          packages: [],
+          refused: [{ name: "sudo", reason: "denied" }],
+          invalid: false,
+        },
+      });
+      expect(screen.getByRole("status").textContent).toContain(
+        "aptPackages will be refused: sudo could change the container's protections",
+      );
+    });
+
     test("reopening the launcher asks again from restricted", () => {
       const { rerender } = renderDialog();
       fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));

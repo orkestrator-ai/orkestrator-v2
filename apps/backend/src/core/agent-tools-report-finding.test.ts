@@ -233,6 +233,9 @@ describe("report_finding on the Orkestrator MCP server", () => {
         commandsRun: [],
         commandsNotRun: [],
         limitations: [],
+        // The tool's input schema is the strict provider schema.
+        outcome: "reviewed",
+        blockedReason: null,
       },
       whatChanged: {
         overview: "Change",

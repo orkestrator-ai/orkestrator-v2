@@ -19,6 +19,24 @@
  * session in an "ask" mode parks an approval; the CLI's follow-up with the
  * tool result is answered like any other call.
  *
+ * Three more behaviours serve specs that need the CLI to produce particular
+ * transcript parts (`transcript-parts-live.spec.ts`, the `graph-profiles`
+ * scenario's credential-free run):
+ *
+ * - `[script:<id>]` plays the tool calls registered under `<id>` in
+ *   {@link FakeAnthropicModelOptions.toolScripts}, one per model call: step
+ *   `n` answers the call that carries `n` tool results after the prompt, and
+ *   once the steps run out the turn ends with `answerFor(<prompt>)`. A step
+ *   whose tool starts with `*` names the offered tool ending in the rest (a
+ *   workflow result tool's server prefix is not known in advance); when no
+ *   offered tool matches, the bare rest is called, so the CLI's refusal of an
+ *   absent tool becomes part of the evidence.
+ * - `[retry:<id>:<n>]` answers the first `n` calls of that prompt with HTTP
+ *   500, so the CLI retries and reports each retry.
+ * - Every call records how many image blocks its user messages carried and
+ *   which tools it offered, so an image round trip and a turn's tool surface
+ *   can be checked without reading content.
+ *
  * Runs under Node (the Playwright spec) as well as Bun: `node:http` only.
  * Prompts are kept in memory for the run; they are fixture strings, and never
  * written to test output.
@@ -46,6 +64,33 @@ export interface FakeModelCall {
   streamedAt?: number;
   /** The client went away while the call was held or still streaming. */
   aborted?: boolean;
+  /** Image blocks in the call's user messages, tool results included. */
+  images: number;
+  /** Names of the tools the call offered, at most {@link MAX_RECORDED_TOOLS}. */
+  tools: string[];
+  /** The `[script:<id>]` the call belonged to, the step it got and the tool that step called. */
+  script?: { id: string; step: number; tool?: string };
+  /** The HTTP status of an error answer (a `[retry:…]` failure). */
+  failedWith?: number;
+}
+
+/** One scripted tool call of a `[script:<id>]` turn. */
+export interface FakeToolStep {
+  /** The tool's exact name, or `*<suffix>` for the offered tool ending in `<suffix>`. */
+  tool: string;
+  /** Called instead of the bare suffix when no offered tool ends in it (a deferred MCP tool). */
+  fallback?: string;
+  /**
+   * The call's input. The string `{{resultKey}}` anywhere in it becomes the
+   * workflow result key the turn's instructions quote, so a script can submit
+   * a result the way a model following those instructions would.
+   */
+  input: Record<string, unknown>;
+}
+
+export interface FakeAnthropicModelOptions {
+  /** The scripts `[script:<id>]` prompts play, keyed by lower-case id. */
+  toolScripts?: Readonly<Record<string, readonly FakeToolStep[]>>;
 }
 
 export interface FakeAnthropicModel {
@@ -65,6 +110,12 @@ const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const HOLD_PATTERN = /\[hold:([a-z0-9-]{1,64})\]/i;
 const STREAM_PATTERN = /\[stream:(\d{1,5})\]/i;
 const BASH_PATTERN = /\[bash:([a-z0-9-]{1,64})\]/i;
+const SCRIPT_PATTERN = /\[script:([a-z0-9-]{1,64})\]/i;
+const RETRY_PATTERN = /\[retry:([a-z0-9-]{1,64}):(\d{1,2})\]/i;
+/** Tool names one call records at most. */
+export const MAX_RECORDED_TOOLS = 256;
+/** The most failures one `[retry:<id>:<n>]` asks for. */
+export const MAX_RETRY_FAILURES = 5;
 /** The most deltas one `[stream:<n>]` answer sends. */
 export const MAX_STREAM_DELTAS = 2_000;
 /** The pause between two deltas of a streamed answer. */
@@ -163,20 +214,30 @@ export function endsWithToolResult(body: unknown): boolean {
 
 /** One assistant message that calls `Bash` once, as streamed SSE frames. */
 export function toolUseStreamFrames(id: string, model: string, command: string): string {
+  return toolCallStreamFrames(id, model, "Bash", {
+    command,
+    description: "Print a fixture word",
+  });
+}
+
+/** One assistant message that calls `name` once with `input`, as streamed SSE frames. */
+export function toolCallStreamFrames(
+  id: string,
+  model: string,
+  name: string,
+  input: Record<string, unknown>,
+): string {
   const events: Array<{ type: string } & Record<string, unknown>> = [
     messageStart(id, model),
     {
       type: "content_block_start",
       index: 0,
-      content_block: { type: "tool_use", id: `toolu_${id}`, name: "Bash", input: {} },
+      content_block: { type: "tool_use", id: `toolu_${id}`, name, input: {} },
     },
     {
       type: "content_block_delta",
       index: 0,
-      delta: {
-        type: "input_json_delta",
-        partial_json: JSON.stringify({ command, description: "Print a fixture word" }),
-      },
+      delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
     },
     { type: "content_block_stop", index: 0 },
     {
@@ -187,6 +248,108 @@ export function toolUseStreamFrames(id: string, model: string, command: string):
     { type: "message_stop" },
   ];
   return events.map(frame).join("");
+}
+
+function userMessages(body: unknown): Array<{ content?: unknown }> {
+  const messages = (body as { messages?: unknown } | null)?.messages;
+  if (!Array.isArray(messages)) return [];
+  return messages.filter(
+    (message): message is { role: string; content?: unknown } =>
+      (message as { role?: unknown } | null)?.role === "user",
+  );
+}
+
+function blocksOf(content: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(content)
+    ? content.filter(
+        (block): block is Record<string, unknown> => !!block && typeof block === "object",
+      )
+    : [];
+}
+
+/**
+ * The prompt that started the current turn: the last user message with text
+ * (a follow-up carrying only tool results is not one), without reminders.
+ */
+export function turnPrompt(body: unknown): string {
+  for (const message of userMessages(body).reverse()) {
+    const text = lastUserPrompt({ messages: [{ role: "user", content: message.content }] });
+    if (text) return text;
+  }
+  return "";
+}
+
+/** Tool results the conversation carries after {@link turnPrompt}: the step a script is on. */
+export function toolResultsSinceTurnPrompt(body: unknown): number {
+  let count = 0;
+  for (const message of userMessages(body).reverse()) {
+    if (lastUserPrompt({ messages: [{ role: "user", content: message.content }] })) break;
+    count += blocksOf(message.content).filter((block) => block.type === "tool_result").length;
+  }
+  return count;
+}
+
+/** Image blocks in every user message, inside tool results too. */
+export function imageBlockCount(body: unknown): number {
+  let count = 0;
+  const visit = (content: unknown) => {
+    for (const block of blocksOf(content)) {
+      if (block.type === "image") count += 1;
+      else if (block.type === "tool_result") visit(block.content);
+    }
+  };
+  for (const message of userMessages(body)) visit(message.content);
+  return count;
+}
+
+/** The names of the tools a request offered, bounded. */
+export function offeredToolNames(body: unknown): string[] {
+  const tools = (body as { tools?: unknown } | null)?.tools;
+  if (!Array.isArray(tools)) return [];
+  return tools
+    .map((tool) => (tool as { name?: unknown } | null)?.name)
+    .filter((name): name is string => typeof name === "string")
+    .slice(0, MAX_RECORDED_TOOLS);
+}
+
+/** The script id a `[script:<id>]` prompt plays, lower-cased. */
+export function scriptIdOf(prompt: string): string | undefined {
+  return SCRIPT_PATTERN.exec(prompt)?.[1]?.toLowerCase();
+}
+
+/** The retry id and failure count (at most {@link MAX_RETRY_FAILURES}) of a `[retry:<id>:<n>]` prompt. */
+export function retryOf(prompt: string): { id: string; failures: number } | undefined {
+  const match = RETRY_PATTERN.exec(prompt);
+  if (!match) return undefined;
+  return { id: match[1]!.toLowerCase(), failures: Math.min(MAX_RETRY_FAILURES, Number(match[2])) };
+}
+
+/**
+ * The tool a script step calls: its exact name, or for `*<suffix>` the first
+ * offered tool ending in `<suffix>`, else the bare suffix.
+ */
+export function resolveStepTool(step: FakeToolStep, offered: readonly string[]): string {
+  if (!step.tool.startsWith("*")) return step.tool;
+  const suffix = step.tool.slice(1);
+  return offered.find((name) => name.endsWith(suffix)) ?? step.fallback ?? suffix;
+}
+
+const RESULT_KEY_PATTERN =
+  /resultKey\W{1,4}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/** The workflow result key a request's instructions quote, if any. */
+export function quotedResultKey(body: unknown): string | undefined {
+  return RESULT_KEY_PATTERN.exec(JSON.stringify(body ?? null))?.[1];
+}
+
+/** A step's input with `{{resultKey}}` replaced by the key the request quotes. */
+export function resolveStepInput(step: FakeToolStep, body: unknown): Record<string, unknown> {
+  const raw = JSON.stringify(step.input);
+  if (!raw.includes("{{resultKey}}")) return step.input;
+  const key = quotedResultKey(body);
+  return key
+    ? (JSON.parse(raw.replaceAll("{{resultKey}}", key)) as Record<string, unknown>)
+    : step.input;
 }
 
 /** The number of extra lines a `[stream:<n>]` prompt asks for, bounded. */
@@ -288,8 +451,14 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   return text ? JSON.parse(text) : {};
 }
 
-export async function startFakeAnthropicModel(port = 0): Promise<FakeAnthropicModel> {
+export async function startFakeAnthropicModel(
+  port = 0,
+  options: FakeAnthropicModelOptions = {},
+): Promise<FakeAnthropicModel> {
   const calls: FakeModelCall[] = [];
+  const scripts = options.toolScripts ?? {};
+  /** `[retry:<id>:<n>]` failures already answered, per id. */
+  const retryFailures = new Map<string, number>();
   const released = new Set<string>();
   const waiters = new Map<string, Set<() => void>>();
   let counter = 0;
@@ -343,6 +512,8 @@ export async function startFakeAnthropicModel(port = 0): Promise<FakeAnthropicMo
           .filter((message) => message.role === "user")
           .map((message) => lastUserPrompt({ messages: [message] })),
         receivedAt: Date.now(),
+        images: imageBlockCount(body),
+        tools: offeredToolNames(body),
       };
       if (calls.length >= MAX_CALLS) calls.shift();
       calls.push(call);
@@ -351,7 +522,67 @@ export async function startFakeAnthropicModel(port = 0): Promise<FakeAnthropicMo
         return;
       }
       const model = String((body as { model?: unknown }).model ?? "claude-haiku-4-5");
-      const text = answerFor(prompt);
+      const streaming = (body as { stream?: unknown }).stream === true;
+      const started = turnPrompt(body);
+      const retry = prompt ? retryOf(prompt) : undefined;
+      if (retry && (retryFailures.get(retry.id) ?? 0) < retry.failures) {
+        retryFailures.set(retry.id, (retryFailures.get(retry.id) ?? 0) + 1);
+        call.failedWith = 500;
+        call.answeredAt = Date.now();
+        response.writeHead(500, { "content-type": "application/json" }).end(
+          JSON.stringify({
+            type: "error",
+            error: { type: "api_error", message: "Fixture failure, retry the request" },
+          }),
+        );
+        return;
+      }
+      const scriptId = scriptIdOf(started);
+      const steps = scriptId ? scripts[scriptId] : undefined;
+      if (scriptId && steps) {
+        const stepIndex = toolResultsSinceTurnPrompt(body);
+        const step = steps[stepIndex];
+        call.answeredAt = Date.now();
+        if (step) {
+          const tool = resolveStepTool(step, call.tools);
+          call.script = { id: scriptId, step: stepIndex, tool };
+          const id = `msg_fake_${counter}`;
+          if (streaming) {
+            response
+              .writeHead(200, { "content-type": "text/event-stream" })
+              .end(toolCallStreamFrames(id, model, tool, resolveStepInput(step, body)));
+          } else {
+            response.writeHead(200, { "content-type": "application/json" }).end(
+              JSON.stringify({
+                id,
+                type: "message",
+                role: "assistant",
+                model,
+                content: [
+                  {
+                    type: "tool_use",
+                    id: `toolu_${id}`,
+                    name: tool,
+                    input: resolveStepInput(step, body),
+                  },
+                ],
+                stop_reason: "tool_use",
+                stop_sequence: null,
+                usage: { input_tokens: 1, output_tokens: 1 },
+              }),
+            );
+          }
+          return;
+        }
+        call.script = { id: scriptId, step: stepIndex };
+      }
+      // After a compaction the turn's message also carries the CLI's own
+      // context blocks; the answer echoes only the line with the marker.
+      const text = answerFor(
+        scriptId && steps
+          ? (started.split("\n").find((line) => SCRIPT_PATTERN.test(line)) ?? started).trim()
+          : prompt,
+      );
       const streamDeltas = streamDeltaCountOf(prompt);
       const bashWord = endsWithToolResult(body) ? undefined : bashWordOf(prompt);
       call.answeredAt = Date.now();

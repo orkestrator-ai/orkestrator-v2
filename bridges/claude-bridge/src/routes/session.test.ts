@@ -896,12 +896,12 @@ describe("session routes", () => {
     test("maps a materialization refusal instead of returning a bodiless 500", async () => {
       mockGetSession.mockImplementationOnce(() => undefined);
       mockEnsurePersistedSession.mockImplementation(async () => {
-        throw refusal("conflict", "Session is being deleted");
+        throw refusal("conflict", "Session is being closed");
       });
 
       const res = await jsonRequest("POST", "/session/s-1/prompt", { prompt: "Hello" });
       expect(res.status).toBe(409);
-      expect(await jsonBody(res)).toEqual({ error: "Session is being deleted" });
+      expect(await jsonBody(res)).toEqual({ error: "Session is being closed" });
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 

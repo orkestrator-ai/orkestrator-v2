@@ -44,6 +44,7 @@ import {
   type NativeMessageProps,
 } from "./NativeMessage.shared";
 import { MessagePart } from "./NativeMessage.renderer";
+import { CompactionPart, RetryPart } from "./NativeMessage.notice-parts";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
@@ -283,6 +284,39 @@ export const NativeMessage = memo(function NativeMessage({
             application={permissionRulePart.application}
             ruleExists={permissionRulePart.ruleExists}
           />
+        </div>
+      </div>
+    );
+  }
+
+  // A notice row (Claude writes compaction boundaries and API retries as
+  // system rows) is its part, not its text: a compaction boundary has no
+  // content at all, and a retry's text alone cannot say whether it settled.
+  const noticeParts = isSystem
+    ? message.parts.filter(
+        (part): part is Extract<NativeMessagePart, { type: "compaction" | "retry" }> =>
+          part.type === "compaction" || part.type === "retry",
+      )
+    : [];
+  if (noticeParts.length > 0) {
+    return (
+      <div className="px-2 @sm:px-4 py-1">
+        <div
+          data-transcript-item="system"
+          data-agent-chat-search-content="true"
+          className="max-w-3xl mx-auto min-w-0"
+        >
+          {noticeParts.map((part, index) =>
+            part.type === "compaction" ? (
+              <CompactionPart
+                key={`${message.id}:${index}`}
+                part={part}
+                expansionKey={`${message.id}:${index}/compaction`}
+              />
+            ) : (
+              <RetryPart key={`${message.id}:${index}`} part={part} />
+            ),
+          )}
         </div>
       </div>
     );

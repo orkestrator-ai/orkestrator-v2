@@ -37,3 +37,22 @@ Final aggregate counts and evidence are recorded in the Address Findings result.
 Final rerun evidence: `/tmp/orkestrator-test-run.GX1alI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
 backend 17,922 pass, 145 skip, one fail. The root group passed (4,309 pass,
 one skip); other workspace packages, bridges and protocol lockfile passed.
+
+## Sibling expiry-notice assertion — 2026-11-13 (recurrence)
+
+Observing branch base: `17d28238c098b4443d1289df5c4ed75e7cc2802e`;
+reviewed head: `0cec5f453978bed824fe1a6e7da0facef0638a5a` (a test-harness and
+documentation change that touches no backend file). `mise run flaky:recurrence
+-- 3121 --base 17d28238c` answered open, so this counts as a recurrence.
+Review preparation's `mise run test:full` (default worker plan, on a host
+shared with other worktrees' runs) failed the same test
+`mail queued for a worker that ends expires, and the sender is told` at line
+379 (145.61 ms): expected notice sender `system`, received undefined. The
+backend group counted 21,688 pass, 286 skip, 3 fail across 1,476 files; the
+other two failures were environmental (an untrusted user mise config, and
+WebKit missing host libraries).
+
+The runner's own rerun of the unchanged file alone passed (526.5 s, most of it
+spent waiting for host capacity). A second rerun alone also passed:
+`mise run test:logged -- --name rerun-pipeline-worker-mail.test -- bun --cwd=apps/backend test src/core/pipeline-worker-mail.test.ts --parallel=1 --only-failures`
+(exit 0, 4.3 s). Cause still unconfirmed; the case stays open.

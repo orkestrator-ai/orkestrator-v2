@@ -114,10 +114,7 @@ describe("live benchmark lifecycle", () => {
     expect(result.guardLines).toBe(2);
     const start = (h.runtime.startProfile as ReturnType<typeof mock>).mock.calls[0]!;
     expect(start[0]).toBe("rw-ab-owned-rollback-1");
-    expect(start[3]).toMatchObject({
-      ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
-      ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
-    });
+    expect(start[3]).toMatchObject({ ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all" });
     expect(start[3].ORKESTRATOR_RECURRING_METRICS).toBeUndefined();
     // Never a window on the host's desktop, and no reachability probe networks.
     expect(start[3].DISPLAY).toBeUndefined();
@@ -259,7 +256,6 @@ describe("live benchmark lifecycle", () => {
     const env = (h.runtime.startProfile as ReturnType<typeof mock>).mock.calls[0]![3];
     expect(env.ORKESTRATOR_RECURRING_METRICS).toBe("0");
     expect(env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK).toBeUndefined();
-    expect(env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING).toBeUndefined();
   });
 
   test("long prefixes preserve invocation, arm and repeat under the profile length limit", async () => {

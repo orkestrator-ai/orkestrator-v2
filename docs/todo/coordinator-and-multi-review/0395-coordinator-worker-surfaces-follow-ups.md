@@ -417,7 +417,7 @@ An older leaf answers an unknown controller command, and `coordinatorNodeTarget`
 turns that into "update it, then retry". (Corrected 2026-11-01: this said the
 answer was `Unknown command: …`, but a real leaf answers
 `Unknown backend command: …`, so the check never matched one until todo 1030
-task 4.) An older `controller_multi_review_surface` answers
+(retired) task 4.) An older `controller_multi_review_surface` answers
 the new surfaces with "Expected surface root, fix or address.", and the
 command node maps that text to the same message.
 
@@ -538,7 +538,7 @@ reported re-sends it to the adopter.
 ## Related
 
 - To-do 0142 (retired 2026-11-11; see [`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces)).
-- [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
+- [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
   for the live suite.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the scope call of task 2, the billed Claude run of task 4) moved there on 2026-11-10.
 

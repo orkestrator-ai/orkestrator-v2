@@ -9,7 +9,7 @@ import { OpenCode2Provider } from "./provider.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId } from "./steer.js";
 
 /**
- * The qualification checks of to-do 0008 task 7 that the other 2.x live
+ * The qualification checks of to-do 0008 (retired) task 7 that the other 2.x live
  * files do not already make: an exact retry of an input id, a turn that runs
  * while nothing reads it, a server restart under a live provider, and the
  * resume picker's archive and restore. A real

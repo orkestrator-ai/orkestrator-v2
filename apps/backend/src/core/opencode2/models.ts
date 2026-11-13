@@ -1,6 +1,6 @@
 /**
  * The model catalogue and reasoning effort of OpenCode 2.x sessions
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 5).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan phase 5).
  *
  * - **Source.** `GET /api/model` lists the chat models of every provider the
  *   server can serve now (2.x lists no model of an unconnected provider), and

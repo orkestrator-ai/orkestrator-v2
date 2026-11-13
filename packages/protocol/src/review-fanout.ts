@@ -17,6 +17,7 @@
  */
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import {
+  REVIEW_BLOCKED_ERROR_PREFIX,
   STRUCTURED_REVIEW_MAX_TEXT_BYTES,
   isStructuredReviewReport,
   safeParseStructuredReviewFindings,
@@ -730,6 +731,22 @@ export function reviewerCouldNotStart(
   reviewer: Pick<ReviewerRecord, "status" | "startFailed">,
 ): boolean {
   return reviewer.status === "failed" && reviewer.startFailed === true;
+}
+
+/**
+ * The reviewer's own reason it could not review, for a reviewer that failed
+ * because its report said `reviewScope.outcome: "blocked"`, or `null`.
+ *
+ * Read from `error`, which the backend writes with
+ * {@link REVIEW_BLOCKED_ERROR_PREFIX} on both engines (the graph run keeps
+ * only the activation's error text), so no record field is needed.
+ */
+export function reviewerBlockedReason(
+  reviewer: Pick<ReviewerRecord, "status" | "error">,
+): string | null {
+  if (reviewer.status !== "failed" || !reviewer.error?.startsWith(REVIEW_BLOCKED_ERROR_PREFIX))
+    return null;
+  return reviewer.error.slice(REVIEW_BLOCKED_ERROR_PREFIX.length).trim() || null;
 }
 
 /** The reviewers whose reports are usable inputs to consolidation. */

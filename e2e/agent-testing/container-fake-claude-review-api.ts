@@ -1,7 +1,7 @@
 /**
  * QA stand-in for the Anthropic Messages API that takes a whole Multi Review
  * through the image's real `claude` CLI, with no login and no billed request
- * (to-do 0190 task 3). It runs inside the environment container on its
+ * (to-do 0190, task 3). It runs inside the environment container on its
  * loopback, copied in and started by `container-fake-claude-install.ts`.
  *
  *   bun container-fake-claude-review-api.ts --port 47123 [--log <file>]
@@ -32,6 +32,12 @@
  * step chosen and the error flag of each answered step. Never a prompt, a
  * tool's output, a resultKey or a path. No imports: the file runs on its own
  * inside the image.
+ *
+ * With `--hold <file>`, a reviewer's request whose answer would be its
+ * submission waits while that file exists (at most {@link HOLD_LIMIT_MS}),
+ * after logging a `hold` record once, so the turn is still running while a
+ * spec reads Agent Info (to-do 0190 task 3). Removing the file
+ * releases every held turn.
  */
 
 type Block = {
@@ -208,6 +214,8 @@ export function reviewReport(baseRef: string, readDiff: boolean): Record<string,
           ? "QA fixture model: the diff was read, but no finding was looked for."
           : "QA fixture model: the diff could not be read and no finding was looked for.",
       ],
+      outcome: "reviewed",
+      blockedReason: null,
     },
     whatChanged: {
       overview: "The fixture model reviewed the package without judging its content.",
@@ -376,9 +384,33 @@ export function reviewStream(id: string, model: string, step: ReviewStep): strin
   return frames.map((frame) => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join("");
 }
 
+/** The longest a held submission waits, so a spec that never releases it cannot wedge a turn. */
+export const HOLD_LIMIT_MS = 5 * 60_000;
+
+/**
+ * Waits while `hold` exists, logging one `hold` record first. Answers at once
+ * when the file is absent.
+ */
+export async function waitWhileHeld(
+  hold: string,
+  kind: string,
+  log?: (line: string) => void,
+  options: { pollMs?: number; limitMs?: number; exists?: (path: string) => Promise<boolean> } = {},
+): Promise<boolean> {
+  const exists = options.exists ?? ((path: string) => Bun.file(path).exists());
+  if (!(await exists(hold))) return false;
+  log?.(JSON.stringify({ kind, step: "hold", answered: [] }));
+  const deadline = Date.now() + (options.limitMs ?? HOLD_LIMIT_MS);
+  while (Date.now() < deadline && (await exists(hold))) {
+    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 250));
+  }
+  return true;
+}
+
 export async function handleFakeClaudeReviewApi(
   request: Request,
   log?: (line: string) => void,
+  hold?: string,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "POST" && url.pathname === "/v1/messages/count_tokens") {
@@ -395,6 +427,9 @@ export async function handleFakeClaudeReviewApi(
   const id = `msg_fixture_${crypto.randomUUID().replaceAll("-", "")}`;
   const step = reviewStep(body);
   const record = stepRecord(body, step);
+  if (hold && record.kind === "review-report" && step.kind === "tool" && step.step === "submit") {
+    await waitWhileHeld(hold, record.kind, log);
+  }
   if (log && record.kind !== "plain") log(JSON.stringify(record));
   if (!body.stream) return Response.json(messageJson(id, model, step));
   return new Response(reviewStream(id, model, step), {
@@ -410,10 +445,12 @@ if (import.meta.main) {
   const logPath = logIndex === -1 ? undefined : process.argv[logIndex + 1];
   const { appendFileSync } = await import("node:fs");
   const log = logPath ? (line: string) => appendFileSync(logPath, `${line}\n`) : undefined;
+  const holdIndex = process.argv.indexOf("--hold");
+  const hold = holdIndex === -1 ? undefined : process.argv[holdIndex + 1];
   Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: (request) => handleFakeClaudeReviewApi(request, log),
+    fetch: (request) => handleFakeClaudeReviewApi(request, log, hold),
   });
 }

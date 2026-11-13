@@ -5,8 +5,8 @@
  * web binds it per `lib/backend` client
  * (`apps/web/src/lib/node-scope/domains/pull-requests.ts`).
  *
- * - **Version 1** (a node whose hello advertises `pull-requests`): calls
- *   carry the envelope (the merge guards, `deleteBranch` and `method`, the
+ * - **Versions 3, 2 and 1** (a node whose hello advertises `pull-requests`):
+ *   calls carry the envelope (the merge guards, `deleteBranch` and `method`, the
  *   review's `comments` and `commitId`, the review package's `expectedHead`,
  *   `validationPlan` and `additionalLimitations` are critical) and results
  *   are decoded with the command's schema.
@@ -37,6 +37,10 @@ const legacyPullRequestsApi = (
 ): PullRequestsApi => legacyCommandApi(context, PULL_REQUESTS_COMMANDS);
 
 export const pullRequestsClient = domainClient(pullRequestsDomain, {
+  3: pullRequestsApi,
+  // Version 3 only removed `merge_pr_local`, which only tests called
+  // (2026-11-13), so version 2 peers take the same API. Adapter 2 goes when
+  // the support floor passes the first Stable release with version 3.
   2: pullRequestsApi,
   // Version 2 only removed commands nothing called (2026-11-10), so version 1
   // peers take the same API. Adapter 1 goes when the support floor passes the

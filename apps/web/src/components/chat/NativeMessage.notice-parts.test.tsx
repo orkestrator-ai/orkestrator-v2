@@ -1,5 +1,6 @@
 /**
- * The four transcript rows for things that happened *to* the conversation.
+ * The four transcript rows for things that happened *to* the conversation,
+ * and the system rows a provider writes them on.
  *
  * Rendered from synthetic projections only: every assertion here is about
  * presentation, and none of these components may learn which provider produced
@@ -8,7 +9,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
+import { NativeMessage } from "./NativeMessage";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { newSessionState } from "../../../../../bridges/cursor-bridge/src/agent-session";
 import {
@@ -181,5 +184,62 @@ describe("ImagePart", () => {
     expect(screen.getByText("a generated cat")).toBeTruthy();
     expect(screen.queryByText("preview unavailable") === null).toBe(true);
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("NativeMessage system notice rows", () => {
+  function systemRow(parts: NativeMessagePart[], content = "") {
+    return {
+      id: "notice-1",
+      role: "system" as const,
+      content,
+      parts,
+      createdAt: "2026-11-13T00:00:00.000Z",
+    };
+  }
+
+  test("a compaction boundary on a system row renders as the boundary, though it has no text", () => {
+    renderInAppCommandScope(
+      <NativeMessage
+        platform="claude"
+        message={systemRow([part("compaction", { tokenCountText: "manual compaction" })])}
+      />,
+    );
+    expect(screen.getByText("Context compacted")).toBeTruthy();
+    expect(screen.getByText("manual compaction")).toBeTruthy();
+  });
+
+  test("a retry on a system row says whether it settled, not only what the API answered", () => {
+    renderInAppCommandScope(
+      <NativeMessage
+        platform="claude"
+        message={systemRow(
+          [
+            part("retry", {
+              content: "The API answered 500",
+              toolState: "success",
+              retryAttempt: 1,
+            }),
+          ],
+          "The API answered 500",
+        )}
+      />,
+    );
+    expect(screen.getByText("Retried")).toBeTruthy();
+    expect(screen.getByText("The API answered 500")).toBeTruthy();
+  });
+
+  test("a system row without notice parts keeps its text", () => {
+    renderInAppCommandScope(
+      <NativeMessage
+        platform="claude"
+        message={systemRow(
+          [part("status", { content: "Interrupted by user", severity: "info" })],
+          "Interrupted by user",
+        )}
+      />,
+    );
+    expect(screen.getByText("Interrupted by user")).toBeTruthy();
+    expect(screen.queryByText("Context compacted") === null).toBe(true);
   });
 });

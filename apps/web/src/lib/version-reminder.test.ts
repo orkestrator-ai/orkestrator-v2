@@ -39,6 +39,56 @@ describe("describeVersionReminder", () => {
     }
   });
 
+  test("names an older server as the side to update, not as an update", () => {
+    // What today's renderer showed against v2.21.0 (to-do 7120 (retired) task 4): "has
+    // been updated" and a reload, although the server was the older side.
+    const reminder = describeVersionReminder({
+      clientVersion: "2.36.4-beta",
+      backendVersion: "2.21.0",
+      skew: "backend-older",
+      clientKind: "backend-served",
+    });
+    expect(reminder?.title).toBe("This server runs an older Orkestrator");
+    expect(reminder?.description).toBe(
+      "It runs Orkestrator 2.21.0, and this page is 2.36.4-beta; some features are unavailable until the server is updated. Reload to load the server's own version.",
+    );
+    expect(reminder?.action).toBe("reload");
+  });
+
+  test("does not offer a reload that already failed to change the versions", () => {
+    const older = {
+      clientVersion: "2.36.4-beta",
+      backendVersion: "2.21.0",
+      skew: "backend-older" as const,
+      reloadTried: true,
+    };
+    const served = describeVersionReminder({ ...older, clientKind: "backend-served" });
+    expect(served?.title).toBe("This server runs an older Orkestrator");
+    expect(served?.description).not.toContain("Reload");
+    expect(served?.action).toBeNull();
+    expect(
+      describeVersionReminder({ ...older, clientKind: "backend-served", hostCanUpdate: true })
+        ?.action,
+    ).toBe("update");
+
+    const newer = describeVersionReminder({
+      ...versions,
+      skew: "client-older",
+      clientKind: "backend-served",
+      reloadTried: true,
+    });
+    expect(newer?.title).not.toBe("Orkestrator has been updated");
+    expect(newer?.action).toBeNull();
+    const hosted = describeVersionReminder({
+      ...versions,
+      skew: "client-older",
+      clientKind: "hosted",
+      reloadTried: true,
+    });
+    expect(hosted?.action).toBeNull();
+    expect(hosted?.description).not.toContain("Reload to");
+  });
+
   test("points an out-of-date desktop app at the updater", () => {
     const reminder = describeVersionReminder({
       ...versions,
@@ -60,6 +110,9 @@ describe("describeVersionReminder", () => {
       });
       expect(reminder?.title).toBe("The Orkestrator backend is out of date");
       expect(reminder?.description).toContain("computer running the backend");
+      expect(reminder?.description).toContain(
+        "runs an older Orkestrator (2.19.17) than this app (2.20.0); some features are unavailable until it is updated.",
+      );
       expect(reminder?.action).toBeNull();
     }
   });

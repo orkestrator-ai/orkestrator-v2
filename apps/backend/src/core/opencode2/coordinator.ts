@@ -1,5 +1,5 @@
 /**
- * Coordinators on OpenCode (docs/todo/agent-engines/0008-opencode-v2.md,
+ * Coordinators on OpenCode (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`),
  * owner decision 4).
  *
  * A coordinator conversation's OpenCode server is its own process (the

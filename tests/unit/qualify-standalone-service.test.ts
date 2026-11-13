@@ -31,6 +31,8 @@ function fixture(
     interrupt?: "SIGINT" | "SIGTERM";
     interruptDuringApply?: boolean;
     realBackend?: boolean;
+    /** Publish what a release before 2.30.0-beta does: no Linux process identity. */
+    legacyDescriptor?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(path.join(os.tmpdir(), "qualify-service-test-"));
@@ -68,6 +70,9 @@ function fixture(
         appVersion: service.version,
         // A real live PID proves cleanup does not trust manager success alone.
         pid: options.backendSurvives ? process.pid : (service.backend?.pid ?? 2_000_000_000),
+        url: "http://127.0.0.1:1/",
+        authFile: path.join(service.dataDir, "gateway-auth.json"),
+        ...(options.legacyDescriptor ? {} : { processIdentity: "boot:1" }),
       }),
     );
   };
@@ -274,6 +279,21 @@ for (const phases of [
         ).detail.version,
       ).toBe(phases.includes("update") ? "to" : "from");
     expect(f.services.values().next().value!.loaded).toBe(false);
+  });
+}
+for (const legacy of [false, true]) {
+  test(`the client connects ${legacy ? "by endpoint to a descriptor without" : "by data directory to a descriptor with"} a process identity`, async () => {
+    const f = fixture({ legacyDescriptor: legacy });
+    expect(await f.run("update")).toBe(0);
+    const added = f.calls.find((argv) => argv.includes("connection") && argv.includes("add"))!;
+    const endpoint = legacy && process.platform === "linux";
+    expect(added.includes("--url")).toBe(endpoint);
+    expect(added.includes("--data-dir")).toBe(!endpoint);
+    if (endpoint)
+      expect(added).toContain(path.join(f.services.get("service")!.dataDir, "gateway-auth.json"));
+    // The connection is saved only once the first backend has published.
+    const start = f.calls.findIndex((argv) => argv.includes("start"));
+    expect(f.calls.indexOf(added)).toBeGreaterThan(start);
   });
 }
 for (const phases of ["updat", ",", "", "update,typo"]) {

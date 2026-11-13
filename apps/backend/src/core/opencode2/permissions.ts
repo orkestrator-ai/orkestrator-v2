@@ -1,6 +1,6 @@
 /**
  * Session permission rules for OpenCode 2.x sessions
- * (docs/todo/agent-engines/0008-opencode-v2.md, phase 5; task 4: the read-only
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), phase 5; task 4: the read-only
  * per-prompt tools mask moves to session permissions).
  *
  * 2.x has no per-prompt tool mask. What a session may do is its agent's rules

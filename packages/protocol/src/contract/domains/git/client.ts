@@ -4,7 +4,7 @@
  * (`api.changes_get_view({ resourceKey })`). The web binds it per
  * `lib/backend` client (`apps/web/src/lib/node-scope/domains/git.ts`).
  *
- * - **Version 1** (a node whose hello advertises `git`): calls carry the
+ * - **Versions 2 and 1** (a node whose hello advertises `git`): calls carry the
  *   envelope (`pathIds` on `changes_prepare_restore` is critical) and results
  *   are decoded with the command's schema.
  * - **Version 0** (a pre-contract node): today's untyped call, `{ command,
@@ -13,8 +13,8 @@
  *   `lib/backend/files-sessions.ts` already read.
  *
  * **Capability.** `changes_get_capabilities` gated the Changes surfaces on
- * the `change-tracking-v1` protocol. Version 1 includes that protocol and
- * its fixed features ({@link GIT_CHANGE_TRACKING_PROTOCOL}: history, git
+ * the `change-tracking-v1` protocol. Version 1 and later include that
+ * protocol and its fixed features ({@link GIT_CHANGE_TRACKING_PROTOCOL}: history, git
  * scopes, operation volume), so a caller that only needs to know the
  * protocol exists reads the version. The answer's `restore`,
  * `strictCheckpoints` and `policyVersion` are the backend's change-tracking
@@ -36,7 +36,7 @@ import { gitDomain } from "./domain.js";
 
 export type GitApi = CommandApi<typeof GIT_COMMANDS>;
 
-/** The change-tracking protocol and fixed features every `git` version-1 node speaks. */
+/** The change-tracking protocol and fixed features every `git` node from version 1 speaks. */
 export const GIT_CHANGE_TRACKING_PROTOCOL = Object.freeze({
   capability: CHANGE_TRACKING_PROTOCOL_CAPABILITY,
   history: true,
@@ -49,6 +49,10 @@ const legacyGitApi = (_call: CommandCall, context: DomainAdapterContext): GitApi
   legacyCommandApi(context, GIT_COMMANDS);
 
 export const gitClient = domainClient(gitDomain, {
+  2: gitApi,
+  // Version 2 only removed `refresh_environment_diff_stats`, which only tests
+  // called (2026-11-13), so version 1 peers take the same API. Adapter 1 goes
+  // when the support floor passes the first Stable release with version 2.
   1: gitApi,
   0: legacyGitApi,
 });

@@ -1899,5 +1899,8 @@ environment is away, and a wait surviving a backend restart).
   host; a live `open-pull-request`, which opens a real pull request and needs
   the user's approval; a backend restart mid fan-out on a real stack (the
   seeded interleavings cover it with fakes); and the coordinator's graph
-  wakes with a live coordinator. The Phase 2 exit criteria in the retired
+  wakes with a live coordinator. The tier checks are repeatable since
+  2026-11-13: the live coordinator suite's `graph-profiles` scenario
+  ([agent-testing.md](../development/agent-testing.md#live-coordinator-suite))
+  runs them per provider. The Phase 2 exit criteria in the retired
   plan index (`git show 2b876486b:plans/graphs/000-index.md`) track them.

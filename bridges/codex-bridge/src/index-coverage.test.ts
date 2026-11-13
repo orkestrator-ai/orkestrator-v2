@@ -13,26 +13,7 @@ process.env.CODEX_BRIDGE_NO_SERVER = "1";
 // refresh mutates process.env underneath these tests.
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 
-const nativeSetTimeout = globalThis.setTimeout;
-let initialReplayRetentionTimer:
-  { callback: () => void; cleared: boolean; unref: () => void } | undefined;
-globalThis.setTimeout = ((
-  callback: (...args: unknown[]) => void,
-  delay?: number,
-  ...args: unknown[]
-) => {
-  if (delay === 60_000 && initialReplayRetentionTimer === undefined) {
-    initialReplayRetentionTimer = {
-      callback: () => callback(...args),
-      cleared: false,
-      unref: () => undefined,
-    };
-    return initialReplayRetentionTimer as unknown as ReturnType<typeof setTimeout>;
-  }
-  return nativeSetTimeout(callback, delay, ...args);
-}) as typeof setTimeout;
 const { __testing } = await import("./index.js");
-globalThis.setTimeout = nativeSetTimeout;
 
 const temporaryRoots: string[] = [];
 
@@ -49,110 +30,24 @@ afterEach(() => {
 });
 
 describe("codex bridge private boundary coverage", () => {
-  test("drops idle replay retention, reacquires it, and cancels a pending expiry", () => {
-    expect(initialReplayRetentionTimer).toBeDefined();
-    const restoreRing = __testing.withIsolatedEventRingForTesting();
-    const nativeClearTimeout = globalThis.clearTimeout;
-    const scheduled: Array<{
-      callback: () => void;
-      cleared: boolean;
-      unref: () => void;
-    }> = [];
-
-    globalThis.setTimeout = ((callback: () => void, delay?: number) => {
-      expect(delay).toBe(60_000);
-      const timer = {
-        callback,
-        cleared: false,
-        unref: () => undefined,
-      };
-      scheduled.push(timer);
-      return timer as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout;
-    globalThis.clearTimeout = ((timer: ReturnType<typeof setTimeout>) => {
-      (timer as unknown as { cleared: boolean }).cleared = true;
-    }) as typeof clearTimeout;
-
+  test("emits without reading the payload, so a hostile one cannot break the cursor", () => {
+    const revisions: number[] = [];
+    const remove = __testing.subscribeForTesting((_event, revision) => {
+      revisions.push(revision);
+    });
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    let payloadReads = 0;
+    const throwing = {
+      get value(): never {
+        payloadReads += 1;
+        throw new Error("getter failed");
+      },
+    };
+    const before = __testing.latestRevisionForTesting();
     try {
-      __testing.emitForTesting({ type: "session.updated", sessionId: "before-idle" });
-      expect(__testing.eventRingForTesting().getStats().retained).toBe(1);
-
-      initialReplayRetentionTimer!.callback();
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 0,
-        retainedBytes: 0,
-        latestRevision: 1,
-      });
-
-      __testing.emitForTesting({ type: "session.updated", sessionId: "while-disabled" });
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 0,
-        latestRevision: 2,
-      });
-
-      const releaseFirst = __testing.subscribeForTesting(() => undefined);
-      __testing.emitForTesting({ type: "session.updated", sessionId: "after-reacquire" });
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 1,
-        latestRevision: 3,
-      });
-      releaseFirst();
-      expect(scheduled).toHaveLength(1);
-
-      const releaseSecond = __testing.subscribeForTesting(() => undefined);
-      expect(scheduled[0]!.cleared).toBe(true);
-      releaseSecond();
-      expect(scheduled).toHaveLength(2);
-
-      scheduled[1]!.callback();
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 0,
-        retainedBytes: 0,
-        latestRevision: 3,
-      });
-      __testing.emitForTesting({ type: "session.updated", sessionId: "disabled-again" });
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 0,
-        latestRevision: 4,
-      });
-
-      const releaseThird = __testing.subscribeForTesting(() => undefined);
-      __testing.emitForTesting({ type: "session.updated", sessionId: "reacquired-again" });
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 1,
-        latestRevision: 5,
-      });
-      releaseThird();
-    } finally {
-      globalThis.setTimeout = nativeSetTimeout;
-      globalThis.clearTimeout = nativeClearTimeout;
-      restoreRing();
-    }
-  });
-
-  test("contains unserializable SSE payloads without breaking revision continuity", () => {
-    const restoreRing = __testing.withIsolatedEventRingForTesting();
-    // Re-enable retention after the preceding expiry test, then release the
-    // subscriber so this exercises the lazy background serialization path.
-    const releaseRetention = __testing.subscribeForTesting(() => undefined);
-    releaseRetention();
-    const originalError = console.error;
-    console.error = () => undefined;
-    try {
-      const cyclic: Record<string, unknown> = {};
-      cyclic.self = cyclic;
-      const throwing = {
-        get value(): never {
-          throw new Error("getter failed");
-        },
-      };
-
       expect(() => {
-        __testing.emitForTesting({
-          type: "session.updated",
-          sessionId: "cyclic",
-          data: cyclic,
-        });
+        __testing.emitForTesting({ type: "session.updated", sessionId: "cyclic", data: cyclic });
         __testing.emitForTesting({
           type: "session.updated",
           sessionId: "bigint",
@@ -163,36 +58,14 @@ describe("codex bridge private boundary coverage", () => {
           sessionId: "throwing-getter",
           data: throwing,
         });
-        __testing.emitForTesting({
-          type: "session.idle",
-          sessionId: "after-errors",
-        });
+        __testing.emitForTesting({ type: "session.idle", sessionId: "after" });
       }).not.toThrow();
-
-      const replay = __testing.eventRingForTesting().since(0);
-      expect(replay.complete).toBe(true);
-      expect(replay.events.map((entry) => entry.revision)).toEqual([1, 2, 3, 4]);
-      expect(replay.events.slice(0, 3).map((entry) => entry.event.serialize())).toEqual([
-        JSON.stringify({
-          sessionId: "cyclic",
-          error: "payload could not be serialized",
-        }),
-        JSON.stringify({
-          sessionId: "bigint",
-          error: "payload could not be serialized",
-        }),
-        JSON.stringify({
-          sessionId: "throwing-getter",
-          error: "payload could not be serialized",
-        }),
-      ]);
-      expect(JSON.parse(replay.events[3]!.event.serialize())).toEqual({
-        sessionId: "after-errors",
-      });
     } finally {
-      console.error = originalError;
-      restoreRing();
+      remove();
     }
+    expect(payloadReads).toBe(0);
+    expect(revisions).toEqual([before + 1, before + 2, before + 3, before + 4]);
+    expect(__testing.latestRevisionForTesting()).toBe(before + 4);
   });
 
   test("shares one transcript path snapshot across concurrent metadata lookups", async () => {
@@ -590,13 +463,13 @@ describe("codex bridge private boundary coverage", () => {
     expect(errors).toContainEqual([expect.stringContaining("[bridge.codex] sse.keepalive-failed")]);
   });
 
-  test("writes keepalives with the latest replay cursor and an empty payload", async () => {
+  test("writes keepalives with the latest event cursor and an empty payload", async () => {
     jest.useFakeTimers();
     __testing.emitForTesting({
       type: "session.updated",
       sessionId: "keepalive-cursor",
     });
-    const revision = __testing.eventRingForTesting().latestRevision;
+    const revision = __testing.latestRevisionForTesting();
     const writes: Array<{ event: string; data: string; id?: string }> = [];
     const timer = __testing.startSseKeepaliveForTesting(async (frame) => {
       writes.push(frame);
@@ -617,44 +490,6 @@ describe("codex bridge private boundary coverage", () => {
         data: "{}",
       },
     ]);
-  });
-
-  test("keeps an idle heartbeat floor while using the faster active cadence", async () => {
-    jest.useFakeTimers();
-    const idleWrites: number[] = [];
-    const idleTimer = __testing.startSseKeepaliveForTesting(
-      async () => {
-        idleWrites.push(Date.now());
-      },
-      2,
-      () => false,
-      14,
-    );
-    try {
-      jest.advanceTimersByTime(8);
-      expect(idleWrites).toHaveLength(0);
-      jest.advanceTimersByTime(6);
-    } finally {
-      clearInterval(idleTimer);
-    }
-    expect(idleWrites.length).toBeGreaterThanOrEqual(1);
-
-    const activeWrites: number[] = [];
-    const activeTimer = __testing.startSseKeepaliveForTesting(
-      async () => {
-        activeWrites.push(Date.now());
-      },
-      2,
-      () => true,
-      100,
-    );
-    try {
-      jest.advanceTimersByTime(4);
-    } finally {
-      clearInterval(activeTimer);
-      jest.useRealTimers();
-    }
-    expect(activeWrites.length).toBeGreaterThanOrEqual(2);
   });
 
   test("round-trips the bridge model cache and rejects stale or malformed caches", async () => {

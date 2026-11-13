@@ -48,4 +48,4 @@ Analysed 2026-11-11 against `main` at `14df96544` (measured on branch commit `25
 ## Related
 
 - To-do 7440 (retired 2026-11-11; `git show 14df96544:docs/todo/design-canvas/7440-design-perf-listener-count-two-states.md`): the `jsEventListeners` two-state reading, explained in [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests).
-- [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md) tasks 5 and 12.
+- 0036 (retired 2026-11-13) tasks 5 and 12, summarised in [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `17d28238c`.

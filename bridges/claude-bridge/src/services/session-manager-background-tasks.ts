@@ -742,8 +742,8 @@ export function emitBackgroundTaskSnapshot(session: SessionState): void {
 
 /**
  * Release a session's control handle, closing the underlying query if the SDK
- * exposes a way to. Called when the session is deleted or explicitly aborted —
- * the two points at which the user has said the background work should stop.
+ * exposes a way to. Called when the session is dropped or explicitly aborted —
+ * the points at which the user has said the background work should stop.
  */
 export function releaseQueryControl(session: SessionState): void {
   void releaseQueryControls(session);
@@ -767,8 +767,8 @@ export async function releaseQueryControls(session: SessionState): Promise<void>
 /**
  * Detach every query control the session owns and hand them to the caller.
  *
- * Deletion closes them best-effort through `releaseQueryControls`; tab close
- * closes them itself because it must report a close it could not confirm.
+ * `releaseQueryControls` closes them best-effort; tab close closes them itself
+ * because it must report a close it could not confirm.
  */
 export function takeQueryControls(
   session: SessionState,

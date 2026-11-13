@@ -627,6 +627,7 @@ export class NativeAgentPromptQueueDispatcher {
       error: statusDetail,
       failureKind,
       contextUsage,
+      interruption,
     } = await readProviderStatus(provider, session.providerSessionId);
     // This read is the last look at the previous turn before the next prompt
     // replaces its status; keep its content-free outcome for observers.
@@ -711,7 +712,19 @@ export class NativeAgentPromptQueueDispatcher {
       this.queueRetryAt.set(queueKey, Date.now() + USAGE_LIMIT_QUEUE_HOLD_MS);
       return;
     }
-    if (status !== "idle" && !goalTurn) {
+    /*
+     * A turn a provider restart cut short (the bridge or backend process was
+     * replaced; `interruption: "restart"`) is not a model failure: the same
+     * session takes the next prompt, and the bridge's own notice asks for
+     * one. Holding the queue here inverted the user's order, because the
+     * composer sends a new prompt straight to an idle-with-error session and
+     * the held head went out only after that later prompt's turn ended. The
+     * at-capacity guard below still holds for every other terminal error. A
+     * session that keeps restarting takes one queued prompt per restart, each
+     * of which the user asked for, rather than parking the queue.
+     */
+    const restartInterrupted = status === "error" && interruption === "restart";
+    if (status !== "idle" && !goalTurn && !restartInterrupted) {
       await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
         /*
          * A terminal turn error is sticky until the next turn runs, and the

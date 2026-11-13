@@ -209,6 +209,20 @@ A match answers `304` with the variant the client holds and no coded
 `Content-Length`, which only compressing would tell us. `If-None-Match: *` and
 `If-Modified-Since` alone name no variant, so they still compress first.
 
+That date-only path is kept as it is on purpose (to-do 6160, retired
+2026-11-13): no engine we ship takes it, and the alternatives either name a
+coding no 200 would send or omit the tag RFC 9110 requires on a `304`.
+`apps/backend/scripts/static-revalidation-probe.ts` drives each Playwright
+engine through a first load, a reload, a second navigation and two `fetch()`
+modes against the real gateway with `compression: "body"`. Chromium 158 (Linux,
+2026-11-11; macOS, 2026-11-13) sent 8 revalidations and WebKit 27.2 (macOS
+27.2, 2026-11-13) sent 5, every one with both `If-None-Match` and
+`If-Modified-Since`: none by date alone. `apps/backend/tests/gateway-static-revalidation.test.ts`
+("revalidating a static file by date alone") pins what such a request gets: a
+`304` with the headers a 200 would send now, after one compression. Rerun the
+probe if a shipped client changes engine; a date-only revalidation there would
+reopen this.
+
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
 continues in identity and counts as declined. A browser holds two event
@@ -237,6 +251,24 @@ about to fail. Nothing waits for a batch: the frame goes out in the flush a lone
 result would have used, so results merge only when they finish together. An
 older client offering only v1, or an older server selecting it, keeps one
 `operation-result` per input.
+
+`apps/backend/scripts/terminal-input-results-probe.ts` checks this in real
+engines: the renderer's own client in a page, typed into by Playwright (52 keys
+25 ms apart, 316 with no delay, then a reload), against a leaf gateway with an
+echoing fake backend, directly, through a command node's relay, and behind a
+proxy that adds 40 ms each way. In WebKit 27.2 and Chromium 158 on macOS
+(2026-11-13, three WebKit sets) every route negotiated
+`orkestrator-terminal.v1.input-results`, the relay included, and offering only
+v1 still gave one result per input. No input failed or fell back, the backend
+received and echoed exactly what was typed, and input worked after the reload.
+Typing 25 ms apart gave one result per key on every route; the frames are
+smaller (3,215 against 4,567 bytes for 52 keys). Keys with no delay merged only
+on the latency route (308, 260 and 309 result frames for 316 keys, against
+314 to 316 elsewhere). The real-shell run in Chromium found the same (1202
+task 11, retired). The frame stays: it is about 30% smaller and adds no delay.
+A real remote route and a phone are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(5080 (retired) task 3).
 
 The flush stops moving channel frames to a socket holding 256 KiB and resumes
 from the `ws.send` callback, so a backlog stays in its own channel's queue and
@@ -462,8 +494,13 @@ blocks that, but the renderer compares its bundled version with the backend's
 (`apps/web/src/components/BackendVersionReminder.tsx`). On a mismatch it shows
 a warning toast saying which side is older and how to update: reload a page
 the backend served, update the desktop app (**Check for Updates…**), or update
-Orkestrator on the backend's machine. Dismissing it hides it for the session
-until either version changes. The Settings **Debug** section shows the same
+Orkestrator on the backend's machine. When the server is older than a page it
+served, the warning says so ("This server runs an older Orkestrator"; some
+features are unavailable until it is updated) rather than calling the server
+updated. A reload is offered once per pair of versions: if the page comes
+back with the same pair (a renderer the server does not bundle, such as a
+development or hosted one), the warning drops the reload. Dismissing it hides
+it for the session until either version changes. The Settings **Debug** section shows the same
 note. The public CLI has its own schema handshake instead
 ([public-cli.md](public-cli.md)).
 
@@ -499,8 +536,23 @@ and a direct (bearer) or cross-origin client with `fetch`, because an
 commands queued behind them on HTTP/1.1, which allows about six connections per
 host, and would hold one of the gateway's eight streaming-gzip slots per
 terminal. Changing the filter reopens the stream, and every terminal it
-already carried is told to re-read its snapshot. A
-backend restart drops all of them in every open tab at once, so each stream
+already carried is told to re-read its snapshot.
+
+A real headless Chromium showed this on 2026-11-13 (`17d28238c`,
+`bearer-terminal-stream-live.spec.ts`,
+[how to run it](../development/agent-testing.md#live-bearer-terminal-stream)):
+a bearer client over plain HTTP/1.1 held one terminal stream and one main
+stream while seven terminals printed, every terminal's output arrived on it,
+and `/invoke` answered in p90 25 ms one at a time (max 45 ms) and p90 35 ms in
+bursts of five, against p90 25 ms before the output started. An eighth
+terminal rebuilt the stream once (the new one opens before the old one closes,
+so two were open for about a second) and sent all seven earlier terminals a
+re-read. Six per-terminal bearer streams opened by hand, as clients did
+before, held an `/invoke` unanswered for the whole 4 s the control waited.
+Which protocol real Tailscale Serve and hosted routes negotiate is an item on
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+A backend restart drops these streams in every open tab at once, so each stream
 reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 `packages/protocol/src/reconnect-backoff.ts`, wired in
 `apps/web/src/lib/native/web-gateway.ts`):

@@ -71,7 +71,7 @@ import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
 import { cancelPromptDispatchHold, promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
-import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
+import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage/cache.js";
 import {
   claudeBackgroundObservation,
   claudeReadOnlySandboxObservation,

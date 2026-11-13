@@ -454,6 +454,50 @@ describe("NativeAgentPromptQueueDispatcher after a restart-interrupted turn", ()
     });
   });
 
+  test("an in-flight head from an ambiguous dispatch is resent under its own request id", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "sent once, answer lost",
+      });
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "later",
+        text: "typed later",
+      });
+      // The first send's outcome is unknown (the bridge went away mid-request):
+      // the reservation stays durable rather than being failed or re-minted.
+      let observation: Record<string, unknown> = { status: "idle" };
+      host.provider = observing(() => observation);
+      const dispatch = host.dispatchPrompt as ReturnType<typeof mock>;
+      dispatch.mockImplementationOnce(async () => {
+        throw new Error("socket hang up");
+      });
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect((await storage.getPromptQueue(queueKey))?.inFlight?.requestId).toBe("queued");
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+
+      // The restart that lost the answer also cut the session's turn short.
+      observation = {
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        interruptedRequestId: "queued",
+      };
+      await dispatcher.drainPromptQueueForSession(identity);
+      const requestIds = () =>
+        dispatch.mock.calls.map((call) => (call[0] as DispatchNativeAgentPromptInput).requestId);
+      // The same idempotency key, so the bridge's dispatch journal can answer
+      // "already sent" instead of running the turn twice; never a new id, and
+      // never parked as if the model had failed.
+      expect(requestIds()).toEqual(["queued", "queued"]);
+      const queue = await storage.getPromptQueue(queueKey);
+      expect(queue?.dispatchError).toBeUndefined();
+      expect(queue?.inFlight).toBeUndefined();
+      expect(queue?.messages.map((message) => (message as { id: string }).id)).toEqual(["later"]);
+      expect(dispatcher.forTesting().queueAttempts.has(queueKey)).toBe(false);
+    });
+  });
+
   test("any other terminal error still holds the queue with back-off", async () => {
     await withPersistedQueue(async (storage, { dispatcher, host }) => {
       await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {

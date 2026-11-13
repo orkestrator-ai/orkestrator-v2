@@ -104,7 +104,9 @@ bun scripts/older-release-stack.ts renderer --tag v2.36.1
 ```
 
 `--toolchain-bin-dir` hands the backend a managed toolchain (a profile's, for
-a fake-model turn). The launcher stays attached and stops its backend on
+a fake-model turn). `--root` picks another throwaway root; the launcher replaces
+`<root>/source` only when it is absent, empty or carries the launcher's own
+marker, and otherwise refuses with nothing deleted. The launcher stays attached and stops its backend on
 SIGINT or SIGTERM; a profile restart changes the renderer URL, so restart a
 `backend` stack after it.
 

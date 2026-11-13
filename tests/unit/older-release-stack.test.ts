@@ -1,18 +1,23 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  claimReleaseSource,
   parseArguments,
+  prepareRelease,
   stackBackendArguments,
   stackEnvironment,
   stackLayout,
   UsageError,
 } from "../../scripts/older-release-stack";
 
-// Pure parts of the older-release launcher (to-do 7120 (retired) task 5). The
-// launcher itself archives a tag, installs it and starts a backend; that is
-// exercised by hand (docs/todo/transcripts-and-observation/0048, "Multi-client,
-// restarts and an older backend"), never here.
+// Pure parts of the older-release launcher (to-do 7120 (retired) task 5), and
+// its refusal to replace a source directory it does not own. The launcher
+// itself archives a tag, installs it and starts a backend; that is exercised by
+// hand (docs/todo/transcripts-and-observation/0048, "Multi-client, restarts and
+// an older backend"), never here.
 
 describe("parseArguments", () => {
   test("an older backend needs a tag and exactly one renderer source", () => {
@@ -164,5 +169,98 @@ describe("stackBackendArguments", () => {
     expect(() => stackBackendArguments({ layout, port: 40001, controlPort: 34122 })).toThrow(
       "34122",
     );
+  });
+});
+
+describe("claimReleaseSource", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  });
+  async function newRoot(): Promise<string> {
+    const root = await mkdtemp(path.join(tmpdir(), "older-release-stack-"));
+    roots.push(root);
+    return root;
+  }
+  async function unrelatedSource(root: string): Promise<string> {
+    const file = path.join(root, "source", "keep.txt");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "the user's work");
+    return file;
+  }
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+
+  test("a root with no checkout, or an empty one, may be prepared", async () => {
+    const root = await newRoot();
+    expect(await claimReleaseSource(root)).toEqual({ prepared: null });
+    expect(await claimReleaseSource(path.join(root, "not-yet-created"))).toEqual({
+      prepared: null,
+    });
+    await mkdir(path.join(root, "source"));
+    expect(await claimReleaseSource(root)).toEqual({ prepared: null });
+  });
+
+  test("an existing source directory with no marker is refused and kept", async () => {
+    const root = await newRoot();
+    const file = await unrelatedSource(root);
+    await expect(claimReleaseSource(root)).rejects.toThrow(UsageError);
+    // prepareRelease refuses before archiving, installing or deleting anything.
+    await expect(prepareRelease({ tag: "v2.21.0", root }, ["claude-bridge"])).rejects.toThrow(
+      "was not created by this launcher",
+    );
+    expect(await readFile(file, "utf8")).toBe("the user's work");
+  });
+
+  test("an unreadable or invalid marker is not ownership", async () => {
+    const root = await newRoot();
+    const file = await unrelatedSource(root);
+    const prepared = stackLayout(root, "backend").marker;
+    for (const content of [
+      "{not json",
+      JSON.stringify({ tag: "v2.21.0" }),
+      JSON.stringify({ tag: "anything", commit, built: [] }),
+    ]) {
+      await writeFile(prepared, content);
+      await expect(claimReleaseSource(root)).rejects.toThrow(UsageError);
+    }
+    // A marker that is a directory cannot be read at all.
+    await rm(prepared);
+    await mkdir(prepared);
+    await expect(claimReleaseSource(root)).rejects.toThrow(UsageError);
+    await rm(prepared, { recursive: true });
+    // An owner record naming another checkout does not cover this one.
+    await writeFile(
+      stackLayout(root, "backend").ownerMarker,
+      JSON.stringify({ owner: "older-release-stack", source: "/elsewhere/source" }),
+    );
+    await expect(claimReleaseSource(root)).rejects.toThrow(UsageError);
+    expect(await readFile(file, "utf8")).toBe("the user's work");
+  });
+
+  test("a stray archive path or a non-directory source is refused", async () => {
+    const root = await newRoot();
+    await writeFile(path.join(root, "source.tar"), "someone's archive");
+    await expect(claimReleaseSource(root)).rejects.toThrow("source.tar");
+    const other = await newRoot();
+    await writeFile(path.join(other, "source"), "a file");
+    await expect(claimReleaseSource(other)).rejects.toThrow("not a directory");
+  });
+
+  test("the launcher's own checkout may be replaced", async () => {
+    const root = await newRoot();
+    await unrelatedSource(root);
+    const layout = stackLayout(root, "backend");
+    // A checkout an earlier run prepared carries its preparation record.
+    await writeFile(layout.marker, JSON.stringify({ tag: "v2.21.0", commit, built: ["renderer"] }));
+    expect(await claimReleaseSource(root)).toEqual({
+      prepared: { tag: "v2.21.0", commit, built: ["renderer"] },
+    });
+    // One that failed part way carries only the owner record beside it.
+    await rm(layout.marker);
+    await writeFile(
+      layout.ownerMarker,
+      JSON.stringify({ owner: "older-release-stack", source: layout.source }),
+    );
+    expect(await claimReleaseSource(root)).toEqual({ prepared: null });
   });
 });

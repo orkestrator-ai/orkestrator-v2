@@ -26,7 +26,9 @@
  * mixed-version harness's `backendEnvironment`):
  *
  * - its own data directory, worktree directory, HOME and TMPDIR under the
- *   root (default `output/older-release/<tag>/`, git-ignored);
+ *   root (default `output/older-release/<tag>/`, git-ignored). `--root` is the
+ *   user's choice, so `<root>/source` is replaced only when it is absent,
+ *   empty or carries the launcher's own marker (`claimReleaseSource`);
  * - loopback only, on a free port that is never 34121, 34122 or 45507, with an
  *   ephemeral control port and `ORKESTRATOR_CONTROL_MCP_PORT=0` (releases
  *   before 2026-11 otherwise bind the production Control MCP port);
@@ -49,7 +51,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { backendEnvironment, FORBIDDEN_PORTS, freePort, ROOT } from "./mixed-version/harness.ts";
@@ -170,6 +172,11 @@ export function stackLayout(root: string, mode: Exclude<StackMode, "prepare">) {
     source: path.join(root, "source"),
     archive: path.join(root, "source.tar"),
     marker: path.join(root, "source", ".older-release-prepared.json"),
+    /**
+     * Beside the checkout, not inside it, so it survives the checkout being
+     * replaced or a preparation that fails half way.
+     */
+    ownerMarker: path.join(root, ".older-release-source.json"),
     run,
     data: path.join(run, "data"),
     home: path.join(run, "home"),
@@ -263,15 +270,97 @@ interface PreparedMarker {
   built: string[];
 }
 
+const OWNER = "older-release-stack";
+
+interface OwnerMarker {
+  owner: typeof OWNER;
+  source: string;
+}
+
+async function readJson(file: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(file, "utf8")) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isPreparedMarker(value: unknown): value is PreparedMarker {
+  const marker = value as Partial<PreparedMarker> | null;
+  return (
+    typeof marker === "object" &&
+    marker !== null &&
+    typeof marker.tag === "string" &&
+    TAG.test(marker.tag) &&
+    typeof marker.commit === "string" &&
+    /^[0-9a-f]{40}$/u.test(marker.commit) &&
+    Array.isArray(marker.built) &&
+    marker.built.every((entry) => entry === "claude-bridge" || entry === "renderer")
+  );
+}
+
+async function pathKind(target: string): Promise<"absent" | "directory" | "other"> {
+  try {
+    return (await lstat(target)).isDirectory() ? "directory" : "other";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw error;
+  }
+}
+
+/**
+ * Whether the launcher may replace `<root>/source` and write `<root>/source.tar`.
+ * `--root` is the user's choice, so a directory there is never assumed to be
+ * ours: it may be replaced only when it is absent, empty, or carries the
+ * launcher's own marker (the owner record beside it, or a well-formed
+ * preparation record inside it, which only this launcher writes). Anything
+ * else is refused with nothing touched. Returns the valid preparation record
+ * when there is one.
+ */
+export async function claimReleaseSource(
+  root: string,
+): Promise<{ readonly prepared: PreparedMarker | null }> {
+  const layout = stackLayout(root, "backend");
+  const owner = (await readJson(layout.ownerMarker)) as Partial<OwnerMarker> | null;
+  const ownerValid =
+    typeof owner === "object" &&
+    owner !== null &&
+    owner.owner === OWNER &&
+    owner.source === layout.source;
+  const sourceKind = await pathKind(layout.source);
+  if (sourceKind === "other") {
+    throw new UsageError(`${layout.source} exists and is not a directory; refusing to replace it`);
+  }
+  const prepared = sourceKind === "directory" ? await readJson(layout.marker) : null;
+  const preparedValid = isPreparedMarker(prepared);
+  if (!ownerValid && !preparedValid) {
+    if (sourceKind === "directory" && (await readdir(layout.source)).length > 0) {
+      throw new UsageError(
+        `${layout.source} exists and was not created by this launcher; ` +
+          `refusing to delete it. Pick another --root or remove it yourself.`,
+      );
+    }
+    if ((await pathKind(layout.archive)) !== "absent") {
+      throw new UsageError(
+        `${layout.archive} exists and was not created by this launcher; refusing to overwrite it`,
+      );
+    }
+  }
+  return { prepared: preparedValid ? prepared : null };
+}
+
 /**
  * Archive, install and build the tag's checkout. Reuses an earlier checkout of
- * the same commit and builds only what is missing.
+ * the same commit and builds only what is missing. Refuses, before running
+ * anything, when `<root>/source` is not the launcher's own
+ * (`claimReleaseSource`).
  */
 export async function prepareRelease(
   options: Pick<StackOptions, "tag" | "root">,
   needs: ReadonlyArray<"claude-bridge" | "renderer">,
 ): Promise<string> {
   const layout = stackLayout(options.root, "backend");
+  const claim = await claimReleaseSource(options.root);
   const commit = spawnSync("git", ["rev-parse", "--verify", `${options.tag}^{commit}`], {
     cwd: ROOT,
     encoding: "utf8",
@@ -280,14 +369,13 @@ export async function prepareRelease(
     throw new UsageError(`${options.tag} is not a tag in this repository (git fetch --tags?)`);
   }
   const sha = commit.stdout.trim();
-  let marker: PreparedMarker | null = null;
-  try {
-    marker = JSON.parse(await readFile(layout.marker, "utf8")) as PreparedMarker;
-  } catch {
-    marker = null;
-  }
+  let marker = claim.prepared;
   if (!marker || marker.commit !== sha) {
-    // Only this launcher's own checkout under the root is ever replaced.
+    // Record ownership before the first change, so a preparation that fails
+    // part way leaves a checkout the next run may replace.
+    await mkdir(options.root, { recursive: true, mode: 0o700 });
+    const owner: OwnerMarker = { owner: OWNER, source: layout.source };
+    await writeFile(layout.ownerMarker, `${JSON.stringify(owner, null, 2)}\n`);
     await rm(layout.source, { recursive: true, force: true });
     await mkdir(layout.source, { recursive: true, mode: 0o700 });
     run(

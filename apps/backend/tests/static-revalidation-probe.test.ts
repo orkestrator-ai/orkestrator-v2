@@ -18,8 +18,9 @@ function request(
   };
 }
 
-// The figures this helper produces are to-do 6160's evidence, so each kind of
-// request is pinned on its own before a mixed run.
+// The figures this helper produces are the evidence for to-do 6160 (retired;
+// docs/architecture/remote-gateway.md), so each kind of request is pinned on
+// its own before a mixed run.
 describe("summarizeRequests", () => {
   test("an empty run has no revalidations", () => {
     expect(summarizeRequests([])).toEqual({ revalidations: 0, dateOnlyRevalidations: 0 });

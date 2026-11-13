@@ -183,6 +183,7 @@
     "e2e/agent-testing/design-canvas-electron.spec.ts": 1,
     "e2e/agent-testing/design-canvas-packaged-electron.spec.ts": 1,
     "e2e/agent-testing/electron-main.spec.ts": 2,
+    "e2e/agent-testing/exit-marker-packaged-electron.spec.ts": 1,
     "e2e/agent-testing/log-controls-packaged-electron.spec.ts": 1,
     "e2e/agent-testing/multi-node-window.spec.ts": 1,
     "e2e/agent-testing/packaged-security-electron.spec.ts": 2,

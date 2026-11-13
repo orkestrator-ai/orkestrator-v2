@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "browser-gateway.spec.ts",
+    "steer-inactive-live.spec.ts",
     "pipeline-delete.spec.ts",
     "environment-delete-retry.spec.ts",
     "headless-profile.spec.ts",
@@ -87,6 +88,7 @@ export default defineConfig({
     "session-history-live.spec.ts",
     "client-outage.spec.ts",
     "bearer-terminal-stream-live.spec.ts",
+    "background-tab-reconnect-live.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

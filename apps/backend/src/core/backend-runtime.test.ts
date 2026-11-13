@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { agentAccountLoginProgress, cancelAgentAccountLogin } from "./agent-accounts.js";
 import { claudeLoginHandoff } from "./agent-accounts-containers.js";
-import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
+import { contextUsageWithPlanUsage } from "./plan-usage/cache.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { OrkestratorBackend } from "./index.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";

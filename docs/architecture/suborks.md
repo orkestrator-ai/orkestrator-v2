@@ -13,8 +13,10 @@ resolution, carrier, delivery body),
 and [`coordinator-subork-actions.ts`](../../apps/backend/src/core/coordinator-subork-actions.ts)
 (the same tool in coordinator conversations) and
 [`storage-suborks.ts`](../../apps/backend/src/core/storage-suborks.ts) (the store).
-Outstanding live checks:
-[4340](../todo/agent-engines/4340-suborks-live-qualification.md).
+Outstanding live checks: the 4340 (retired) items of the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md). Known defect:
+[8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
+(an OpenCode subork cut short by a backend restart stays running).
 
 From any native agent tab, an environment's or a coordinator conversation, the
 active agent asks one or several other agents and gets their answers back. A subork runs on Orkestrator's own agent machinery
@@ -46,7 +48,8 @@ parses natural language. The plain-text form works because the tool is offered t
 every tab and its description says when to use it. A real OpenCode 1.x process
 showed the path from a plain-text request to the tool (see
 [Real-process evidence](#real-process-evidence)), but what a real model does with the
-description is [not yet qualified](../todo/agent-engines/4340-suborks-live-qualification.md).
+description is not yet qualified (the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md), 4340 (retired)
+task 2).
 
 Retention keeps compact call receipts until environment deletion. A retry of a pruned
 request returns its original handle and an expiry notice, without starting targets
@@ -219,7 +222,11 @@ connects with its own tab credential (`opencode2/turn-connections.ts`).
 
 - **Durable.** `native-agent-suborks` holds one row per call, with each target's
   runner record. `init` resumes running rows, and the runner's dispatch journal
-  and proof-based recovery mean a restart never sends a turn twice.
+  and proof-based recovery mean a restart never sends a turn twice. A target
+  turn the restart cut short gets the runner's one continuation. On OpenCode
+  that does not happen yet: its session stays busy after the kill and the
+  subork waits out the 45-minute bound
+  ([8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)).
 - **Stop.** Stopping the caller, the group's Stop button (a turn that has ended has
   no other Stop to press) and closing its tab all stop the session's running calls.
   The row is committed first, so a pass in flight is fenced by its next read or
@@ -288,7 +295,7 @@ container turn needs. The guard's probe is the backend's
 `get_environment_uncommitted_paths` command, which answers for both kinds. Provider
 fakes cover both paths. A local environment has real-process evidence on OpenCode
 2 (below), as it had on OpenCode 1.x. No container run with a real provider has been done yet
-([4340](../todo/agent-engines/4340-suborks-live-qualification.md)).
+(the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md), 4340 (retired) task 3).
 
 ## Real-process evidence
 
@@ -317,6 +324,33 @@ The same run on OpenCode 1.x (`native-agent-suborks-opencode.live.test.ts`,
 5f4e27b1c:apps/backend/src/core/native-agent-suborks-opencode.live.test.ts`) showed
 the same on the environment-wide credential.
 
-The script, not a model, decided to call the tool. Whether real models choose
-`ask_agents` for plain text, and how the other five providers behave against a live
-model, still needs live evidence.
+`mise run test:agent:suborks` (`docs/development/agent-testing.md`, "Suborks on
+every provider and across a restart") runs the whole stack in a disposable
+`dev:test` profile on a scripted model with no login: the real backend, the Pi
+bridge and `opencode2 serve`, the agent tools server, the subork service, the
+branch runner, the workspace guard and the mail drain. It passed on 2026-11-13
+(macOS, Apple silicon) and shows, in a local environment:
+
+- `/subork` typed in a Pi tab and in an OpenCode tab reached `ask_agents`; each
+  call ran a Pi and an OpenCode target in parallel, both submitted through
+  `submit_subork_answer`, and one mail woke the caller once with both answers
+  (about 5 to 9 s from typing to the wake). The Pi subork is `enforced` and
+  unguarded, the OpenCode one `provider-configured` and guarded. A Pi subork is
+  offered `ask_agents` as the result credential's refusal, and when it calls
+  the tool, Pi's own read-only gate blocks the call before it reaches the
+  agent tools server ("extension tools are disabled"), so no nested call
+  starts. An OpenCode subork is not offered it at all.
+- With the backend `SIGKILL`ed while a Pi target's turn was in flight (its
+  subork `running`, checked again just before the signal), the restarted
+  backend resumed the row, the target finished on the runner's continuation
+  turn (a second target turn; the request the killed backend sent was
+  abandoned unread), the `/subork` turn was not sent again and the answer
+  woke the OpenCode caller once on its restarted server. The same kill with
+  an OpenCode target left that target running (8045).
+
+In both, the script, not a model, decided to call the tool. Whether real models
+choose `ask_agents` for plain text, and how every provider behaves against a live
+model, still need live evidence. Claude, Codex, Cursor and Grok have no real-stack
+run at all: none of them has a scripted model that reaches a profile's own bridge.
+The live mode of the same specs covers all six (manual-test checklist, 4340
+(retired) tasks 1 and 4).

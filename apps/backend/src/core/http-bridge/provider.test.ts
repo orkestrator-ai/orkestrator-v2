@@ -19,7 +19,7 @@ import {
 } from "../agent-provider-test-support.js";
 import { normalizeProviderAuthNotice, normalizeProviderReadiness } from "./transport.js";
 import { readHttpBridgeSessionState } from "./progressive.js";
-import { PlanUsageState } from "../plan-usage-cache.js";
+import { PlanUsageState } from "../plan-usage/cache.js";
 import { HttpBridgeProvider } from "./provider.js";
 import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 

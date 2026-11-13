@@ -3,6 +3,37 @@ import type {
   AgentInteractionQuestion,
 } from "@orkestrator/protocol/agent-interactions";
 
+/**
+ * Every kind an approval card can arrive as. A case waits for any of them, so
+ * a card of the wrong kind is found and then refused by
+ * {@link approvalKindProblem} with its actual kind, rather than timing out as
+ * "never asked".
+ */
+export const APPROVAL_KINDS: ReadonlySet<string> = new Set([
+  "command-approval",
+  "file-approval",
+  "permission",
+]);
+
+/**
+ * The approval kind a case's prompt must raise, where the live run is what
+ * proves the provider's mapping. Grok's shell tool is an ACP `execute` call,
+ * which the ACP bridge maps to a command approval (todo 0001 item 2); before
+ * that mapping it arrived as a generic `permission`, which the generic set
+ * above would still have accepted.
+ */
+export const EXPECTED_APPROVAL_KINDS: Readonly<Record<string, string>> = {
+  "grok-approval": "command-approval",
+};
+
+/** Why a raised approval has the wrong kind for its case, or `undefined` when it is right. */
+export function approvalKindProblem(caseId: string, kind: string): string | undefined {
+  if (!APPROVAL_KINDS.has(kind)) return `${caseId}: ${kind} is not an approval`;
+  const expected = EXPECTED_APPROVAL_KINDS[caseId];
+  if (expected && kind !== expected) return `${caseId}: raised ${kind}, expected ${expected}`;
+  return undefined;
+}
+
 /** A qualification may grant this request only, never a durable or session policy. */
 export function approvalOption(
   question: AgentInteractionQuestion | undefined,

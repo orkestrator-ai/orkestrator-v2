@@ -16,6 +16,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { withDesignLiveHeartbeat } from "./design-live-heartbeat";
 import {
+  APPROVAL_KINDS,
+  approvalKindProblem,
   approvalOption,
   raiseAndProtect,
   withEnvironmentCleanup,
@@ -57,7 +59,6 @@ const MODELS: Partial<Record<string, string>> = Object.fromEntries(
     .map((pair) => pair.split("=").map((part) => part.trim()))
     .filter((pair): pair is [string, string] => pair.length === 2 && !!pair[0] && !!pair[1]),
 );
-const APPROVAL_KINDS = new Set(["command-approval", "file-approval", "permission"]);
 const CODEWORD = "PAUSE_BETA";
 
 interface Case {
@@ -90,6 +91,7 @@ const CASES: Case[] = [
     pausable: true,
   },
   { id: "grok-question", agent: "grok", kind: "question", pausable: true },
+  // Must arrive as a command approval (`EXPECTED_APPROVAL_KINDS`, todo 0001 task 3).
   { id: "grok-approval", agent: "grok", kind: "approval", pausable: true },
   { id: "opencode-question", agent: "opencode", kind: "question", pausable: false },
   { id: "opencode-approval", agent: "opencode", kind: "approval", pausable: false },
@@ -337,6 +339,11 @@ test("a paused question and approval wait past ten minutes on every provider, th
               )
               .toBe(true);
             run.observed.push(`raised ${run.request!.kind}`);
+            // Where a case names the kind its provider must map to (Grok's
+            // shell call is a command approval), any other kind fails here.
+            if (run.testCase.kind === "approval") {
+              expect(approvalKindProblem(run.testCase.id, run.request!.kind)).toBeUndefined();
+            }
             if (run.testCase.kind === "approval") expect(existsSync(run.marker)).toBe(false);
             log(
               `${run.testCase.id}: ${run.request!.kind} pending, expiresAt=${run.request!.expiresAt}`,

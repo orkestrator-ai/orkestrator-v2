@@ -37,6 +37,10 @@ const DIRECT_SPECS = new Map([
     "bearer-terminal-stream-live.spec.ts",
     "a bearer client's own connections per host, counted through a loopback link",
   ],
+  [
+    "background-tab-reconnect-live.spec.ts",
+    "a hidden tab needs a browser Playwright did not launch",
+  ],
 ]);
 
 /** Specs with cases that load modules through Chromium themselves, and how many. */

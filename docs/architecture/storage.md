@@ -602,8 +602,10 @@ and its own, daily, best-effort copies (below):
   minutes of disk I/O and must never block the backend's event loop. That child
   also reads `dbstat` on the finished copy, never the live file, and the largest
   12 tables and indexes by bytes go to `backups/.top-tables.json`, one set per
-  database. Bun 1.4.4 on Linux has `dbstat`; a SQLite without it reports nothing
-  and the copy still counts. Because nearly every store shares `store_rows`, the
+  database. Bun 1.4.4 has `dbstat` on Linux, and so does the system SQLite it
+  loads on macOS 27.2 (3.54.0, `ENABLE_DBSTAT_VTAB` in `PRAGMA compile_options`,
+  checked 2026-11-13); a SQLite without it reports nothing and the copy still
+  counts. Because nearly every store shares `store_rows`, the
   same child also sums `octet_length(value)` per store over the copy (through
   `length(CAST(value AS BLOB))` on a SQLite older than 3.43) and folds store
   names to families with `leaseFamily`'s rules before anything leaves it

@@ -178,7 +178,10 @@ host refused the namespace, with the kernel's own message (for example Ubuntu
 24.04's AppArmor restriction or a container's seccomp profile).
 `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
 `test:browser` fails on a Linux host other than the one it was qualified on
-(to-do 7020 task 2).
+(to-do 7020 task 2). On macOS the wrapper runs both suites unchanged on the host
+network and prints no line, because Docker Desktop keeps its networks inside its
+VM; it creates no namespace and changes nothing in the Mac's network
+configuration (qualified 2026-11-13, to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -744,6 +747,11 @@ open until all of the following have observed evidence:
    parent. Verify no native UI, host window or focus change, the cancel
    response, and a `hidden-cancelled` event for each source. Do not inject
    exceptions into production or log dialog contents.
+   `hidden-dialogs-electron.spec.ts` (in `mise run test:agent:electron`,
+   macOS only) is this run. The remote-restart prompt needs a packaged build,
+   so the spec raises a parented box through the same router instead, and
+   the `remote-restart` label is covered by
+   `apps/desktop/tests/native-dialogs.test.ts`.
 5. Stop/reset the profile, then launch a fresh fixture with `--no-headless`
    from the same unattended shell. Verify the ordinary window and Dock icon
    appear. Stop/reset it afterwards.
@@ -752,7 +760,7 @@ Record the commit, macOS/Electron versions, profile, exact commands, results
 and cleanup. A Linux pass or a mocked activation-policy call cannot close this
 qualification. Steps 1, 2 and 5 need a person watching the Mac's screen and
 are on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
-steps 3 and 4 are agent work tracked in
+steps 3 and 4 passed on `arktech-mini` on 2026-11-13, recorded in
 [2181, task 4](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),
@@ -1010,6 +1018,35 @@ and verifies the mail's file effect while another environment is active.
 Reloading must retain the delivered status without sending the carrier again.
 The native mail-steer suite separately exercises a turn changing between the
 active-run lookup and the provider's check of `expectedRunId`.
+
+The queued-steering inactive-path scenario has its own spec,
+`e2e/agent-testing/steer-inactive-live.spec.ts`, one case per platform. Codex
+runs on a real model under `ORKESTRATOR_AGENT_TEST_REVIEW=1`. Claude and
+Cursor run with no login and nothing billed under
+`ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1`: Claude's real CLI on a scripted
+loopback model, Cursor's real bridge over its fake SDK, which the case swaps in
+for `bridges/cursor-bridge/dist/index.js` and puts back afterwards. That entry
+is shared by every profile started from the checkout, so the swap holds an
+owner lock (`dist/index.qa-lock.json`) and a second run is refused while the
+first is alive; the bundle runs the fake only for the owning profile's bridges,
+and any other profile's launch runs the real entry kept as
+`dist/index.qa-real.js`. Claude's scripted model appends the marker once per
+delivered steer, so a duplicate delivery fails the case:
+
+```bash
+mise run dev:test --profile steer7 --fixture --no-agent-credentials --no-host-seed \
+  --agent-platforms claude,cursor --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=steer7 ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1 \
+  mise run test:logged -- --name steer-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/steer-inactive-live.spec.ts
+mise run dev:stop --profile steer7
+mise run dev:reset --profile steer7
+```
+
+`ORKESTRATOR_AGENT_TEST_STEER_PLATFORMS` narrows the scripted platforms, and
+`ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS=claude,cursor` runs them on the
+profile's real logins instead (billed).
 
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
@@ -1391,7 +1428,8 @@ The profile title shows only in the native window title: the packaged
 renderer is built without `VITE_ORKESTRATOR_PROFILE`, so its document title
 stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
 nothing waits for Vite. Native menu key equivalents are still not exercised:
-Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
+Playwright sends keys through Chromium, not the OS (0036 (retired) task 3; that pass
+is in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 `log-controls-packaged-electron.spec.ts` runs against the same build (macOS too:
 `mise run package:mac:unpacked:test`). It turns on the real Settings switch, reads
@@ -1399,6 +1437,27 @@ Help from Electron's `Menu`, opens DevTools through the item, turns the switch o
 and separately waits for the running backend's one-minute check to revert raised
 log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
 macOS. Headless on Linux means the native menu bar itself is not drawn or read.
+
+`exit-marker-packaged-electron.spec.ts` runs against the same build, on macOS and
+Linux. It launches the app three times on one disposable profile and checks the
+desktop's essential log file (`logs/essential/essential.jsonl`, mode `0600`), a
+diagnostics bundle read through the same two commands Settings uses (whole, and holding
+that log), then `previous-run` `clean` after a normal quit and `crashed` after it kills
+the app's own process tree with SIGKILL
+([logging.md](../architecture/logging.md#health-summary-and-the-clean-exit-marker)).
+It does not drive the native save dialog. Outcomes and durations go to
+`output/agent-testing/electron-packaged/evidence-exit-marker-packaged.json`. A pass took
+10 s on arktech-mini (macOS, 2026-11-13) and 4.5 s on beelink (Linux x64, against
+`mise run package:linux:unpacked:test`, 2026-11-13). There `scripts/download-bun.sh`
+needs `shasum`, which Arch Linux ships in `/usr/bin/core_perl`, off a non-interactive
+shell's `PATH`; add that directory to `PATH` before building.
+
+```bash
+mise run package:mac:unpacked:test   # on Linux: mise run package:linux:unpacked:test
+ORKESTRATOR_AGENT_TEST_RUN_ID=exit-marker-packaged \
+mise run test:logged -- --name exit-marker-packaged -- bunx playwright test \
+  --config e2e/agent-testing/playwright.packaged-electron.config.ts exit-marker-packaged-electron.spec.ts
+```
 
 `packaged-native-shortcuts-electron.spec.ts` is in the same config but skips
 unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`. It is the one packaged spec that
@@ -1506,6 +1565,43 @@ review the file's diff.
 Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
+
+`window-visibility-polls-electron.spec.ts` checks that a real window pauses
+the renderer's polls (`startCoordinatedPoll`) while its document is hidden.
+It spawns Electron itself rather than through `electron.launch()`: a page
+Playwright attaches to reports `visible` even in a window that was never
+shown. It does not use `ELECTRON_TEST_SWITCHES`, whose
+`--disable-backgrounding-occluded-windows` would turn the signal off. Its
+three cases need different hosts:
+
+| Case | Runs | Shows a window |
+| --- | --- | --- |
+| A never-shown window, made visible by Electron's `setBackgroundThrottling(false)` | Everywhere | No |
+| A window under the macOS lock screen | macOS, only with `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1` and while the session's screen is locked; it skips if the screen unlocks | Only under the lock screen, hidden again the moment the screen unlocks |
+| Hidden, minimised and covered windows | Linux and Windows desktops; macOS only with `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1` on an unlocked screen | Yes, small and never focused |
+
+On macOS every case takes the `accessory` activation policy and windows that
+cannot take focus. Both cases that show a window need the opt-in: a check
+that the screen is locked is not permission to show one, so the lock-screen
+fixture checks again before each step that shows a window and, on
+`unlock-screen`, hides its windows and stops (the case then skips). On
+Windows, which has no process groups, the spec stops Electron's process tree
+with `taskkill /T` rather than the POSIX group helpers. Whether Chromium sees
+a covered window on Linux depends on the display server and window manager
+(under Xvfb with openbox it did, on 2026-11-13), so on Linux the covered state
+is recorded in the `desktop-window-polls` attachment rather than asserted, as
+is a minimise that a display with no window manager ignores.
+
+On a Mac with Docker, the Linux run fits in a throwaway container: Xvfb and
+openbox give it a display nobody sees, and Electron's sandbox needs
+`--security-opt seccomp=unconfined` there (Docker's default profile refuses
+the user namespace it creates). The commands are in to-do 2181's Current
+state. The hidden agent-test windows turn background throttling off, so a
+hidden profile's renderer keeps polling; that is intended, since its windows
+are never shown.
+
+`hidden-dialogs-electron.spec.ts` (macOS only) is step 4 of the
+[live macOS hidden-profile qualification](#live-macos-hidden-profile-qualification).
 
 ### Measuring Electron main's CPU
 
@@ -1850,6 +1946,51 @@ started (`qa-outage-7835`, `qa-outage-7835r2` and the review runs'
 only the env and log files it wrote; the `output/agent-testing/<profile>/`
 results and the previews written by review runs are kept, as is everything
 that was there before. Nothing under `/tmp/orkestrator-test-run.*` was removed.
+
+### Live background-tab reconnect
+
+`e2e/agent-testing/background-tab-reconnect-live.spec.ts` measures reconnects
+from a tab the browser has really put in the background (to-do 0048 task 18).
+Headless Chromium never hides a page, and neither does a browser Playwright
+launches: its default switches turn background throttling off, and it enables
+DevTools focus emulation on every page, which keeps the page `visible` behind
+another tab or in a minimised window. So the spec starts Playwright's
+Chromium headed itself, without those switches, and attaches with
+`connectOverCDP(..., { noDefaults: true })`. It opens the app over the outage
+link of `client-outage-support.ts`, with one local terminal, lets the browser
+hide the tab (occlusion, another tab of the same window, or minimising), and
+checks that hidden timers are throttled, that a link that drops and returns
+while hidden is reconnected by the hidden tab on its own (within the ladder's
+16 s cap plus 4 s), and that showing the tab retries the main and terminal
+streams within 1 s. For that last check it waits, during the second outage,
+until both streams have just failed (each runs its own jittered ladder), so
+neither ladder's next rung can fall before the tab is shown; an attempt by
+either stream between the link returning and the tab becoming `visible`
+fails the run. Those rules and the browser's exception-safe startup (a
+failed start terminates the child before it rejects) are in
+`background-tab-reconnect-support.ts`, unit-tested by the default suite. It
+needs a display (it opens a window for a few minutes) and is opt-in:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile q48t18 \
+  --fixture --no-agent-credentials --no-host-seed --agent-platforms pi --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=q48t18 ORKESTRATOR_AGENT_TEST_LIVE_BACKGROUND_TAB=1 \
+  mise run test:logged -- --name background-tab -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  background-tab-reconnect-live.spec.ts --workers=1
+```
+
+`ORKESTRATOR_AGENT_TEST_OUTAGE_MS` sets each outage (45 s by default; 330000
+keeps the tab hidden past Chromium's five-minute intensive-throttling
+threshold, and the spec prints a line every 30 s so the logged runner's
+no-output watchdog does not end it). On a
+locked display every window is occluded: only the tab Chromium opened at
+launch is hidden, and the spec shows it with focus emulation, because
+bringing it to the front cannot. The evidence (`evidence-*.json`) names which
+happened (`hiddenBy`, `shownBy`). Chromium runs with `--use-mock-keychain`
+and `--password-store=basic`, and the spec removes its user-data directory
+and environment. The 2026-11-13 runs on macOS are recorded in
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md#background-tab-reconnect-2026-11-13-macos).
 
 ### Live cold restart
 
@@ -2196,6 +2337,38 @@ beside the run: numbers and cell labels only. Each cell carries an `outcome`
 unfinished or unsettled terminal burst, or a p95 past the 3 s completion or
 2 s approval budget. The test fails at the end of its run unless every cell
 qualified; the evidence file is written either way.
+
+### Live diagnostics export across nodes (two profiles)
+
+`e2e/agent-testing/diagnostics-across-nodes-live.spec.ts` exports a leaf's
+diagnostics bundle from a command node, between two running `dev:test` profiles
+(to-do 6141 (retired) task 4, [logging.md](../architecture/logging.md#the-diagnostics-bundle)).
+It turns on Save Logs to Disk on the leaf and writes a synthetic debug log of plain
+words there, so the bundle spans several 256 KiB pieces. Through Settings (the leaf's
+machine chip, Debug, Export diagnostics, Save bundle) and through
+`orkestrator --profile <command> --node <leaf> diagnostics export`, it checks that the
+saved file is the leaf's own bundle (its backend pid in `health-summary.json`, and the
+synthetic log), and that the command node refuses a plan made on the leaf. No agent
+runs. Build the CLI first; reset both profiles afterwards.
+
+```bash
+mise run build:cli
+FLAGS="--fixture --headless --no-agent-credentials --no-host-seed --agent-platforms pi"
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile diag-cmd $FLAGS    # own terminal
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile diag-leaf $FLAGS   # own terminal
+ORKESTRATOR_AGENT_TEST_DIAGNOSTICS_ACROSS_NODES=1 \
+ORKESTRATOR_AGENT_TEST_PROFILE=diag-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=diag-leaf \
+  mise run test:logged -- --name diagnostics-across-nodes -- \
+  bunx playwright test --config e2e/agent-testing/playwright.diagnostics-across-nodes.config.ts
+mise run dev:stop --profile diag-leaf && mise run dev:reset --profile diag-leaf
+mise run dev:stop --profile diag-cmd && mise run dev:reset --profile diag-cmd
+```
+
+Evidence (sizes, piece counts, durations) goes to
+`output/agent-testing/<run>/diagnostics-across-nodes/evidence.json`. The first run
+(2026-11-13, macOS) passed in 27 s: about 1 MiB in five pieces each way.
 
 ### Live second node scope (two profiles)
 
@@ -3121,6 +3294,77 @@ ORKESTRATOR_AGENT_TEST_COORDINATOR_SLOW_REMOTE=1` to `bunx playwright test
 reads backend log lines from the profile's `logs/electron.log`, so it needs a
 `dev:test` profile rather than a standalone backend. The shim's timestamps use
 GNU `date`, so the spec runs on Linux.
+
+### Suborks on every provider and across a restart (fake model)
+
+`mise run test:agent:suborks` qualifies `/subork` (`docs/architecture/suborks.md`)
+on the real stack with no login and nothing billed (4340 (retired) tasks 1 and
+4). It passed on 2026-11-13 on macOS in 160 s. It starts a disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi,opencode` profile with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs both specs of
+`e2e/agent-testing/playwright.suborks.config.ts`, then stops and resets the
+profile. The specs point the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) and its isolated OpenCode `opencode.json` at
+`suborks-fake-model.ts` (one loopback server, base paths `/pi/v1` and
+`/opencode/v1`; script in `suborks-fake-model-script.ts`), and add the fake's
+provider to the profile's OpenCode allowlist. Everything else is real: the
+bridges and `opencode2 serve`, the agent tools server, the subork service,
+the branch runner, the workspace guard and the mail drain.
+
+- `suborks-live.spec.ts`: each enabled platform in turn types
+  `/subork ask <itself> and <the next>` in its own tab. The call's row must
+  hold one subork per target, `finished`, on the read-only tier the
+  enforcement matrix gives it and guarded below `enforced`; the delivery must
+  be `sent`; and the mail must wake the caller into one new turn that reads
+  both answers. The fake counts that the `/subork` turn started once, that
+  each target turn started and submitted, that a target offered `ask_agents`
+  (a Pi subork) tried it and was refused (depth 1), and that the caller was
+  woken exactly once.
+- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi, the fake holds
+  the target's requests open, and the backend is `SIGKILL`ed (after checking
+  its command line and start time) and the profile restarted with
+  `devTestRestartArgs`. The kill waits until every target's subork reads
+  `running` and checks that again just before the signal. After the restart
+  the held requests are released; the resumed row must settle with the
+  subork `finished`, one row, the delivery `sent`, the `/subork` turn not sent
+  again and exactly one wake, on the restarted OpenCode server. The fake
+  proves the target finished on the runner's continuation: a second target
+  turn started, the killed backend's held request was abandoned unread (its
+  submit is not counted), and the answer was submitted on a request that was
+  read.
+  An OpenCode target is left out of the default until
+  [8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
+  is fixed: its session stays busy in OpenCode's store after the kill, so the
+  subork stays `running` until the 45-minute bound.
+  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces it,
+  and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed run's
+  environment for inspection.
+
+Both specs wait for states rather than for changes since an earlier sample
+(`suborks-live-checks.ts`): a call counts as over only once its delivery has
+left `waiting` (it settles before its mail goes out), and the wake is found by
+position after the `/subork` request's row, so a wake already finished by the
+first poll still counts. The fake recognises OpenCode's own tool-less title
+requests and never counts them as turns. `suborks-fake-model-script.test.ts`,
+`suborks-fake-model.test.ts` (routes, hold, release, abandoned requests, 400
+and 413) and `suborks-live-checks.test.ts` run in the default suite. Claude, Codex, Cursor and Grok have no scripted model that
+reaches a profile's own bridge, so the scripted run covers Pi and OpenCode;
+both specs also run on real models without
+`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE`, on every platform the profile enables
+(`ORKESTRATOR_AGENT_TEST_SUBORK_PLATFORMS` narrows,
+`ORKESTRATOR_AGENT_TEST_SUBORK_ENVIRONMENT=container` moves the sweep into a
+container environment, `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_PLATFORM` picks
+the restart spec's platform). Those billed runs are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md); each
+spec's header has the commands. The content-free summaries are
+`output/agent-testing/<profile>/suborks/summary.json` and
+`restart-summary.json`. To run the scripted specs against a profile you
+started yourself, start it with the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_SUBORKS=1
+ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE=1` to `bunx playwright test --config
+e2e/agent-testing/playwright.suborks.config.ts`. The restart spec restarts that
+profile and both change its Pi and OpenCode settings for the run, so reset it
+afterwards.
 
 ### Live goal suite
 

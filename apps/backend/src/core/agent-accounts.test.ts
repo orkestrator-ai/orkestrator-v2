@@ -31,8 +31,8 @@ import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
 import type { CommandContext } from "./commands-context.js";
-import type { PlanUsageReader } from "./plan-usage.js";
-import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
+import type { PlanUsageReader } from "./plan-usage/reader.js";
+import { contextUsageWithPlanUsage } from "./plan-usage/cache.js";
 import { StorageService } from "./storage.js";
 
 let root: string;

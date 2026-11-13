@@ -1,5 +1,5 @@
 import { createBuildPipelineProvider } from "./build-pipeline-provider.js";
-import type { PlanUsageState } from "./plan-usage-cache.js";
+import type { PlanUsageState } from "./plan-usage/index.js";
 import type { StorageService } from "./storage.js";
 
 /** Reconnect to the surviving runtime, without creating or dispatching a turn. */

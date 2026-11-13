@@ -639,7 +639,7 @@ active account's last good reading as stale.
 
 Session-reported usage windows are folded into the platform's card only when
 the reporting bridge was launched on the active account
-(`contextUsageWithPlanUsage` in `plan-usage-cache.ts`).
+(`contextUsageWithPlanUsage` in `plan-usage/cache.ts`).
 
 ### How old a reading is
 
@@ -1186,7 +1186,7 @@ Detectable, so the rule avoids it, within what a reading can show:
 - Claude reports `extra_usage.is_enabled` in the same usage payload Claude Code's
   `/usage` reads. Codex reports `credits` (`has_credits`, `unlimited`),
   `rate_limit.limit_reached`, and on app-server `ordinaryUsageAllowed`.
-  `plan-usage.ts` reads these into `PlanUsageSnapshot.paidOverage`.
+  `plan-usage/reader.ts` reads these into `PlanUsageSnapshot.paidOverage`.
 - An account the provider says is past its included allowance, or one with paid
   usage on and any limit at 100%, is never a destination (`wouldPay`). An account
   past 98% of its weekly or 5-hour limit is out anyway.

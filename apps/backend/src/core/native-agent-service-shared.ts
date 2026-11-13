@@ -6,7 +6,7 @@ import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/nativ
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { OpenCode2ServerConnection } from "./opencode2/index.js";
-import type { PlanUsageState } from "./plan-usage-cache.js";
+import type { PlanUsageState } from "./plan-usage/index.js";
 import type {
   BuildPipelineAgent,
   PipelineSessionPhase,

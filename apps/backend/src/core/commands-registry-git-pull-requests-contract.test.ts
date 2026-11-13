@@ -20,8 +20,8 @@ const context = {} as CommandContext;
 describe("git and pull-requests registrations", () => {
   const commands = createCommandRegistry();
 
-  test("registers all 63 commands with their definitions", () => {
-    expect(DEFINITIONS).toHaveLength(63);
+  test("registers all 61 commands with their definitions", () => {
+    expect(DEFINITIONS).toHaveLength(61);
     for (const def of DEFINITIONS) {
       expect({ name: def.name, defined: commands.contracts.get(def.name) === def }).toEqual({
         name: def.name,
@@ -32,8 +32,8 @@ describe("git and pull-requests registrations", () => {
     expect(map.git).toBeUndefined();
     expect(map["pull-requests"]).toBeUndefined();
     expect(commands.helloDomains()).toMatchObject({
-      git: { min: 1, max: 1 },
-      "pull-requests": { min: 1, max: 2 },
+      git: { min: 1, max: 2 },
+      "pull-requests": { min: 1, max: 3 },
     });
   });
 

@@ -31,10 +31,8 @@ import type {
 import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import type { FileMention } from "@/types";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
-import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   promptDraftStore,
   tmuxElicitationDraftKey,
@@ -815,63 +813,6 @@ export const claudeTmuxStore = defineScopedStore<ClaudeTmuxState>(
 
 /** Reads the nearest node scope's tmux tabs; other code uses `scope.store(claudeTmuxStore)`. */
 export const useClaudeTmuxStore = scopedStoreHook(claudeTmuxStore);
-
-/**
- * Move state persisted by older releases under a bare tab id to the
- * environment-scoped key used by current queue and draft APIs.
- *
- * This is intentionally an atomic store mutation: the tab state and every
- * compose-related map must switch keys together, otherwise a render between
- * individual moves can make a draft or queued prompt appear to disappear.
- * Existing scoped values win because they may already contain a newer backend
- * snapshot.
- */
-export function migrateLegacyClaudeTmuxState(
-  legacyTabId: string,
-  scopedStateKey: string,
-  environmentId: string,
-  scope: NodeScope = appCommandScope(),
-): boolean {
-  if (legacyTabId === scopedStateKey) return false;
-
-  let migrated = false;
-  scope.store(claudeTmuxStore).setState((state) => {
-    const legacyTab = state.tabs.get(legacyTabId);
-    if (!legacyTab || (legacyTab.environmentId && legacyTab.environmentId !== environmentId)) {
-      return state;
-    }
-
-    const tabs = new Map(state.tabs);
-    if (!tabs.has(scopedStateKey)) {
-      tabs.set(scopedStateKey, {
-        ...legacyTab,
-        environmentId,
-      });
-    }
-    tabs.delete(legacyTabId);
-
-    const moveValue = <T>(source: Map<string, T>): Map<string, T> => {
-      if (!source.has(legacyTabId)) return source;
-      const next = new Map(source);
-      if (!next.has(scopedStateKey)) {
-        next.set(scopedStateKey, next.get(legacyTabId)!);
-      }
-      next.delete(legacyTabId);
-      return next;
-    };
-
-    migrated = true;
-    return {
-      tabs,
-      attachments: moveValue(state.attachments),
-      draftText: moveValue(state.draftText),
-      draftMentions: moveValue(state.draftMentions),
-      messageQueue: moveValue(state.messageQueue),
-      effortLevels: moveValue(state.effortLevels),
-    };
-  });
-  return migrated;
-}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

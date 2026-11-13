@@ -1066,9 +1066,12 @@ messages apart, so four simultaneous frames are not separately measured.
 frame has rendered it in this session, so until then it matches only by its
 summary. Find reads stored text only for the loaded part of a transcript, at most
 64 documents per session. Text beyond 64 Ki characters is not searchable, and the
-card does not say so. The container-isolated worker image has not yet been run
-with the text step:
-[`7670`](../todo/transcripts-and-observation/7670-static-search-text-container-worker.md).
+card does not say so. The text step runs in the container-isolated worker image
+as in process isolation: on 2026-11-13 a prepared image read the same text, which
+the backend stores as `search-text`, for the same document (the container case
+of `preview-static-search-text.test.ts`;
+[evidence](../development/container-qualification.md#tmux-reopen-static-search-text-and-streamed-reads-in-real-containers-2026-11-13),
+to-do 7670 (retired)).
 Multiple automatically executing JavaScript documents, more chart types and a
 convenience publishing tool are out of scope:
 [`4650`](../todo/transcripts-and-observation/4650-static-html-presentation-follow-ups.md).

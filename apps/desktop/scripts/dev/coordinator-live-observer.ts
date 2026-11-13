@@ -1,6 +1,6 @@
-import {
-  AGENT_INTERACTION_CONTRACT_VERSION,
-  type AgentInteractionKind,
+import type {
+  AgentInteractionKind,
+  AgentInteractionQuestionAnswer,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
@@ -8,6 +8,7 @@ import {
   createTurnWatch,
   transcriptToolCalls,
   isApprovalKind,
+  turnAnswerResolution,
   type CoordinatorLivePlatformSummary,
   type CoordinatorTurnProjection,
   type CoordinatorTranscriptMessage,
@@ -117,6 +118,13 @@ export function createDelegationWatch(
     holdWorkerInteractions?: (environmentId: string) => boolean;
     onProjection?: (projection: Projection | null) => void;
     worker?: { invoke: Invoke; projectId: string };
+    /**
+     * Answers a question the coordinator asks, for a scenario that expects one
+     * (`ask`); see `createTurnWatch`. Without it every question escapes.
+     */
+    answerCoordinatorQuestion?: (
+      request: NonNullable<Projection["interactions"]>[number],
+    ) => AgentInteractionQuestionAnswer[] | undefined;
   } = {},
 ) {
   const { identity, conversation, projectId } = coordinator;
@@ -127,7 +135,9 @@ export function createDelegationWatch(
   const coordinatorMailbox = { environmentId: identity.environmentId, tabId: conversation.tabId };
   const queueKey = `${identity.agent}\0${identity.logicalSessionKey}`;
   const observations: DelegationObservation[] = [];
-  const coordinatorTurn = createTurnWatch();
+  const coordinatorTurn = createTurnWatch(
+    options.answerCoordinatorQuestion ? { answerQuestion: options.answerCoordinatorQuestion } : {},
+  );
   const workerTurns = new Map<string, ReturnType<typeof createTurnWatch>>();
   const workerPhases = new Map<string, string>();
   /** A worker turn that failed, by environment: the scenario cannot go on. */
@@ -160,11 +170,7 @@ export function createDelegationWatch(
       await via("resolve_native_agent_interaction", {
         ...target,
         interactionId: item.interactionId,
-        resolution: {
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          ...item,
-          resolvedAt: Date.now(),
-        },
+        resolution: turnAnswerResolution(item),
       });
     }
   };
@@ -186,6 +192,8 @@ export function createDelegationWatch(
     workerName: (environmentId: string) => names.get(environmentId),
     workerPhase: (environmentId: string) => workerPhases.get(environmentId) ?? "unknown",
     escaped: () => coordinatorTurn.escapedInteractions(),
+    /** Coordinator questions answered through `answerCoordinatorQuestion`. */
+    answeredQuestions: () => coordinatorTurn.answeredQuestions(),
     workerEscaped: () => [...workerTurns.values()].flatMap((turn) => turn.escapedInteractions()),
     /** The worker's own session was read at least once. */
     workerObserved: (environmentId: string) => observedWorkers.has(environmentId),
@@ -402,48 +410,55 @@ export function createDelegationWatch(
       );
     },
     /** Tool rows' output, fetched from behind each row's detail reference. */
-    async toolOutputs(
-      tool: string,
-      messages: readonly CoordinatorTranscriptMessage[],
-    ): Promise<string[]> {
-      const outputs: string[] = [];
-      const visit = async (value: unknown, depth: number): Promise<void> => {
-        if (depth > 8) return;
-        if (Array.isArray(value)) {
-          for (const item of value) await visit(item, depth + 1);
-          return;
-        }
-        if (!value || typeof value !== "object") return;
-        const record = value as Record<string, unknown>;
-        if (
-          typeof record.toolName === "string" &&
-          orkestratorToolCalls([{ name: record.toolName, args: "", state: "unknown" }], tool)
-            .length > 0
-        ) {
-          // A failed call reads as `{"isError":true,"error":…}`, its message
-          // bounded: evaluations read it, and a check detail may quote it.
-          const failed = (error: string) =>
-            JSON.stringify({ isError: true, error: error.slice(0, MAX_TOOL_ERROR_CHARS) });
-          let text = typeof record.toolOutput === "string" ? record.toolOutput : "";
-          if (!text && typeof record.toolError === "string" && record.toolError)
-            text = failed(record.toolError);
-          if (!text && typeof record.detailRef === "string") {
-            const details = await invoke<ToolDetails | null>("get_native_agent_tool_details", {
-              ...identity,
-              detailRef: record.detailRef,
-            }).catch(() => null);
-            text = details?.toolError ? failed(details.toolError) : (details?.toolOutput ?? "");
-          }
-          outputs.push(text);
-        }
-        for (const field of ["childTools", "subagentActions"])
-          await visit(record[field], depth + 1);
-      };
-      for (const message of messages) await visit(message.parts, 0);
-      return outputs;
-    },
+    toolOutputs: (tool: string, messages: readonly CoordinatorTranscriptMessage[]) =>
+      readToolOutputs(invoke, identity, tool, messages),
   };
   return watch;
+}
+
+/**
+ * The output of every row of one Orkestrator tool in `messages`, fetched from
+ * behind each row's detail reference when the row carries none. A failed call
+ * reads as `{"isError":true,"error":…}`, its message bounded: evaluations read
+ * it, and a check detail may quote it.
+ */
+export async function readToolOutputs(
+  invoke: Invoke,
+  identity: SessionIdentity,
+  tool: string,
+  messages: readonly CoordinatorTranscriptMessage[],
+): Promise<string[]> {
+  const outputs: string[] = [];
+  const visit = async (value: unknown, depth: number): Promise<void> => {
+    if (depth > 8) return;
+    if (Array.isArray(value)) {
+      for (const item of value) await visit(item, depth + 1);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (
+      typeof record.toolName === "string" &&
+      orkestratorToolCalls([{ name: record.toolName, args: "", state: "unknown" }], tool).length > 0
+    ) {
+      const failed = (error: string) =>
+        JSON.stringify({ isError: true, error: error.slice(0, MAX_TOOL_ERROR_CHARS) });
+      let text = typeof record.toolOutput === "string" ? record.toolOutput : "";
+      if (!text && typeof record.toolError === "string" && record.toolError)
+        text = failed(record.toolError);
+      if (!text && typeof record.detailRef === "string") {
+        const details = await invoke<ToolDetails | null>("get_native_agent_tool_details", {
+          ...identity,
+          detailRef: record.detailRef,
+        }).catch(() => null);
+        text = details?.toolError ? failed(details.toolError) : (details?.toolOutput ?? "");
+      }
+      outputs.push(text);
+    }
+    for (const field of ["childTools", "subagentActions"]) await visit(record[field], depth + 1);
+  };
+  for (const message of messages) await visit(message.parts, 0);
+  return outputs;
 }
 
 /**
@@ -473,11 +488,7 @@ export async function settleCoordinatorTurn(
       await invoke("resolve_native_agent_interaction", {
         ...identity,
         interactionId: answer.interactionId,
-        resolution: {
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          ...answer,
-          resolvedAt: Date.now(),
-        },
+        resolution: turnAnswerResolution(answer),
       });
     }
     if (answers.length > 0) summary.escapedInteractions = watch.escapedInteractions();

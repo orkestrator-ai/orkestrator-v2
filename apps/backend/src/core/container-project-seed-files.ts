@@ -3,7 +3,7 @@ import { pack } from "tar-stream";
 import path from "node:path";
 import { isPathInsideRoot } from "./commands-project-files.js";
 import { DOCKER_LABEL_PROJECT_SEED_REFUSED } from "./constants.js";
-import { classifyDockerCopyFailure } from "./docker-copy-refusal.js";
+import { copyIntoContainer } from "./docker-copy-refusal.js";
 import { runCommand } from "./shell.js";
 
 /**
@@ -164,17 +164,14 @@ export async function copyProjectSeedFilesIntoContainer(
     archive.entry({ name: file.target, mode: 0o600, ...owner }, file.contents);
   }
   archive.finalize();
-  await runCommand("docker", ["cp", "-a", "-", `${containerId}:/`], {
-    stdin: await collected,
-    timeoutMs: 120_000,
-  }).catch(async (error: unknown) => {
-    // The CLI reports a refused stream copy as "must be a directory".
-    throw await classifyDockerCopyFailure(
-      containerId,
-      error,
-      "the project seed files into the container",
-    );
-  });
+  // The CLI reports a refused stream copy as "must be a directory"; a busy
+  // filesystem is retried (`copyIntoContainer`).
+  await copyIntoContainer(
+    containerId,
+    ["cp", "-a", "-", `${containerId}:/`],
+    { stdin: await collected, timeoutMs: 120_000 },
+    "the project seed files into the container",
+  );
 }
 
 /** Container label value: `.env=symlink,opencode.json=outside-project`. */

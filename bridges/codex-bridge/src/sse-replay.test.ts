@@ -1,13 +1,12 @@
 /**
- * Exercises `/event/subscribe` over real HTTP.
+ * Exercises `/event/subscribe` over real HTTP: the `id:` framing, the cursor
+ * handshake, and the subscribe-then-check ordering that stops an event emitted
+ * mid-handshake from falling between the cursor check and the live stream.
  *
- * The unit tests in `packages/protocol/src/node/event-ring.test.ts` cover the
- * buffer; this covers the parts only the endpoint can get wrong — the `id:`
- * framing, the cursor handshake, and the subscribe-then-replay ordering that
- * stops an event emitted mid-handshake from falling into the gap between the
- * replay and the live stream.
+ * The bridge serves only the observation stream (`?observe=1`): content-free
+ * frames and no replay, so a reconnect is either caught up or told of its gap.
  */
-import { beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { TransformStream } from "node:stream/web";
 
 /**
@@ -24,7 +23,7 @@ process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 
-const { app, __testing, MAX_REPLAY_SSE_BYTES } = await import("./index.js");
+const { app, __testing } = await import("./index.js");
 
 interface Frame {
   event: string;
@@ -56,9 +55,11 @@ function parseFrames(text: string): Frame[] {
   return frames;
 }
 
+const latestRevision = () => __testing.latestRevisionForTesting();
+
 /**
- * Opens a subscription, runs `during` while it is live, then aborts and returns
- * whatever was written.
+ * Opens an observation subscription (`query` is appended after `?observe=1`),
+ * runs `during` while it is live, then aborts and returns whatever was written.
  */
 async function collect(
   query: string,
@@ -66,7 +67,7 @@ async function collect(
   options: { headers?: Record<string, string>; expected?: number } = {},
 ): Promise<Frame[]> {
   const controller = new AbortController();
-  const response = await app.request(`/event/subscribe${query}`, {
+  const response = await app.request(`/event/subscribe?observe=1${query}`, {
     signal: controller.signal,
     ...(options.headers ? { headers: options.headers } : {}),
   });
@@ -93,7 +94,7 @@ async function collect(
     }
   };
 
-  // The `connected` frame plus any replay.
+  // The `connected` frame plus any gap frame.
   await drain(1);
   await during();
   await drain(parseFrames(text).length + (options.expected ?? 1));
@@ -108,11 +109,11 @@ describe("/event/subscribe", () => {
     const token = "sse-test-token";
     __testing.setBridgeAuthForTesting(token);
     try {
-      expect((await app.request("/event/subscribe")).status).toBe(401);
-      expect((await app.request(`/event/subscribe?token=${token}`)).status).toBe(401);
+      expect((await app.request("/event/subscribe?observe=1")).status).toBe(401);
+      expect((await app.request(`/event/subscribe?observe=1&token=${token}`)).status).toBe(401);
 
       const controller = new AbortController();
-      const response = await app.request("/event/subscribe", {
+      const response = await app.request("/event/subscribe?observe=1", {
         headers: { Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
@@ -123,16 +124,23 @@ describe("/event/subscribe", () => {
     }
   });
 
-  let baseline = 0;
-
-  beforeAll(() => {
-    baseline = __testing.eventRingForTesting().latestRevision;
+  test("refuses a subscription that does not ask for observation mode", async () => {
+    const subscribers = __testing.getSubscriberCountForTesting();
+    for (const query of ["", "?observe=0", "?since=1"]) {
+      const response = await app.request(`/event/subscribe${query}`);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "observe=1 is required: this bridge serves only the observation stream",
+      });
+    }
+    expect(__testing.getSubscriberCountForTesting()).toBe(subscribers);
   });
 
-  // No assertion on subscriber count: Hono's `app.request({ signal })` does not
-  // reliably propagate the abort to `c.req.raw.signal`, so a handler can outlive
-  // its test. That is a quirk of driving SSE through `app.request`, not a leak in
-  // the endpoint, and asserting on it would just be flaky.
+  // No assertion on subscriber count for open streams: Hono's
+  // `app.request({ signal })` does not reliably propagate the abort to
+  // `c.req.raw.signal`, so a handler can outlive its test. That is a quirk of
+  // driving SSE through `app.request`, not a leak in the endpoint, and asserting
+  // on it would just be flaky.
 
   test("stamps every frame with a monotonic id", async () => {
     const frames = await collect(
@@ -154,409 +162,104 @@ describe("/event/subscribe", () => {
     }
   });
 
-  test("the connected frame reports the current revision", async () => {
-    const before = __testing.eventRingForTesting().latestRevision;
+  test("the connected frame confirms observation mode and reports the current revision", async () => {
+    const before = latestRevision();
     const frames = await collect("", () => {
       __testing.emitForTesting({ type: "session.updated", sessionId: "s2" });
     });
 
     const connected = frames.find((frame) => frame.event === "connected");
     expect(connected).toBeDefined();
-    expect(connected!.data.revision).toBe(before);
-    // A fresh subscription is not a replay.
-    expect(connected!.data.replayed).toBe(0);
+    expect(connected!.data).toMatchObject({ status: "connected", revision: before, observe: true });
   });
 
-  test("replays only what the cursor missed", async () => {
-    // Emit while nobody is listening — the case the ring exists for.
+  test("frames carry the event type, cursor and session, never the payload", async () => {
+    const frames = await collect(
+      "",
+      () => {
+        __testing.emitForTesting({
+          type: "message.updated",
+          sessionId: "observed-live",
+          data: { message: { id: "m-live", content: "secret transcript text" } },
+        });
+      },
+      { expected: 1 },
+    );
+    const live = frames.find((frame) => frame.data.sessionId === "observed-live");
+    expect(live).toMatchObject({ event: "message.updated", data: { sessionId: "observed-live" } });
+    expect(Object.keys(live!.data)).toEqual(["sessionId"]);
+    expect(JSON.stringify(frames)).not.toContain("secret transcript text");
+  });
+
+  test("a cursor behind the current revision gets a reconcile frame, not the missed events", async () => {
     __testing.emitForTesting({ type: "session.updated", sessionId: "gap" });
-    const cursor = __testing.eventRingForTesting().latestRevision;
+    const cursor = latestRevision();
     __testing.emitForTesting({ type: "session.idle", sessionId: "gap-missed-1" });
     __testing.emitForTesting({ type: "session.error", sessionId: "gap-missed-2" });
 
-    const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 2 });
+    const frames = await collect(`&since=${cursor}`, () => undefined);
 
-    const connected = frames.find((frame) => frame.event === "connected");
-    expect(connected!.data.replayed).toBe(2);
-
-    const replayed = frames.filter((frame) => frame.event.startsWith("session."));
-    expect(replayed.map((frame) => frame.data.sessionId)).toEqual(["gap-missed-1", "gap-missed-2"]);
-    // The event before the cursor must not be re-sent.
-    expect(replayed.some((frame) => frame.data.sessionId === "gap")).toBe(false);
-  });
-
-  test("serializes and replays session warnings with their retry metadata", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({
-      type: "session.warning",
-      sessionId: "warning-replay",
+    const reconcile = frames.find((frame) => frame.event === "session.reconcile-required");
+    expect(reconcile).toMatchObject({
+      id: String(latestRevision()),
       data: {
-        error: "The provider connection was interrupted.",
-        code: "provider_connection_lost",
-        willRetry: true,
+        reason: "cursor-expired",
+        requestedRevision: cursor,
+        latestRevision: latestRevision(),
       },
     });
-    const warningRevision = __testing.eventRingForTesting().latestRevision;
-
-    const frames = await collect(`?since=${cursor}`, () => undefined);
-    const warning = frames.find((frame) => frame.event === "session.warning");
-
-    expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(1);
-    expect(warning).toEqual({
-      event: "session.warning",
-      id: String(warningRevision),
-      data: {
-        sessionId: "warning-replay",
-        error: "The provider connection was interrupted.",
-        code: "provider_connection_lost",
-        willRetry: true,
-      },
-    });
-  });
-
-  test("an observation subscriber gets content-free frames, replayed ones included", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({
-      type: "message.updated",
-      sessionId: "observed-replay",
-      data: { message: { id: "m-replay", content: "secret transcript text" } },
-    });
-    const frames = await collect(
-      `?observe=1&since=${cursor}`,
-      () => {
-        __testing.emitForTesting({
-          type: "session.updated",
-          sessionId: "observed-live",
-          data: { status: "running" },
-        });
-      },
-      // The replay frame may still be in flight behind `connected`.
-      { expected: 2 },
+    // A reconcile frame without a session tells the backend every session may
+    // have changed; the missed frames themselves are not retained.
+    expect(reconcile!.data.sessionId).toBeUndefined();
+    expect(frames.some((frame) => String(frame.data.sessionId ?? "").startsWith("gap"))).toBe(
+      false,
     );
-    expect(frames[0]).toMatchObject({ event: "connected", data: { observe: true } });
-    const replayed = frames.find((frame) => frame.data.sessionId === "observed-replay");
-    expect(replayed).toMatchObject({
-      event: "message.updated",
-      data: { sessionId: "observed-replay" },
-    });
-    expect(Object.keys(replayed!.data)).toEqual(["sessionId"]);
-    const live = frames.find((frame) => frame.data.sessionId === "observed-live");
-    expect(live).toMatchObject({ event: "session.updated", data: { sessionId: "observed-live" } });
-    expect(Object.keys(live!.data)).toEqual(["sessionId"]);
-    expect(JSON.stringify(frames)).not.toContain("secret transcript text");
-    expect(Number(live!.id)).toBeGreaterThan(Number(replayed!.id));
   });
 
-  test("an observation subscriber is notified while replay retention has lapsed", async () => {
-    const restoreRetention = __testing.suspendReplayRetentionForTesting();
-    try {
-      const frames = await collect(
-        "?observe=1",
-        () => {
-          __testing.emitForTesting({
-            type: "session.idle",
-            sessionId: "observed-idle",
-            data: {},
-          });
-        },
-        { expected: 1 },
-      );
-      expect(
-        frames.some(
-          (frame) => frame.event === "session.idle" && frame.data.sessionId === "observed-idle",
-        ),
-      ).toBe(true);
-    } finally {
-      restoreRetention();
-    }
-  });
+  test("a caught-up cursor gets no reconcile frame", async () => {
+    const cursor = latestRevision();
+    const frames = await collect(`&since=${cursor}`, () => undefined);
 
-  test("session filtering replaces unrelated payloads with cursor-only frames", async () => {
-    const frames = await collect(
-      "?sessionId=target",
-      () => {
-        __testing.emitForTesting({
-          type: "message.updated",
-          sessionId: "other",
-          data: { message: { content: "large unrelated payload" } },
-        });
-        __testing.emitForTesting({
-          type: "message.updated",
-          sessionId: "target",
-          data: { message: { content: "wanted" } },
-        });
-      },
-      { expected: 2 },
-    );
-
-    const cursor = frames.find((frame) => frame.event === "bridge.cursor");
-    expect(cursor).toBeDefined();
-    expect(cursor!.data).toEqual({});
-    expect(frames.some((frame) => frame.data.sessionId === "other")).toBe(false);
-    expect(
-      frames.some(
-        (frame) => frame.event === "message.updated" && frame.data.sessionId === "target",
-      ),
-    ).toBe(true);
-  });
-
-  test("session filtering preserves revision order and target payloads during replay", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-
-    __testing.emitForTesting({
-      type: "message.updated",
-      sessionId: "replay-other-1",
-      data: { message: { content: "large unrelated replay payload 1" } },
-    });
-    const unrelatedRevision1 = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({
-      type: "message.updated",
-      sessionId: "replay-target",
-      data: {
-        message: {
-          content: "wanted replay payload",
-          parts: [{ type: "text", text: "preserve me" }],
-        },
-      },
-    });
-    const targetRevision = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({
-      type: "session.idle",
-      sessionId: "replay-other-2",
-      data: { detail: "unrelated replay payload 2" },
-    });
-    const unrelatedRevision2 = __testing.eventRingForTesting().latestRevision;
-
-    const frames = await collect(`?since=${cursor}&sessionId=replay-target`, () => undefined, {
-      expected: 3,
-    });
-
-    expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(3);
-    const replayed = frames.filter((frame) => frame.event !== "connected");
-    expect(replayed.map((frame) => ({ event: frame.event, id: frame.id }))).toEqual([
-      { event: "bridge.cursor", id: String(unrelatedRevision1) },
-      { event: "message.updated", id: String(targetRevision) },
-      { event: "bridge.cursor", id: String(unrelatedRevision2) },
-    ]);
-    expect(replayed[0]!.data).toEqual({});
-    expect(replayed[1]!.data).toEqual({
-      sessionId: "replay-target",
-      message: {
-        content: "wanted replay payload",
-        parts: [{ type: "text", text: "preserve me" }],
-      },
-    });
-    expect(replayed[2]!.data).toEqual({});
-    expect(
-      replayed.some((frame) => JSON.stringify(frame.data).includes("unrelated replay payload")),
-    ).toBe(false);
-  });
-
-  test("replays superseded snapshots as cursor tombstones followed by the latest message", async () => {
-    const restoreRing = __testing.withIsolatedEventRingForTesting();
-    try {
-      const cursor = __testing.eventRingForTesting().latestRevision;
-      for (const content of ["first", "second", "third"]) {
-        __testing.emitForTesting({
-          type: "message.updated",
-          sessionId: "same-session",
-          data: { message: { id: "same-message", content } },
-        });
-      }
-
-      const revisions = __testing
-        .eventRingForTesting()
-        .since(cursor)
-        .events.map((entry) => entry.revision);
-      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 3 });
-      const replayed = frames.filter((frame) => frame.event !== "connected");
-
-      expect(replayed).toEqual([
-        { event: "bridge.cursor", id: String(revisions[0]), data: {} },
-        { event: "bridge.cursor", id: String(revisions[1]), data: {} },
-        {
-          event: "message.updated",
-          id: String(revisions[2]),
-          data: {
-            sessionId: "same-session",
-            message: { id: "same-message", content: "third" },
-          },
-        },
-      ]);
-    } finally {
-      restoreRing();
-    }
-  });
-
-  test("does not supersede the same message id across different sessions", async () => {
-    const restoreRing = __testing.withIsolatedEventRingForTesting();
-    try {
-      const cursor = __testing.eventRingForTesting().latestRevision;
-      __testing.emitForTesting({
-        type: "message.updated",
-        sessionId: "session-one",
-        data: { message: { id: "shared-id", content: "session one old" } },
-      });
-      __testing.emitForTesting({
-        type: "message.updated",
-        sessionId: "session-two",
-        data: { message: { id: "shared-id", content: "session two" } },
-      });
-      __testing.emitForTesting({
-        type: "message.updated",
-        sessionId: "session-one",
-        data: { message: { id: "shared-id", content: "session one new" } },
-      });
-
-      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 3 });
-      const replayed = frames.filter((frame) => frame.event !== "connected");
-      expect(replayed.map((frame) => frame.event)).toEqual([
-        "bridge.cursor",
-        "message.updated",
-        "message.updated",
-      ]);
-      expect(replayed[1]!.data).toMatchObject({
-        sessionId: "session-two",
-        message: { id: "shared-id", content: "session two" },
-      });
-      expect(replayed[2]!.data).toMatchObject({
-        sessionId: "session-one",
-        message: { id: "shared-id", content: "session one new" },
-      });
-    } finally {
-      restoreRing();
-    }
-  });
-
-  test("an event's payload is serialized once and shared by live subscribers and replays", async () => {
-    // The getter counts how many times the payload is walked. One live fan-out
-    // plus two replays must serialize exactly once — per-subscriber and
-    // per-replay stringification of megabyte message snapshots is what this
-    // memoization removes.
-    let reads = 0;
-    const event = {
-      type: "message.updated" as const,
-      sessionId: "memo-target",
-      data: {
-        get message() {
-          reads += 1;
-          return { content: "memoized" };
-        },
-      },
-    };
-
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    const removeFirst = __testing.subscribeForTesting(() => undefined);
-    const removeSecond = __testing.subscribeForTesting(() => undefined);
-    try {
-      __testing.emitForTesting(event);
-    } finally {
-      removeFirst();
-      removeSecond();
-    }
-
-    for (let replay = 0; replay < 2; replay += 1) {
-      const frames = await collect(`?since=${cursor}`, () => undefined);
-      const frame = frames.find(
-        (f) => f.event === "message.updated" && f.data.sessionId === "memo-target",
-      );
-      expect(frame?.data.message).toEqual({ content: "memoized" });
-    }
-    expect(reads).toBe(1);
-  });
-
-  test("growing serialized snapshots stay inside the replay byte budget", () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    const chunk = "x".repeat(1024 * 1024);
-    for (let index = 0; index < 36; index += 1) {
-      __testing.emitForTesting({
-        type: "message.updated",
-        sessionId: "byte-budget",
-        data: { message: { content: chunk, index } },
-      });
-    }
-
-    const stats = __testing.eventRingForTesting().getStats();
-    expect(stats.maxBytes).toBe(MAX_REPLAY_SSE_BYTES);
-    expect(stats.retainedBytes).toBeLessThanOrEqual(MAX_REPLAY_SSE_BYTES);
-    expect(stats.retained).toBeLessThan(36);
-    // Some of the requested immutable snapshots were evicted, so replay must
-    // demand an authoritative reconcile rather than return a partial history.
-    expect(__testing.eventRingForTesting().since(cursor).complete).toBe(false);
-  });
-
-  test("an idle ring advances its cursor without retaining background payloads", () => {
-    const restoreRing = __testing.withIsolatedEventRingForTesting();
-    const restoreRetention = __testing.suspendReplayRetentionForTesting();
-    try {
-      const cursor = __testing.eventRingForTesting().latestRevision;
-      __testing.emitForTesting({
-        type: "message.updated",
-        sessionId: "idle-background",
-        data: {
-          message: {
-            id: "message-idle",
-            content: "x".repeat(1024 * 1024),
-          },
-        },
-      });
-
-      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
-        retained: 0,
-        retainedBytes: 0,
-        latestRevision: cursor + 1,
-      });
-      expect(__testing.eventRingForTesting().since(cursor).complete).toBe(false);
-    } finally {
-      restoreRetention();
-      restoreRing();
-    }
-  });
-
-  test("a caught-up cursor replays nothing", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    const frames = await collect(`?since=${cursor}`, () => undefined);
-
-    expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(0);
+    expect(frames.find((frame) => frame.event === "connected")).toBeDefined();
     expect(frames.some((frame) => frame.event === "session.reconcile-required")).toBe(false);
   });
 
-  test("replays an explicit runtime overflow reconciliation frame", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({
-      type: "session.reconcile-required",
-      sessionId: "ordered-overflow",
-      data: { reason: "ordered-event-queue-overflow" },
+  test("forwards an explicit runtime reconciliation frame with its session", async () => {
+    const frames = await collect("", () => {
+      __testing.emitForTesting({
+        type: "session.reconcile-required",
+        sessionId: "ordered-overflow",
+        data: { reason: "ordered-event-queue-overflow" },
+      });
     });
-
-    const frames = await collect(`?since=${cursor}`, () => undefined);
     expect(frames).toContainEqual(
       expect.objectContaining({
         event: "session.reconcile-required",
-        data: {
-          sessionId: "ordered-overflow",
-          reason: "ordered-event-queue-overflow",
-        },
+        data: { sessionId: "ordered-overflow" },
       }),
     );
   });
 
   test("accepts the cursor from a Last-Event-ID header", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({ type: "session.idle", sessionId: "via-header" });
+    const current = await collect("", () => undefined, {
+      headers: { "Last-Event-ID": String(latestRevision()) },
+    });
+    expect(current.some((frame) => frame.event === "session.reconcile-required")).toBe(false);
 
-    // What a native EventSource sends when the browser reconnects by itself.
-    const frames = await collect("", () => undefined, {
+    const cursor = latestRevision();
+    __testing.emitForTesting({ type: "session.idle", sessionId: "via-header" });
+    // What a native EventSource sends when it reconnects by itself.
+    const behind = await collect("", () => undefined, {
       headers: { "Last-Event-ID": String(cursor) },
     });
-
-    expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(1);
-    expect(frames.some((frame) => frame.data.sessionId === "via-header")).toBe(true);
+    expect(behind.find((frame) => frame.event === "session.reconcile-required")).toMatchObject({
+      data: { requestedRevision: cursor },
+    });
   });
 
   test("asks for a reconcile when the cursor is from the future", async () => {
     // A client reconnecting to a restarted bridge, whose revisions began again.
-    const frames = await collect("?since=999999", () => undefined);
+    const frames = await collect("&since=999999", () => undefined);
 
     const reconcile = frames.find((frame) => frame.event === "session.reconcile-required");
     expect(reconcile).toBeDefined();
@@ -567,24 +270,34 @@ describe("/event/subscribe", () => {
   test("a garbled cursor is treated as a fresh subscription", async () => {
     // Must not fail the connection: a corrupt Last-Event-ID would otherwise leave
     // the client with no stream at all.
-    const frames = await collect("?since=not-a-number", () => undefined);
+    const frames = await collect("&since=not-a-number", () => undefined);
     expect(frames.find((frame) => frame.event === "connected")).toBeDefined();
     expect(frames.some((frame) => frame.event === "session.reconcile-required")).toBe(false);
   });
 
+  test("parses only non-negative safe integers as a cursor", () => {
+    const parse = __testing.parseEventCursorForTesting;
+    expect(parse("0")).toBe(0);
+    expect(parse("42")).toBe(42);
+    expect(parse(" 7 ")).toBe(7);
+    for (const input of [null, undefined, "", "  ", "abc", "-1", "1.5", "1e3", "0x10", "٣"]) {
+      expect(parse(input)).toBeNull();
+    }
+    expect(parse("99999999999999999999")).toBeNull();
+  });
+
   test("an event emitted during the handshake is delivered exactly once", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting({ type: "session.idle", sessionId: "before-connect" });
+    const cursor = latestRevision();
 
     const controller = new AbortController();
-    const response = await app.request(`/event/subscribe?since=${cursor}`, {
+    const response = await app.request(`/event/subscribe?observe=1&since=${cursor}`, {
       signal: controller.signal,
     });
 
-    // Emitted *immediately* after the request, racing the replay computation. This
-    // is the ordering bug the buffered-listener design exists to prevent: the
-    // event must not fall between the replay and the live stream, and must not be
-    // sent twice either.
+    // Emitted *immediately* after the request, racing the cursor check. This is
+    // the ordering bug the buffered-listener design exists to prevent: the event
+    // must not fall between the check and the live stream, and must not be sent
+    // twice either.
     __testing.emitForTesting({ type: "session.error", sessionId: "during-connect" });
 
     const reader = response.body!.getReader();
@@ -606,14 +319,11 @@ describe("/event/subscribe", () => {
     const sessionIds = frames
       .filter((frame) => frame.event.startsWith("session."))
       .map((frame) => frame.data.sessionId);
-
-    expect(sessionIds).toContain("before-connect");
     expect(sessionIds.filter((id) => id === "during-connect")).toHaveLength(1);
-    expect(sessionIds.filter((id) => id === "before-connect")).toHaveLength(1);
   });
 
   test("a fresh connection keeps its original anchor when an event lands before connected", async () => {
-    const anchor = __testing.eventRingForTesting().latestRevision;
+    const anchor = latestRevision();
     __testing.setSseRouteTestHooksForTesting({
       afterSubscriberRegistered: () => {
         __testing.emitForTesting({
@@ -636,7 +346,7 @@ describe("/event/subscribe", () => {
   });
 
   test("events arriving during the buffered drain stay in revision order", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
+    const cursor = latestRevision();
     let injectedDuringWrite = false;
     __testing.setSseRouteTestHooksForTesting({
       beforeBufferedDrain: () => {
@@ -660,7 +370,7 @@ describe("/event/subscribe", () => {
     });
 
     try {
-      const frames = await collect(`?since=${cursor}`, () => undefined, {
+      const frames = await collect(`&since=${cursor}`, () => undefined, {
         expected: 3,
       });
       const drained = frames.filter((frame) =>
@@ -679,8 +389,8 @@ describe("/event/subscribe", () => {
     }
   });
 
-  test("starts keepalives only after the buffered replay tail is written", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
+  test("starts keepalives only after the buffered handshake tail is written", async () => {
+    const cursor = latestRevision();
     const order: string[] = [];
     __testing.setSseRouteTestHooksForTesting({
       beforeBufferedDrain: () => {
@@ -699,7 +409,7 @@ describe("/event/subscribe", () => {
     });
 
     try {
-      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 1 });
+      const frames = await collect(`&since=${cursor}`, () => undefined, { expected: 1 });
       expect(frames.some((frame) => frame.data.sessionId === "keepalive-order")).toBe(true);
       expect(order).toEqual(["drain", "write", "keepalive"]);
     } finally {
@@ -707,13 +417,13 @@ describe("/event/subscribe", () => {
     }
   });
 
-  test("closes a subscriber whose handshake replay buffer exceeds its cap", async () => {
-    const cursor = __testing.eventRingForTesting().latestRevision;
+  test("closes a subscriber whose handshake buffer exceeds its cap", async () => {
+    const cursor = latestRevision();
     const originalError = console.info;
     const errors: string[] = [];
     console.info = ((message: unknown) => errors.push(String(message))) as typeof console.info;
     __testing.setSseRouteTestHooksForTesting({
-      maxBufferedReplayEvents: 2,
+      maxBufferedHandshakeEvents: 2,
       afterSubscriberRegistered: () => {
         for (let index = 0; index < 3; index += 1) {
           __testing.emitForTesting({
@@ -725,30 +435,22 @@ describe("/event/subscribe", () => {
     });
 
     try {
-      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 0 });
+      const frames = await collect(`&since=${cursor}`, () => undefined, { expected: 0 });
       expect(
         frames.filter((frame) => String(frame.data.sessionId).startsWith("overflow-")),
       ).toHaveLength(0);
-      expect(errors.some((message) => message.includes("replay buffer overflowed"))).toBe(true);
+      expect(errors.some((message) => message.includes("handshake buffer overflowed"))).toBe(true);
     } finally {
       console.info = originalError;
       __testing.setSseRouteTestHooksForTesting(null);
     }
   });
 
-  test("the ring grows as events are emitted and reports its stats", () => {
-    const stats = __testing.eventRingForTesting().getStats();
-    expect(stats.latestRevision).toBeGreaterThan(baseline);
-    expect(stats.retained).toBeGreaterThan(0);
-    expect(stats.capacity).toBeGreaterThan(0);
-  });
-
-  test("health reports the event ring", async () => {
+  test("health reports the event cursor", async () => {
     const body = (await (await app.request("/global/health")).json()) as {
-      events?: { latestRevision?: number; capacity?: number; subscribers?: number };
+      events?: { latestRevision?: number; subscribers?: number };
     };
-    expect(body.events?.capacity).toBeGreaterThan(0);
-    expect(body.events?.latestRevision).toBeGreaterThan(0);
+    expect(body.events?.latestRevision).toBe(latestRevision());
     expect(typeof body.events?.subscribers).toBe("number");
   });
 });
@@ -843,18 +545,17 @@ describe("/session/:id/approvals", () => {
 describe("connected frame id", () => {
   test("echoes the client's cursor so the handshake is idempotent", async () => {
     __testing.emitForTesting({ type: "session.updated", sessionId: "idem-0" });
-    const cursor = __testing.eventRingForTesting().latestRevision;
+    const cursor = latestRevision();
     __testing.emitForTesting({ type: "session.idle", sessionId: "idem-1" });
     __testing.emitForTesting({ type: "session.idle", sessionId: "idem-2" });
 
-    const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 2 });
+    const frames = await collect(`&since=${cursor}`, () => undefined);
     const connected = frames.find((frame) => frame.event === "connected")!;
 
     /**
-     * The critical property: a browser EventSource adopts the id of *every* frame,
-     * so if this carried the latest revision and the socket died here, the retry
-     * would ask for everything after the newest event and silently skip the two
-     * frames it was mid-way through replaying.
+     * The critical property: a client adopts the id of *every* frame, so if this
+     * carried the latest revision and the socket died here, the retry would look
+     * caught up and the client would never learn of the gap.
      */
     expect(Number(connected.id)).toBe(cursor);
     expect(Number(connected.data.revision)).toBeGreaterThan(cursor);
@@ -863,17 +564,17 @@ describe("connected frame id", () => {
   test("a fresh subscription anchors at the latest revision", async () => {
     // No cursor means the client chose to start now, so adopting the latest
     // revision is right — there is nothing behind it that it wants.
-    const latest = __testing.eventRingForTesting().latestRevision;
+    const latest = latestRevision();
     const frames = await collect("", () => undefined);
     const connected = frames.find((frame) => frame.event === "connected")!;
     expect(Number(connected.id)).toBe(latest);
   });
 
-  test("an expired cursor anchors at the latest revision", async () => {
+  test("an expired cursor's reconcile frame anchors at the latest revision", async () => {
     // The client has been told to resync from scratch, so it should not come back
-    // asking for the range that no longer exists.
-    const frames = await collect("?since=999999", () => undefined);
+    // asking for the range it missed.
+    const frames = await collect("&since=999999", () => undefined);
     const reconcile = frames.find((frame) => frame.event === "session.reconcile-required")!;
-    expect(Number(reconcile.id)).toBe(__testing.eventRingForTesting().latestRevision);
+    expect(Number(reconcile.id)).toBe(latestRevision());
   });
 });

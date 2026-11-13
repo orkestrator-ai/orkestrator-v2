@@ -1,6 +1,6 @@
 # Provider SDK adoption backlog
 
-Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade ([1020](1020-provider-upgrade-2026-10-30.md)) and at `ee2cc8423` for the 2026-11-06 upgrade ([1031](1031-provider-upgrade-2026-11-06.md)).
+Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade (1020 (retired), `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`) and at `ee2cc8423` for the 2026-11-06 upgrade ([1031](1031-provider-upgrade-2026-11-06.md)).
 
 ## Task analysis
 
@@ -319,7 +319,7 @@ Probed live 2026-10-31 on 1.0.67: `agent stdio` does forward both modes, the ans
 The pins moved to Claude `0.3.314` / `2.1.314`, Codex `0.166.0`, OpenCode
 `1.19.5`, Cursor `1.2.0`, Grok `1.0.70` and ACP SDK `2.1.0` (Pi unchanged).
 Rechecked every task and candidate here against them; the per-provider
-classification is in [1020](1020-provider-upgrade-2026-10-30.md). Changes made
+classification is in 1020 (retired 2026-11-13; `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`). Changes made
 here: the Codex goals entry under "Decided out" is corrected, because the
 flag it relied on defaults on, and the bridge now turns it off. New candidates
 were added for Claude, Codex, Cursor and Grok. Tasks 7, 8, 10 and 11 record the
@@ -644,7 +644,8 @@ reason.
 - **OpenCode `find.*` file search.** Orkestrator owns workspace file search;
   the provider's search has no consumer.
 - **Pi provider login.** Status stays read-only (see
-  [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)).
+  [agent-engines.md](../../architecture/agent-engines.md) § Pi; to-do 0003, retired
+  2026-11-13).
 - **Codex `thread/delete`.** Never.
 - **Claude `verbatimPrompts` / `client_composed`.** It skips the CLI's
   turn-start attachment pass, which is a real behaviour cost with no reported
@@ -759,7 +760,7 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `PI_SELF_UPDATE_COMMAND` so `pi update` in a terminal tab defers to the
     managed pin.
 - OpenCode: `reference.list` and the other Session V2 features wait for
-  [0008-opencode-v2.md](0008-opencode-v2.md).
+  0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 
 ### Qualification
 
@@ -819,9 +820,9 @@ The billed Grok `costUsdTicks` run moved to the
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md),
   [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md),
   [0006-session-titles-and-history.md](0006-session-titles-and-history.md),
-  [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md),
+  [agent-accounts.md](../../architecture/agent-accounts.md) (to-do 0003, retired 2026-11-13),
   [0004-composer-model-parameters.md](0004-composer-model-parameters.md),
-  [0008-opencode-v2.md](0008-opencode-v2.md).
+  0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed Grok turns of task 11) moved there on 2026-11-10.
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) owns removing the Claude
   `services/mcp-config.ts` parse.

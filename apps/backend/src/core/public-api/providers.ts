@@ -64,7 +64,7 @@ export function providerCapabilities(agent: AgentPlatform): PublicProviderCapabi
     completion: completion.support,
     completionNote: completion.note,
     // OpenCode advertises steer, but its steering is not yet qualified through
-    // the public CLI (todo 0008), so the CLI keeps refusing OpenCode steer up
+    // the public CLI (to-do 7905 task 4), so the CLI keeps refusing OpenCode steer up
     // front.
     steer: native.actions?.steer === true && agent !== "opencode",
     stop: true,

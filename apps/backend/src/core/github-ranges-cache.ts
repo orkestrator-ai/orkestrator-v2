@@ -11,7 +11,11 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { classifyDockerCopyFailure, isDockerCopyRefusedError } from "./docker-copy-refusal.js";
+import {
+  copyIntoContainer,
+  isDockerCopyBusyError,
+  isDockerCopyRefusedError,
+} from "./docker-copy-refusal.js";
 import { runCommand } from "./shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -127,6 +131,7 @@ export async function copyGithubRangesSeed(
   containerId: string,
   seedFile: string,
   run: typeof runCommand = runCommand,
+  sleep?: (ms: number) => Promise<void>,
 ): Promise<boolean> {
   const staging = await mkdtemp(path.join(os.tmpdir(), "orkestrator-github-seed-"));
   try {
@@ -134,25 +139,28 @@ export async function copyGithubRangesSeed(
     const staged = path.join(staging, "github-ranges");
     await copyFile(seedFile, staged);
     await chmod(staged, 0o644);
-    await run(
-      "docker",
+    await copyIntoContainer(
+      containerId,
       ["cp", `${staging}${path.sep}.`, `${containerId}:${GITHUB_RANGES_SEED_DIRECTORY}`],
-      {
-        timeoutMs: 30_000,
-      },
+      { timeoutMs: 30_000 },
+      "the GitHub ranges seed",
+      { run, sleep },
     );
     return true;
   } catch (error) {
     // A refused copy (a read-only bind on a nosuid/nodev filesystem under
-    // rootless Docker) is named, not left unclassified: every boot of such
-    // a container then fetches GitHub's ranges itself.
-    const refused = isDockerCopyRefusedError(
-      await classifyDockerCopyFailure(containerId, error, "the GitHub ranges seed", run),
-    );
+    // rootless Docker) or one the daemon kept refusing as busy is named, not
+    // left unclassified: every boot of such a container then fetches GitHub's
+    // ranges itself.
+    const refusal = isDockerCopyRefusedError(error)
+      ? "read-only-bind-remount"
+      : isDockerCopyBusyError(error)
+        ? "snapshot-busy"
+        : null;
     log.warn("github-ranges.seed-not-copied", {
       containerId: containerId.slice(0, 12),
       ...classifyCommandFailure(error, { tools: ["docker"] }),
-      ...(refused ? { refusal: "read-only-bind-remount" } : {}),
+      ...(refusal ? { refusal } : {}),
       error: formatLogError(error),
     });
     return false;

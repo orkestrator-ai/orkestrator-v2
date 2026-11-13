@@ -4,17 +4,17 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice.
 
 ### Tasks
 
-1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); the `opencode` move and placing `keyed-record-format.ts` are open, one domain per change.
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: open.
+1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); the `opencode` move is open.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13, see "Assumptions and decisions"); the other ten (`features` to `native-agent`) are open, one domain per change.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
 6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11; to-do 7800 (retired 2026-11-11) gave each an `index.ts` and both lint patterns (see "Current state").
-7. **Open questions**: where `keyed-record-format.ts` and `pi-model-catalog-seeding.ts` go, and whether `storage` and `native-agent` move before or after their splits. Status: partly done (the 0009/0010 splits have landed).
+7. **Open questions**: where `keyed-record-format.ts` and `pi-model-catalog-seeding.ts` go, and whether `storage` and `native-agent` move before or after their splits. Status: partly done (the 0009/0010 splits have landed, and `keyed-record-format.ts` stays in the shared kernel, 2026-11-13); `pi-model-catalog-seeding.ts` is open until the model catalogue code is moved.
 
 ### 1. Wave 1 (leaves)
 
@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md).
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open).
 
 **Decisions.**
 
@@ -147,12 +147,12 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** Listed under "Open questions".
 
-**Investigation.** `keyed-record-format.ts` is no longer imported only by `build-pipeline-transcript-*`: `transcript-artifacts/store.ts` imports it too, alongside `build-pipeline-transcript-store.ts` and `build-pipeline-transcript-legacy-manifests.ts`. `pi-model-catalog-seeding.ts` now sits beside `pi-catalog-probes.ts` (from 0066, owned by `runtime.localServers.piCatalog`). The third question is settled: the 0009 and 0010 inheritance splits merged (#1276, #1180), so `storage` and `native-agent` are no longer about to be rewritten by those, though 0214 and 0057 are follow-ups (see tasks 2 and 3).
+**Investigation.** `keyed-record-format.ts` is no longer imported only by `build-pipeline-transcript-*`: `transcript-artifacts/store.ts` imports it too, alongside `build-pipeline-transcript-store.ts` and `build-pipeline-transcript-legacy-manifests.ts`. `pi-model-catalog-seeding.ts` now sits beside `pi-catalog-probes.ts` (from 0066, owned by `runtime.localServers.piCatalog`). The third question is settled: the 0009 and 0010 inheritance splits merged (#1276, #1180), so `storage` and `native-agent` are no longer about to be rewritten by those, though 0214 and 0057 are follow-ups (see tasks 2 and 3). Re-checked 2026-11-13 on `17d28238c`: `keyed-record-format.ts` still has those three production importers in two domains (two `build-pipeline-transcript-*` files and `transcript-artifacts/store.ts`), plus `build-pipeline-transcript-test-fixtures.ts` and `build-pipeline-transcript-store.test.ts`. Settled: it stays in the kernel (the recommended option below).
 
 **Decisions.**
 
-- **Where does `keyed-record-format.ts` go?**
-  - **The shared kernel at the `core/` root (recommended).**
+- **Where does `keyed-record-format.ts` go?** Settled 2026-11-13: the kernel.
+  - **The shared kernel at the `core/` root (recommended; chosen).**
     - Pros: it now has importers in two domains, which is what the kernel is for.
     - Cons: one more root file.
   - **`build-pipeline/`, exported from its `index.ts`.**
@@ -247,6 +247,29 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `commands-servers.ts` and `scheduled-jobs/executor.ts` import
   `coordinatorRoleCapabilities`, because `index.ts` reaches both through
   `server.ts`. See "Assumptions and decisions".
+- Done (task 1's `keyed-record-format.ts` placement, 2026-11-13, against
+  `main` at `17d28238c`): it stays at the `core/` root as a shared-kernel
+  module, because its production importers are in two domains
+  (`build-pipeline-transcript-store.ts`,
+  `build-pipeline-transcript-legacy-manifests.ts` and
+  `transcript-artifacts/store.ts`). No file moved and no import changed; its
+  header comment, which still named the keyed record store removed with #969,
+  now names its users and says why it is in the kernel. See "Assumptions and
+  decisions".
+- Done (task 2's `plan-usage` slice, 2026-11-13, against `main` at
+  `17d28238c`): the two `plan-usage*` source files and their three tests are
+  in `core/plan-usage/` (`plan-usage.ts` → `reader.ts`,
+  `plan-usage-cache.ts` → `cache.ts`, and `reader.test.ts`, `cache.test.ts`,
+  `agent-test-origin.test.ts`), with an `index.ts` and both lint patterns.
+  `index.ts` re-exports the seven symbols the ten production importers
+  outside the folder use (`contextUsageWithPlanUsage`, `PlanUsageState`,
+  `createPlanUsageReader`, `readAgentAccountPlanUsage` and the types
+  `PlanUsageCache`, `PlanUsageRead` and `PlanUsageReader`). One leaf module is
+  a named exception in the `apps/backend/src/**` pattern: `cache.js`, which
+  `http-bridge/provider.ts` and `http-bridge/progressive.ts` import directly,
+  because `cache.ts` is documented as a leaf that keeps the reader's
+  credential modules out of the bridge provider's graph. See "Assumptions and
+  decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -268,8 +291,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 - The `core/` root holds 378 non-test `.ts` files and 299 tests (the
   2026-10-15 count; after the `http-bridge` slice on 2026-11-06 it holds 827
   and 842, after the `web-annotations` slice on 2026-11-11 it holds 883
-  and 925, and after OpenCode 1.x's retirement and the `control-mcp` slice
-  on 2026-11-11 it holds 803 and 852).
+  and 925, after OpenCode 1.x's retirement and the `control-mcp` slice
+  on 2026-11-11 it holds 803 and 852, and after the `plan-usage` slice on
+  2026-11-13 it holds 806 and 856).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -278,8 +302,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | web-annotations | `web-annotation-*` | done (29 / 27 moved, 2026-11-11) | |
   | http-bridge | `http-bridge-*` | done (20 / 20 moved, 2026-11-06) | |
   | control-mcp | `control-mcp-*` | done (40 / 29 moved, 2026-11-11) | |
-  | keyed-records | `keyed-record-*` | 1 | 0 |
-  | plan-usage | `plan-usage*` | 2 | 2 |
+  | keyed-records | `keyed-record-*` | done (1 / 0 placed in the kernel, 2026-11-13) | |
+  | plan-usage | `plan-usage*` | done (2 / 3 moved, 2026-11-13) | |
   | features | `feature-*` | 3 | 3 |
   | coordinator | `coordinator-*` | 7 | 5 |
   | agent-accounts | `agent-accounts*` | 7 | 7 |
@@ -302,8 +326,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   These are file counts only. Importer and dependency counts go stale within a
   day, so each slice re-measures them (step 1 below).
 - `keyed-record-*` is now one file, `keyed-record-format.ts`: the keyed-record
-  engine went with #969. Its only importers are `build-pipeline-transcript-*`
-  files.
+  engine went with #969. Its importers are two `build-pipeline-transcript-*`
+  files and `transcript-artifacts/store.ts`, so it stays in the shared kernel
+  (2026-11-13).
 - Codemod: `bun scripts/move-backend-modules.ts --prefix <prefix> --into
   <folder> [--dry-run]`, or `--map <file.json>`, tested by
   `tests/unit/move-backend-modules.test.ts`. It moves the files, drops the
@@ -335,11 +360,10 @@ before the busy ones move.
 1. **Wave 1 (leaves):** `opencode`.
    (Done: an `index.ts` and both lint patterns for `mcp-management/` and
    `public-api/`; the `http-bridge`, `web-annotations` and `control-mcp`
-   moves.) Place `keyed-record-format.ts` rather
-   than giving it a folder (see "Open questions").
-2. **Wave 2 (mid-tier):** `plan-usage`, `features`, `coordinator`,
+   moves; `keyed-record-format.ts` placed in the shared kernel.)
+2. **Wave 2 (mid-tier):** `features`, `coordinator`,
    `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`,
-   `build-pipeline`, `native-agent`.
+   `build-pipeline`, `native-agent`. (Done: `plan-usage`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
    `environments`, `storage`. Many files import these, and `containers` and
    `previews` are also imported from outside `core/`, so these slices touch the
@@ -406,8 +430,96 @@ Done when:
 Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
 `index.ts` step (2026-11-03), task 1's `http-bridge` slice (2026-11-06),
 task 1's `web-annotations` slice with the codemod fix from todo 7490
-(2026-11-11), to-do 7800 and task 1's `control-mcp` slice (2026-11-11). The moves in waves 1 to 4 (tasks 1 to 4) were
+(2026-11-11), to-do 7800 and task 1's `control-mcp` slice (2026-11-11), and task 1's
+`keyed-record-format.ts` placement with task 2's `plan-usage` slice
+(2026-11-13). The other moves in waves 1 to 4 (tasks 1 to 4) were
 left open on purpose: they move many files that other work in flight touches.
+
+### Task 2: `plan-usage` as the first wave 2 slice
+
+- Chosen: one domain, `plan-usage`, moved with the codemod against `main` at
+  `17d28238c`, in the same change as the `keyed-record-format.ts` placement
+  (both requested together; the placement changes one comment). It is the
+  first wave 2 domain in the plan's order and the smallest, no open pull
+  request touched it (two were open), and the ticket excluded the domains
+  other running builds own (`opencode`, containers, native-agent,
+  transcripts, coordinator, multi-review, storage, public-api, nodes, mcp,
+  host maintenance), so `opencode` stays open in wave 1.
+- File names: a `--map` file rather than `--prefix`, because
+  `plan-usage.ts` has no `plan-usage-` prefix to drop. It became
+  `reader.ts` (its header: "plan-quota reads … without starting an agent";
+  it exports `createPlanUsageReader`) and its test `reader.test.ts`;
+  `plan-usage-cache.ts` became `cache.ts`, and
+  `plan-usage-agent-test-origin.test.ts` became `agent-test-origin.test.ts`.
+  Options were `reader.ts` or `index.ts`-as-implementation; `index.ts` stays
+  the re-export-only surface, as in every other folder.
+- Measured before the move: 10 production importers outside the folder
+  (`agent-accounts-runtime.ts`, `agent-accounts.ts`, `agent-usage-limits.ts`,
+  `commands-registry-types.ts`, `feature-planning.ts`,
+  `native-agent-service-shared.ts`, `retired-looped-review-cleanup.ts`, and
+  `http-bridge/progressive.ts`, `provider.ts` and `transport.ts`) using
+  seven symbols from two modules; four co-located tests outside the folder
+  (`agent-accounts.test.ts`, `agent-usage-limits.test.ts`,
+  `backend-runtime.test.ts`, `http-bridge/provider.test.ts`); and path
+  strings in one flake record and one to-do file. No `mock.module()` or
+  `spyOn` targeted the files, no worker or bundle entry point names them, and
+  no `<revision>:<path>` string named a moved file. The codemod moved 5 files
+  and rewrote 21.
+- `index.ts` holds exactly the seven production symbols. Eight production
+  importers use it, six of them type-only; `agent-accounts-runtime.ts`
+  (its two imports merged into one) and `agent-accounts.ts` import values
+  through it, and both already reached `reader.ts`. Co-located tests outside
+  the folder keep deep imports (procedure step 3).
+- Named exception: `cache.js`. Routing all ten importers through `index.ts`
+  closed no runtime cycle (`oxlint` clean), but `cache.ts`'s header says it is
+  "deliberately a leaf module" so that provider read paths do not pull in the
+  reader's credential machinery (the Keychain, config and container command
+  modules). With `http-bridge/provider.ts` importing `index.js`, its value
+  import graph grew from 49 to 194 modules and reached `reader.ts`,
+  `commands-files.ts`, `commands-validation.ts` and `cursor-sdk-bridge.ts`
+  (measured with a throwaway value-import reachability script). Options:
+  (a) an exception for `cache.js` in the `apps/backend/src/**` pattern;
+  (b) route the bridge files through `index.ts` and accept the larger graph;
+  (c) a second barrel for the cache. Chosen (a), the same mechanism as the
+  cycle exceptions: it keeps the leaf property the module documents, and a
+  barrel per leaf would split the domain's surface. Cons: a second allowed
+  import path for the cache's three symbols. `http-bridge/transport.ts` imports
+  only the type `PlanUsageState`, so it goes through `index.ts`. The
+  `index.ts` header and `linting.md` ("Module boundaries") name the exception.
+- Hand fixes after the codemod: the bare name `plan-usage.ts` in
+  `cache.ts`'s own header (now `reader.ts`), a comment in
+  `commands-servers-agent-test-origin.test.ts`, short names in
+  `docs/architecture/agent-accounts.md` and `backend-runtime.md`, to-dos 0003
+  and 1000, and the folder list in `docs/development/linting.md`. The flake
+  record (0175) keeps the codemod's path rewrite, as in the earlier slices.
+  The four `bridges/cursor-bridge` `plan-usage.js` imports and
+  `@orkestrator/protocol/plan-usage` are other modules with the same name and
+  are untouched.
+- Lint patterns: `**/plan-usage/*` with `!**/plan-usage/index.js` and
+  `!**/plan-usage/cache.js` under `apps/backend/src/**`, and the
+  `**/backend/src/core/plan-usage/*` form under `tests/unit/**`.
+  `@orkestrator/protocol/plan-usage` and
+  `@orkestrator/protocol/node/cursor-plan-usage` end in a single segment, so
+  neither matches. Checked with probe files (deleted): deep imports of
+  `cache.js` and `reader.js` are reported under `tests/unit/**`, `reader.js`
+  is reported under `apps/backend/src/**` and `cache.js` is not, `index.js`
+  is not reported under either, and the two protocol imports are not.
+
+### Task 1: `keyed-record-format.ts` stays in the shared kernel
+
+- Chosen: task 7's recommended option. Its three production importers are in
+  two domains (the build pipeline's transcript store and legacy manifest
+  import, and `transcript-artifacts/store.ts`), and what it offers is generic
+  (a record header format plus `syncDirectory`, `writeExclusivePrivateFile`,
+  `readBoundedFile` and `sha256Hex`), so it is kernel code by this file's own
+  rule. The other option, `build-pipeline/` exported from its `index.ts`,
+  would make `transcript-artifacts/` depend on `build-pipeline/` for a file
+  helper, and `build-pipeline` has not moved yet.
+- Done in this change: no move and no import rewrite (nothing to update). The
+  header comment, which said the format is "shared by the keyed record store
+  and the record manifest" (the store went with #969), now names its users and
+  says why it is in the kernel. The table row and "Open questions" record the
+  placement.
 
 ### Task 1: `control-mcp` as the next slice
 
@@ -851,9 +963,9 @@ Rules that keep slices safe:
 
 ## Open questions
 
-- Where `keyed-record-format.ts` goes. Its only importers are
-  `build-pipeline-transcript-*`, so moving it with the `build-pipeline` slice
-  looks right; the alternative is the shared kernel.
+- Where `keyed-record-format.ts` goes. Settled 2026-11-13: the shared kernel
+  at the `core/` root, because `transcript-artifacts/store.ts` imports it as
+  well as two `build-pipeline-transcript-*` files (task 7).
 - Where `pi-model-catalog-seeding.ts` belongs: next to the native-agent model
   catalogue code, or the kernel. Decide when it is touched.
 - Whether `storage` and `native-agent` should move before or after their

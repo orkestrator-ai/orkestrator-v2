@@ -8,13 +8,14 @@ Found on 2026-10-26 while doing
 
 Analysed 2026-10-27 against `main` at `863b5782`; task 3 re-analysed and
 run 2026-11-10 against `main` at `c98b20e6f`, and again 2026-11-11 against
-`main` at `498b68766`.
+`main` at `498b68766`; task 3 re-analysed 2026-11-13 against `main` at
+`17d28238c`.
 
 ### Tasks
 
 1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: done 2026-10-28 (option (b), shown in Agent Info and on the Multi Review reviewer and consolidation step; decisions A1 to A9).
 2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux run, the Linux-only case included, passed 2026-11-10 (A15).
-3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17; the run found and fixed two defects), and for AppArmor's `bwrap-userns-restrict` on 2026-11-11 from CI's Ubuntu 26.04 runner (A18). Open: Agent Info's "No sandbox" seen during a reviewer turn on the real stack, which needs a host whose containers reach the profile's agent tools server (A19; the display is now pinned by a component test). The Windows check moved to 7568 on 2026-11-10.
+3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17; the run found and fixed two defects), and for AppArmor's `bwrap-userns-restrict` on 2026-11-11 from CI's Ubuntu 26.04 runner (A18). Open: Agent Info's "No sandbox" seen during a reviewer turn on the real stack. The case is built (2026-11-13, A22): `container-multi-review-read-only.spec.ts` holds the reviewers before they submit and reads Reviewer 1's Agent Info, but it has not run, because it needs a Linux node with rootless Docker whose containers reach the profile's agent tools server (A19). The Windows check moved to 7568 on 2026-11-10.
 
 ### 1. Choose and implement the behaviour
 
@@ -300,7 +301,7 @@ Updated 2026-11-11 (task 3 and 7565), 2026-11-10 (task 3); the rest 2026-10-28 o
   run 42938699515 (A18). The read-only turn on Windows moved to 7568 on
   2026-11-10.
 - [ ] Agent Info's "No sandbox" while a reviewer turn runs, on the real stack
-  (A19).
+  (A19). The case is built (A22); left: run it, as in "Needs verification".
 
 ## Constraints and rationale
 
@@ -532,6 +533,24 @@ Made 2026-10-28 while implementing.
     coordinator's inputs for a case no report has raised. Pinned by
     `read-only-connection-env.test.ts` ("which settings file a coordinator
     bridge reads").
+- **A22. The held Agent Info sighting is built, and the file stays open
+  until it runs (2026-11-13, task 3).** The Claude review fake
+  (`container-fake-claude-review-api.ts`) gained `--hold <file>`: while the
+  file exists, a reviewer's submitting request waits (at most 5 minutes), and
+  the spec reads Reviewer 1's Agent Info during that wait, checks "No
+  sandbox, approvals denied" and the container reason, then removes the file
+  in a `finally`. The hold is unit-tested; the spec has not run, because
+  beelink2, where it was built, has no Docker access (the socket is
+  `root:docker`, the user is not in the group, and there is no rootless
+  daemon). Options: (a) retire this file and move the run to 7568; (b) keep
+  task 3 open as `backlog`. **Chosen: (b).** A run on a headless Linux node
+  with rootless Docker and a loopback fake is agent work by
+  [Human-only work](../../README.md#human-only-work), so it does not belong
+  in the checklist; (a) was tried first and the Multi Review of 2026-11-13
+  rejected it because it retired the to-do before its deliverable had been
+  seen. The spec is selected alone with a file filter after
+  `test:agent:docker`, so the other Docker fixture specs do not run against
+  the credential-free profile.
 
 ## Open questions
 
@@ -545,9 +564,24 @@ Made 2026-10-28 while implementing.
   CI's runner (A18). Ubuntu 24.04 stays with 0145 task 3.
 - Agent Info saying "No sandbox" while a reviewer turn runs, on the real
   stack: the fake's turns finish in a few seconds, so it was not caught on
-  2026-11-10, and omarchy-hp cannot run the container case (A19). The
-  reported policy is pinned by `claude-query-config.reported-policy.test.ts`
-  and the panel by `AgentInfoButton.reviewers.test.tsx`.
+  2026-11-10, and neither omarchy-hp nor beelink2 can run the container case
+  (A19, A22). The reported policy is pinned by
+  `claude-query-config.reported-policy.test.ts` and the panel by
+  `AgentInfoButton.reviewers.test.tsx`. How to run it (A22): on a Linux node
+  whose environment containers reach a `dev:test` profile's agent tools
+  server (`mise run docker:disposable -- start --host-loopback` with its
+  `DOCKER_HOST` exported for the profile and the spec, as on beelink on
+  2026-11-10), build the dev image in that daemon, start `mise run dev:test
+  --profile <name> --fixture --fixture-environments local,container
+  --no-agent-credentials --agent-platforms claude --no-host-seed --headless`,
+  then run `ORKESTRATOR_AGENT_TEST_PROFILE=<name>
+  ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:logged -- --name
+  container-review-claude -- mise run test:agent:docker --
+  container-multi-review-read-only.spec.ts`, and stop and reset the profile.
+  Record here the date, the Claude CLI version, the result, and whether the
+  attached `reviewer-agent-info-running` screenshot shows "No sandbox,
+  approvals denied" with "cannot run commands in this container"; then
+  retire this file.
 - Done 2026-11-10: the container case (A12) and the Linux run of the live
   suite (19 of 19, A15).
 

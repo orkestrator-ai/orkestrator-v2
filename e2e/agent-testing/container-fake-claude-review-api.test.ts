@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { validateWorkflowResult } from "../../apps/backend/src/core/workflow-result-contracts";
 import {
   HEAD_COMMAND,
   LIST_COMMAND,
   WRITE_PROBE,
   handleFakeClaudeReviewApi,
+  waitWhileHeld,
   packageFromRead,
   reviewReport,
   reviewSlot,
@@ -205,5 +209,85 @@ describe("container fake Claude review API", () => {
         )
       ).status,
     ).toBe(200);
+  });
+  test("a hold keeps a reviewer's submission waiting until it is released", async () => {
+    const lines: string[] = [];
+    let checks = 0;
+    // Present for three checks, then released.
+    const exists = async () => (checks += 1) <= 3;
+    expect(
+      await waitWhileHeld("/held", "review-report", (line) => lines.push(line), {
+        pollMs: 1,
+        exists,
+      }),
+    ).toBe(true);
+    expect(checks).toBe(4);
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      { kind: "review-report", step: "hold", answered: [] },
+    ]);
+    // Absent: answered at once, nothing logged.
+    expect(
+      await waitWhileHeld("/held", "review-report", (line) => lines.push(line), {
+        exists: async () => false,
+      }),
+    ).toBe(false);
+    expect(lines).toHaveLength(1);
+    // A hold never released still ends at its limit.
+    expect(
+      await waitWhileHeld("/held", "review-report", undefined, {
+        pollMs: 1,
+        limitMs: 5,
+        exists: async () => true,
+      }),
+    ).toBe(true);
+  });
+
+  test("the server holds only a reviewer's submission, and only while the file exists", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "ork-fake-review-hold-"));
+    const hold = path.join(directory, "hold");
+    try {
+      const atSubmit = body(
+        reviewerPrompt,
+        [
+          { step: "package", text: packageRead },
+          { step: "list" },
+          { step: "git", text: "refused", error: true },
+          { step: "diff-file" },
+          { step: "write-probe", text: "refused", error: true },
+        ],
+        ["Bash", "Read", "mcp__orkestrator__submit_review_report"],
+      );
+      expect(toolStep(reviewStep(atSubmit))?.step).toBe("submit");
+      const post = (payload: ReviewApiBody, lines: string[]) =>
+        handleFakeClaudeReviewApi(
+          new Request("http://127.0.0.1:47123/v1/messages", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          }),
+          (line) => lines.push(line),
+          hold,
+        );
+      await writeFile(hold, "");
+      const lines: string[] = [];
+      let answered = false;
+      const pending = post(atSubmit, lines).then((response) => {
+        answered = true;
+        return response;
+      });
+      for (let wait = 0; wait < 100 && !lines.length; wait += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(JSON.parse(lines[0]!)).toMatchObject({ kind: "review-report", step: "hold" });
+      // An earlier step is never held.
+      const early: string[] = [];
+      await post(body(reviewerPrompt, []), early);
+      expect(early.map((line) => JSON.parse(line).step)).toEqual(["package"]);
+      expect(answered).toBe(false);
+      await rm(hold);
+      expect((await pending).status).toBe(200);
+      expect(lines.map((line) => JSON.parse(line).step)).toEqual(["hold", "submit"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

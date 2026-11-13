@@ -236,8 +236,8 @@ supported peer already has the newer behaviour.
 
 Not governed by the window (listed so nobody waits on it):
 
-- `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`, `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`,
-  `ORKESTRATOR_RECURRING_METRICS=0`:
+- `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and `ORKESTRATOR_RECURRING_METRICS=0`
+  (`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` was removed on 2026-11-13):
   [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 - Container `legacy-layer` storage, `host-mounts` inputs and network policy 1:
   the switches that forced them on a capable image were removed on

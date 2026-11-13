@@ -859,9 +859,18 @@ on revocation described above.
   per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
   is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
   never leave the backend.
-- Writing: on Linux a file staged byte for byte is reflinked from the
-  descriptor that was checked (`FileCloner`, through `/proc/self/fd`), where
-  the data directory's filesystem can (btrfs, XFS, bcachefs). A reflink shares
+- Writing: a file staged byte for byte is cloned from the descriptor that was
+  checked (`FileCloner`, `portable-inputs-clone.ts`), never from its path, so a
+  file swapped in after the check is not staged. On Linux that is a reflink
+  through `/proc/self/fd`, where the data directory's filesystem can (btrfs,
+  XFS, bcachefs). On macOS it is an APFS clone through `fclonefileat(2)`,
+  reached with `bun:ffi` (neither Node nor Bun exposes it, `clonefile(2)` and
+  `COPYFILE_FICLONE` take a path, and `/dev/fd` duplicates a descriptor rather
+  than naming the file); the clone's BSD file flags and extended attributes,
+  which `fclonefileat` copies and a plain copy does not, are cleared (all but
+  `com.apple.provenance`, which the kernel puts on every file the backend
+  writes). Outside Bun, or off APFS (`ENOTSUP` on HFS+, `EXDEV` across
+  volumes), the file is copied. A clone shares
   the source's blocks until either side writes, so the revision stays an
   independent copy: a write to it never reaches the host file or another
   environment's revision, unlike a hard link. Its size is checked after the
@@ -870,7 +879,7 @@ on revocation described above.
   guarded file (Claude's settings and `.claude.json`, the credential-guarded
   skill and extension trees) is read and written as before, since cloning after
   the read could stage bytes nobody checked. Anywhere else (another platform,
-  ext4, tmpfs, a source on another filesystem) the run copies, and after one
+  ext4, tmpfs, HFS+, a source on another filesystem) the run copies, and after one
   failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
   btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
   copied (measurements (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)).
@@ -939,9 +948,18 @@ on revocation described above.
   (`hostClaudeSignedOut`) only when every place the login is looked up says
   so: each `.credentials.json` absent or holding no login, and on macOS a
   metadata-only `security find-generic-password` (no `-w`, so no access
-  prompt) exiting 44, item not found, for each keychain searched. An
-  unreadable file, an expired login or any other Keychain answer keeps the
-  older behaviour, stripping refresh tokens in place.
+  prompt) exiting 44, item not found, for each keychain searched. Measured on
+  macOS 27.2 against a temporary keychain (2026-11-13): 44 for a record the
+  keychain lacks, 0 once it exists, and 44 too for a keychain path that is
+  missing, empty, not a keychain or a directory. So the pinned
+  `login.keychain-db` lookup runs only when that file starts with the
+  keychain magic (`isKeychainFile`): without one, an agent-test profile, whose
+  lookup is pinned to its own home, reads as not signed out, and an ordinary
+  install relies on the default search list alone. A locked keychain was not
+  measured (it raises an unlock prompt on the desktop); an answer other than
+  44 keeps the strip. An unreadable file, an expired login or any other
+  Keychain answer keeps the older behaviour, stripping refresh tokens in
+  place.
 - When a container's host-imported Codex or Grok login lapses, the tab's
   sign-in message (readiness `authentication-required`) is replaced by
   guidance to renew the login on the host (or the added Codex account in
@@ -1080,10 +1098,12 @@ copied directory rather than about fifteen. The walk uses GNU find's `-printf`;
 where find lacks it (BSD find, when the helpers run on macOS) the first walk
 lists nothing and the rest of the boot uses a portable walk
 (`agent_input_directory_walk`): `find -print0` classified with shell tests, and
-one `du -sk`, with the same bounds and listing. Timings are in
-[4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
-and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
-tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
+one `du -sk`, with the same bounds and listing. Timings are in to-do 4580
+(retired 2026-11-13) tasks 2 and 3
+(`git show 17d28238c:docs/todo/containers-and-environments/4580-input-stamp-follow-ups.md`)
+and to-do 6740 (retired 2026-11-13) tasks 3 and 5
+(`git show 17d28238c:docs/todo/containers-and-environments/6740-input-staging-follow-ups.md`);
+the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 

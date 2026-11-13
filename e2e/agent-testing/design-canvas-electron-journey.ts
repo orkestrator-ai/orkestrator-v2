@@ -146,69 +146,51 @@ export async function openDesignWindow(
  * Open, edit, keyboard, export, download and host import, through `window`.
  * Downloads and the host fixture go under `temporaryRoot`; the environment is
  * stopped and deleted at the end of a passing run.
+ *
+ * `electronApp` is null for an app reached only over CDP: a shipped build
+ * whose Node inspect fuse is off, such as a published release in the 0036 (retired)
+ * renderer pairing (design-canvas-renderer-pairing-electron.spec.ts). Then the
+ * steps that need main skip: the window size, the Save-dialog and open-dialog
+ * instrumentation, the window zoom factor around Ctrl/⌘+0, and the download.
+ * Every renderer and backend step still runs.
+ *
+ * `olderRenderer` marks a published renderer that predates renderer fixes
+ * and features the journey checks on the way. Both skip for it: the app-wide
+ * keyboard shortcuts dialog (#1240, after v2.22.3), and Ctrl/⌘+0 resetting a
+ * focused canvas, which App's zoom listener swallowed until the fix 0036 (retired)
+ * recorded on 2026-10-22 (v2.22.3 shipped on 2026-10-17). Neither depends on
+ * the backend.
  */
 export async function runDesignCanvasJourney({
   electronApp,
   window,
   profile,
   temporaryRoot,
+  olderRenderer = false,
 }: {
-  electronApp: ElectronApplication;
+  electronApp: ElectronApplication | null;
   window: Page;
   profile: RuntimeProfile;
   temporaryRoot: string;
+  olderRenderer?: boolean;
 }): Promise<void> {
   const downloadDir = path.join(temporaryRoot, "downloads");
   const hostDir = path.join(temporaryRoot, "host-designs");
   await mkdir(downloadDir, { recursive: true });
   await mkdir(hostDir, { recursive: true });
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]?.setSize(1440, 960);
-  });
-  const versions = await electronApp.evaluate(() => ({
-    electron: process.versions.electron,
-    chrome: process.versions.chrome,
-  }));
-  test.info().annotations.push({ type: "electron", description: JSON.stringify(versions) });
-
-  // Main-process instrumentation: record (and refuse) any OS open dialog,
-  // and give Electron's download a save path instead of its Save dialog.
-  await electronApp.evaluate(({ BrowserWindow, dialog }, downloadDir) => {
-    const state = globalThis as typeof globalThis & {
-      __designDialogCalls?: string[];
-      __designDownloads?: DownloadRecord[];
-    };
-    state.__designDialogCalls = [];
-    state.__designDownloads = [];
-    const record = (name: string) => () => {
-      state.__designDialogCalls!.push(name);
-      return name.endsWith("Sync") ? undefined : { canceled: true, filePaths: [] };
-    };
-    (dialog as any).showOpenDialog = record("showOpenDialog");
-    (dialog as any).showOpenDialogSync = record("showOpenDialogSync");
-    const session = BrowserWindow.getAllWindows()[0]!.webContents.session;
-    session.on("will-download", (_event, item) => {
-      const entry: DownloadRecord = {
-        filename: item.getFilename(),
-        scheme: new URL(item.getURL()).protocol,
-        savePath: `${downloadDir}/${item.getFilename()}`,
-        state: "progressing",
-        received: 0,
-      };
-      item.setSavePath(entry.savePath);
-      state.__designDownloads!.push(entry);
-      item.once("done", (_doneEvent, doneState) => {
-        entry.state = doneState;
-        entry.received = item.getReceivedBytes();
-      });
-    });
-  }, downloadDir);
+  if (electronApp) {
+    await runMainInstrumentation(electronApp, downloadDir);
+  } else {
+    test.info().annotations.push({ type: "main-process", description: "not reachable (CDP only)" });
+  }
   const dialogCalls = () =>
-    electronApp.evaluate(
-      () => (globalThis as { __designDialogCalls?: string[] }).__designDialogCalls ?? [],
-    );
+    electronApp
+      ? electronApp.evaluate(
+          () => (globalThis as { __designDialogCalls?: string[] }).__designDialogCalls ?? [],
+        )
+      : Promise.resolve([] as string[]);
   const downloads = () =>
-    electronApp.evaluate(
+    electronApp!.evaluate(
       () => (globalThis as { __designDownloads?: DownloadRecord[] }).__designDownloads ?? [],
     );
 
@@ -257,7 +239,13 @@ export async function runDesignCanvasJourney({
   const expand = window.getByRole("button", { name: `Expand project ${project.name}` });
   const entry = window.getByText(environment.name, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
-  if (await expand.isVisible()) await expand.click();
+  // A startup dialog (Docker, GitHub CLI) that opens just as Expand is
+  // clicked takes the click; its locator handler then closes it and the
+  // project stays collapsed. Expand until the environment shows (flake 9969).
+  await expect(async () => {
+    if (await expand.isVisible()) await expand.click();
+    await expect(entry).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
   await window.mouse.move(0, 0);
   await entry.click();
 
@@ -298,12 +286,17 @@ export async function runDesignCanvasJourney({
       element.setAttribute("tabindex", "0");
       (element as HTMLElement).focus();
     });
-    const shortcutsChord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`;
-    await window.keyboard.press(shortcutsChord);
-    await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
-    await expect(window.getByRole("textbox", { name: "Search keyboard shortcuts" })).toBeFocused();
-    await window.keyboard.press(shortcutsChord);
-    await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    // The app-wide shortcuts dialog opens over a focused design frame.
+    if (!olderRenderer) {
+      const shortcutsChord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`;
+      await window.keyboard.press(shortcutsChord);
+      await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+      await expect(
+        window.getByRole("textbox", { name: "Search keyboard shortcuts" }),
+      ).toBeFocused();
+      await window.keyboard.press(shortcutsChord);
+      await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    }
     const entries = await libraryIds(DESIGN_NAME);
     expect(entries).toHaveLength(1);
     canvasId = entries[0]!.id;
@@ -396,10 +389,14 @@ export async function runDesignCanvasJourney({
     await expect(title).toBeVisible();
 
     // Canvas zoom keys.
+    // The window's zoom factor is main's to read; over CDP only, the page's
+    // CSS width stands in for it (an app zoom change rescales it).
     const appZoom = () =>
-      electronApp.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]!.webContents.getZoomFactor(),
-      );
+      electronApp
+        ? electronApp.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows()[0]!.webContents.getZoomFactor(),
+          )
+        : window.evaluate(() => globalThis.innerWidth);
     const appZoomBefore = await appZoom();
     await title.click();
     const zoom0 = await zoomPercent(window);
@@ -438,28 +435,46 @@ export async function runDesignCanvasJourney({
         state.__designKeys!.push([event.key, event.metaKey, event.ctrlKey, event.defaultPrevented]),
       );
     });
-    await window.keyboard.press("ControlOrMeta+=");
-    await expect.poll(appZoom).toBeGreaterThan(appZoomBefore);
+    if (electronApp) {
+      await window.keyboard.press("ControlOrMeta+=");
+      await expect.poll(appZoom).toBeGreaterThan(appZoomBefore);
+      // Press once the canvas has re-measured at the new window zoom.
+      await expect.poll(canvasSize).not.toEqual(sizeBefore);
+    } else {
+      // No zoom factor to compare across Ctrl/⌘+=: move the canvas off 100%
+      // instead, so the reset below is observable.
+      await window.keyboard.press("+");
+      await expect.poll(() => zoomPercent(window)).not.toBe(100);
+    }
     const appZoomed = await appZoom();
-    // Press once the canvas has re-measured at the new window zoom.
-    await expect.poll(canvasSize).not.toEqual(sizeBefore);
     await window.keyboard.press("ControlOrMeta+0");
-    await expect
-      .poll(() => zoomPercent(window))
-      .toBe(100)
-      .catch(async (error: Error) => {
-        const keys = await window.evaluate(
-          () => (globalThis as { __designKeys?: unknown[] }).__designKeys,
-        );
-        throw new Error(
-          `${error.message}\nwindow keydown (bubble): ${JSON.stringify(keys)}; app zoom ${await appZoom()}`,
-        );
+    if (olderRenderer) {
+      // Recorded, not asserted: the fix came after this release.
+      await window.waitForTimeout(1_000);
+      test.info().annotations.push({
+        type: "older-renderer-ctrl-0",
+        description: `canvas zoom after Ctrl/Cmd+0: ${await zoomPercent(window)}%`,
       });
+    } else {
+      await expect
+        .poll(() => zoomPercent(window))
+        .toBe(100)
+        .catch(async (error: Error) => {
+          const keys = await window.evaluate(
+            () => (globalThis as { __designKeys?: unknown[] }).__designKeys,
+          );
+          throw new Error(
+            `${error.message}\nwindow keydown (bubble): ${JSON.stringify(keys)}; app zoom ${await appZoom()}`,
+          );
+        });
+    }
     expect(await appZoom()).toBe(appZoomed);
-    await window.keyboard.press("ControlOrMeta+-");
-    await expect.poll(appZoom).toBe(appZoomBefore);
-    // The canvas re-measures after the window zoom settles.
-    await expect.poll(canvasSize).toEqual(sizeBefore);
+    if (electronApp) {
+      await window.keyboard.press("ControlOrMeta+-");
+      await expect.poll(appZoom).toBe(appZoomBefore);
+      // The canvas re-measures after the window zoom settles.
+      await expect.poll(canvasSize).toEqual(sizeBefore);
+    }
     // At 100% the tall frame's title sits under the toolbar; fit it back in
     // view. Fit is idempotent, so repeat it until the viewport has re-measured.
     await expect(async () => {
@@ -492,8 +507,10 @@ export async function runDesignCanvasJourney({
     await window.getByRole("button", { name: "Export design to repository" }).click();
     const dialog = window.getByRole("dialog", { name: "Export design to repository" });
     await expect(dialog.getByLabel("Folder")).toHaveValue("designs");
+    // The suggested file name arrives with the backend's export preview, after
+    // the folder's default (flake 9969).
+    await expect(dialog.getByLabel("File name")).toHaveValue(/\.orkdes$/, { timeout: 30_000 });
     const fileName = await dialog.getByLabel("File name").inputValue();
-    expect(fileName).toMatch(/\.orkdes$/);
     const relativePath = `designs/${fileName}`;
     await expect(dialog.getByText(`New file: ${relativePath} will be created.`)).toBeVisible();
     await dialog
@@ -519,20 +536,23 @@ export async function runDesignCanvasJourney({
     ).toBeVisible();
   });
 
-  await test.step("download through Electron's download manager", async () => {
-    const committed = (await snapshot(canvasId)).canvas;
-    await window.getByRole("button", { name: "Download orkdes" }).click();
-    const expectedName = `${DESIGN_NAME.replace(/[^a-zA-Z0-9_-]/g, "-")}.orkdes`;
-    await expect
-      .poll(async () => (await downloads()).map((item) => item.state), { timeout: 15_000 })
-      .toEqual(["completed"]);
-    const [download] = await downloads();
-    expect(download).toMatchObject({ filename: expectedName, scheme: "blob:" });
-    const content = await readFile(download!.savePath, "utf8");
-    expect(download!.received).toBe(Buffer.byteLength(content));
-    expect(JSON.parse(content)).toEqual(committed);
-    expect(await dialogCalls()).toEqual([]);
-  });
+  // The download's save path is set from main (no main over CDP).
+  if (electronApp) {
+    await test.step("download through Electron's download manager", async () => {
+      const committed = (await snapshot(canvasId)).canvas;
+      await window.getByRole("button", { name: "Download orkdes" }).click();
+      const expectedName = `${DESIGN_NAME.replace(/[^a-zA-Z0-9_-]/g, "-")}.orkdes`;
+      await expect
+        .poll(async () => (await downloads()).map((item) => item.state), { timeout: 15_000 })
+        .toEqual(["completed"]);
+      const [download] = await downloads();
+      expect(download).toMatchObject({ filename: expectedName, scheme: "blob:" });
+      const content = await readFile(download!.savePath, "utf8");
+      expect(download!.received).toBe(Buffer.byteLength(content));
+      expect(JSON.parse(content)).toEqual(committed);
+      expect(await dialogCalls()).toEqual([]);
+    });
+  }
 
   await test.step("open a host .orkdes through the in-app host picker", async () => {
     const hostFile = path.join(hostDir, "host-fixture.orkdes");
@@ -591,4 +611,62 @@ export async function runDesignCanvasJourney({
 
   await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
   await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+}
+
+/** Size the window, then record main's dialogs and give downloads a save path. */
+async function runMainInstrumentation(
+  electronApp: ElectronApplication,
+  downloadDir: string,
+): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1440, 960);
+  });
+  const versions = await electronApp.evaluate(() => ({
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+  }));
+  test.info().annotations.push({ type: "electron", description: JSON.stringify(versions) });
+  // The OS Save dialog of a download is Electron's own, not Orkestrator's: the
+  // product installs no `will-download` handler on the window's session (the
+  // artifact host's isolated session cancels downloads, and is not this one).
+  // 0036 (retired) task 3 dropped a manual Save dialog check on that basis, so a product
+  // handler added later must bring its own test of the dialog it shows.
+  expect(
+    await electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.webContents.session.listenerCount("will-download"),
+    ),
+    "The window's session has a will-download handler: test the Save dialog it changes",
+  ).toBe(0);
+  // Main-process instrumentation: record (and refuse) any OS open dialog,
+  // and give Electron's download a save path instead of its Save dialog.
+  await electronApp.evaluate(({ BrowserWindow, dialog }, downloadDir) => {
+    const state = globalThis as typeof globalThis & {
+      __designDialogCalls?: string[];
+      __designDownloads?: DownloadRecord[];
+    };
+    state.__designDialogCalls = [];
+    state.__designDownloads = [];
+    const record = (name: string) => () => {
+      state.__designDialogCalls!.push(name);
+      return name.endsWith("Sync") ? undefined : { canceled: true, filePaths: [] };
+    };
+    (dialog as any).showOpenDialog = record("showOpenDialog");
+    (dialog as any).showOpenDialogSync = record("showOpenDialogSync");
+    const session = BrowserWindow.getAllWindows()[0]!.webContents.session;
+    session.on("will-download", (_event, item) => {
+      const entry: DownloadRecord = {
+        filename: item.getFilename(),
+        scheme: new URL(item.getURL()).protocol,
+        savePath: `${downloadDir}/${item.getFilename()}`,
+        state: "progressing",
+        received: 0,
+      };
+      item.setSavePath(entry.savePath);
+      state.__designDownloads!.push(entry);
+      item.once("done", (_doneEvent, doneState) => {
+        entry.state = doneState;
+        entry.received = item.getReceivedBytes();
+      });
+    });
+  }, downloadDir);
 }

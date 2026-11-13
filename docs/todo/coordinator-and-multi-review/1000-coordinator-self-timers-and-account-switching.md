@@ -41,7 +41,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against 
 
 **Context.** `apps/backend/src/core/agent-usage-limits.ts:119` (`readProjectUsageLimits`, command `get_project_usage_limits`), `packages/protocol/src/agent-usage-limits.ts` (`classifyUsageLimitError`, `usageLimitFailure`, `exhaustedUsageWindows`).
 
-**Investigation.** The one durable record of a failed turn is the session's `turnOutcomes` (bounded error text, written for every backend-dispatched prompt). When this was built, bridges reduced usage limits to error strings (Codex's `codexErrorInfo` code was dropped in `setPhase`, Claude's `rate_limit_event` status was not read); task 5 changed that. Plan windows are cached per platform for the active account (`plan-usage-cache.ts`). Tests: `agent-usage-limits.test.ts` (backend and protocol).
+**Investigation.** The one durable record of a failed turn is the session's `turnOutcomes` (bounded error text, written for every backend-dispatched prompt). When this was built, bridges reduced usage limits to error strings (Codex's `codexErrorInfo` code was dropped in `setPhase`, Claude's `rate_limit_event` status was not read); task 5 changed that. Plan windows are cached per platform for the active account (`plan-usage/cache.ts`). Tests: `agent-usage-limits.test.ts` (backend and protocol).
 
 **Decisions.** See Assumptions and decisions: "Usage-limit reader".
 
@@ -286,7 +286,7 @@ manual-test checklist).
 ## Related
 
 - [agent-accounts.md](../../architecture/agent-accounts.md#machines) ("Preferred login"; to-do 0722's decision (c), retired 2026-11-10), why a switch is the user's act.
-- [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md).
+- [agent-accounts.md](../../architecture/agent-accounts.md), to-do 0003 (retired 2026-11-13).
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md), where task 4's scenario would live.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 4: its billed live run; the real-provider check of task 5's usage-limit signals) moved there on 2026-11-10.
 - `docs/architecture/scheduled-jobs.md` (Self-timers), `docs/architecture/agent-accounts.md` (Coordinator switching), `docs/architecture/coordinator.md`.

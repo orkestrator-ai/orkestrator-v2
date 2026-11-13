@@ -14,10 +14,13 @@ and 2 (see [Assumptions and decisions](#assumptions-and-decisions)).
 Analysed 2026-11-10 against `main` at `c6de4733c` (branch head `10d5c9b31`),
 on beelink, for the failed whole-suite `test:browser` run of task 2.
 
+Analysed 2026-11-13 against `main` at `17d28238c`, on a Mac (macOS 27.2 on 18
+cores, Playwright 1.65.0), for the macOS half of task 2.
+
 ### Tasks
 
 1. **An environment move failed with `claude-tmux cleanup incomplete`**: `local environment move survives inactive navigation and reload` failed once because the move command answered 500. Status: done (2026-11-09): cause reproduced on the real stack and fixed.
-2. **Qualify the loopback-only namespace for `test:browser` beyond beelink**: review validation and other Linux hosts have not run the suites through `scripts/loopback-network.ts`. Status: open: Ubuntu 24.04 and Debian 13 userlands qualified on beelink's kernel (2026-11-09); macOS remains (a Linux host with another kernel or hardening moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10); and a whole-suite `test:browser` pass on beelink has not been observed since: the 2026-11-10 run failed 131 cases at a load average above 100 and was stopped with 1,542 unrun.
+2. **Qualify the loopback-only namespace for `test:browser` beyond beelink**: review validation and other Linux hosts have not run the suites through `scripts/loopback-network.ts`. Status: open: Ubuntu 24.04 and Debian 13 userlands qualified on beelink's kernel (2026-11-09); macOS qualified (2026-11-13: both suites ran through the wrapper, which changed nothing in the Mac's network configuration, and no failure was the wrapper's); a Linux host with another kernel or hardening moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10. What remains for an agent is a whole-suite `test:browser` pass on beelink, not observed since the 2026-11-10 run failed 131 cases at a load average above 100 and was stopped with 1,542 unrun; it needs a quiet host.
 
 ### 1. An environment move failed with `claude-tmux cleanup incomplete`
 
@@ -94,7 +97,7 @@ step=claude-tmux`), leaving the runtime root behind. This branch was the one
 
 **Problem.** `mise run test:browser` now runs both Playwright suites through
 `scripts/loopback-network.ts`, which on Linux uses `unshare --user
---map-root-user --net` and raises `lo` with `ip`. It has run on beelink only.
+--map-root-user --net` and raises `lo` with `ip`. When this task was opened it had run on beelink only; macOS was qualified on 2026-11-13.
 
 **Context.** Hosts that refuse unprivileged user namespaces (for example Ubuntu
 24.04 with `kernel.apparmor_restrict_unprivileged_userns=1`, the GitHub runner
@@ -162,6 +165,53 @@ also a sample of five files, not the whole suite. A whole-suite pass inside
 the namespace on beelink, which component runs B and C nearly were
 (2026-11-06), has not been repeated on this branch.
 
+2026-11-13, macOS (macOS 27.2, 18 cores, Playwright 1.65.0) at `17d28238c`.
+On macOS the wrapper plans no namespace (`loopbackNamespacePlan` returns the
+command unchanged for any platform other than Linux, without probing), so
+there is nothing to compare against an `ORKESTRATOR_E2E_HOST_NETWORK=1` run
+except the notice line. What was checked:
+
+- The wrapper on macOS: with no opt-out it prints no `[loopback-network]` line
+  and runs the command directly, passing its exit status through (7); with
+  `ORKESTRATOR_E2E_HOST_NETWORK=1` it prints the host-network line. The host
+  has no `unshare`, and the wrapper never calls it there. Its unit tests
+  (`tests/unit/loopback-network.test.ts`) passed on macOS: 16 passed, 2
+  skipped (the two Linux-only namespace cases).
+- The Mac's network configuration: the interface list (`ifconfig -l`) and the
+  default route (`netstat -rn -f inet`) were the same before the first run and
+  after the last. No change was made or needed.
+- The suites, all on private ports (`ORKESTRATOR_E2E_PORT=14722`,
+  `ORKESTRATOR_PUBLIC_E2E_PORT=14723`), through `test:logged`, on a host shared
+  with about nine other builds:
+
+| Run | What ran | Workers | Load average (start → end) | Result |
+| --- | --- | --- | --- | --- |
+| 1 | `mise run test:browser` | 9 | 19 → 58 | stopped by `test:logged`'s 300 s no-output watchdog: the run's output was piped into a `tail` that printed only at the end (this build's mistake, not the suite's) |
+| 2 | `mise run test:browser` | 9 | 21 → 66 | stopped by the 30-minute group deadline after 1,474 of 1,884 component cases; 15 failures reported, all test timeouts (24 timeout lines) and `toBeVisible` misses; no `ERR_NETWORK_CHANGED` |
+| 3 | `mise run test:browser`, `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7000000`, `ORKESTRATOR_VALIDATION_GRANTED_WORKERS=6` | 6 | 51 → 48 | component suite: 1,729 passed, 154 skipped, 1 failed (37.6 min); the public-site suite did not start because the task chains the suites with `&&` |
+| 3a | `e2e/PaneBreakpoint.spec.ts --repeat-each=3` through the wrapper | default | 40 | 33 passed (57.5 s) |
+| 3b | the same with `ORKESTRATOR_E2E_HOST_NETWORK=1` | default | 40 | 33 passed (49.4 s) |
+| 3c | public-site suite through the wrapper | 2 | 42 | 14 passed (15.6 s) |
+
+Run 3's one failure was the mobile `split panes keep terminal output, scroll
+positions and the draft across the breakpoint (pane tree, appendChild
+fallback)` case, expected first visible `Transcript message 36.`, received
+`35.`: flake
+[0351](../../tests/flaky-tests/web-ui/0351-pane-breakpoint-parallel-startup.md)'s
+one-row anchor mismatch, recorded there as a recurrence. It passed in both
+reruns, on either network setting. Every run on macOS uses the host network,
+so neither this failure nor run 2's timeouts can come from the wrapper; they
+match the load-sensitive cases beelink saw.
+
+Runs 1 and 2 also left the Vite fixture server listening on port 14722 after
+`test:logged` terminated them. A probe sent SIGTERM to Playwright with and
+without the wrapper: the server survived both ways, because Playwright's
+runner handles only SIGINT and starts the server in its own process group.
+The wrapper does not cause it; it is to-do
+[8040](8040-playwright-sigterm-orphans-fixture-server.md). The evidence files
+are under `output/agent-testing/7020-macos/` in the worktree that ran them
+(not committed).
+
 **Decisions.**
 
 - **How to qualify it?**
@@ -228,13 +278,33 @@ namespace and on the host network at different loads (table under task 2's
 Investigation). That separates load from the namespace for those files; it does
 not stand in for a whole-suite pass, so the task stays open for one.
 
+### Task 2: macOS qualified without a second full host-network run
+
+On macOS the wrapper's plan is the command itself on the host network, so an
+`ORKESTRATOR_E2E_HOST_NETWORK=1` whole-suite run would repeat run 3 with a
+different notice line and measure only the host's load drift. Instead the one
+failing file was rerun both ways straight after (runs 3a and 3b) and the
+plan's macOS branch is pinned by its unit test. The suites ran on private
+ports so they could not reuse another checkout's fixture server on 1422, and
+run 3 used 6 workers and a longer `test:logged` deadline: at a load average
+near 60 the default 9 workers did not finish the component suite within 30
+minutes (run 2).
+
+### Task 2: the orphaned fixture server is a separate to-do
+
+Not a failure the wrapper caused (reproduced without it), and the fix belongs
+in the Playwright configs or the test runner rather than in
+`scripts/loopback-network.ts`, so it went to
+[8040](8040-playwright-sigterm-orphans-fixture-server.md) instead of this
+change. The two orphans this work left were stopped by PID after their
+command line and start time were checked.
+
 ## Outstanding work
 
-- Task 2: run `test:browser` on a macOS node, where no `[loopback-network]`
-  line is printed, and confirm the result matches an
-  `ORKESTRATOR_E2E_HOST_NETWORK=1` run. The same check on a Linux host other
-  than beelink (ideally Ubuntu 24.04 with its default AppArmor restriction)
-  moved to [7568](../manual-test/7568-manual-test-checklist.md).
+- Task 2: the check on a Linux host other than beelink (ideally Ubuntu 24.04
+  with its default AppArmor restriction) is in
+  [7568](../manual-test/7568-manual-test-checklist.md). macOS is done
+  (2026-11-13).
 - Task 2: a whole-suite `mise run test:browser` pass inside the namespace on
   beelink is not established on this branch. The only whole run (2026-11-10,
   `10d5c9b31`) failed 131 cases (62 navigation timeouts, none a network-change
@@ -256,3 +326,4 @@ not stand in for a whole-suite pass, so the task stays open for one.
 - Flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md), the cause and the run record.
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found the original failures.
 - [2921](2921-component-browser-failures-on-main.md), other `test:browser` failures.
+- [8040](8040-playwright-sigterm-orphans-fixture-server.md), the fixture server a terminated run leaves behind, found by the macOS qualification.

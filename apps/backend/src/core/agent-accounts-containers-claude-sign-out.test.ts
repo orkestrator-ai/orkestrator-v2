@@ -26,7 +26,7 @@ import { createEnvironment, StorageService } from "./storage.js";
  * After the host signs out of Claude, the next container start removes the
  * login the backend handed the container, instead of only stripping its
  * refresh tokens and leaving the access token usable until it expires
- * (to-do 4580 task 1). A host login that has merely expired keeps the old
+ * (to-do 4580 (retired), task 1). A host login that has merely expired keeps the old
  * behaviour.
  */
 // The in-container command tests start real bash, node and flock processes.

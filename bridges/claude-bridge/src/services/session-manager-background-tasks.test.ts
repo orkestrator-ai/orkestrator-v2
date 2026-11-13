@@ -14,7 +14,7 @@ import {
   captureEvents,
   createSession,
   deleteSession,
-  deleteSessionDurably,
+  closeSessionRetainingHistory,
   getSession,
   inspectDuringTurn,
   nextQueryCall,
@@ -1560,10 +1560,10 @@ describe("background task reducer", () => {
     expect(created.backgroundTasks?.["task-cycle-two"]?.status).toBe("completed");
   });
 
-  test("deleting the session closes a query retained for a continuation", async () => {
-    const created = createSession("delete while retained");
+  test("closing the session closes a query retained for a continuation", async () => {
+    const created = createSession("close while retained");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate then delete");
+    const promptPromise = sendPrompt(created.id, "delegate then close");
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -1589,10 +1589,10 @@ describe("background task reducer", () => {
     expect(call.isClosed()).toBe(false);
     expect(created.abortController).toBeUndefined();
 
-    // Deletion is the point at which the user has said the work should stop.
-    // The retained control must still be reachable, or the CLI would keep
-    // writing to a rollout that has just been removed underneath it.
-    expect(await deleteSessionDurably(created.id)).toBe(true);
+    // Close is the point at which the user has said the work should stop. The
+    // retained control must still be reachable, or the CLI would keep running
+    // after its tab has gone.
+    expect(await closeSessionRetainingHistory(created.id)).toBe("closed");
     await waitFor(() => call.isClosed());
     await promptPromise;
   });

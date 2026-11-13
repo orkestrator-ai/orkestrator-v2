@@ -5,7 +5,7 @@
  * `dev:test --fixture` profile with host credentials. Each provider in
  * `ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS` (default `claude,codex`) runs one
  * fixture-scoped cycle in its own pair of disposable environments
- * (docs/todo/design-canvas/0036-design-canvas-qualification.md, "Live agents"):
+ * (to-do 0036, retired; docs/architecture/design-canvas.md, "Qualification"):
  *
  * 1. **Launch.** New design workspace with the provider. The brief asks the
  *    agent to create, inspect, refine, capture and `save_canvas` through the
@@ -306,8 +306,8 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             .length;
 
         // The mounted tab sends its opening prompt. Leaving before the prompt is
-        // accepted defers it until the tab mounts again (a follow-up in
-        // docs/todo/design-canvas/0036-design-canvas-qualification.md), so leave once it is.
+        // accepted defers it until the tab mounts again (a follow-up in to-do
+        // 0036, retired; see docs/architecture/design-canvas.md), so leave once it is.
         await expect
           .poll(userMessages, {
             timeout: 90_000,

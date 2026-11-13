@@ -19,6 +19,7 @@ import {
   DOCKER_LABEL_PROJECT_ID,
   DOCKER_LABEL_OPERATION_ID,
   DOCKER_LABEL_INPUTS_REVISION,
+  DOCKER_LABEL_DEBIAN_ARCHIVE,
   DOCKER_LABEL_NETWORK_POLICY,
   DOCKER_LABEL_PROJECT_SEED_REFUSED,
   DOCKER_LABEL_RUNTIME_GENERATION,
@@ -122,6 +123,10 @@ import {
   egressGatewayName,
   removeRuntimeContainer,
 } from "./egress-gateway.js";
+import {
+  projectDeclaresAptPackages,
+  runtimeInstallsAptPackages,
+} from "./container-apt-packages.js";
 import {
   dockerAdmissionCapacity,
   logDriverArguments,
@@ -396,6 +401,19 @@ export async function createDockerContainer(
     networkPolicy,
     imageGatewayVersion: imageCapabilitySet["egress-gateway"] ?? 0,
   });
+  // A restricted runtime behind a gateway, for a project that declares
+  // Debian packages, also reaches Debian's archive so setup can install them
+  // (to-do 7770). Recorded as a label, so later allowlist revisions agree.
+  const debianArchive =
+    runtimeInstallsAptPackages({
+      networkMode: environment.networkAccessMode === "full" ? "full" : "restricted",
+      enforcement,
+      imageAptPackagesVersion: imageCapabilitySet["apt-packages"] ?? 0,
+    }) &&
+    (await projectDeclaresAptPackages(project.localPath, [
+      environment.branch,
+      repoConfig.defaultBranch || "main",
+    ]));
   const addHostGatewayAlias = shouldAddDockerHostGatewayAlias(process.platform, topology.kind);
   // Rootless: host-gateway is inside RootlessKit's namespace. Name its host
   // loopback address instead once the reachability check proved it answers.
@@ -514,7 +532,7 @@ export async function createDockerContainer(
     // Only re-add hosts for platforms this install actually enabled. An
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
-    const domains = containerAllowedDomains(environment, config, networkPolicy);
+    const domains = containerAllowedDomains(environment, config, networkPolicy, { debianArchive });
     const explicitNone = Boolean(imageCapabilitySet["network-refresh"]);
     allowedDomainsValue = allowedDomainsArgument(domains, explicitNone);
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${allowedDomainsValue}`);
@@ -676,6 +694,7 @@ export async function createDockerContainer(
     args.push(
       "--label",
       `${DOCKER_LABEL_NETWORK_POLICY}=${networkPolicy}`,
+      ...(debianArchive ? ["--label", `${DOCKER_LABEL_DEBIAN_ARCHIVE}=1`] : []),
       ...Object.entries(policyEnvironment).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
     );
   }

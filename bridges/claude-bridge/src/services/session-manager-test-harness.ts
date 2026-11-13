@@ -179,7 +179,7 @@ export const {
   STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
   CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
   withControlRequestTimeout,
-  deleteSessionDurably,
+  closeSessionRetainingHistory,
   renameSessionDurably,
   forkPersistedSession,
   rewindSessionFiles,

@@ -1,7 +1,7 @@
 /**
  * The read side of an OpenCode 2.x provider: transcript windows and pages,
  * session state, the interactive snapshot, usage and interaction cards
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 4).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan phase 4).
  *
  * `OpenCode2Provider` owns one of these and delegates to it, so the
  * provider's dispatch and steer logic and this read side stay apart. The

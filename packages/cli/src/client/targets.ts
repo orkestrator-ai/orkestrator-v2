@@ -317,7 +317,24 @@ async function descriptorTarget(
     );
   }
   const baseUrl = normalizeBaseUrl(descriptor.url);
-  return {
+  // The process whose token this target hands out until a restart replaces
+  // it (an update, a rollback, a service manager restart).
+  const original = async () => {
+    // The service's own auth file is created mode 0600 by the backend.
+    const refusal = await descriptorProcessRefusal(descriptor, readStart);
+    if (refusal)
+      throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
+    return readTokenFile(descriptor.authFile, true);
+  };
+  /** The successor's target once one was adopted; it follows later restarts itself. */
+  let successor: ResolvedTarget | null = null;
+  const adopt = (next: ResolvedTarget) => {
+    target.baseUrl = next.baseUrl;
+    target.identity.endpoint = next.identity.endpoint;
+    if (next.identity.generation) target.identity.generation = next.identity.generation;
+    if (next.descriptorGeneration) target.descriptorGeneration = next.descriptorGeneration;
+  };
+  const target: ResolvedTarget = {
     identity: {
       name,
       kind,
@@ -326,17 +343,48 @@ async function descriptorTarget(
       generation: descriptor.generation,
     },
     baseUrl,
-    // The service's own auth file is created mode 0600 by the backend.
+    // Once the process it was resolved from has gone, follow the descriptor
+    // its successor publishes, but only for the same installation. Until one
+    // is published the original refusal stands, so a caller observing through
+    // a restart keeps waiting (`connection-failed`) instead of failing.
     readToken: async () => {
-      const refusal = await descriptorProcessRefusal(descriptor, readStart);
-      if (refusal)
-        throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
-      return readTokenFile(descriptor.authFile, true);
+      try {
+        if (!successor) return await original();
+        const token = await successor.readToken();
+        adopt(successor);
+        return token;
+      } catch (error) {
+        if (successor || !(error instanceof CliError) || error.code !== "connection-failed")
+          throw error;
+        const next = await refresh().catch((refreshError: unknown) => {
+          if (refreshError instanceof CliError && refreshError.code === "identity-mismatch")
+            throw refreshError;
+          return null;
+        });
+        if (!next) throw error;
+        if (next.expectedInstallationId !== descriptor.installationId) {
+          throw new CliError(
+            "identity-mismatch",
+            `The backend at ${kind} '${name}' is a different installation than the one resolved`,
+            {
+              details: {
+                expected: descriptor.installationId,
+                actual: next.expectedInstallationId ?? null,
+              },
+            },
+          );
+        }
+        const token = await next.readToken();
+        successor = next;
+        adopt(next);
+        return token;
+      }
     },
     expectedInstallationId: descriptor.installationId,
     descriptorGeneration: descriptor.generation,
     refresh,
   };
+  return target;
 }
 
 export interface TargetSelection {
@@ -441,8 +489,8 @@ export async function resolveProfile(
   const refresh = () => resolveProfile(profileName, env, readStart);
   if (manifest.dataDir) {
     const descriptorFile = path.join(manifest.dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE);
-    // A missing descriptor means a backend that predates it; a refused one
-    // must stop here rather than fall back to the manifest's endpoint.
+    // A missing descriptor means its backend could not publish one (below); a
+    // refused one must stop here rather than fall back to the manifest's endpoint.
     const descriptor = await readDescriptor(descriptorFile).catch((error: unknown) => {
       if (error instanceof CliError && error.details?.descriptor === "missing") return null;
       throw error;
@@ -457,8 +505,13 @@ export async function resolveProfile(
       return descriptorTarget(located.id, "profile", descriptor, undefined, refresh, readStart);
     }
   }
-  // Backends that predate the instance descriptor: the manifest's own
-  // endpoint and auth file, with identity checked from capabilities only.
+  // A ready profile without a descriptor: the manifest's own endpoint and auth
+  // file, with identity checked from capabilities only. Kept although every
+  // backend from v2.21.0 on writes the descriptor before its ready line
+  // (`apps/backend/src/main.ts`): the write is best effort there. A failed
+  // capabilities read or file write is only logged, and the backend still
+  // serves and reports ready, so dev:test can mark the profile ready with no
+  // descriptor on disk.
   if (!manifest.browserUrl || !manifest.authFile) {
     throw new CliError(
       "profile-unavailable",

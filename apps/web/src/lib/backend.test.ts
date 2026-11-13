@@ -694,8 +694,6 @@ describe("backend setup wrappers", () => {
     await backendWrappers.stopBuildPipelineReviewer("pipeline-1", "reviewer-2");
     await backendWrappers.restartBuildPipelineCurrentStep("pipeline-1");
     await backendWrappers.retryBuildPipelineInteractionFailure("pipeline-1");
-    const legacySnapshots = [{ id: "legacy-pipeline" }];
-    await backendWrappers.importLegacyBuildPipelines("project-1", legacySnapshots);
 
     expect(invokeMock.mock.calls).toEqual([
       ["start_build_pipeline", input],
@@ -740,13 +738,6 @@ describe("backend setup wrappers", () => {
         "retry_build_pipeline_interaction_failure",
         {
           pipelineId: "pipeline-1",
-        },
-      ],
-      [
-        "import_legacy_build_pipelines",
-        {
-          projectId: "project-1",
-          snapshots: legacySnapshots,
         },
       ],
     ]);

@@ -36,7 +36,7 @@ Replace the placeholder numbers in §8.2 and the "inferred" claims in §15 with 
   - logged by main in `apps/desktop/electron/workspace-realm-messages.ts` with `sinceOpenMs`
   - This is desktop only; a browser frame logs to the console.
 - iOS handles only `webViewWebContentProcessDidTerminate` (`apps/ios/OrkestratorMobile/Views/RemoteWebView.swift:432-435`).
-- Todo `docs/todo/transcripts-and-observation/5380-bearer-terminal-stream-live-evidence.md`, task 2, already asks which routes use HTTP/1.1.
+- Todo 5380 (retired) task 2, now an item on the manual-test checklist (`docs/todo/manual-test/7568-manual-test-checklist.md`), already asks which routes use HTTP/1.1.
 
 ## Work
 
@@ -49,7 +49,7 @@ Replace the placeholder numbers in §8.2 and the "inferred" claims in §15 with 
 - [x] Request rate from a hidden browser realm, before and after [0003](0003-hidden-realm-visibility.md).
 - [x] Whether a hidden desktop `WebContentsView` reports `visibilityState: hidden` and throttles timers.
 - [x] `nextHopProtocol` on direct loopback and the relay (both `http/1.1`).
-- [ ] `nextHopProtocol` on direct LAN and Tailscale Serve; then close 5380 task 2 with the answer.
+- [ ] `nextHopProtocol` on direct LAN and Tailscale Serve; then close the checklist's 5380 (retired) task 2 item with the answer.
 - [x] Count long-lived requests per origin with a window plus three relayed realms, to confirm or refute P5 (connection exhaustion).
 - [x] Cold-open time to first paint on this Mac (desktop development build, Chromium, WebKit), from the existing boot timing.
 - [ ] Cold-open time on other hosts (Linux, iPad, real LAN/tailnet latency).

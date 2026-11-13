@@ -192,24 +192,42 @@ describe("removeProfile", () => {
 });
 
 describe("profile Keychain item", () => {
-  /** A Keychain holding `items` copies of each named service. */
+  /**
+   * A Keychain holding `items` copies of each `<service>\n<account>` pair.
+   * Like `security`, a query without `-a` matches any account of the service,
+   * and each successful delete removes one item.
+   */
   function keychain(items: Record<string, number>): CommandRunner {
     return (command, args) => {
       if (command !== "security") return run(command, args);
       securityCalls.push(args);
       const service = args[args.indexOf("-s") + 1]!;
-      if ((items[service] ?? 0) === 0) {
-        return { status: KEYCHAIN_ITEM_NOT_FOUND_EXIT, stdout: "", stderr: "" };
-      }
-      items[service]! -= 1;
+      const account = args.includes("-a") ? args[args.indexOf("-a") + 1] : undefined;
+      const match = Object.keys(items).find((key) => {
+        const [itemService, itemAccount] = key.split("\n");
+        return (
+          itemService === service &&
+          (account === undefined || itemAccount === account) &&
+          items[key]! > 0
+        );
+      });
+      if (!match) return { status: KEYCHAIN_ITEM_NOT_FOUND_EXIT, stdout: "", stderr: "" };
+      items[match]! -= 1;
       return { status: 0, stdout: "", stderr: "" };
     };
   }
 
-  test("reset deletes only the profile's own Safe Storage item, after its state", async () => {
+  test("reset deletes only the profile's own Safe Storage items, after its state", async () => {
     const profile = await createProfile("keychain");
-    const service = `${profile.electronTitle} Safe Storage`;
-    const items = { [service]: 2, "Orkestrator AI Safe Storage": 1 };
+    const title = profile.electronTitle;
+    // Electron 45.2.3 names the account "<title> Key" (live macOS run, see
+    // docs/development/disk-usage.md); earlier builds named it "<title>".
+    // Both are the profile's.
+    const current = `${title} Safe Storage\n${title} Key`;
+    const legacy = `${title} Safe Storage\n${title}`;
+    const production = "Orkestrator AI Safe Storage\nOrkestrator AI Key";
+    const sameAccount = `Other Service\n${title} Key`;
+    const items = { [current]: 1, [legacy]: 1, [production]: 1, [sameAccount]: 1 };
     let stateGoneFirst = true;
     const keychainRun = keychain(items);
     const result = await removeProfile(profile, {
@@ -226,16 +244,48 @@ describe("profile Keychain item", () => {
 
     expect(result).toMatchObject({ keychainItemsRemoved: 2, keychainWarning: null });
     expect(stateGoneFirst).toBe(true);
-    expect(items).toEqual({ [service]: 0, "Orkestrator AI Safe Storage": 1 });
+    expect(items).toEqual({ [current]: 0, [legacy]: 0, [production]: 1, [sameAccount]: 1 });
     expect(securityCalls).toEqual(
       Array.from({ length: 3 }, () => [
         "delete-generic-password",
         "-s",
         "Orkestrator AI — DEV [keychain] Safe Storage",
-        "-a",
-        "Orkestrator AI — DEV [keychain]",
       ]),
     );
+  });
+
+  test("deletes every account under the profile's service, one item per call", async () => {
+    // The profile owns its service whatever the account, so an account
+    // neither Electron build used is deleted too (a later rename, say).
+    // Real `security` deletes one matching item per call: checked in a
+    // throwaway keychain on macOS 27.2 (docs/development/disk-usage.md).
+    const profile = await createProfile("keychain-accounts");
+    const title = profile.electronTitle;
+    const service = `${title} Safe Storage`;
+    const items = {
+      [`${service}\n${title} Key`]: 1,
+      [`${service}\nUnexpected Account`]: 2,
+      [`Other Service\nUnexpected Account`]: 1,
+    };
+    const result = removeProfileKeychainItem(profile, keychain(items), "darwin", roots);
+    expect(result).toEqual({ removed: 3, warning: null });
+    expect(items).toEqual({
+      [`${service}\n${title} Key`]: 0,
+      [`${service}\nUnexpected Account`]: 0,
+      [`Other Service\nUnexpected Account`]: 1,
+    });
+    expect(securityCalls).toEqual(
+      Array.from({ length: 4 }, () => ["delete-generic-password", "-s", service]),
+    );
+  });
+
+  test("stops at the deletion bound when the item keeps coming back", async () => {
+    const profile = await createProfile("keychain-bound");
+    const service = `${profile.electronTitle} Safe Storage`;
+    const items = { [`${service}\n${profile.electronTitle} Key`]: 100 };
+    const result = removeProfileKeychainItem(profile, keychain(items), "darwin", roots);
+    expect(result).toEqual({ removed: 8, warning: null });
+    expect(securityCalls).toHaveLength(8);
   });
 
   test("keeps the item when the profile state could not be removed", async () => {

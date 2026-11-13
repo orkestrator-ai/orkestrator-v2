@@ -565,16 +565,14 @@ other consumer — notifications go to a per-thread serial queue and fan out fro
 there. A slow consumer on one thread therefore cannot stall every other thread
 in the environment.
 
-SSE frames carry `id: <revision>`, and `EventRing`
-(`packages/protocol/src/node/event-ring.ts`, shared with the Claude bridge)
-keeps a bounded replay buffer so a reconnecting client can ask for exactly what
-it missed. A newer full `message.updated` snapshot collapses the older frames
-for the same message to `bridge.cursor` frames that only keep the cursor dense;
-on the Claude bridge that includes the `message.patched` frames since the
-previous snapshot. An observation subscriber (`?observe=1`) of the Claude bridge
-still gets one content-free frame per revision. The
-`connected` frame echoes the client's own cursor rather than the latest
-revision, because a browser `EventSource` adopts every id it sees.
+`/event/subscribe` serves only the backend observer's stream (`?observe=1`;
+anything else is a 400, on the Claude bridge too). Frames carry
+`id: <revision>`, the event type and the session id, never a payload, and
+nothing is retained for replay: a reconnecting client whose cursor is not the
+current one gets `session.reconcile-required` (Claude: `replay.required`), and
+the backend re-reads every session on any connect anyway. The `connected`
+frame echoes the client's own cursor rather than the latest revision, because
+a client adopts every id it sees and must not skip past an unreported gap.
 
 Idle threads are detached (`thread/unsubscribe`, state freed) and transparently
 re-attached on the next request. `thread/delete` is never called: closing a
@@ -745,7 +743,8 @@ interpose a bridge process. The backend runs the managed `opencode2` binary
 `opencode serve` for the environment and talks to it directly. OpenCode 1.x and
 its SDK were retired on 2026-11-11: there is no 1.x server, no
 `@opencode-ai/sdk` dependency and no setting choosing between the lines
-([0008](../todo/agent-engines/0008-opencode-v2.md)).
+(to-do 0008, retired 2026-11-13; its history is in
+`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 
 **Where the server runs.**
 
@@ -856,6 +855,35 @@ OpenCode bump, re-check:
   under `apps/backend/src/core/opencode2/`.
 - The routes the client and the feature modules call (`GET /openapi.json` on a
   running server lists them).
+
+A bump is qualified on scripted models, with no login and nothing billed,
+in three layers ([upgrade-agents.md](../development/upgrade-agents.md) has
+the commands):
+
+- `mise run verify:opencode2:live`: every test under its own `opencode serve`
+  with a temporary `HOME`, `XDG_*` and `OPENCODE_DB`.
+- `mise run verify:opencode2:real-stack`: the idle-observation spec's
+  OpenCode cases (a missed final event, an approval card, a cut event
+  stream, a hidden document, a turn finishing with no renderer, composer
+  steer) in a local environment of a disposable profile.
+- `mise run verify:opencode2:container`: the same cases in a container
+  environment, with the scripted model served on the container's own
+  loopback and named in the profile's `opencode.json`, which each runtime
+  stages, plus a preserving rebuild after which a follow-up turn must settle
+  on the same session because `opencode2.db` came with it.
+
+All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
+2026-11-13, behind an egress gateway); the per-case figures are in
+[agent-testing.md](../development/agent-testing.md). The paths not yet run
+(a runtime without an egress gateway, concurrent sessions, a steer racing a
+card, steer through the public CLI) are to-do
+[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). The
+mitigations OpenCode 2 runs under (an exact pin, auto-update and file
+watchers off, an isolated database, model, agent and permission switches
+under the dispatch lock, the backend-held steer guard and its bounded
+journal, experimental routes used only at the exact pin) await the owner's
+review in the manual-test checklist; record that review, and any
+real-provider run, here.
 
 | Component                        | Purpose                                                           |
 | -------------------------------- | ----------------------------------------------------------------- |
@@ -1433,8 +1461,9 @@ JSONL file and resumes from it, so the bridge holds only the *rendered*
 transcript, the composer selection and the prompt journal. An idle detach, a
 bridge restart and a crashed process all recover by reopening that file, and
 losing the bridge's own state costs a transcript rather than a conversation.
-That also gives fork a real implementation: `createBranchedSession` writes a new
-file holding the path to the chosen entry, so a fork is an independent
+That also gives fork a real implementation: Pi's `AgentSessionRuntime.fork`
+(over `createBranchedSession`) writes a new file holding the path to the chosen
+entry and runs the extension hooks a fork fires, so a fork is an independent
 conversation rather than a copy of what was on screen.
 
 Pi ships no permission system, so its adapter implements the execution policy's

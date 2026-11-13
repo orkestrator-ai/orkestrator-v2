@@ -1,6 +1,6 @@
 /**
  * Steering on OpenCode 2.x, from what the pinned 2.2.6 server was observed to
- * do (`scripts/opencode2-steer-probe.ts`; docs/todo/agent-engines/0008-opencode-v2.md
+ * do (`scripts/opencode2-steer-probe.ts`; to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)
  * task 10):
  *
  * - `POST /api/session/:id/prompt` with `delivery: "steer"` delivers at the

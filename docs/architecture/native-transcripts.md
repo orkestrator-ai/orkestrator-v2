@@ -303,15 +303,30 @@ produces, so the window is measured whole.
 A part-trimmed head (one row larger than the whole window, reported by
 `omittedParts`) also recovers through this read, at most once a second per
 view however many readers share it; while a recovery is pending the view keeps
-the last recovered transcript. Measured on 2026-11-11 with a loopback model
-(the conditional-reads spec's `trimmed-head` scenario, see
+the last recovered transcript. A recovery that a newer revision overtook
+while its read was in flight is still committed when the view has not moved
+since the read started and the newer revision's recovery is pending, so the
+view advances once per recovery even when reading the row outlasts the gap
+between revisions; it never replaces a complete transcript that landed
+meanwhile.
+
+The recovered head row grows on every read, so no two views share it. The
+ring of superseded views that serves a reader one view behind
+(`native-agent-transcript-delta-bases.ts`) is bounded per key at 2 MiB, but
+always keeps its newest base, up to 8 MiB for that one base, and the grown
+row reaches a reader that negotiated patches as its appended text.
+
+Measured with a loopback model (the conditional-reads spec's `trimmed-head`
+scenario, see
 [agent-testing.md](../development/agent-testing.md#live-conditional-reads-loopback-models)):
-exactly one recovery read a second with one reader or two, and the view moved
-about once a second while that row stayed under about a million characters.
-Past that, each recovered transcript reached readers as a whole snapshot of
-about 3 MB, and past about 1.7 million characters the view stopped moving
-until the turn ended (to-do
-[7845](../todo/transcripts-and-observation/7845-trimmed-head-snapshots-and-stalled-view.md)).
+exactly one recovery read a second with one reader or two. Before 2026-11-13,
+past about a million characters each recovered transcript reached readers as
+a whole snapshot of about 3 MB (17.5 to 63 MB per viewer in 20 s), and past
+about 1.7 million characters the view stopped moving until the turn ended.
+After the fix, every recovered transcript reached every reader as a delta, 20
+view changes in 20 s per viewer up to 2.49 million characters, at about
+0.9 MB per viewer in 20 s (to-do 7845 (retired); its figures are in
+`git show b2ca5530b:docs/todo/transcripts-and-observation/7845-trimmed-head-snapshots-and-stalled-view.md`).
 
 ### Deferred display bodies
 
@@ -566,3 +581,32 @@ display-tail checkpoint age. See
 read in process against a provider fake (CPU, wall time, and the characters
 serialised and hashed), plus the legacy `getProjection` read encoded both
 ways. Its scenarios and how to compare two commits are in the script's header.
+
+### Live bytes per prompt send and turn check
+
+Efficiency batch E9 took its baseline with a provider fake
+(`native-agent-transcript-read-bytes.test.ts`: before E9 a prompt send read 33
+rows, 271,676 bytes, and a turn check 2 rows, 16,466 bytes, on its 8 KB rows).
+The live figures come from `transcript-read-bytes-live.spec.ts`
+([how to run it](../development/agent-testing.md#live-bytes-per-prompt-send-and-turn-check-loopback-model)):
+a real Claude bridge and CLI against a loopback model, six streamed history
+turns first, with no page rendering the session. Bytes are the response bodies
+the bridge wrote (none was compressed on that loopback hop), without HTTP
+headers; the backend's own timers (activity sweep, change-evidence poll) are
+counted apart. Measured 2026-11-13 on `17d28238c`, Claude CLI 2.1.319:
+
+| Read | Bridge requests | Bytes, mean (range) | Of which transcript rows |
+| --- | --- | --- | --- |
+| Prompt send (`dispatch_native_agent_intent`, 6 s window, model parked) | 11.4 | 18,569 (11,276 to 28,719) | 502: one bounded `/messages?limit` tail read |
+| Turn check (`get_native_agent_session_state_update`) | 4.6 | 3,727 (3,683 to 3,988) | 0 |
+| Turn check before E9 (one-message projection) | 6.7 | 7,406 (5,572 to 23,757) | 1,189 |
+| No command: idle 10 s, or a parked turn 6 s | 0 | 0 (the timers alone: 2,193 to 2,325) | 0 |
+
+A prompt send is the `POST /session/:id/prompt` (117 bytes), two state reads
+(3.6 to 5 KB each, growing with the session), the tail read, `/mcp` (700
+bytes) and four short interaction lists. On two of five sends a new CLI query
+(`/init`) bumped the command catalogue's revision and the backend re-read the
+18,152-byte catalogue; without it a send is 11 to 13 KB. A turn check is one
+state read and three empty interaction lists, with no transcript read, which
+the spec asserts. Real row sizes need a billed turn, an item on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).

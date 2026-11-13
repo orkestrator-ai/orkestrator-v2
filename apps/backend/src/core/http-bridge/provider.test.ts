@@ -19,7 +19,7 @@ import {
 } from "../agent-provider-test-support.js";
 import { normalizeProviderAuthNotice, normalizeProviderReadiness } from "./transport.js";
 import { readHttpBridgeSessionState } from "./progressive.js";
-import { PlanUsageState } from "../plan-usage-cache.js";
+import { PlanUsageState } from "../plan-usage/cache.js";
 import { HttpBridgeProvider } from "./provider.js";
 import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
@@ -428,7 +428,17 @@ describe("HTTP bridge provider", () => {
     const { provider } = httpProvider((url) =>
       url.endsWith("/commands")
         ? Response.json({
-            commands: [{ name: "/legacy" }, { name: "/future", source: "workspace-pack" }],
+            catalogueVersion: 1,
+            status: "ready",
+            commands: [
+              { name: "/legacy", id: "claude:/legacy", executionKind: "provider-prompt" },
+              {
+                name: "/future",
+                id: "claude:/future",
+                executionKind: "provider-prompt",
+                source: "workspace-pack",
+              },
+            ],
           })
         : new Response(null, { status: 404 }),
     );

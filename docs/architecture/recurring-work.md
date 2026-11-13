@@ -235,9 +235,13 @@ allowlist in `apps/desktop/electron/backend-process.ts`:
   its 60 s tab timer) were removed after the busy live profile and the long
   soak (todo 0048 task 13), so naming them, or `all`, leaves them on their
   keyed drivers.
-- `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
-  itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
+
+Native observation sharing (stable-idle group backoff and busy-queue reuse of
+the sweep's answer) has no switch: `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`,
+which made every consumer read providers itself again, was removed on
+2026-11-13 once the live-provider qualification (to-do 0049, retired) ended
+(todo 0048 task 13).
 
 ## Inventory
 
@@ -360,7 +364,7 @@ recorded.
 
 | ID | Source | Cadence |
 | --- | --- | --- |
-| L02 | `bridges/codex-bridge/src/index.ts`, `bridges/claude-bridge/src/routes/events.ts` | Codex checks every 5 s and sends at 5 s while active, 30 s while idle, echoing the latest revision; Claude every 30 s per connection. |
+| L02 | `bridges/codex-bridge/src/index.ts`, `bridges/claude-bridge/src/routes/events.ts` | Every 30 s per connection; Codex echoes the latest revision. |
 | L03, L04 | Codex app-server lifecycle and bridge index; Claude `session-manager-persistence.ts` and `session-manager-runtime-idle.ts` | Codex idle-session and index cleanup every 5 min; Claude evicts idle hydrated transcripts every 5 min. Each warm Claude CLI has one deadline, armed when a turn hands back the foreground and restarted by its own frames: it closes input after 10 min of silence (`CLAUDE_BRIDGE_RUNTIME_IDLE_MS`; at least 5 min while a continuation is owed) and re-checks a CLI still running tasks every 10 min. |
 | L05 | Cursor and Pi `server.ts`, `BridgeLifecycle` (`packages/protocol/src/bridge-lifecycle.ts`) | 1 min idle sweep, 10 min idle detach; parent check every 1 s (`PARENT_WATCH_INTERVAL_MS`). `BridgeLifecycle` owns the handles, clears every timer on shutdown and rejects a repeated start. |
 | L06 | `packages/protocol/src/parent-watchdog.ts` | Every 1 s (`PARENT_WATCH_INTERVAL_MS`), used by every bridge; ACP can override it with `ACP_PARENT_WATCHDOG_INTERVAL_MS`. A restarted backend reaps orphans 5 to 7 s after it starts, so detection must come well inside that. On detection the Codex bridge interrupts running turns (2 s budget) before it drains. |

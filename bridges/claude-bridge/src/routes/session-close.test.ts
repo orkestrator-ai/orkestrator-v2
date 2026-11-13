@@ -6,7 +6,6 @@ import { afterAll, describe, expect, mock, test } from "bun:test";
 import {
   PERSISTED_SDK_ID,
   createSession,
-  deleteSessionDurably,
   getSession,
   materializePersistedSession,
   mockSdkDeleteSession,
@@ -14,7 +13,6 @@ import {
   reconcilePersistedSessions,
   sdkSessionInfo,
   track,
-  waitFor,
 } from "../services/session-manager-test-harness.js";
 
 const envKeys = ["CLAUDE_BRIDGE_NO_SERVER", "CLAUDE_BRIDGE_AUTH_DISABLED_FOR_TESTING"] as const;
@@ -90,29 +88,5 @@ describe("POST /session/:id/close", () => {
     expect(retried.status).toBe(200);
     expect(await retried.json()).toEqual({ closed: true, retained: true });
     expect(getSession(state.id)).toBeUndefined();
-  });
-
-  test("answers 503 pending while a permanent deletion owns the session", async () => {
-    const state = await materializePersistedSession();
-    let finishDelete: (() => void) | undefined;
-    mockSdkDeleteSession.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          finishDelete = resolve;
-        }),
-    );
-    const deletion = deleteSessionDurably(state.id);
-
-    const pending = await closeRequest(state.id);
-    expect(pending.status).toBe(503);
-    expect(await pending.json()).toEqual({
-      closed: false,
-      pending: true,
-      error: "Session is already being closed or deleted",
-    });
-
-    await waitFor(() => finishDelete !== undefined);
-    finishDelete!();
-    await expect(deletion).resolves.toBe(true);
   });
 });

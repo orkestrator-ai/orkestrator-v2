@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -10,6 +11,8 @@ import {
   quiesceRuntime,
   parseCopyOutput,
   candidateStartError,
+  COPY_DRAIN_BASE_MS,
+  copyDrainWindowMs,
   parseMeasureOutput,
   pipeContainerPath,
   rebuildPreview,
@@ -115,6 +118,181 @@ exit 125
       },
     );
   }, 15_000);
+  test("a helper that never sees end of input after its producer exits is abandoned in the drain window (to-do 7705)", async () => {
+    // The 2026-11-11 stall: `docker cp` had exited, but the helper's `tee` was
+    // still blocked on the container's stdin 14 minutes later, so the step
+    // waited for the one-hour deadline. Here the helper ignores its input
+    // ending, as that one did.
+    // Removal is slow here: the step must not settle before it finishes,
+    // because rollback removes the candidate's volumes next.
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  cp) printf 'archive bytes'; exit 0 ;;
+  rm) sleep 1; echo "rm $*" >> "$FAKE_DOCKER_LOG"; exit 0 ;;
+  *) exec sleep 30 ;;
+esac
+`,
+      async (log) => {
+        const started = Date.now();
+        const logs = captureLogs();
+        let streamed = -1;
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+          drainWindowMs: (bytes, streamedMs) => {
+            expect(bytes).toBe("archive bytes".length);
+            // Measured from the producer's spawn to its close.
+            streamed = streamedMs;
+            return 300;
+          },
+          settleGraceMs: 2_000,
+          consumerContainer: "orkestrator-copy-test",
+        }).finally(() => logs.restore());
+        expect(result).toEqual({
+          absent: false,
+          output: "",
+          producerFailed: true,
+          daemonUnavailable: false,
+          stalled: true,
+        });
+        expect(Date.now() - started).toBeLessThan(10_000);
+        expect(logs.records()).toMatchObject([
+          {
+            event: "replacement.copy-helper-stalled",
+            fields: { producerCode: 0, bytes: "archive bytes".length, drainMs: 300 },
+          },
+        ]);
+        expect(streamed).toBeGreaterThanOrEqual(0);
+        expect(streamed).toBeLessThan(Date.now() - started);
+        expect(logs.records()[0]?.fields?.streamedMs).toBe(streamed);
+        // The helper container is removed (killing `docker run` leaves it
+        // running), and the removal had finished before the step settled.
+        expect(await log.read()).toContain("rm rm -f orkestrator-copy-test");
+      },
+    );
+  }, 20_000);
+  test("a stalled helper that cannot be removed is reported, and one already gone is not", async () => {
+    for (const [rm, failed] of [
+      ["echo 'Error response from daemon: cannot remove container: device busy' >&2; exit 1", true],
+      [
+        "echo 'Error response from daemon: No such container: orkestrator-copy-test' >&2; exit 1",
+        false,
+      ],
+    ] as const) {
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  cp) printf 'archive bytes'; exit 0 ;;
+  rm) ${rm} ;;
+  *) exec sleep 30 ;;
+esac
+`,
+        async () => {
+          const logs = captureLogs();
+          const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+            drainWindowMs: () => 300,
+            settleGraceMs: 2_000,
+            consumerContainer: "orkestrator-copy-test",
+          }).finally(() => logs.restore());
+          expect(result).toMatchObject({ absent: false, stalled: true });
+          const removeFailed = logs
+            .records()
+            .filter((record) => record.event === "replacement.copy-helper-remove-failed");
+          if (failed) {
+            expect(result).toMatchObject({ helperRemovalFailed: true });
+            expect(removeFailed).toMatchObject([
+              { level: "warn", fields: { helper: "orkestrator-copy-test" } },
+            ]);
+          } else {
+            expect(result).not.toHaveProperty("helperRemovalFailed");
+            expect(removeFailed).toEqual([]);
+          }
+        },
+      );
+    }
+  }, 20_000);
+  test("a producer's own failure outranks a stall of the helper it left waiting", async () => {
+    // The producer already said why it failed; the helper then sat in the
+    // drain window. Its answer, not the stall, names the failure.
+    for (const [stderr, expected] of [
+      [
+        "Error response from daemon: Could not find the file /home/node/.pi in container source",
+        { absent: true },
+      ],
+      [
+        "Error response from daemon: remount-ro /d/rootfs/overlayfs/1/git, flags: 0x1021: operation not permitted",
+        { absent: false, refused: true, stalled: true },
+      ],
+      [
+        "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+        { absent: false, daemonUnavailable: true, stalled: true },
+      ],
+    ] as const) {
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  cp) printf '%s\\n' '${stderr}' >&2; exit 1 ;;
+  rm) echo "rm $*" >> "$FAKE_DOCKER_LOG"; exit 0 ;;
+  *) exec sleep 30 ;;
+esac
+`,
+        async (log) => {
+          const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+            drainWindowMs: () => 300,
+            settleGraceMs: 2_000,
+            consumerContainer: "orkestrator-copy-test",
+          });
+          expect(result).toEqual(
+            expected.absent
+              ? expected
+              : {
+                  output: "",
+                  producerFailed: true,
+                  daemonUnavailable: false,
+                  ...expected,
+                },
+          );
+          expect(await log.read()).toContain("rm rm -f orkestrator-copy-test");
+        },
+      );
+    }
+  }, 30_000);
+  test("the drain window does not cut short a helper that finishes its checks", async () => {
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  cp) printf 'archive bytes'; exit 0 ;;
+  rm) echo "rm $*" >> "$FAKE_DOCKER_LOG"; exit 0 ;;
+  *) cat >/dev/null; sleep 1; printf 'ORKESTRATOR_COPY status=ok files=1 bytes=13\\n'; exit 0 ;;
+esac
+`,
+      async (log) => {
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+          drainWindowMs: () => 5_000,
+          consumerContainer: "orkestrator-copy-test",
+        });
+        expect(result).toMatchObject({ absent: false, producerFailed: false });
+        expect(result).not.toHaveProperty("stalled");
+        expect(parseCopyOutput((result as { output: string }).output)).toEqual({
+          ok: true,
+          files: 1,
+          bytes: 13,
+        });
+        expect(await log.read()).toBe("");
+      },
+    );
+  }, 20_000);
+  test("the drain window is minutes, grows with the bytes sent and stays far below the hour", () => {
+    expect(copyDrainWindowMs(0)).toBe(COPY_DRAIN_BASE_MS);
+    expect(copyDrainWindowMs(1024 ** 3)).toBeGreaterThan(copyDrainWindowMs(0));
+    expect(copyDrainWindowMs(5 * 1024 ** 3)).toBeLessThan(10 * 60_000);
+  });
+  test("the drain window also gets as long again as the stream took", () => {
+    // A loaded host slows the helper's work after its input ends as much as
+    // its work while the stream flows, so a slow stream earns a longer drain.
+    expect(copyDrainWindowMs(0, 90_000)).toBe(COPY_DRAIN_BASE_MS + 90_000);
+    expect(copyDrainWindowMs(1024 ** 3, 60_000)).toBe(copyDrainWindowMs(1024 ** 3) + 60_000);
+    expect(copyDrainWindowMs(0, -5)).toBe(COPY_DRAIN_BASE_MS);
+  });
   test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
     // Reaching no daemon (its socket gone) also says "no such file"; that
     // step was not copied and must fail, never be skipped as absent.
@@ -913,6 +1091,60 @@ exit 1
 // under an attached helper. The step must fail as an outage, not as files that
 // failed verification, and must say so without asking the daemon again: on a
 // systemd host that probe waits for the restarted daemon and answers "up".
+describe("a streamed copy step whose helper stalls", () => {
+  async function stalledStep(rm: string) {
+    const { context, owner } = await fixture();
+    const candidate = planStorageSet("env-lifecycle", owner, 1, "candidate");
+    const step = replacementCopyPlan("legacy-layer")[0]!;
+    let result: Awaited<ReturnType<typeof runCopyStep>> | undefined;
+    let dockerLog = "";
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  cp) printf 'archive'; exit 0 ;;
+  rm) echo "rm $*" >> "$FAKE_DOCKER_LOG"; ${rm} ;;
+  version) echo 29.0.0; exit 0 ;;
+  *) exec sleep 30 ;;
+esac
+`,
+      async (log) => {
+        result = await runCopyStep(
+          context,
+          "sha256:fixture",
+          step,
+          {
+            containerId: "source-container",
+            storage: { format: "legacy-layer", workspaceGeneration: 1 },
+          },
+          candidate,
+          { drainWindowMs: () => 300, settleGraceMs: 2_000 },
+        );
+        dockerLog = await log.read();
+      },
+    );
+    return { result: result!, dockerLog };
+  }
+
+  test("fails as helper-input-stalled once its named helper is removed", async () => {
+    const { result, dockerLog } = await stalledStep("exit 0");
+    expect(result).toEqual({ ok: false, reason: "helper-input-stalled" });
+    expect(dockerLog).toMatch(/^rm rm -f orkestrator-copy-[0-9a-f-]{12}$/m);
+  }, 20_000);
+
+  test("fails as helper-remove-failed when the helper cannot be removed", async () => {
+    const { result } = await stalledStep(
+      "echo 'Error response from daemon: cannot remove container' >&2; exit 1",
+    );
+    expect(result).toEqual({ ok: false, reason: "helper-remove-failed" });
+    if (result.ok) throw new Error("Expected copy failure");
+    await withDockerScript("#!/bin/sh\necho 29.0.0\n", async () => {
+      const error = String(await replacementCopyFailure(result.reason));
+      expect(error).toContain("ContainerLifecycleError:needs-attention");
+      expect(error).toContain("helper container could not be removed");
+    });
+  }, 20_000);
+});
+
 describe("copy step names a daemon lost while its helper waited", () => {
   const LOST = [
     "Error waiting for container: Canceled: grpc: the client connection is closing: context canceled",

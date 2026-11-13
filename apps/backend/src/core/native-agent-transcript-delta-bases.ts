@@ -15,6 +15,16 @@
  * The ring is contiguous by construction: anything that would leave a hole (a
  * different history, a base too large to keep) empties it, because a delta
  * across a hole could miss what happened inside it.
+ *
+ * A part-trimmed head row that the backend recovers once a second grows on
+ * every recovery, so consecutive views never share it and a base holding it
+ * costs the whole row. Past about a million characters that is more than the
+ * per-key bound, which used to empty the ring on every recovery and send
+ * every reader a whole snapshot (to-do 7845 (retired), task 1). The per-key bound now
+ * sheds older bases but always keeps the newest one: a base over the key
+ * bound replaces the ring rather than emptying it, so a reader one view
+ * behind still gets a delta, and with patches the grown row travels as its
+ * appended parts. Only a base over `maxBaseBytes` is too large to keep.
  */
 import {
   NATIVE_AGENT_REVISED_MESSAGES_MAX,
@@ -31,6 +41,12 @@ import { NATIVE_REVISED_MESSAGES_MAX_BYTES } from "./native-agent-service-shared
 
 export const NATIVE_TRANSCRIPT_DELTA_MAX_BASES = 8;
 export const NATIVE_TRANSCRIPT_DELTA_MAX_KEY_BYTES = 2 * 1024 * 1024;
+/**
+ * The most one base may cost when it is the only one its key keeps. Covers a
+ * recovered head row of about four million characters; a larger base empties
+ * the ring and its readers get a snapshot.
+ */
+export const NATIVE_TRANSCRIPT_DELTA_MAX_BASE_BYTES = 8 * 1024 * 1024;
 export const NATIVE_TRANSCRIPT_DELTA_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 /** One array slot per row a base keeps, whether or not it is charged for the row. */
 const ROW_REFERENCE_BYTES = 8;
@@ -38,6 +54,8 @@ const ROW_REFERENCE_BYTES = 8;
 export interface TranscriptDeltaBaseLimits {
   maxBases: number;
   maxKeyBytes: number;
+  /** Bound on a single base, which the ring keeps alone when it exceeds `maxKeyBytes`. */
+  maxBaseBytes: number;
   maxTotalBytes: number;
 }
 
@@ -86,6 +104,7 @@ export class TranscriptDeltaBases {
     private readonly limits: TranscriptDeltaBaseLimits = {
       maxBases: NATIVE_TRANSCRIPT_DELTA_MAX_BASES,
       maxKeyBytes: NATIVE_TRANSCRIPT_DELTA_MAX_KEY_BYTES,
+      maxBaseBytes: NATIVE_TRANSCRIPT_DELTA_MAX_BASE_BYTES,
       maxTotalBytes: NATIVE_TRANSCRIPT_DELTA_MAX_TOTAL_BYTES,
     },
   ) {}
@@ -101,7 +120,7 @@ export class TranscriptDeltaBases {
       return;
     }
     const bytes = retainedBytes(superseded.value, next);
-    if (bytes > this.limits.maxKeyBytes) {
+    if (bytes > Math.max(this.limits.maxKeyBytes, this.limits.maxBaseBytes)) {
       this.forget(key);
       return;
     }
@@ -112,7 +131,12 @@ export class TranscriptDeltaBases {
     ring.bases.push({ token: superseded.token, value: superseded.value, bytes });
     ring.bytes += bytes;
     this.bytes += bytes;
-    while (ring.bases.length > this.limits.maxBases || ring.bytes > this.limits.maxKeyBytes) {
+    // Oldest first, but never the base just added: shedding it would leave the
+    // ring empty for a reader one view behind, the case the ring exists for.
+    while (
+      ring.bases.length > this.limits.maxBases ||
+      (ring.bytes > this.limits.maxKeyBytes && ring.bases.length > 1)
+    ) {
       this.shedOldest(key, ring);
     }
     while (this.bytes > this.limits.maxTotalBytes) {

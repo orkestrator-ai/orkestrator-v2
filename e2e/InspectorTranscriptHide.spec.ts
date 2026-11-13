@@ -34,24 +34,24 @@ async function scrollHalfway(scroller: Locator): Promise<number> {
 }
 
 /**
- * Wheel up over the transcript until the reader is clear of the end, as a
- * reader keeps scrolling.
+ * One wheel tick up over the transcript leaves the end; the helper then wheels
+ * on until the reader is 100 px clear, as a reader keeps scrolling, because a
+ * WebKit tick under load can stop short of 100 px.
  *
- * WebKit can swallow the first tick from the end: the list's height shrinks
- * as the wheel animation starts, the browser clamps the offset, and the clamp
- * cancels the animation, leaving the reader at the end (fanout: 4 of 4 WebKit
- * runs in the Playwright image, failing most of CI's Mobile shell (webkit)
- * runs on pull requests; the building scenario: 1 of 68). A Safari reader
- * loses that tick too, so it is a product defect, not test timing. It is
- * tracked in to-do 7766
- * (docs/todo/transcripts-and-observation/7766-webkit-first-wheel-tick-swallowed-at-end.md),
- * which also records why the retry covers every view: a single-tick
- * assertion on the views that usually keep it would fail CI intermittently.
- * When 7766 is fixed, replace the retry with one tick and assert it.
+ * WebKit animates the tick, and its first step can meet a list that shrinks
+ * by about as much, so the offset is clamped to the new end and the
+ * virtualizer's compensation moves it back up. The controller used to pin
+ * that compensation back to the end before its scroll event arrived, so the
+ * tick moved nothing (to-do 7766, retired; `readerMovedUpUnobserved` in
+ * transcript-scroll-controller.ts, and transcript-scroll.md, "Reader input"). The single-tick poll proves it does not.
  */
 async function wheelUpFromEnd(page: Page, bottomGap: () => Promise<number>): Promise<void> {
+  await page.mouse.wheel(0, -600);
+  await expect
+    .poll(bottomGap, { message: "one wheel tick leaves the end", timeout: 5_000 })
+    .toBeGreaterThan(1);
   await expect(async () => {
-    await page.mouse.wheel(0, -600);
+    if ((await bottomGap()) <= 100) await page.mouse.wheel(0, -600);
     await expect.poll(bottomGap, { timeout: 1_000 }).toBeGreaterThan(100);
   }).toPass({ timeout: 10_000 });
 }
@@ -108,11 +108,13 @@ async function expectStableEnd(transcript: Locator, overview: Locator, overviewO
     },
     { overviewElement: await overview.elementHandle(), expectedOverview: overviewOffset },
   );
-  expect(samples.length).toBeGreaterThan(1);
+  // The samples first: a frame that left the end or moved the overview also
+  // ends the loop, and the count alone would hide which (flake 9976).
   for (const sample of samples) {
     expect(sample.bottomGap).toBeLessThanOrEqual(1);
     expect(sample.overviewTop).toBe(overviewOffset);
   }
+  expect(samples.length).toBeGreaterThan(1);
 }
 
 // These transcripts use `activation: "latest"`, so showing the pane lands on the

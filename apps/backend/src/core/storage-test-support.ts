@@ -7,6 +7,9 @@ import { databaseStoreForPath, openBackendDatabase } from "./storage-stores.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import { StorageService } from "./storage.js";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { PersistedNativeAgentTurnOutcome } from "./models.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 
 /**
  * Test helpers for the backend database. Stores are named by the data-dir
@@ -102,6 +105,39 @@ export function seedLegacyPromptQueueClaim(
   };
   seedStore(dataDir, "prompt-queues.json", queues);
   return token;
+}
+
+/**
+ * Appends one turn outcome to a stored native agent session's `turnOutcomes`,
+ * from outside the backend, as a provider's failed turn would have recorded
+ * it. Live specs use it (through `e2e/agent-testing/backend-store.ts`) to give
+ * a running profile a usage-limited tab without spending a plan. Returns
+ * false when the session does not exist.
+ */
+export function appendNativeAgentTurnOutcome(
+  dataDir: string,
+  session: { environmentId: string; agent: AgentPlatform; logicalSessionKey: string },
+  outcome: PersistedNativeAgentTurnOutcome,
+): boolean {
+  const key = nativeAgentSessionStorageKey(
+    session.environmentId,
+    session.agent,
+    session.logicalSessionKey,
+  );
+  return withDatabase(dataDir, (database) =>
+    database.updateStoreRow(storeName("native-agent-sessions.json"), key, (current) => {
+      if (!current || typeof current !== "object") return { result: false };
+      const stored = current as { turnOutcomes?: PersistedNativeAgentTurnOutcome[] };
+      return {
+        result: true,
+        value: {
+          ...stored,
+          turnOutcomes: [...(stored.turnOutcomes ?? []).slice(-49), outcome],
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }),
+  );
 }
 
 export function hasStore(dataDir: string, file: string): boolean {

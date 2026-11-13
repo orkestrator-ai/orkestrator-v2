@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type { BackgroundTaskSnapshot } from "../types/index.js";
+import type { BackgroundTaskSnapshot, SessionState, SSEEvent } from "../types/index.js";
 import {
   backgroundTasksForSnapshot,
   SNAPSHOT_BACKGROUND_TASKS_MAX_BYTES,
   SNAPSHOT_TASK_DESCRIPTION_MAX_CHARS,
   SNAPSHOT_TASK_TEXT_MAX_CHARS,
 } from "./background-task-snapshot.js";
-import { MAX_TERMINAL_BACKGROUND_TASKS } from "./session-manager-background-tasks.js";
+import { eventEmitter } from "./event-emitter.js";
+import {
+  emitBackgroundTaskSnapshot,
+  MAX_TERMINAL_BACKGROUND_TASKS,
+} from "./session-manager-background-tasks.js";
 
 function settledAgent(index: number, textLength: number): BackgroundTaskSnapshot {
   return {
@@ -119,5 +123,33 @@ describe("backgroundTasksForSnapshot", () => {
     const tasks = record([settledAgent(3, 5_000), settledAgent(1, 5_000), settledAgent(2, 5_000)]);
     const served = backgroundTasksForSnapshot(tasks, 30 * 1024);
     expect(Object.keys(served)).toEqual(Object.keys(tasks).filter((id) => id in served));
+  });
+
+  test("emitBackgroundTaskSnapshot publishes the bounded projection", () => {
+    const tasks = record(
+      Array.from({ length: MAX_TERMINAL_BACKGROUND_TASKS }, (_, index) => settledShell(index)),
+    );
+    const session = {
+      id: `session-snapshot-${crypto.randomUUID()}`,
+      backgroundTasks: tasks,
+    } as unknown as SessionState;
+    const frames: SSEEvent[] = [];
+    const unsubscribe = eventEmitter.subscribe((event) => void frames.push(event));
+    try {
+      emitBackgroundTaskSnapshot(session);
+    } finally {
+      unsubscribe();
+    }
+
+    const updates = frames.filter(
+      (event) => event.type === "session.updated" && event.sessionId === session.id,
+    );
+    expect(updates).toHaveLength(1);
+    const served = (updates[0]!.data as { backgroundTasks: Record<string, BackgroundTaskSnapshot> })
+      .backgroundTasks;
+    expect(encodedBytes(tasks)).toBeGreaterThan(SNAPSHOT_BACKGROUND_TASKS_MAX_BYTES);
+    expect(encodedBytes(served)).toBeLessThanOrEqual(SNAPSHOT_BACKGROUND_TASKS_MAX_BYTES);
+    expect(served).toEqual(backgroundTasksForSnapshot(tasks));
+    expect(session.backgroundTasks).toBe(tasks);
   });
 });

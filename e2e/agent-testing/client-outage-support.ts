@@ -37,6 +37,8 @@ export interface LinkRequest {
   at: number;
   /** Wall-clock ms when the client got an answer. */
   answeredAt?: number;
+  /** Wall-clock ms when the client's connection for it closed; absent while open. */
+  closedAt?: number;
   status?: number;
   /** The invoke command's name; never its arguments. */
   command?: string;
@@ -177,7 +179,10 @@ export async function startOutageLink(options: {
       },
     );
     upstream.once("error", () => response.destroy());
-    response.once("close", () => upstream.destroy());
+    response.once("close", () => {
+      if (entry) entry.closedAt = Date.now();
+      upstream.destroy();
+    });
     if (body) upstream.end(body);
     else request.pipe(upstream);
   };
@@ -227,6 +232,7 @@ export async function startOutageLink(options: {
     const isApi = url.pathname.startsWith(API_PREFIX);
     const kind = isApi ? classify(url, true) : null;
     const entry = kind ? record({ owner: options.owner, kind, at: Date.now() }) : null;
+    if (entry) socket.once("close", () => (entry.closedAt = Date.now()));
     if (isApi && mode !== "up") {
       if (entry) entry.dropped = true;
       refuse(socket);
@@ -390,4 +396,24 @@ export function retriesAreSpread(
   const coincident = rungs.reduce((total, rung) => total + rung.coincidentPairs, 0);
   const wideEnough = rungs.some((rung) => rung.spanMs >= jitterWindowMsOfRung(rung.rung) / 2);
   return wideEnough && coincident / pairs <= 0.2;
+}
+
+/**
+ * Run in a blank link page (`page.evaluate(installReactRefreshPreamble)`)
+ * before it imports renderer modules from Vite. `web-gateway.ts` reaches a
+ * `.tsx` module, and `@vitejs/plugin-react` refuses to run one ("can't detect
+ * preamble") unless the page installed the refresh runtime, as the app's own
+ * `index.html` does. Self-contained: Playwright sends only its source.
+ */
+export async function installReactRefreshPreamble(): Promise<void> {
+  const page = window as unknown as Record<string, unknown>;
+  if (page.__vite_plugin_react_preamble_installed__) return;
+  const runtimePath = "/@react-refresh";
+  const runtime = (await import(/* @vite-ignore */ runtimePath)) as {
+    default: { injectIntoGlobalHook(target: Window): void };
+  };
+  runtime.default.injectIntoGlobalHook(window);
+  page.$RefreshReg$ = () => undefined;
+  page.$RefreshSig$ = () => (type: unknown) => type;
+  page.__vite_plugin_react_preamble_installed__ = true;
 }

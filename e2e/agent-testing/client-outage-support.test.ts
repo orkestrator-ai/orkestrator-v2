@@ -192,6 +192,26 @@ describe("outage link", () => {
     expect(outage.requests).toHaveLength(0);
   });
 
+  test("a stream is recorded as open until its client closes it", async () => {
+    const gateway = await serve((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": connected\n\n");
+    });
+    const outage = await link(gateway.url);
+    const stream = await fetch(`${outage.url}/__orkestrator/events?includeEvents=a,b`);
+    const reader = stream.body!.getReader();
+    await reader.read();
+    expect(outage.requests[0]).toMatchObject({ kind: "terminal-stream", status: 200 });
+    expect(outage.requests[0]!.closedAt).toBeUndefined();
+
+    await reader.cancel();
+    const deadline = Date.now() + 5_000;
+    while (outage.requests[0]!.closedAt === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(outage.requests[0]!.closedAt).toBeGreaterThanOrEqual(outage.requests[0]!.at);
+  });
+
   test("reset refuses new requests and ends an open stream", async () => {
     const gateway = await serve((_request, response) => {
       response.writeHead(200, { "content-type": "text/event-stream" });

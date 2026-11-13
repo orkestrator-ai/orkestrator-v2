@@ -13,7 +13,7 @@ import {
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
-import type { PlanUsageCache } from "./plan-usage-cache.js";
+import type { PlanUsageCache } from "./plan-usage/index.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /**

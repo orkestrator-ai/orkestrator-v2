@@ -73,6 +73,11 @@ export function createFakeCursorAgentApi({
     reply?: string;
     status: TurnStatus;
     createdAt: number;
+    /**
+     * Every steer this run accepted, in order, as the user's text (the frame
+     * stripped). A steer the bridge delivered twice shows up twice here.
+     */
+    steers?: string[];
   }
   interface StoredAgent {
     /** The name the bridge created the agent with. */
@@ -221,9 +226,18 @@ export function createFakeCursorAgentApi({
             release();
           },
           // Accepted into the running turn, as the SDK's live steer is. Only a
-          // held turn is ever running long enough to be steered.
-          steer: async () => {
+          // held turn is ever running long enough to be steered. The text is
+          // kept on the turn, so a spec can count what reached the vendor.
+          steer: async (text?: string) => {
             record("steer", agentId);
+            const steer = stripSystemInstructions(text ?? "");
+            turn.steers = [...(turn.steers ?? []), steer];
+            mutate((store) => {
+              const stored = store.agents[agentId]?.turns.find(
+                (entry) => entry.runId === turn.runId,
+              );
+              if (stored) stored.steers = [...(stored.steers ?? []), steer];
+            });
             return "complete_delivered" as const;
           },
           onDidChangeStatus: () => () => undefined,

@@ -278,8 +278,8 @@ use. Nothing here is removable on 2026-11-11. The rollback switches the
 investigation found are tracked where they already were: the remaining
 `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` drivers in
 [0048](../transcripts-and-observation/0048-recurring-work-qualification.md)
-task 13 (with `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waited on 0049
-until it was retired on 2026-11-11), and
+task 13 (`ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waited on 0049
+until it was retired on 2026-11-11, was removed on 2026-11-13), and
 `ORKESTRATOR_EGRESS_FILTER=off` in 6101. The retired-command Register rows
 (195 to 200 at the time of writing) wait on the next Stable release and
 their counters.

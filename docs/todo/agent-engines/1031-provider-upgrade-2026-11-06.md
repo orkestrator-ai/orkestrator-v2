@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against main at `ee2cc8423`.
+Analysed 2026-11-06 against main at `ee2cc8423`. Task 9 updated 2026-11-13 against main at `17d28238c`: the Linux Claude sandbox probe and `claude-host-login-refresh.ts` ran at the current pins (see "No-login Claude checks at 2.1.319 (2026-11-13)" in task 9).
 
 ### Tasks
 
@@ -14,7 +14,7 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 6. **Codex, Cursor, Grok and ACP: no behaviour change needed**: protocol, patch and argv rechecks. Status: done.
 7. **OpenCode 2.x gate**: whether 2.2.3–2.2.5 opened 0008's gate. Status: done (still closed).
 8. **Adopt-later and not-relevant calls**: every other change in the changelogs. Status: done (candidates moved to 0007).
-9. **Live evidence at the new pins**: the container image, the Linux loopback failures, and the checks that need no login: the macOS sandbox live test, the Linux Claude sandbox probe and `claude-host-login-refresh.ts`. Status: open (image built and smoke-tested; Linux loopback failures fixed in the product; the macOS and no-login runs remain; the signed-in checks moved to 7568 on 2026-11-10).
+9. **Live evidence at the new pins**: the container image, the Linux loopback failures, and the checks that need no login: the macOS sandbox live test, the Linux Claude sandbox probe and `claude-host-login-refresh.ts`. Status: open, for an agent on the Mac host (arktech-mini): only the macOS sandbox live test is left. Image built and smoke-tested; Linux loopback failures fixed in the product; the Linux sandbox probe and `claude-host-login-refresh.ts` passed in a container with a fake login on 2026-11-13; the signed-in checks moved to 7568 on 2026-11-10.
 10. **One sign-in expiry for every provider**: Claude `credential_expires_at` beside Cursor's `expiresAt`. Status: done (live signed-in check moved to 7568, 2026-11-10).
 11. **One "a person must answer this" marker for every provider**: Claude now, Codex `humanCommand` later. Status: done (Codex path built and fake-tested; live once Codex leaves `experimentalApi`).
 12. **Provider-neutral tool safety hints on approval cards**: Codex MCP `tool_annotations`. Status: done for Codex, Pi and Claude (Claude 2026-11-10: read from the CLI's MCP status when the call is parked; a signed-in check with a real MCP server moved to 7568, 2026-11-10).
@@ -26,7 +26,7 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 
 **Problem.** Every pinned SDK and CLI except OpenCode had a newer stable release, so upstream fixes and features were unused.
 
-**Context.** The runbook is [upgrade-agents.md](../../development/upgrade-agents.md); the previous round is [1020](1020-provider-upgrade-2026-10-30.md). OpenCode stays on 1.x until [0008](0008-opencode-v2.md)'s gate opens.
+**Context.** The runbook is [upgrade-agents.md](../../development/upgrade-agents.md); the previous round is 1020 (retired 2026-11-13; `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`). OpenCode stays on 1.x until [0008](0008-opencode-v2.md)'s gate opens.
 
 **Investigation.** Upstream on 2026-11-06 (`npm view … dist-tags`, the Grok `stable` pointer, GitHub releases):
 
@@ -182,7 +182,7 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 
 **Problem.** The upgrade had to say whether OpenCode 2.2.3–2.2.5 changed 0008's readiness gate.
 
-**Context.** 0008 was last rechecked against 2.2.2 (2026-10-30, [1020](1020-provider-upgrade-2026-10-30.md) task 8).
+**Context.** 0008 was last rechecked against 2.2.2 (2026-10-30, 1020 (retired) task 8).
 
 **Investigation.** Tags v2.2.2 → v2.2.5 and the published `@opencode/client` packages: storage policy (`AGENTS.md` byte-identical; one new one-way `job` migration), prompt input (identical `prompt-input.ts`: no per-prompt model, agent, tools or structured output), runtime-context gaps, stale-turn guard (identical `specs/v2/session.md`), bounded inbox and MCP endpoints (still under `/api/experimental/mcp/{server}`) are all as they were. No 1.x end-of-life notice. Not run: the 2.x binary itself. 2.x changes to remember for the future provider: `integration.use` no longer covers MCP, skills or plugins (`mcp.use`, `skill.use`, `plugin.use`); schedules now fire under `opencode serve` when `experimental.schedules` is on, which would run turns Orkestrator never dispatched; a built-in Claude Agent provider; experimental artifacts.
 
@@ -263,7 +263,18 @@ Signed in, in the disposable profile `qa-1031-upgrade` (`dev:test --fixture --he
 - `close-retention-live.spec.ts` (Cursor, OpenCode): blocked before any agent work. This host's `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog covered the page and the environment click timed out. A host firewall rule, not the upgrade; rerun once the rule in that dialog is applied.
 - Pi and Grok: no signed-in run. The host's Pi `auth.json` holds no login, and its Grok login has expired, so the profile could not seed either.
 
-Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move; the script was removed with OpenCode 1.x on 2026-11-11, `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`); the macOS sandbox live test; the Linux Claude sandbox probe; `claude-host-login-refresh.ts`. The signed-in checks not run (the billed coordinator-skills probe; signed-in sessions for Pi and Grok; Cursor/OpenCode close and resume, blocked here by the host firewall; model and effort switches, compaction and sub-agent cards on every provider; `mise run test:agent:goals`) moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10, with the host firewall rule.
+Not run at the time: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move; the script was removed with OpenCode 1.x on 2026-11-11, `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`); the macOS sandbox live test; the Linux Claude sandbox probe; `claude-host-login-refresh.ts`. The last two ran on 2026-11-13 (below). The signed-in checks not run (the billed coordinator-skills probe; signed-in sessions for Pi and Grok; Cursor/OpenCode close and resume, blocked here by the host firewall; model and effort switches, compaction and sub-agent cards on every provider; `mise run test:agent:goals`) moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10, with the host firewall rule.
+
+#### No-login Claude checks at 2.1.319 (2026-11-13)
+
+Also task 9 of 1020 (retired the same day). Run on beelink (Arch Linux x86_64, bubblewrap 0.13.1 and socat on `PATH`, no AppArmor userns restriction) against main at `17d28238c`. The pins have not moved since this upgrade: Agent SDK 0.3.319, whose bundled CLI and the managed `CLAUDE_CLI_VERSION` are both 2.1.319. No login, no credentials, no billed turn: every model is a scripted loopback endpoint or a refusing proxy, and every Claude home is a temporary directory. Each suite ran through `test:logged`; the container runs used `docker run --rm --network none --user node --entrypoint /bin/bash` through `apps/desktop/scripts/dev/docker-qualification-bin/docker`, with the worktree mounted read-only, on the newest local image `orkestrator-v2:dev-886430ba83a0` (`88e9a880c456`, built 2026-11-11, `claude --version` 2.1.319, Bun 1.4.4, Node 24.22.2; no `bwrap` or `socat`). Nothing failed that needed a fix, so no code changed.
+
+- **Linux sandbox probe, on the host.** `probeClaudeLinuxSandbox()` answered `{ available: true }`. `conformance-coordinator-sandbox-live.test.ts` (the runbook's command): 19 pass, 0 fail (5.2 s), every scenario including the ones that need a working sandbox (`default-sandbox-writes`, `coordinator-sandbox-refuses`, `coordinator-sandbox-reads`, `coordinator-hook-refuses`) and `read-only-required-refused`, whose refusal text ("Sandbox required but unavailable") is unchanged. `verify:claude:sandbox-live`'s file (`claude-provider-sandbox.live.test.ts`): 1 pass (14.3 s). `conformance-coordinator-read-boundary-live.test.ts`: 6 pass (3.1 s).
+- **The binary still nests a namespace.** The 2.1.319 Linux binary still contains the `apply-seccomp: unshare(CLONE_NEWUSER)` path and the `write /proc/self/setgroups (nested userns is capability-restricted …)` message, and bubblewrap's `--unshare-user`, `--unshare-pid`, `--proc`, `--new-session` and `--die-with-parent`, so the probe in `claude-linux-sandbox.ts` still models what the CLI runs. `allowNestedUserNamespaces` and `enableWeakerNestedSandbox` are still there and still not used. One message reads `apply-seccomp: could not set user.max_user_namespaces (%s); the seccomp filter alone keeps the command fr…`; it is a fallback inside the nested namespace, not a way around it, so the probe needs no change.
+- **Linux sandbox probe, in the container.** `probeClaudeLinuxSandbox()` answered `missing-programs` with the expected reason ("bubblewrap and socat on PATH … not in this container's image"), as `docs/architecture/coordinator.md` describes. The same test file: 15 pass, 4 fail. All seven hook-only adversarial cases, the five `unavailable-hook-*` cases and the three read-only-turn cases (`read-only-required-refused` included) passed; the CI container step runs a subset of these. The four that need a working sandbox failed with the CLI's own "Sandbox required but unavailable: … bubblewrap (bwrap) not installed, socat not installed", which is the behaviour the bridge relies on in a container (it refuses such a turn with 422 before asking the CLI). That is a host requirement of those four cases, not a defect; see Assumptions and decisions.
+- **`claude-host-login-refresh.ts`, in the container.** `bun scripts/claude-host-refresh-trigger-probe.ts --claude "$CLAUDE_CLI_PATH" --json` with the image's managed CLI and no network: exit 0, `allMatch: true`, all nine cases as expected (60.5 s; the five unreachable-API cases run out the refresher's 60 s budget together). A, E (refreshable, two minutes left or expired) contacted `platform.claude.com` before anything else; B, C, D did not. F (refreshable, two minutes left, fake API answering 404) refreshed first and exited 1 in 0.9 s; G (two hours left) did not refresh and exited 1 in 0.9 s; H (fake API answering 401) asked the API first, then the token host, and exited 1 in 2.8 s; I (access-only, 401) exited 1 in 2.5 s with no token-host contact. F to I each sent `POST /v1/messages` with the fake access token as bearer, and no case rewrote the fake credential file. That matches 2.1.314 and the 2026-11-11 `unshare -rn` run at 2.1.319. The refresher's unit tests (`claude-host-login-refresh.test.ts`, 7 pass) and the probe's (`tests/unit/claude-host-refresh-trigger-probe.test.ts`, 8 pass) also pass.
+
+Left for task 9: the macOS sandbox live test (`mise run verify:claude:sandbox-live` on macOS at 2.1.319, no credentials, scripted model), which needs a Mac. It is agent work for the Mac host (arktech-mini), not a manual check. Evidence for this run (metadata only, no tokens) is under `output/qualification-claude-1020-1031/` in the build worktree, which is git-ignored.
 
 **Decisions.**
 
@@ -457,9 +468,28 @@ The advisory is a `status` warning part on an assistant row with empty content, 
 
 Signed out against 1.0.77: `agent stdio` reads `GROK_STORAGE_MODE` (the `--storage-mode` flag is global and ignored there); `local` behaves exactly as unset and writes the `sessions/<cwd>/<id>/` layout `session/load` reads. `GROK_STORAGE_MODE=local` is now in the Grok child's `POLICY_ENV`, and the argv liveness checks pass with it set. A provider-neutral "sync sessions to the provider's cloud" setting was not built: no user has asked to upload, and it needs a settings surface.
 
+### Task 9: the no-login Claude checks (2026-11-13)
+
+Recorded 2026-11-13 by the worker that ran the Linux sandbox probe and the login-refresh probe (it also retired 1020).
+
+- **Which image for the container runs?**
+  - **The newest locally built Orkestrator image, `orkestrator-v2:dev-886430ba83a0`, run with `--rm` and no network (chosen).**
+    - Pros: it already carries the managed Claude 2.1.319, Bun and Node; nothing new is built or left behind on a host nine other builds share.
+    - Cons: built by another worktree from a commit two days older than main; only its Claude pin matters here, and that is unchanged since 2026-11-06.
+  - **Build a fresh image from this worktree.**
+    - Pros: provenance is exactly main.
+    - Cons: a 6 GB build on a busy shared host, for a CLI version the existing image already pins.
+- **The four sandbox-requiring cases that fail in the container?**
+  - **Record them as a host requirement and change nothing (chosen).**
+    - Pros: they assert a working bubblewrap sandbox, which a container never has by design; the CI container step already selects only the no-sandbox cases.
+    - Cons: running the whole file in a container still reports four failures.
+  - **Skip those four when the probe says the sandbox is unavailable.**
+    - Pros: the file would be green everywhere.
+    - Cons: a Linux host whose sandbox broke would skip the cases meant to catch it, which is the failure the AppArmor qualification exists to report.
+
 ## Needs verification
 
-- Task 9's list.
+- Task 9: the macOS sandbox live test (agent work on the Mac host).
 - The signed-in checks at the new pins for tasks 10 to 15 moved to the
   [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
   2026-11-10.
@@ -468,7 +498,7 @@ Signed out against 1.0.77: `agent stdio` reads `GROK_STORAGE_MODE` (the `--stora
 
 ## Related
 
-- [1020-provider-upgrade-2026-10-30.md](1020-provider-upgrade-2026-10-30.md)
+- 1020 (retired 2026-11-13), the previous upgrade round: `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md) (candidates)
 - [0008-opencode-v2.md](0008-opencode-v2.md)
 - [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md) (task 4, task 11)

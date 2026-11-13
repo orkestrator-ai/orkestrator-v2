@@ -272,6 +272,18 @@ describe("iOS UI and WebKit security contracts", () => {
       connect.indexOf("isSwitchingThroughBridge = true"),
     );
     expect(connect.indexOf("requireConsent")).toBeLessThan(connect.indexOf("model.connect("));
+    // `use` of the server already open answers without `model.use`, so its
+    // network check cannot commit after a switch approved meanwhile.
+    const use = bridge.slice(bridge.indexOf('case "use":'), bridge.indexOf('case "rename":'));
+    const unchanged = use.indexOf("if target.id == model.activeConnection?.id {");
+    expect(unchanged).toBeGreaterThan(-1);
+    const unchangedReply = use.indexOf("model.connectionListPayload()", unchanged);
+    expect(unchangedReply).toBeGreaterThan(unchanged);
+    expect(unchangedReply).toBeLessThan(use.indexOf("requireConsent"));
+    expect(use.indexOf("requireConsent")).toBeLessThan(
+      use.indexOf("isSwitchingThroughBridge = true"),
+    );
+    expect(use.indexOf("isSwitchingThroughBridge = true")).toBeLessThan(use.indexOf("model.use("));
     // Teardown and a new document withdraw the question; silence refuses.
     expect(bridge.match(/consentGate\.cancelPending\(\)/g)?.length).toBe(2);
     expect(consent).toContain("settle(entry, .timedOut, withdrawPrompt: true)");

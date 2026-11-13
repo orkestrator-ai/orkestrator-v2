@@ -267,7 +267,77 @@ final class BridgeConsentTests: XCTestCase {
             body: ["connectionId": first.id.uuidString]
         )
         XCTAssertTrue(harness.presenter.requests.isEmpty)
+        // Nothing changes, so nothing is checked, saved or reloaded.
+        XCTAssertTrue(harness.validator.checks.isEmpty)
+        XCTAssertTrue(harness.store.savedVaults.isEmpty)
+        XCTAssertEqual(harness.model.activeConnection?.id, first.id)
+        XCTAssertFalse(harness.coordinator.isSwitchingThroughBridge)
         XCTAssertTrue(try XCTUnwrap(harness.scripts().last).contains(#""use-id", true"#))
+    }
+
+    func testUsingTheServerAlreadyOpenCannotUndoASwitchApprovedMeanwhile() async throws {
+        let harness = makeHarness(.approve)
+        // Hold whichever request reaches the network check first.
+        var held: CheckedContinuation<Void, Never>?
+        harness.validator.checkHandler = { _, _ in
+            await withCheckedContinuation { held = $0 }
+        }
+        let stayOnFirst = Task {
+            await harness.coordinator.handleBridgeRequest(
+                id: "stay-id",
+                action: "use",
+                body: ["connectionId": first.id.uuidString]
+            )
+        }
+        let switchToSecond = Task {
+            await harness.coordinator.handleBridgeRequest(
+                id: "switch-id",
+                action: "use",
+                body: ["connectionId": second.id.uuidString]
+            )
+        }
+        // Release the held check only once one request has answered, so the
+        // order is fixed: either the open server answered without a check, or
+        // (the defect) the switch finished while the first request was held.
+        while held == nil || !harness.scripts().contains(where: { $0.contains(", true, ") }) {
+            await Task.yield()
+        }
+        held?.resume()
+        await stayOnFirst.value
+        await switchToSecond.value
+
+        // Only the approved switch reached the network, and it is the one kept.
+        XCTAssertEqual(harness.presenter.requests, [.switchTo(second)])
+        XCTAssertEqual(harness.validator.checks.map { $0.0 }, [second.address])
+        XCTAssertEqual(harness.model.activeConnection?.id, second.id)
+        XCTAssertEqual(harness.store.savedVaults.last?.activeConnectionID, second.id)
+        XCTAssertEqual(harness.coordinator.requestedConnection?.id, second.id)
+        XCTAssertTrue(harness.scripts().contains { $0.contains(#""stay-id", true"#) })
+        XCTAssertTrue(harness.scripts().contains { $0.contains(#""switch-id", true"#) })
+    }
+
+    func testAnApprovedConnectSavesTheNewServerAndOpensIt() async throws {
+        let harness = makeHarness(.approve)
+        await harness.coordinator.handleBridgeRequest(
+            id: "connect-id",
+            action: "connect",
+            body: ["address": "NEW.example", "token": "gateway-token-new-123"]
+        )
+        let saved = try XCTUnwrap(
+            harness.model.vault.connections.first { $0.address == URL(string: "https://new.example")! }
+        )
+        XCTAssertEqual(
+            harness.presenter.requests,
+            [.save(address: URL(string: "https://new.example")!, switches: true)]
+        )
+        XCTAssertEqual(harness.validator.checks.map { $0.0 }, [saved.address])
+        XCTAssertEqual(saved.token, "gateway-token-new-123")
+        XCTAssertEqual(harness.model.activeConnection?.id, saved.id)
+        XCTAssertEqual(harness.coordinator.requestedConnection?.id, saved.id)
+        XCTAssertFalse(harness.coordinator.isSwitchingThroughBridge)
+        let reply = try XCTUnwrap(harness.scripts().last)
+        XCTAssertTrue(reply.contains(#""connect-id", true"#))
+        XCTAssertFalse(reply.contains("gateway-token-new-123"))
     }
 
     func testADeclinedForgetKeepsTheServerAndItsSession() async {

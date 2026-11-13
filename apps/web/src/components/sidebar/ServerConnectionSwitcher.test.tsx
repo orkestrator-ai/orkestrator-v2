@@ -720,9 +720,51 @@ describe("server connection switcher", () => {
     fireEvent.click(await screen.findByText("New connection"));
 
     await waitFor(() => expect(addInNativeEditor).toHaveBeenCalledTimes(1));
-    expect(screen.queryByLabelText("Gateway token")).toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByLabelText("Gateway token") === null).toBe(true);
+    expect(screen.queryByRole("dialog") === null).toBe(true);
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  test("sends a server that needs a token to the native editor rather than the in-page form", async () => {
+    // The iOS app never reports requiresToken (it keeps every token it saved),
+    // but a newer page must still not take a token here if it ever did.
+    const list: ConnectionList = {
+      activeConnectionId: "current",
+      connections: [
+        {
+          id: "current",
+          name: "current.example",
+          address: "https://current.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+        {
+          id: "saved",
+          name: "saved.example",
+          address: "https://saved.example",
+          kind: "remote",
+          active: false,
+          requiresToken: true,
+        },
+      ],
+    };
+    const addInNativeEditor = mock(async () => true);
+    const { connect, use } = installConnections(list, { addInNativeEditor });
+    window.__orkestratorClientPlatform = "iphone-wkwebview";
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
+
+    fireEvent.pointerDown(
+      await screen.findByRole("button", { name: "Connected server: current.example" }),
+      { button: 0, ctrlKey: false, pointerType: "touch" },
+    );
+    fireEvent.click(await screen.findByText("saved.example"));
+
+    await waitFor(() => expect(addInNativeEditor).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("Gateway token") === null).toBe(true);
+    expect(screen.queryByLabelText("Tailscale address") === null).toBe(true);
+    expect(connect).not.toHaveBeenCalled();
+    expect(use).not.toHaveBeenCalled();
   });
 
   test("reports a native editor that could not open and shows no token field", async () => {
@@ -758,7 +800,7 @@ describe("server connection switcher", () => {
           description: "editor unavailable",
         }),
       );
-      expect(screen.queryByLabelText("Gateway token")).toBeNull();
+      expect(screen.queryByLabelText("Gateway token") === null).toBe(true);
     } finally {
       toastError.mockRestore();
     }

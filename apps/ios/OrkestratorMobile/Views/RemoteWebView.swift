@@ -742,9 +742,16 @@ struct RemoteWebView: UIViewRepresentable {
                         throw ConnectionBridgeError.invalidInput
                     }
                     let target = try model.savedConnection(connectionID: connectionID)
-                    if target.id != model.activeConnection?.id {
-                        try await requireConsent(.switchTo(target))
+                    if target.id == model.activeConnection?.id {
+                        // The server already open needs no question because
+                        // nothing changes: answer without calling `model.use`.
+                        // Its network check would let this unprompted request
+                        // commit after a switch the user approved meanwhile,
+                        // and quietly switch back.
+                        try await reply(id: requestID, result: model.connectionListPayload())
+                        return
                     }
+                    try await requireConsent(.switchTo(target))
                     isSwitchingThroughBridge = true
                     let result = try await model.use(connectionID: connectionID)
                     defer { finishBridgeSwitch() }

@@ -10,8 +10,8 @@ import {
 import { orkestratorToolCalls } from "./coordinator-live-delegation.js";
 
 /**
- * The live coordinator suite's `ask` scenario (to-do 6940 task 1, retired; see
- * "The `ask` case" in `docs/development/agent-testing.md`).
+ * The live coordinator suite's `ask` scenario (to-do 6940 task 1, retired; see the
+ * `ask` case under "Live coordinator suite" in `docs/development/agent-testing.md`).
  *
  * One coordinator turn launches a worker and then, in the same turn and
  * without waiting for it, asks the user one question with two named options.

@@ -201,5 +201,5 @@ Never shown. An offline or timed-out node has `status: "unavailable"` and no fig
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md): recurring-work qualification.
-- [1000](1000-coordinator-self-timers-and-account-switching.md): the routed read tools this follows.
+- 1000 (retired; [coordinator-timers-and-accounts-decisions.md](../../architecture/coordinator-timers-and-accounts-decisions.md)): the routed read tools this follows.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows part of task 3, the user part of task 7: release builds on two real machines) moved there on 2026-11-10.

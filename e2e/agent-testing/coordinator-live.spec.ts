@@ -142,7 +142,10 @@ import { runAskScenario } from "../../apps/desktop/scripts/dev/coordinator-live-
 import { askApplies } from "../../apps/desktop/scripts/dev/coordinator-live-ask";
 import { runIdentityScenario } from "../../apps/desktop/scripts/dev/coordinator-live-identity-orchestration";
 import { runAccountSwitchScenario } from "../../apps/desktop/scripts/dev/coordinator-live-account-switch-orchestration";
-import { accountSwitchApplies } from "../../apps/desktop/scripts/dev/coordinator-live-account-switch";
+import {
+  ACCOUNT_SWITCH_HOLD_REQUEST_ENV,
+  accountSwitchApplies,
+} from "../../apps/desktop/scripts/dev/coordinator-live-account-switch";
 import { profileAccountFixtures } from "./coordinator-live-account-fixtures";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
@@ -1254,6 +1257,7 @@ async function accountSwitchCase(input: {
     cleanup,
     fixtures: profileAccountFixtures({ repositoryRoot, dataDir, cleanup }),
     pollIntervalMs: POLL_INTERVAL_MS,
+    holdRequestForPerson: process.env[ACCOUNT_SWITCH_HOLD_REQUEST_ENV] === "1",
   });
   const projection = watch.projection();
   summary.toolCalls = transcriptToolCalls(projection?.messages ?? []).map(({ name, state }) => ({

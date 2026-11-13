@@ -98,6 +98,8 @@ type Script = {
   switchesWithoutPermission?: boolean;
   /** The timer never fires. */
   timerNeverFires?: boolean;
+  /** A person answers the held request in the dialog, with this decision. */
+  personDecides?: "reject" | "approve";
 };
 
 const tool = (toolName: string, output: unknown): CoordinatorTranscriptMessage => ({
@@ -112,7 +114,7 @@ const tool = (toolName: string, output: unknown): CoordinatorTranscriptMessage =
   ],
 });
 
-function fixture(script: Script = {}) {
+function fixture(script: Script = {}, asked: () => boolean = () => true) {
   const now = () => new Date().toISOString();
   const environments: Array<{ id: string; name: string }> = [];
   const messages: CoordinatorTranscriptMessage[] = [];
@@ -199,7 +201,16 @@ function fixture(script: Script = {}) {
         value = { accounts: [], active: { claude: active } };
         break;
       case "list_node_action_requests":
-        value = requests.map((request) => ({ ...request }));
+        // The person answers the dialog once the harness has asked them to.
+        if (script.personDecides && asked()) {
+          const pending = requests.find((request) => request.state === "pending");
+          if (pending && (pending.seen = Number(pending.seen ?? 0) + 1) > 2) {
+            pending.state = script.personDecides === "reject" ? "rejected" : "executed";
+            if (script.personDecides === "approve") active = FIXTURE;
+            wake([{ role: "assistant", content: "Noted." }]);
+          }
+        }
+        value = requests.map(({ seen: _seen, ...request }) => ({ ...request }));
         break;
       case "resolve_node_action_request": {
         const request = requests.find((item) => item.requestId === args.requestId);
@@ -301,7 +312,12 @@ function fixture(script: Script = {}) {
 }
 
 async function run(script: Script = {}) {
-  const scripted = fixture(script);
+  const logged: string[] = [];
+  const scripted = fixture(script, () =>
+    logged.some((line) => line.includes("approval dialog now")),
+  );
+  const log = console.log;
+  console.log = (line: unknown) => void logged.push(String(line));
   const summary: CoordinatorLivePlatformSummary = {
     version: 1,
     platform: "claude",
@@ -319,9 +335,11 @@ async function run(script: Script = {}) {
       fixtures: scripted.fixtures,
       token,
       pollIntervalMs: 1,
+      ...(script.personDecides ? { holdRequestForPerson: true } : {}),
     });
-    return { ...result, ...scripted, summary };
+    return { ...result, ...scripted, summary, logged };
   } finally {
+    console.log = log;
     if (previous === undefined)
       delete process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS;
     else process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS = previous;
@@ -386,6 +404,18 @@ describe("account-switch scenario orchestration", () => {
         "request:rejected-switches-nothing",
       ]),
     );
+  });
+
+  test("held for a person, a request rejected in the dialog qualifies, and the harness sends no answer", async () => {
+    const { checks, requests, logged } = await run({ personDecides: "reject" });
+    expect(checks.filter((item) => !item.passed)).toEqual([]);
+    expect(requests[0]).toMatchObject({ state: "rejected" });
+    expect(logged.some((line) => line.includes("approval dialog"))).toBe(true);
+  });
+
+  test("held for a person, a request approved in the dialog fails: it changed the account", async () => {
+    const { checks } = await run({ personDecides: "approve" });
+    expect(failed(checks)).toEqual(expect.arrayContaining(["request:rejected-switches-nothing"]));
   });
 
   test("a timer that never fires is reported, not hung on", async () => {

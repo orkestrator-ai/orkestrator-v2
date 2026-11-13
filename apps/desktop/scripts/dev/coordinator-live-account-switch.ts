@@ -17,7 +17,7 @@ import {
 
 /**
  * The live coordinator suite's `account-switch` scenario (to-do 1000 task 4,
- * retired; see "The `account-switch` case" in
+ * retired; see the `account-switch` case under "Live coordinator suite" in
  * `docs/development/agent-testing.md`).
  *
  * The harness seeds what a real usage limit would leave behind: a worker tab
@@ -40,6 +40,13 @@ import {
  */
 
 export const ACCOUNT_SWITCH_PHASES = ["request", "granted"] as const;
+
+/**
+ * Set to `1` for a run a person watches: the request phase's switch request is
+ * left pending for them to reject in the profile's approval dialog, so the
+ * real dialog is part of the run (the manual-test checklist's billed run).
+ */
+export const ACCOUNT_SWITCH_HOLD_REQUEST_ENV = "ORKESTRATOR_AGENT_TEST_ACCOUNT_SWITCH_HOLD_REQUEST";
 export type AccountSwitchPhase = (typeof ACCOUNT_SWITCH_PHASES)[number];
 
 export interface AccountSwitchProbe {

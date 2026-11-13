@@ -67,6 +67,12 @@ export async function runAccountSwitchScenario(input: {
   /** `create_schedule`'s `at`; default `+1m`. */
   at?: string;
   pollIntervalMs?: number;
+  /**
+   * Leave the request phase's pending request for a person to reject in the
+   * profile's approval dialog (`ACCOUNT_SWITCH_HOLD_REQUEST_ENV`), instead of
+   * rejecting it by command. The harness waits up to one step for the answer.
+   */
+  holdRequestForPerson?: boolean;
 }) {
   const { coordinator, summary, cleanup, fixtures } = input;
   const { invoke, identity, projectId } = coordinator;
@@ -192,7 +198,21 @@ export async function runAccountSwitchScenario(input: {
           return idleReads >= 2 && observation.queueLength === 0;
         },
       );
-      if (phase === "request") {
+      if (phase === "request" && input.holdRequestForPerson) {
+        console.log(
+          `[coordinator-live] ${platform}: reject the account switch request in the profile's approval dialog now`,
+        );
+        let answered: SwitchRequestRecord[] = [];
+        await watch.until("a person to answer the switch request in the dialog", async () => {
+          answered = switchRequestsFor(await switchRequests(), probe).filter(
+            (request) => pendingIds.has(request.requestId) && request.state !== "pending",
+          );
+          return answered.length === pendingIds.size;
+        });
+        evidence.rejected =
+          pendingIds.size > 0 && answered.every((request) => request.state === "rejected");
+        await watch.coordinatorSettled("the coordinator after the answered request");
+      } else if (phase === "request") {
         for (const requestId of pendingIds) {
           await invoke("resolve_node_action_request", { requestId, decision: "reject" });
         }

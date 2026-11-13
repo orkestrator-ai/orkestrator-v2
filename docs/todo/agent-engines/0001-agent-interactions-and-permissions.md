@@ -21,7 +21,7 @@ repeated as tasks; their live checks are. The open questions and the
 1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67). Filing the upstream request moved to 7568 on 2026-11-10.
 2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: done (the hook canary is added, the slash-catalogue risk was already closed, and a skill written during a running turn is kept as residual risk).
 3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: open. The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
-7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
+7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model went to 0024 and then 6940 (both retired 2026-11-13): the live suite's `ask` scenario, whose billed runs are on the manual-test checklist.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
 9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented, and since 2026-11-11 Agent Info carries a note for it (7563 (retired))).
 
@@ -102,7 +102,7 @@ Running the file first showed it was stale on main: its three pinned cases faile
 
 **Problem.** MCP elicitation rehydration, Claude's `ask` and `deny` policy overrides and a delegating coordinator turn have no real-browser evidence.
 
-**Context.** These are the "Browser" qualification bullet. The coordinator half overlaps 0024 (coordinator live conformance).
+**Context.** These are the "Browser" qualification bullet. The coordinator half overlaps 0024 (retired; coordinator live conformance).
 
 **Investigation.** The earlier note was wrong on one point: `e2e/ClaudeInteractions.spec.ts` (since #1009) already raises a Claude MCP form and URL elicitation through the real Claude bridge with a fake SDK, rehydrates it after an inactive environment and a reload from the bridge's `/session/:id/interactions` (through `HttpBridgeInteractionAdapter`), then answers and cancels it. The Claude `ask` override on a real CLI is covered by the live pause spec (Claude approval).
 
@@ -113,7 +113,7 @@ Done 2026-11-06 in the component browser suite (`e2e/playwright.config.ts`, head
 - A Claude session overridden to `deny`: a Bash call is refused with "policy denies approvals" and no card, while an AskUserQuestion still shows and its answer reaches the SDK.
 - A coordinator: the Claude fixture host started with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only` reports `coordinator-read-only`, allows `mcp__orkestrator__*`, lets `launch_environment` through the read-only PreToolUse hook, refuses Write in the hook and in `canUseTool` with no card, and parks a question that survives a reload and is answered.
 
-All 10 cases passed in three consecutive runs at the default worker count, and alongside `ClaudeInteractions.spec.ts` and `CodexHostRules.spec.ts` (18 of 18). No isolated `dev:test` profile was needed: the component suite starts no backend. A real coordinator turn on a live model stays with 0024.
+All 10 cases passed in three consecutive runs at the default worker count, and alongside `ClaudeInteractions.spec.ts` and `CodexHostRules.spec.ts` (18 of 18). No isolated `dev:test` profile was needed: the component suite starts no backend. A real coordinator turn on a live model is the live suite's `ask` scenario (6940, retired).
 
 **Decisions.**
 
@@ -649,7 +649,7 @@ or a person.
   that delegates and asks a question.~~ Done 2026-11-06 with provider fakes
   (task 7): `e2e/ClaudeInteractions.spec.ts` and
   `e2e/InteractionPolicyChecks.spec.ts`. A coordinator turn on a real model
-  is left to 0024.
+  is left to 0024 (retired), now the live suite's `ask` scenario.
 - ~~`mise run test:agent:docker` for the container cells on Cursor and Pi.~~
   Done 2026-11-06 with fake engines (task 8); the live-provider runs are
   [7040](7040-container-cells-on-real-cursor-and-pi.md).

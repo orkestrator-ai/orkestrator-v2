@@ -4,7 +4,8 @@ import { escapedInteractionFailures, type CoordinatorLiveCheck } from "./coordin
 
 /**
  * The live coordinator suite's `identity` scenario (to-do 0024 task 6, retired;
- * see "The `identity` case" in `docs/development/agent-testing.md`).
+ * see the `identity` case under "Live coordinator suite" in
+ * `docs/development/agent-testing.md`).
  *
  * One harness-made environment with three agent tabs on the platform, and no
  * coordinator. It checks the mailbox identity behaviours that depend on each

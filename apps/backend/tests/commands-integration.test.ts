@@ -12,6 +12,8 @@ import {
   TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS,
   TERMINAL_ACTIVITY_SETTLE_MS,
 } from "../src/core/terminal-runtime";
+import { createBackendChangeTracking } from "../src/core/change-tracking";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -1812,6 +1814,16 @@ exit 0
   });
 
   describe("backend-owned diff statistics", () => {
+    /** Deletes a test's environment; a failed delete does not fail the test. */
+    const deleteEnvironmentQuietly = (
+      commands: ReturnType<typeof createCommandRegistry>,
+      environmentId: string,
+      context: CommandContext,
+    ) =>
+      Promise.resolve(commands.get("delete_environment")?.({ environmentId }, context)).catch(
+        () => undefined,
+      );
+
     function localDiffEnvironment(worktree: string) {
       const environment = createEnvironment({
         status: "stopped",
@@ -1906,9 +1918,7 @@ exit 0
           ),
         ).resolves.toMatchObject({ status: "reset", reason: "generation" });
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     });
 
@@ -1937,9 +1947,7 @@ exit 0
           await expect(fs.readFile(logPath, "utf8").catch(() => "")).resolves.toBe("");
         });
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     });
 
@@ -1990,10 +1998,7 @@ exit 0
           const trackedPath = path.join(worktree, "tracked.txt");
           emitted.splice(0);
           await fs.writeFile(trackedPath, "base\nchanged again\n");
-          await commands.get("refresh_environment_diff_stats")?.(
-            { environmentId: environment.id },
-            context,
-          );
+          context.runtime.diffStats.refreshExplicitly(environment.id);
           // One write is enough for whichever path gets there first - the explicit
           // refresh or the watcher. Retrying the write instead would only mask an
           // arbitrarily slow announcement, and cannot escape the suppression above.
@@ -2024,9 +2029,7 @@ exit 0
             }),
           );
         } finally {
-          await Promise.resolve(
-            commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-          ).catch(() => undefined);
+          await deleteEnvironmentQuietly(commands, environment.id, context);
         }
       },
       ASYNC_TEST_BUDGET_MS,
@@ -2108,10 +2111,7 @@ exit 1
                 framedContainerGitStatus("M\0tracked.txt\0", "1\t0\ttracked.txt\0"),
               );
               emitted.splice(0);
-              await commands.get("refresh_environment_diff_stats")?.(
-                { environmentId: environment.id },
-                context,
-              );
+              context.runtime.diffStats.refreshExplicitly(environment.id);
               await waitForCondition(
                 () =>
                   emitted.some(
@@ -2142,11 +2142,20 @@ exit 1
       ASYNC_TEST_BUDGET_MS,
     );
 
-    test("refreshes a tracked environment on explicit request", async () => {
+    test("refreshes a tracked environment on the Files panel's explicit request", async () => {
       const { worktree } = await createGitWorktreeWithOrigin();
       await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
       const { environment, context, emitted } = localDiffEnvironment(worktree);
       const commands = createCommandRegistry();
+      // As the backend wires it (`index.ts`); the runtime's shutdown closes it.
+      context.runtime.attachChangeTracking(
+        createBackendChangeTracking({
+          dataDir: await createTempDir("ork-changes-refresh-"),
+          storage: context.storage,
+          emit: context.emit,
+          diffStats: context.runtime.diffStats,
+        }),
+      );
 
       try {
         await commands.get("get_environment_diff_stats")?.({}, context);
@@ -2157,10 +2166,9 @@ exit 1
         emitted.splice(0);
         await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\nagain\n");
 
-        await commands.get("refresh_environment_diff_stats")?.(
-          { environmentId: environment.id },
-          context,
-        );
+        const resourceKey = environmentChangeResourceKey(environment.id);
+        const refreshed = await commands.get("changes_refresh")?.({ resourceKey }, context);
+        expect(refreshed).toMatchObject({ kind: "settled" });
         await waitForCondition(
           () =>
             emitted.some(
@@ -2171,9 +2179,7 @@ exit 1
           "refreshed diff stats to be announced",
         );
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     });
 
@@ -2219,9 +2225,7 @@ exit 1
           }),
         );
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     });
 
@@ -2317,9 +2321,7 @@ exit 1
         expect(change.stats.filesChanged).toBe(2_001);
         expect(change.stats.additions).toBe(2_000);
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     }, 30_000);
 
@@ -2340,9 +2342,7 @@ exit 1
           ?.payload as { stats: { truncated: boolean } };
         expect(change.stats.truncated).toBe(false);
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     });
 
@@ -2480,9 +2480,7 @@ exit 1
           gitOutput(worktree, ["config", "--get", "core.fsmonitor"]).catch(() => ""),
         ).resolves.not.toBe("true");
       } finally {
-        await Promise.resolve(
-          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-        ).catch(() => undefined);
+        await deleteEnvironmentQuietly(commands, environment.id, context);
       }
     });
 

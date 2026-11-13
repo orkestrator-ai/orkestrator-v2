@@ -1069,10 +1069,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
       sessionId: "tmux-session",
     });
     tmuxStore.setDraftText(scopedTmuxKey, "discard me");
-    tmuxStore.setRunning("removed-tmux", true, {
-      environmentId,
-      sessionId: "legacy-tmux-session",
-    });
 
     const destroy = mock(async () => {});
     window.orkestrator = { browserPreview: { destroy } } as never;
@@ -1117,7 +1113,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(destroy).toHaveBeenCalledWith("removed-browser");
     expect(appCommandStore(claudeTmuxStore).getState().getTab(scopedTmuxKey).running).toBe(false);
     expect(appCommandStore(claudeTmuxStore).getState().getDraftText(scopedTmuxKey)).toBe("");
-    expect(appCommandStore(claudeTmuxStore).getState().getTab("removed-tmux").running).toBe(false);
 
     expect(teardownTab).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4163,7 +4158,7 @@ describe("paneLayoutStore remaining branch coverage", () => {
     expect(tabs[1]).toBe(sibling);
   });
 
-  test("resets both scoped and legacy Claude tmux tab state on removal", () => {
+  test("resets the scoped Claude tmux tab state on removal", () => {
     const environmentId = "env-tmux-reset";
     const tabId = "tmux-tab";
     const scopedKey = createClaudeTmuxStateKey(environmentId, tabId);
@@ -4172,18 +4167,10 @@ describe("paneLayoutStore remaining branch coverage", () => {
       environmentId,
       sessionId: "scoped-session",
     });
-    appCommandStore(claudeTmuxStore).getState().setRunning(tabId, true, {
-      environmentId,
-      sessionId: "legacy-session",
-    });
 
     appCommandStore(paneLayoutStore).getState().removeTab("default", tabId, environmentId);
 
     expect(appCommandStore(claudeTmuxStore).getState().getTab(scopedKey)).toMatchObject({
-      running: false,
-      sessionId: null,
-    });
-    expect(appCommandStore(claudeTmuxStore).getState().getTab(tabId)).toMatchObject({
       running: false,
       sessionId: null,
     });

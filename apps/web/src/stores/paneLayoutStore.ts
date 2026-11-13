@@ -452,9 +452,6 @@ function cleanupSharedNativeTab(scope: NodeScope, envId: string, tab: TabInfo) {
 function cleanupClaudeTmuxTab(scope: NodeScope, envId: string, tabId: string) {
   const store = scope.store(claudeTmuxStore).getState();
   store.resetTab(createClaudeTmuxStateKey(envId, tabId));
-  // Also clear any legacy bare-key state that may exist from before the
-  // (envId, tabId) composite key migration.
-  store.resetTab(tabId);
   void tabTeardownBackend(scope)
     .teardownTab({ environmentId: envId, tabId, kind: "claude-tmux" })
     .catch((err) =>

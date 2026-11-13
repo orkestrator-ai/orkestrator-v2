@@ -1,6 +1,6 @@
 // Claude tmux mode chat tab.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, History, Sparkles, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useVirtuosoScrollState } from "@/hooks";
@@ -39,7 +39,6 @@ import {
   compactConsecutiveAssistantMessages,
   createClaudeTmuxStateKey,
   claudeTmuxStore,
-  migrateLegacyClaudeTmuxState,
   useClaudeTmuxStore,
   visibleTmuxMessages,
   type TmuxPendingElicitation,
@@ -156,13 +155,7 @@ export function ClaudeTmuxChatTab({
   );
   const persistedClaudeModel = persistedClaudeSettings.model;
 
-  const scopedTabState = useClaudeTmuxStore((s) => s.tabs.get(stateKey));
-  const legacyTabState = useClaudeTmuxStore((s) => s.tabs.get(tabId));
-  const shouldUseLegacyTabState =
-    !scopedTabState &&
-    legacyTabState &&
-    (!legacyTabState.environmentId || legacyTabState.environmentId === environmentId);
-  const tabState = scopedTabState ?? (shouldUseLegacyTabState ? legacyTabState : undefined);
+  const tabState = useClaudeTmuxStore((s) => s.tabs.get(stateKey));
   const storeKey = stateKey;
   const setRunning = useClaudeTmuxStore((s) => s.setRunning);
   const applyTranscriptLine = useClaudeTmuxStore((s) => s.applyTranscriptLine);
@@ -339,10 +332,6 @@ export function ClaudeTmuxChatTab({
     fastModeMutationVersionRef.current += 1;
     setFastModeEnabled(enabled);
   }, []);
-
-  useLayoutEffect(() => {
-    migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId, tmuxScope);
-  }, [environmentId, stateKey, tabId, tmuxScope]);
 
   useEffect(() => {
     if (!initialLaunchReasoningEffort) return;

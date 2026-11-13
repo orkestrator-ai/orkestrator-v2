@@ -428,7 +428,17 @@ describe("HTTP bridge provider", () => {
     const { provider } = httpProvider((url) =>
       url.endsWith("/commands")
         ? Response.json({
-            commands: [{ name: "/legacy" }, { name: "/future", source: "workspace-pack" }],
+            catalogueVersion: 1,
+            status: "ready",
+            commands: [
+              { name: "/legacy", id: "claude:/legacy", executionKind: "provider-prompt" },
+              {
+                name: "/future",
+                id: "claude:/future",
+                executionKind: "provider-prompt",
+                source: "workspace-pack",
+              },
+            ],
           })
         : new Response(null, { status: 404 }),
     );

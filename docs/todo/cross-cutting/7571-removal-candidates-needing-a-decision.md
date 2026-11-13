@@ -2,86 +2,82 @@
 
 ## Task analysis
 
-Analysed 2026-11-10 against main at `53340356c`, from the dead-code and
-fallback investigation of that day. The same branch removed everything that
-was safe under the support window
+Analysed 2026-11-13 against main at `17d28238c`, first written on
+2026-11-10 against `53340356c` from the dead-code and fallback
+investigation of that day. The same branch removed everything that was safe
+under the support window
 ([version-compatibility.md](../../architecture/version-compatibility.md)).
 Window-dated removals are in
 [7570](7570-compatibility-paths-waiting-on-the-floor.md). This file holds
 the rest: candidates that need a product decision, a live check, or a
-change too large to fold into a removal sweep.
+change too large to fold into a removal sweep. On 2026-11-13 tasks 1, 2,
+8, 12 and 14 and four of task 9's six items were done (see Assumptions and
+decisions); every part that needs a person is on the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### Tasks
 
-1. **Bridge full-payload SSE mode**: remove the non-observe branch of `/event/subscribe` in the Claude and Codex bridges and the replay retention only it keeps alive. Status: open.
-2. **Claude bridge delete-tombstone machinery**: `deleteSessionDurably` and its tombstone ticks have no HTTP route since `DELETE /session/:id` was removed. Status: open.
+1. **Bridge full-payload SSE mode**: removed from the Claude and Codex bridges, with the replay ring only it kept. Status: done.
+2. **Claude bridge delete-tombstone machinery**: writer and reader removed; no tombstone was ever stored. Status: done.
 3. **Image readiness markers**: stop writing `/tmp/.environment-ready` and `/tmp/.entrypoint-complete`, validated with an image build. Status: open.
 4. **`envFilePatterns` setting**: Settings offers it, but the backend never reads it. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
 5. **Interaction observer switches**: decide the fate of `ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
 6. **Artifact rollout flags**: keep the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags as kill switches, or remove them. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
 7. **Unmounted and uncalled surfaces**: `NetworkWhitelistDialog.tsx`, and the admin commands `set_workflow_result_tools_rollout` and `graph_capability_ceiling_set`. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
-8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState`, and single-`pipelineId` handoff records. Status: open.
-9. **Small probable leftovers needing one check each**: the CLI targets fallback without an instance descriptor, command rows without `catalogueVersion`, `bypassPermissionsModeAccepted` in the entrypoint, Cursor's `streamed.total` usage fallback, Pi's no-runtime `forkSession`, and the `kind: "legacy"` container readiness path. Status: open.
+8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command is task 15).
+9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment); `bypassPermissionsModeAccepted` waits on a live container start and the `kind: "legacy"` readiness path on a decision. Status: open (depends on the live check and the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
 10. **Remaining retired to-do numbers in source comments**: about 39 numbers on about 80 comment lines. Status: open.
 11. **Root `conductor.json`**: keep it only if someone opens this repository in Conductor. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
-12. **Commands kept only for tests**: `merge_pr_local` and `refresh_environment_diff_stats` have no product caller. Status: open.
+12. **Commands kept only for tests**: `merge_pr_local` and `refresh_environment_diff_stats` removed, their tests ported. Status: done.
 13. **Linear connection commands**: `connect_linear` and `disconnect_linear` have no UI caller. Status: open (depends on the decision on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
-14. **Uncalled renderer API factories**: `createCommandNodesApi` and `createSelfImprovementApi`. Status: open.
+14. **Uncalled renderer API factories**: `createCommandNodesApi` and `createSelfImprovementApi` removed. Status: done.
+15. **`import_legacy_build_pipelines`**: the backend half of task 8; e2e specs seed pipelines through it. Status: open.
 
 ### 1. Bridge full-payload SSE mode
 
-**Problem.** The Claude and Codex bridges still serve a full-payload
-`/event/subscribe` stream. No backend from v2.21.0 onward opens it: v2.21.0
-never subscribes, and every later backend sends `observe=1` (checked against
-v2.21.0, v2.27.0-beta and v2.36.0). The full mode costs a few hundred lines:
-serialisation, superseded-frame collapse and the replay ring.
+**Problem.** The Claude and Codex bridges served a full-payload
+`/event/subscribe` stream that no backend from v2.21.0 opens: v2.21.0 never
+subscribes, and every later backend sends `observe=1`.
 
-**Context.** In the Claude bridge's `routes/events.ts`, only full-mode
-subscribers keep the replay ring alive; observers never arm it. So the
-removal is a redesign of replay retention, not a deletion, and it touches
-the root AGENTS.md invariants 7 and 8 (replay subscribes before it
-calculates; a connected frame echoes the client's cursor). The "legacy web
-client" text in root AGENTS.md and `bridges/claude-bridge/AGENTS.md` refers
-to this mode. `apps/backend/tests/codex-subagent-stack.ts` (about line 212)
-uses full mode and must move to observe mode.
+**Context.** Done 2026-11-13. Removed: the full-mode branches, the
+serialisation cache and superseded-frame collapse in
+`bridges/claude-bridge/src/routes/events.ts` and
+`bridges/codex-bridge/src/index.ts`, the Codex per-tab `sessionId` filter and
+5 s active keepalive (keepalives are now a flat 30 s), and the replay ring
+`packages/protocol/src/node/event-ring.ts` with its test and package export.
+Observers never armed the ring, so they already got a gap frame on any
+cursor behind the current one.
 
-**Investigation.** List what the observe path needs from
-`packages/protocol/src/node/event-ring.ts` and from the Claude and Codex
-SSE code, delete the rest, and keep the cursor and replay tests that the
-observe path exercises.
+**Investigation.** The observe path keeps a revision counter, cursor parsing
+and a gap frame (`replay.required` for Claude, `session.reconcile-required`
+for Codex). It still subscribes and reads the revision in one synchronous
+step and buffers the handshake (invariant 7), and its `connected` frame
+echoes the client's cursor (invariant 8). The root, bridge and Codex
+`AGENTS.md` text that described full mode and replay was updated.
 
-**Decisions.**
-
-- **Remove now, or keep as the documented debugging stream?**
-  - **Remove it in its own change (recommended).**
-    - Pros: drops a few hundred lines and a second serialisation path nobody uses.
-    - Cons: needs care with the replay invariants and a review of its own.
-  - **Keep it.**
-    - Pros: no work.
-    - Cons: dead code that the bridge rules still have to describe.
+**Decisions.** A request without `observe=1` gets 400 (see Assumptions and
+decisions); the live observer check is on the manual-test checklist.
 
 ### 2. Claude bridge delete-tombstone machinery
 
 **Problem.** `deleteSessionDurably`, `recordDeletedSdkSession` and
 `sessionDeletionTick` in the Claude bridge served `DELETE /session/:id`,
-which is now removed. They still run through reconcile and many tests.
+which is removed, and still ran through reconcile and many tests.
 
-**Context.** A tombstone recorded by an older bridge may still be on disk
-and finished by reconcile, so the reader may need to stay while a data
-directory can hold one.
+**Context.** Done 2026-11-13. Writer and reader removed, together with the
+"permanent deletion in progress" branch of `closeSessionRetainingHistory`
+and its route message. No code in the bridge calls the SDK's
+`deleteSession` any more; the prompt refusal during a close now says
+"Session is being closed".
 
-**Investigation.** Find every caller other than the removed route. Decide
-whether a stored delete tombstone can still exist (written by any bridge in
-the window) and whether reconcile must finish it.
+**Investigation.** The tombstone was never stored: from #179 through
+v2.21.0 to v2.38.1-beta it was a process-local map, lost on every bridge
+restart. The v2.21.0 backend never sent DELETE to the Claude bridge
+(`LEGACY_DELETE_RETAINS_HISTORY.claude = false`), and #2105 (first in
+v2.37.5-beta) removed the route. So no data directory can hold one, and
+the recommended "keep the reader" option had nothing to read.
 
-**Decisions.**
-
-- **Keep finishing stored tombstones, remove the writer (recommended).**
-  - Pros: no stored deletion is left half done.
-  - Cons: the reader stays until no supported release writes tombstones.
-- **Remove both.**
-  - Pros: the least code.
-  - Cons: a tombstone from an older bridge would never be finished.
+**Decisions.** Both removed (see Assumptions and decisions).
 
 ### 3. Image readiness markers
 
@@ -201,47 +197,42 @@ owners of workflow-result tools and graphs about the commands.
 
 ### 8. Old browser-held and stored state readers
 
-**Problem.** Three readers serve state from before v2.21.0:
+**Problem.** Three renderer readers served state from before v2.21.0: the
+`orkestrator-build-pipelines` localStorage import, `migrateLegacyClaudeTmuxState`
+and single-`pipelineId` handoff records.
 
-- the localStorage build-pipeline import (`lib/build-pipeline-persistence.ts`, about lines 614-735, called from `App.tsx`) and the backend `import_legacy_build_pipelines`;
-- `migrateLegacyClaudeTmuxState` (`stores/claudeTmuxStore.ts`, about lines 829-870, plus `ClaudeTmuxChatTab.tsx` and `paneLayoutStore.ts`);
-- single-`pipelineId` handoff records (`lib/pane-selection-storage.ts`, about lines 140-143).
+**Context.** Done 2026-11-13. Removed `migrateLegacyBuildPipelines` and its
+`App.tsx` call, the renderer wrapper `importLegacyBuildPipelines`,
+`migrateLegacyClaudeTmuxState` with the chat tab's bare-tab-id fallback read
+and the pane-layout store's bare-key reset, and the single-`pipelineId`
+branch of `pane-selection-storage.ts`. Their tests went or now assert the
+old shape is ignored.
 
-**Context.** No renderer has written `orkestrator-build-pipelines` since
-#178 (2026-07-27), but the hosted client has been live since 2026-07-14, so
-a browser that used it in those two weeks and has not opened it since could
-still hold some. `claudeTmuxStore` never used persistence middleware, so its
-only possible source is stored prompt-queue records keyed by a bare tab id.
+**Investigation.** Prompt-queue hydration (`prompt-queue-sources.ts`) only
+sets `messageQueue` and never creates a tab entry, the tmux store was never
+persisted, and every store write in `ClaudeTmuxChatTab.tsx` uses the scoped
+key, so the tmux migration could not fire. The backend command stays for
+now (task 15).
 
-**Investigation.** For the tmux migration, check whether
-`prompt-queue-sources.ts` can still hydrate a bare-key record. For the
-others, no further investigation is possible: the data is in users'
-browsers.
-
-**Decisions.**
-
-- **Retire all three (recommended).**
-  - Pros: about 190 lines; only browsers idle for over three months could lose anything, and the tmux path is probably unreachable.
-  - Cons: such a browser loses its pre-July pipelines.
-- **Keep them.**
-  - Pros: no data loss.
-  - Cons: dead code for a case that may never occur.
+**Decisions.** The recommended "retire all three" for the renderer readers.
 
 ### 9. Small probable leftovers needing one check each
 
-**Problem.** Each of these is probably dead, but proving it needs a check
-the investigation could not run:
+**Problem.** Each of these was probably dead, but proving it needed a check.
 
-- `packages/cli/src/client/targets.ts` (about lines 454-470): the fallback for a profile without an instance descriptor. Confirm every ready backend publishes the descriptor.
-- Command-catalogue rows without `catalogueVersion` (`http-bridge/catalog.ts`, `native-agent-command-dispatch.ts`). Confirm every v2.21.0 bridge's `/commands` answer carries it (`git grep catalogueVersion v2.21.0 -- bridges`). Keep `isLegacyCommandId` for stored intents.
-- `bypassPermissionsModeAccepted` in `docker/entrypoint.sh` (about lines 1271-1343). The pinned Claude CLI may ignore it; confirm with one live container start.
-- Cursor's `streamed.total` usage fallback (`bridges/cursor-bridge/src/prompt.ts`, about line 641) "for older SDK/runtime pairs". Confirm `RunResult.usage` is always present on `@cursor/sdk` 1.3.1.
-- Pi's no-runtime `forkSession` fallback (`bridges/pi-bridge/src/agent-session.ts`, about lines 1619-1650). It serves only dependency-injected test sessions; move those tests onto a runtime.
-- The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, about lines 54 and 209-226). It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides.
+**Context.** Checked 2026-11-13:
 
-**Context.** See each item.
+- CLI targets fallback without an instance descriptor (`packages/cli/src/client/targets.ts`): **kept**. The backend writes the descriptor before its ready line only as a best effort (from v2.21.0 a failed write is logged and the backend still serves), so a ready dev:test profile can lack one. The reason is in a code comment.
+- Command-catalogue answers without `catalogueVersion`: **removed**. Every v2.21.0 bridge stamps it on every `/session/:id/commands` answer; such an answer is now `outdated-bridge`. The non-enhanced path stays for another catalogue version and display-only providers, and `isLegacyCommandId` stays for stored intents.
+- Cursor's `streamed.total` usage fallback (`bridges/cursor-bridge/src/prompt.ts`): **kept**. `@cursor/sdk` 1.3.1 declares `RunResult.usage` optional, and a turn failed without a result has only what streamed. The comment now says so.
+- Pi's no-runtime `forkSession` fallback: **removed**; its two tests run on a fake runtime, and a new test forks through the real SDK runtime with a scripted model.
+- `bypassPermissionsModeAccepted` in `docker/entrypoint.sh` (about lines 1271-1343): open. The pinned Claude CLI may ignore it; confirming that needs one live container start, which is on the manual-test checklist.
+- The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, `parseBootProbe` and `observeContainerBoot`): open. It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides; the decision is on the manual-test checklist.
 
-**Investigation.** As listed.
+**Investigation.** For the two open items, the agent work after the answer
+is: delete the entrypoint block if the CLI ignores it (with an image build
+and `bash docker/tests/final-image-smoke.sh <image>`), and delete or keep the
+legacy readiness path as decided, with a comment if kept.
 
 **Decisions.** For each item, remove it when its check passes
 (recommended); otherwise record why it stays in a code comment.
@@ -285,27 +276,22 @@ repository references it, and it was last edited on 2026-09-09.
 
 ### 12. Commands kept only for tests
 
-**Problem.** `merge_pr_local` has no product caller (its renderer wrapper was
-removed), but about 15 backend tests use it as the entry point to the
-stored-merge path. `refresh_environment_diff_stats` has no product caller
-either, but `e2e/agent-testing/browser-gateway.spec.ts` drives it.
+**Problem.** `merge_pr_local` and `refresh_environment_diff_stats` had no
+product caller.
 
-**Context.** No renderer in the window calls either command (checked
-against v2.21.0 and v2.36.6-beta). Removing a command bumps its contract
-domain; `pull-requests` and `environments` are already at version 2 on this
-branch, so do it before that version ships if possible.
+**Context.** Done 2026-11-13. Both commands, their definitions and handlers
+were removed. `pull-requests` went to version 3 and `git` to version 2
+(both `min: 1`), each client keeping an older-version adapter with the same
+API; the register and Retired rows are in
+[version-compatibility.md](../../architecture/version-compatibility.md).
 
-**Investigation.** Port the backend tests to `merge_environment_pr`, and
-point the e2e spec at whichever command the UI uses to refresh diff stats.
+**Investigation.** The backend merge tests now call `merge_environment_pr`
+(the command the UI uses). The diff-stats tests and
+`e2e/agent-testing/browser-gateway.spec.ts` use `changes_refresh`, which the
+Files panel's Refresh sends. The e2e spec was edited but not run (real-stack
+suites are on demand).
 
-**Decisions.**
-
-- **Port the tests, then remove both commands (recommended).**
-  - Pros: the tests exercise the path users take.
-  - Cons: a test rewrite.
-- **Keep them as test entry points.**
-  - Pros: no work.
-  - Cons: two public commands exist only for tests.
+**Decisions.** The recommended "port the tests, then remove both commands".
 
 ### 13. Linear connection commands
 
@@ -331,16 +317,90 @@ Linear connection, and whether any backend path still posts to Linear.
 ### 14. Uncalled renderer API factories
 
 **Problem.** `createCommandNodesApi` and `createSelfImprovementApi` in
-`apps/web/src/lib/backend/` have no non-test caller. The removal sweep left
-them alone because they are factories that may be wired up through a scope.
+`apps/web/src/lib/backend/` had no non-test caller.
 
-**Context.** Fork A1 found that `machine-profile.ts`'s factory, which looked
-dead, is wired into `scope-backend.ts`.
+**Context.** Done 2026-11-13. Neither `scope-backend.ts` nor any node-scope
+wiring uses them: command-node commands always go to the command node over
+the portal, and self-improvement is the window's own backend. Both files
+now export plain functions bound to `portalBackendClient` and
+`commandBackendClient`; `factories.test.ts` skips them, and plan item
+[3002](../../../plans/unified/3002-lib-backend-client-parameter.md) records it.
 
-**Investigation.** Search `scope-backend.ts` and the node-scope wiring for
-each factory.
+**Investigation.** None further.
 
 **Decisions.** Remove each one that no scope wires in (recommended).
+
+### 15. `import_legacy_build_pipelines`
+
+**Problem.** The backend command that imported task 8's localStorage
+snapshots has no product caller now that the renderer import is gone.
+
+**Context.** `e2e/agent-testing/container-app-wiring.spec.ts` (about line
+315) and `e2e/agent-testing/pipeline-delete.spec.ts` (about line 64) seed
+pipelines through it, and so does `scripts/mixed-version/scenarios/pipelines.ts`.
+It is a `pipelines` domain command (version 1, shipped), so removing it
+bumps that domain to 2 with a version-1 adapter, a register row and a
+Retired row, as task 12 did.
+
+**Investigation.** Find or add a seeding path for those specs (a dev:test
+fixture, or a test-only storage seed through the CLI), port the three
+callers, run the two e2e specs against an isolated profile, then remove the
+command, its schema and its backend tests in `commands-state-sync.test.ts`.
+
+**Decisions.**
+
+- **Port the seeding, then remove the command (recommended).**
+  - Pros: no public command exists only for tests.
+  - Cons: needs a real-stack run of two e2e specs.
+- **Keep it as a documented test seeding entry point.**
+  - Pros: no work.
+  - Cons: a public command that writes arbitrary pipeline snapshots stays.
+
+## Assumptions and decisions
+
+### Task 1: a request without `observe=1` is refused with 400
+
+Chose refusal over treating every subscription as observe: a leftover
+client that expects payloads fails loudly instead of reading content-free
+frames as empty updates. Every backend in the window sends `observe=1`.
+Replay was dropped rather than kept for observers, because observers never
+armed the ring and the backend already re-reads every session on each
+`connected` frame.
+
+### Task 2: removed the reader as well as the writer
+
+The recommended option kept the reader for stored tombstones, but the
+history shows none was ever stored and no supported backend ever sent the
+DELETE that wrote one, so nothing could be left half done.
+
+### Task 8: kept `import_legacy_build_pipelines` on the backend
+
+The renderer readers went as recommended. The backend command is the
+seeding entry point of two e2e specs and a mixed-version scenario, which
+this change could not run, so its removal is task 15 rather than an
+unverified edit.
+
+### Task 9: two items kept with a comment, two left for a person
+
+The CLI fallback and the Cursor usage fallback failed their checks and stay,
+each with the reason in a comment. The entrypoint item needs a live
+container start and the legacy readiness path a decision; both are on the
+manual-test checklist.
+
+### Task 12: bumped `pull-requests` and `git`
+
+Both domains' current versions had shipped, so removing a command needed a
+bump (`pull-requests` 3, `git` 2, both `min: 1`) with an older-version
+adapter of the same API, as the 2026-11-10 removals did. One project-home
+test changed intent: with `merge_environment_pr`, only an unguarded call
+with `deleteBranch: true` and no cleanup still shows that a home ignores a
+branch delete.
+
+### Task 14: plain functions instead of factories
+
+The files keep their named exports, so no caller changed; the
+`lib-backend-command-default` guard no longer counts them as shims, which is
+correct because they always mean one node.
 
 ## Related
 

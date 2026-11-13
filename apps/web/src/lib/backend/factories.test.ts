@@ -12,12 +12,18 @@ import type { BackendClient } from "./client";
 
 const commandInvoke = invoke as unknown as ReturnType<typeof mock>;
 
+const FIXED_NODE_FILES: ReadonlySet<string> = new Set(["command-nodes.ts", "self-improvement.ts"]);
+
 const directory = import.meta.dir;
 const modules = readdirSync(directory)
   .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
   // Not command files: the client builders, shared helpers and the per-scope
   // aggregate of every factory (`backendForScope`, plan item 4001).
   .filter((file) => file !== "client.ts" && file !== "shared.ts" && file !== "scope-backend.ts")
+  // Bound to one node by design, so they have no factory (7571 task 14):
+  // command-node commands always go to the command node over the portal, and
+  // self-improvement is this window's own backend.
+  .filter((file) => !FIXED_NODE_FILES.has(file))
   .sort();
 
 /**
@@ -52,7 +58,7 @@ afterEach(() => {
 
 describe("lib/backend factories", () => {
   test("every source file has a factory", () => {
-    expect(modules.length).toBe(39);
+    expect(modules.length).toBe(37);
   });
 
   for (const file of modules) {

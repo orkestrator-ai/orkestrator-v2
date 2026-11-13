@@ -115,7 +115,7 @@ describe("bridge authentication and origin policy", () => {
     const headers = { Authorization: `Bearer ${AUTH_TOKEN}` };
     const subscribe = async () => {
       const controller = new AbortController();
-      const response = await app.request("/event/subscribe", {
+      const response = await app.request("/event/subscribe?observe=1", {
         headers,
         signal: controller.signal,
       });

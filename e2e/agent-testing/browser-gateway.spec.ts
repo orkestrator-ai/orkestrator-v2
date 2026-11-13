@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
 import type {
@@ -710,9 +711,7 @@ test("real browser gateway exercises an authoritative local environment", async 
     await expect
       .poll(async () => historyHas(await readHistory(), "history-resumed"), { timeout: 15_000 })
       .toBe(true);
-    await invoke<void>("refresh_environment_diff_stats", {
-      environmentId: environment.id,
-    });
+    await invoke("changes_refresh", { resourceKey: environmentChangeResourceKey(environment.id) });
     await expect
       .poll(
         async () => {

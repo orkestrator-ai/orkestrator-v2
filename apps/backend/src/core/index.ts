@@ -1132,8 +1132,6 @@ export class OrkestratorBackend {
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
-        // Rollback for step 07's observation sharing; fences stay either way.
-        observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
         // A view-only invalidation for an idle session whose content changed:

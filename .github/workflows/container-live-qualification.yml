@@ -48,6 +48,8 @@ on:
       - "docker/update-firewall.sh"
       - "docker/orkestrator-egress-gateway.sh"
       - "docker/orkestrator-egress-filter.pl"
+      - "docker/orkestrator-apt-install.sh"
+      - "apps/backend/src/core/container-apt-packages.ts"
       - "apps/backend/src/core/egress-gateway.ts"
       - "apps/backend/src/core/github-ranges-cache.ts"
       - "apps/backend/scripts/github-ranges-seed.ts"
@@ -210,6 +212,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-filter.test.ts --parallel=1
 
+      # Declared Debian packages (aptPackages, to-do 7770): a restricted runtime
+      # behind its gateway installs one from deb.debian.org and refuses denied ones.
+      - name: Live declared Debian packages
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-apt-packages.test.ts --parallel=1
+
       # Claude Code, Codex, OpenCode, Pi and Grok finish fake-provider turns with the
       # telemetry hosts refused (6100); Cursor remains unqualified (7420).
       - name: Live agent CLIs without telemetry hosts
@@ -286,7 +294,7 @@ jobs:
 
       # Design export through real `docker exec` into the run's image: client
       # kills, the daemon closing the helper's stdin, and digest reconciliation
-      # (todo 0036 task 2).
+      # (todo 0036 task 2, retired; docs/architecture/design-canvas.md).
       - name: Live design export
         if: ${{ !cancelled() }}
         env:

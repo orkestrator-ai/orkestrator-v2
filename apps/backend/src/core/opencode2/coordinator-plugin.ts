@@ -1,6 +1,6 @@
 /**
  * The coordinator guard, a 2.x server plugin
- * (docs/todo/agent-engines/0008-opencode-v2.md, coordinators on 2.x).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), coordinators on 2.x).
  *
  * A coordinator's 2.x server is its own process, launched with
  * `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`. This plugin

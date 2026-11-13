@@ -4,16 +4,11 @@
 // Claude rollout (`{sdkSessionId}.jsonl`) and the bridge-owned preferences file
 // (durable dispatch journal, steer journal and client-key alias) are both kept,
 // so the conversation stays listed by `GET /session/list` and a deliberate
-// resume reaches it again. Permanent deletion is `deleteSessionDurably`, which
-// only an explicit DELETE may invoke.
+// resume reaches it again. The bridge has no path that deletes a rollout.
 
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import type { ClaudeQueryControl, SessionState } from "../types/index.js";
-import {
-  claimedPromptDispatches,
-  sessionOperationError,
-  sessions,
-} from "./session-manager-core.js";
+import { claimedPromptDispatches, sessions } from "./session-manager-core.js";
 import {
   cleanupPendingInteractions,
   forgetPromptDispatchesForSession,
@@ -44,8 +39,8 @@ const closesInFlight = new Map<string, Promise<RetainingCloseOutcome>>();
 /**
  * Sessions whose `deleting` claim belongs to a close that could not confirm
  * stop, with the query controls whose `close()` failed or did not settle. Such
- * a session stays fenced (no prompt, dispatch claim or deletion is admitted)
- * but a later close may take the claim over and try again.
+ * a session stays fenced (no prompt or dispatch claim is admitted) but a later
+ * close may take the claim over and try again.
  */
 const stalledCloses = new WeakMap<SessionState, Set<ClaudeQueryControl>>();
 
@@ -62,11 +57,9 @@ export type RetainingCloseOptions = {
  *   materialized from disk first: a rollout that is not in memory has no query,
  *   no parked interaction and no dispatch claim, so there is nothing to close,
  *   and adopting it only to drop it again would cost a history read.
- * - The claim is taken before the first await, exactly as permanent deletion
- *   does, so a prompt cannot slip in on the next microtask.
- * - Concurrent closes share one operation. A permanent deletion already in
- *   progress is a conflict the caller retries; its outcome is not ours to
- *   report.
+ * - The claim is taken before the first await, so a prompt cannot slip in on
+ *   the next microtask.
+ * - Concurrent closes share one operation.
  * - Stop must be proven within the budget: every owned query's `close()` must
  *   return (or resolve) without throwing, and a dispatch claim racing the close
  *   must settle. Otherwise this rejects with
@@ -85,12 +78,6 @@ export function closeSessionRetainingHistory(
   const session = sessions.get(sessionId);
   if (!session) return Promise.resolve("missing");
   const unconfirmed = stalledCloses.get(session);
-  if (session.deleting && !unconfirmed) {
-    return Promise.reject(
-      sessionOperationError("conflict", "Session deletion is already in progress"),
-    );
-  }
-
   stalledCloses.delete(session);
   session.deleting = true;
   session.status = "running";

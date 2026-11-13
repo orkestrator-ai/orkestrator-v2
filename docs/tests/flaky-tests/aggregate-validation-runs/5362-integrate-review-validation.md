@@ -50,3 +50,22 @@ clone test at 8,304.65 ms. Its complete isolated rerun
 also failed (0 pass, 15 fail, 78.5 s), repeatedly timing out in fixture Git pushes
 and commits. It is **not** classified as a flake or excused here. Evidence:
 `orkestrator-test-run.IsEWfZ/git-mirror-isolated.log.gz` under the same temporary parent.
+
+## Recurrence (2026-11-13)
+
+- **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; `mise run flaky:recurrence -- 5362 --base 17d28238c --registry-ref origin/main` answered open.
+- **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at `16561abbc`
+  (7571 removals). It does not touch `tests/unit/raw-console.test.ts` or the
+  lint rule it drives.
+- **Test:** `raw console lint rule > rejects console in apps/web-public/src/probe.ts, used directly or passed as a value`
+  (`tests/unit/raw-console.test.ts`): exceeded its 5,000 ms deadline at
+  5,036.10 ms.
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun2 -- mise run test`
+  on Linux while other worktrees' aggregates held host slots. The root group
+  reported 4484 pass, 1 skip and 23 fail across 254 files; the other 22 were
+  `tests/unit/components/ClaudeTmuxChatTab.test.tsx`, caused by the branch and
+  fixed in it. The workspace group was cut off by the 1,800 s deadline.
+- **Isolated rerun:** `mise run test:logged -- --name raw-console -- bun test tests/unit/raw-console.test.ts --parallel=1 --only-failures`
+  passed in 3.3 s.
+- **Evidence:** inner `root-and-agent-support-tests.log` in
+  `orkestrator-test-run.Lm95pw/` under the host temporary directory.

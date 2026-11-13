@@ -34,6 +34,8 @@ export default defineConfig({
     "local-gateway-transport-cpu-electron.spec.ts",
     "renderer-log-boundary-electron.spec.ts",
     "pull-request-pane-electron.spec.ts",
+    "window-visibility-polls-electron.spec.ts",
+    "hidden-dialogs-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

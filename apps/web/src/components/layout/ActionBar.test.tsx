@@ -104,13 +104,6 @@ const mergePrMock = mock(
     _deleteBranch: boolean,
   ): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }),
 );
-const mergePrLocalMock = mock(
-  async (
-    _environmentId: string,
-    _method: string,
-    _deleteBranch: boolean,
-  ): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }),
-);
 const openInEditorMock = mock(async (_containerId: string, _editor: string) => {});
 const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
 const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({
@@ -812,7 +805,6 @@ mock.module("@/lib/backend", () => ({
   teardownTab: teardownTabMock,
   mergeEnvironmentPr: mergeEnvironmentPrMock,
   mergePr: mergePrMock,
-  mergePrLocal: mergePrLocalMock,
   openInEditor: openInEditorMock,
   openLocalInEditor: openLocalInEditorMock,
   readContainerFile: readContainerFileMock,
@@ -935,7 +927,6 @@ beforeEach(() => {
   deleteEnvironmentMock.mockReset();
   mergeEnvironmentPrMock.mockReset();
   mergePrMock.mockReset();
-  mergePrLocalMock.mockReset();
   openInEditorMock.mockReset();
   openLocalInEditorMock.mockReset();
   readContainerFileMock.mockReset();
@@ -1048,7 +1039,6 @@ beforeEach(() => {
     }),
   );
   mergePrMock.mockImplementation(async () => ({ outcome: "merged" }));
-  mergePrLocalMock.mockImplementation(async () => ({ outcome: "merged" }));
   openInEditorMock.mockImplementation(async () => {});
   openLocalInEditorMock.mockImplementation(async () => {});
   readContainerFileMock.mockImplementation(async () => ({ content: "{}" }));
@@ -7709,7 +7699,6 @@ describe("ActionBar successful cleanup and merge actions", () => {
     );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
-    expect(mergePrLocalMock).not.toHaveBeenCalled();
 
     resolveMerge({ outcome: "merged", cleanupOutcome: "completed" });
 
@@ -7889,7 +7878,6 @@ describe("ActionBar successful cleanup and merge actions", () => {
     await waitFor(() =>
       expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
     );
-    expect(mergePrLocalMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
   });
 
@@ -9221,7 +9209,6 @@ describe("ActionBar error dialogs", () => {
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     expect(errorAlert.textContent).toContain("local merge failed");
     expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
-    expect(mergePrLocalMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();

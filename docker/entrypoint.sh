@@ -575,7 +575,7 @@ copy_agent_directory() {
     # One walk answers the entry bound, the link check and the size bound, and
     # lists the directory for the input stamp when one is recording. Starting a
     # dozen processes per directory was most of a many-skill first start
-    # (to-do 6740 task 3). find's failure is expected once the cap is exceeded,
+    # (to-do 6740 (retired), task 3). find's failure is expected once the cap is exceeded,
     # but otherwise fails closed.
     if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
         walk_listing="$AGENT_INPUT_COPIED_PATHS.unit"

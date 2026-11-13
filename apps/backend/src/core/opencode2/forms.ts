@@ -1,6 +1,6 @@
 /**
  * OpenCode 2.x forms (`Form.Info`) as the shared question card, and the
- * card's answer back as a `Form.Answer` (docs/todo/agent-engines/0008-opencode-v2.md,
+ * card's answer back as a `Form.Answer` (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`),
  * build plan phase 4).
  *
  * 2.x asks every question through a form: the `question` tool creates one

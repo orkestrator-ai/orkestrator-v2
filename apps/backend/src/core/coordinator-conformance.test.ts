@@ -49,7 +49,8 @@ import { effectiveOpenCodePolicy, openCodePermissionRules } from "./opencode2/po
  * A platform reaches `enforced` only if its bridge actually translates the
  * coordinator policy into something the provider or the OS holds. These
  * assertions are the cheap, always-run half of that; the expensive half is the
- * real-stack read-only suite described in `docs/todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md`.
+ * real-stack live coordinator suite, whose evidence is in
+ * `docs/development/coordinator-live-conformance.md` (to-do 0024, retired).
  */
 const coordinatorPolicy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "restricted" },

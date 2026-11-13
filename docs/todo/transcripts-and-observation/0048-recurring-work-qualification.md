@@ -63,7 +63,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (waits on 7568: 0048 task 5) for the `feature-planning` and `build-pipeline` rollback drivers and the switch itself (2026-11-13: `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` is removed with its code paths, desktop allowlist entry, the recurring baseline's rollback mode and the A/B rollback arm's value; sharing is the only driver, decision Q3) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
-18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: done (2026-11-13: `background-tab-reconnect-live.spec.ts` in headed Chromium on macOS, the tab hidden behind another tab with Chromium's own throttling on; 4 of 4 passing runs: hidden timers woke once a second, the hidden tab reconnected 4.9 to 10.0 s after the link returned (budget 20 s), and showing it retried both streams 52 to 149 ms later, against a next rung at least 8 s away; decisions Q2 and Q4).
+18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: done (2026-11-13: `background-tab-reconnect-live.spec.ts` in headed Chromium on macOS, the tab hidden behind another tab with Chromium's own throttling on; 5 passing runs, one hidden about 12 minutes: hidden timers woke once a second, the hidden tab reconnected 2.3 to 10.0 s after the link returned (budget 20 s), retry gaps never grew past the 16 s cap after 12 minutes hidden, and showing it retried both streams 8 to 163 ms later, against a next rung at least 8 s away; decisions Q2 and Q4).
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
 20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in 7200, two fixed with tests).
 21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: done (2026-11-06).
@@ -755,7 +755,9 @@ disposable one.
 Chromium, the recommended option, through a new opt-in spec,
 `e2e/agent-testing/background-tab-reconnect-live.spec.ts`. Its results are in
 [Background-tab reconnect](#background-tab-reconnect-2026-11-13-macos):
-every step held in four passing runs, within the budgets the spec sets. Two
+every step held in five passing runs (one with a 330 s outage, past
+Chromium's five-minute intensive-throttling threshold), within the budgets
+the spec sets. Two
 things had kept earlier attempts from seeing a hidden tab at all, and the
 spec now avoids both (decision Q2): Playwright's default Chromium switches
 turn background throttling off, and Playwright enables DevTools focus
@@ -1833,13 +1835,24 @@ in the same window. The link drop is `reset` mode (connections refused),
   and the main stream and the terminal stream came back 2.0 to 10.0 s after
   the link returned, within the ladder's 16 s cap plus a second of timer
   alignment (budget 20 s). Throttling only rounded the ladder's delays to
-  whole seconds. Each tab was hidden for about two minutes, so Chromium's
-  intensive throttling, which starts after five minutes hidden, was not
-  exercised; a longer hidden period is not measured.
+  whole seconds.
+- **Past five minutes hidden.** A fifth run held each outage for 330 s
+  (`ORKESTRATOR_AGENT_TEST_OUTAGE_MS=330000`; the spec now prints a
+  progress line every 30 s, since the logged runner ends a group silent for
+  5 min, which ended the first attempt at it), so the tab stayed hidden for
+  about 12 minutes, past the five minutes after which Chromium's intensive
+  throttling can hold chained timers to once a minute. It passed: 28 refused
+  attempts on each stream, every gap from 8.97 to 16.03 s (the capped rung's
+  8 to 16 s, never stretched toward a minute), both streams back 2.3 and
+  2.5 s after the link returned while still hidden, and an 8 and 12 ms retry
+  once shown. Bringing the tab to the front did not show it in that run (the
+  display had locked), so it was shown by focus emulation (`shownBy`); its
+  hidden half is a real background tab, like the four runs above.
 - **Showing the tab retries at once.** The tab was shown 0.7 to 1.5 s after
   a refused attempt, so the ladder's next rung was at least 6.5 s away. Both
   streams were retried 52 to 163 ms after the tab became `visible` and were
-  answered 70 to 355 ms after (budget 1 s): `retryWaitingStreams` clears the
+  answered 70 to 355 ms after (budget 1 s) in the four runs above:
+  `retryWaitingStreams` clears the
   waiting timers on the visibility edge, as designed. No product change was
   needed.
 - **Earlier attempts that day.** Two development runs did not reach these

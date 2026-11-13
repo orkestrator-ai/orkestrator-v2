@@ -1878,7 +1878,10 @@ ORKESTRATOR_AGENT_TEST_PROFILE=q48t18 ORKESTRATOR_AGENT_TEST_LIVE_BACKGROUND_TAB
   background-tab-reconnect-live.spec.ts --workers=1
 ```
 
-`ORKESTRATOR_AGENT_TEST_OUTAGE_MS` sets each outage (45 s by default). On a
+`ORKESTRATOR_AGENT_TEST_OUTAGE_MS` sets each outage (45 s by default; 330000
+keeps the tab hidden past Chromium's five-minute intensive-throttling
+threshold, and the spec prints a line every 30 s so the logged runner's
+no-output watchdog does not end it). On a
 locked display every window is occluded: only the tab Chromium opened at
 launch is hidden, and the spec shows it with focus emulation, because
 bringing it to the front cannot. The evidence (`evidence-*.json`) names which

@@ -295,6 +295,18 @@ function writeEvidence(testInfo: TestInfo, name: string, evidence: unknown): voi
   console.log(`[background-tab] ${name} ${JSON.stringify(evidence)}`);
 }
 
+/**
+ * Waits `ms`, printing a content-free line every 30 s so the logged runner's
+ * no-output watchdog (5 min) does not end a long outage.
+ */
+async function waitWithProgress(page: Page, ms: number, label: string): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < ms) {
+    await page.waitForTimeout(Math.min(30_000, ms - (Date.now() - startedAt)));
+    console.log(`[background-tab] ${label}: ${Math.round((Date.now() - startedAt) / 1_000)} s`);
+  }
+}
+
 const visibilityOf = (page: Page) => page.evaluate(() => document.visibilityState);
 
 /** This test's own focus emulation: on shows the page as a captured tab, off hands it back. */
@@ -431,7 +443,7 @@ test("a background tab reconnects while hidden and retries at once when shown", 
     // 2. A link that drops and returns while hidden.
     const firstOutageAt = Date.now();
     link.setMode("reset");
-    await page.waitForTimeout(OUTAGE_MS);
+    await waitWithProgress(page, OUTAGE_MS, "outage");
     const firstRestoredAt = Date.now();
     link.setMode("up");
     await expect
@@ -486,7 +498,7 @@ test("a background tab reconnects while hidden and retries at once when shown", 
     // 3. Shown while waiting out a capped rung: an immediate retry.
     const secondOutageAt = Date.now();
     link.setMode("reset");
-    await page.waitForTimeout(OUTAGE_MS);
+    await waitWithProgress(page, OUTAGE_MS, "outage");
     // Wait for a failed attempt, so the ladder's next rung is at least
     // CAP_RUNG_FLOOR_MS away; restore the link and show the tab right after.
     const lastFailure = Date.now();

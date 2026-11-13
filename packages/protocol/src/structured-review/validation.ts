@@ -2,9 +2,11 @@ import {
   REVIEW_CHANGE_TYPES,
   REVIEW_ISSUE_CATEGORIES,
   REVIEW_OVERALL_RISKS,
+  REVIEW_SCOPE_OUTCOMES,
   REVIEW_SEVERITIES,
   REVIEW_VERDICTS,
   type ReviewContractName,
+  type ReviewScopeOutcome,
   type ReviewFindingPool,
   type ReviewReconciliation,
   type StructuredReviewFindings,
@@ -267,6 +269,8 @@ function validateReviewScope(value: unknown, path: string, issues: Issues): void
     "commandsRun",
     "commandsNotRun",
     "limitations",
+    "outcome",
+    "blockedReason",
   ]);
   if (!object) return;
 
@@ -311,6 +315,40 @@ function validateReviewScope(value: unknown, path: string, issues: Issues): void
     `${path}.limitations`,
     issues,
   );
+  validateReviewOutcome(object, path, issues);
+}
+
+/**
+ * `outcome` and `blockedReason` are optional so a report written before they
+ * existed still parses (as reviewed). When present, a blocked outcome needs a
+ * reason and a reviewed one must not carry one: the reason is what the user
+ * sees in place of the findings, so a blocked report without it would fail a
+ * reviewer with nothing to say why.
+ */
+function validateReviewOutcome(object: JsonObject, path: string, issues: Issues): void {
+  const hasOutcome = hasOwn(object, "outcome");
+  if (hasOutcome && !validateEnum(object.outcome, `${path}.outcome`, issues, REVIEW_SCOPE_OUTCOMES))
+    return;
+  const outcome = (hasOutcome ? object.outcome : "reviewed") as ReviewScopeOutcome;
+  const reason = hasOwn(object, "blockedReason") ? object.blockedReason : null;
+  if (reason !== null && !validateString(reason, `${path}.blockedReason`, issues)) return;
+  if (outcome === "blocked") {
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      addIssue(
+        issues,
+        `${path}.blockedReason`,
+        "inconsistent_value",
+        "A blocked review must say what stopped it in blockedReason.",
+      );
+    }
+  } else if (reason !== null) {
+    addIssue(
+      issues,
+      `${path}.blockedReason`,
+      "inconsistent_value",
+      "blockedReason must be null unless outcome is blocked.",
+    );
+  }
 }
 
 function validateCodeChange(value: unknown, path: string, issues: Issues): void {
@@ -753,7 +791,10 @@ function normalizeOptionalFindingArrays(value: unknown): unknown {
   const normalized: JsonObject = {};
   for (const [key, entry] of Object.entries(value as JsonObject)) {
     if (
-      (key === "alternativeFixes" || key === "reviewModels" || key === "reviewSourceIds") &&
+      (key === "alternativeFixes" ||
+        key === "reviewModels" ||
+        key === "reviewSourceIds" ||
+        key === "blockedReason") &&
       entry === null
     ) {
       changed = true;
@@ -817,6 +858,27 @@ export function backfillLegacyTestResults(value: unknown): unknown {
   };
 }
 
+/**
+ * Fills `reviewScope.outcome: "reviewed"` and `blockedReason: null` into a
+ * report that has neither, for a structural check against the strict provider
+ * schema.
+ *
+ * The provider schema requires both fields, but the domain contract reads a
+ * report without them as reviewed: a reviewer whose prompt carried the schema
+ * from before the fields existed (a turn dispatched before an upgrade) answers
+ * without them, and refusing that answer would spend a repair turn on a report
+ * the domain accepts. A report that carries either field is left alone, so a
+ * half-filled outcome still fails. Scoped to `$.reviewScope` by path.
+ */
+export function backfillLegacyReviewOutcome(value: unknown): unknown {
+  if (!isPlainObject(value)) return value;
+  const scope = value.reviewScope;
+  if (!isPlainObject(scope) || hasOwn(scope, "outcome") || hasOwn(scope, "blockedReason")) {
+    return value;
+  }
+  return { ...value, reviewScope: { ...scope, outcome: "reviewed", blockedReason: null } };
+}
+
 function isPlainObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -876,6 +938,37 @@ export function isStructuredReviewReport(
   options?: StructuredReviewParseOptions,
 ): value is StructuredReviewReport {
   return safeParseStructuredReviewReport(value, options).success;
+}
+
+/** Whether the review happened; a report written before `outcome` existed reads as reviewed. */
+export function structuredReviewOutcome(report: StructuredReviewReport): ReviewScopeOutcome {
+  return report.reviewScope.outcome ?? "reviewed";
+}
+
+/**
+ * The reviewer's own reason it could not review, trimmed, or `null` for a
+ * report that says it reviewed the change. A blocked report is a failed
+ * reviewer: its empty findings are not a verdict on the change.
+ */
+export function structuredReviewBlockedReason(report: StructuredReviewReport): string | null {
+  if (structuredReviewOutcome(report) !== "blocked") return null;
+  const reason = report.reviewScope.blockedReason?.trim();
+  return reason ? reason : "The reviewer reported that it could not review the change.";
+}
+
+/** Prefix of a failed reviewer's error when its report said it could not review. */
+export const REVIEW_BLOCKED_ERROR_PREFIX = "The reviewer could not review the change: ";
+
+/**
+ * The failure a blocked report becomes, or `null` for a review that happened.
+ * Accepts any value so a host can test a raw result: anything that is not a
+ * valid report is left to the contract validation that already ran.
+ */
+export function structuredReviewBlockedFailure(value: unknown): string | null {
+  const parsed = safeParseStructuredReviewReport(value, { allowLegacyTestResults: true });
+  if (!parsed.success) return null;
+  const reason = structuredReviewBlockedReason(parsed.data);
+  return reason === null ? null : `${REVIEW_BLOCKED_ERROR_PREFIX}${reason}`;
 }
 
 /** Project a report onto the findings a fix turn is asked to address. */

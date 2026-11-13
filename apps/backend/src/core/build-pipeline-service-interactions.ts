@@ -274,7 +274,18 @@ export class BuildPipelineInteractions {
     return true;
   }
 
-  async fail(pipelineId: string, error: unknown): Promise<void> {
+  /**
+   * Fails the current stage. `consumeResult` names a workflow result the
+   * failure answers: its consumption is staged in the same write that commits
+   * the failure, and only then consumed, so a restart in between leaves a
+   * failed stage with the outbox marker rather than a live stage whose only
+   * result is gone.
+   */
+  async fail(
+    pipelineId: string,
+    error: unknown,
+    options: { consumeResult?: { sessionId: string; resultKey: string } } = {},
+  ): Promise<void> {
     const record = await this.ctx.storage.getBuildPipeline(pipelineId);
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const pipeline = record.snapshot;
@@ -316,7 +327,17 @@ export class BuildPipelineInteractions {
     delete pipeline.stallWarning;
     this.ctx.provisioningPrompts.delete(pipeline.id);
     this.ctx.lastProviderAgent.delete(pipeline.id);
+    const consumed = options.consumeResult;
+    const consumedSession = consumed
+      ? pipeline.sessions.find((session) => session.sdkSessionId === consumed.sessionId)
+      : undefined;
+    if (consumed && consumedSession) {
+      this.ctx.stageWorkflowResultConsumption(pipeline, consumedSession, consumed.resultKey);
+    }
     await this.ctx.save(pipeline, record.revision);
+    if (consumed && consumedSession) {
+      await this.ctx.consumeWorkflowResult(pipeline, consumedSession, consumed.resultKey);
+    }
     await this.recovery.reconcileTerminalState(pipeline);
   }
 

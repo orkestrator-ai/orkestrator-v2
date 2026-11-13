@@ -15,7 +15,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { VERIFICATION_VERDICT_SCHEMA } from "@orkestrator/protocol/build-pipeline";
-import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import {
+  REVIEW_BLOCKED_ERROR_PREFIX,
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+} from "@orkestrator/protocol/structured-review";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -768,6 +771,47 @@ describe("BuildPipelineService structured results", () => {
       },
       { structuredResultDeadlineMs: 0 },
     );
+  });
+
+  test("fails the review stage when the reviewer reports it could not review", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const built = await startBuilding(service, storage);
+      await service.advanceNow(built.id);
+      expect((await snapshot(storage, built.id)).phase).toBe("reviewing");
+
+      // A valid report with no findings would otherwise go straight to Verify.
+      provider.structuredResult = {
+        ok: true,
+        provider: "claude",
+        requestId: "review-request",
+        value: {
+          ...cleanReview,
+          reviewScope: {
+            ...cleanReview.reviewScope,
+            filesReviewed: [],
+            commandsRun: [],
+            outcome: "blocked",
+            blockedReason: "Every shell command failed: the sandbox could not start.",
+          },
+          verdict: { ready: "no", reasoning: "The change could not be reviewed." },
+        },
+      };
+      await service.advanceNow(built.id);
+
+      const failed = await snapshot(storage, built.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.error).toContain(
+        `${REVIEW_BLOCKED_ERROR_PREFIX}Every shell command failed: the sandbox could not start.`,
+      );
+      expect(failed.structuredReview).toBeUndefined();
+      expect(failed.sessions.some((session) => session.reviewReport !== undefined)).toBe(false);
+      // The review session carries the reason, and the failure is the
+      // ordinary retryable stage failure.
+      const review = failed.sessions.at(-1);
+      expect(review?.status).toBe("error");
+      expect(review?.error).toContain("Every shell command failed");
+      expect(failed.failureContext).toMatchObject({ phase: "reviewing", kind: "stage-transition" });
+    });
   });
 
   test("clears the wait marker when the result finally arrives", async () => {

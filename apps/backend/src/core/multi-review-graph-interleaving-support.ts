@@ -119,11 +119,15 @@ function never(): Promise<never> {
  * fan-out, the pass-through one for the plan, consolidation, Fix and PR
  * description (whose behaviour other suites own).
  */
-function routedAgentExecutor(real: GraphNodeExecutor, fake: GraphNodeExecutor): GraphNodeExecutor {
+function routedAgentExecutor(
+  real: GraphNodeExecutor,
+  fake: GraphNodeExecutor,
+  realNodes: ReadonlySet<string>,
+): GraphNodeExecutor {
   // Reviewers run the template's own built-in `discovery-review` prompt on the
   // sealed package.
   const route = (context: GraphExecutorContext): [GraphNodeExecutor, GraphExecutorContext] =>
-    context.node.id === REAL_AGENT_NODE ? [real, context] : [fake, context];
+    realNodes.has(context.node.id) ? [real, context] : [fake, context];
   return {
     kind: "agent",
     start: (context) => {
@@ -154,8 +158,14 @@ export async function multiReviewInterleavingWorld(
      * step is fixed, so a seed replays exactly. Off, their calls overlap.
      */
     serialCalls?: boolean;
+    /**
+     * Agent nodes the real executor runs (default: the reviewer fan-out only).
+     * The rest use the pass-through executor.
+     */
+    realAgentNodes?: readonly string[];
   } = {},
 ): Promise<MultiReviewInterleavingWorld> {
+  const realAgentNodes = new Set(options.realAgentNodes ?? [REAL_AGENT_NODE]);
   const fixture = await createGraphTemplateFixture();
   const storage = fixture.storage;
   const projectId = fixture.projectId;
@@ -284,7 +294,11 @@ export async function multiReviewInterleavingWorld(
       });
       process.wiring = wiring;
       registry.register(
-        routedAgentExecutor(captured.resolve("agent")!, fakeRegistry.resolve("agent")!),
+        routedAgentExecutor(
+          captured.resolve("agent")!,
+          fakeRegistry.resolve("agent")!,
+          realAgentNodes,
+        ),
       );
       registry.register(fakeRegistry.resolve("system")!);
       registry.register(fakeRegistry.resolve("human")!);
@@ -417,5 +431,18 @@ export async function multiReviewInterleavingWorld(
   return world;
 }
 
-/** A clean reviewer report, submitted through the activation's port tool. */
-export const INTERLEAVING_REPORT = graphReviewReport({ reviewSummary: "Reviewed" });
+const INTERLEAVING_BASE_REPORT = graphReviewReport({ reviewSummary: "Reviewed" });
+
+/**
+ * A clean reviewer report, submitted through the activation's port tool. The
+ * port tool checks its input against the strict provider schema, so the
+ * report carries the wire form of `reviewScope.outcome` (`blockedReason: null`).
+ */
+export const INTERLEAVING_REPORT = {
+  ...INTERLEAVING_BASE_REPORT,
+  reviewScope: {
+    ...INTERLEAVING_BASE_REPORT.reviewScope,
+    outcome: "reviewed",
+    blockedReason: null,
+  },
+};

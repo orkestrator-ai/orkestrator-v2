@@ -544,7 +544,6 @@ function cleanupLocalTabResources(
   if (tab.type === "claude-tmux") {
     const store = scope.store(claudeTmuxStore).getState();
     store.resetTab(createClaudeTmuxStateKey(envId, tab.id));
-    store.resetTab(tab.id);
   }
 }
 

@@ -1069,6 +1069,15 @@ describe("paneLayoutStore authoritative cleanup", () => {
       sessionId: "tmux-session",
     });
     tmuxStore.setDraftText(scopedTmuxKey, "discard me");
+    // Another environment's tab with the same id. With two scoped keys for the
+    // id, a reset of the bare tab id resolves to neither and writes a stray
+    // bare-key entry instead.
+    const otherEnvironmentTmuxKey = createClaudeTmuxStateKey("env-other", "removed-tmux");
+    tmuxStore.setRunning(otherEnvironmentTmuxKey, true, {
+      environmentId: "env-other",
+      sessionId: "other-tmux-session",
+    });
+    tmuxStore.setDraftText(otherEnvironmentTmuxKey, "keep me");
 
     const destroy = mock(async () => {});
     window.orkestrator = { browserPreview: { destroy } } as never;
@@ -1113,6 +1122,13 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(destroy).toHaveBeenCalledWith("removed-browser");
     expect(appCommandStore(claudeTmuxStore).getState().getTab(scopedTmuxKey).running).toBe(false);
     expect(appCommandStore(claudeTmuxStore).getState().getDraftText(scopedTmuxKey)).toBe("");
+    expect(
+      appCommandStore(claudeTmuxStore).getState().getTab(otherEnvironmentTmuxKey).running,
+    ).toBe(true);
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftText(otherEnvironmentTmuxKey)).toBe(
+      "keep me",
+    );
+    expect(appCommandStore(claudeTmuxStore).getState().tabs.has("removed-tmux")).toBe(false);
 
     expect(teardownTab).toHaveBeenCalledWith(
       expect.objectContaining({

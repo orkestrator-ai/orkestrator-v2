@@ -1428,9 +1428,18 @@ case that pins the CLI's own refusal of a required sandbox runs only on Linux
 container environment, with two Claude reviewers and a Claude consolidation
 on the image's real `claude` against a scripted Messages API, is
 `container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
-[container qualification](../development/container-qualification.md)). Not
-yet run: stock Ubuntu with AppArmor's `bwrap-userns-restrict`, and Windows
-([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
+[container qualification](../development/container-qualification.md)). Since
+2026-11-13 that spec also holds each reviewer's submission until it has read
+Reviewer 1's Agent Info during the running turn ("No sandbox, approvals
+denied" and the container reason); that part has not run yet, because the
+host it was written on could not run Docker, and the display is pinned by
+`AgentInfoButton.reviewers.test.tsx`. Stock Ubuntu with AppArmor's
+`bwrap-userns-restrict` passed in CI's restricted AppArmor phase
+(`conformance-apparmor-live.test.ts`, 2026-11-11). The Agent Info run is the
+open part of to-do
+[0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)
+task 3, and Windows is a live check in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
 `enforced` on such a host, an administrator chooses one of:
@@ -1537,9 +1546,17 @@ the real pinned app-server on a loopback model,
 `live-read-only-exec-rules.test.ts` (`RUN_LIVE_CODEX_APP_SERVER=1`, no
 credits) shows a chained `cat | head && grep` run without asking only when
 the rules are in place, and a redirection and `sed` ask and are declined
-with the sentinel file unchanged. A full reviewer turn in a container has
-not run yet (to-do
-[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
+with the sentinel file unchanged. A whole reviewer turn on the same pinned
+binary, through the bridge's own runtime with the container policy, is
+`live-read-only-reviewer-turn.test.ts` (same gate; passed 2026-11-13 with
+Codex 0.167.0): the scripted reviewer
+(`e2e/agent-testing/container-fake-codex-review-api.ts`) reads the package
+and lists the workspace without asking, its `git diff`, a `touch` and an
+`apply_patch` are asked about and declined (both a command and a file-change
+approval reach `refuseApproval`), it reads the sealed diff file instead, and
+its `submit_review_report` call, made from a code-mode cell
+(`tools.mcp__orkestrator__submit_review_report`), reaches the MCP server
+with no approval asked; nothing is written to the checkout.
 A Linux host, macOS and a coordinator (which runs under its launcher's
 permission profile) keep Codex's sandbox. A Linux host whose policy refuses
 bubblewrap's namespace is not probed for Codex yet.
@@ -1555,8 +1572,16 @@ consolidation step, and Multi Review shows the warning note. Proved by
 `app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`,
 `codex-read-only-exec-rules.test.ts`, and the `refuseApproval` cases of
 `server-request-router.test.ts` against a
-scripted app-server. No real Codex turn in a container has run with it yet
-(to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
+scripted app-server, and by `live-read-only-reviewer-turn.test.ts` against the
+pinned binary. The same Multi Review in a real container, with Codex
+reviewers, consolidation and preparation on the image's `codex` and that
+scripted reviewer on the container's loopback, is
+`container-multi-review-codex-read-only.spec.ts` (opt-in,
+`ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1`; see
+[container qualification](../development/container-qualification.md)). It has
+not run yet: its run on a Docker host whose containers reach the profile's
+agent tools server is the open part of to-do
+[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md).
 
 ### Changing qualification
 

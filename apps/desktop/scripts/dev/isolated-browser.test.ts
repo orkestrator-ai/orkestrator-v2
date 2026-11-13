@@ -823,7 +823,7 @@ test("Docker qualification refuses companion profiles", async () => {
   ).rejects.toThrow("not companion profiles");
 });
 
-test("every spec with a Docker fixture test is in exactly one shard of the browser config", async () => {
+test("every spec with a Docker fixture test is in the browser config and in exactly one shard", async () => {
   const config = await readFile(
     path.join(repositoryRoot, "e2e/agent-testing/playwright.browser.config.ts"),
     "utf8",
@@ -832,13 +832,19 @@ test("every spec with a Docker fixture test is in exactly one shard of the brows
     [...config.matchAll(/"([\w.-]+\.spec\.ts)"/g)].map((match) => `e2e/agent-testing/${match[1]}`),
   );
   // The same selection `--grep "Docker fixture"` makes: a test or describe
-  // title that contains it.
+  // title that contains it. Every spec file is scanned, not only the listed
+  // ones, so a new Docker fixture spec the config's explicit `testMatch` does
+  // not name (and `test:agent:docker` therefore never runs) fails here.
   const title = /\btest(?:\.describe)?\(\s*["'`][^"'`]*Docker fixture/;
   const docker: string[] = [];
-  for (const file of listed) {
-    const source = await readFile(path.join(repositoryRoot, file), "utf8").catch(() => "");
+  for (const name of new Bun.Glob("*.spec.ts").scanSync(
+    path.join(repositoryRoot, "e2e/agent-testing"),
+  )) {
+    const file = `e2e/agent-testing/${name}`;
+    const source = await readFile(path.join(repositoryRoot, file), "utf8");
     if (title.test(source)) docker.push(file);
   }
+  expect(docker.filter((file) => !listed.has(file))).toEqual([]);
   const assigned = DOCKER_FIXTURE_SHARDS.flat();
   expect(new Set(assigned).size).toBe(assigned.length);
   expect([...assigned].sort()).toEqual(docker.sort());

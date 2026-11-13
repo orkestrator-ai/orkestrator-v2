@@ -2,11 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-12 against `main` at `dc8803a8c`.
+Analysed 2026-11-12 against `main` at `dc8803a8c`; re-analysed 2026-11-13
+against `main` at `17d28238c`.
 
 ### Tasks
 
-1. **Run a real Codex read-only turn in a container and check what it may do**. Status: open.
+1. **Run a real Codex read-only turn in a container and check what it may do**. Status: open. The fake Responses API, a host live test of the whole reviewer turn (passed 2026-11-13 on Codex 0.167.0) and the container spec are built; left: one run of the container spec on a Linux node with rootless Docker (see "Needs verification").
 
 ### 1. Run a real Codex read-only turn in a container and check what it may do
 
@@ -114,6 +115,53 @@ whose options writes a file or runs another program, plus `git status`,
 instructions name them so the model reads diffs from its review package with
 `cat`. Task 1 stays open: the end-to-end canary is still the only proof that
 a real turn reads and submits.
+
+### The canary is built and the file stays open until it runs (task 1, 2026-11-13)
+
+Built as the recommended Codex variant of the Claude container spec:
+`e2e/agent-testing/container-fake-codex-review-api.ts` (a Responses
+WebSocket that scripts the reviewer in Codex code-mode `exec` cells and logs
+only step names and error flags), the gated host test
+`bridges/codex-bridge/src/app-server/live-read-only-reviewer-turn.test.ts`
+(`RUN_LIVE_CODEX_APP_SERVER=1`; passed on 2026-11-13 against Codex 0.167.0:
+reads ran, `git diff`, `touch` and `apply_patch` were declined, the submit
+reached the MCP server with no approval, nothing reached the checkout) and
+the opt-in container spec
+`e2e/agent-testing/container-multi-review-codex-read-only.spec.ts`, which is
+in the browser config and the second Docker fixture shard. The container
+spec has not run: beelink2, where it was built, has no Docker access.
+Options: (a) retire this file and move the run to 7568; (b) keep task 1
+open as `backlog`. Chose (b): a run on a headless Linux node with rootless
+Docker and a loopback fake is agent work by
+[Human-only work](../../README.md#human-only-work), and the Multi Review of
+2026-11-13 rejected (a) for retiring the to-do before a container run had
+passed.
+
+## Needs verification
+
+- The container run of `container-multi-review-codex-read-only.spec.ts`. On a
+  Linux node whose environment containers reach a `dev:test` profile's agent
+  tools server (`mise run docker:disposable -- start --host-loopback` with
+  its `DOCKER_HOST` exported for the profile and the spec, as on beelink on
+  2026-11-10; or `--agent-tools-port` in a range one firewall rule admits,
+  [agent-testing.md](../../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port)),
+  build the dev image in that daemon, start a fresh `mise run dev:test
+  --profile <name> --fixture --fixture-environments local,container
+  --no-agent-credentials --agent-platforms codex --no-host-seed --headless`,
+  then run `ORKESTRATOR_AGENT_TEST_PROFILE=<name>
+  ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1 mise run test:logged -- --name
+  container-review-codex -- mise run test:agent:docker --
+  container-multi-review-codex-read-only.spec.ts`, and stop and reset the
+  profile. The file filter matters: no other Codex session may run in
+  `fixture-container` before the case, because its app-server reads the
+  fake's `openai_base_url` and key when it starts, and the other Docker
+  fixture specs start Codex there. Record here the date, the image's Codex
+  version and the result; on a failure, the step log's records
+  (`/tmp/orkestrator-qa-codex-review-steps.jsonl` in the container: step
+  names and error flags only) and the workflow's phase and error. Then
+  retire this file. A failure in the fixture rather than the product (the
+  backend refusing an unsigned Codex, the container's Codex not reading
+  `~/.codex/config.toml`) is a new to-do.
 
 ## Related
 

@@ -96,6 +96,8 @@ export const CROSS_PACKAGE_CONTRACTS: ReadonlySet<string> = new Set([
   // Exercises backend normalization through the renderer's pipeline adapter.
   "tests/unit/lib/opencode-pipeline-transcript.test.ts",
   "tests/unit/migrate-copy.test.ts",
+  // The backend's copy pipe and drain window against the real copy helper script.
+  "tests/unit/migrate-copy-drain-window.test.ts",
   // Deferred backend references must survive the browser's normalization.
   "tests/unit/native-agent-deferred-normalization.test.ts",
   // The goal scripts/qa-remote-goal-hold.ts seeds must be the one the backend's

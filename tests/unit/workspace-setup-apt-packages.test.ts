@@ -106,6 +106,48 @@ describe.skipIf(!jqAvailable)("workspace-setup.sh package phase", () => {
     });
   }
 
+  // Names cross into the installer one per line, so a separator inside one
+  // must never turn one declared name into several installer arguments.
+  for (const aptPackages of [
+    ["hello\nffmpeg"],
+    ["libvips-dev", "hello\n"],
+    ["\nhello"],
+    ["hello\u0000ffmpeg"],
+    ["hello\rffmpeg"],
+    ["hello\tffmpeg"],
+    ["hello\u007f"],
+  ]) {
+    test(`${JSON.stringify(aptPackages)} is refused before the installer runs`, () => {
+      const run = runPackagePhase({ config: { aptPackages } });
+      expect(run.code).toBe(1);
+      expect(run.installs).toEqual([]);
+      expect(run.stdout).toContain("no control characters");
+      expect(run.stdout).toContain(marker("apt-packages-refused"));
+      expect(run.containerSetupRan).toBe(false);
+    });
+  }
+
+  test("a name with a space or other printable character reaches the installer whole", () => {
+    // The installer, not setup, refuses it (status 3), as one argument.
+    const dir = mkdtempSync(join(tmpdir(), "ork-apt-arg-"));
+    dirs.push(dir);
+    const config = join(dir, "orkestrator-ai.json");
+    const args = join(dir, "args");
+    writeFileSync(config, JSON.stringify({ aptPackages: ["bad name", "libvips-dev"] }));
+    const harness = `
+GREEN=""; BLUE=""; RED=""; NC=""
+eval "$(sed -n '/^project_apt_packages() {/,/^}$/p; /^run_project_apt_packages() {/,/^}$/p' "$1")"
+ARGS_LOG="$3"
+run_apt_install() { printf '<%s>' "$@" > "$ARGS_LOG"; return 0; }
+run_project_apt_packages "$2"
+`;
+    const result = spawnSync("bash", ["-c", harness, "--", setupScript, config, args], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(readFileSync(args, "utf8")).toBe("<bad name><libvips-dev>");
+  });
+
   for (const [exit, reason, text] of [
     [3, "apt-packages-refused", "was refused"],
     [4, "apt-packages-unsupported-runtime", "firewall runs inside it"],

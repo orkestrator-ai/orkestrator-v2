@@ -16,7 +16,10 @@
 #   modifier (`sudo+`, `hello-` removes hello) or pick a provider of a virtual
 #   package;
 # - no requested package, and nothing the install would bring in, is on
-#   APT_PACKAGE_DENYLIST, and the install removes nothing;
+#   APT_PACKAGE_DENYLIST, and the install removes nothing. One install runs
+#   at a time (an exclusive lock in root's home, held from apt-get update to
+#   the end), so the plan checked is the plan installed, and the real install
+#   also runs with --no-remove;
 # - a restricted container installs only when its firewall is held by an
 #   egress gateway (recorded egress `gateway`, verified at boot), so a
 #   maintainer script running as root cannot change the rules.
@@ -29,13 +32,17 @@
 #   0 installed (or already installed)   2 usage
 #   3 refused (name, count, denylist, dependency or removal)
 #   4 this runtime may not install under Restricted
-#   5 the archive could not be reached   6 apt-get failed
+#   5 the archive could not be reached   6 apt-get failed (or another
+#     install held the lock too long)
 set -euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 022
 
 APT_PACKAGES_MAX=32
+# Root-only: node cannot create, replace or hold it.
+LOCK_FILE=/root/.orkestrator-apt-install.lock
+LOCK_WAIT_SECONDS=900
 APT_NAME_MAX=100
 # Packages that change the container boundary: privilege grants, the
 # firewall, and remote login. Keep in step with APT_PACKAGE_DENYLIST in
@@ -115,13 +122,27 @@ case "$network_mode" in
         ;;
 esac
 
+# One install at a time, from apt-get update to the end. Without it two calls
+# could both pass the checks below against the same state, and the second
+# real install could then remove what the first installed. (The already-
+# installed check above needs no lock: no install removes anything.)
+if ! exec 9>>"$LOCK_FILE"; then
+    echo "orkestrator-apt-install: cannot open its lock file" >&2
+    exit 6
+fi
+if ! flock -w "$LOCK_WAIT_SECONDS" 9; then
+    echo "orkestrator-apt-install: another package install is still running" >&2
+    exit 6
+fi
+
 # A private temporary directory for apt and the maintainer scripts, and an
-# environment with nothing from the caller.
+# environment with nothing from the caller. Nothing apt starts inherits the
+# lock, so it is released when this script ends.
 work=$(mktemp -d /root/.orkestrator-apt.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 run_apt() {
     env -i PATH="$PATH" HOME=/root TMPDIR="$work" LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive \
-        "$@"
+        "$@" 9>&-
 }
 APT_OPTIONS=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=120)
 
@@ -159,7 +180,9 @@ while read -r action name _; do
 done <<< "$plan"
 
 echo "Installing: ${packages[*]}"
-if ! run_apt apt-get "${APT_OPTIONS[@]}" install -y -q --no-install-recommends \
+# --no-remove: the plan above removes nothing, and the lock keeps it the plan,
+# but the install itself refuses a removal too.
+if ! run_apt apt-get "${APT_OPTIONS[@]}" install -y -q --no-install-recommends --no-remove \
     -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -- "${packages[@]}"; then
     echo "orkestrator-apt-install: apt-get install failed" >&2
     exit 6

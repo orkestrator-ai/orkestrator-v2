@@ -1,12 +1,14 @@
 import {
+  aptPackagesNeedArchive,
   declaredAptPackagesFromText,
-  declaresAptPackages,
 } from "@orkestrator/protocol/apt-packages";
 import { readDefaultBranchConfigText, type GitBlobReader } from "./setup-approval.js";
 
 /**
  * Whether a new restricted runtime should reach Debian's archive: its project
- * declares `aptPackages` (to-do 7770), read from this machine's checkout
+ * declares `aptPackages` (to-do 7770) that setup would install
+ * (`aptPackagesNeedArchive`; a list setup refuses outright never reaches the
+ * archive, so it opens nothing), read from this machine's checkout
  * without fetching, on the first of `branches` that exists there (the
  * environment's own branch, then the one it starts from). Without a checkout
  * or any of the branches, nothing is opened; setup then says the archive is
@@ -25,7 +27,7 @@ export async function projectDeclaresAptPackages(
   for (const branch of new Set(branches.filter(Boolean))) {
     const text = await readDefaultBranchConfigText(projectPath, branch, readBlob);
     if (text === null) continue;
-    return text.trim() ? declaresAptPackages(declaredAptPackagesFromText(text)) : false;
+    return text.trim() ? aptPackagesNeedArchive(declaredAptPackagesFromText(text)) : false;
   }
   return false;
 }

@@ -133,3 +133,14 @@ export function declaredAptPackagesFromText(text: string): DeclaredAptPackages {
 export function declaresAptPackages(declared: DeclaredAptPackages): boolean {
   return declared.packages.length > 0 || declared.refused.length > 0 || declared.invalid;
 }
+
+/**
+ * Whether setup would reach Debian's archive for this declaration: it names
+ * packages and setup will not stop on it first. A refused name stops the
+ * installer before `apt-get update`, and an invalid field stops setup (or the
+ * installer's count check) before the installer looks anything up, so neither
+ * needs the archive, and a runtime created for one is not given it.
+ */
+export function aptPackagesNeedArchive(declared: DeclaredAptPackages): boolean {
+  return declared.packages.length > 0 && declared.refused.length === 0 && !declared.invalid;
+}

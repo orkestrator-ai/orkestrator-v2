@@ -1291,8 +1291,8 @@ else is rejected outright. `full` mode skips the firewall entirely.
   and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
-  A gateway runtime created for a project that declares `aptPackages` also
-  gets `deb.debian.org`, recorded as its `orkestrator-debian-archive=1` label
+  A gateway runtime created for a project that declares `aptPackages` setup
+  would install also gets `deb.debian.org`, recorded as its `orkestrator-debian-archive=1` label
   ([declared-system-packages.md](docs/architecture/declared-system-packages.md)).
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, mise, the

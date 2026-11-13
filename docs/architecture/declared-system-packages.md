@@ -37,6 +37,10 @@ Local environments ignore the field: the host's packages are the user's.
   installer checks it against **everything the install would bring in**, so
   `ssh` (which depends on `openssh-server`) is refused too, and it refuses any
   install that would remove a package.
+- A name holds no control character. Setup passes the names to the
+  installer one per line, so it refuses a field with a newline (or any other
+  control character) in a name rather than let `"hello\nffmpeg"` become two
+  names.
 
 A denylist is never complete, and Debian's maintainer scripts run as root.
 They are Debian's signed code, not the repository's; the image's
@@ -56,10 +60,15 @@ for it takes any arguments. Root enforces every rule, in this order:
    (`/run/orkestrator-network/firewall-boot` = `gateway`). Otherwise exit 4: on
    a runtime whose firewall is in the container, a maintainer script would run
    with `NET_ADMIN`.
-4. `apt-get update` (exit 5 when the archive is unreachable), then an exact
+4. An exclusive lock, `/root/.orkestrator-apt-install.lock` (root-only, held
+   until the script ends and not inherited by anything apt starts; exit 6
+   after 15 minutes waiting). Without it two installs could both pass the
+   checks below against the same state, and the second could then remove what
+   the first installed.
+5. `apt-get update` (exit 5 when the archive is unreachable), then an exact
    name check with `apt-cache pkgnames`, then a simulated install whose `Inst`
    and `Remv` lines are checked against the denylist (exit 3), then the
-   install (exit 6 on failure).
+   install, itself run with `--no-remove` (exit 6 on failure).
 
 apt runs under `env -i` with root's `PATH`, `HOME=/root` and a private
 `TMPDIR`, `--no-install-recommends`, and the names after `--`. The checks
@@ -73,8 +82,8 @@ the session. The same rules apply; it gains nothing a commit to
 `orkestrator-ai.json` would not.
 
 `workspace-setup.sh` (`run_project_apt_packages`) reads the field with `jq`,
-refuses a field that is not a list of strings, passes each name as one
-argument, and turns the installer's status into a setup failure reason:
+refuses a field that is not a list of strings or holds a control character,
+passes each name as one argument, and turns the installer's status into a setup failure reason:
 
 | Status | Reason | Lifecycle message |
 | --- | --- | --- |
@@ -94,9 +103,13 @@ HTTPS only keeps the port and the name check simple.
 `deb.debian.org` (`DEBIAN_ARCHIVE_DOMAINS`) is added to a runtime's allowlist
 only when, at creation, the runtime is restricted, behind an egress gateway,
 from an image with `apt-packages=1`, **and** its project declares packages
-(`projectDeclaresAptPackages`, `apps/backend/src/core/container-apt-packages.ts`):
-the host checkout's copy of the environment's branch, else the branch it
-starts from, read without fetching. The decision is recorded as the runtime
+setup would install (`projectDeclaresAptPackages`,
+`apps/backend/src/core/container-apt-packages.ts`, through
+`aptPackagesNeedArchive`): a list with a refused name, or a field setup
+refuses, never reaches the archive, so it opens nothing. The launchers still
+warn about such a list. The declaration is read from the host checkout's
+copy of the environment's branch, else the branch it starts from, without
+fetching. The decision is recorded as the runtime
 label `orkestrator-debian-archive=1`, and every later allowlist revision,
 live edit and MCP reachability hint reads that label, so they agree with what
 the runtime was created with. A project that adds packages later needs a
@@ -119,10 +132,20 @@ will stop on the list.
 
 - `tests/unit/apt-packages-installer.test.ts`: the installer's rules match the
   protocol module, its argument checks, and how the image ships it.
-- `tests/unit/workspace-setup-apt-packages.test.ts`: the setup phase and its
-  failure markers.
+- `tests/unit/apt-packages-installer-plan.test.ts`: the real installer with
+  its root paths rewritten into a temporary root and stub `apt-get`,
+  `apt-cache` and `dpkg-query`: the runtime gate, the exact-name and plan
+  checks, `--no-remove`, and two concurrent installs of conflicting packages.
+- `tests/unit/workspace-setup-apt-packages.test.ts`: the setup phase, its
+  failure markers, and names with control characters.
+- `apps/backend/tests/container-debian-archive-create.test.ts`: which new
+  runtimes `createDockerContainer` gives the archive and the label, against a
+  fake `docker`; `apps/backend/tests/container-network.test.ts` covers the MCP
+  view of a labelled runtime.
 - `docker/tests/root-boundary-smoke.sh`: the installer, through `node`'s sudo
   grant and with the image `PATH`, runs nothing `node` planted.
 - `apps/backend/tests/container-live-apt-packages.test.ts` (opt-in,
   `RUN_LIVE_DOCKER_TESTS=1`): a restricted runtime behind its gateway installs
-  a declared package from the real archive and refuses denied ones.
+  a declared package from the real archive and refuses denied ones, two
+  concurrent installs of conflicting packages (`openntpd`, `chrony`) install
+  one and refuse the other, and a runtime for a refused list gets no archive.

@@ -4,6 +4,7 @@ import {
   MAX_APT_PACKAGES,
   aptPackageRefusal,
   declaredAptPackages,
+  aptPackagesNeedArchive,
   declaredAptPackagesFromText,
   declaresAptPackages,
 } from "./apt-packages";
@@ -32,7 +33,9 @@ describe("aptPackages declarations", () => {
       invalid: false,
     });
     expect(declaresAptPackages(declared)).toBe(true);
+    expect(aptPackagesNeedArchive(declared)).toBe(true);
     expect(declaresAptPackages(declaredAptPackages({ aptPackages: [] }))).toBe(false);
+    expect(aptPackagesNeedArchive(declaredAptPackages({ aptPackages: [] }))).toBe(false);
   });
 
   test("names the installer refuses outright are reported, not installed", () => {
@@ -51,6 +54,11 @@ describe("aptPackages declarations", () => {
       { name: "a=1", reason: "malformed" },
     ]);
     expect(declaresAptPackages(declared)).toBe(true);
+    // The installer refuses the whole list before apt-get update.
+    expect(aptPackagesNeedArchive(declared)).toBe(false);
+    expect(aptPackagesNeedArchive(declaredAptPackages({ aptPackages: ["hello", "sudo"] }))).toBe(
+      false,
+    );
   });
 
   test("a field that is not a list of strings, or names too many, is invalid", () => {
@@ -68,6 +76,20 @@ describe("aptPackages declarations", () => {
     // Duplicates count, as the installer counts every argument.
     const repeated = Array.from({ length: MAX_APT_PACKAGES + 1 }, () => "hello");
     expect(declaredAptPackages({ aptPackages: repeated }).invalid).toBe(true);
+    // Setup stops on an invalid field, so it never needs the archive.
+    for (const aptPackages of ["libvips-dev", ["ok-pkg", 3], many, repeated]) {
+      expect(aptPackagesNeedArchive(declaredAptPackages({ aptPackages }))).toBe(false);
+    }
+  });
+
+  test("a name with a control character is refused as one name, never split", () => {
+    const declared = declaredAptPackages({ aptPackages: ["hello\nffmpeg", "hello\u0000", "a\tb"] });
+    expect(declared.packages).toEqual([]);
+    expect(declared.refused.map((entry) => entry.reason)).toEqual([
+      "malformed",
+      "malformed",
+      "malformed",
+    ]);
   });
 
   test("a refused name is shortened for display", () => {

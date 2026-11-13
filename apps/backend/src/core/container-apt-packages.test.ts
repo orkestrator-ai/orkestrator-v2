@@ -32,9 +32,20 @@ describe("whether a new runtime reaches Debian's archive (to-do 7770)", () => {
     expect(await projectDeclaresAptPackages("/repo", ["feature", "main"], reader)).toBe(true);
   });
 
-  test("a list setup will refuse still counts, so setup can say why", async () => {
-    const reader = blobs({ "refs/remotes/origin/main": JSON.stringify({ aptPackages: ["sudo"] }) });
-    expect(await projectDeclaresAptPackages("/repo", ["main"], reader)).toBe(true);
+  test("a list setup refuses before the installer looks anything up opens nothing", async () => {
+    for (const aptPackages of [
+      ["sudo"],
+      ["libvips-dev", "sudo"],
+      ["libvips-dev", "bad;name"],
+      "libvips-dev",
+      ["libvips-dev", 3],
+      Array.from({ length: 33 }, (_, index) => `pkg${index}`),
+    ]) {
+      const reader = blobs({ "refs/remotes/origin/main": JSON.stringify({ aptPackages }) });
+      expect(await projectDeclaresAptPackages("/repo", ["main"], reader)).toBe(false);
+    }
+    // The launchers still report such a list (get_project_setup_requirements
+    // reads the same declaration); only the archive stays closed.
   });
 
   test("no checkout, no branch, no file or an empty list opens nothing", async () => {

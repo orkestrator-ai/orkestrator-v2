@@ -418,6 +418,49 @@ esac
       );
     }
   });
+
+  test("a runtime labelled for Debian's archive lists deb.debian.org (to-do 7770)", async () => {
+    const { context } = await allowlistContext(["one.example"]);
+    await context.storage.updateEnvironment("env-lifecycle", {
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 1,
+        lastRuntimeGeneration: 1,
+        runtime: {
+          containerId: "container-1",
+          runtimeGeneration: 1,
+          owner: "test",
+          imageId: IMAGE_ID,
+        },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        outcomes: [],
+      },
+    });
+    for (const [archiveLabel, expected] of [
+      ["1", ["one.example", "deb.debian.org"]],
+      ["0", ["one.example"]],
+      ["<no value>", ["one.example"]],
+    ] as const) {
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  inspect) case "$*" in *orkestrator-debian-archive*) printf '${archiveLabel}\\n' ;; *) printf '3\\n' ;; esac ;;
+esac
+`,
+        async () => {
+          const view = await containerNetworkView(context)("env-lifecycle");
+          expect(view).toEqual({
+            mode: "restricted",
+            policyVersion: 3,
+            allowedDomains: [...expected],
+          });
+          expect(urlReachabilityWarning("https://deb.debian.org/debian", view) === undefined).toBe(
+            archiveLabel === "1",
+          );
+        },
+      );
+    }
+  });
 });
 
 /**

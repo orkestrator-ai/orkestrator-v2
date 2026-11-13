@@ -8,13 +8,17 @@
  * `deb.debian.org`; the runtime's `node` user then installs the declared
  * package through its sudo grant from the real archive, and the installer
  * refuses denied packages, a package that would bring one in, and a pattern.
- * A second runtime, for a project that declares nothing, gets no archive:
- * the same install there fails as unreachable, so the first one's download
- * went through the gateway's allowlist and nowhere else.
+ * Two installs started together of packages that conflict (openntpd and
+ * chrony both provide time-daemon) run one after the other: one installs and
+ * the other's plan then shows the removal, so it is refused and nothing is
+ * removed. A second runtime, for a project that declares nothing, gets no
+ * archive: the same install there fails as unreachable, so the first one's
+ * download went through the gateway's allowlist and nowhere else. A third,
+ * for a project whose list setup refuses outright, gets no archive either.
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
- * (an image built from this tree, with `apt-packages=1`). It downloads one
- * small package (GNU hello) from deb.debian.org.
+ * (an image built from this tree, with `apt-packages=1`). It downloads a few
+ * small packages (GNU hello, openntpd or chrony) from deb.debian.org.
  *
  * Every resource is labelled with this run's private owner namespace and
  * removed by that label afterwards.
@@ -208,6 +212,27 @@ describe("declared Debian packages (to-do 7770)", () => {
         ),
       ).not.toMatch(/^ii/);
 
+      // Concurrent installs of conflicting packages are serialized: the plan
+      // checked is the plan installed, so neither removes the other.
+      const concurrent = await asNode(
+        declared.containerId,
+        `sudo -n ${INSTALLER} openntpd > /tmp/apt-a.log 2>&1 & a=$!; ` +
+          `sudo -n ${INSTALLER} chrony > /tmp/apt-b.log 2>&1 & b=$!; ` +
+          `wait $a; echo "a=$?"; wait $b; echo "b=$?"; cat /tmp/apt-a.log /tmp/apt-b.log`,
+      );
+      const statuses = [/\ba=(\d+)/, /\bb=(\d+)/].map((pattern) =>
+        Number(pattern.exec(concurrent)?.[1] ?? -1),
+      );
+      expect(statuses.sort()).toEqual([0, 3]);
+      expect(concurrent).toMatch(/the install would remove (openntpd|chrony)/);
+      const timeDaemons = await asNode(
+        declared.containerId,
+        "for p in openntpd chrony; do dpkg-query -W -f='${db:Status-Abbrev}' $p 2>/dev/null | grep -q '^ii' && echo $p; done",
+      );
+      expect(
+        timeDaemons.split("\n").filter((line) => line && !line.startsWith("rc=")),
+      ).toHaveLength(1);
+
       // A project that declares nothing gets no archive: the gateway refuses it.
       const plain = await createRuntime("plain", { setupContainer: ["true"] });
       expect(await label(plain.containerId)).not.toBe("1");
@@ -215,6 +240,12 @@ describe("declared Debian packages (to-do 7770)", () => {
       const unreachable = await asNode(plain.containerId, `sudo -n ${INSTALLER} hello`);
       expect(unreachable).toContain("Debian's archive could not be reached");
       expect(unreachable).toMatch(/\nrc=5$/);
+
+      // A list setup refuses outright never reaches the archive, so its
+      // runtime is not given it.
+      const refusedOnly = await createRuntime("refused", { aptPackages: ["hello", "sudo"] });
+      expect(await label(refusedOnly.containerId)).not.toBe("1");
+      expect(await gatewayDomains(refusedOnly.gateway)).not.toContain("deb.debian.org");
     },
     LIVE_TIMEOUT_MS,
   );

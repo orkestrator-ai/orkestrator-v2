@@ -78,7 +78,7 @@ plant_command() {
     fi
 }
 for dir in /usr/local/share/npm-global/bin /home/node/.opencode/bin /usr/local/bin /usr/local/sbin; do
-    for name in awk ps cat date sleep wc readlink chgrp chmod pkill iptables ipset ip getent mktemp install id stat find sed grep env rm apt-get apt-cache dpkg dpkg-query; do
+    for name in awk ps cat date sleep wc readlink chgrp chmod pkill iptables ipset ip getent mktemp install id stat find sed grep env rm apt-get apt-cache dpkg dpkg-query flock; do
         plant_command "$dir/$name"
     done
 done

@@ -742,7 +742,9 @@ run_project_root_setup() {
 # Debian packages orkestrator-ai.json's "aptPackages" field declares (to-do
 # 7770), one per line: the non-empty strings of an array. Prints nothing for an
 # absent or null field, and returns 1 when the field is not an array of
-# strings.
+# strings, or when a string holds a control character. The names travel one
+# per line, so a newline inside one ("hello\nffmpeg") would otherwise reach the
+# installer as two valid names instead of one it refuses.
 project_apt_packages() {
     local kind
     kind=$(jq -r '.aptPackages | type' "$1" 2>/dev/null || echo null)
@@ -751,7 +753,8 @@ project_apt_packages() {
         array) ;;
         *) return 1 ;;
     esac
-    jq -e '.aptPackages | all(type == "string")' "$1" >/dev/null 2>&1 || return 1
+    jq -e '.aptPackages | all(type == "string" and (explode | all(. >= 32 and . != 127)))' \
+        "$1" >/dev/null 2>&1 || return 1
     jq -r '.aptPackages[] | select(. != "")' "$1" 2>/dev/null
 }
 
@@ -777,7 +780,7 @@ run_project_apt_packages() {
         echo ""
         echo -e "${RED}System packages cannot be installed${NC}"
         echo "  orkestrator-ai.json's \"aptPackages\" must be a list of Debian package"
-        echo "  names, such as [\"libvips-dev\", \"ffmpeg\"]."
+        echo "  names, such as [\"libvips-dev\", \"ffmpeg\"], with no control characters."
         printf '\033]9999;setup_failure_reason=apt-packages-refused\007'
         return 1
     fi

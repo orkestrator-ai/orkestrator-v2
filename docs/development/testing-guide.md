@@ -1951,7 +1951,7 @@ else a test leaves lands inside a directory a later run can attribute and
 remove. The preload removes its directory when its `afterAll` runs unless a
 live process still names it; a killed process's directory is removed by the
 next test process once the owner has exited and the directory is an hour old
-(0248). A test that needs the shared temporary directory reads
+(to-do 0248, retired). A test that needs the shared temporary directory reads
 `ORKESTRATOR_TEST_PARENT_TMPDIR`. A process a test starts to outlive it, such
 as the `dev:test` launcher a real-stack spec restarts, gets
 `outlivingProcessEnv()` from the same module: the private directory is removed
@@ -1961,6 +1961,21 @@ when the runner exits, and only a command line, never an environment, keeps it
 temporary directory of its own keeps that directory's names short. For a leak
 hunt, set `ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory
 is kept for inspection.
+
+This was checked on Linux (beelink, 2026-11-11) and on macOS 27.2
+(arktech-mini, 2026-11-13; to-do 0248, retired). Each run got a new empty
+`TMPDIR`: `mise run test:agent:design:isolated --no-agent-credentials` and
+`mise run test:preview:browser` (Chromium and WebKit; the hosts had no
+Firefox build). Afterwards the `TMPDIR` held no
+`playwright_chromiumdev_profile-*`, `playwright-artifacts-*` or
+`ork-test-tmp-*`, only Node's and Playwright's caches (plus, on Linux,
+Electron's `scoped_dir*` and the system Chromium's ownerless
+`org.chromium.Chromium.*` directories). On macOS the runner's own `/private/tmp/ork-test-tmp-<pid>-*` was gone once it
+exited. On a host shared with other builds, `/private/tmp` gains
+`ork-test-tmp-*` directories from their runs too. Find this checkout's from
+the owner PID's working directory while it is alive. For an exited owner,
+compare its `node-compile-cache` entries with your own run's: Node keys them
+by script path, so another checkout's directory shares none.
 
 A test removes a temporary directory it made itself, after whatever holds the
 directory open has finished, and awaits the removal so the process cannot exit

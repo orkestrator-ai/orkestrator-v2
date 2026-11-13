@@ -100,3 +100,31 @@ ORKESTRATOR_AGENT_TEST_PROFILE=review-refusal-recovery ORKESTRATOR_AGENT_TEST_RU
 Artifacts: `output/agent-testing/refusal-design-owner/browser/`.
 This observation is intermittent; it does not establish a root cause or resolve
 prior deterministic observations. No assertion, timeout or skip was changed.
+
+## macOS cleanup evidence (to-dos 0023 and 0248) — 2026-11-13
+
+On base `17d28238c` (no design or renderer change on the branch), arktech-mini
+(macOS 27.2 arm64, nine other builds on the host), the first of two runs of
+
+```sh
+mise run test:logged -- --name design-0248-mac -- env TMPDIR=<empty private dir> ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run test:agent:design:isolated --no-agent-credentials --no-host-seed
+```
+
+on disposable credential-free Codex profile `qa-browser-1daf6db2-f0d` (one
+worker) failed this case: after `page.reload()` the 15-second click on the
+`UPPER.ORKDES` button at `design-canvas.spec.ts:248` timed out. The page
+snapshot shows the `origin` project expanded with no environment row yet and
+the project's Coordinator view in the main pane, so the file panel listed the
+project rather than the environment. 2 passed, 1 failed (3.5 min); teardown
+then reported `ArtifactBoundError` because the failure's `trace.zip` passed the
+64 MiB sanitization limit, and removed it. Compressed evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FJqTzT/design-0248-mac.log.gz`;
+screenshot and error context under
+`output/agent-testing/qa-browser-1daf6db2-f0d/browser/artifacts/`.
+
+The complete unchanged owner, rerun at once the same way on fresh profile
+(`design2-0248-mac`), passed (exit 0, 288.5 s logged). `mise run
+flaky:recurrence 0380 --base 17d28238c` answered "open. Record the failure as a
+recurrence". No assertion, timeout or skip was changed; the cause is still
+unconfirmed, though this snapshot (no environment row after reload) is a more
+specific lead than the earlier missing-pane-layout observations.

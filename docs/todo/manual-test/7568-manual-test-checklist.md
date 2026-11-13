@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (319 items): run each check under
+1. **Manual tests and live checks** (320 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (59 items): make each call
@@ -75,7 +75,9 @@ Git history at `17d28238c`, and its record is in
 [host-updates.md](../../architecture/host-updates.md#qualification).
 5340 and 5380 were retired on 2026-11-13, once their loopback-model and
 real-browser evidence was recorded in the documents their items link; both
-are in Git history at `17d28238c`.
+are in Git history at `17d28238c`. 7670 was retired on
+2026-11-13, once its container worker run passed on Linux; it is in Git
+history at `17d28238c`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -122,8 +124,8 @@ agent can apply it.
 | Design canvas | 5 | 2 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
-| Transcripts, observation and bandwidth | 28 | 3 |
-| **Total** | 319 | 59 |
+| Transcripts, observation and bandwidth | 29 | 3 |
+| **Total** | 320 | 59 |
 
 ## Outstanding work
 
@@ -703,6 +705,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **6680 (retired) task 1: Pi composer catalogue size on your logins.** (Background: the E10 baseline in [native-transcripts.md](../../architecture/native-transcripts.md#one-request-per-round); a credential-free profile has no Pi catalogue.) In a disposable profile with your Pi provider logins (`mise run dev:test --profile pi-catalogue-qa --fixture --credential-source pi --agent-platforms pi`), open a Pi tab and read the composer's model count and the size of one Pi bridge `GET /session/:id/status` body (for example from the gateway's `/__orkestrator/metrics`, or with the conditional-reads spec's bridge counter). Stop and reset the profile afterwards. Record: the number of models and the `/status` body size, beside the decision item for 6680 task 2 below (it decides the 130 KB Pi `/status` question).
 - [ ] **7766 (retired) task 1: the first wheel tick up from a transcript's end in real Safari.** (Background: [Reader input](../../architecture/transcript-scroll.md#reader-input).) Playwright's Linux WebKit lost that tick under load before the fix; Playwright's macOS WebKit never did, so desktop Safari with real input is unproven. In desktop Safari, serve the component fixture as the e2e suite does and open `/pipeline-flow?scenario=fanout&longTranscript=report&paneControls` and `/pipeline-flow?scenario=building&longTranscript&paneControls`. With the transcript at its newest message, give one notch of a mouse wheel up, then (after returning to the end) one short two-finger trackpad swipe up; repeat each five times. Record: Safari and macOS versions, and for each input how many of the five moved the transcript away from the end on the first notch or swipe, to the coordinator. A tick that moves nothing needs a new to-do.
 - [ ] **[7100](../transcripts-and-observation/7100-long-soak-follow-ups.md) task 2: a Linux node whose agent can reach Docker, for the container long soak.** beelink2's agent account cannot reach Docker (it is not in the `docker` group, and RootlessKit is not installed for `mise run docker:disposable`), so the soak cannot start there. Either let an agent use a Docker daemon (install RootlessKit on beelink2 so `docker:disposable` can start a rootless daemon, or name a fleet node whose agent already reaches Docker; adding an account to the `docker` group is root-equivalent, so decide that deliberately), or run the soak yourself with the command in 7100 task 2 on such a host and `mise run dev:stop`/`dev:reset` its `rw-ctrsoak` profiles if the driver did not. Record: the node (or "ran it myself" with the host), and for a run of your own its output JSON path, cycles completed, any failed steps and the footprint trend, in 7100 task 2's Investigation; an agent then runs or reads the soak.
+- [ ] **7670 (retired) task 1: the container preview worker on Docker Desktop for Mac (Apple Silicon).** (Background: the [2026-11-13 Linux run](../../development/container-qualification.md#tmux-reopen-static-search-text-and-streamed-reads-in-real-containers-2026-11-13), which found that the worker's seccomp profile stopped runc 1.5.2 from starting the worker container at all and changed the profile; the [container isolation](../../architecture/transcript-artifacts-runtime.md) section describes the profile.) No agent node has a running Docker Desktop, so this needs your Mac. With Docker Desktop running, in a checkout of `main` that has the 2026-11-13 profile change, run `docker/artifact-preview-worker/build.sh`, then `bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-static-search-text.test.ts ./src/core/transcript-artifacts/preview-print.test.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1` and check that no case reports "container case skipped" or "live cases skipped". Then remove the image you built (`docker image rm orkestrator-artifact-preview-worker:1`) and the `docker/artifact-preview-worker/image-pin.json` the build wrote. Record: in the 2026-11-13 section of `docs/development/container-qualification.md`, the Docker Desktop version, `docker info --format '{{.Runtimes}}'`, and the pass, fail and skip counts of each file; a failure there means the profile needs another syscall for that runtime.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 1: bridge observers still go live against the observe-only bridges.** The Claude and Codex bridges now serve only `?observe=1` and keep no replay ring. In a disposable `dev:test` profile (`--no-host-seed`, never the production instance) with a fake model or a disposable login, open a native Claude tab and a native Codex tab in a fixture environment, run one short turn in each, switch to another environment while it runs, then let both idle for five minutes. Expected: each turn's status and messages arrive without a reload, the backend log shows the observation stream connected for both bridges (no repeated `400` on `/event/subscribe`), and the observer group backs off while idle (no reconnect loop). Record: the bridge versions, what you saw and any log lines (no prompts or contents), as a reply to the coordinator. A failure goes to a new to-do for an agent.
 
 ### Decisions, approvals and outward actions

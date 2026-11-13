@@ -259,6 +259,15 @@ describe("CI workflow contracts", () => {
       "ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}",
     );
     expect(source).toContain("apps/backend/scripts/container-exec-cost.ts --image");
+    // The preview worker under its seccomp profile on a real runc: the live
+    // case skips without the image, so the step refuses to run without it.
+    expect(source).toContain("bash docker/artifact-preview-worker/build.sh");
+    expect(source).toContain(
+      'docker image inspect "$ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE" > /dev/null && mise run test:logged',
+    );
+    expect(source).toContain(
+      "./src/core/transcript-artifacts/preview-container.test.ts --parallel=1",
+    );
     // Without the gate every live test skips and the job passes vacuously.
     expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');
     // GitHub's ranges come from one authenticated fetch, not every suite's own

@@ -565,16 +565,14 @@ other consumer — notifications go to a per-thread serial queue and fan out fro
 there. A slow consumer on one thread therefore cannot stall every other thread
 in the environment.
 
-SSE frames carry `id: <revision>`, and `EventRing`
-(`packages/protocol/src/node/event-ring.ts`, shared with the Claude bridge)
-keeps a bounded replay buffer so a reconnecting client can ask for exactly what
-it missed. A newer full `message.updated` snapshot collapses the older frames
-for the same message to `bridge.cursor` frames that only keep the cursor dense;
-on the Claude bridge that includes the `message.patched` frames since the
-previous snapshot. An observation subscriber (`?observe=1`) of the Claude bridge
-still gets one content-free frame per revision. The
-`connected` frame echoes the client's own cursor rather than the latest
-revision, because a browser `EventSource` adopts every id it sees.
+`/event/subscribe` serves only the backend observer's stream (`?observe=1`;
+anything else is a 400, on the Claude bridge too). Frames carry
+`id: <revision>`, the event type and the session id, never a payload, and
+nothing is retained for replay: a reconnecting client whose cursor is not the
+current one gets `session.reconcile-required` (Claude: `replay.required`), and
+the backend re-reads every session on any connect anyway. The `connected`
+frame echoes the client's own cursor rather than the latest revision, because
+a client adopts every id it sees and must not skip past an unreported gap.
 
 Idle threads are detached (`thread/unsubscribe`, state freed) and transparently
 re-attached on the next request. `thread/delete` is never called: closing a
@@ -1463,8 +1461,9 @@ JSONL file and resumes from it, so the bridge holds only the *rendered*
 transcript, the composer selection and the prompt journal. An idle detach, a
 bridge restart and a crashed process all recover by reopening that file, and
 losing the bridge's own state costs a transcript rather than a conversation.
-That also gives fork a real implementation: `createBranchedSession` writes a new
-file holding the path to the chosen entry, so a fork is an independent
+That also gives fork a real implementation: Pi's `AgentSessionRuntime.fork`
+(over `createBranchedSession`) writes a new file holding the path to the chosen
+entry and runs the extension hooks a fork fires, so a fork is an independent
 conversation rather than a copy of what was on screen.
 
 Pi ships no permission system, so its adapter implements the execution policy's

@@ -5,7 +5,6 @@ import {
   PERSISTED_SDK_ID,
   claimPromptDispatch,
   createSession,
-  deleteSessionDurably,
   getPendingPlanApprovals,
   getSession,
   materializePersistedSession,
@@ -112,7 +111,6 @@ describe("closeSessionRetainingHistory", () => {
     expect(abort.signal.aborted).toBe(true);
     expect(state.deleting).toBe(true);
     await expect(sendPrompt(state.id, "too late")).rejects.toMatchObject({ code: "conflict" });
-    await expect(deleteSessionDurably(state.id)).rejects.toMatchObject({ code: "conflict" });
 
     await waitFor(() => finishClose !== undefined);
     // Close has not been confirmed while the query is still shutting down.
@@ -138,24 +136,6 @@ describe("closeSessionRetainingHistory", () => {
     await prompt.catch(() => undefined);
   });
 
-  test("refuses to report a close while a permanent deletion owns the session", async () => {
-    const state = await materializePersistedSession();
-    let finishDelete: (() => void) | undefined;
-    mockSdkDeleteSession.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          finishDelete = resolve;
-        }),
-    );
-    const deletion = deleteSessionDurably(state.id);
-    await expect(closeSessionRetainingHistory(state.id)).rejects.toMatchObject({
-      code: "conflict",
-    });
-    await waitFor(() => finishDelete !== undefined);
-    finishDelete!();
-    await expect(deletion).resolves.toBe(true);
-  });
-
   test("keeps a session registered and fenced when query close throws, then a retry closes it", async () => {
     const state = await materializePersistedSession();
     let failClose = true;
@@ -175,7 +155,6 @@ describe("closeSessionRetainingHistory", () => {
     expect(getSession(state.id)).toBe(state);
     expect(state.deleting).toBe(true);
     await expect(sendPrompt(state.id, "sneak in")).rejects.toMatchObject({ code: "conflict" });
-    await expect(deleteSessionDurably(state.id)).rejects.toMatchObject({ code: "conflict" });
     await prompt.catch(() => undefined);
 
     // The retry takes the stalled claim over and closes the same query again

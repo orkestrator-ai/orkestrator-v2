@@ -111,7 +111,6 @@
     "apps/web/src/lib/store-resource-sync.test.ts": 2,
     "apps/web/src/stores/previewServiceStore.test.ts": 1,
     "bridges/acp-bridge/src/acp-session-close.test.ts": 1,
-    "bridges/claude-bridge/src/routes/events.test.ts": 1,
     "bridges/claude-bridge/src/services/session-manager-background-tasks.test.ts": 5,
     "bridges/claude-bridge/src/services/session-manager-core.test.ts": 1,
     "bridges/claude-bridge/src/services/session-manager-runtime.test.ts": 2,

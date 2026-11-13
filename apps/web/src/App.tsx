@@ -15,7 +15,6 @@ import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBann
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { COMMAND_SCOPE_SERVICES, startScopeServices } from "@/lib/scope-services";
 import { hydrateCommandScopeFromSnapshot } from "@/lib/node-snapshots";
-import { migrateLegacyBuildPipelines } from "@/lib/build-pipeline-persistence";
 import { Toaster } from "@/components/ui/sonner";
 import { ArtifactLiveHost } from "@/components/chat/rich/ArtifactLiveHost";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -276,13 +275,6 @@ function ConnectedApp() {
     hydrateCommandScopeFromSnapshot(commandScope);
     return startScopeServices(commandScope, COMMAND_SCOPE_SERVICES);
   }, [commandScope]);
-  useEffect(() => {
-    void migrateLegacyBuildPipelines().catch((error) => {
-      // Keep the legacy key intact so the next launch can retry after a
-      // transient backend failure.
-      log.warn("build-pipelines.migrate-failed", { error: formatLogError(error) });
-    });
-  }, []);
   // Renderer stores are projections of backend-owned queues and pipelines,
   // restored after the services above (`useNodeBootHydration`).
   useNodeBootHydration(commandScope);

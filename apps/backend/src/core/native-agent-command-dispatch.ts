@@ -204,8 +204,12 @@ export function planCommandDispatch(input: CommandDispatchInput): CommandDispatc
     ...(command.bindingRevision ? { bindingRevision: command.bindingRevision } : {}),
   };
   if (!input.catalogue.enhanced || isLegacyCommandId(command.id!)) {
-    // A legacy bridge understands only prompt text; its rows have always run
-    // that way. It is never handed a selection it would silently ignore.
+    // Rows this backend cannot execute against run as prompt text: a catalogue
+    // in a version other than 1 (a newer bridge, after a downgrade), and rows
+    // given a synthetic `legacy:` id because their provider lists display rows
+    // only. Such a provider is never handed a selection it would silently
+    // ignore. A bridge without `catalogueVersion` never gets here: its read
+    // fails as `outdated-bridge` (`http-bridge/catalog.ts`).
     return {
       kind: "prompt",
       allowProviderCommands: true,

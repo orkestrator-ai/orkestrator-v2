@@ -75,9 +75,10 @@ one, and no public payload contains a path or a template body.
   has no provider catalogue) or `missing` (the bridge does not hold the
   session). An enhanced bridge answers an unknown session **in band** with
   `missing`; a 404 means the bridge is older than this contract (it predates
-  the route, or it is a pre-2.21 bridge that does not hold the session). The
-  backend reports that as `unavailable` with the error code `outdated-bridge`
-  and counts it; it never falls back to a global list.
+  the route, or it is a pre-2.21 bridge that does not hold the session). So
+  does an answer without `catalogueVersion`. The backend reports either as
+  `unavailable` with the error code `outdated-bridge` and counts it; it never
+  falls back to a global list.
 - `attachPending: true` (with `status: "stale"` only) says the rows are what
   the bridge could read without starting the provider session, and the
   provider adds more commands once the session attaches (its first turn or an
@@ -452,6 +453,9 @@ contract (2.21.0) answers the session route with 404; its catalogue is
 bridge, and each such read is counted per agent
 (`outdatedBridgeCatalogueReadCounts` in `http-bridge/catalog.ts`, with one
 warning per provider instance and no command names). A pre-2.21 bridge that
-does answer the session route sends rows without `catalogueVersion`; those are
-non-enhanced: they get a synthetic `legacy:` ID (`legacyCommandId`) and run as
-typed text, never as a selection.
+does answer the session route sends rows without `catalogueVersion`; every
+bridge from v2.21.0 on stamps every answer of the route with it, so such an
+answer gets the same `outdated-bridge` answer and count, and its rows are never
+shown. A catalogue in a version other than 1 (a newer bridge after a
+downgrade) is still read as display rows: they get a synthetic `legacy:` ID
+(`legacyCommandId`) and run as typed text, never as a selection.

@@ -516,7 +516,9 @@ an empty candidate commit. When the helper side of a copy dies, the
 producer's remaining output is discarded so both processes settle, rather
 than leaving the rebuild holding its queue and copy slot. Once the producer
 has closed, the helper gets a drain window (`copyDrainWindowMs`: 2 minutes
-plus 1 s per 16 MiB sent) to finish; a helper still running then is killed,
+plus 1 s per 16 MiB sent, plus as long again as the stream took, so a loaded
+host that slows the helper's final verification has also slowed the stream
+and earned the time) to finish; a helper still running then is killed,
 its container removed by name, and the step fails as `helper-input-stalled`
 (logged `replacement.copy-helper-stalled`), because on a rootless daemon a
 helper once never saw end of input and would otherwise have held the

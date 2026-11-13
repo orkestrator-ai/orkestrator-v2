@@ -11,7 +11,7 @@ Tasks 1 and 2 acted on 2026-11-13 against `main` at `17d28238c`, on beelink2
 ### Tasks
 
 1. **Find why the helper never saw end of input**: reproduce the stall and say whether it is the daemon, the CLI or the backend's pipe. Status: blocked (waits on a recurrence: a `replacement.copy-helper-stalled` log line). The stall's shape is reproduced on demand (a helper that never finishes reading after its producer exits, in a unit test and live); the natural stall did not recur in 75 runs on 2026-11-13, so its cause is still open.
-2. **Bound a stalled copy step well below an hour**: a step whose producer has exited should not wait out `COPY_TIMEOUT_MS`. Status: done 2026-11-13 (a drain window of 2 minutes plus 1 s per 16 MiB sent, then the step fails as `helper-input-stalled` and the helper is removed).
+2. **Bound a stalled copy step well below an hour**: a step whose producer has exited should not wait out `COPY_TIMEOUT_MS`. Status: done 2026-11-13 (a drain window of 2 minutes plus 1 s per 16 MiB sent plus the streaming time, then the step fails as `helper-input-stalled` and the helper is removed).
 
 ### 1. Find why the helper never saw end of input
 
@@ -119,8 +119,9 @@ flight: 2.5 minutes for 512 MiB, about 7.5 for 5 GiB.
 ### A drain window after the producer closes, then abandon the step (task 2)
 
 Chose: once the `docker cp` producer closes, `pipeContainerPath` ends the
-helper client's stdin and starts `copyDrainWindowMs(bytes)` (2 minutes plus 1 s
-per 16 MiB sent). A helper still running then is killed, its container is
+helper client's stdin and starts `copyDrainWindowMs(bytes, streamedMs)` (2 minutes plus 1 s
+per 16 MiB sent, plus the streaming time added in review round 2; see
+below). A helper still running then is killed, its container is
 removed by name (`orkestrator-copy-<id>`, since killing `docker run` leaves
 the container running), `replacement.copy-helper-stalled` is logged, and the
 step fails as `helper-input-stalled`, so the rebuild rolls back with the
@@ -128,6 +129,22 @@ original kept, as on any failed copy. Why: the recommended option, built
 before task 1's cause because the bound does not depend on it; a stalled
 step now costs minutes instead of an hour. Alternative: keep the one-hour
 deadline, which holds the environment for the whole hour.
+
+### The window also gets the streaming time, checked against the real helper (task 2)
+
+Chose: `copyDrainWindowMs(bytes, streamedMs)` adds the time from spawning
+the producer to its close, and `tests/unit/migrate-copy-drain-window.test.ts`
+(slow tier) measures the real `copy-stream` helper's time after its input
+ends against the default window. Why: review round 2 found the bytes-only
+window unchecked against the helper's post-input verification on a large
+workspace or a loaded host. Measured on beelink2 (container qualification,
+"7705 drain window against the real helper"): 0.63 s after input against a
+138 s window, 0.83 s on one CPU. The per-member work happens while the
+stream flows, so the post-input time stays a small fraction of the streaming
+time, and adding that time keeps a slow legitimate copy inside the window on
+a host that slows both. Cost: a stall after a long stream waits that much
+longer, still bounded by `COPY_TIMEOUT_MS`. Alternative: a per-file term,
+which needs the member count the producer's byte stream does not carry.
 
 ### A reason of its own, not `source-read-failed` (task 2)
 

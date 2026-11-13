@@ -130,18 +130,33 @@ const HELPER_REMOVE_TIMEOUT_MS = 30_000;
 /**
  * How long the helper may keep running once the `docker cp` producer has
  * closed: a base for its final checks (it waits up to 60 s for its own
- * listings) plus time for the bytes it was sent at a slow extraction rate.
- * On a rootless daemon a helper once never saw end of input after its
- * producer exited and would have held the rebuild for the whole
- * {@link COPY_TIMEOUT_MS} (to-do 7705); with this a stalled step fails in
- * minutes. 5 GiB gets about 7.5 minutes.
+ * listings), time for the bytes it was sent at a slow extraction rate, and as
+ * long again as the stream itself took. On a rootless daemon a helper once
+ * never saw end of input after its producer exited and would have held the
+ * rebuild for the whole {@link COPY_TIMEOUT_MS} (to-do 7705); with this a
+ * stalled step fails in minutes. 5 GiB gets about 7.5 minutes plus its
+ * streaming time.
+ *
+ * The streaming term is what keeps a slow legitimate copy inside the window.
+ * The helper's work after its input ends (re-hashing the destination in
+ * batches, sorting and joining the manifests, `git fsck`) is cheaper than the
+ * work it does while the stream flows (a shell and a hash per member), and a
+ * loaded host slows both alike. The real helper's post-input time, measured
+ * against this window, is pinned by `tests/unit/migrate-copy-drain-window.test.ts`.
  */
 export const COPY_DRAIN_BASE_MS = 2 * 60_000;
 export const COPY_DRAIN_BYTES_PER_SECOND = 16 * 1024 * 1024;
 
-/** The drain window for a step whose producer sent `bytes`. */
-export function copyDrainWindowMs(bytes: number): number {
-  return COPY_DRAIN_BASE_MS + Math.ceil((Math.max(0, bytes) / COPY_DRAIN_BYTES_PER_SECOND) * 1000);
+/**
+ * The drain window for a step whose producer sent `bytes` over `streamedMs`
+ * (from spawning the producer to its close).
+ */
+export function copyDrainWindowMs(bytes: number, streamedMs = 0): number {
+  return (
+    COPY_DRAIN_BASE_MS +
+    Math.ceil((Math.max(0, bytes) / COPY_DRAIN_BYTES_PER_SECOND) * 1000) +
+    Math.max(0, Math.ceil(streamedMs))
+  );
 }
 /** Capacity headroom on top of the estimated copy size. */
 const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
@@ -299,7 +314,7 @@ export interface PipeContainerPathOptions {
   timeoutMs?: number;
   settleGraceMs?: number;
   /** Overrides {@link copyDrainWindowMs}; tests pass a short one. */
-  drainWindowMs?: (bytes: number) => number;
+  drainWindowMs?: (bytes: number, streamedMs: number) => number;
   /** The helper container's name, removed when the step is abandoned. */
   consumerContainer?: string;
 }
@@ -345,6 +360,7 @@ export async function pipeContainerPath(
   options: PipeContainerPathOptions = {},
 ): Promise<PipeContainerPathResult> {
   return new Promise((resolve) => {
+    const streamStarted = Date.now();
     const producer = spawnCommand("docker", ["cp", `${containerId}:${sourcePath}`, "-"]);
     const consumer = spawnCommand("docker", consumerArgs);
     let producerErr = "";
@@ -465,13 +481,15 @@ export async function pipeContainerPath(
       // but not after an unpipe.
       if (!consumer.stdin.destroyed && !consumer.stdin.writableEnded) consumer.stdin.end();
       if (consumerCode !== null || drainTimer !== undefined || abandoned) return;
-      const windowMs = (options.drainWindowMs ?? copyDrainWindowMs)(bytes);
+      const streamedMs = Date.now() - streamStarted;
+      const windowMs = (options.drainWindowMs ?? copyDrainWindowMs)(bytes, streamedMs);
       drainTimer = setTimeout(() => {
         if (consumerCode !== null) return;
         stalled = true;
         log.warn("replacement.copy-helper-stalled", {
           producerCode: producerCode ?? null,
           bytes,
+          streamedMs,
           drainMs: windowMs,
         });
         abandon();

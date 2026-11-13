@@ -52,6 +52,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     // Real `bun pm pack` and `bun install` against a loopback registry, then install.sh.
     "tests/unit/install-script-locked-run.test.ts",
     "tests/unit/migrate-copy.test.ts",
+    // Streams a 50 MB archive with a Git repository through the real copy helper.
+    "tests/unit/migrate-copy-drain-window.test.ts",
     "tests/unit/pi-bridge-vendor.test.ts",
     "tests/unit/playwright-spec-loading.test.ts",
     "tests/unit/release/release-desktop.test.ts",

@@ -369,6 +369,30 @@ tasks 1 and 2, and 7750 (retired 2026-11-13), run in worktree
   settled `stalled` after 3.2 s, and the helper container was gone from
   `docker ps -a` 3 s later (removed by name). Before the change the same step
   waits for `COPY_TIMEOUT_MS`, one hour.
+- **7705 drain window against the real helper (review round 2,
+  2026-11-13):** a legitimate copy must finish its post-input verification
+  (re-hashing the destination, sorting and joining the manifests,
+  `git fsck --connectivity-only`) inside the window, or it would fail as
+  `helper-input-stalled`. `tests/unit/migrate-copy-drain-window.test.ts`
+  (slow tier) runs the real `pipeContainerPath` into the real
+  `orkestrator-migrate.sh copy-stream` on the host, with a `docker` stand-in
+  that runs each side, for 3,000 1 KiB files, three 16 MiB files and a Git
+  repository (about 55 MB of archive). On beelink2 at load average 0.8 the
+  helper took 0.63 s after its input ended against a 138 s window (14.3 s of
+  streaming), and 0.83 s against 135 s with the whole run pinned to one CPU.
+  A one-off probe with 5,000 4 KiB files took 0.34 s after 24 s of
+  streaming. The helper's per-member work (a shell and a hash for each
+  member) happens while the stream flows, so its time after input is a small
+  fraction of the streaming time. The window now also adds the time the
+  stream took (`copyDrainWindowMs(bytes, streamedMs)`), so a host loaded
+  enough to stretch the verification has stretched the stream as well. A
+  first version of the probe stalled with the producer alive: the source
+  repository's background `git gc --auto` deleted loose objects mid-read, and
+  tar blocked on its "File removed before we read it" warnings because the
+  probe never read the producer's stderr. `pipeContainerPath` reads that
+  stream, and with it drained the same copy completed, so this was a probe
+  artifact, not a product stall. The test turns automatic gc off in its
+  fixture for that reason.
 - **7750 (retired), what it found** (retired here; its text is `git show
   17d28238c:docs/todo/containers-and-environments/7750-rootless-automatic-port-collisions-outlast-retries.md`):
   on 2026-11-11 on beelink2, disposable daemon `idle0049` (slirp4netns, host

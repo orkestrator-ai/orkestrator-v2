@@ -136,9 +136,12 @@ esac
       async (log) => {
         const started = Date.now();
         const logs = captureLogs();
+        let streamed = -1;
         const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
-          drainWindowMs: (bytes) => {
+          drainWindowMs: (bytes, streamedMs) => {
             expect(bytes).toBe("archive bytes".length);
+            // Measured from the producer's spawn to its close.
+            streamed = streamedMs;
             return 300;
           },
           settleGraceMs: 2_000,
@@ -158,6 +161,9 @@ esac
             fields: { producerCode: 0, bytes: "archive bytes".length, drainMs: 300 },
           },
         ]);
+        expect(streamed).toBeGreaterThanOrEqual(0);
+        expect(streamed).toBeLessThan(Date.now() - started);
+        expect(logs.records()[0]?.fields?.streamedMs).toBe(streamed);
         // The helper container is removed (killing `docker run` leaves it
         // running), and the removal had finished before the step settled.
         expect(await log.read()).toContain("rm rm -f orkestrator-copy-test");
@@ -279,6 +285,13 @@ esac
     expect(copyDrainWindowMs(0)).toBe(COPY_DRAIN_BASE_MS);
     expect(copyDrainWindowMs(1024 ** 3)).toBeGreaterThan(copyDrainWindowMs(0));
     expect(copyDrainWindowMs(5 * 1024 ** 3)).toBeLessThan(10 * 60_000);
+  });
+  test("the drain window also gets as long again as the stream took", () => {
+    // A loaded host slows the helper's work after its input ends as much as
+    // its work while the stream flows, so a slow stream earns a longer drain.
+    expect(copyDrainWindowMs(0, 90_000)).toBe(COPY_DRAIN_BASE_MS + 90_000);
+    expect(copyDrainWindowMs(1024 ** 3, 60_000)).toBe(copyDrainWindowMs(1024 ** 3) + 60_000);
+    expect(copyDrainWindowMs(0, -5)).toBe(COPY_DRAIN_BASE_MS);
   });
   test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
     // Reaching no daemon (its socket gone) also says "no such file"; that

@@ -59,7 +59,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "lifecycle.reconcile-failed":
         "Reconciling one environment's container operation failed; the next pass retries.",
       "replacement.copy-helper-stalled":
-        "A rebuild copy step's helper was still running when its drain window after the `docker cp` producer closed ran out, so the step was abandoned and the helper removed. Fields: the producer's exit code, the bytes it sent and the window.",
+        "A rebuild copy step's helper was still running when its drain window after the `docker cp` producer closed ran out, so the step was abandoned and the helper removed. Fields: the producer's exit code, the bytes it sent, how long it streamed and the window.",
       "replacement.copy-helper-remove-failed":
         "An abandoned rebuild copy step's helper container (`helper`, its name) could not be removed, so the step failed rather than settle while the helper may still mount the new storage.",
       "replacement.clear-terminals-failed":

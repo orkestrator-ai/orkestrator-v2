@@ -7,9 +7,10 @@ reads and discusses the configured local checkout, searches the code, and uses
 Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
-What is still missing — mainly provider parity and live qualification — lives in
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md)
-and the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+What is still missing — mainly provider parity and live qualification — is on
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+the live suite's evidence so far is in
+[coordinator-live-conformance.md](../development/coordinator-live-conformance.md);
 why each platform holds the read-only boundary the way it does is in
 [`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
 OpenCode and Grok steer in
@@ -4168,8 +4169,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`
 
-The runs that qualify each platform, and the scenarios still to add, are in
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).
+The runs that qualify each platform are recorded in
+[coordinator-live-conformance.md](../development/coordinator-live-conformance.md)
+(to-do 0024, retired); the runs still owed are on the manual-test checklist.
 
 ### Build admission provenance
 

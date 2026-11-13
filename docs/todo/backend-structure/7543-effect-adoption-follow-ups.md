@@ -111,7 +111,7 @@ Bridges carry no Effect (see effect-usage.md).
 
 **Decisions.**
 
-- An Effect-free `boundedWait(work, ms, { onLate })` in `packages/protocol`, next to `EventRing` (recommended). Pros: one tested copy, no runtime in the bridges. Cons: touches five bridges.
+- An Effect-free `boundedWait(work, ms, { onLate })` in `packages/protocol/src/node/` (recommended). Pros: one tested copy, no runtime in the bridges. Cons: touches five bridges.
 - Leave the copies. Pros: no churn in invariant-dense code. Cons: the next copy may forget to unref or dispose the late result.
 
 ### 5. Parked cancels and prompt timeouts as `acquireUseRelease` in the Cursor bridge

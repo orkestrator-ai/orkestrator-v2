@@ -353,8 +353,8 @@ export class DiffStatsTracking {
   }
 
   /**
-   * A user's explicit refresh of one environment's changes, from any surface
-   * (the sidebar, the Files panel, the change projection): a container is
+   * A user's explicit refresh of one environment's changes (`changes_refresh`,
+   * from the Files panel and the Changes tab): a container is
    * asked for its remote as well, unless a fetch started or ended in the last
    * 15 s, and then the environment scans at once. The invalidation comes
    * first so that scan finds the fetch due. Before this, the change

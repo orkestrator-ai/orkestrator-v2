@@ -207,24 +207,23 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   counted as `system:<subtype>` drift. Content blocks the parser has no
   branch for are counted as `block:<type>` drift.
 - **The native tab never sees SSE.** The backend polls `GET /session/:id` and
-  the transcript routes; `session.updated` frames only reach the legacy web
-  client. Turn-scoped state the tab must show (activity, thinking estimate,
-  background tasks) has to be in that snapshot. A row derived from a record
-  the rollout keeps (a task report, an interruption marker) must be produced
-  by both the live loop and `normalizePersistedSessionMessages`, or a reload
-  will disagree with the live tab.
-- **The SSE replay ring is the shared `EventRing`**
-  (`@orkestrator/protocol/node/event-ring`), fed the emitter's own revisions
-  (`appendAt`, `advanceTo`). A full `message.updated` collapses every earlier
-  `message.updated` and `message.patched` frame for that message, which a
-  full-mode replay sends as `bridge.cursor`. An observation replay
-  (`?observe=1`) still sends one content-free frame per revision under its
-  original type, so what the backend observer reads does not change.
-- **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`;
-  an older bridge's called the SDK's `deleteSession`, which removes the
-  `{sessionId}.jsonl` rollout. Tab close uses `POST /session/:id/close`
-  (`closeSessionRetainingHistory`), which stops the query and keeps the
-  rollout; nothing may fall back from close to DELETE.
+  the transcript routes; the bridge's only SSE stream is the backend
+  observer's content-free `?observe=1` wakeup. Turn-scoped state the tab must
+  show (activity, thinking estimate, background tasks) has to be in that
+  snapshot. A row derived from a record the rollout keeps (a task report, an
+  interruption marker) must be produced by both the live loop and
+  `normalizePersistedSessionMessages`, or a reload will disagree with the live
+  tab.
+- **The SSE stream keeps no replay.** `routes/events.ts` serves only
+  `?observe=1` (anything else is a 400): one content-free frame per emitter
+  revision, under a `generation:revision` cursor. A reconnect whose cursor is
+  not the current one gets `replay.required`; nothing is serialized or
+  retained for replay.
+- **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`
+  and no code in it calls the SDK's `deleteSession`; an older bridge's DELETE
+  did, which removed the `{sessionId}.jsonl` rollout. Tab close uses
+  `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops the
+  query and keeps the rollout; nothing may fall back from close to DELETE.
   Close answers 503 pending, keeping the session registered and fenced, when
   it cannot prove the query stopped (`Query.close()` threw or did not settle,
   or a racing dispatch claim did not settle).

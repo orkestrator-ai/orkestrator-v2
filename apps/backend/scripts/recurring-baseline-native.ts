@@ -21,9 +21,10 @@ import { StorageService } from "../src/core/storage.js";
  * Every provider read is counted at the provider boundary, split into the
  * no-touch observation route (`/activity`, OpenCode's event-fed batch) and
  * the tab-facing status read (`/session/:id/status` or the Claude session
- * resource — a liveness touch, and on Claude a transcript hydrate). Two modes
- * run the identical workload: `rollback` (`observationSharing: false`, the
- * pre-step-07 cadence) and `shared` (the default).
+ * resource — a liveness touch, and on Claude a transcript hydrate). One mode
+ * runs: `shared`, the only driver since its rollback
+ * (`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) was removed (todo 0048
+ * task 13). Artifacts from before then also carry a `rollback` mode.
  *
  * Storage is a real `StorageService` in a temporary directory; its content is
  * synthetic and never reported. Only counts and latencies leave this module.
@@ -82,13 +83,10 @@ export interface NativeObservationCounts {
 
 export interface NativeObservationResult {
   fixture: Omit<NativeObservationFixture, "agents"> & { agents: string[] };
-  modes: { rollback: NativeObservationCounts; shared: NativeObservationCounts };
+  modes: { shared: NativeObservationCounts };
 }
 
-async function runMode(
-  fixture: NativeObservationFixture,
-  sharing: boolean,
-): Promise<NativeObservationCounts> {
+async function runShared(fixture: NativeObservationFixture): Promise<NativeObservationCounts> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-native-baseline-"));
   let clock = 1_000_000;
   const now = () => clock;
@@ -155,7 +153,6 @@ async function runMode(
         return provider;
       },
       now,
-      observationSharing: sharing,
       onActivityTransition: (event) => {
         if (event.providerSessionId === externalSession) {
           if (event.state === "working") startsObserved.push(clock);
@@ -270,7 +267,6 @@ async function runMode(
 export async function runNativeObservationBaseline(
   fixture: NativeObservationFixture = DEFAULT_NATIVE_FIXTURE,
 ): Promise<NativeObservationResult> {
-  const rollback = await runMode(fixture, false);
-  const shared = await runMode(fixture, true);
-  return { fixture: { ...fixture, agents: [...fixture.agents] }, modes: { rollback, shared } };
+  const shared = await runShared(fixture);
+  return { fixture: { ...fixture, agents: [...fixture.agents] }, modes: { shared } };
 }

@@ -8,7 +8,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against
 
 ### Tasks
 
-2. **Prove a published release installs from its lockfile**: a real update on a standalone Linux host (a disposable systemd container, as in 0033). Status: blocked (needs two published releases that carry `resources/release-runtime/`). The macOS half, which needs a spare Mac account, moved to the manual-test checklist (7568: 5022 task 2).
+2. **Prove a published release installs from its lockfile**: a real update on a standalone Linux host (a disposable systemd container, as in 0033 (retired)). Status: open. Unblocked on 2026-11-13: 2.38.0-beta's updater installs from the lockfile (its `dist/main.js` runs `bun install --frozen-lockfile` on `resources/release-runtime/`) and 2.38.1-beta carries that directory, and `scripts/qualify-host-upgrades-container.ts` already updates a systemd service from 2.38.0-beta to 2.38.1-beta. The macOS half, which needs a spare Mac account, moved to the manual-test checklist (7568: 5022 task 2).
 3. **Pin the Bun that `install.sh` downloads**: it still fetches Bun's own installer with `curl | bash`. Status: done (2026-11-05): the script downloads Bun's release archive and checks it against stated SHA-256s.
 4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: done (2026-11-05) for releases that publish `resources/release-runtime/`; the current pin, 2.36.1, predates it and still runs through `bun x` until the pin moves (proving that on the live site is 5022 task 1 in the manual-test checklist, 7568).
 
@@ -23,12 +23,12 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against
 - `installRelease` on the packed `orkestrator` tarball, with other packages proxied from npm: installed in about 4 s, and `bin/orkestrator.js --version` reported the version.
 - `bun install --frozen-lockfile --os … --cpu …` accepted the lockfile for linux x64, linux arm64, darwin arm64 and darwin x64, and chose each platform's `@img/sharp-*` and Agent SDK packages. Only linux x64 ran the result.
 
-Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/standalone-service.ts:352`; the rest holds. Task 4 gives the first run the same install, so the run in 0033 can watch both: the first run from `install.sh` and the update after it.
+Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/standalone-service.ts:352`; the rest holds. Task 4 gives the first run the same install, so the run in 0033 (retired) can watch both: the first run from `install.sh` and the update after it.
 
 **Decisions.**
 
 - **How to qualify it?**
-  - **Add it to the standalone service run in [0033](0033-remote-host-upgrades.md): update between two real releases on Linux (here) and macOS (7568: 5022 task 2), and check the release's `bun.lock` matches and `sharp` loads (recommended).**
+  - **Add it to the standalone service run of 0033 (retired; now `scripts/qualify-host-upgrades-container.ts`, see [host-updates.md](../../architecture/host-updates.md#qualification)): update between two real releases on Linux (here) and macOS (7568: 5022 task 2), and check the release's `bun.lock` matches and `sharp` loads (recommended).**
     - Pros: one run covers rollback and the lockfile together; it runs on real hosts.
     - Cons: needs two releases that carry the change.
   - **Rely on `mise run smoke:cli`, which installs the lockfile before each publish.**
@@ -130,7 +130,7 @@ Releases older than the lockfile still install with a plain `bun install`. The p
 
 ## Related
 
-- [0033](0033-remote-host-upgrades.md)
+- 0033 (retired 2026-11-13): its qualification record is [host-updates.md, Qualification](../../architecture/host-updates.md#qualification)
 - [5021](5021-publish-npm-from-ci-with-provenance.md)
 - [Releasing the desktop app](../../development/releasing.md)
 - [Host updates](../../architecture/host-updates.md)

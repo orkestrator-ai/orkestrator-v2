@@ -346,10 +346,6 @@ const mockListPromptQueues = mock(async (_environmentId: string) => []);
 const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
 const mockStopBuildPipelinePersistence = mock(() => undefined);
-const mockMigrateLegacyBuildPipelines = mock(async () => {
-  appPersistenceLifecycle.push("migrate-build");
-  return { importedIds: [], skipped: 0 };
-});
 const mockStartBuildPipelinePersistence = mock(() => {
   appPersistenceLifecycle.push("start-build");
   return mockStopBuildPipelinePersistence;
@@ -365,7 +361,6 @@ const mockApplyPaneLayoutIntent = mock(
 mock.module("@/lib/build-pipeline-persistence", () => ({
   ...realBuildPipelinePersistenceSnapshot,
   hydrateBuildPipelinesForProject: (projectId: string) => mockListBuildPipelines(projectId),
-  migrateLegacyBuildPipelines: mockMigrateLegacyBuildPipelines,
   startBuildPipelinePersistence: mockStartBuildPipelinePersistence,
 }));
 
@@ -629,11 +624,6 @@ function resetAppMocks() {
   mockListBuildPipelines.mockResolvedValue([]);
   appPersistenceLifecycle.length = 0;
   mockStopBuildPipelinePersistence.mockClear();
-  mockMigrateLegacyBuildPipelines.mockReset();
-  mockMigrateLegacyBuildPipelines.mockImplementation(async () => {
-    appPersistenceLifecycle.push("migrate-build");
-    return { importedIds: [], skipped: 0 };
-  });
   mockStartBuildPipelinePersistence.mockClear();
   mockToastError.mockClear();
   mockAppUnlisten.mockClear();
@@ -956,34 +946,6 @@ describe("App background processing mounts", () => {
           "project-one",
           "project-two",
         ]);
-      });
-    } finally {
-      logs.restore();
-    }
-  });
-
-  test("contains a rejected legacy build-pipeline migration", async () => {
-    resetStores({
-      environments: [],
-      selectedProjectId: null,
-      selectedEnvironmentId: null,
-    });
-    const migrationError = new Error("migration unavailable");
-    mockMigrateLegacyBuildPipelines.mockRejectedValueOnce(migrationError);
-    const logs = captureLogs();
-    try {
-      render(<App />);
-
-      expect(await screen.findByTestId("project-launcher")).toBeTruthy();
-      await waitFor(() => {
-        expect(logs.records()).toContainEqual(
-          expect.objectContaining({
-            level: "warn",
-            area: "web.app",
-            event: "build-pipelines.migrate-failed",
-            fields: { error: expect.objectContaining({ message: migrationError.message }) },
-          }),
-        );
       });
     } finally {
       logs.restore();

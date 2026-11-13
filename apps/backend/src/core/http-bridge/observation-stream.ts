@@ -17,26 +17,26 @@ import { bridgeEventStreamFetch } from "./transport.js";
  * group may read less often only while something reports work started by
  * anyone else (`NativeAgentObservationCapabilities.idleBackoffWakeup`). The
  * Claude and Codex bridges already publish every session change on
- * `GET /event/subscribe`, with a bounded replay ring and a cursor, so this
- * subscribes once per bridge connection and turns frames into content-free
- * hints. Hints only make a group due; they are never applied as activity, and
+ * `GET /event/subscribe`, with a cursor, so this subscribes once per bridge
+ * connection and turns frames into content-free hints. Hints only make a group due; they are never applied as activity, and
  * the sweep's no-touch read stays the only source of truth.
  *
  * - **Live** only between a `connected` frame and the next gap, and only while
  *   some frame (a keepalive at worst) arrived within
  *   {@link BRIDGE_OBSERVATION_STREAM_SILENCE_MS}. A half-open connection
  *   therefore stops qualifying the group for backoff and is reconnected.
- * - **Replay.** Reconnects resume from the last frame id (`?since=`). Every
- *   connect, a `replay.required` (Claude) and a `session.reconcile-required`
- *   without a session (Codex, cursor expired) hint every session: whatever
- *   was missed is re-read by the next sweep. A bridge restart ends the
- *   stream and reads the same way.
+ * - **Gaps.** Reconnects send the last frame id (`?since=`). The bridges keep
+ *   no replay, so a cursor that is not current gets a `replay.required`
+ *   (Claude) or a `session.reconcile-required` without a session (Codex).
+ *   That, and every connect, hint every session: whatever was missed is
+ *   re-read by the next sweep. A bridge restart ends the stream and reads the
+ *   same way.
  * - **Observation mode.** The stream is opened with `?observe=1`: the bridge
- *   sends each event's type, cursor and session id, never its payload, and
- *   does not keep its replay ring alive for this subscriber. A bridge that
- *   does not confirm the mode in its `connected` frame predates it; the
- *   subscription is closed for good rather than pulling every full message
- *   snapshot, and the group keeps the full sweep cadence.
+ *   sends each event's type, cursor and session id, never its payload; a
+ *   current bridge refuses a subscription without it. A bridge that does not
+ *   confirm the mode in its `connected` frame predates it; the subscription is
+ *   closed for good rather than pulling every full message snapshot, and the
+ *   group keeps the full sweep cadence.
  * - **Bounds.** One connection per bridge, frames bounded by the shared SSE
  *   decoder, reconnects backed off with jitter, and only a session id read
  *   from each frame's prefix: no payload is parsed or retained.
@@ -49,9 +49,8 @@ import { bridgeEventStreamFetch } from "./transport.js";
 export const BRIDGE_OBSERVATION_STREAM_AGENTS: ReadonlySet<string> = new Set(["claude", "codex"]);
 
 /**
- * Longest silence a live stream may have. Both bridges send a keepalive at
- * least every 30 s (Codex every 5 s while a session is active), so 2.5 of
- * the longest interval means the connection is gone, not quiet.
+ * Longest silence a live stream may have. Both bridges send a keepalive
+ * every 30 s, so 2.5 intervals means the connection is gone, not quiet.
  */
 export const BRIDGE_OBSERVATION_STREAM_SILENCE_MS = 75_000;
 

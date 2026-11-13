@@ -1,6 +1,6 @@
 /**
  * How an OpenCode 2.x server is started inside a container
- * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phases 2 and 3).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan phases 2 and 3).
  * Pure: the start script, the plugins it writes and what decides whether an
  * image runs 2.x. `opencode2-container-server.ts` drives Docker with them.
  *

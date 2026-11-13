@@ -17,7 +17,7 @@ import type { OpenCode2Message } from "./types.js";
  * The 2.x client and steer classification against a real pinned 2.x server.
  * No credentials or remote model: a scripted local model in a disposable
  * profile. Run with RUN_LIVE_OPENCODE2=1 and OPENCODE2_CLI_PATH set to the
- * 2.x binary (docs/todo/agent-engines/0008-opencode-v2.md, task 10).
+ * 2.x binary (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), task 10).
  */
 const binary = process.env.OPENCODE2_CLI_PATH?.trim();
 const liveTest = process.env.RUN_LIVE_OPENCODE2 === "1" && binary ? test : test.skip;

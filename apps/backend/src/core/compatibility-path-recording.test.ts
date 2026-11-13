@@ -33,6 +33,12 @@ test("catalogue rejection counts every outdated bridge read and leaves current r
   expect(count(id)).toBe(before + 2);
   expect(legacy.requests).toHaveLength(2);
   expect(legacy.requests.every((request) => request.url.includes("/session/"))).toBe(true);
+  // A pre-2.21 bridge that answers the session route without a version.
+  const unversioned = httpProvider(() => Response.json({ commands: [] }), codexConnection);
+  await expect(unversioned.provider.commandCatalogue!("session-1")).rejects.toMatchObject({
+    catalogueErrorCode: "outdated-bridge",
+  });
+  expect(count(id)).toBe(before + 3);
 });
 
 test("retaining close counts only the restart notice", async () => {

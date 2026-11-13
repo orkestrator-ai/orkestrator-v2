@@ -408,6 +408,10 @@
                   "!**/control-mcp/tools.js"
                 ],
                 "message": "Import the control-mcp domain through control-mcp/index.js."
+              },
+              {
+                "group": ["**/plan-usage/*", "!**/plan-usage/index.js", "!**/plan-usage/cache.js"],
+                "message": "Import the plan-usage domain through plan-usage/index.js."
               }
             ]
           }
@@ -524,6 +528,13 @@
                   "!**/backend/src/core/control-mcp/index.js"
                 ],
                 "message": "Import the control-mcp domain through control-mcp/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/plan-usage/*",
+                  "!**/backend/src/core/plan-usage/index.js"
+                ],
+                "message": "Import the plan-usage domain through plan-usage/index.js."
               }
             ]
           }

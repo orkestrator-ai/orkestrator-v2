@@ -92,7 +92,7 @@ describe("prompt admission", () => {
   });
 
   test.each([
-    [{ deleting: true }, "being deleted"],
+    [{ deleting: true }, "being closed"],
     [{ status: "running" }, "already processing"],
     [{ rewindInProgress: true }, "restoring files"],
   ] as const)("refuses %p without reserving dispatch or foreground", (fields, message) => {

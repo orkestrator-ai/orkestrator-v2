@@ -122,6 +122,20 @@ if (process.env.FAKE_ACP_ARGS_FILE) {
   appendFileSync(process.env.FAKE_ACP_ARGS_FILE, `${JSON.stringify(process.argv.slice(2))}\n`);
 }
 
+// `FAKE_ACP_ENV_SCAN_FILE` records, per child, every environment value that
+// starts with `FAKE_ACP_ENV_SCAN_PREFIX` (the prefix's own variable excluded),
+// so a test can prove a credential never reached this process's environment.
+if (process.env.FAKE_ACP_ENV_SCAN_FILE && process.env.FAKE_ACP_ENV_SCAN_PREFIX) {
+  const prefix = process.env.FAKE_ACP_ENV_SCAN_PREFIX;
+  const found = Object.entries(process.env)
+    .filter(([key, value]) => key !== "FAKE_ACP_ENV_SCAN_PREFIX" && value?.includes(prefix))
+    .map(([key]) => key);
+  appendFileSync(
+    process.env.FAKE_ACP_ENV_SCAN_FILE,
+    `${JSON.stringify({ pid: process.pid, keys: found })}\n`,
+  );
+}
+
 if (process.env.FAKE_ACP_LIFECYCLE_FILE) {
   appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `start:${process.pid}\n`);
   process.once("SIGTERM", () => {

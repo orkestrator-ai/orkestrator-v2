@@ -6,13 +6,16 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 Updated 2026-11-11 against `main` at `14df96544`: the Linux half of task 1
 reproduced on beelink2; macOS and the reduction remain.
 Updated 2026-11-13 against `main` at `17d28238c`: the macOS half of task 1
-reproduced on arktech-mini, and task 2 ruled out the commands, the harness, a
-watch helper and aborts as the trigger.
+reproduced on arktech-mini, and task 2 ruled out a watch helper and aborts as
+the trigger. Corrected the same day: the schedule replays did not rebuild the
+test's repository, so they rule nothing out (see "Task 2: the first replays
+were not the recorded workload" below); `reduction.ts` now does, and the abort
+step was re-run on it.
 
 ### Tasks
 
 1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: done (Linux 2026-11-11: 47 lost `close` events in 100 runs; macOS 2026-11-13: 4 lost `exit` and 3 lost `close` events in 100 runs).
-2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: open (2026-11-13: test 1 alone still loses events, while the same commands replayed at the same times lose none, with or without the harness; next, delete the test's service calls one at a time).
+2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: open (2026-11-13: test 1 alone still loses events; a watch helper and aborts racing the exit do not trigger it standalone; the first replays of test 1's commands were not faithful and are void, so next, record test 1 again and replay it faithfully with `reduction.ts replay`, with and without the harness, before deleting service calls).
 
 ### 1. Reproduce on the old pipe capture
 
@@ -92,21 +95,26 @@ So macOS shows both symptoms on the pipe capture, and the lost `exit` is the mac
 
 So the trigger is in what that test brings and the script lacks: the public API harness and its storage, and the diff-stats service's watchers, admission pool and scan retargeting. That is where to delete from next.
 
-**macOS, 2026-11-13.** Each step ran 100 times, against the same pipe-capture copy and strict probe as task 1. The probe recorded test 1's exact spawn schedule (98 children: every command, its working directory and its offset from the first spawn) so it could be replayed without the services that produced it:
+**macOS, 2026-11-13.** Each step ran 100 times, against the same pipe-capture copy and strict probe as task 1. The probe recorded test 1's spawn schedule (98 children: every command, its working directory and its offset from the first spawn) so it could be replayed without the services that produced it. That recording held nothing else, which made the three replay rows below void, and the first abort row ran on a script that could abort its own fixture; both are explained after the table:
 
 | Step | Children | Lost | Runs with a loss |
 | --- | --- | --- | --- |
 | Test 1 alone (`-t saved/reset`) | 10,151 | **12**: 9 `exit`, 3 `close` | 8 of 100 |
 | Test 1 alone, with the capture marking any child it aborted or timed out (80 runs) | 8,191 | **12**: 7 `exit`, 5 `close` | 12 of 80 |
-| Test 1's recorded schedule replayed inside `bun test` through the same scratch `runCommand`, the public API harness created first and left idle | 9,800 | 0 | 0 |
-| The same replay without the harness | 9,800 | 0 | 0 |
-| The same replay standalone (`reduction.ts replay`, 300 times) | 29,400 | 0 | — |
+| Void: test 1's recorded schedule replayed inside `bun test` through the same scratch `runCommand`, the public API harness created first and left idle | 9,800 | 0 | 0 |
+| Void: the same replay without the harness | 9,800 | 0 | 0 |
+| Void: the same replay standalone (the first `reduction.ts replay`, 300 times) | 29,400 | 0 | — |
 | 4260's command pattern standalone, with a long-lived `bun -e` watch helper on pipes, as the backend's macOS watch helper (`reduction.ts pattern --host`, twice 3,000 iterations) | 36,600 | 0 | — |
-| The pattern with half the children SIGKILLed and their streams destroyed 0 to 80 ms after spawn, as an aborted scan is (`reduction.ts pattern --abort=80`) | 12,200 | 0 | — |
+| Superseded: the pattern with half the children SIGKILLed and their streams destroyed 0 to 80 ms after spawn, as an aborted scan is (the first `reduction.ts pattern --abort=80`, setup abortable, outcomes unchecked) | 12,200 | 0 | — |
+| Re-run on the fixed script: the fixture never aborted and checked, half the scan children (the five scans and the clone) picked for a SIGKILL 0 to 80 ms after spawn; 708 were still running when it fired and were killed, 25 `index.lock` files a killed `status` left were removed, 0 scans failed unexpectedly (`reduction.ts pattern 2400 --abort=80`, host load about 5) | 14,644 | 0 | — |
 
-At test 1's rate (12 in 10,151) the two in-test replays would expect about 23 losses between them, so their zero is not chance. In the marked runs no lost child had been aborted or had timed out when it was lost; the capture's abort path never ran at all, and 11 other children timed out. Every lost child whose position was recorded (10 of 12) was among the test's later spawns, the 66th to the 100th of about 100, from about the replacement checkout's `git clone` on, which matches 4260's note that a stuck child was spawned just before the clone exited. The replays ran that clone too and lost nothing.
+**Why the replays are void.** The recorded schedule held only argv, working directory and offset. The replay created an empty directory layout and a single `# comparison` README, so it never made the test's own file writes (`unpushed base`, `dirty`, `dirty again`), never passed the Git identity the harness gives its commits through the environment, and passed the recorded commit ids, which do not exist in a fresh repository, to the later `diff`, `checkout` and `cat-file` calls. Its `run()` ignored every exit status. A replay of a schedule shaped like test 1 with its writes withheld fails 15 of its 19 commands (exit 1 or 128), so most of the 98 replayed commands most likely failed early, and the zero says nothing about whether test 1's commands alone are enough. That question is open again.
 
-So on macOS the trigger is neither the commands nor their timing, nor the harness's presence, nor a watch helper, nor an abort racing the exit: the same 98 spawns lose nothing unless the test's own service calls run between them. What those calls add is in-process work around each spawn: the diff-stats service's scans and their admission pool, `set_environment_diff_base` and the other commands through the harness, storage writes, and the environment's worktree watch. That is the next deletion, inside test 1 itself.
+**Why the first abort row is superseded.** The first `--abort` applied to every spawn, the fixture's `git init`, `add` and `commit` included, and ignored exit statuses, so a run whose commit was killed scanned an unborn repository without saying so. `reduction.ts` now never aborts the fixture's commands and fails if one of them fails, removes the `index.lock` a killed `status` leaves before the per-iteration `checkout` (which would otherwise fail), and exits 1 if any scan that was not aborted failed. The re-run row above is on that script. It also shows that "half the children" overstated what the first row aborted: a child is killed only if it is still running when its timer fires, which was 708 of the 12,240 scan children (about 6%) in the re-run. Before the fix, each of its 25 stale locks would have failed that iteration's `checkout` without a word. The watch helper row ran without aborts, so its fixture was intact, but its outcomes were not checked either.
+
+In the marked runs no lost child had been aborted or had timed out when it was lost; the capture's abort path never ran at all, and 11 other children timed out. Every lost child whose position was recorded (10 of 12) was among the test's later spawns, the 66th to the 100th of about 100, from about the replacement checkout's `git clone` on, which matches 4260's note that a stuck child was spawned just before the clone exited.
+
+So on macOS the trigger is neither a watch helper nor an abort racing the exit. Whether the commands and their timing are enough on their own, or the test's service calls between them are needed (the diff-stats service's scans and their admission pool, `set_environment_diff_base` and the other commands through the harness, storage writes, and the environment's worktree watch), needs a faithful replay. The probe now records one: every command's exit status, the revision it printed, its Git identity variables, which earlier children were still running when it started, and the test's file writes (`preload.ts`). `reduction.ts replay` makes those writes, waits for whatever had finished first in the recording, substitutes each recorded revision with the one its own command printed, refuses a schedule recorded before this, and exits 1 on any command that ends differently from the recording. A schedule recorded from a scratch fixture shaped like test 1's Git use (22 entries: 19 commands, 3 writes, 3 revisions) replayed 20 times with 0 mismatches.
 
 The scripts are committed as `scripts/lost-child-event/` (`probe.ts`, `preload.ts`, `reduction.ts`) so the next step can start from them. `reduction.ts` is also what to attach to the upstream report as the non-reproducing reduction.
 
@@ -122,13 +130,13 @@ The scripts are committed as `scripts/lost-child-event/` (`probe.ts`, `preload.t
 - **Where to run the next step?** (2026-11-13)
   - **Linux on beelink2, deleting the test's service calls one at a time (recommended).**
     - Pros: about one loss in two runs there, so 20 runs a step suffice.
-    - Cons: the replay was run on macOS only, so the first step there is to repeat it with `reduction.ts replay` and the preload (cheap at that rate); the macOS symptom (a lost `exit`) is checked only at the end.
+    - Cons: the faithful replay still has to run first (record test 1 there with the preload, then `reduction.ts replay` and the in-test replay, with and without the harness), and the macOS symptom (a lost `exit`) is checked only at the end.
   - **macOS on arktech-mini.**
     - Pros: tests the platform-specific lost `exit` directly.
     - Cons: 8 runs in 100 with a loss, so each step needs about 100 runs (about 10 minutes) to tell zero from the baseline.
 - **Which call to delete first?** (2026-11-13)
   - **Replace the diff-stats service's scans (`readFileList` with `refresh`, `diffStats.sync`) with the recorded commands, keeping the harness's commands and storage (recommended).**
-    - Pros: they spawn most of the children, and their admission pool and retargeting are what the replay lacked.
+    - Pros: they spawn most of the children, and their admission pool and retargeting are what a replay lacks.
     - Cons: the scans also drive the test's assertions, which must be dropped for that step.
   - **Drop the harness commands (`set_environment_diff_base` and the rest) first.**
     - Pros: smaller change to the test.
@@ -136,7 +144,7 @@ The scripts are committed as `scripts/lost-child-event/` (`probe.ts`, `preload.t
 
 ## Current state
 
-Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is open: on macOS the loss needs test 1's service calls, not just its commands. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
+Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is open: on macOS the loss is not triggered by a watch helper or by aborts; whether it needs test 1's service calls or only its commands waits on a faithful replay, which the probe and `reduction.ts` now support. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
 
 ## Constraints and rationale
 
@@ -168,7 +176,20 @@ macOS has no `/proc`, and every way to list another process's descriptors (`lsof
 
 ### Task 2: replay the recorded schedule before deleting services (2026-11-13)
 
-Deleting services one at a time from test 1 needs a stand-in for each, and at macOS's rate (8 runs in 100 with a loss) each step costs 100 runs. Replaying the exact recorded spawn schedule answers the larger question first, whether the commands alone are enough, at the cost of three runs. They are not, which narrows every later step to the test's service calls.
+Deleting services one at a time from test 1 needs a stand-in for each, and at macOS's rate (8 runs in 100 with a loss) each step costs 100 runs. Replaying the exact recorded spawn schedule answers the larger question first, whether the commands alone are enough, at the cost of three runs. The first three replays did not answer it (next subsection), so the choice stands and the replay is still the next step.
+
+### Task 2: the first replays were not the recorded workload (2026-11-13)
+
+Review found that the replay rebuilt only the directory layout: no file writes, no commit identity, recorded commit ids passed to a fresh repository, and no exit status checked, so failed Git commands counted as a replayed workload. It also found that `--abort` could kill the pattern's own fixture. Options:
+
+- **Make the recording and replay faithful, and mark the old rows void (chosen).**
+  - Pros: the replay is still the cheapest way to tell commands from services; the record says plainly which rows count.
+  - Cons: the in-test replays need the scratch pipe capture again, so they cannot be redone in the same change.
+- **Remove replay mode and its claims.**
+  - Pros: smaller.
+  - Cons: throws away the cheapest next step.
+
+The probe records outcomes, revisions, identity, dependencies and writes only when `LOST_CHILD_PROBE_SCHEDULE` is set; recording a revision adds a `data` listener to the child's stdout, so recording runs are kept apart from measuring runs. Revisions are mapped by the command that printed them rather than by forcing identical commit ids (fixed dates and identity), which would have depended on every byte of every write matching. A schedule from before the change is refused rather than replayed, since it cannot be made faithful.
 
 ### Task 2: the scripts are committed, the pipe capture is not (2026-11-13)
 

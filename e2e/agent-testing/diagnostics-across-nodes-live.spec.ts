@@ -42,9 +42,10 @@
  * `output/agent-testing/<run>/diagnostics-across-nodes/evidence.json`.
  */
 import { expect, test } from "./browser-test";
+import { PUBLIC_EXIT } from "@orkestrator/protocol/public-api";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -179,7 +180,7 @@ function cli(args: string[], configDir: string, cwd: string) {
   } catch {
     // Reported through the status below.
   }
-  return { status: result.status, body };
+  return { status: result.status, signal: result.signal, body };
 }
 
 test.describe("diagnostics export from a leaf node", () => {
@@ -308,6 +309,7 @@ test.describe("diagnostics export from a leaf node", () => {
       );
       expect(planned.status).toBe(0);
       const planId = String(planned.body.result?.planId);
+      const wrongNodeFile = path.join(scratch, "wrong-node.tar.gz");
       const elsewhere = cli(
         [
           "--profile",
@@ -317,13 +319,21 @@ test.describe("diagnostics export from a leaf node", () => {
           "--plan",
           planId,
           "--file",
-          path.join(scratch, "wrong-node.tar.gz"),
+          wrongNodeFile,
         ],
         configDir,
         scratch,
       );
-      expect(elsewhere.status).not.toBe(0);
       evidence.planOnOtherNode = { exitStatus: elsewhere.status, code: elsewhere.body.error?.code };
+      // The CLI ran to completion (no timeout or signal, so `status` is a real
+      // exit code) and the command node answered that it does not hold the
+      // plan. Any other failure (transport, sign-in, arguments, a missing
+      // profile) proves nothing about where plans live.
+      expect(elsewhere.signal).toBeNull();
+      expect(elsewhere.body.ok).toBe(false);
+      expect(elsewhere.body.error?.code).toBe("not-found");
+      expect(elsewhere.status).toBe(PUBLIC_EXIT.notFound);
+      expect(existsSync(wrongNodeFile)).toBe(false);
       const sameNode = cli(
         [
           "--profile",

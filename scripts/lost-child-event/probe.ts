@@ -13,8 +13,15 @@
  * Records are JSON lines, to `LOST_CHILD_PROBE_OUT` or stdout. They hold the
  * command and its subcommand only (`git rev-parse`), never paths, arguments,
  * output or environment. With `LOST_CHILD_PROBE_SCHEDULE` set, the summary
- * also writes every child's spawn offset, working directory and full argv to
- * that file, for `reduction.ts replay`; keep it local, it holds paths.
+ * also writes a schedule to that file for `reduction.ts replay`: every child's
+ * spawn offset, working directory, full argv, Git identity and date variables,
+ * exit status, the revision it printed (a `rev-parse HEAD`'s output), and
+ * which earlier children were still running when it started; and every file
+ * the test wrote (`recordWrite`, called by `preload.ts`). That is what a
+ * replay needs to rebuild the repository the commands ran against, rather
+ * than only their timing. Keep it local: it holds paths and file contents.
+ * Recording a revision adds a `data` listener to the child's stdout, so a
+ * recording run is not a measuring run; count losses from runs without it.
  *
  * Used by `preload.ts` (inside `bun test`) and by `reduction.ts`.
  */
@@ -114,8 +121,62 @@ type Tracked = {
 
 const LOSS_MS = 5_000;
 const tracked: Tracked[] = [];
-const schedule: Array<{ at: number; cwd: string; argv: string[] }> = [];
 export const probeState = { test: 0 };
+
+/** One recorded command. `open`: earlier entries (by index) still running when it started. */
+export type ScheduleCommand = {
+  at: number;
+  cwd: string;
+  argv: string[];
+  /** Only the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables the spawn passed. */
+  env?: Record<string, string>;
+  open: number[];
+  /** The exit code, `null` for a signal; absent if it never exited. */
+  exit?: number | null;
+  /** The object id the command printed as its whole first line, if any. */
+  oid?: string;
+};
+/** One recorded file write, under the test's own directories. */
+export type ScheduleWrite = {
+  at: number;
+  write: string;
+  content?: string;
+  contentBase64?: string;
+  open: number[];
+};
+export type ScheduleEntry = ScheduleCommand | ScheduleWrite;
+/** The schedule file's first line. Version 1 was a bare array of `{ at, cwd, argv }`. */
+export type ScheduleFile = { version: 2; entries: ScheduleEntry[] };
+export const SCHEDULE_VERSION = 2;
+
+const recording = Boolean(process.env.LOST_CHILD_PROBE_SCHEDULE);
+const schedule: ScheduleEntry[] = [];
+/** Schedule indices of commands not yet closed. */
+const openEntries = new Set<number>();
+const GIT_IDENTITY = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
+const OID_LINE = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+/** Bounds a recorded write, so a schedule stays small. */
+const MAX_WRITE_BYTES = 64 * 1024;
+
+function openNow(): number[] {
+  return [...openEntries];
+}
+
+/**
+ * Records a file write for the replay; a no-op unless recording. Writes over
+ * 64 KiB, or of content that is neither a string nor bytes, are recorded as
+ * skipped, so the replay can say it is incomplete.
+ */
+export function recordWrite(file: unknown, data: unknown): void {
+  if (!recording || typeof file !== "string") return;
+  const entry: ScheduleWrite = { at: Date.now(), write: file, open: openNow() };
+  if (typeof data === "string" && Buffer.byteLength(data) <= MAX_WRITE_BYTES) entry.content = data;
+  else if (ArrayBuffer.isView(data) && data.byteLength <= MAX_WRITE_BYTES)
+    entry.contentBase64 = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
+      "base64",
+    );
+  schedule.push(entry);
+}
 
 function record(entry: Record<string, unknown>): void {
   const line = JSON.stringify(entry);
@@ -133,6 +194,7 @@ export function track(
   argv: readonly string[],
   before: Set<number>,
   cwd?: string,
+  env?: Record<string, string | undefined>,
 ): void {
   if (child.pid === undefined) return;
   const t: Tracked = {
@@ -149,15 +211,35 @@ export function track(
     lostClose: false,
   };
   tracked.push(t);
-  if (process.env.LOST_CHILD_PROBE_SCHEDULE)
-    schedule.push({ at: t.spawnAt, cwd: cwd ?? "", argv: [...argv] });
-  child.once("exit", () => {
+  let entry: ScheduleCommand | undefined;
+  let index = -1;
+  if (recording) {
+    entry = { at: t.spawnAt, cwd: cwd ?? "", argv: [...argv], open: openNow() };
+    const identity = Object.entries(env ?? {}).filter(
+      (pair): pair is [string, string] => GIT_IDENTITY.test(pair[0]) && pair[1] !== undefined,
+    );
+    if (identity.length) entry.env = Object.fromEntries(identity);
+    index = schedule.push(entry) - 1;
+    openEntries.add(index);
+    // Only the first line is kept, and only if it is an object id.
+    let head = "";
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      if (head.length < 128) head += String(chunk).slice(0, 128);
+    });
+    child.once("close", () => {
+      const line = head.split("\n")[0]!.trim();
+      if (OID_LINE.test(line)) entry!.oid = line;
+    });
+  }
+  child.once("exit", (code) => {
     t.exitAt = Date.now();
+    if (entry) entry.exit = code;
     if (t.lostExit)
       record({ kind: "LATE_EXIT", label: t.label, afterZombieMs: t.exitAt - t.zombieAt });
   });
   child.once("close", () => {
     t.closeAt = Date.now();
+    if (index >= 0) openEntries.delete(index);
     if (t.lostClose)
       record({ kind: "LATE_CLOSE", label: t.label, afterExitMs: t.closeAt - t.exitAt });
   });
@@ -211,9 +293,12 @@ export async function holdUntilClosed(maxMs: number): Promise<void> {
   clearInterval(scanner);
   const scheduleFile = process.env.LOST_CHILD_PROBE_SCHEDULE;
   if (scheduleFile) {
-    const first = schedule[0]?.at ?? 0;
-    const entries = schedule.map((entry) => ({ ...entry, at: entry.at - first }));
-    appendFileSync(scheduleFile, `${JSON.stringify(entries)}\n`);
+    const first = schedule.find((entry) => "argv" in entry)?.at ?? 0;
+    const file: ScheduleFile = {
+      version: SCHEDULE_VERSION,
+      entries: schedule.map((entry) => ({ ...entry, at: entry.at - first })),
+    };
+    appendFileSync(scheduleFile, `${JSON.stringify(file)}\n`);
   }
   const labels: Record<string, number> = {};
   for (const t of tracked) labels[t.label] = (labels[t.label] ?? 0) + 1;

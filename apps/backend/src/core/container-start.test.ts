@@ -311,7 +311,7 @@ describe("startDockerContainer", () => {
     );
   });
 
-  test("a busy host's run of collisions on fresh ports is outlasted and its length logged (to-do 7750)", async () => {
+  test("a busy host's run of collisions on fresh ports is outlasted and its length logged (to-do 7750 (retired))", async () => {
     // The 2026-11-11 run: three retries, each on a new port, then a fourth collision.
     const ports = [32792, 32794, 32800, 32808, 32814, 32816];
     expect(PORT_COLLISION_RETRIES).toBeGreaterThanOrEqual(10);

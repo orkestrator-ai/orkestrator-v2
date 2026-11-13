@@ -19,7 +19,7 @@ freshly built image
 ### Tasks
 
 1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
-2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: blocked (waits on a recurrence: a `copy-in.snapshot-busy` log line, or the busy refusal on any host). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. The bind delivery below waits for a host that fails again.
+2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: blocked (waits on a recurrence: a `copy-in.snapshot-busy` log line, or the busy refusal on any host). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. The bind delivery below waits for a host that fails again. Whether the firewall's GitHub fetch gets a token is a decision in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the agent work assumes the recommended answer (no token).
 3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries; raised to ten on 2026-11-13 by 7750 (retired)).
 4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: done 2026-11-11 (on a rootless daemon the backend chooses automatic host ports itself; qualified on a disposable rootless daemon).
 
@@ -227,6 +227,11 @@ Steps:
     - Cons: it fails every time for the environment image; only the
       one-layer probe ever succeeded on a retry.
 - **Should the firewall's GitHub fetch stop depending on the anonymous allowance?**
+  This is the user's call (a credential near containers); it moved to the
+  [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+  2026-11-13 as "7549 task 2: decide whether the firewall's GitHub fetch gets
+  a token". Until it is recorded, the agent work here assumes the
+  recommended option.
   - **No; fix the seed delivery above so the fetch is the exception again (recommended).**
     - Pros: the seed exists so that boots do not fetch; no token goes near a
       container.

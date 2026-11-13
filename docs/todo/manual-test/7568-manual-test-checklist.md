@@ -15,7 +15,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 1. **Manual tests and live checks** (307 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (53 items): make each call
+2. **Decisions, approvals and outward actions** (54 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -81,14 +81,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
-| Containers and environments | 24 | 9 |
+| Containers and environments | 24 | 10 |
 | Coordinator and Multi Review | 80 | 6 |
 | Cross-cutting | 75 | 20 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 307 | 53 |
+| **Total** | 307 | 54 |
 
 ## Outstanding work
 
@@ -699,6 +699,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7390](../containers-and-environments/7390-rootless-restart-remaining-settings.md) task 2: install `pasta` and `vpnkit` for the remaining rootless drivers.** Decide whether to install the `passt` package and a `vpnkit` binary on a Linux host (beelink or another; a host change needing `sudo`), or to skip those drivers. Record: the host and which binaries are on `PATH` in 7390 task 2; this also serves 6101 task 4's pasta run.
 - [ ] **[7420](../containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md) task 3: release-note line for the removed telemetry hosts.** When cutting the next release, add: "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; Claude Code, Codex, OpenCode, Pi and Grok completed fake-provider turns without them. Existing allowlists keep them; remove them in Settings to close the channel." Record: the release version that carried the line, in 7420.
 - [ ] **[7549](../containers-and-environments/7549-rootless-docker-cp-refusals.md) task 1: approve and file the upstream Moby report.** Review the draft in 7549 task 1 (rootless dockerd 29.9.2: `docker cp` with a read-only bind whose source filesystem is `nosuid`/`nodev` fails with `remount-ro … operation not permitted`, with the busybox reproduction) and, if approved, file it as an issue on github.com/moby/moby. Record: the issue URL (or "declined") in 7549 task 1.
+- [ ] **[7549](../containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2: decide whether the firewall's GitHub fetch gets a token.** When a restricted boot has no fresh GitHub ranges seed (the seed copy was refused, or the backend's seed is over a day old), the firewall fetches `api.github.com/meta` unauthenticated, limited to 60 requests an hour per address, so a host creating restricted containers quickly can run out and later boots fail closed. Choose: keep the fetch anonymous and fix seed delivery so the fetch stays the exception (recommended: no credential goes near a container; a host whose seed is over a day old still fetches per boot), or pass a GitHub token to the firewall's fetch (5000 requests an hour, but a credential in every restricted container's root phase). Record: the choice and date in 7549 task 2's Assumptions and decisions section; "token" makes the token path an agent task there.
 
 #### Coordinator and Multi Review
 

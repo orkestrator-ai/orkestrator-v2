@@ -369,7 +369,7 @@ tasks 1 and 2, and 7750 (retired 2026-11-13), run in worktree
   settled `stalled` after 3.2 s, and the helper container was gone from
   `docker ps -a` 3 s later (removed by name). Before the change the same step
   waits for `COPY_TIMEOUT_MS`, one hour.
-- **7750, what it found** (retired here; its text is `git show
+- **7750 (retired), what it found** (retired here; its text is `git show
   17d28238c:docs/todo/containers-and-environments/7750-rootless-automatic-port-collisions-outlast-retries.md`):
   on 2026-11-11 on beelink2, disposable daemon `idle0049` (slirp4netns, host
   loopback), two container starts in a row collided on four Docker-chosen
@@ -381,7 +381,7 @@ tasks 1 and 2, and 7750 (retired 2026-11-13), run in worktree
   a start that met collisions logs `start.port-collision-run` once it ends.
   `container-start.test.ts` replays that run (six collisions on six ports,
   then a start) and a run longer than the bound.
-- **7750, live:** `container-start-docker.test.ts` with
+- **7750 (retired), live:** `container-start-docker.test.ts` with
   `RUN_LIVE_DOCKER_TESTS=1` and `oven/bun:1.4.4-debian` passed 4, skipped 1
   (the opt-in mount case) on `r7549`, with the fresh-port bound at ten. The
   new `start.port-collision-run` line gave the run length in each case,

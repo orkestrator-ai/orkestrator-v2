@@ -400,6 +400,122 @@ test("queue holds while limit recovery is pending, then releases the head", asyn
   });
 });
 
+describe("NativeAgentPromptQueueDispatcher after a restart-interrupted turn", () => {
+  // Found by the multi-client restart qualification (to-do 7120 (retired) task 1): a
+  // prompt queued behind a turn a backend restart cut short was held as if the
+  // model had failed, and went out only after a prompt the user typed later.
+  function observing(read: () => Record<string, unknown>) {
+    return async () =>
+      ({
+        status: async () => read().status,
+        observeSession: async () => read(),
+      }) as unknown as NativeAgentRuntimeProvider;
+  }
+
+  test("queued prompts go out in the order the user queued them, starting at once", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "queued behind the interrupted turn",
+      });
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "later",
+        text: "typed later",
+      });
+      let observation: Record<string, unknown> = {
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        interruptedRequestId: "interrupted",
+      };
+      host.provider = observing(() => observation);
+
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+      expect(host.dispatchPrompt).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requestId: "queued" }),
+      );
+      // Sent on the first pass: no back-off was counted and nothing was parked.
+      expect(dispatcher.forTesting().queueAttempts.has(queueKey)).toBe(false);
+      expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
+
+      observation = { status: "running" };
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+
+      observation = { status: "idle" };
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(
+        (host.dispatchPrompt as ReturnType<typeof mock>).mock.calls.map(
+          (call) => (call[0] as DispatchNativeAgentPromptInput).requestId,
+        ),
+      ).toEqual(["queued", "later"]);
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+    });
+  });
+
+  test("an in-flight head from an ambiguous dispatch is resent under its own request id", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "sent once, answer lost",
+      });
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "later",
+        text: "typed later",
+      });
+      // The first send's outcome is unknown (the bridge went away mid-request):
+      // the reservation stays durable rather than being failed or re-minted.
+      let observation: Record<string, unknown> = { status: "idle" };
+      host.provider = observing(() => observation);
+      const dispatch = host.dispatchPrompt as ReturnType<typeof mock>;
+      dispatch.mockImplementationOnce(async () => {
+        throw new Error("socket hang up");
+      });
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect((await storage.getPromptQueue(queueKey))?.inFlight?.requestId).toBe("queued");
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+
+      // The restart that lost the answer also cut the session's turn short.
+      observation = {
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        interruptedRequestId: "queued",
+      };
+      await dispatcher.drainPromptQueueForSession(identity);
+      const requestIds = () =>
+        dispatch.mock.calls.map((call) => (call[0] as DispatchNativeAgentPromptInput).requestId);
+      // The same idempotency key, so the bridge's dispatch journal can answer
+      // "already sent" instead of running the turn twice; never a new id, and
+      // never parked as if the model had failed.
+      expect(requestIds()).toEqual(["queued", "queued"]);
+      const queue = await storage.getPromptQueue(queueKey);
+      expect(queue?.dispatchError).toBeUndefined();
+      expect(queue?.inFlight).toBeUndefined();
+      expect(queue?.messages.map((message) => (message as { id: string }).id)).toEqual(["later"]);
+      expect(dispatcher.forTesting().queueAttempts.has(queueKey)).toBe(false);
+    });
+  });
+
+  test("any other terminal error still holds the queue with back-off", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "held",
+      });
+      host.provider = observing(() => ({
+        status: "error",
+        error: "Selected model is at capacity.",
+      }));
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).not.toHaveBeenCalled();
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+      expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+    });
+  });
+});
+
 test("a coordinator's queued message waits for the running turn, then is sent as the next turn", async () => {
   // What a refused or unavailable steer leaves behind on the Coordinator page:
   // the durable queue row. The drain must hold it while the turn runs and

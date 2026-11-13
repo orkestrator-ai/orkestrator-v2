@@ -25,7 +25,9 @@
  * and `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE` name a running older
  * backend (its gateway URL and its `gateway-auth.json`), started with
  * `--renderer-dev-server-url` set to this profile's renderer, so the browser
- * runs today's renderer against it. Its Claude CLI must already point at the
+ * runs today's renderer against it. `scripts/older-release-stack.ts backend
+ * --tag v2.21.0 --renderer-profile q48t11 --toolchain-bin-dir <the profile's
+ * toolchain>` starts one and prints both values. Its Claude CLI must already point at the
  * same fake model (`ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT` fixes the port).
  *
  * Every measurement is a wall-clock interval read in this process, recorded

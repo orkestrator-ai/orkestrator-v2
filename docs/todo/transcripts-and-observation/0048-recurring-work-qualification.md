@@ -49,7 +49,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 and 2026-11-11 runs were on Linux; the physical-device run moved to 7568 on 2026-11-10).
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
-11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
+11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needed a decision was in 7120 (retired 2026-11-13, `git show f486caaac:docs/todo/transcripts-and-observation/7120-multi-client-restart-follow-ups.md`), all of it since done).
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (only the two PR candidates are left, blocked (waits on 7568: 0048 task 5)) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to to-do 7745, decision C5, which leased the terminal and observed the orphan and its end live on 2026-11-11 before it was retired; see [recurring-work.md](../../architecture/recurring-work.md) row B19) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open for `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, whose wait on 0049 ended on 2026-11-11 (0049 finished and was retired); the `feature-planning` and `build-pipeline` rollback drivers and the switch itself still wait for task 5's live GitHub run (7568: 0048 task 5) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
@@ -436,8 +436,8 @@ the register. Results are in
 [Multi-client, restarts and an older backend](#multi-client-restarts-and-an-older-backend-2026-11-06-linux).
 Two defects were fixed (decisions T11.1 and T11.2). The bearer-client concern
 above did not arise: each client signs in again with a fresh `dev:login` link
-after a restart. Follow-ups needing a decision are in
-[7120](7120-multi-client-restart-follow-ups.md).
+after a restart. Follow-ups needing a decision were in 7120 (retired
+2026-11-13), all done.
 
 ### 12. Measured candidates
 
@@ -1279,7 +1279,7 @@ showing the result.
 | Two clients, connected client A (10 rounds) | turn completion visible | p50 175 ms, p95 375 ms | ≤ 3 s |
 | | activity indicator working / idle | p95 2.3 s / 2.7 s | ≤ 4 s |
 | | diff badge after a save (watched local) | p50 452 ms, p95 514 ms | ≤ 2 s |
-| Two clients, client B cut off 4 to 5 s by the outage link | answer, idle and badge after the link returns | p50 6.3 s, p95 13.1 s | none; reconnect ladder ([7120](7120-multi-client-restart-follow-ups.md) task 2) |
+| Two clients, client B cut off 4 to 5 s by the outage link | answer, idle and badge after the link returns | p50 6.3 s, p95 13.1 s | ≤ 16 s plus one read since 2026-11-13 (7120 (retired) task 2; [latency budgets](../../architecture/recurring-work.md#latency-budgets)) |
 | Queued prompt (10 rounds) | dispatched after the running turn ends | p50 1.36 s, p95 1.81 s | ≤ 3 s |
 | | shown on both clients | p95 1.92 s | ≤ 3 s |
 | Backend crash / graceful restart, turn held, prompt queued | restart to `ready` | 3.1 s / 3.1 s | none |
@@ -1296,7 +1296,7 @@ showing the result.
   `client-outage-support.ts` in `reset` mode. Before its link returned B had
   seen neither the answer nor the badge; after it, each client showed the
   prompt and the answer once, and the model saw the prompt once. B's
-  convergence time is its reconnect rung, not backend work (task 2 of 7120).
+  convergence time is its reconnect rung, not backend work (task 2 of 7120 (retired)).
 - **Backend restarts.** A backend crash ends the whole `dev:test` profile and
   the local bridge with it (the parent-bound wrapper), so the held call is
   aborted and the turn settles as failed with "Claude restarted before this
@@ -1306,7 +1306,7 @@ showing the result.
   restarted bridge's empty preview as `complete: true`; fixed (T11.1). The
   queued prompt is held while the interrupted turn reads as failed and goes
   out after the user's next turn ends: delivered once, but after a prompt
-  typed later (7120 task 1).
+  typed later (7120 (retired) task 1; fixed 2026-11-13, the queued prompt now goes first).
 - **Bridge restarts.** The first run left the killed bridge's Claude CLI
   running as an orphan, still waiting on the parked model call; fixed (T11.2).
   After the fix the held call is aborted and no Claude process of the profile
@@ -1326,9 +1326,9 @@ showing the result.
   nothing of it remained), so later starts set `DOCKER_HOST` to an absent
   socket. Today's renderer worked: sidebar, turn, legacy diff badge, no page
   errors; twelve newer commands answered 500 and their fallbacks held. It
-  shows a misleading "has been updated" notice (7120 task 4). Today's CLI ran
+  shows a misleading "has been updated" notice (7120 (retired) task 4; reworded 2026-11-13). Today's CLI ran
   project, environment and session commands against it over `--url`; its
-  `--data-dir` connection is refused on Linux (7120 task 3).
+  `--data-dir` connection is refused on Linux (7120 (retired) task 3; registered 2026-11-13).
 - **Harness notes.** The fake key is not a Claude login, so the app's "Claude
   Code Is Not Logged In" notice opens and the spec dismisses it; a 30 s
   default click timeout once let a reopening notice outlast the wait, so
@@ -1575,7 +1575,7 @@ Starts over the busy phase (from the round-boundary samples), per round:
 - **Clients.** The two-client rounds cut the second client's link (`reset`)
   from just after the mail to the end of the review; it converged in
   4.4 to 12.5 s after the link returned (1.1 to 7.5 s in the client run), the reconnect ladder of
-  [7120](7120-multi-client-restart-follow-ups.md) task 2. The one-client
+  7120 (retired) task 2. The one-client
   rounds hid the document for the same span; it converged in at most 176 ms.
   Burst rows have one sample per environment per client.
 - **Harness notes.** Approving from the CLI is refused for an approval with
@@ -1796,7 +1796,7 @@ credentials or a platform CI lacks are batched in
 - ~~Two clients with one disconnected; backend and bridge restarts at durable
   transition boundaries; an older backend~~. Done 2026-11-06 on Linux (see
   [Multi-client, restarts and an older backend](#multi-client-restarts-and-an-older-backend-2026-11-06-linux));
-  follow-ups in [7120](7120-multi-client-restart-follow-ups.md).
+  follow-ups in 7120 (retired 2026-11-13, all done).
 - ~~Real-browser QA of the Files panel, the coordinator view, validation
   output and hidden-document reconcile~~. Done 2026-11-01
   (`container-files-wiring.spec.ts` and `container-app-wiring.spec.ts`; see
@@ -2447,8 +2447,9 @@ with other tasks' decisions.
   Chosen: the tag, under `output/` (git-ignored), with its own data and home
   and Docker unreachable. Why: no external download beyond the frozen
   lockfile's packages, and the tag is the release. Cons: it ran the current
-  Claude CLI rather than its pinned one; the launcher is not committed (7120
-  task 5).
+  Claude CLI rather than its pinned one; the launcher was not committed then; since 2026-11-13 it is
+  `scripts/older-release-stack.ts` (7120 (retired) task 5,
+  [Checking a pairing live](../../architecture/version-compatibility.md#checking-a-pairing-live)).
 - **T11.5 What counts as a durable boundary here.** Local bridges die with
   their backend, so "restart mid-dispatch" for a local environment is always
   "turn interrupted": the boundaries qualified are the dispatch accepted with
@@ -2702,8 +2703,8 @@ collide with other tasks' decisions.
 - [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
   long soak left (containers, a browser reader, three projection maps
   without eviction).
-- [7120-multi-client-restart-follow-ups.md](7120-multi-client-restart-follow-ups.md):
-  what task 11's run left for a decision.
+- 7120 (retired 2026-11-13; `git show f486caaac:docs/todo/transcripts-and-observation/7120-multi-client-restart-follow-ups.md`):
+  what task 11's run left for a decision, all since done.
 - 0049 (retired 2026-11-11; `git show 498b68766:docs/todo/transcripts-and-observation/0049-native-agent-idle-observation.md`),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and

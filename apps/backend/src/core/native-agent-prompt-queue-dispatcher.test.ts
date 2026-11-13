@@ -401,7 +401,7 @@ test("queue holds while limit recovery is pending, then releases the head", asyn
 });
 
 describe("NativeAgentPromptQueueDispatcher after a restart-interrupted turn", () => {
-  // Found by the multi-client restart qualification (to-do 7120 task 1): a
+  // Found by the multi-client restart qualification (to-do 7120 (retired) task 1): a
   // prompt queued behind a turn a backend restart cut short was held as if the
   // model had failed, and went out only after a prompt the user typed later.
   function observing(read: () => Record<string, unknown>) {

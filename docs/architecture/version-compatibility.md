@@ -85,6 +85,45 @@ below and the version reminder naming which side to update.
   skew. The window does not retire them; their owners retire them on
   qualification evidence or after a migration.
 
+### Checking a pairing live
+
+`scripts/older-release-stack.ts` starts one side of a pairing from a release
+tag on a throwaway root under `output/older-release/<tag>/`: the tag is
+archived from this repository (npm carries no v2.21.0 and no renderer),
+installed with `--frozen-lockfile --ignore-scripts`, and only what the mode
+needs is built. The backend runs as `agent-test` on loopback, never on 34121,
+34122 or 45507, with Docker unreachable, no inherited credentials, and its
+gateway token in the data directory's owner-only `gateway-auth.json`
+(`--url <url> --credential-file <file>` for the CLI, or the login form).
+
+```bash
+# An older backend serving today's renderer (a dev:test profile's, or any loopback URL)
+bun scripts/older-release-stack.ts backend --tag v2.21.0 --renderer-profile <profile>
+# Today's backend serving an older release's renderer
+bun scripts/older-release-stack.ts renderer --tag v2.36.1
+```
+
+`--toolchain-bin-dir` hands the backend a managed toolchain (a profile's, for
+a fake-model turn). The launcher stays attached and stops its backend on
+SIGINT or SIGTERM; a profile restart changes the renderer URL, so restart a
+`backend` stack after it.
+
+Recorded runs:
+
+- 2026-11-06, v2.21.0's backend with today's renderer and CLI:
+  [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md#multi-client-restarts-and-an-older-backend-2026-11-06-linux).
+- 2026-11-13, v2.21.0's backend with today's renderer (the launcher's first
+  run): the version reminder named the older server and offered a reload
+  once; after a reload that brought back the same versions it offered none.
+- 2026-11-13, today's backend with v2.36.1's renderer, the last Stable
+  release before per-conversation startup errors (C6): a coordinator
+  conversation whose Claude bridge exited before becoming healthy (a stub
+  `bun` in the toolchain) showed in the old pane as "Connection Failed" naming
+  the error, with the rest of the panel working; the pane's Retry repeated the
+  refusal, and opening the panel again cleared the error and counted
+  `coordinator-ensure.conversation-errors-cleared`, as the Register row says.
+  The full record is 4880 (retired), `git show f486caaac:docs/todo/coordinator-and-multi-review/4880-c6-live-checks.md`.
+
 ## Usage counters
 
 Each path the backend can observe records a content-free count in

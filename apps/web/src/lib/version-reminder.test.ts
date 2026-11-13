@@ -40,7 +40,7 @@ describe("describeVersionReminder", () => {
   });
 
   test("names an older server as the side to update, not as an update", () => {
-    // What today's renderer showed against v2.21.0 (to-do 7120 task 4): "has
+    // What today's renderer showed against v2.21.0 (to-do 7120 (retired) task 4): "has
     // been updated" and a reload, although the server was the older side.
     const reminder = describeVersionReminder({
       clientVersion: "2.36.4-beta",

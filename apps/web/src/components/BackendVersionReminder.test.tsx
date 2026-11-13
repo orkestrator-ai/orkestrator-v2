@@ -152,7 +152,7 @@ describe("BackendVersionReminder", () => {
   );
 
   test("a page the server served says it is older, and drops a reload that did not help", async () => {
-    // Today's renderer served through an older backend (to-do 7120 task 4): a
+    // Today's renderer served through an older backend (to-do 7120 (retired) task 4): a
     // reload returns the same renderer, so the second notice offers none.
     backendVersion = "0.0.1";
     const reload = spyOn(window.location, "reload").mockImplementation(() => {});

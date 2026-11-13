@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import {
   MAX_TOOL_CALLS,
   READY_FILE,
+  RECEIVED_FILE,
+  steerDeliveries,
   steerResponseContent,
   steerStep,
   type MessagesBody,
@@ -78,6 +80,78 @@ test("a steer is found wherever the CLI put it, and appended once", () => {
     ...call("printf '%s' 'queued-steer-1731456000000' >> .qa-queued-received"),
   ];
   expect(steerStep(body(appended))).toMatchObject({ kind: "shell", command: "sleep 3" });
+});
+
+const MARKER = "queued-steer-1731456000000";
+const APPEND = `printf '%s' '${MARKER}' >> ${RECEIVED_FILE}`;
+
+/**
+ * Plays the conversation the way the CLI would: each shell step the model
+ * asks for runs (appends go to `received`) and its call joins the history;
+ * `deliver` is called before each request and may add steer texts.
+ */
+function play(deliver: (call: number, messages: unknown[]) => void, calls = 8): string {
+  const messages: unknown[] = [{ role: "user", content: FIRST }];
+  let received = "";
+  for (let index = 0; index < calls; index += 1) {
+    deliver(index, messages);
+    const step = steerStep(body(messages));
+    if (step.kind !== "shell") break;
+    if (step.command.includes(RECEIVED_FILE)) received += MARKER;
+    messages.push(...call(step.command));
+  }
+  return received;
+}
+
+test("one delivered steer leaves the marker in the file exactly once", () => {
+  const received = play((index, messages) => {
+    if (index === 2) messages.push({ role: "user", content: [{ type: "text", text: STEER }] });
+  });
+  expect(received).toBe(MARKER);
+});
+
+test("a steer delivered twice leaves the marker twice, so the spec's exactly-once check fails", () => {
+  // Both copies in one request.
+  const together = play((index, messages) => {
+    if (index === 2) {
+      messages.push({
+        role: "user",
+        content: [
+          { type: "text", text: STEER },
+          { type: "text", text: STEER },
+        ],
+      });
+    }
+  });
+  expect(together).toBe(`${MARKER}${MARKER}`);
+  // The second copy after the first was appended.
+  const later = play((index, messages) => {
+    if (index === 2 || index === 5) {
+      messages.push({ role: "user", content: [{ type: "text", text: STEER }] });
+    }
+  });
+  expect(later).toBe(`${MARKER}${MARKER}`);
+  // What steer-inactive-live.spec.ts asserts of `.qa-queued-received`.
+  expect(together.trim()).not.toBe(MARKER);
+  expect(later.trim()).not.toBe(MARKER);
+});
+
+test("deliveries are counted per steer text, duplicates kept", () => {
+  expect(steerDeliveries([FIRST])).toEqual([]);
+  expect(steerDeliveries([STEER, `${STEER}\n${STEER}`])).toEqual([MARKER, MARKER, MARKER]);
+  const history = [
+    { role: "user", content: FIRST },
+    ...call(`printf ready > ${READY_FILE} && sleep 3`),
+    { role: "user", content: STEER },
+    ...call(APPEND),
+  ];
+  // One delivery, one append: back to waiting.
+  expect(steerStep(body(history))).toMatchObject({ kind: "shell", command: "sleep 3" });
+  // A second delivery: a second append.
+  expect(steerStep(body([...history, { role: "user", content: STEER }]))).toMatchObject({
+    kind: "shell",
+    command: APPEND,
+  });
 });
 
 test("requests outside the spec's conversation, or without Bash, get text", () => {

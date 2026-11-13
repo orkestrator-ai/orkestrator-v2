@@ -1,8 +1,8 @@
 /**
  * A scripted loopback Anthropic Messages endpoint for the inactive-path steer
- * spec's Claude case (`browser-gateway.spec.ts`, "queued native steering
- * survives a lost gateway response, inactive environment and reload"; todo
- * 0005 task 7). The profile's real Claude CLI, bridge and backend take the
+ * spec's Claude case (`steer-inactive-live.spec.ts`, "Claude: queued native
+ * steering survives a lost gateway response, inactive environment and
+ * reload"; todo 0005 task 7). The profile's real Claude CLI, bridge and backend take the
  * turn; only the model is this file. No login, nothing billed.
  *
  * It plays the spec's two prompts the way a compliant model would:
@@ -15,8 +15,14 @@
  *    .qa-queued-received") may reach the model anywhere in the conversation:
  *    the bridge sends it with `priority: "now"`, and the CLI places it where
  *    its own version puts mid-turn input. So every user text in the request
- *    is searched, and the append is made once: once a call in the
- *    conversation has appended, the model goes back to sleeping.
+ *    is searched, and each delivery is appended once, as a model following
+ *    each delivered instruction would. The request carries the whole
+ *    conversation, so the steer texts in it are the deliveries so far and the
+ *    appends among the conversation's calls are the ones already made: while
+ *    there are more deliveries than appends the model appends again, then it
+ *    goes back to sleeping. A steer delivered twice (together, or after the
+ *    first append) therefore leaves the marker twice in the file, and the
+ *    spec's exactly-once check fails instead of hiding the duplicate.
  *
  * A request that offers no `Bash` tool (a title or summary request), or does
  * not belong to the spec's conversation, gets a short text reply. A
@@ -40,7 +46,7 @@ export const SLEEP_SECONDS = 3;
 /** About ten minutes of waiting calls, well past the spec's own budget. */
 export const MAX_TOOL_CALLS = 200;
 
-const STEER_PATTERN = /Append exactly ([A-Za-z0-9-]{1,80}) once to \.qa-queued-received/;
+const STEER_PATTERN = /Append exactly ([A-Za-z0-9-]{1,80}) once to \.qa-queued-received/g;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 type Block = {
@@ -86,6 +92,11 @@ function commandsSoFar(messages: Message[]): string[] {
     .map((block) => (typeof block.input?.command === "string" ? block.input.command : ""));
 }
 
+/** The marker of every steer the conversation has delivered, in order, duplicates kept. */
+export function steerDeliveries(texts: string[]): string[] {
+  return texts.flatMap((text) => Array.from(text.matchAll(STEER_PATTERN), (match) => match[1]!));
+}
+
 /** The next step for one Messages request. */
 export function steerStep(body: MessagesBody): SteerStep {
   const messages = body.messages ?? [];
@@ -96,8 +107,10 @@ export function steerStep(body: MessagesBody): SteerStep {
   }
   const commands = commandsSoFar(messages);
   if (commands.length >= MAX_TOOL_CALLS) return { kind: "text", text: "Stopped waiting." };
-  const marker = texts.map((text) => STEER_PATTERN.exec(text)?.[1]).find(Boolean);
-  if (marker && !commands.some((command) => command.includes(RECEIVED_FILE))) {
+  const delivered = steerDeliveries(texts);
+  const appended = commands.filter((command) => command.includes(RECEIVED_FILE)).length;
+  const marker = delivered[appended];
+  if (marker) {
     return {
       kind: "shell",
       command: `printf '%s' '${marker}' >> ${RECEIVED_FILE}`,

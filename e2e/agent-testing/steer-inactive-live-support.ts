@@ -13,13 +13,35 @@
  *   SDK, which keeps every steer it accepted in its store. The real entry is
  *   kept beside it and put back by the returned `restore`; a run killed
  *   before that leaves the backup, which the next install keeps and the next
- *   restore puts back.
+ *   restore puts back. The entry is shared by every profile started from
+ *   this checkout, so the swap holds an owner lock for its whole length (a
+ *   second run is refused while the first is alive), and the bundle serves
+ *   the fake only to the owning profile's bridges: any other launch runs the
+ *   real entry (`bridges/cursor-bridge/src/testing/host-fake-entry-lock.ts`).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { environmentStateDirectory } from "../../apps/backend/src/core/environment-state-paths";
+import {
+  LOCK_FILE_NAME,
+  readHostFakeEntryLock,
+  REAL_ENTRY_NAME,
+  type HostFakeEntryLock,
+} from "../../bridges/cursor-bridge/src/testing/host-fake-entry-lock";
 
 export type SteerPlatform = "codex" | "claude" | "cursor";
 
@@ -28,9 +50,6 @@ export const STEER_PLATFORM_LABELS: Record<SteerPlatform, string> = {
   claude: "Claude",
   cursor: "Cursor",
 };
-
-/** The bundle's backup beside the entry it replaced. */
-export const REAL_ENTRY_SUFFIX = ".qa-real";
 
 /** A real provider model, or the platform's scripted one. */
 export type SteerEngine = "real" | "scripted";
@@ -87,20 +106,80 @@ export function selectedSteerPlatforms(env: NodeJS.ProcessEnv): Map<SteerPlatfor
   return selected;
 }
 
-/**
- * Put `bundle` where the bridge entry is, keeping the real entry beside it.
- * A backup left by an earlier, interrupted run is the real entry, so it is
- * kept rather than overwritten with whatever the entry now holds.
- */
-export function swapBridgeEntry(entry: string, bundle: string): () => void {
-  const backup = `${entry}${REAL_ENTRY_SUFFIX}`;
-  if (!existsSync(backup)) {
-    if (!existsSync(entry)) throw new Error(`bridge entry not found: ${entry}`);
-    renameSync(entry, backup);
+/** Whether `pid` names a live process (signal 0 checks, it delivers nothing). */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-  writeFileSync(entry, bundle, { mode: 0o644 });
+}
+
+/**
+ * Take the entry's owner lock for `dataDir`'s profile. A lock held by a live
+ * process is refused; one whose process is gone was left by a killed run and
+ * is taken over.
+ */
+function acquireEntryLock(directory: string, dataDir: string): HostFakeEntryLock {
+  const file = path.join(directory, LOCK_FILE_NAME);
+  const lock: HostFakeEntryLock = { pid: process.pid, dataDir, token: randomUUID() };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let fd: number;
+    try {
+      fd = openSync(file, "wx", 0o644);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const held = readHostFakeEntryLock(directory);
+      if (held && processAlive(held.pid)) {
+        throw new Error(
+          `the Cursor bridge entry is swapped by another run (pid ${held.pid}, data directory ${held.dataDir}); wait for it, or remove ${file} if that process is not a steer run`,
+        );
+      }
+      rmSync(file, { force: true });
+      continue;
+    }
+    try {
+      writeSync(fd, JSON.stringify(lock));
+    } finally {
+      closeSync(fd);
+    }
+    return lock;
+  }
+  throw new Error(`could not take the Cursor bridge entry lock ${file}`);
+}
+
+/**
+ * Put `bundle` where the bridge entry is for `dataDir`'s profile, keeping the
+ * real entry beside it as {@link REAL_ENTRY_NAME}. The swap holds the entry's
+ * owner lock until the returned restore runs, so a second run is refused
+ * rather than restoring the first run's entry under it. A backup left by an
+ * earlier, interrupted run is the real entry, so it is kept rather than
+ * overwritten with whatever the entry now holds. Both writes are renames, so
+ * a launch never finds the entry missing or half written.
+ */
+export function swapBridgeEntry(entry: string, bundle: string, dataDir: string): () => void {
+  const directory = path.dirname(entry);
+  const backup = path.join(directory, REAL_ENTRY_NAME);
+  const lock = acquireEntryLock(directory, dataDir);
+  const lockFile = path.join(directory, LOCK_FILE_NAME);
+  try {
+    if (!existsSync(backup)) {
+      if (!existsSync(entry)) throw new Error(`bridge entry not found: ${entry}`);
+      copyFileSync(entry, `${backup}.tmp`);
+      renameSync(`${backup}.tmp`, backup);
+    }
+    writeFileSync(`${entry}.qa-tmp`, bundle, { mode: 0o644 });
+    renameSync(`${entry}.qa-tmp`, entry);
+  } catch (error) {
+    rmSync(lockFile, { force: true });
+    throw error;
+  }
   return () => {
+    // Only the owner restores; a later swap's lock is not this one's to drop.
+    if (readHostFakeEntryLock(directory)?.token !== lock.token) return;
     if (existsSync(backup)) renameSync(backup, entry);
+    rmSync(lockFile, { force: true });
   };
 }
 

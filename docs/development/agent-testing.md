@@ -1017,7 +1017,13 @@ runs on a real model under `ORKESTRATOR_AGENT_TEST_REVIEW=1`. Claude and
 Cursor run with no login and nothing billed under
 `ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1`: Claude's real CLI on a scripted
 loopback model, Cursor's real bridge over its fake SDK, which the case swaps in
-for `bridges/cursor-bridge/dist/index.js` and puts back afterwards:
+for `bridges/cursor-bridge/dist/index.js` and puts back afterwards. That entry
+is shared by every profile started from the checkout, so the swap holds an
+owner lock (`dist/index.qa-lock.json`) and a second run is refused while the
+first is alive; the bundle runs the fake only for the owning profile's bridges,
+and any other profile's launch runs the real entry kept as
+`dist/index.qa-real.js`. Claude's scripted model appends the marker once per
+delivered steer, so a duplicate delivery fails the case:
 
 ```bash
 mise run dev:test --profile steer7 --fixture --no-agent-credentials --no-host-seed \

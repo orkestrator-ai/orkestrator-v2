@@ -866,19 +866,29 @@ steer must have reached the agent exactly once.
   (a), as the warm-CLI run (task 8) did: the CLI's own handling of a
   `priority: "now"` steer is part of what is proved. The script
   (`steer-inactive-fake-claude.ts`) writes the ready file, keeps the turn
-  running with short `sleep` calls, and appends the steer's marker once,
-  looking for the steer in every user text of the request because the CLI
-  decides where mid-turn input goes. Its decisions are pinned by
-  `steer-inactive-fake-claude.test.ts`.
+  running with short `sleep` calls, and appends the steer's marker once per
+  delivery, looking for the steer in every user text of the request because
+  the CLI decides where mid-turn input goes. The request carries the whole
+  conversation, so the number of steer texts in it is the number of
+  deliveries; a duplicated steer makes a second append and the case's
+  exactly-once check on `.qa-queued-received` fails (review round 1). Its
+  decisions are pinned by `steer-inactive-fake-claude.test.ts`.
 - **Cursor's engine.** Options: (a) swap the profile's Cursor bridge entry
   (`bridges/cursor-bridge/dist/index.js`, what the host launch runs) for a
   bundle of the bridge over its fake SDK for the length of the case, as the
   Docker cells swap the image's entry (0001 task 8); (b) a test-only launch
   override in the backend. Chose (a): production launch code stays unaware of
   the fake. The cost is a write to the checkout's build output; the real
-  entry is kept beside it (`index.js.qa-real`) and put back in `finally`, a
+  entry is kept beside it (`index.qa-real.js`) and put back in `finally`, a
   backup left by a killed run is kept and restored by the next run, and the
   profile's bridge-build check reports a stale entry before any later run.
+  Every profile started from the checkout launches that one entry, so (review
+  round 1) the swap holds an owner lock (`index.qa-lock.json`, created
+  exclusively; a live owner refuses a second run, a dead owner's lock is taken
+  over) and the bundle serves the fake only to bridges whose
+  `CURSOR_BRIDGE_STATE_DIR` is inside the owner's data directory; any other
+  launch imports the real entry. A per-profile bridge path would need a
+  launch seam in the backend, which option (b) already rejected.
   The new host entry (`src/testing/host-fake-engine-server.ts`) keeps the
   fake's store in the environment's own `CURSOR_BRIDGE_STATE_DIR`, and the
   fake SDK now records each steer's text on the run, so the case counts what

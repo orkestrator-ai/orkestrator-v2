@@ -1,18 +1,27 @@
 import { afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  hostFakeEntryServes,
+  LOCK_FILE_NAME,
+  readHostFakeEntryLock,
+  REAL_ENTRY_NAME,
+} from "../../bridges/cursor-bridge/src/testing/host-fake-entry-lock";
+import {
+  bundleHostFakeCursorBridge,
   fakeCursorStorePath,
   fakeCursorTurns,
   readyPrompt,
-  REAL_ENTRY_SUFFIX,
   selectedSteerPlatforms,
   steerPrompt,
   steersCarrying,
   swapBridgeEntry,
 } from "./steer-inactive-live-support";
 import { steerStep } from "./steer-inactive-fake-claude";
+
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 const directories: string[] = [];
 afterEach(() => {
@@ -25,35 +34,120 @@ function scratch(): string {
   return directory;
 }
 
-test("the swap puts the bundle in place and restore brings the real entry back", () => {
-  const entry = path.join(scratch(), "index.js");
+/** A dist directory with a real entry, and the profile data directory a swap serves. */
+function distWithEntry(): { entry: string; dist: string; backup: string; lock: string } {
+  const dist = scratch();
+  const entry = path.join(dist, "index.js");
   writeFileSync(entry, "real bridge");
-  const restore = swapBridgeEntry(entry, "fake bridge");
+  return {
+    entry,
+    dist,
+    backup: path.join(dist, REAL_ENTRY_NAME),
+    lock: path.join(dist, LOCK_FILE_NAME),
+  };
+}
+
+test("the swap puts the bundle in place and restore brings the real entry back", () => {
+  const { entry, dist, backup, lock } = distWithEntry();
+  const restore = swapBridgeEntry(entry, "fake bridge", "/profiles/a");
   expect(readFileSync(entry, "utf8")).toBe("fake bridge");
-  expect(readFileSync(`${entry}${REAL_ENTRY_SUFFIX}`, "utf8")).toBe("real bridge");
+  expect(readFileSync(backup, "utf8")).toBe("real bridge");
+  expect(readHostFakeEntryLock(dist)).toMatchObject({ pid: process.pid, dataDir: "/profiles/a" });
   restore();
   expect(readFileSync(entry, "utf8")).toBe("real bridge");
-  expect(existsSync(`${entry}${REAL_ENTRY_SUFFIX}`)).toBe(false);
+  expect(existsSync(backup)).toBe(false);
+  expect(existsSync(lock)).toBe(false);
   // A second restore has nothing left to do.
   restore();
   expect(readFileSync(entry, "utf8")).toBe("real bridge");
 });
 
 test("a backup left by an interrupted run is kept as the real entry", () => {
-  const entry = path.join(scratch(), "index.js");
-  writeFileSync(`${entry}${REAL_ENTRY_SUFFIX}`, "real bridge");
+  const { entry, backup, lock } = distWithEntry();
+  writeFileSync(backup, "real bridge");
   writeFileSync(entry, "stale fake bridge");
-  const restore = swapBridgeEntry(entry, "fake bridge");
-  expect(readFileSync(`${entry}${REAL_ENTRY_SUFFIX}`, "utf8")).toBe("real bridge");
+  // The killed run's lock names a process that is gone.
+  writeFileSync(lock, JSON.stringify({ pid: 2_147_483_000, dataDir: "/profiles/old", token: "x" }));
+  const restore = swapBridgeEntry(entry, "fake bridge", "/profiles/a");
+  expect(readFileSync(backup, "utf8")).toBe("real bridge");
   restore();
+  expect(readFileSync(entry, "utf8")).toBe("real bridge");
+  expect(existsSync(lock)).toBe(false);
+});
+
+test("a second run is refused while the first owns the swap, and cannot restore under it", () => {
+  const { entry, dist } = distWithEntry();
+  const first = swapBridgeEntry(entry, "fake bridge A", "/profiles/a");
+  expect(() => swapBridgeEntry(entry, "fake bridge B", "/profiles/b")).toThrow(
+    "swapped by another run",
+  );
+  // The refused run changed nothing: the owner's fake and lock are in place.
+  expect(readFileSync(entry, "utf8")).toBe("fake bridge A");
+  expect(readHostFakeEntryLock(dist)?.dataDir).toBe("/profiles/a");
+  first();
+  expect(readFileSync(entry, "utf8")).toBe("real bridge");
+  // Once released, the next run may take it.
+  const second = swapBridgeEntry(entry, "fake bridge B", "/profiles/b");
+  expect(readFileSync(entry, "utf8")).toBe("fake bridge B");
+  // The first run's restore is not the second's: it leaves the second's swap alone.
+  first();
+  expect(readFileSync(entry, "utf8")).toBe("fake bridge B");
+  second();
   expect(readFileSync(entry, "utf8")).toBe("real bridge");
 });
 
 test("a missing entry is refused before anything is written", () => {
-  const entry = path.join(scratch(), "index.js");
-  expect(() => swapBridgeEntry(entry, "fake bridge")).toThrow("bridge entry not found");
+  const dist = scratch();
+  const entry = path.join(dist, "index.js");
+  expect(() => swapBridgeEntry(entry, "fake bridge", "/profiles/a")).toThrow(
+    "bridge entry not found",
+  );
   expect(existsSync(entry)).toBe(false);
+  expect(existsSync(path.join(dist, LOCK_FILE_NAME))).toBe(false);
 });
+
+test("the fake serves only bridges inside the owning profile's data directory", () => {
+  const lock = { pid: 1, dataDir: "/profiles/a", token: "t" };
+  expect(hostFakeEntryServes(lock, "/profiles/a/cursor-bridge-state/env-1")).toBe(true);
+  expect(hostFakeEntryServes(lock, "/profiles/b/cursor-bridge-state/env-1")).toBe(false);
+  expect(hostFakeEntryServes(lock, "/profiles/ab/cursor-bridge-state/env-1")).toBe(false);
+  expect(hostFakeEntryServes(lock, "/profiles/a")).toBe(false);
+  expect(hostFakeEntryServes(lock, undefined)).toBe(false);
+  expect(hostFakeEntryServes(null, "/profiles/a/cursor-bridge-state/env-1")).toBe(false);
+});
+
+test("the bundle runs the real entry for any other profile, and when no swap owns it", () => {
+  const dist = scratch();
+  const entry = path.join(dist, "index.js");
+  writeFileSync(entry, bundleHostFakeCursorBridge(repositoryRoot));
+  const ranReal = path.join(dist, "ran-real");
+  writeFileSync(
+    path.join(dist, REAL_ENTRY_NAME),
+    `require("node:fs").writeFileSync(${JSON.stringify(ranReal)}, process.env.CURSOR_BRIDGE_STATE_DIR ?? "");`,
+  );
+  const run = (stateDir: string) => {
+    rmSync(ranReal, { force: true });
+    const result = spawnSync("bun", [entry], {
+      env: { ...process.env, CURSOR_BRIDGE_STATE_DIR: stateDir },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return existsSync(ranReal) ? readFileSync(ranReal, "utf8") : null;
+  };
+  // No lock: the swap has been released (or never taken).
+  expect(run(path.join(dist, "profiles", "a", "state"))).toBe(
+    path.join(dist, "profiles", "a", "state"),
+  );
+  // Another profile's bridge while profile a owns the swap.
+  writeFileSync(
+    path.join(dist, LOCK_FILE_NAME),
+    JSON.stringify({ pid: process.pid, dataDir: path.join(dist, "profiles", "a"), token: "t" }),
+  );
+  expect(run(path.join(dist, "profiles", "b", "state"))).toBe(
+    path.join(dist, "profiles", "b", "state"),
+  );
+}, 60_000);
 
 test("Codex keeps its own opt-in; Claude and Cursor run scripted or, when named, real", () => {
   expect([...selectedSteerPlatforms({})]).toEqual([]);

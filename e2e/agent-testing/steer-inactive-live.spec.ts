@@ -143,6 +143,7 @@ async function prepareEngine(
     const restore = swapBridgeEntry(
       cursorBridgeEntry(repositoryRoot),
       bundleHostFakeCursorBridge(repositoryRoot),
+      status.dataDir!,
     );
     return async () => restore();
   }

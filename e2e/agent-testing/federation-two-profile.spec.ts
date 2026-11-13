@@ -20,8 +20,9 @@
  *   up: within `ACTIVITY_LAG_BUDGET_MS` of the leaf's backend, far inside the
  *   60 s reconcile that would otherwise be the only path.
  * - **Per-node relayed events** (to-do 5840 (retired) task 1). The command
- *   page's streams are recorded (an init script wraps `EventSource`; frames
- *   are reduced to names, node ids and kinds). The main stream must carry no
+ *   page's streams are recorded (an init script wraps `EventSource`, and
+ *   `frameFacts` reduces each frame to names, node ids and kinds before
+ *   anything is compared or written). The main stream must carry no
  *   relayed frame, a relayed stream must name the leaf, and under a flood of
  *   leaf file changes the relayed ring must move while the main ring barely
  *   does. Then the tab goes away (hidden, offline, streams dropped) while the
@@ -60,6 +61,7 @@ import {
   PI_PROVIDER,
   FAKE_MODEL_ID,
   describeStream,
+  frameFacts,
   isRelayedFrame,
   lagSummary,
   legacyMainStreamUrl,
@@ -99,6 +101,8 @@ const ACTIVITY_LAG_BUDGET_MS = 10_000;
 const ACTIVITY_CYCLES = 3;
 const FLOOD_WRITES = 40;
 const VIEW_TIMEOUT_MS = 60_000;
+/** How long a dispatched turn may take to reach the fake model (a cold Pi start included). */
+const DISPATCH_TIMEOUT_MS = 180_000;
 const LEAF_NAME = "Leaf two-profile";
 const COMMAND_NAME = "Command two-profile";
 const LEAF_TAB = "federation-two-profile-pi";
@@ -106,6 +110,8 @@ const LEGACY_COUNTER = "relayed-node-event.legacy-stream";
 
 type Identity = { environmentId: string; agent: "pi"; logicalSessionKey: string };
 type Calls = { completions: number; refused: number; heldTotal: number; held: number };
+/** A stream as the page recorded it: raw `data` fields, bounded, never written anywhere. */
+type PageStream = { url: string; total: number; data: string[]; closed: boolean };
 type RecordedStream = { url: string; total: number; frames: FrameFacts[]; closed: boolean };
 type RingStats = { latestRevision: number };
 
@@ -118,15 +124,18 @@ test.skip(
 );
 
 /**
- * Runs in every page before the app: records each `EventSource` and its
- * frames (event name, relayed node id, kind and inner event name only), and
- * lets the spec hide the document and drop every stream. Self-contained,
- * because Playwright serialises it into the page.
+ * Runs in every page before the app: records each `EventSource` and the raw
+ * `data` of its frames (bounded by count and bytes), and lets the spec hide
+ * the document and drop every stream. The spec reduces the data with the
+ * unit-tested `frameFacts` (`recordedStreams`), so the raw strings stay in
+ * page and test memory and never reach an artifact. Self-contained, because
+ * Playwright serialises it into the page.
  */
 function installStreamRecorder(): void {
-  type Frame = { event: string; nodeId?: string; relayedKind?: string; relayedEvent?: string };
-  type Stream = { url: string; total: number; frames: Frame[]; closed: boolean };
+  type Stream = { url: string; total: number; data: string[]; closed: boolean };
   const MAX_FRAMES = 4_000;
+  const MAX_BYTES = 16 * 1024 * 1024;
+  let bytes = 0;
   const qa = {
     streams: [] as Stream[],
     sources: new Set<EventSource>(),
@@ -152,7 +161,7 @@ function installStreamRecorder(): void {
   class RecordingEventSource extends NativeEventSource {
     constructor(url: string | URL, init?: EventSourceInit) {
       super(url, init);
-      const stream: Stream = { url: String(url), total: 0, frames: [], closed: false };
+      const stream: Stream = { url: String(url), total: 0, data: [], closed: false };
       qa.streams.push(stream);
       records.set(this, stream);
       qa.sources.add(this);
@@ -177,20 +186,10 @@ function installStreamRecorder(): void {
               const stream = records.get(source);
               if (stream && typeof message.data === "string") {
                 stream.total += 1;
-                try {
-                  const parsed = JSON.parse(message.data) as { event?: unknown; payload?: unknown };
-                  if (typeof parsed.event === "string" && stream.frames.length < MAX_FRAMES) {
-                    const frame: Frame = { event: parsed.event };
-                    if (parsed.event.startsWith("relayed-node-event")) {
-                      const relayed = (parsed.payload ?? {}) as Record<string, unknown>;
-                      if (typeof relayed.nodeId === "string") frame.nodeId = relayed.nodeId;
-                      if (typeof relayed.kind === "string") frame.relayedKind = relayed.kind;
-                      if (typeof relayed.event === "string") frame.relayedEvent = relayed.event;
-                    }
-                    stream.frames.push(frame);
-                  }
-                } catch {
-                  // Not a gateway frame; counted only.
+                // Past either bound a frame is counted only.
+                if (stream.data.length < MAX_FRAMES && bytes + message.data.length <= MAX_BYTES) {
+                  bytes += message.data.length;
+                  stream.data.push(message.data);
                 }
               }
               return handler.call(this, message);
@@ -216,12 +215,17 @@ function installStreamRecorder(): void {
   });
 }
 
+/** A page's streams, each frame reduced by `frameFacts`; frames that are not gateway frames are dropped. */
 async function recordedStreams(page: Page): Promise<RecordedStream[]> {
-  return page.evaluate(() =>
-    (
-      window as unknown as { __federationQa: { streams: RecordedStream[] } }
-    ).__federationQa.streams.map((stream) => ({ ...stream, frames: [...stream.frames] })),
+  const streams = await page.evaluate(() =>
+    (window as unknown as { __federationQa: { streams: PageStream[] } }).__federationQa.streams.map(
+      (stream) => ({ ...stream, data: [...stream.data] }),
+    ),
   );
+  return streams.map(({ data, ...stream }) => ({
+    ...stream,
+    frames: data.map(frameFacts).filter((facts): facts is FrameFacts => facts !== null),
+  }));
 }
 
 /** What a page's streams carried, by kind; the facts only, never a URL. */
@@ -238,7 +242,9 @@ async function streamFacts(page: Page, leafNodeId: string) {
     mainStreams: main.length,
     relayedStreams: relayed.length,
     openRelayedStreams: relayed.filter((stream) => !stream.closed).length,
-    relayedFiltersNameLeaf: relayed.every((stream) => stream.relayedNodes.includes(leafNodeId)),
+    // False with no relayed stream at all, so an empty list never passes.
+    relayedFiltersNameLeaf:
+      relayed.length > 0 && relayed.every((stream) => stream.relayedNodes.includes(leafNodeId)),
     mainFrames: mainFrames.length,
     mainRelayedFrames: mainFrames.filter(isRelayedFrame).length,
     mainLegacyFromLeaf: mainFrames.filter(
@@ -490,7 +496,7 @@ async function dispatchHeldTurn(label: string): Promise<number> {
   });
   await expect
     .poll(async () => (await calls(model.origin)).heldTotal, {
-      timeout: 180_000,
+      timeout: DISPATCH_TIMEOUT_MS,
       message: `the ${label} turn never reached the fake model`,
     })
     .toBe(heldBefore + 1);
@@ -505,18 +511,30 @@ async function leafActivity(): Promise<string> {
   return environment.agentActivityState ?? "idle";
 }
 
-/** When the leaf's backend, its own row and the command node's row each first show `state`. */
-async function observeTransition(page: Page, state: "working" | "idle", startedAt: number) {
+/**
+ * When the leaf's backend, its own row and the command node's row each first
+ * show `state`. Call it while all three still show the other state and
+ * before the action that changes it (`whileObserving`), so no transition can
+ * happen before the polls are running.
+ */
+async function observeTransition(
+  page: Page,
+  state: "working" | "idle",
+  startedAt: number,
+  timeoutMs = VIEW_TIMEOUT_MS,
+) {
   const { leafPage, leafEnvironment } = s();
   const [backendAt, leafRowAt, commandRowAt] = await Promise.all([
-    firstSeen(`leaf backend ${state}`, async () => (await leafActivity()) === state),
+    firstSeen(`leaf backend ${state}`, async () => (await leafActivity()) === state, timeoutMs),
     firstSeen(
       `leaf row ${state}`,
       async () => (await markerState(leafPage, leafEnvironment.name)) === state,
+      timeoutMs,
     ),
     firstSeen(
       `command row ${state}`,
       async () => (await markerState(page, leafEnvironment.name)) === state,
+      timeoutMs,
     ),
   ]);
   return {
@@ -527,6 +545,25 @@ async function observeTransition(page: Page, state: "working" | "idle", startedA
     commandBehindBackendMs: commandRowAt - backendAt,
     commandBehindLeafRowMs: commandRowAt - leafRowAt,
   };
+}
+
+/**
+ * Arms the observers for `state`, then runs `action` (the dispatch or the
+ * release) alongside them, and resolves with both once the transition is
+ * seen everywhere and the action has finished.
+ */
+async function whileObserving(
+  page: Page,
+  state: "working" | "idle",
+  action: () => Promise<unknown>,
+  timeoutMs?: number,
+) {
+  const startedAt = Date.now();
+  const [step] = await Promise.all([
+    observeTransition(page, state, startedAt, timeoutMs),
+    action(),
+  ]);
+  return step;
 }
 
 async function openContext(browser: Browser, record: boolean): Promise<BrowserContext> {
@@ -647,17 +684,23 @@ test("a remote row's activity keeps up with the leaf's own row (2190 task 3)", a
   await expect.poll(() => markerState(commandPage, leafEnvironment.name)).toBe("idle");
   const transitions: Array<Awaited<ReturnType<typeof observeTransition>>> = [];
   for (let cycle = 1; cycle <= ACTIVITY_CYCLES; cycle += 1) {
-    const dispatchedAt = await dispatchHeldTurn(`activity-${cycle}`);
-    transitions.push(await observeTransition(commandPage, "working", dispatchedAt));
+    // Observers are armed while every view is idle, before the dispatch, and
+    // the first cold Pi start may take as long as the dispatch's own wait.
+    transitions.push(
+      await whileObserving(
+        commandPage,
+        "working",
+        () => dispatchHeldTurn(`activity-${cycle}`),
+        DISPATCH_TIMEOUT_MS,
+      ),
+    );
     const label = await sidebarEnvironmentRow(commandPage, leafEnvironment.name).getAttribute(
       "aria-label",
     );
     expect(label, "the remote row announces the leaf and its activity").toMatch(
       new RegExp(`, on ${LEAF_NAME}, Working$`),
     );
-    const releasedAt = Date.now();
-    await release(model.origin);
-    transitions.push(await observeTransition(commandPage, "idle", releasedAt));
+    transitions.push(await whileObserving(commandPage, "idle", () => release(model.origin)));
   }
   summary.activity = {
     transitions,
@@ -748,9 +791,21 @@ test("relayed events arrive per node with a busy leaf and an inactive tab (5840 
   await expect
     .poll(() => markerState(commandPage, leafEnvironment.name), { timeout: VIEW_TIMEOUT_MS })
     .toBe("idle");
+  // The reload must reopen the relayed path, not merely leave nothing to check.
+  await expect
+    .poll(async () => (await streamFacts(commandPage, leafNodeId)).openRelayedStreams, {
+      timeout: VIEW_TIMEOUT_MS,
+      message: "a relayed stream reopened after the reload",
+    })
+    .toBeGreaterThan(0);
   const afterReload = await streamFacts(commandPage, leafNodeId);
+  expect(afterReload.relayedStreams, "the reloaded page opened a relayed stream").toBeGreaterThan(
+    0,
+  );
   expect(afterReload.mainRelayedFrames).toBe(0);
-  expect(afterReload.relayedFiltersNameLeaf).toBe(true);
+  expect(afterReload.relayedFiltersNameLeaf, "every relayed stream's filter names the leaf").toBe(
+    true,
+  );
   const after = await metrics(command);
   summary.relayed = {
     badges: { first, flooded, back, reloaded },

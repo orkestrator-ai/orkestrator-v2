@@ -110,7 +110,14 @@ describe("frameFacts", () => {
     expect(frameFacts(JSON.stringify({ event: "resource-changed", payload: { id: "e" } }))).toEqual(
       { event: "resource-changed" },
     );
+    // Only the exact old name or the per-node prefix is relayed.
+    expect(
+      frameFacts(
+        JSON.stringify({ event: "relayed-node-events", payload: { nodeId: "leaf", kind: "x" } }),
+      ),
+    ).toEqual({ event: "relayed-node-events" });
     expect(frameFacts("not json")).toBeNull();
+    expect(frameFacts("null")).toBeNull();
     expect(frameFacts(JSON.stringify({ payload: 1 }))).toBeNull();
   });
 
@@ -118,6 +125,7 @@ describe("frameFacts", () => {
     expect(isRelayedFrame({ event: "relayed-node-event" })).toBe(true);
     expect(isRelayedFrame({ event: "relayed-node-event:leaf" })).toBe(true);
     expect(isRelayedFrame({ event: "resource-changed" })).toBe(false);
+    expect(isRelayedFrame({ event: "relayed-node-events" })).toBe(false);
   });
 });
 

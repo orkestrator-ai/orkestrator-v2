@@ -126,7 +126,11 @@ export interface FrameFacts {
   relayedEvent?: string;
 }
 
-/** Reads one SSE `data` field; null for anything that is not a gateway frame. */
+/**
+ * Reads one SSE `data` field; null for anything that is not a gateway frame.
+ * The spec's stream recorder keeps raw `data` in the page and reduces every
+ * frame through this before comparing or writing anything.
+ */
 export function frameFacts(data: string): FrameFacts | null {
   let parsed: unknown;
   try {

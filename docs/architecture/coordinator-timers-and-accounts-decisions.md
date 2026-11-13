@@ -1,19 +1,19 @@
-# Coordinator self-timers and provider-account switching
+# Coordinator self-timers and account switching: decisions
 
-## Task analysis
+Status: Living — what was built for coordinator self-timers, usage limits and
+provider-account switching, where each part is tested, and the decisions
+behind it. Folded in from to-do 1000 (retired 2026-11-13, once its last agent
+task, the live suite's `account-switch` scenario, was built; read it with
+`git show 17d28238c:docs/todo/coordinator-and-multi-review/1000-coordinator-self-timers-and-account-switching.md`).
+The behaviour itself is described in
+[agent-accounts.md](agent-accounts.md#coordinator-switching) and
+[scheduled-jobs.md](scheduled-jobs.md). The live runs still owed (the
+scenario's billed run on real Claude and Codex coordinators, and real
+providers' usage-limit signals) are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+cited as `1000 (retired)`.
 
-Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against `main` at `69a3b4ca5` for tasks 5 to 8, which were then built.
-
-### Tasks
-
-1. **Self-timers on the existing scheduler**: `create_schedule` action type `remind_me`, delivered to the setting conversation, relative and absolute times in the user's zone, limits, restart persistence. Status: done.
-2. **List and switch provider accounts**: `list_provider_accounts` and `switch_provider_account` through the Settings switch path, with a user-approved request by default and a self-timer permission as the one exception. Status: done.
-3. **Usage-limit reader**: `get_usage_limits` across the project's environments without bridge or transcript reads. Status: done.
-4. **Account-switch scenario in the live suite**: an `account-switch` scenario in `coordinator-live.ts` that seeds a usage-limit turn outcome and two fake account directories in the disposable profile and checks the coordinator sets a timer, is woken, lists, and files (or, with a granted timer, makes) a switch; tested over a scripted transport. Status: open (1, 2 and 3 are done). Its billed run on a real Claude and Codex coordinator moved to the manual-test checklist on 2026-11-10.
-5. **Structured usage-limit signal from the bridges**: carry Codex's `usageLimitExceeded` code and Claude's rate-limit status to the backend instead of classifying error text. Status: done (2026-11-05; no live provider has sent either signal yet; the real-provider check is on the manual-test checklist).
-6. **The user's zone when the coordinator's machine is not the user's**: absolute times use the backend host's zone. Status: done (2026-11-05).
-7. **Show a timer's permission and a coordinator's switches to the user**: Settings → Schedules and the account views do not mark either. Status: done (2026-11-05; switches under the standing permission were already shown since 2026-11-04).
-8. **Resume limited workers after a switch**: the coordinator must prompt each limited tab itself. Status: done (2026-11-05, the recommended option: the coordinator resumes, guided by the tool results).
+## What was built
 
 ### 1. Self-timers on the existing scheduler
 
@@ -49,12 +49,16 @@ Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against 
 
 **Problem.** No real coordinator has used these tools.
 
-**Context.** The live coordinator suite (`apps/desktop/scripts/dev/coordinator-live.ts`) has scenarios `read-only`, `async`, `family`, `status`, `peer`.
+**Context.** The live coordinator suite (`apps/desktop/scripts/dev/coordinator-live.ts`); see [Live coordinator suite](../development/agent-testing.md#live-coordinator-suite).
 
 **Investigation.** A real run needs two signed-in logins of one provider in an isolated profile, and a worker that genuinely hits a usage limit, which cannot be produced on demand without spending a plan. The parts that can be qualified cheaply are: the model choosing `remind_me` with the right body for the scenario prompt, the timer waking it, `get_usage_limits` on a seeded failed turn outcome, and the approval request appearing in the real dialog.
 
-This task builds the scenario; its billed run on real Claude and Codex
-coordinators is on the manual-test checklist.
+Built 2026-11-13 as the recommended option below: the `account-switch`
+scenario (the `account-switch` case under "Live coordinator suite" in
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite)),
+tested over a scripted transport (`coordinator-live-account-switch.test.ts`).
+Its billed run on real Claude and Codex coordinators is on the manual-test
+checklist, cited as `1000 (retired)` task 4.
 
 **Decisions.**
 
@@ -182,7 +186,7 @@ Added 2026-11-04 after two approval requests waited about 4.5 hours overnight wh
 
 - **Options.** (a) Keep only the self-timer permission. (b) A per-provider Settings tick, held on the coordinator's machine, covering its switches there and on the machines it controls. (c) The same tick, plus a per-target-machine list.
 - **Choice.** (b), with guardrails: signed-in target only, never one whose reading shows a used-up window, at most 3 per target machine and provider per rolling hour (then an approval request with `askedBecause`). Each switch is recorded as an executed `switch-agent-account` request (`authorizedBy: "standing-grant"`), toasted, and listed under the tick. It pins like any manual switch.
-- **Why.** (a) needs the user to foresee the night. (c) adds a list nobody asked for: the user's case was two machines at once, and Settings' machine picker already lets a leaf hold its own choice for its own coordinators. Recording as a request reuses task 7's recommended history and gives the limit a durable count. See [agent-accounts.md](../../architecture/agent-accounts.md#switching-without-asking).
+- **Why.** (a) needs the user to foresee the night. (c) adds a list nobody asked for: the user's case was two machines at once, and Settings' machine picker already lets a leaf hold its own choice for its own coordinators. Recording as a request reuses task 7's recommended history and gives the limit a durable count. See [agent-accounts.md](agent-accounts.md#switching-without-asking).
 - **Evidence per acceptance criterion** (ticket b5ebc08b). Backend tests are in `apps/backend/src/core/coordinator-account-switch-grant.test.ts` ("grant test") unless named otherwise; all use fake accounts.
 
   | Criterion | Where it is built | Test |
@@ -242,7 +246,35 @@ Added 2026-11-04 after two approval requests waited about 4.5 hours overnight wh
 - **Choice.** (a). A switch that ran returns `limitedTabs` (that provider's limited tabs of this project on that machine) and a `resumeStep`; an approved switch's mail says to read them with `get_usage_limits`; the coordinator rule names the step.
 - **Why.** As recommended: no automation that spends turns on its own, and the switch stays easy to approve. Listing only that provider's tabs, from the outcome's structured kind where the bridge gave one, guards against prompting a tab that was not limited.
 
-## Current state
+### Seeding the scenario (task 4)
+
+- **How the usage limit is produced.** Options: (a) append a usage-limit
+  turn outcome to a real worker's stored session from outside the backend;
+  (b) write a whole synthetic session row; (c) wait for a real limit. Chose
+  (a): the worker is a real tab with one finished turn, and only its newest
+  outcome is added (`appendNativeAgentTurnOutcome` in
+  `storage-test-support.ts`, reached through `e2e/agent-testing/backend-store.ts`),
+  so the session row stays one the backend wrote. A running backend observes
+  it through the store's committed revision, which
+  `storage-test-support-turn-outcome.test.ts` checks against the usage-limit
+  reader. (b) would have to reproduce the row's ownership and provider
+  fields; (c) is the plan the decision above rejects.
+- **Which accounts.** One extra signed-in fixture account for the
+  coordinator's own platform, added to the profile's registry beside the
+  existing ones, with the active account unchanged; the registry is written
+  back exactly afterwards, which also undoes the switch and its pin. The case
+  runs only on Claude and Codex, the platforms with accounts. Switching the
+  active account to a fixture login would break the coordinator's next turn,
+  so the granted switch is the last step of the case and the registry is
+  restored before anything else runs.
+- **Both permission paths in one case.** A `request` phase (no permission:
+  a pending request, which the harness rejects so nothing changes) and a
+  `granted` phase (a timer set in a user-started turn with the user's
+  permission: the switch runs at once and is recorded as the timer's). The
+  approval itself is answered with `resolve_node_action_request` rather than
+  in the dialog; the dialog is part of the billed run on the checklist.
+
+## Behaviour in brief
 
 A coordinator can set a timer that prompts itself later ("in 2 hours", "at
 14:30"), find workers that stopped on a provider usage limit, list the
@@ -269,24 +301,19 @@ may switch accounts is marked in Settings → Schedules and the switches it
 allows are recorded and shown with the account; and a switch tells the
 coordinator exactly which tabs to resume.
 
-## Outstanding work
-
-Task 4 above: the `account-switch` scenario (its billed run is on the
-manual-test checklist).
-
 ## Constraints and rationale
 
 - Never write a credential: every switch is `set_active_agent_account`.
 - Tests use fakes only: no real `~/.claude`, `~/.codex` or `~/.pi`, no billed turns.
 
-## Needs verification
+## Known gaps
 
 - Task 6 has no browser check: the renderer change is a field on two requests, covered by unit tests.
 
 ## Related
 
-- [agent-accounts.md](../../architecture/agent-accounts.md#machines) ("Preferred login"; to-do 0722's decision (c), retired 2026-11-10), why a switch is the user's act.
-- [agent-accounts.md](../../architecture/agent-accounts.md), to-do 0003 (retired 2026-11-13).
-- [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md), where task 4's scenario would live.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 4: its billed live run; the real-provider check of task 5's usage-limit signals) moved there on 2026-11-10.
+- [agent-accounts.md](agent-accounts.md#machines) ("Preferred login"; to-do 0722's decision (c), retired 2026-11-10), why a switch is the user's act.
+- [agent-accounts.md](agent-accounts.md), to-do 0003 (retired 2026-11-13).
+- [0024-coordinator-live-conformance.md](../development/coordinator-live-conformance.md), where task 4's scenario would live.
+- [Manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md): the human-only parts of to-do 1000 (the billed run of task 4's scenario; the real-provider check of task 5's usage-limit signals), cited as `1000 (retired)`. Record their results in this file.
 - `docs/architecture/scheduled-jobs.md` (Self-timers), `docs/architecture/agent-accounts.md` (Coordinator switching), `docs/architecture/coordinator.md`.

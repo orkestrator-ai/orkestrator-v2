@@ -3361,7 +3361,12 @@ one (`routing`), that a coordinator under the default research setting reaches
 its research MCP server (`research`), that each worker-surface tool works on a
 worker of this node and the root-changes approval copies the user's file into
 it (`surfaces`, Claude only), that each tool from the coordinator gap review
-works against a real worker (`gap-tools`), and that peer mail between two ordinary environments wakes
+works against a real worker (`gap-tools`), that a coordinator can launch a
+worker and ask the user a question in the same turn (`ask`), that each tab of
+one environment sees itself as its own mailbox, takes `idle`-policy mail and
+keeps a resumed conversation under its own credential (`identity`), that a
+coordinator's self-timer wakes it to read a usage limit and switch accounts
+(`account-switch`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -3815,6 +3820,121 @@ approvals answered, through that node's backend. `mise run test:agent:coordinato
 
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
 `deliver-now`, `goal`, `routing`, `surfaces`, `gap-tools` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+The `ask` case (to-do 6940 task 1, retired) shows a real model choosing to ask
+the user a question while its turn already holds a delegation, which the
+fake-provider check in `e2e/InteractionPolicyChecks.spec.ts` cannot. One
+build-mode turn calls `get_launch_options` and `launch_environment`, then, in
+the same turn and without waiting, asks one single-choice question with two
+options, `north-<token>` and `south-<token>`, through the provider's own
+question tool, and ends with a `COORDINATOR_LIVE_ASK {"choice":…}` line:
+
+```bash
+mise run test:agent:coordinator --credential-source claude --scenario ask
+```
+
+The harness answers the card through `resolve_native_agent_interaction` with
+the second option, so a model that takes the first or its own recommendation
+is caught, then lets the worker's wake run and settle. It passes when there is
+exactly one `launch_environment` call with `delivery: "async"`, exactly one
+question was answered, the worker's delegation was already open when the
+question reached the harness, the question came in the launch's own turn, the
+reported choice is the answered option, and no
+approval or other question reached the harness. "The launch's own turn" is
+judged from turn identity first: no coordinator turn may have been finalized
+(a new `contextUsage.turns` id) between the dispatch and the question, which
+catches a turn that ended, and the next that started, between two reads. The
+phase is a second signal, counted only when it reads idle twice in a row, the
+rule the turn watch settles on, because a provider can drop to idle for one
+read between two steps of the same turn. A question that does not
+offer both labels is not answered: it is cancelled and fails as escaped. Pi
+and Cursor raise no question interactions, so they are skipped with that
+reason (`ASK_QUESTION_SUPPORT`); Codex parks a question only with
+`default_mode_request_user_input`, which the bridge turns on for every policy
+but a pipeline's. The prompt and verdict are in `coordinator-live-ask.ts`;
+`coordinator-live-ask.test.ts` runs the orchestration over a scripted command
+transport.
+
+The `identity` case (to-do 0024 task 6, retired; see
+[coordinator-live-conformance.md](coordinator-live-conformance.md)) needs no
+coordinator. The harness makes one local environment with three agent tabs in
+its pane layout (a tab has a mailbox only once it is in the layout):
+
+```bash
+mise run test:agent:coordinator --credential-source cursor --scenario identity
+```
+
+1. The first two tabs each call `list_mailboxes` once. Each result must mark
+   exactly one mailbox `self`, and it must be that tab. The first tab is also
+   given a code word to remember.
+2. The second tab's inject policy is set to `idle` (`mute_agent_mail`, put
+   back to `inherit` afterwards) and the harness sends it mail as the user
+   (`send_agent_mail`). User mail follows the tab's policy alone, so under the
+   default `off` it would be held: the mail must be `injected` and start a turn
+   that writes the `COORDINATOR_LIVE_IDENTITY_IDLE` line.
+3. The first tab's conversation is resumed in the third tab
+   (`resume_native_agent_session`). A tab's Agent MCP credential is per tab, so
+   the bridge resumes the same provider session with a new `agentMcp`. The
+   third tab's `list_mailboxes` must mark the third tab `self`, its provider
+   session must be the first tab's, and it must repeat the first turn's code
+   word.
+
+Any approval or question in those turns is denied or cancelled and fails the
+case. It runs on every platform; the billed Cursor and Grok runs are on the
+manual-test checklist. That a Cursor resume keeps the same SDK agent object,
+and that a rotated Grok token reloads only its own session's child, are
+visible only inside the bridges, where `bridges/cursor-bridge/src/agent-session.test.ts`
+and `bridges/acp-bridge/src/acp-session-sibling-isolation.test.ts` cover
+them. The prompts and verdict are in `coordinator-live-identity.ts`;
+`coordinator-live-identity.test.ts` runs the orchestration over a scripted
+command transport.
+
+The `account-switch` case (to-do 1000 task 4, retired; see
+[coordinator-timers-and-accounts-decisions.md](../architecture/coordinator-timers-and-accounts-decisions.md))
+runs only on Claude and Codex, the platforms with provider accounts, and turns
+on experimental scheduling for its run, since the schedule tools are offered
+only then:
+
+```bash
+mise run test:agent:coordinator --credential-source claude --scenario account-switch
+```
+
+The harness seeds what a real usage limit leaves behind, without spending a
+plan: a worker tab on the platform finishes one real turn, then a usage-limit
+failure is appended as its newest turn outcome
+(`e2e/agent-testing/backend-store.ts … append-turn-outcome`), and one more
+signed-in fixture account (fixture tokens only, never a real login) is added
+to the profile's own account directory and registry with the active account
+unchanged (`e2e/agent-testing/coordinator-live-account-fixtures.ts`). The
+coordinator then runs two phases, each a turn that sets a `remind_me`
+self-timer at `+1m` and ends, and a turn the reminder starts that calls
+`get_usage_limits`, `list_provider_accounts` and `switch_provider_account`
+once each:
+
+- `request`: the timer carries no permission, so the switch must come back
+  `pending` and appear as one pending `switch-agent-account` request for the
+  fixture account. The harness rejects it (`resolve_node_action_request`) and
+  the active account must not change.
+- `granted`: the timer is set with `authorizeAccountSwitch` in the user's
+  turn, so the switch must come back `switched`, move the active account to
+  the fixture account, and be recorded as an executed request with
+  `authorizedBy: "self-timer"` and that timer's id.
+
+Each phase also checks that the timer was set once with the right
+permission, nothing was read or switched before it fired, its reminder was
+delivered and woke the coordinator, `get_usage_limits` listed the seeded
+worker and `list_provider_accounts` listed the fixture account. Both timers
+are deleted, and the registry is written back exactly, which also undoes the
+switch and its pin. The approval is answered by command unless
+`ORKESTRATOR_AGENT_TEST_ACCOUNT_SWITCH_HOLD_REQUEST=1` is set: then the harness
+prints a line asking for it to be rejected in the profile's approval dialog
+and waits up to one step for a person to do so (an approval there fails the
+case, since it changes the account). The billed run on real Claude and Codex
+coordinators, with the dialog, is on the manual-test checklist. The prompts and verdict are in
+`coordinator-live-account-switch.ts`; `coordinator-live-account-switch.test.ts`
+runs the orchestration over a scripted command transport, and
+`apps/backend/src/core/storage-test-support-turn-outcome.test.ts` shows a
+running backend's usage-limit reader sees an outcome appended from outside.
+
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

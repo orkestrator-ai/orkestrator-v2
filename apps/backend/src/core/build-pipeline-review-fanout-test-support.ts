@@ -163,6 +163,8 @@ export class FanoutProvider implements BuildPipelineProvider {
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
   usagePending = false;
   invalidConsolidationResults = 0;
+  /** Consolidation results that say the consolidator could not review. */
+  blockedConsolidationResults = 0;
   unknownSourceConsolidationResults = 0;
   runningConsolidation = false;
   missingConsolidationResult = false;
@@ -315,6 +317,22 @@ export class FanoutProvider implements BuildPipelineProvider {
       this.consolidationResultCalls += 1;
       if (this.consolidationResultCalls <= this.invalidConsolidationResults) {
         return { ...base, value: {} as T };
+      }
+      if (this.blockedConsolidationResults > 0) {
+        this.blockedConsolidationResults -= 1;
+        const clean = reportFor("Consolidation could not run.");
+        return {
+          ...base,
+          value: {
+            ...clean,
+            reviewScope: {
+              ...clean.reviewScope,
+              filesReviewed: [],
+              outcome: "blocked",
+              blockedReason: BLOCKED_REVIEW_REASON,
+            },
+          } as T,
+        };
       }
       const merged = reportFor(
         "Merged review.",

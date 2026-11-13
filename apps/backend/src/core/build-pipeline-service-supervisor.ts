@@ -2173,10 +2173,13 @@ export class BuildPipelineSupervisor {
     if (blocked !== null) {
       // The reviewer could not review: a failed review stage, not a clean
       // report that would send the build straight to Verify. The result is
-      // consumed so a retry of the stage asks for a new one.
-      this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
-      await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
-      throw new Error(blocked);
+      // consumed so a retry of the stage asks for a new one, but only after
+      // the failure (with its outbox marker) is durable: consuming first
+      // would let a restart find a reviewing stage whose only result is gone.
+      await this.interactions.fail(pipeline.id, new Error(blocked), {
+        consumeResult: { sessionId: session.sdkSessionId, resultKey: requestId },
+      });
+      return;
     }
     const report = stripStructuredReviewProvenance(parsed.data);
     session.structuredResultStatus = "accepted";

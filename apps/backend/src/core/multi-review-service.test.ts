@@ -234,6 +234,8 @@ class Provider implements BuildPipelineProvider {
   reviewerReport: StructuredReviewReport = cleanReport;
   /** Reviewer sessions whose report says the reviewer could not review. */
   blockedReviewerSessions = new Set<string>();
+  /** Consolidation reports that say the consolidator could not review. */
+  blockedConsolidationReports = 0;
   consolidationReport: StructuredReviewReport = consolidatedReport;
   messagesCalls = 0;
   usageTokens: number | undefined;
@@ -433,6 +435,15 @@ class Provider implements BuildPipelineProvider {
             retryable: true,
             details: { path: "$.verdict.ready", reason: "Expected an enum value." },
           },
+        };
+      }
+      if (isConsolidation && this.blockedConsolidationReports > 0) {
+        this.blockedConsolidationReports -= 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: { ...blockedReport, issues: [], testCoverageGaps: [] } as T,
         };
       }
       if (isConsolidation && this.invalidConsolidatedReports > 0) {
@@ -7508,6 +7519,44 @@ test("MultiReviewService does not consolidate when every reviewer could not revi
         sent.prompt.includes("<multi-review-reports-json>"),
       ),
     ).toBe(false);
+  });
+});
+
+test("MultiReviewService fails the review when the consolidator reports it could not review", async () => {
+  const provider = new Provider();
+  provider.blockedConsolidationReports = 1;
+  await withService("env-blocked-consolidation", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+
+    // A valid blocked report with no findings is a failed consolidation, not a
+    // clean review: nothing becomes ready and no auto-PR is queued.
+    const failed = await snapshot(started.id);
+    expect(failed?.error).toBe(`${REVIEW_BLOCKED_ERROR_PREFIX}${BLOCKED_REASON}`);
+    expect(failed?.consolidatedReport).toBeUndefined();
+    expect(failed?.autoPrLaunch).toBeUndefined();
+    expect(failed?.activeRequest).toBeUndefined();
+    expect(failed?.pendingResultConsumptions).toBeUndefined();
+    expect(failed?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+
+    // Retrying consolidates again from the reviewers' surviving reports.
+    await service.retry(started.id);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = await snapshot(started.id);
+    expect(ready?.consolidatedReport).toBeDefined();
+    expect(ready?.error).toBeUndefined();
   });
 });
 

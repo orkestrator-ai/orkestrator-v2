@@ -35,6 +35,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import { reviewerBlockedReason } from "@orkestrator/protocol/review-fanout";
+import { REVIEW_BLOCKED_ERROR_PREFIX } from "@orkestrator/protocol/structured-review";
 import {
   isMultiReviewWorkflow,
   type MultiReviewModelSelection,
@@ -44,6 +45,7 @@ import { turnSlots, type FakeAgentScript, type FakeAgentTurn } from "./graph-age
 import { multiReviewGraphRunId } from "./multi-review-graph-engine.js";
 import {
   INTERLEAVING_REPORT,
+  REAL_AGENT_NODE,
   multiReviewInterleavingWorld,
   type MultiReviewInterleavingWorld,
   type MultiReviewTestProcess,
@@ -878,6 +880,53 @@ test("a graph reviewer that could not review fails, with its reason, and is not 
     expect(record.reviewers[0]?.startFailed).toBeUndefined();
     expect(reviewerBlockedReason(record.reviewers[0]!)).toBe(reason);
     expect(record.phase).toBe("ready");
+  } finally {
+    await world.cleanup();
+  }
+}, 30_000);
+
+// The graph engine applies the same check to the consolidation step: a
+// consolidator that could not review fails, rather than a clean report
+// making the review ready.
+test("a graph consolidator that could not review fails the review", async () => {
+  const reason = "The reviewer reports could not be read.";
+  const world = await multiReviewInterleavingWorld({
+    realAgentNodes: [REAL_AGENT_NODE, "consolidate"],
+    script: async (turn, tools) => {
+      const consolidating = positionOf(turn) === 0;
+      await tools.call("submit_report", {
+        resultKey: turnSlots(turn).report,
+        result: consolidating
+          ? {
+              ...INTERLEAVING_REPORT,
+              reviewScope: {
+                ...INTERLEAVING_REPORT.reviewScope,
+                filesReviewed: [],
+                outcome: "blocked",
+                blockedReason: reason,
+              },
+            }
+          : INTERLEAVING_REPORT,
+      });
+      return "idle";
+    },
+  });
+  try {
+    const process = world.start();
+    await process.ready;
+    const started = await world.startReview({ reviewers: [MODELS[0]!] });
+    let record = started;
+    for (let pass = 0; pass < 40 && !record.graphRun?.settled; pass++) {
+      await process.service.advanceNow(started.id);
+      await process.graphRuns.advanceNow(multiReviewGraphRunId(started.id)).catch(() => null);
+      await world.provider.settle();
+      record = await world.workflow(started.id);
+    }
+    expect(world.provider.turns().some((turn) => positionOf(turn) === 0)).toBe(true);
+    expect(record.reviewers[0]?.status).toBe("completed");
+    expect(record.consolidatedReport).toBeUndefined();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toContain(`${REVIEW_BLOCKED_ERROR_PREFIX}${reason}`);
   } finally {
     await world.cleanup();
   }

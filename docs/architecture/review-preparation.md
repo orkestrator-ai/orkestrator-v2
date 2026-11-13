@@ -666,7 +666,16 @@ The report therefore says whether the review happened:
   (standalone Multi Review and Build Pipeline panels) and the graph engine,
   where a `review-report@1` output fails its step before any artifact is
   written. A single-reviewer Build Pipeline review stage fails the stage with
-  the same message.
+  the same message, committing the failed stage and the result's
+  consumption marker in one write before the slot is consumed, so a restart
+  in between still finds the failure and its reason.
+- **A consolidator that could not review.** The consolidation turn answers
+  with the same report, so it can say `blocked` too. Every engine treats that
+  as a failed consolidation, never a clean report: standalone Multi Review
+  fails the review (no consolidated report, so no ready phase and no auto-PR)
+  and its retry consolidates again on a fresh session; a Build Pipeline panel
+  fails its review stage instead of going on to Verify; and the graph engine
+  fails the consolidate step through the same `resultFailure` check.
 - **Shown as such.** `reviewerBlockedReason` reads the reason back from the
   error, which is all a graph run keeps of a failed step. The Multi Review and
   Build Pipeline graphs label the reviewer "Could not review" and show the

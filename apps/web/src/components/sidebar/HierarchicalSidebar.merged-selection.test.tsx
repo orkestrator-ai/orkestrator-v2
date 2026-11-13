@@ -2,7 +2,7 @@
  * Shift-click range selection in the merged "By project" and "By repository"
  * lists: the range is the rows between the anchor and the click as they are
  * on screen, in the command node's merged order and folders, never this
- * window's own project tree (to-do 2190, task 7).
+ * window's own project tree (to-do 2190 (retired), task 7).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";

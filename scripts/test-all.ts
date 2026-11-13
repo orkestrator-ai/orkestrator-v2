@@ -903,6 +903,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/coordinator-routing-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-surfaces-fake-model.test.ts",
   "./e2e/agent-testing/coordinator-node-mail-fake-model.test.ts",
+  "./e2e/agent-testing/federation-two-profile-support.test.ts",
   "./e2e/agent-testing/coordinator-restart-fake-model.test.ts",
   "./e2e/agent-testing/suborks-fake-model-script.test.ts",
   "./e2e/agent-testing/suborks-fake-model.test.ts",

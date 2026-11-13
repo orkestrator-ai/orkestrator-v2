@@ -9,18 +9,20 @@ import { describeVersionReminder, versionClientKind } from "@/lib/version-remind
 
 export const VERSION_REMINDER_TOAST_ID = "orkestrator-version-reminder";
 const DISMISSED_KEY = "orkestrator.versionReminder.dismissed";
+/** The version pair the user last reloaded for, so a reload that did not help is not offered again. */
+const RELOADED_KEY = "orkestrator.versionReminder.reloaded";
 
-function readDismissed(): string | null {
+function readSession(key: string): string | null {
   try {
-    return window.sessionStorage.getItem(DISMISSED_KEY);
+    return window.sessionStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeDismissed(value: string): void {
+function writeSession(key: string, value: string): void {
   try {
-    window.sessionStorage.setItem(DISMISSED_KEY, value);
+    window.sessionStorage.setItem(key, value);
   } catch {
     // Private mode or a full store: the reminder simply shows again.
   }
@@ -38,7 +40,8 @@ function writeDismissed(value: string): void {
  *
  * Checks on mount and on every event-stream reconnect, which is when a
  * restarted (possibly upgraded) backend comes back. A dismissed reminder stays
- * hidden for this session until either version changes.
+ * hidden for this session until either version changes, and a Reload that
+ * brought back the same pair is not offered again for it.
  */
 export function BackendVersionReminder() {
   /** Version pair of the reminder on screen, if any. */
@@ -68,12 +71,14 @@ export function BackendVersionReminder() {
               .catch(() => false)
           : false;
       if (disposed) return;
+      const pair = `${BUNDLED_APP_VERSION}\u0000${reported}`;
       const reminder = describeVersionReminder({
         skew,
         clientVersion: BUNDLED_APP_VERSION,
         backendVersion: reported,
         clientKind: versionClientKind(),
         hostCanUpdate,
+        reloadTried: readSession(RELOADED_KEY) === pair,
       });
       if (!reminder) {
         // Clearing it here is not the user dismissing it, so record nothing.
@@ -83,8 +88,7 @@ export function BackendVersionReminder() {
         }
         return;
       }
-      const pair = `${BUNDLED_APP_VERSION}\u0000${reported}`;
-      if (readDismissed() === pair) {
+      if (readSession(DISMISSED_KEY) === pair) {
         // Withdraw another pair's reminder without recording its dismissal.
         shownPairRef.current = null;
         toast.dismiss(VERSION_REMINDER_TOAST_ID);
@@ -99,10 +103,18 @@ export function BackendVersionReminder() {
         onDismiss: () => {
           if (shownPairRef.current !== pair) return;
           shownPairRef.current = null;
-          writeDismissed(pair);
+          writeSession(DISMISSED_KEY, pair);
         },
         ...(reminder.action === "reload"
-          ? { action: { label: "Reload", onClick: () => window.location.reload() } }
+          ? {
+              action: {
+                label: "Reload",
+                onClick: () => {
+                  writeSession(RELOADED_KEY, pair);
+                  window.location.reload();
+                },
+              },
+            }
           : reminder.action === "update"
             ? {
                 action: {

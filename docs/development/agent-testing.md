@@ -506,6 +506,51 @@ so they always build first. The older-bridge step below swaps one bundle in
 during a spec, after the check, and is unaffected.
 The Electron Playwright config starts its own app and does not use this guard.
 
+### Seeded coordinator workflow records: `--seed-workflow-records`
+
+The coordinator panel says when the workflow records every project's
+coordinator shares are nearly full or full
+([coordinator.md, "Workflow record limit and cleanup"](../architecture/coordinator.md#workflow-record-limit-and-cleanup)).
+No ordinary fixture gets near the 2,000-record limit, so `dev:test` can seed
+records that are still in use:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile workflow-store-qa \
+  --no-host-seed --no-agent-credentials --headless --agent-platforms codex \
+  --seed-workflow-records near-limit
+```
+
+The value is a count from 1 to 2,000 (no sign or leading zeros), `near-limit`
+(1,800, where the banner first shows) or `full` (2,000, where new launches are
+refused); anything else fails at argument parsing, before any build.
+`dev:test` only; `dev` rejects it. After the bridge build and before Electron starts, the launcher runs
+`apps/backend/scripts/seed-coordinator-workflows.ts` against the profile's
+data directory. No backend has the store open then, and the records go in
+through the store's own API, never by editing the database. The script refuses
+the default data directory and any directory that is not a development
+profile's `data` folder. Its output is in the profile's
+`logs/workflow-records-seed.log`; the launcher prints a one-line summary.
+
+The records belong to the coordinator of their own project,
+`seeded-workflows` (a bare repository at `fixtures/seeded-workflows` in the
+profile), so `--fixture` is optional and its project is untouched. Open that
+project's Coordinator tab: the banner is a floating notice at desktop width and
+a pill at phone width. Each record is an `environment` launch record with no
+delegation, for an environment that does not exist, and with its
+worker-outcome watch already ended, so nothing reconciles it, wakes the
+coordinator about it or mails it. A record is in use only because it is
+inside the 24-hour replay window, so every start with the option moves the
+seeded records back into it: the state lasts a day after the last seeded
+start. A smaller count on a later start leaves the rest as finished history
+that a cleanup may clear; `dev:reset` removes everything.
+
+The limit is shared with the profile's other projects. At the limit each
+seeded record goes in the way any launch's does: the store clears the oldest
+finished records, whichever project they belong to, and never one still in
+use. When only records in use are left before the requested count is reached,
+seeding stops there with the store full and the summary names how many were
+refused, so `full` on a profile with other live work seeds fewer than 2,000.
+
 ## Sign a browser in
 
 ```bash
@@ -3183,6 +3228,68 @@ ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
 It attaches the leaf, adds projects and changes both profiles' messaging and
 Pi settings, so reset both afterwards. The link setup it shares with the
 notice suite below is in `coordinator-two-node-support.ts`.
+
+### Federation between two profiles (remote activity, relayed events)
+
+`mise run test:agent:federation:two-profile` qualifies what a command node
+shows of its leaf on two real backends in headless Chromium, with no login and
+nothing billed (to-dos 2190 task 3 and 5840 tasks 1 and 2, both retired once it
+passed). It starts two disposable `dev:test --fixture --headless
+--no-agent-credentials --no-host-seed --agent-platforms pi` profiles, the
+second as a companion profile, with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`,
+runs `e2e/agent-testing/federation-two-profile.spec.ts`, then stops and resets
+both. The command node attaches the leaf with `add_node` over the leaf's real
+gateway (token read in memory, never printed). The leaf's isolated Pi
+`models.json` names `federation-two-profile-fake-model.ts`, which holds every
+turn carrying its marker until the spec releases it, so a real Pi native turn
+moves the leaf's activity between working and idle on cue.
+
+- **Remote-row activity.** One page on the command node, one on the leaf. For
+  three held turns, the spec times when the leaf backend's record, the leaf's
+  own row and the command node's row each first show working, then idle (the
+  rows' `environment-status-marker` `data-state`). The command node's row must
+  follow the leaf's record within 10 s, far inside the 60 s reconcile.
+- **Per-node relayed events.** An init script records the command page's
+  `EventSource`s, reduced to event names, node ids and frame kinds. The main
+  stream must carry no relayed frame and every relayed stream's filter must
+  name the leaf. Under a flood of 40 file changes in the leaf's worktree the
+  relayed ring (`replay.relayedRing` on `/__orkestrator/metrics`) must move
+  more than the main ring, and the remote row's change badge must match the
+  leaf's own. Then the window switches to its own environment and the tab
+  goes away (document hidden, offline, streams dropped) while the leaf changes
+  and starts a turn; on return, and again after a reload, the badge and the
+  activity must match the leaf's.
+- **Older peers on the wire.** A second command page has
+  `relayedEvents=per-node` stripped from its main stream and `perNodeEvents`
+  removed from `watch_node_events` answers, which is what an older renderer
+  sends and what an older command node answers. It must open no relayed
+  stream, receive the leaf's events as `relayed-node-event`, get a `resync`
+  for the leaf after a reconnect, keep the badge right, and move the
+  `relayed-node-event.legacy-stream` counter, which must not move while every
+  client asks for per-node names. Real older releases are a manual check
+  (7568).
+
+Passed on Linux on 2026-11-13 (three cases, 154 s including both profile
+starts). The activity observers are armed before each dispatch and release, so
+a transition cannot happen before its polls start; the command node's row
+followed the leaf's record by 418–894 ms (median 557 ms). The flood moved the
+relayed ring by 10 and the main ring by 0, the returning tab showed the leaf's
+badge in 0.23 s and its activity in 0.53 s, a relayed stream naming the leaf
+reopened after the reload, and the older-peer page moved the legacy counter by
+3 with one `resync`. Frames are reduced by `frameFacts`, the helper the
+support unit test covers.
+
+Both backends share one kernel and loopback, so a cross-machine or slow link is
+not exercised. The content-free summary (timings, counts, ring deltas, badge
+texts) is
+`output/agent-testing/<command-profile>/federation-two-profile/summary.json`.
+To run the spec against two profiles you started yourself, start both with the
+same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_FEDERATION_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_FEDERATION_TWO_PROFILE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.federation-two-profile.config.ts`. It
+attaches the leaf, sets both display names and changes the leaf's Pi
+settings, so reset both afterwards.
 
 ### Coordinator usage-limit notices between two profiles (fixture accounts)
 

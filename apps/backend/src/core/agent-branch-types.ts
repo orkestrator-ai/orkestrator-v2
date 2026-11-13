@@ -210,6 +210,14 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   ): string;
   /** Keeps an accepted result on the branch before it is committed `completed`. */
   acceptResult(branch: B, data: unknown): void | Promise<void>;
+  /**
+   * Why a valid result still fails its branch, or `null` to accept it. A
+   * reviewer that reports it could not review returns a well-formed result
+   * that is not a review: the slot is consumed as for any accepted result, but
+   * the branch is committed `failed` with this message and `acceptResult` is
+   * not called, so the failed-branch path (restart, fan-in without it) applies.
+   */
+  resultFailure?(branch: B, data: unknown): string | null;
   /** Text of the one steer that asks a live turn to commit a validated result. */
   commitNudgeText(branch: B, requestId: string, digest: string): string;
   /** Drops owner-side queue fields when a branch leaves `pending` or fails. */

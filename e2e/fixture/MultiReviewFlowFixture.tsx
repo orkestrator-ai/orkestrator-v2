@@ -6,7 +6,11 @@ import type {
   MultiReviewStepTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { ReviewIssue, StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  REVIEW_BLOCKED_ERROR_PREFIX,
+  type ReviewIssue,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
 import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
@@ -460,6 +464,15 @@ export function MultiReviewFlowFixture() {
     const snapshot = multiReviewFlowWorkflow(phase, count);
     if (packageControls) snapshot.validationRun = undefined;
     if (params.has("worktreeChanged")) snapshot.reviewWorktreeChanged = true;
+    if (params.has("couldNotReview") && snapshot.reviewers[1]) {
+      // Reviewer 2's report said it could not review (to-do 7871 (retired)).
+      const { report: _report, ...blocked } = snapshot.reviewers[1];
+      snapshot.reviewers[1] = {
+        ...blocked,
+        status: "failed",
+        error: `${REVIEW_BLOCKED_ERROR_PREFIX}No shell command could run in this container, so no file of the change could be read.`,
+      };
+    }
     if (params.has("manyFindings")) {
       snapshot.reviewers[0]!.report = {
         ...snapshot.reviewers[0]!.report!,

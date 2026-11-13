@@ -85,3 +85,23 @@ Desktop `closing a OpenCode tab during a turn stops it and keeps the conversatio
 ## Recurrence — 2026-11-13 (declarative apt packages, review round 1)
 
 Observed 2026-11-13 on `declarative-apt-packages-7e73967deb64-r1` at `a5191e523`, base `17d28238c` (`mise run flaky:recurrence -- 6460 --base 17d28238c` answered "open. Record the failure as a recurrence"). The branch changes no close or OpenCode code. The first `mise run test:logged -- --name browser -- mise run test:browser`, at host load about 100 on 16 cores, hit the 1800 s group deadline after 725 of 1884 tests, with 114 failures, mostly `page.reload` and visibility timeouts of 30 s in MultiReviewFlow, PipelineFlow, SidebarDrag and others. A run of four of those owners (`e2e/PipelineFlow.spec.ts e2e/SidebarDrag.spec.ts e2e/MultiReviewFlow.spec.ts e2e/CreateEnvironmentDialog.spec.ts`) at load 72 to 85 still failed 31 and passed 262, a different set. `e2e/CreateEnvironmentDialog.spec.ts` then passed alone with two workers (56.4 s). The full suite run again at load about 47 completed: 4 failed, 1726 passed. One of the four was `closing a OpenCode tab during a turn stops it and keeps the conversation` (`e2e/CloseRetention.spec.ts:432`, desktop, a `toMatchObject` mismatch after a five-second predicate timeout); the others were flake 1012. `e2e/CloseRetention.spec.ts` passed with `e2e/ToolGroupFold.spec.ts`, one worker (exit 0, 244.7 s). Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-13 (PipelineFlow nested rewinds)
+
+- **Branch:** `reviewer-failure-c64fd66ac37e-r1` at `4ed678dcc`, base
+  `17d28238c`. `mise run flaky:recurrence -- 6460 --base 17d28238c` returned
+  "open. Record the failure as a recurrence". The branch's one change to
+  `PipelineFlowGraph.tsx` is a "could not review" status for a failed node
+  whose error carries the reviewer-blocked prefix; the nested-rewinds
+  scenario has no such node.
+- **Test:** `nested rewind history retains every transcript and validation across reload`
+  (`e2e/PipelineFlow.spec.ts:781`, desktop), at load average about 80 to 105.
+- **Runs:** failed in the two-worker run of `MultiReviewFlow.spec.ts` and
+  `PipelineFlow.spec.ts` (see
+  [1120](../coordinator-and-multi-review/1120-multireview-flow-parallel-reload-timeouts.md)),
+  then in a one-worker rerun of the failed set, then in two of three
+  `--repeat-each=3 --workers=1 --project=desktop-chromium` runs of this test
+  alone (1 passed, 1.8 min). Every failure was a `locator.click` on a
+  `getByRole('tablist', { name: 'Build pipeline' })` tab timing out at 30 s,
+  and each stopped at a different step (`:788` after the reload, `:806` near
+  the end), the same symptom this case lists at `:776` and `:809`.

@@ -21,6 +21,7 @@ import {
   REVIEW_CHANGE_TYPES,
   REVIEW_ISSUE_CATEGORIES,
   REVIEW_OVERALL_RISKS,
+  REVIEW_SCOPE_OUTCOMES,
   REVIEW_SEVERITIES,
   REVIEW_VERDICTS,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -634,6 +635,7 @@ The provider-enforced JSON Schema is authoritative. Silently check the complete 
   - \`issues[].severity\`: ${inlineCodeList(REVIEW_SEVERITIES)}; \`riskProfile.overallRisk\`: ${inlineCodeList(REVIEW_OVERALL_RISKS)}; \`verdict.ready\`: ${inlineCodeList(REVIEW_VERDICTS)}.
 - \`riskProfile.riskAreas[]\` is the open-ended field for affected domains and hazards such as \`concurrency\`, \`auth\`, or \`architecture\`. A value's suitability as a risk area does not make it a member of a neighbouring closed enum; use only the schema-derived enum lists above. If no \`changeTypes\` value accurately applies, omit that label from the array; never invent a synonym.
 - Every issue object must include all schema-required keys, including \`reviewModels\`, \`reviewSourceIds\`, and \`alternativeFixes\`. Every coverage-gap object must include \`reviewModels\` and \`reviewSourceIds\`. Use \`null\` for inapplicable nullable values unless a consolidation instruction explicitly requires source IDs.
+- \`reviewScope.outcome\` is ${inlineCodeList(REVIEW_SCOPE_OUTCOMES)}: \`reviewed\` when you examined the change, \`blocked\` only when you could not review it at all (for example no command would run or the files could not be read). \`reviewScope.blockedReason\` says what stopped you when blocked and is \`null\` otherwise. A blocked report counts as a failed reviewer, never as a clean review.
 - Every \`line\` is a positive integer or \`null\`. Report an issue only when it has earned an integer confidence from 75 through 100. Remove a finding below 75; never raise its confidence merely to satisfy this reporting policy. \`testResults.total\` must equal \`passed + failed + notRun\`, and the number of \`failures\` entries must equal \`failed\`.
 - Do not emit a near-match and rely on repair. Check every enum member, required key, null, count, and additional-properties constraint before sending the result.`;
 }

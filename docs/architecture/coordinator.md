@@ -197,7 +197,10 @@ coordinator panel renders `CoordinatorWorkflowStoreBanner` through
 `CoordinatorWorkerPrompts` at `near-limit` (warning) and `full` (alert), saying
 that deleting finished worker environments or letting
 running work finish frees room. The field is additive: an older renderer ignores it, and a
-renderer reading an older backend gets no field and shows no banner.
+renderer reading an older backend gets no field and shows no banner. To see
+either state in a running app, start an isolated profile with
+`dev:test --seed-workflow-records near-limit` (or `full`); see
+[agent-testing.md, "Seeded coordinator workflow records"](../development/agent-testing.md#seeded-coordinator-workflow-records---seed-workflow-records).
 
 What removal changes for the user:
 

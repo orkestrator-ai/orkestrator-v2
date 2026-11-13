@@ -166,5 +166,6 @@ passed.
 ## Related
 
 - `docs/architecture/coordinator.md`, "Codex read-only turns in a container".
-- [7871](7871-reviewer-that-reviewed-nothing-shows-complete.md): the reviewer
-  that reviewed nothing shows as complete.
+- 7871 (retired): the reviewer that reviewed nothing showed as complete. A
+  reviewer now reports `reviewScope.outcome: "blocked"` and is treated as a
+  failed reviewer ([A reviewer that could not review](../../architecture/review-preparation.md#a-reviewer-that-could-not-review)).

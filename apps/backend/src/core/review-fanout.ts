@@ -36,6 +36,7 @@ import {
   STRUCTURED_REVIEW_MAX_COVERAGE_GAPS,
   STRUCTURED_REVIEW_MAX_ISSUES,
   safeParseStructuredReviewReport,
+  structuredReviewBlockedFailure,
   structuredReviewReportBudgetIssues,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
@@ -841,6 +842,9 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
     parseResult: (_reviewer, result) => parseStructuredReportResult(result),
     repairPrompt: (_reviewer, issues, attempt, maxAttempts) =>
       structuredReportRepairPrompt(issues, attempt, maxAttempts),
+    // A reviewer that says it could not review is a failed reviewer, not a
+    // clean one: its empty findings say nothing about the change.
+    resultFailure: (_reviewer, data) => structuredReviewBlockedFailure(data),
     acceptResult: (reviewer, data) => {
       reviewer.report = attributeReportFindings(data as StructuredReviewReport, reviewer);
       // The accepted report is the reviewer's findings; the provisional ones it

@@ -840,7 +840,10 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     return this.accept(branch, requestId, providerSessionId, parsed.data);
   }
 
-  /** Keeps an accepted result, commits the branch `completed`, consumes the slot. */
+  /**
+   * Keeps an accepted result, commits the branch `completed` (or `failed`
+   * when {@link AgentBranchHost.resultFailure} refuses it), consumes the slot.
+   */
   private async accept(
     branch: B,
     requestId: string,
@@ -848,9 +851,20 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     data: unknown,
   ): Promise<"continue"> {
     const host = this.host;
-    const accepted = host.acceptResult(branch, data);
-    if (accepted) await accepted;
-    branch.status = "completed";
+    const failure = host.resultFailure?.(branch, data) ?? null;
+    if (failure === null) {
+      const accepted = host.acceptResult(branch, data);
+      if (accepted) await accepted;
+      branch.status = "completed";
+    } else {
+      // A valid answer that says the work could not be done: the turn ran, so
+      // this is the branch's failure, not a start failure.
+      branch.status = "failed";
+      branch.error = failure.slice(0, 4_096);
+      delete branch.startFailed;
+      host.clearAdmission?.(branch);
+      host.branchFailed?.(branch, "result");
+    }
     branch.completedAt = agentBranchNowIso();
     delete branch.schemaRepairPrompt;
     delete branch.continuationPrompt;

@@ -2,6 +2,7 @@ import {
   REVIEW_CHANGE_TYPES,
   REVIEW_ISSUE_CATEGORIES,
   REVIEW_OVERALL_RISKS,
+  REVIEW_SCOPE_OUTCOMES,
   REVIEW_SEVERITIES,
   REVIEW_VERDICTS,
 } from "./types.js";
@@ -224,6 +225,8 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
         "commandsRun",
         "commandsNotRun",
         "limitations",
+        "outcome",
+        "blockedReason",
       ],
       properties: {
         targetBranch: { type: "string" },
@@ -255,6 +258,17 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
         limitations: {
           type: "array",
           items: { type: "string" },
+        },
+        outcome: {
+          type: "string",
+          enum: REVIEW_SCOPE_OUTCOMES,
+          description:
+            "reviewed when you examined the change; blocked when you could not review it at all (no working shell, files you cannot read, a tool that keeps failing). A blocked review is reported as a failed reviewer, not as a clean one, so never answer reviewed with no findings when you could not look.",
+        },
+        blockedReason: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          description:
+            "When outcome is blocked, what stopped the review, in one or two sentences. null when outcome is reviewed.",
         },
       },
     },

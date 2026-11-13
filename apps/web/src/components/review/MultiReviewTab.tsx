@@ -24,7 +24,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { readOnlyCommandSandboxOffNote } from "@orkestrator/protocol/native-agent";
-import { reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
+import { reviewerBlockedReason, reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -1645,7 +1645,11 @@ function MultiReviewOverviewTab({
             ? reviewerPendingLabel(reviewer, workflow.reviewers)
             : undefined,
         statusWord: reviewerStatusWord(reviewer),
-        error: reviewer.status === "failed" ? reviewer.error : undefined,
+        // A reviewer that could not review shows its own reason under that status.
+        error:
+          reviewer.status === "failed"
+            ? (reviewerBlockedReason(reviewer) ?? reviewer.error)
+            : undefined,
         // A failed or stopped reviewer can still have filed a partial report.
         severity: reviewer.report ? severityCounts(reviewer.report.issues) : undefined,
         findingsLabel: findings,

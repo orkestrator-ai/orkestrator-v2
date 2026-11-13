@@ -581,3 +581,32 @@ display-tail checkpoint age. See
 read in process against a provider fake (CPU, wall time, and the characters
 serialised and hashed), plus the legacy `getProjection` read encoded both
 ways. Its scenarios and how to compare two commits are in the script's header.
+
+### Live bytes per prompt send and turn check
+
+Efficiency batch E9 took its baseline with a provider fake
+(`native-agent-transcript-read-bytes.test.ts`: before E9 a prompt send read 33
+rows, 271,676 bytes, and a turn check 2 rows, 16,466 bytes, on its 8 KB rows).
+The live figures come from `transcript-read-bytes-live.spec.ts`
+([how to run it](../development/agent-testing.md#live-bytes-per-prompt-send-and-turn-check-loopback-model)):
+a real Claude bridge and CLI against a loopback model, six streamed history
+turns first, with no page rendering the session. Bytes are the response bodies
+the bridge wrote (none was compressed on that loopback hop), without HTTP
+headers; the backend's own timers (activity sweep, change-evidence poll) are
+counted apart. Measured 2026-11-13 on `17d28238c`, Claude CLI 2.1.319:
+
+| Read | Bridge requests | Bytes, mean (range) | Of which transcript rows |
+| --- | --- | --- | --- |
+| Prompt send (`dispatch_native_agent_intent`, 6 s window, model parked) | 11.4 | 18,569 (11,276 to 28,719) | 502: one bounded `/messages?limit` tail read |
+| Turn check (`get_native_agent_session_state_update`) | 4.6 | 3,727 (3,683 to 3,988) | 0 |
+| Turn check before E9 (one-message projection) | 6.7 | 7,406 (5,572 to 23,757) | 1,189 |
+| No command: idle 10 s, or a parked turn 6 s | 0 | 0 (the timers alone: 2,193 to 2,325) | 0 |
+
+A prompt send is the `POST /session/:id/prompt` (117 bytes), two state reads
+(3.6 to 5 KB each, growing with the session), the tail read, `/mcp` (700
+bytes) and four short interaction lists. On two of five sends a new CLI query
+(`/init`) bumped the command catalogue's revision and the backend re-read the
+18,152-byte catalogue; without it a send is 11 to 13 KB. A turn check is one
+state read and three empty interaction lists, with no transcript read, which
+the spec asserts. Real row sizes need a billed turn, an item on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).

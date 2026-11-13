@@ -261,7 +261,8 @@ describe("the sweep's global work", () => {
     try {
       await world.coordinator.reconcileWorkerDelegations();
       // The global repair is once; each wake still performs its own lifecycle
-      // repair, tracked separately in follow-up 6660 task 2.
+      // repair, which also adopts open side conversations' live work. 6660
+      // task 2 measured it (about 2 to 9 ms per wake) and kept it.
       expect(sync).toHaveBeenCalledTimes(1 + workers.length);
     } finally {
       sync.mockRestore();

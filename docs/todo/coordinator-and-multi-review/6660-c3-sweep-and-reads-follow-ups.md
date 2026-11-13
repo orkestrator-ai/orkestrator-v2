@@ -2,12 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `cd7e963ec`, with coordinator batch C3 (Sweep and reads) applied.
+Analysed 2026-11-05 against `main` at `cd7e963ec`, with coordinator batch C3 (Sweep and reads) applied. Task 2 analysed and closed 2026-11-13 against `main` at `17d28238c`.
 
 ### Tasks
 
 1. **Prune finished workflow records below the limit**: decide on a measurement at a real large store's size. Counting a real store's coordinators and records on the user's machines moved to the manual-test checklist; then run the bench at those figures and decide. Status: blocked (waits on 7568: 6660 task 1 real-store count).
-2. **A sweep's wake pass repeats the main's repair per wake**: measure, then decide whether a wake for an open, assigned main needs it. Status: open.
+2. **A sweep's wake pass repeats the main's repair per wake**: measured 2026-11-13 (about 2 to 9 ms per wake) and kept as it is. Status: done.
 
 ### 1. Prune finished workflow records below the limit
 
@@ -38,19 +38,34 @@ So 1,400 finished records cost 5 to 8 ms on a sweep that runs every 60 s and abo
 
 **Problem.** Each delegation wake calls `ensureMainConversation`, which runs the full repair for that main: adoption of every other conversation's live work, a mailbox sync for the whole backend, an owed-set read and a mail move. A sweep that delivers several wakes therefore syncs mailboxes once per wake, on top of the sweep's own sync.
 
-**Context.** Found while building C3, part `0110`, task 1, which moved the sweep's own sync and scans to once per pass. The wake path was out of that task's scope. `deliverDelegationWake` in `coordinator-service.ts` relies on `ensureMainConversation` both to open a main when the last one closed and to move a closed main's held report before choosing the wake kind.
+**Context.** Found while building C3, part `0110`, task 1, which moved the sweep's own sync and scans to once per pass. `deliverDelegationWake` in `coordinator-service.ts` relies on `ensureMainConversation` both to open a main when the last one closed and to move a closed main's held report before choosing the wake kind.
 
-**Investigation.** Read from the code only. The C3 bench owes no wakes, so it does not measure this. When the main is open and already has an agent, the repair finds nothing to do unless a conversation closed since the last sweep; it still costs the sync, two coordinator store reads and a pass over the mail store per wake.
+**Investigation.** `coordinator-sweep-bench.ts --owed N` (added for this task) makes N delegations finish without a wake before each measured sweep, on mains that are open with an agent, and alternates two variants so both see the same store growth: the sweep as it runs, and the same sweep with each wake's `ensureMainConversation` cut to its open-main lookup (what skipping the repair would leave). It also times the real `ensureMainConversation` and counts `synchronizeAgentMailboxes` calls. Mean per pass, one Linux host shared with other builds (load average 5 to 8, so the absolute figures are noisy; compare within a row):
+
+| Store and wakes | Pass with repair | Pass without | Repair per wake | Syncs per pass | One sync |
+| --- | --- | --- | --- | --- | --- |
+| 40 projects, 400 open, 40 wakes (one per project), run 1 | 728 ms | 527 ms | 6.7 ms | 41 | 4.7 ms |
+| same, run 2 | 940 ms | 713 ms | 8.6 ms | 41 | 6.1 ms |
+| 4 projects, 40 open, 20 wakes (five per project) | 125 ms | 94 ms | 2.2 ms | 21 | 1.4 ms |
+| 40 projects, 400 open, 2 wakes | 42 ms | 35 ms | 4.0 ms | 3 | 3.0 ms |
+| 40 projects, 400 open, 1 wake | 31 ms | 29 ms | 3.9 ms | 2 | 2.7 ms |
+
+The same sweep with no wake owed took 21 to 23 ms. So the repair is about a quarter of a wake's cost, most of it the backend-wide mailbox sync, whose cost grows with the number of mailboxes; a pass with one or two wakes pays 2 to 8 ms more on a 60 s cadence, and a burst of 40 wakes about 200 ms once. Commands (from the repository root): `mise exec -- bun apps/backend/scripts/coordinator-sweep-bench.ts --projects 40 --open 10 --finished 0 --iterations 10 --owed 40`, then `--projects 4 ... --owed 20`, `--iterations 20 --owed 2` and `--owed 1`. `apps/backend/tests/coordinator-sweep-bench.test.ts` keeps the mode working and pins one sync per wake plus the sweep's own.
+
+Reading the code again for the decision corrected the premise above: the wake path calls `ensureMainConversation` without `opened`, so `reconcileMainMail` runs with `closedOnly` false and also moves **open** side conversations' live work onto the main. The repair is therefore not idle when no conversation closed: work a side conversation launched since the last repair moves on the next wake. Neither the workspace's `updatedAt` nor the coordinator store's revision says whether that happened (every wake writes the store twice).
 
 **Decisions.**
 
 - **What to change?**
-  - **Measure a pass with many owed wakes first, then skip the repair when the main was already open with an agent and no conversation closed since the last repair (recommended).**
-    - Pros: keeps the repair where a main is new or a close happened, which is what moves held reports; removes per-wake syncs in the common case.
-    - Cons: needs a reliable "nothing closed since" signal, such as the workspace's `updatedAt` or the store revision.
-  - **Leave it.**
-    - Pros: no change to a path whose ordering the wake's crash safety depends on.
-    - Cons: a burst of wakes repeats a backend-wide sync per wake.
+  - **Skip the repair when the main was already open with an agent and no conversation closed since the last repair.**
+    - Pros: removes the per-wake sync in the common case, about a quarter of a wake.
+    - Cons: not behaviour-neutral: a side conversation's new live work would stay with it until a later wake or the user's next action, and the "nothing closed since" signal does not cover that. It saves 2 to 8 ms per sweep with one or two wakes.
+  - **Bound it to one repair per project per wake pass.**
+    - Pros: keeps a repair in every pass that wakes a project.
+    - Cons: saves only on several wakes for one project in one pass (about 1.5 ms per extra wake in the five-per-project row), and has the same ordering question for work started between two wakes.
+  - **Leave it (recommended, chosen).**
+    - Pros: no change to a path whose ordering the wake's crash safety and the held-report move depend on; the measured cost is a few milliseconds per wake.
+    - Cons: a burst of wakes still repeats a backend-wide sync per wake (about 200 ms for 40 wakes).
 
 ## Current state
 
@@ -58,12 +73,12 @@ C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, ma
 
 ## Needs verification
 
-- Both tasks rest on a synthetic store. Neither has been measured at a real store's size (task 1 waits on the user's count; task 2's bench owes no wakes yet).
+- Task 1 rests on a synthetic store and has not been measured at a real store's size; it waits on the user's count.
 
 ## Related
 
 - Coordinator batches outcome (`git show 413bd6219:docs/reports/2026-11-06-coordinator-batches-outcome.md`), finding B1 ("list walked long before the cap")
-- [6360-c2-workflow-records-live-checks.md](6360-c2-workflow-records-live-checks.md): the store-full banner on a live stack, which needs the same kind of seeded store
+- 6360 (retired 2026-11-13): the store banner on a live stack, now checked with `dev:test --seed-workflow-records` ([agent-testing.md](../../development/agent-testing.md#seeded-coordinator-workflow-records---seed-workflow-records))
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: counting a real coordinator store's records) moved there on 2026-11-10.
 
 ## Assumptions and decisions
@@ -85,3 +100,12 @@ report. Restoring `b0fbe4ee1^` would retrieve the outcome locally but would stil
 depend on unmerged branch history; linking only to the batch record would omit
 the detail. The archived copy keeps that detail available with the living docs
 and supersedes the earlier merged-history recovery decision.
+
+### Task 2: keep the per-wake repair
+
+Measured with the bench's new `--owed` mode (Investigation above) and kept,
+the file's "Leave it" option. The earlier recommendation assumed the repair
+does nothing unless a conversation closed; the code shows a wake also moves
+open side conversations' live work onto the main, so skipping it changes
+behaviour, for a saving of a few milliseconds per wake. Nothing about this
+needs the user: it is a no-change outcome within the file's own options.

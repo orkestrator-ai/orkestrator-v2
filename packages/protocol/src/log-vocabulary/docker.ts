@@ -58,6 +58,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "lifecycle.record-failure-failed": "A failed container operation could not be recorded.",
       "lifecycle.reconcile-failed":
         "Reconciling one environment's container operation failed; the next pass retries.",
+      "replacement.copy-helper-stalled":
+        "A rebuild copy step's helper was still running when its drain window after the `docker cp` producer closed ran out, so the step was abandoned and the helper removed. Fields: the producer's exit code, the bytes it sent and the window.",
       "replacement.clear-terminals-failed":
         "Terminal sessions could not be cleared after a container replacement.",
       "recovery.clear-terminals-failed":
@@ -67,7 +69,15 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "availability.probe-failed":
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":
-        "An automatic host port collided on start, so it is retried (up to three times): with fresh ports, or, when `backendChosen`, on the same backend-chosen port after a pause.",
+        "An automatic host port collided on start, so it is retried: with fresh ports (up to ten times), or, when `backendChosen`, on the same backend-chosen port after a pause (up to three times).",
+      "copy-in.snapshot-busy-retrying":
+        "Docker could not mount a created or stopped container's filesystem to copy files into it (device or resource busy), so the copy is retried after a pause.",
+      "copy-in.snapshot-busy-recovered":
+        "A copy into a container that Docker had refused as busy succeeded on a retry; `retries` is how many it took.",
+      "copy-in.snapshot-busy":
+        "Docker still refused a copy into a container as busy after every retry, so it failed.",
+      "start.port-collision-run":
+        "A start that met host-port collisions ended: `collisions` is the run's length, with the fresh-port and same-port retries it used, the first and last colliding ports, and the `outcome` (started, exhausted, not-retryable or network-lost).",
       "host-ports.owned-list-failed":
         "Docker could not list the host ports the backend chose for this owner's other containers, so a new rootless container's ports were chosen avoiding only this process's recent choices.",
       "writer-lease.lost": {

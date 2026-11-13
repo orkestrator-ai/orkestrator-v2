@@ -514,7 +514,14 @@ file or directory` when the daemon socket is gone, fails the step and rolls
 back with the original authoritative; an outage that ended mid-copy once let
 an empty candidate commit. When the helper side of a copy dies, the
 producer's remaining output is discarded so both processes settle, rather
-than leaving the rebuild holding its queue and copy slot. Both were found by
+than leaving the rebuild holding its queue and copy slot. Once the producer
+has closed, the helper gets a drain window (`copyDrainWindowMs`: 2 minutes
+plus 1 s per 16 MiB sent) to finish; a helper still running then is killed,
+its container removed by name, and the step fails as `helper-input-stalled`
+(logged `replacement.copy-helper-stalled`), because on a rootless daemon a
+helper once never saw end of input and would otherwise have held the
+rebuild for the one-hour copy deadline
+([7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md)). Both were found by
 the live rebuild-fault suite (C15), which also covers a kill just before and
 just after the commit write. A step that failed because either side reached
 no daemon is reported as `daemon-unavailable` ("Docker stopped responding
@@ -1172,13 +1179,16 @@ to remount (`remount-ro … operation not permitted`) becomes an
 picks an automatic host port inside RootlessKit's namespace, which cannot see
 host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
-start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
+start is retried, up to ten times (`PORT_COLLISION_RETRIES`): rootless
 dockerd hands out automatic ports in sequence, and short-lived outbound
-sockets held two in a row in a 2026-11-09 run (and four in a row right after
+sockets held two in a row in a 2026-11-09 run, four in a row right after
 a daemon restart on 2026-11-11, which hands ports out again from the bottom
-of the range;
-[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
-task 4). Docker 29.9 detaches the
+of the range
+([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4), and four in a row twice on a busy host the same day (7750
+(retired)). Each retry is an inspect, a reconnect and a start with no
+pause, and the run's length, retries, first and last ports and outcome are
+logged once it ends (`start.port-collision-run`). Docker 29.9 detaches the
 container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
@@ -1198,7 +1208,8 @@ the same owner (`docker ps -a`) and, for the window before a new container
 exists, the ports this backend chose in the last 30 minutes. The
 port then stays the container's own across starts and daemon restarts. A
 collision on a labelled port is retried on the same port after a pause
-(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`, so three same-port retries,
+`PORT_HOLD_RETRIES`) for its short-lived holder to
 go; one still held after the retries is a `port-conflict` that says to stop
 the holder or rebuild the environment, which chooses new ports. A port the
 user fixed is still never retried. Rootful daemons keep
@@ -1219,6 +1230,15 @@ boot record read reports `boot-record-copy-refused` instead of
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
+
+Those three copies into a created container go through `copyIntoContainer`,
+which also handles a daemon that cannot mount the container's filesystem
+because it is busy (`failed to mount … device or resource busy`, seen once,
+on beelink2's rootless daemon on 2026-11-09, and not reproduced since,
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2). It retries after 1 and 3 s (`COPY_BUSY_RETRY_DELAYS_MS`); a copy
+still busy fails creation with `unsupported-topology` naming the busy
+filesystem, and the GitHub seed logs `refusal=snapshot-busy`.
 
 `live-restore` cannot work on a rootless daemon: a rootless restart replaces
 RootlessKit, its user and network namespaces, containerd and the shims, so

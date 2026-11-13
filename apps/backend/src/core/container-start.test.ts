@@ -8,6 +8,7 @@ import {
   parseStartInspection,
   portCollisionRetry,
   PORT_COLLISION_RETRIES,
+  PORT_HOLD_RETRIES,
   PORT_HOLD_RETRY_DELAYS_MS,
   shouldRetryPortCollision,
   startDockerContainer,
@@ -179,13 +180,18 @@ describe("startDockerContainer", () => {
     expect(calls[2]).toEqual(["network", "connect", "ork-env-net", "abc123"]);
     expect(logs.records()).toMatchObject([
       { event: "start.port-collision-retrying", fields: { port: 33169 } },
+      {
+        event: "start.port-collision-run",
+        level: "info",
+        fields: { collisions: 1, freshPortRetries: 1, samePortRetries: 0, outcome: "started" },
+      },
     ]);
   });
 
   test("a backend-chosen port collision retries the same port after growing pauses", async () => {
     const collision = () => new CommandFailedError(ROOTLESSKIT_IN_USE);
     const fixture = scriptedRun(
-      [...Array.from({ length: PORT_COLLISION_RETRIES }, collision), "ok"],
+      [...Array.from({ length: PORT_HOLD_RETRIES }, collision), "ok"],
       backendOnly,
       { backendLabel: "38917,38919" },
     );
@@ -197,21 +203,22 @@ describe("startDockerContainer", () => {
         pauses.push(ms);
       },
     }).finally(() => logs.restore());
-    expect(pauses).toEqual([...PORT_HOLD_RETRY_DELAYS_MS].slice(0, PORT_COLLISION_RETRIES));
-    expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(
-      PORT_COLLISION_RETRIES + 1,
-    );
+    expect(pauses).toEqual([...PORT_HOLD_RETRY_DELAYS_MS].slice(0, PORT_HOLD_RETRIES));
+    expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(PORT_HOLD_RETRIES + 1);
     expect(fixture.attached()).toBe(true);
     expect(fixture.published()).toBe(true);
-    expect(logs.records().map((record) => record.fields?.backendChosen)).toEqual(
-      Array.from({ length: PORT_COLLISION_RETRIES }, () => true),
-    );
+    expect(
+      logs
+        .records()
+        .filter((record) => record.event === "start.port-collision-retrying")
+        .map((record) => record.fields?.backendChosen),
+    ).toEqual(Array.from({ length: PORT_HOLD_RETRIES }, () => true));
   });
 
   test("a backend-chosen port still held after every retry is a typed port-conflict", async () => {
     const collision = () => new CommandFailedError(ROOTLESSKIT_IN_USE);
     const fixture = scriptedRun(
-      Array.from({ length: PORT_COLLISION_RETRIES + 1 }, collision),
+      Array.from({ length: PORT_HOLD_RETRIES + 1 }, collision),
       backendOnly,
       { backendLabel: "38917,38919" },
     );
@@ -225,9 +232,7 @@ describe("startDockerContainer", () => {
     expect(parseContainerLifecycleError(error)).toMatchObject({ code: "port-conflict" });
     expect((error as Error).message).toContain("Host port 38917, which Orkestrator chose");
     expect((error as Error).message).toContain("rebuild the environment");
-    expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(
-      PORT_COLLISION_RETRIES + 1,
-    );
+    expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(PORT_HOLD_RETRIES + 1);
     // Reconnected after the last attempt too, so a later start publishes.
     expect(fixture.attached()).toBe(true);
   });
@@ -288,9 +293,82 @@ describe("startDockerContainer", () => {
     );
     expect(fixture.attached()).toBe(true);
     expect(fixture.published()).toBe(true);
-    expect(logs.records().map((record) => record.fields?.retry)).toEqual(
+    const retrying = logs
+      .records()
+      .filter((record) => record.event === "start.port-collision-retrying");
+    expect(retrying.map((record) => record.fields?.retry)).toEqual(
       Array.from({ length: PORT_COLLISION_RETRIES }, (_, index) => index + 1),
     );
+  });
+
+  test("a busy host's run of collisions on fresh ports is outlasted and its length logged (to-do 7750)", async () => {
+    // The 2026-11-11 run: three retries, each on a new port, then a fourth collision.
+    const ports = [32792, 32794, 32800, 32808, 32814, 32816];
+    expect(PORT_COLLISION_RETRIES).toBeGreaterThanOrEqual(10);
+    const fixture = scriptedRun(
+      [
+        ...ports.map(
+          (port) => new CommandFailedError(ROOTLESSKIT_IN_USE.replace("38917", String(port))),
+        ),
+        "ok",
+      ],
+      automaticOnly,
+    );
+    const pauses: number[] = [];
+    const logs = captureLogs();
+    await startDockerContainer("b2dcdbfd3953abc", {
+      run: fixture.run,
+      sleep: async (ms) => {
+        pauses.push(ms);
+      },
+    }).finally(() => logs.restore());
+    expect(fixture.published()).toBe(true);
+    expect(pauses).toEqual([]);
+    const runs = logs.records().filter((record) => record.event === "start.port-collision-run");
+    expect(runs).toEqual([
+      expect.objectContaining({
+        level: "info",
+        fields: {
+          container: "b2dcdbfd3953",
+          collisions: ports.length,
+          freshPortRetries: ports.length,
+          samePortRetries: 0,
+          firstPort: 32792,
+          lastPort: 32816,
+          outcome: "started",
+        },
+      }),
+    ]);
+  });
+
+  test("a run longer than the bound fails and logs its whole length", async () => {
+    const collision = () => new CommandFailedError(ROOTLESSKIT_IN_USE);
+    const fixture = scriptedRun(
+      Array.from({ length: PORT_COLLISION_RETRIES + 1 }, collision),
+      automaticOnly,
+    );
+    const logs = captureLogs();
+    await expect(
+      startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore()),
+    ).rejects.toThrow("address already in use");
+    const runs = logs.records().filter((record) => record.event === "start.port-collision-run");
+    expect(runs).toMatchObject([
+      {
+        level: "warn",
+        fields: {
+          collisions: PORT_COLLISION_RETRIES + 1,
+          freshPortRetries: PORT_COLLISION_RETRIES,
+          outcome: "exhausted",
+        },
+      },
+    ]);
+  });
+
+  test("a start that never collided logs no run", async () => {
+    const fixture = scriptedRun(["ok"], automaticOnly);
+    const logs = captureLogs();
+    await startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore());
+    expect(logs.records()).toEqual([]);
   });
 
   test("a collision past the retries, or one on a fixed port, is returned unchanged", async () => {

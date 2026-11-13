@@ -9,7 +9,9 @@ tasks 1 and 2 re-checked and task 4 found on 2026-11-11 against `main` at
 `498b68766`
 ([evidence](../../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11));
 task 4 acted on the same day
-([evidence](../../development/container-qualification.md#backend-chosen-host-ports-on-rootless-docker-2026-11-11)).
+([evidence](../../development/container-qualification.md#backend-chosen-host-ports-on-rootless-docker-2026-11-11));
+task 2 acted on 2026-11-13 against `main` at `17d28238c`, on beelink2
+([evidence](../../development/container-qualification.md#docker-cp-busy-probe-copy-stream-stall-and-port-collision-runs-on-beelink2-2026-11-13)).
 Found by the retired to-do 0109's task 5, the rootless re-run on a
 freshly built image
 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
@@ -17,8 +19,8 @@ freshly built image
 ### Tasks
 
 1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
-2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open. Not reproduced on beelink (kernel 7.1.8) on either image store (2026-11-10, again on the containerd store 2026-11-11); the next step is the probe on beelink2 (kernel 7.2.15), the one host that failed, and the delivery change waits for its result.
-3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries).
+2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: blocked (waits on a recurrence: a `copy-in.snapshot-busy` log line, or the busy refusal on any host). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. The bind delivery below waits for a host that fails again.
+3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries; raised to ten on 2026-11-13 by 7750 (retired)).
 4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: done 2026-11-11 (on a rootless daemon the backend chooses automatic host ports itself; qualified on a disposable rootless daemon).
 
 ### 1. `docker cp` refused when a read-only bind's source is `nosuid`/`nodev`
@@ -181,10 +183,29 @@ Steps:
    not run. beelink2 failed on kernel 7.2.15; repeat the probe there (or on
    any host that fails) on both stores, with
    `mise run docker:disposable -- start --storage overlay2` for the second.
+   Done 2026-11-13 on beelink2 itself (kernel 7.2.15,
+   [evidence](../../development/container-qualification.md#docker-cp-busy-probe-copy-stream-stall-and-port-collision-runs-on-beelink2-2026-11-13)): not reproduced on
+   rootless containerd store (an environment image built in the daemon, and
+   one copied in with `load-image`) or rootless overlay2, with busybox,
+   `oven/bun`, 78- and 80-layer probe images and the 78-layer environment
+   image, after a start and stop, with volumes and a read-only bind, with six
+   creates and copies at once, right after daemon restarts, and with a
+   recursive watcher on the data root. That kernel has overlayfs `index=Y`,
+   under which a second mount of an upper directory still in use by another
+   overlay mount fails with exactly `EBUSY`; the snapshot mounts on today's
+   daemon pass `index=off`, which disables that check. What held the
+   container's upper directory on 2026-11-09, and whether that daemon's
+   mount omitted `index=off`, is not known: an attempt to hold a snapshot
+   mounted by hand was rejected with `EINVAL`.
 2. Pick the fix below for the affected set and add a live case that creates a
-   runtime with a project seed file on a rootless daemon. Not started: the
-   recommended fix is an image contract change, and with no failing host
-   available it could not be shown to fix anything.
+   runtime with a project seed file on a rootless daemon. Partly done
+   2026-11-13: the three copies retry a busy refusal and then fail with a
+   typed error ("Assumptions and decisions"), and seed-file delivery into a
+   created environment-image container passed live on beelink2's rootless
+   daemon (`container-project-seed-docker.test.ts`). The recommended bind
+   delivery is still not built: with no failing host it could not be shown
+   to fix anything, and it is an image contract change in the input-staging
+   code. Act on it when the refusal recurs.
 
 **Decisions.**
 
@@ -242,7 +263,7 @@ neighbourhood.
 **Decisions.**
 
 Done 2026-11-10: `startDockerContainer` retries up to
-`PORT_COLLISION_RETRIES` (3) times, reconnecting the network before each
+`PORT_COLLISION_RETRIES` (3 then; 10 since 2026-11-13, 7750 (retired)) times, reconnecting the network before each
 retry and stopping a started container that still has none; a collision past
 the retries is the existing `port-conflict`. Unit tests cover three collisions
 then a start, and four collisions; the live start-recovery suite
@@ -364,8 +385,12 @@ pause instead of recreating the container.
   firewall-failure cases now report `boot-record-copy-refused` instead of
   `container-exited` (task 1).
 - Copies into a created container work on beelink (kernel 7.1.8) on both
-  image stores (again on 2026-11-11 on the containerd store); beelink2
-  (kernel 7.2.15, containerd store) refused them (task 2).
+  image stores (again on 2026-11-11 on the containerd store) and, since
+  2026-11-13, on beelink2 (kernel 7.2.15) on both, where they were refused on
+  2026-11-09 (task 2). A copy into a created container the daemon refuses as
+  busy is retried after 1 and 3 s; one still refused fails with
+  `unsupported-topology` naming the busy filesystem (seed files and project
+  files), or is logged as `refusal=snapshot-busy` (the GitHub seed).
 - On a rootless daemon, runtimes and gateways created from now on publish
   host ports the backend chose; they keep them across starts and daemon
   restarts, and a start that finds one held waits for it a few seconds
@@ -380,9 +405,10 @@ pause instead of recreating the container.
 
 ## Outstanding work
 
-- Task 2: reproduce `device or resource busy` on a host that fails
-  (beelink2), on both image stores, then build the delivery fix and its
-  live case.
+- Task 2 (blocked on a recurrence): when a host refuses copies as busy
+  again (`copy-in.snapshot-busy` in the backend log, or the typed error),
+  record the daemon's full mount options and whether `index=off` is among
+  them, then build the recommended bind delivery and its live case.
 
 ## Assumptions and decisions
 
@@ -425,6 +451,24 @@ creation time and architecture match. Why: step 1 needs the comparison
 daemon, and overlay2's image id is the config digest while the containerd
 store's is the manifest digest, so the old id check refused every image
 copied into an overlay2 instance.
+
+### Retry a busy copy twice, then fail with a typed error (task 2)
+
+Chose: `copyIntoContainer` (`docker-copy-refusal.ts`) runs the seed-file,
+project-file and GitHub-seed copies; when the daemon answers `failed to mount
+… device or resource busy` it retries after 1 and 3 s
+(`COPY_BUSY_RETRY_DELAYS_MS`), and a copy still busy fails with an
+`unsupported-topology` error that names the busy filesystem (the GitHub seed
+logs `refusal=snapshot-busy` and carries on). Why: the 2026-11-09 busybox
+container accepted its second copy, so a short retry covers the transient
+case at no cost to a healthy daemon, and the creation failure now says why
+instead of passing on a raw daemon message. The failed attempt never
+extracted anything (the mount failed first), so repeating the whole copy is
+safe. This is not the recommended fix: the environment image refused three
+copies 5 s apart, which no retry covers. Alternative: build the bind
+delivery now, which with no failing host could not be shown to fix
+anything and changes the image contract in the input-staging code another
+build is editing.
 
 ### Task 4 kept in this to-do (task 4)
 

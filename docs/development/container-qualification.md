@@ -309,6 +309,90 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## `docker cp` busy probe, copy-stream stall and port-collision runs on beelink2 (2026-11-13)
+
+To-dos [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2, [7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md)
+tasks 1 and 2, and 7750 (retired 2026-11-13), run in worktree
+`orkestrator-v2-20261113-000432-1c9f451a929a` (branch
+`rootless-docker-copy-1c9f451a929a-r1`, from `main` at `17d28238c`).
+
+- **Host:** beelink2 (Omarchy, kernel 7.2.15-1-omarchy, x86_64), the host
+  whose 2026-11-09 run refused copies with `device or resource busy`, with
+  other pipelines' builds and tests running. Its overlayfs module has
+  `index=Y` (`CONFIG_OVERLAY_FS_INDEX=y`), so a second overlay mount of an
+  upper directory another live overlay mount still uses fails with `EBUSY`
+  unless the mount passes `index=off`; with the default off it only warns.
+- **Daemons:** `mise run docker:disposable -- start --name r7549` (rootless
+  Engine 29.9.2, slirp4netns, containerd image store), plus `r7549o`
+  (`--storage overlay2`) and `r7549l` (containerd store). The data roots were
+  in the default instance root under `~/.local/state`, not in the worktree.
+- **Images:** busybox, `oven/bun:1.4.4-debian`, a 78-layer busybox image and an
+  80-layer image with whiteouts, opaque directories and `USER 1000`, all
+  built or pulled in `r7549`; and the environment image itself
+  (`docker/Dockerfile` at this commit, 78 layers, 5.78 GB), built in `r7549`
+  and copied into `r7549o` and `r7549l` with `load-image`, so both a built and
+  a loaded image were probed on the containerd store.
+- **7549 task 2 probe: not reproduced.** `docker create` then `docker cp` of
+  a file into `/tmp/` (three times), the seed files' tar-stream form into `/`,
+  and a copy after a start and stop: every copy succeeded, for every image, on
+  both stores, with the runtime's named volumes, with a read-only bind, with
+  `--network none`, with six creates and copies running at once (36 copies),
+  right after each of three cycles of two daemon restarts, and with a
+  recursive file watcher on `r7549l`'s data root (the 2026-11-09 data root
+  was in a worktree the backend watches; this watcher could not enter the
+  directories owned by subordinate ids). The containerd snapshot mounts on
+  this daemon carry `userxattr,index=off` (`ctr snapshots mounts` inside the
+  daemon's namespace), which turns that `EBUSY` refusal off for them; the
+  2026-11-09 message showed `userxattr` before `lowerdir`, a different option
+  order, and its full option list was not recorded. An attempt to hold a
+  created container's snapshot mounted and so force the refusal failed:
+  the holding `mount -t overlay` was rejected with `EINVAL` inside the
+  daemon's namespace, while a plain overlay there mounted. So the 2026-11-09
+  cause is still unknown.
+- **7549 task 2 delivery, live:** `container-project-seed-docker.test.ts`
+  (`ORKESTRATOR_SEED_TEST_IMAGE` = the environment image) passed 1/1:
+  seed files copied into a created container through the new
+  `copyIntoContainer`, read back with the right owner and modes.
+  `docker-copy-refusal-docker.test.ts` (`ORKESTRATOR_COPY_REFUSAL_TEST_IMAGE`
+  = the environment image) passed 1/1: the `nosuid`/`nodev` refusal is still
+  typed on every copy path, which now goes through `copyIntoContainer`.
+- **7705 natural stall: not reproduced.** 75 runs of `docker cp <stopped
+  container>:<path> - | docker run --rm -i --network none busybox sh -c
+  'cat >/dev/null; echo ok'` on `r7549`, for a missing path (the producer
+  fails before the helper attaches), an empty directory and a one-file
+  directory: 30 on a settled daemon and 45 in three cycles started right
+  after two daemon restarts each. Every helper saw end of input and exited.
+- **7705 bound, live:** the backend's `pipeContainerPath` with a real
+  `docker cp` producer and a real `docker run --rm -i --name …` helper that
+  never finishes reading (`exec sleep 600`), drain window 3 s: the step
+  settled `stalled` after 3.2 s, and the helper container was gone from
+  `docker ps -a` 3 s later (removed by name). Before the change the same step
+  waits for `COPY_TIMEOUT_MS`, one hour.
+- **7750, what it found** (retired here; its text is `git show
+  17d28238c:docs/todo/containers-and-environments/7750-rootless-automatic-port-collisions-outlast-retries.md`):
+  on 2026-11-11 on beelink2, disposable daemon `idle0049` (slirp4netns, host
+  loopback), two container starts in a row collided on four Docker-chosen
+  ports each (32792, 32794, 32800 then the fourth attempt; 32808, 32814,
+  32816 then the fourth) and failed with `port-conflict` after three retries;
+  the next attempt a minute later started at once. Built: the fresh-port
+  bound is ten (`PORT_COLLISION_RETRIES`), the same-port bound for
+  backend-chosen ports stays three (`PORT_HOLD_RETRIES`, one per pause), and
+  a start that met collisions logs `start.port-collision-run` once it ends.
+  `container-start.test.ts` replays that run (six collisions on six ports,
+  then a start) and a run longer than the bound.
+- **7750, live:** `container-start-docker.test.ts` with
+  `RUN_LIVE_DOCKER_TESTS=1` and `oven/bun:1.4.4-debian` passed 4, skipped 1
+  (the opt-in mount case) on `r7549`, with the fresh-port bound at ten. The
+  new `start.port-collision-run` line gave the run length in each case,
+  including `collisions=11 freshPortRetries=10 firstPort=32772
+  lastPort=32782 outcome=exhausted` for the container with Docker's
+  automatic mapping walking fourteen held ports.
+- **Cleanup.** Probe containers and volumes were removed as they were made;
+  the three daemons were stopped with `docker:disposable -- stop`, then this
+  checkout's instance root (its tools cache) and the probe files under
+  `output/` were removed.
+
 ## Pre-gateway images under the current backend on rootless Linux Engine (2026-11-11)
 
 The historical-image part of retired to-do 5510's task 3: a restricted

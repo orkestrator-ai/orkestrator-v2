@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -10,6 +11,8 @@ import {
   quiesceRuntime,
   parseCopyOutput,
   candidateStartError,
+  COPY_DRAIN_BASE_MS,
+  copyDrainWindowMs,
   parseMeasureOutput,
   pipeContainerPath,
   rebuildPreview,
@@ -115,6 +118,82 @@ exit 125
       },
     );
   }, 15_000);
+  test("a helper that never sees end of input after its producer exits is abandoned in the drain window (to-do 7705)", async () => {
+    // The 2026-11-11 stall: `docker cp` had exited, but the helper's `tee` was
+    // still blocked on the container's stdin 14 minutes later, so the step
+    // waited for the one-hour deadline. Here the helper ignores its input
+    // ending, as that one did.
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  cp) printf 'archive bytes'; exit 0 ;;
+  rm) echo "rm $*" >> "$FAKE_DOCKER_LOG"; exit 0 ;;
+  *) exec sleep 30 ;;
+esac
+`,
+      async (log) => {
+        const started = Date.now();
+        const logs = captureLogs();
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+          drainWindowMs: (bytes) => {
+            expect(bytes).toBe("archive bytes".length);
+            return 300;
+          },
+          settleGraceMs: 2_000,
+          consumerContainer: "orkestrator-copy-test",
+        }).finally(() => logs.restore());
+        expect(result).toEqual({
+          absent: false,
+          output: "",
+          producerFailed: true,
+          daemonUnavailable: false,
+          stalled: true,
+        });
+        expect(Date.now() - started).toBeLessThan(10_000);
+        expect(logs.records()).toMatchObject([
+          {
+            event: "replacement.copy-helper-stalled",
+            fields: { producerCode: 0, bytes: "archive bytes".length, drainMs: 300 },
+          },
+        ]);
+        // The helper container is removed: killing `docker run` leaves it running.
+        for (let wait = 0; wait < 50 && !(await log.read()).includes("rm"); wait += 1) {
+          await Bun.sleep(100);
+        }
+        expect(await log.read()).toContain("rm rm -f orkestrator-copy-test");
+      },
+    );
+  }, 20_000);
+  test("the drain window does not cut short a helper that finishes its checks", async () => {
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  cp) printf 'archive bytes'; exit 0 ;;
+  rm) echo "rm $*" >> "$FAKE_DOCKER_LOG"; exit 0 ;;
+  *) cat >/dev/null; sleep 1; printf 'ORKESTRATOR_COPY status=ok files=1 bytes=13\\n'; exit 0 ;;
+esac
+`,
+      async (log) => {
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+          drainWindowMs: () => 5_000,
+          consumerContainer: "orkestrator-copy-test",
+        });
+        expect(result).toMatchObject({ absent: false, producerFailed: false });
+        expect(result).not.toHaveProperty("stalled");
+        expect(parseCopyOutput((result as { output: string }).output)).toEqual({
+          ok: true,
+          files: 1,
+          bytes: 13,
+        });
+        expect(await log.read()).toBe("");
+      },
+    );
+  }, 20_000);
+  test("the drain window is minutes, grows with the bytes sent and stays far below the hour", () => {
+    expect(copyDrainWindowMs(0)).toBe(COPY_DRAIN_BASE_MS);
+    expect(copyDrainWindowMs(1024 ** 3)).toBeGreaterThan(copyDrainWindowMs(0));
+    expect(copyDrainWindowMs(5 * 1024 ** 3)).toBeLessThan(10 * 60_000);
+  });
   test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
     // Reaching no daemon (its socket gone) also says "no such file"; that
     // step was not copied and must fail, never be skipped as absent.

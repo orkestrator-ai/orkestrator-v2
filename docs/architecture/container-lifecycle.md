@@ -514,7 +514,23 @@ file or directory` when the daemon socket is gone, fails the step and rolls
 back with the original authoritative; an outage that ended mid-copy once let
 an empty candidate commit. When the helper side of a copy dies, the
 producer's remaining output is discarded so both processes settle, rather
-than leaving the rebuild holding its queue and copy slot. Both were found by
+than leaving the rebuild holding its queue and copy slot. Once the producer
+has closed, the helper gets a drain window (`copyDrainWindowMs`: 2 minutes
+plus 1 s per 16 MiB sent, plus as long again as the stream took, so a loaded
+host that slows the helper's final verification has also slowed the stream
+and earned the time) to finish; a helper still running then is killed,
+its container removed by name, and the step fails as `helper-input-stalled`
+(logged `replacement.copy-helper-stalled`), because on a rootless daemon a
+helper once never saw end of input and would otherwise have held the
+rebuild for the one-hour copy deadline
+([7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md)).
+The step settles only after that removal has finished, because rollback
+removes the candidate's volumes next and Docker keeps a volume a container
+still mounts; a helper that could not be removed fails the step as
+`helper-remove-failed` (logged `replacement.copy-helper-remove-failed`). A
+producer that had already failed with its own answer (nothing to copy, a
+refused remount, no daemon) is classified by that answer, not as a stall of
+the helper it left waiting. The absent-path rule and the output discard were found by
 the live rebuild-fault suite (C15), which also covers a kill just before and
 just after the commit write. A step that failed because either side reached
 no daemon is reported as `daemon-unavailable` ("Docker stopped responding
@@ -859,9 +875,18 @@ on revocation described above.
   per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
   is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
   never leave the backend.
-- Writing: on Linux a file staged byte for byte is reflinked from the
-  descriptor that was checked (`FileCloner`, through `/proc/self/fd`), where
-  the data directory's filesystem can (btrfs, XFS, bcachefs). A reflink shares
+- Writing: a file staged byte for byte is cloned from the descriptor that was
+  checked (`FileCloner`, `portable-inputs-clone.ts`), never from its path, so a
+  file swapped in after the check is not staged. On Linux that is a reflink
+  through `/proc/self/fd`, where the data directory's filesystem can (btrfs,
+  XFS, bcachefs). On macOS it is an APFS clone through `fclonefileat(2)`,
+  reached with `bun:ffi` (neither Node nor Bun exposes it, `clonefile(2)` and
+  `COPYFILE_FICLONE` take a path, and `/dev/fd` duplicates a descriptor rather
+  than naming the file); the clone's BSD file flags and extended attributes,
+  which `fclonefileat` copies and a plain copy does not, are cleared (all but
+  `com.apple.provenance`, which the kernel puts on every file the backend
+  writes). Outside Bun, or off APFS (`ENOTSUP` on HFS+, `EXDEV` across
+  volumes), the file is copied. A clone shares
   the source's blocks until either side writes, so the revision stays an
   independent copy: a write to it never reaches the host file or another
   environment's revision, unlike a hard link. Its size is checked after the
@@ -870,7 +895,7 @@ on revocation described above.
   guarded file (Claude's settings and `.claude.json`, the credential-guarded
   skill and extension trees) is read and written as before, since cloning after
   the read could stage bytes nobody checked. Anywhere else (another platform,
-  ext4, tmpfs, a source on another filesystem) the run copies, and after one
+  ext4, tmpfs, HFS+, a source on another filesystem) the run copies, and after one
   failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
   btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
   copied (measurements (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)).
@@ -939,9 +964,18 @@ on revocation described above.
   (`hostClaudeSignedOut`) only when every place the login is looked up says
   so: each `.credentials.json` absent or holding no login, and on macOS a
   metadata-only `security find-generic-password` (no `-w`, so no access
-  prompt) exiting 44, item not found, for each keychain searched. An
-  unreadable file, an expired login or any other Keychain answer keeps the
-  older behaviour, stripping refresh tokens in place.
+  prompt) exiting 44, item not found, for each keychain searched. Measured on
+  macOS 27.2 against a temporary keychain (2026-11-13): 44 for a record the
+  keychain lacks, 0 once it exists, and 44 too for a keychain path that is
+  missing, empty, not a keychain or a directory. So the pinned
+  `login.keychain-db` lookup runs only when that file starts with the
+  keychain magic (`isKeychainFile`): without one, an agent-test profile, whose
+  lookup is pinned to its own home, reads as not signed out, and an ordinary
+  install relies on the default search list alone. A locked keychain was not
+  measured (it raises an unlock prompt on the desktop); an answer other than
+  44 keeps the strip. An unreadable file, an expired login or any other
+  Keychain answer keeps the older behaviour, stripping refresh tokens in
+  place.
 - When a container's host-imported Codex or Grok login lapses, the tab's
   sign-in message (readiness `authentication-required`) is replaced by
   guidance to renew the login on the host (or the added Codex account in
@@ -1080,10 +1114,12 @@ copied directory rather than about fifteen. The walk uses GNU find's `-printf`;
 where find lacks it (BSD find, when the helpers run on macOS) the first walk
 lists nothing and the rest of the boot uses a portable walk
 (`agent_input_directory_walk`): `find -print0` classified with shell tests, and
-one `du -sk`, with the same bounds and listing. Timings are in
-[4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
-and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
-tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
+one `du -sk`, with the same bounds and listing. Timings are in to-do 4580
+(retired 2026-11-13) tasks 2 and 3
+(`git show 17d28238c:docs/todo/containers-and-environments/4580-input-stamp-follow-ups.md`)
+and to-do 6740 (retired 2026-11-13) tasks 3 and 5
+(`git show 17d28238c:docs/todo/containers-and-environments/6740-input-staging-follow-ups.md`);
+the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
@@ -1172,13 +1208,16 @@ to remount (`remount-ro … operation not permitted`) becomes an
 picks an automatic host port inside RootlessKit's namespace, which cannot see
 host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
-start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
+start is retried, up to ten times (`PORT_COLLISION_RETRIES`): rootless
 dockerd hands out automatic ports in sequence, and short-lived outbound
-sockets held two in a row in a 2026-11-09 run (and four in a row right after
+sockets held two in a row in a 2026-11-09 run, four in a row right after
 a daemon restart on 2026-11-11, which hands ports out again from the bottom
-of the range;
-[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
-task 4). Docker 29.9 detaches the
+of the range
+([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4), and four in a row twice on a busy host the same day (7750
+(retired)). Each retry is an inspect, a reconnect and a start with no
+pause, and the run's length, retries, first and last ports and outcome are
+logged once it ends (`start.port-collision-run`). Docker 29.9 detaches the
 container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
@@ -1198,7 +1237,8 @@ the same owner (`docker ps -a`) and, for the window before a new container
 exists, the ports this backend chose in the last 30 minutes. The
 port then stays the container's own across starts and daemon restarts. A
 collision on a labelled port is retried on the same port after a pause
-(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`, so three same-port retries,
+`PORT_HOLD_RETRIES`) for its short-lived holder to
 go; one still held after the retries is a `port-conflict` that says to stop
 the holder or rebuild the environment, which chooses new ports. A port the
 user fixed is still never retried. Rootful daemons keep
@@ -1219,6 +1259,15 @@ boot record read reports `boot-record-copy-refused` instead of
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
+
+Those three copies into a created container go through `copyIntoContainer`,
+which also handles a daemon that cannot mount the container's filesystem
+because it is busy (`failed to mount … device or resource busy`, seen once,
+on beelink2's rootless daemon on 2026-11-09, and not reproduced since,
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2). It retries after 1 and 3 s (`COPY_BUSY_RETRY_DELAYS_MS`); a copy
+still busy fails creation with `unsupported-topology` naming the busy
+filesystem, and the GitHub seed logs `refusal=snapshot-busy`.
 
 `live-restore` cannot work on a rootless daemon: a rootless restart replaces
 RootlessKit, its user and network namespaces, containerd and the shims, so

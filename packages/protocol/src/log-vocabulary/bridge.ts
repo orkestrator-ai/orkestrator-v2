@@ -135,7 +135,7 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "Reconciling persisted sessions failed; the sessions already known are listed.",
       "sse.aborted": "The client closed an event stream.",
       "sse.cleanup": "An event stream connection was released.",
-      "sse.closed": "An event stream was closed by the bridge; the client reconnects and replays.",
+      "sse.closed": "An event stream was closed by the bridge; the client reconnects.",
       "sse.handshake-failed": "An event stream failed during its handshake; the client reconnects.",
       "sse.keepalive-failed":
         "An event stream keepalive failed, usually a client that has gone; the connection closes.",
@@ -234,14 +234,9 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "Applying session configuration failed; the route answers unavailable.",
       "session.policy-widening-refused":
         "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
-      "sse.closed": "An event stream was closed by the bridge; the client reconnects and replays.",
+      "sse.closed": "An event stream was closed by the bridge; the client reconnects.",
       "sse.keepalive-failed": "An event stream keepalive failed.",
-      "sse.observer-failed": "An event stream observer failed; it reconnects.",
-      "sse.payload-serialize-failed":
-        "An event payload could not be serialized; a placeholder was sent.",
-      "sse.payload-snapshot-failed":
-        "An event payload could not be snapshotted; a placeholder was sent.",
-      "sse.subscriber-failed": "An event stream subscriber failed; it reconnects and replays.",
+      "sse.subscriber-failed": "An event stream subscriber failed; it reconnects.",
       "subagent.activity-load-failed":
         "Sub-agent activity could not be loaded; the transcript renders without it.",
       "thread.archive-failed": "Archiving or unarchiving a thread failed.",

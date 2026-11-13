@@ -39,6 +39,21 @@ export function packagedAppExecutable(
 }
 
 /**
+ * The `process.resourcesPath` a packaged app at `executable` reports:
+ * electron-builder puts `resources/` beside the Linux executable, and a macOS
+ * bundle keeps it in `Contents/Resources`, beside `Contents/MacOS`.
+ */
+export function packagedResourcesPath(
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const directory = path.dirname(executable);
+  return platform === "darwin"
+    ? path.join(path.dirname(directory), "Resources")
+    : path.join(directory, "resources");
+}
+
+/**
  * Inherited variables the packaged app may see. Everything else is dropped:
  * a shell on this host descends from a production Orkestrator, so it carries
  * that instance's `ORKESTRATOR_*` roots and agent MCP token, provider and

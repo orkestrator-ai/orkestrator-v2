@@ -31,6 +31,6 @@ Analysed 2026-11-05 against `main` at `ce7989a50`.
 ## Related
 
 - Coordinator report, 4.3 (A7) (`git show 413bd6219:docs/reports/2026-10-27-coordinator.md`)
-- [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
+- [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
 - [Routing](../../architecture/coordinator.md#routing) and [The context block](../../architecture/coordinator.md#the-context-block)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, counting read-only delegations in real coordinator transcripts) moved there on 2026-11-10.

@@ -1,60 +1,16 @@
 // SSE Events route
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { eventMessageId } from "../services/event-message-id.js";
 import { eventEmitter } from "../services/event-emitter.js";
-import type { SSEEvent } from "../types/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { EventRing } from "@orkestrator/protocol/node/event-ring";
 
 const log = createLogger("bridge.claude");
 
-/** A frame's data and its encoded length, measured once. */
-interface SerializedEventData {
-  data: string;
-  dataBytes: number;
-}
-
-/**
- * Serialized frame payload per event object, shared across subscribers.
- *
- * The emitter hands every subscriber the same event object, and each one
- * previously ran its own `JSON.stringify` over a payload that can be a
- * multi-hundred-KB message snapshot — the cost scaled with subscriber count.
- * The first subscriber serializes (synchronously, inside `emit`, so the
- * snapshot is taken before the payload can mutate) and the rest reuse it,
- * byte count included, so no subscriber measures the string again. A WeakMap
- * keyed on the event object means the cache lives exactly as long as the
- * event does.
- *
- * Exported for tests.
- */
-const serializedEvents = new WeakMap<SSEEvent, SerializedEventData>();
-
-export function serializeEvent(event: SSEEvent): SerializedEventData {
-  let serialized = serializedEvents.get(event);
-  if (serialized === undefined) {
-    const data = JSON.stringify({
-      sessionId: event.sessionId,
-      ...(event.data as object),
-    });
-    serialized = { data, dataBytes: Buffer.byteLength(data) };
-    serializedEvents.set(event, serialized);
-  }
-  return serialized;
-}
-
-export function serializeEventData(event: SSEEvent): string {
-  return serializeEvent(event).data;
-}
-
 /**
  * A subscriber that cannot drain this backlog is closed instead of queued
- * further. Every queued frame is a fully serialized message snapshot, so an
- * unbounded chain against a stalled consumer retains multi-MB strings for as
- * long as the connection nominally exists. The bounded replay ring below
- * covers short disconnects; older gaps explicitly tell the client to
- * rehydrate from the authoritative REST endpoints.
+ * further, and reconnects with its cursor. Frames are content-free, so the
+ * frame count is the bound that binds in practice; the byte cap stays as the
+ * explicit second bound every queue carries.
  */
 export const MAX_PENDING_SSE_FRAMES = 1_000;
 export const MAX_PENDING_SSE_BYTES = 16 * 1024 * 1024;
@@ -63,265 +19,28 @@ interface SseFrame {
   event: string;
   data: string;
   id?: string;
-  /**
-   * UTF-8 length of `data` when the sender already knows it. The bounded
-   * writer measures `data` itself only when this is absent.
-   */
-  dataBytes?: number;
-}
-
-interface ReplayFrame extends SseFrame {
-  revision: number;
-  /** Ring weight: `dataBytes` plus the event name. */
-  bytes: number;
-  dataBytes: number;
-  sessionId?: string;
-  /**
-   * A later full snapshot of the same message is retained after this frame,
-   * so its payload was dropped. Replayed as a `bridge.cursor` frame that only
-   * keeps the client's cursor dense; `event` keeps the original type.
-   */
-  superseded?: true;
-}
-
-interface RetainedReplayFrame extends ReplayFrame {
-  messageId?: string;
-}
-
-/** Flat ring weight of a collapsed frame, which carries no payload. */
-const SUPERSEDED_FRAME_BYTES = 64;
-
-/**
- * Collapses older frames for a message once a newer full snapshot of it is
- * retained.
- *
- * `message.updated` carries the **whole** message, so every earlier
- * `message.updated` and `message.patched` frame for it holds nothing the
- * newer one does not. Collapsing only the previous snapshot would not be
- * enough: a reconnecting client replayed the patches after a collapsed base
- * would apply them to a message it never received. The entries keep their
- * revisions, so the sequence stays dense and the replay's completeness check
- * is unaffected, and because eviction is oldest-first a collapsed frame is
- * always followed in the ring by the snapshot that replaced it.
- */
-function supersedeReplayFrame(
-  incoming: RetainedReplayFrame,
-  retained: RetainedReplayFrame,
-): RetainedReplayFrame | null {
-  if (incoming.event !== "message.updated" || incoming.messageId === undefined) return null;
-  if (retained.event !== "message.updated" && retained.event !== "message.patched") return null;
-  if (retained.messageId !== incoming.messageId || retained.sessionId !== incoming.sessionId) {
-    return null;
-  }
-  // Already collapsed: returned unchanged so the ring's newest-first scan
-  // stops here rather than walking back over frames an earlier snapshot handled.
-  if (retained.superseded) return retained;
-  return {
-    revision: retained.revision,
-    ...(retained.id === undefined ? {} : { id: retained.id }),
-    event: retained.event,
-    data: "{}",
-    dataBytes: 2,
-    bytes: SUPERSEDED_FRAME_BYTES,
-    ...(retained.sessionId === undefined ? {} : { sessionId: retained.sessionId }),
-    messageId: retained.messageId,
-    superseded: true,
-  };
 }
 
 /**
- * The frame an observation subscriber (`?observe=1`) gets: the event type,
- * its cursor and the session it names, never the payload. The backend's
- * activity observer subscribes this way only to learn *that* a session
- * changed, then reads it through the no-touch activity route.
+ * The only stream the bridge serves (`?observe=1`): each frame is the event
+ * type, its cursor and the session it names, never the payload. The backend's
+ * activity observer subscribes only to learn *that* a session changed, then
+ * reads it through the no-touch activity route.
  */
 export function observationFrameData(sessionId: string | undefined): string {
   return JSON.stringify(sessionId === undefined ? {} : { sessionId });
 }
 
-interface ReplayCursor {
+interface EventCursor {
   generation: string;
   revision: number;
 }
 
-export const MAX_REPLAY_SSE_FRAMES = 512;
-/**
- * Sized for an EventSource reconnect gap, not for a whole session.
- *
- * 512 frames is roughly 30s of dense streaming — the same reasoning the codex
- * bridge's ring uses — and every frame here is a serialized message snapshot
- * that grows with the transcript. A 32MB ceiling therefore let one large
- * session pin, indefinitely and in the background, more memory than idle
- * transcript eviction reclaims. A browser reconnects within seconds; a client
- * further behind than this window is better served by `replay.required` and a
- * REST rehydrate, which it already knows how to do.
- */
-export const MAX_REPLAY_SSE_BYTES = 4 * 1024 * 1024;
-
-/**
- * How long the ring keeps retaining frames after its last live subscriber goes
- * away.
- *
- * Retention exists to cover a reconnect, so once no connection has existed for
- * substantially longer than one, there is no cursor left to serve. Past this
- * point the subscriber stops serializing entirely and drops what it holds:
- * before the ring existed, an emit with zero subscribers did essentially
- * nothing, and an idle bridge should cost the same again.
- */
-export const REPLAY_IDLE_RETENTION_MS = 60_000;
-
-/**
- * The bridge's replay ring: the protocol package's `EventRing`, shared with
- * the Codex bridge, fed with the emitter's own revisions so a ring revision is
- * the cursor a client holds.
- */
-export function createReplayBuffer(limits: { maxFrames?: number; maxBytes?: number } = {}) {
-  const ring = new EventRing<RetainedReplayFrame>(limits.maxFrames ?? MAX_REPLAY_SSE_FRAMES, {
-    maxBytes: limits.maxBytes ?? MAX_REPLAY_SSE_BYTES,
-    measureBytes: (frame) => frame.bytes,
-    supersede: supersedeReplayFrame,
-  });
-
-  return {
-    append(event: SSEEvent, revision: number, generation: string): void {
-      const { data, dataBytes } = serializeEvent(event);
-      const messageId = eventMessageId(event);
-      ring.appendAt(revision, {
-        revision,
-        id: `${generation}:${revision}`,
-        event: event.type,
-        data,
-        dataBytes,
-        bytes: dataBytes + Buffer.byteLength(event.type),
-        ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
-        ...(messageId === undefined ? {} : { messageId }),
-      });
-    },
-    /**
-     * Records a revision that is not retained. The cursor still advances, so a
-     * client holding an older one is told to reconcile rather than being told
-     * it is caught up.
-     */
-    skip(revision: number): void {
-      ring.advanceTo(revision);
-    },
-    getFrames(
-      since: ReplayCursor,
-      through: number,
-      generation: string,
-    ): { frames: ReplayFrame[]; resetRequired: boolean } {
-      if (since.generation !== generation || since.revision > through) {
-        return { frames: [], resetRequired: true };
-      }
-      // Caught up: complete even if the ring has since been trimmed or dropped.
-      if (since.revision === through) return { frames: [], resetRequired: false };
-      const replay = ring.since(since.revision);
-      if (!replay.complete) return { frames: [], resetRequired: true };
-      const frames: ReplayFrame[] = [];
-      for (const entry of replay.events) {
-        if (entry.revision > through) break;
-        frames.push(entry.event);
-      }
-      return { frames, resetRequired: false };
-    },
-    clear(): void {
-      ring.clear();
-    },
-    /** Retained weight, so the idle drop is observable. Exported for tests. */
-    stats(): { frames: number; bytes: number } {
-      const stats = ring.getStats();
-      return { frames: stats.retained, bytes: stats.retainedBytes };
-    },
-  };
-}
-
-/**
- * Gates ring retention on there being someone plausibly able to replay from it.
- *
- * The ring subscriber runs on every emit, and serializing a frame costs a full
- * `JSON.stringify` of a message snapshot. Doing that for a bridge nobody is
- * connected to — and holding the result — is background cost with no consumer,
- * so retention is armed by the first live subscriber and dropped again once the
- * last one has been gone for `idleRetentionMs`. A client that reconnects after
- * the drop gets `replay.required`, which the frontend already handles.
- *
- * Exported for tests: the production window is a minute.
- */
-export function createReplayRetention(
-  ring: { clear(): void },
-  idleRetentionMs: number = REPLAY_IDLE_RETENTION_MS,
-) {
-  let liveSubscribers = 0;
-  let retaining = true;
-  let dropTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const scheduleDrop = () => {
-    if (dropTimer) return;
-    dropTimer = setTimeout(() => {
-      dropTimer = undefined;
-      if (liveSubscribers > 0) return;
-      retaining = false;
-      ring.clear();
-    }, idleRetentionMs);
-    // Never let a cache drop hold an exiting bridge open.
-    dropTimer.unref?.();
-  };
-
-  // A bridge that has just started has no subscriber either, so it begins on
-  // the same countdown a drained one does.
-  scheduleDrop();
-
-  return {
-    /** False means "do not even serialize this event". */
-    shouldRetain(): boolean {
-      return retaining;
-    },
-    /** Claim retention for one live subscriber; the result releases it once. */
-    acquire(): () => void {
-      liveSubscribers += 1;
-      retaining = true;
-      if (dropTimer) {
-        clearTimeout(dropTimer);
-        dropTimer = undefined;
-      }
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        liveSubscribers -= 1;
-        if (liveSubscribers === 0) scheduleDrop();
-      };
-    },
-    get liveSubscribers(): number {
-      return liveSubscribers;
-    },
-  };
-}
-
-const replayBuffer = createReplayBuffer();
-const replayRetention = createReplayRetention(replayBuffer);
-
-function formatReplayCursor(revision: number): string {
+function formatCursor(revision: number): string {
   return `${eventEmitter.generation}:${revision}`;
 }
 
-/**
- * Record the normalized wire frame once, independent of live subscribers.
- * This gives short disconnects a bounded cursor replay without retaining raw,
- * mutable SDK message objects.
- */
-eventEmitter.subscribe((event, revision) => {
-  // Bail before `serializeEvent`: with retention dropped there is nothing to
-  // replay to, and the stringify is the expensive half. The ring still learns
-  // the revision, so an older cursor reads as a gap.
-  if (!replayRetention.shouldRetain()) {
-    replayBuffer.skip(revision);
-    return;
-  }
-  replayBuffer.append(event, revision, eventEmitter.generation);
-});
-
-export function parseReplayCursor(value: string | undefined): ReplayCursor | null {
+export function parseEventCursor(value: string | undefined): EventCursor | null {
   if (!value) return null;
   const separator = value.lastIndexOf(":");
   if (separator <= 0) return null;
@@ -332,13 +51,6 @@ export function parseReplayCursor(value: string | undefined): ReplayCursor | nul
   }
   const revision = Number(revisionText);
   return Number.isSafeInteger(revision) && revision >= 0 ? { generation, revision } : null;
-}
-
-export function getReplayFrames(
-  since: ReplayCursor,
-  through: number,
-): { frames: ReplayFrame[]; resetRequired: boolean } {
-  return replayBuffer.getFrames(since, through, eventEmitter.generation);
 }
 
 /**
@@ -362,10 +74,9 @@ export function createBoundedSseWriter(
   let overflowed = false;
   return (frame) => {
     if (overflowed) return Promise.resolve();
-    // Bytes on the wire, not UTF-16 code units: a transcript full of non-ASCII
-    // text can weigh up to 3x what `frame.data.length` reports. A frame built
-    // from a shared serialization already carries the count.
-    const frameBytes = frame.dataBytes ?? Buffer.byteLength(frame.data);
+    // Bytes on the wire, not UTF-16 code units: a non-ASCII session id or
+    // keepalive can weigh more than `frame.data.length` reports.
+    const frameBytes = Buffer.byteLength(frame.data);
     if (
       pendingFrames > 0 &&
       (pendingFrames >= maxPendingFrames || pendingBytes + frameBytes > maxPendingBytes)
@@ -481,6 +192,16 @@ export function createEventsRouter(
     const origin = c.req.header("origin");
     const userAgent = c.req.header("user-agent");
     log.debug("sse.subscribe-requested", { origin, userAgent });
+    // The full-payload stream is gone; every backend that subscribes sends
+    // `observe=1`. Refusing anything else fails a consumer that expects
+    // payloads loudly, rather than handing it content-free frames it would
+    // misread as empty updates.
+    if (c.req.query("observe") !== "1") {
+      return c.json(
+        { error: "observe=1 is required: this bridge serves only the observation stream" },
+        400,
+      );
+    }
     return streamSSE(c, async (stream) => {
       const connectedAt = new Date().toISOString();
       log.debug("sse.opened", { connectedAt });
@@ -498,8 +219,9 @@ export function createEventsRouter(
         closure.close();
       } else {
         // Register before the first awaited write. A client can consume
-        // `connected` and abort while replay is still flushing; attaching this
-        // listener afterwards loses that edge and leaks the subscription.
+        // `connected` and abort while the handshake is still flushing;
+        // attaching this listener afterwards loses that edge and leaks the
+        // subscription.
         c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
       }
       const closeConnection = (reason: string) => {
@@ -523,54 +245,37 @@ export function createEventsRouter(
         { maxPendingFrames, maxPendingBytes },
       );
 
-      // An observation subscriber gets content-free frames and does not keep
-      // the replay ring alive: on its own it costs the bridge one tiny frame
-      // per event, and a reconnect the ring cannot cover is `replay.required`.
-      const observe = c.req.query("observe") === "1";
       const requestedCursorValue = c.req.header("last-event-id") ?? c.req.query("since");
-      const requestedCursor = parseReplayCursor(requestedCursorValue);
+      const requestedCursor = parseEventCursor(requestedCursorValue);
       const cursorWasSupplied = requestedCursorValue !== undefined;
-      const pendingLiveFrames: ReplayFrame[] = [];
+      const pendingLiveFrames: SseFrame[] = [];
       let pendingLiveBytes = 0;
-      let replaying = true;
+      let handshaking = true;
       let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
       let unsubscribe = () => {};
-      // Arm ring retention for as long as this connection exists, and for one
-      // reconnect window after it goes away.
-      const releaseReplayRetention = observe ? () => {} : replayRetention.acquire();
 
       try {
-        // Subscribe before choosing the replay ceiling. Anything emitted during
-        // the handshake is buffered and flushed after the retained replay,
-        // closing the otherwise unavoidable replay/subscribe race.
+        // Subscribe before reading the current revision. Anything emitted
+        // during the handshake is buffered and flushed after it, so no event
+        // falls between the cursor check and the live stream.
         unsubscribe = eventEmitter.subscribe((event, revision) => {
           if (!isOpen) return;
-          let data: string;
-          let dataBytes: number;
-          if (observe) {
-            data = observationFrameData(event.sessionId);
-            dataBytes = Buffer.byteLength(data);
-          } else {
-            ({ data, dataBytes } = serializeEvent(event));
-          }
-          const frame: ReplayFrame = {
-            revision,
-            id: formatReplayCursor(revision),
+          const frame: SseFrame = {
+            id: formatCursor(revision),
             event: event.type,
-            data,
-            dataBytes,
-            bytes: dataBytes + Buffer.byteLength(event.type),
+            data: observationFrameData(event.sessionId),
           };
-          if (replaying) {
+          if (handshaking) {
+            const frameBytes = Buffer.byteLength(frame.data) + Buffer.byteLength(frame.event);
             if (
               pendingLiveFrames.length >= maxPendingFrames ||
-              pendingLiveBytes + frame.bytes > maxPendingBytes
+              pendingLiveBytes + frameBytes > maxPendingBytes
             ) {
               closeConnection("handshake backlog exceeded its cap");
               return;
             }
             pendingLiveFrames.push(frame);
-            pendingLiveBytes += frame.bytes;
+            pendingLiveBytes += frameBytes;
             return;
           }
           void writeFrame(frame).catch((error) => {
@@ -581,69 +286,49 @@ export function createEventsRouter(
           });
         });
 
-        const replayCeiling = eventEmitter.currentRevision;
+        // Read with no await after the subscription: every buffered frame is
+        // past this revision.
+        const subscribedAt = eventEmitter.currentRevision;
         const cursor = requestedCursor ?? {
           generation: cursorWasSupplied ? "invalid" : eventEmitter.generation,
-          revision: replayCeiling,
+          revision: subscribedAt,
         };
-        const replay = getReplayFrames(cursor, replayCeiling);
+        // No events are retained, so a cursor is either current or a gap. A
+        // gap (an older revision, a future one, another process generation, a
+        // malformed cursor) is `replay.required`, and the client re-reads its
+        // authoritative state.
+        const resetRequired =
+          cursor.generation !== eventEmitter.generation || cursor.revision !== subscribedAt;
 
-        // Echo the client's own cursor. Setting this frame to the latest revision
-        // would make EventSource skip replay frames if the connection died halfway
-        // through the handshake.
+        // Echo the client's own cursor, never the latest revision: a client
+        // adopts every `id:` it sees, and must not skip past a gap it has not
+        // been told about yet.
         await writeFrame({
           id: `${cursor.generation}:${cursor.revision}`,
           event: "connected",
           data: JSON.stringify({
             status: "connected",
             timestamp: connectedAt,
-            replayed: replay.frames.length,
-            resetRequired: replay.resetRequired,
-            // Confirms observation mode; an older bridge ignores the parameter.
-            ...(observe ? { observe: true } : {}),
+            resetRequired,
+            // Confirms observation mode; a backend refuses a bridge that does not.
+            observe: true,
           }),
         });
-        if (replay.resetRequired) {
+        if (resetRequired) {
           await writeFrame({
-            id: formatReplayCursor(replayCeiling),
+            id: formatCursor(subscribedAt),
             event: "replay.required",
-            data: JSON.stringify({ through: formatReplayCursor(replayCeiling) }),
+            data: JSON.stringify({ through: formatCursor(subscribedAt) }),
           });
-        } else {
-          for (const frame of replay.frames) {
-            if (observe) {
-              // Observers keep one content-free frame per revision, collapsed
-              // or not: what they are sent does not depend on the collapse.
-              await writeFrame({
-                id: frame.id,
-                event: frame.event,
-                data: observationFrameData(frame.sessionId),
-              });
-            } else if (frame.superseded) {
-              // A newer full snapshot of this message follows in the same
-              // replay, so this revision only keeps the client's cursor dense.
-              // The same frame the Codex bridge sends for a collapsed entry.
-              await writeFrame({ id: frame.id, event: "bridge.cursor", data: "{}" });
-            } else {
-              await writeFrame(frame);
-            }
-          }
         }
         // Queue the whole drain in one synchronous turn. The bounded writer
         // chains strictly FIFO, so enqueue order *is* wire order: awaiting each
         // buffered frame in turn would let a live frame emitted during one of
         // those awaits take the `void writeFrame(...)` path and land *between*
-        // two buffered frames. A browser adopts every `id:` it sees, so that
-        // reorders revisions and regresses the client's stored cursor — and an
-        // out-of-order `message.patched` fails the revision guard, forcing the
-        // full transcript refetch the replay ring exists to avoid.
-        //
-        // Every buffered frame is past `replayCeiling` by construction: the
-        // subscription above and the ceiling read below are separated by no
-        // await, so nothing can be emitted in between.
+        // two buffered frames, regressing the client's stored cursor.
         const drained = pendingLiveFrames.splice(0);
         pendingLiveBytes = 0;
-        replaying = false;
+        handshaking = false;
         const drainWrites = drained.map((frame) => writeFrame(frame));
         // `allSettled` leaves no unhandled rejection behind, but a failed drain
         // must still reach the handler's catch and close the connection rather
@@ -682,7 +367,6 @@ export function createEventsRouter(
         c.req.raw.signal.removeEventListener("abort", onRequestAbort);
         if (keepaliveInterval) clearInterval(keepaliveInterval);
         unsubscribe();
-        releaseReplayRetention();
       }
     });
   });

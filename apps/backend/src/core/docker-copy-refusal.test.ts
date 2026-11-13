@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { isDockerCopyRemountRefused } from "./docker-cli-errors.js";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { isDockerCopyRemountRefused, isDockerCopySnapshotBusy } from "./docker-cli-errors.js";
 import {
+  COPY_BUSY_RETRY_DELAYS_MS,
   COPY_PROBE_ABSENT_PATH,
   classifyDockerCopyFailure,
+  copyIntoContainer,
   dockerCopyRefusedNow,
+  isDockerCopyBusyError,
   isDockerCopyRefusedError,
 } from "./docker-copy-refusal.js";
 import { CommandFailedError, type runCommand } from "./shell.js";
@@ -87,5 +91,83 @@ describe("docker cp remount refusal", () => {
     expect(await dockerCopyRefusedNow("c1", scripted(failed(PROBE_ABSENT)).run)).toBe(false);
     expect(await dockerCopyRefusedNow("c1", scripted(null).run)).toBe(false);
     expect(await dockerCopyRefusedNow("c1", scripted(new Error("spawn failed")).run)).toBe(false);
+  });
+});
+
+// Captured on 2026-11-09 from a disposable rootless Engine 29.9.2 (containerd
+// image store, kernel 7.2.15): `docker cp` into a created container of the
+// 78-layer environment image. Data root and layer list redacted.
+const SNAPSHOT_BUSY =
+  'Error response from daemon: failed to mount <data-root>/rootfs/overlayfs/4f0c2a: mount source: "overlay", target: "<data-root>/rootfs/overlayfs/4f0c2a", fstype: overlay, flags: 0, data: "workdir=<w>,upperdir=<u>,userxattr,lowerdir=<l>", err: device or resource busy';
+
+describe("docker cp into a container whose filesystem is busy (to-do 7549 task 2)", () => {
+  function sequenced(results: Array<Error | null>) {
+    const calls: string[][] = [];
+    const run = (async (_command: string, args: string[] = []) => {
+      calls.push(args);
+      const next = results.shift() ?? null;
+      if (next) throw next;
+      return { stdout: "", stderr: "" };
+    }) as unknown as typeof runCommand;
+    return { run, calls };
+  }
+
+  test("recognises only the daemon's busy mount", () => {
+    expect(isDockerCopySnapshotBusy(SNAPSHOT_BUSY)).toBe(true);
+    expect(isDockerCopySnapshotBusy("device or resource busy")).toBe(false);
+    expect(isDockerCopySnapshotBusy(REMOUNT_REFUSED)).toBe(false);
+  });
+
+  test("a busy copy is retried after the pauses and then delivers", async () => {
+    const fixture = sequenced([failed(SNAPSHOT_BUSY), failed(SNAPSHOT_BUSY), null]);
+    const pauses: number[] = [];
+    const logs = captureLogs();
+    await copyIntoContainer("c1", ["cp", "-a", "-", "c1:/"], { timeoutMs: 1 }, "x", {
+      run: fixture.run,
+      sleep: async (ms) => {
+        pauses.push(ms);
+      },
+    }).finally(() => logs.restore());
+    expect(fixture.calls).toEqual(Array.from({ length: 3 }, () => ["cp", "-a", "-", "c1:/"]));
+    expect(pauses).toEqual([...COPY_BUSY_RETRY_DELAYS_MS]);
+    expect(logs.records().map((record) => record.event)).toEqual([
+      "copy-in.snapshot-busy-retrying",
+      "copy-in.snapshot-busy-retrying",
+      "copy-in.snapshot-busy-recovered",
+    ]);
+  });
+
+  test("a copy still busy after every retry is a typed error naming what was copied", async () => {
+    const fixture = sequenced(
+      Array.from({ length: COPY_BUSY_RETRY_DELAYS_MS.length + 1 }, () => failed(SNAPSHOT_BUSY)),
+    );
+    const error = await copyIntoContainer(
+      "c1",
+      ["cp", "-a", "-", "c1:/"],
+      undefined,
+      "the project seed files into the container",
+      { run: fixture.run, sleep: async () => undefined },
+    ).catch((caught: unknown) => caught);
+    expect(isDockerCopyBusyError(error)).toBe(true);
+    expect(isDockerCopyRefusedError(error)).toBe(false);
+    expect(parseContainerLifecycleError(error)?.code).toBe("unsupported-topology");
+    expect(String(error)).toContain("the project seed files into the container");
+    expect(String(error)).toContain("device or resource busy");
+    // No probe: the daemon said why.
+    expect(fixture.calls).toHaveLength(COPY_BUSY_RETRY_DELAYS_MS.length + 1);
+  });
+
+  test("any other failure is classified at once, never retried", async () => {
+    const fixture = sequenced([failed(REMOUNT_REFUSED)]);
+    const pauses: number[] = [];
+    const error = await copyIntoContainer("c1", ["cp", "f", "c1:/x"], undefined, "x", {
+      run: fixture.run,
+      sleep: async (ms) => {
+        pauses.push(ms);
+      },
+    }).catch((caught: unknown) => caught);
+    expect(isDockerCopyRefusedError(error)).toBe(true);
+    expect(pauses).toEqual([]);
+    expect(fixture.calls).toHaveLength(1);
   });
 });

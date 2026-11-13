@@ -40,6 +40,23 @@
       "excludes": {}
     },
     {
+      "comment": "Syscalls added after this profile's Playwright copy that Docker's default profile allows. runc 1.5 (libpathrs) needs faccessat2 to start the container at all; once faccessat2 is listed, runc no longer answers the lower-numbered clone3, close_range, openat2 and pidfd syscalls with ENOSYS, so they are named here or below",
+      "names": ["faccessat2", "close_range", "openat2", "pidfd_open", "pidfd_send_signal"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [],
+      "includes": {},
+      "excludes": {}
+    },
+    {
+      "comment": "As in Docker's default profile: without CAP_SYS_ADMIN, clone3 answers ENOSYS so glibc falls back to clone. This profile allows clone with no argument filter (the first rule, for Chromium's namespace sandbox), so the fallback admits every clone flag, namespace flags included; the boundary is the container's dropped capabilities, no-new-privileges and the rest of this profile, not a clone flag check",
+      "names": ["clone3"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "args": [],
+      "includes": {},
+      "excludes": {}
+    },
+    {
       "names": [
         "accept",
         "accept4",

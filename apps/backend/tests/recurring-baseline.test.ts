@@ -125,26 +125,27 @@ describe("driven native observation baseline (step 07)", () => {
     expect(serialized).not.toContain("provider-");
     expect(serialized).not.toContain("synthetic queued prompt");
 
-    const { rollback, shared } = first.modes;
-    expect(shared.sweeps).toBe(rollback.sweeps);
-    // Busy queues no longer pay tab-facing (liveness-touching) status reads.
-    expect(rollback.statusReads).toBeGreaterThan(0);
+    // Sharing is the only driver since its rollback switch was removed (todo
+    // 0048 task 13), so the shared counts are checked on their own.
+    expect(Object.keys(first.modes)).toEqual(["shared"]);
+    const { shared } = first.modes;
+    expect(shared.sweeps).toBeGreaterThan(0);
+    expect(shared.queuePasses).toBe(shared.sweeps);
+    // Busy queues pay no tab-facing (liveness-touching) status reads.
     expect(shared.statusReads).toBe(0);
-    // Only qualified (OpenCode) idle groups back off; the rest read every sweep.
-    expect(shared.observationReads).toBeLessThan(rollback.observationReads);
+    // Qualified (OpenCode) idle groups back off, so the sweeps cost fewer
+    // reads than one per session per sweep; the rest read every sweep.
+    expect(shared.observationReads).toBeLessThan(shared.sweeps * fixture.environments);
     expect(shared.retainedGroupPasses).toBeGreaterThan(0);
-    expect(rollback.retainedGroupPasses).toBe(0);
     // Every externally started turn is still seen, within the 4 s budget,
-    // whether or not its provider event arrived, and ends once.
-    for (const counts of [rollback, shared]) {
-      expect(counts.externalStartDiscoveryMs).not.toBeNull();
-      expect(counts.externalStartDiscoveryMs!).toBeLessThanOrEqual(4_000);
-      expect(counts.externalStartWithEventDiscoveryMs!).toBeLessThanOrEqual(2_000);
-      expect(counts.externalEndDiscoveryMs!).toBeLessThanOrEqual(4_000);
-    }
-    expect(shared.turnEndEdges).toBe(rollback.turnEndEdges);
-    // Four runs over a real on-disk store take about a second on an idle
-    // host, but aggregate load has stretched them past five (flake 0177).
+    // whether or not its provider event arrived, and each ends once.
+    expect(shared.externalStartDiscoveryMs).not.toBeNull();
+    expect(shared.externalStartDiscoveryMs!).toBeLessThanOrEqual(4_000);
+    expect(shared.externalStartWithEventDiscoveryMs!).toBeLessThanOrEqual(2_000);
+    expect(shared.externalEndDiscoveryMs!).toBeLessThanOrEqual(4_000);
+    expect(shared.turnEndEdges).toBe(2);
+    // Runs over a real on-disk store take about a second on an idle host,
+    // but aggregate load has stretched them past five (flake 0177).
   }, 30_000);
 });
 

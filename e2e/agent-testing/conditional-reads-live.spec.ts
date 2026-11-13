@@ -33,7 +33,7 @@
  *   measured once it is past 600,000 characters, so the head row alone is over
  *   the window and is part-trimmed. Recovery reads (`/messages`) are counted
  *   per window and over the whole turn, and the first viewer is captured to
- *   `output/visual-previews/` while it streams (to-do 6260, retired, task 3; follow-up 7845).
+ *   `output/visual-previews/` while it streams (to-do 6260, retired, task 3; follow-up 7845, retired).
  *
  * `E10_READY_CHARS` moves the trimmed head's measuring point.
  *

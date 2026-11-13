@@ -8,6 +8,7 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type AgentSessionRuntime,
   type LoadExtensionsResult,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
@@ -220,6 +221,36 @@ function fakeSession(overrides: Record<string, unknown> = {}): FakeSessionContro
     disposed: () => disposed,
     bindings: () => bindings,
   };
+}
+
+/**
+ * An `AgentSessionRuntime` the fork path can drive. `fork` swaps the runtime's
+ * session for one on `forkedFile`, as Pi's does, records where it was asked to
+ * cut, and returns the cut prompt's text the way Pi returns a prompt cut
+ * before itself.
+ */
+function fakeForkRuntime(
+  attached: AgentSession,
+  forks: Array<{ entryId: string; position?: string }>,
+  forkedFile: string,
+): AgentSessionRuntime {
+  let current = attached;
+  return {
+    get session() {
+      return current;
+    },
+    fork: async (entryId: string, options?: { position?: "before" | "at" }) => {
+      forks.push({ entryId, ...(options?.position ? { position: options.position } : {}) });
+      // Pi builds the fork's session with the model and level the attach chose.
+      current = fakeSession({
+        sessionId: `forked-at-${entryId}`,
+        sessionFile: forkedFile,
+        thinkingLevel: attached.thinkingLevel,
+      }).session;
+      return { cancelled: false, selectedText: `prompt ${entryId}` };
+    },
+    dispose: async () => undefined,
+  } as unknown as AgentSessionRuntime;
 }
 
 describe("session ownership", () => {
@@ -961,7 +992,7 @@ describe("Pi SDK lifecycle", () => {
     }
   });
 
-  test("forks at the newest user entry and preserves the composer selection", async () => {
+  test("forks at the newest user entry through the runtime and preserves the composer selection", async () => {
     const forkedFile = join(sessionDirectory, "forked.jsonl");
     await writeFile(
       forkedFile,
@@ -974,19 +1005,20 @@ describe("Pi SDK lifecycle", () => {
       })}\n`,
       "utf8",
     );
-    let branchedAt = "";
-    const fake = fakeSession({
+    const parent = fakeSession({
       thinkingLevel: "high",
       sessionManager: {
-        createBranchedSession: (entryId: string) => {
-          branchedAt = entryId;
-          return forkedFile;
-        },
         getBranch: () => [userEntry("first-user"), userEntry("newest-user")],
         getLeafId: () => "newest-user",
       },
     });
-    installTestHooks({ createAgentSession: async () => fake.session });
+    const forks: Array<{ entryId: string; position?: string }> = [];
+    installTestHooks({
+      createAgentSession: async (attaching) => {
+        attaching.runtime = fakeForkRuntime(parent.session, forks, forkedFile);
+        return parent.session;
+      },
+    });
     const state = newSessionState();
     state.composer = {
       ...state.composer,
@@ -995,15 +1027,20 @@ describe("Pi SDK lifecycle", () => {
     };
 
     const forked = await forkSession(state, undefined);
-    expect(branchedAt).toBe("newest-user");
+    // A prompt is cut before itself, and Pi hands its text back as the draft.
+    expect(forks).toEqual([{ entryId: "newest-user", position: "before" }]);
     expect(forked).not.toBe(state);
-    expect(forked.sessionFile?.endsWith("forked.jsonl")).toBe(true);
+    expect(sessions.get(forked.id)).toBe(forked);
+    expect(forked.sessionFile).toBe(forkedFile);
+    expect(forked.piSessionId).toBe("forked-session");
+    expect(forked.forkDraft).toBe("prompt newest-user");
     expect(forked.composer.selectedModelId).toBe("available/actual");
     expect(forked.composer.selectedReasoningId).toBe("high");
 
     const explicit = await forkSession(state, " first-user ");
-    expect(branchedAt).toBe("first-user");
-    expect(explicit).toBe(forked);
+    expect(forks.at(-1)).toEqual({ entryId: "first-user", position: "before" });
+    expect(explicit).not.toBe(forked);
+    expect(explicit.forkDraft).toBe("prompt first-user");
   });
 
   test("refuses a fork at a message it cannot place instead of forking at the newest prompt", async () => {

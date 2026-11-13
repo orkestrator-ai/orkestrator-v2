@@ -130,6 +130,17 @@ resolved (`identity-mismatch`), so a recycled port cannot silently bind a
 receipt to another backend. A generation change within the same installation
 (a restart) is allowed.
 
+A descriptor connection (`--data-dir`, `--descriptor`, `--profile`) follows
+its backend through a restart. Once the process it was resolved from has gone,
+the next credential read re-reads the descriptor and adopts the successor's
+endpoint and generation, but only when the successor reports the same
+installation ID (`identity-mismatch` otherwise). Until a successor publishes,
+the read is refused as `connection-failed`, which `--wait` treats as the
+backend being away. Before 2026-11-13 the target kept the dead process's
+descriptor, so `host update apply --wait` against a standalone service never
+saw its own update finish (to-do 0033 (retired), found in its systemd
+container run).
+
 ### Connections and credentials
 
 ```bash

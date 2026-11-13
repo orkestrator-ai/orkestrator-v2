@@ -325,7 +325,7 @@ mise run test:logged -- --name disk-report-preparation-owner -- bun test ./tests
 
 No implementation, assertion, timeout or skip changed. The exact repository
 command was rerun through `test:logged` as `review-default-suite`; its result
-is recorded in agent-engines todo 1020.
+is recorded in agent-engines todo 1020 (retired 2026-11-13; `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`).
 
 ## Session history review fixes — 2026-10-31
 

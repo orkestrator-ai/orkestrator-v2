@@ -15,12 +15,10 @@ import {
   U3,
   captureEvents,
   claimPromptDispatch,
-  claudeSessionPreferencesDir,
   createMockChildProcess,
   createOrRecoverSession,
   createSession,
   deleteSession,
-  deleteSessionDurably,
   dismissQuestion,
   ensurePersistedSession,
   evictIdleHydratedTranscripts,
@@ -28,16 +26,13 @@ import {
   getLastIdleTranscriptSweep,
   getPendingPlanApprovals,
   getPendingQuestions,
-  getPromptDispatchRecordCountForTesting,
   getSession,
   getSessionMessages,
   hydratePersistedSessionMessages,
-  installSdkModuleMock,
   listSessions,
   materializePersistedSession,
   mockExistsSync,
   mockQuery,
-  mockSdkDeleteSession,
   mockSdkForkSession,
   mockSdkGetSessionInfo,
   mockSdkGetSessionMessages,
@@ -57,7 +52,6 @@ import {
   sessionIdForClientKey,
   releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
-  setSessionPreferences,
   startIdleTranscriptSweep,
   track,
   transcriptWithToolResult,
@@ -567,78 +561,6 @@ describe("reconcilePersistedSessions", () => {
       await reconcilePersistedSessions();
     });
     expect(existing.title).toBe("Renamed on disk");
-  });
-
-  test("does not resurrect a session deleted while the listing was in flight", async () => {
-    const state = await materializePersistedSession({ cwd: "/repo/env-a" });
-    let releaseList: ((infos: SdkSessionInfo[]) => void) | undefined;
-    mockSdkListSessions.mockImplementation(
-      async () =>
-        new Promise<SdkSessionInfo[]>((resolve) => {
-          releaseList = resolve;
-        }),
-    );
-
-    const reconcile = withWorkspaceCwd("/repo/env-a", async () => {
-      await reconcilePersistedSessions();
-    });
-    await waitFor(() => releaseList !== undefined);
-
-    expect(await deleteSessionDurably(state.id)).toBe(true);
-    expect(getSession(state.id)).toBeUndefined();
-
-    // This snapshot predates the deletion. Adopting it re-inserts a session
-    // whose rollout is gone — and reconcile never prunes, so it would be
-    // listed, openable and undeletable for the lifetime of the bridge.
-    releaseList!([sdkSessionInfo({ cwd: "/repo/env-a" })]);
-    await reconcile;
-    expect(getSession(state.id)).toBeUndefined();
-
-    // The tombstone orders one read against one deletion; it is not a
-    // permanent ban on the id.
-    mockSdkListSessions.mockImplementation(async () => [sdkSessionInfo({ cwd: "/repo/env-a" })]);
-    await withWorkspaceCwd("/repo/env-a", async () => {
-      await reconcilePersistedSessions();
-    });
-    expect(getSession(state.id)).toBeDefined();
-  });
-
-  test("bounds stale-list deletion tombstones to the newest 128 sessions", async () => {
-    await withTemporaryClaudeHome("claude-reconcile-tombstone-cap-", async () => {
-      const infos = Array.from({ length: 129 }, (_, index) =>
-        sdkSessionInfo({
-          sessionId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
-          summary: `Persisted session ${index}`,
-          cwd: "/repo/env-a",
-        }),
-      );
-      mockSdkListSessions.mockImplementation(async () => infos);
-      await withWorkspaceCwd("/repo/env-a", reconcilePersistedSessions);
-      for (const info of infos) track(`session-${info.sessionId}`);
-
-      let releaseStaleList: ((value: SdkSessionInfo[]) => void) | undefined;
-      mockSdkListSessions.mockImplementation(
-        async () =>
-          new Promise<SdkSessionInfo[]>((resolve) => {
-            releaseStaleList = resolve;
-          }),
-      );
-      const staleReconcile = withWorkspaceCwd("/repo/env-a", reconcilePersistedSessions);
-      await waitFor(() => releaseStaleList !== undefined);
-
-      for (const info of infos) {
-        await expect(deleteSessionDurably(`session-${info.sessionId}`)).resolves.toBe(true);
-      }
-      releaseStaleList!(infos);
-      await staleReconcile;
-
-      // The fixed-size history intentionally lets the oldest deletion age out,
-      // while every deletion still inside the 128-entry window suppresses its
-      // pre-deletion row from this stale SDK snapshot.
-      expect(getSession(`session-${infos[0]!.sessionId}`)).toBeDefined();
-      expect(getSession(`session-${infos[1]!.sessionId}`)).toBeUndefined();
-      expect(getSession(`session-${infos.at(-1)!.sessionId}`)).toBeUndefined();
-    });
   });
 
   test("propagates a listSessions failure to its caller", async () => {
@@ -1950,7 +1872,7 @@ describe("forkPersistedSession", () => {
   });
 });
 
-describe("renameSessionDurably and deleteSessionDurably", () => {
+describe("renameSessionDurably", () => {
   test("renames on disk, in memory, and announces the new title", async () => {
     const state = await materializePersistedSession();
     const { events, stop } = captureEvents();
@@ -1993,133 +1915,6 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
         sessionId: state.id,
       }),
     );
-  });
-
-  test("deletes the rollout and the registry entry together", async () => {
-    const state = await materializePersistedSession();
-    await updateSessionPreferences(PERSISTED_SDK_ID, {
-      planMode: true,
-      dispatchedRequestIds: ["initial-prompt:env-1:tab-1"],
-    });
-    const baseline = getPromptDispatchRecordCountForTesting();
-    const prompt = sendPrompt(state.id, "run before delete", {
-      requestId: "durable-delete-cleanup",
-    });
-    const call = await nextQueryCall();
-    call.push({ type: "result", subtype: "success", result: "done" });
-    call.finish();
-    await prompt;
-    expect(getPromptDispatchRecordCountForTesting()).toBe(baseline + 1);
-
-    expect(await deleteSessionDurably(state.id)).toBe(true);
-    expect(mockSdkDeleteSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
-      dir: process.env.CWD || process.cwd(),
-    });
-    expect(await readSessionPreferences(PERSISTED_SDK_ID)).toBeUndefined();
-    expect(getSession(state.id)).toBeUndefined();
-    expect(getPromptDispatchRecordCountForTesting()).toBe(baseline);
-  });
-
-  test("deletes preferences for a session before its first SDK turn", async () => {
-    const state = createSession("not started");
-    track(state.id);
-    await setSessionPreferences(state.id, { planMode: true });
-    const sdkSessionId = state.id.slice("session-".length);
-
-    expect(await deleteSessionDurably(state.id)).toBe(true);
-    expect(mockSdkDeleteSession).not.toHaveBeenCalled();
-    expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
-    expect(getSession(state.id)).toBeUndefined();
-  });
-
-  test("cleans up bridge state when the installed SDK has no durable delete", async () => {
-    const state = await materializePersistedSession();
-    await updateSessionPreferences(PERSISTED_SDK_ID, { planMode: true });
-    installSdkModuleMock({ deleteSession: undefined });
-
-    await expect(deleteSessionDurably(state.id)).resolves.toBe(true);
-    expect(mockSdkDeleteSession).not.toHaveBeenCalled();
-    expect(await readSessionPreferences(PERSISTED_SDK_ID)).toBeUndefined();
-    expect(getSession(state.id)).toBeUndefined();
-  });
-
-  test("stops the active writer before deleting its rollout and serializes deletion", async () => {
-    const state = await materializePersistedSession();
-    const close = mock(async () => {});
-    const abort = new AbortController();
-    state.abortController = abort;
-    state.status = "running";
-    state.queryControl = { close };
-    let finishDelete: (() => void) | undefined;
-    mockSdkDeleteSession.mockImplementation(
-      async () =>
-        new Promise<void>((resolve) => {
-          finishDelete = resolve;
-        }),
-    );
-
-    const deletion = deleteSessionDurably(state.id);
-    await expect(sendPrompt(state.id, "too late")).rejects.toMatchObject({
-      code: "conflict",
-      message: "Session is being deleted",
-    });
-    await waitFor(() => finishDelete !== undefined);
-    expect(abort.signal.aborted).toBe(true);
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(state.deleting).toBe(true);
-    await expect(deleteSessionDurably(state.id)).rejects.toMatchObject({
-      code: "conflict",
-    });
-
-    finishDelete!();
-    await expect(deletion).resolves.toBe(true);
-    expect(getSession(state.id)).toBeUndefined();
-  });
-
-  test("restores the stopped session when durable deletion fails", async () => {
-    const state = await materializePersistedSession();
-    state.turnStartedAt = "2026-01-01T00:00:00.000Z";
-    state.completionBlockedByBackgroundTasks = true;
-    state.queryControl = {
-      close: async () => {
-        throw new Error("close failed");
-      },
-    };
-    mockSdkDeleteSession.mockImplementation(async () => {
-      throw new Error("disk busy");
-    });
-
-    await expect(deleteSessionDurably(state.id)).rejects.toThrow("disk busy");
-    expect(getSession(state.id)).toBe(state);
-    expect(state).toMatchObject({ deleting: false, status: "idle" });
-    expect(state.turnStartedAt).toBeUndefined();
-    expect(state.completionBlockedByBackgroundTasks).toBe(false);
-    expect(state.queryControl).toBeUndefined();
-
-    const prompt = sendPrompt(state.id, "try again");
-    const call = await nextQueryCall();
-    expect(typeof state.turnStartedAt).toBe("string");
-    expect(state.turnStartedAt).not.toBe("2026-01-01T00:00:00.000Z");
-    call.push({ type: "result", subtype: "success" });
-    call.finish();
-    await prompt;
-  });
-
-  test("keeps a deleted rollout absent when preference cleanup fails and lets retry finish cleanup", async () => {
-    const state = await materializePersistedSession();
-    const preferencePath = join(claudeSessionPreferencesDir(), `${PERSISTED_SDK_ID}.json`);
-    await rm(preferencePath, { recursive: true, force: true });
-    await mkdir(preferencePath, { recursive: true });
-
-    await expect(deleteSessionDurably(state.id)).rejects.toBeTruthy();
-    expect(mockSdkDeleteSession).toHaveBeenCalledTimes(1);
-    expect(getSession(state.id)).toBeUndefined();
-
-    await rm(preferencePath, { recursive: true, force: true });
-    mockSdkGetSessionInfo.mockImplementation(async () => undefined);
-    await expect(deleteSessionDurably(state.id)).resolves.toBe(false);
-    expect(await readSessionPreferences(PERSISTED_SDK_ID)).toBeUndefined();
-    expect(mockSdkDeleteSession).toHaveBeenCalledTimes(1);
   });
 });
 

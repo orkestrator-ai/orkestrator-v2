@@ -134,6 +134,16 @@ export const IMAGE_CAPABILITIES = {
    * as unknown.)
    */
   "opencode2-launch": 1,
+  /**
+   * `orkestrator-apt-install`: a root-owned installer, granted to `node`
+   * through sudo, that installs the Debian packages a project declares in
+   * `orkestrator-ai.json`'s `aptPackages` field. It takes only exact package
+   * names, refuses a denylist and anything an install would bring in from it,
+   * and installs under Restricted only behind an egress gateway. The image's
+   * apt sources are HTTPS. An older image has neither, so the backend opens
+   * Debian's archive only for a runtime whose image declares this (to-do 7770).
+   */
+  "apt-packages": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

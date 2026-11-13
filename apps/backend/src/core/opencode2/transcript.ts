@@ -1,6 +1,6 @@
 /**
  * OpenCode 2.x history rows (`Session.Message.Info`) as the shared normalized
- * transcript rows (docs/todo/agent-engines/0008-opencode-v2.md, build plan
+ * transcript rows (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan
  * phase 4).
  *
  * A 2.x assistant row is one model response (one step of the agent loop), so

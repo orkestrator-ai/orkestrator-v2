@@ -7,9 +7,10 @@ reads and discusses the configured local checkout, searches the code, and uses
 Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
-What is still missing — mainly provider parity and live qualification — lives in
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md)
-and the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+What is still missing — mainly provider parity and live qualification — is on
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+the live suite's evidence so far is in
+[coordinator-live-conformance.md](../development/coordinator-live-conformance.md);
 why each platform holds the read-only boundary the way it does is in
 [`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
 OpenCode and Grok steer in
@@ -616,7 +617,10 @@ on `self` and on each node:
 - **Restarts.** History is in memory (`MachineLoadSampler`,
   `apps/backend/src/core/machine-load.ts`) and starts empty on each start;
   persisting it would add a database write on every machine all day for a
-  figure the coverage field already keeps honest. A bucket a minute for the
+  figure the coverage field already keeps honest. Whether to persist it after
+  all is a conditional decision on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+  taken only once a coordinator is seen misled by short 24-hour coverage. A bucket a minute for the
   shorter windows and one every 15 minutes for the longest bound it to about
   160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
   [recurring-work.md](recurring-work.md) B29.
@@ -629,6 +633,17 @@ on `self` and on each node:
   `packages/protocol/src/unknown-command.ts`) and `error`.
   Last-known figures are never shown. `detail` is fixed wording, so a node's
   error text does not reach the coordinator.
+  The mixed-version runner's `nodes` module runs this `list_nodes` against a
+  real leaf of any published release
+  (`mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`):
+  a leaf from before `get_machine_load` reads as `older-version`, and each
+  node's `buildCommit` matches its hello. Run on 2026-11-13 on one Linux host
+  (to-do 1030 (retired) tasks 2 and 7): leaves of this checkout, 2.36.1 and
+  2.36.4-beta reported their load, a 2.34.4-beta leaf read as
+  `older-version`, a source build and 2.36.1 reported `buildCommit: null`,
+  and 2.36.4-beta reported the commit its tag points to. The `older-version`
+  branch retires with its [register](version-compatibility.md#register) row
+  (`machine-load.older-node`).
 - **Who sees it.** Read-only, for main coordinators and side agents
   (`list_nodes` is under `discovery`). The answer is parsed down to the fields
   above; no hostname, account, path or process detail crosses. The operator
@@ -1416,9 +1431,18 @@ case that pins the CLI's own refusal of a required sandbox runs only on Linux
 container environment, with two Claude reviewers and a Claude consolidation
 on the image's real `claude` against a scripted Messages API, is
 `container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
-[container qualification](../development/container-qualification.md)). Not
-yet run: stock Ubuntu with AppArmor's `bwrap-userns-restrict`, and Windows
-([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
+[container qualification](../development/container-qualification.md)). Since
+2026-11-13 that spec also holds each reviewer's submission until it has read
+Reviewer 1's Agent Info during the running turn ("No sandbox, approvals
+denied" and the container reason); that part has not run yet, because the
+host it was written on could not run Docker, and the display is pinned by
+`AgentInfoButton.reviewers.test.tsx`. Stock Ubuntu with AppArmor's
+`bwrap-userns-restrict` passed in CI's restricted AppArmor phase
+(`conformance-apparmor-live.test.ts`, 2026-11-11). The Agent Info run is the
+open part of to-do
+[0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)
+task 3, and Windows is a live check in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
 `enforced` on such a host, an administrator chooses one of:
@@ -1525,9 +1549,17 @@ the real pinned app-server on a loopback model,
 `live-read-only-exec-rules.test.ts` (`RUN_LIVE_CODEX_APP_SERVER=1`, no
 credits) shows a chained `cat | head && grep` run without asking only when
 the rules are in place, and a redirection and `sed` ask and are declined
-with the sentinel file unchanged. A full reviewer turn in a container has
-not run yet (to-do
-[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
+with the sentinel file unchanged. A whole reviewer turn on the same pinned
+binary, through the bridge's own runtime with the container policy, is
+`live-read-only-reviewer-turn.test.ts` (same gate; passed 2026-11-13 with
+Codex 0.167.0): the scripted reviewer
+(`e2e/agent-testing/container-fake-codex-review-api.ts`) reads the package
+and lists the workspace without asking, its `git diff`, a `touch` and an
+`apply_patch` are asked about and declined (both a command and a file-change
+approval reach `refuseApproval`), it reads the sealed diff file instead, and
+its `submit_review_report` call, made from a code-mode cell
+(`tools.mcp__orkestrator__submit_review_report`), reaches the MCP server
+with no approval asked; nothing is written to the checkout.
 A Linux host, macOS and a coordinator (which runs under its launcher's
 permission profile) keep Codex's sandbox. A Linux host whose policy refuses
 bubblewrap's namespace is not probed for Codex yet.
@@ -1543,8 +1575,16 @@ consolidation step, and Multi Review shows the warning note. Proved by
 `app-server-runtime-read-only-sandbox.test.ts`, `codex-read-only-sandbox.test.ts`,
 `codex-read-only-exec-rules.test.ts`, and the `refuseApproval` cases of
 `server-request-router.test.ts` against a
-scripted app-server. No real Codex turn in a container has run with it yet
-(to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)).
+scripted app-server, and by `live-read-only-reviewer-turn.test.ts` against the
+pinned binary. The same Multi Review in a real container, with Codex
+reviewers, consolidation and preparation on the image's `codex` and that
+scripted reviewer on the container's loopback, is
+`container-multi-review-codex-read-only.spec.ts` (opt-in,
+`ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1`; see
+[container qualification](../development/container-qualification.md)). It has
+not run yet: its run on a Docker host whose containers reach the profile's
+agent tools server is the open part of to-do
+[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md).
 
 ### Changing qualification
 
@@ -2937,7 +2977,10 @@ when one opens. The one exception is the backfill rule, for work older than stat
 wakes: a non-terminal status with no earlier notice, unchanged for over 24 hours, on
 an association over 14 days old is recorded without a wake
 (`coordinator-status-backfill.ts`), so a project idle for longer than that does lose
-such a notice.
+such a notice. The rule and its module are deleted once a count of the user's real
+coordinator stores finds no association older than status wakes (to-do 4860
+(retired) task 1, on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 **What wakes it.** Each resource is reduced to one settled status with a
 stable key; a key is sent once, recorded on the association
@@ -3790,6 +3833,17 @@ the notice names the outcome (`Its goal is limited (iteration-cap) after 3 of 3
 iterations`) and `get_worker_goal`. A coordinator's own pause or clear of a running
 goal ends the wait too, so that wake arrives at once.
 
+A worker on another node has no edge on the command node, so the remote sweep
+holds while that node's `get_agent_registry` entry says `goal.running`
+(`NodeCoordinatorRemote.workerState`), and the first read after the goal stops
+closes the delegation. An older node sends no `goal`, which reads as not
+running. `mise run qa:remote-goal-hold` (`scripts/qa-remote-goal-hold.ts`,
+weekly in `.github/workflows/mixed-version-qualification.yml`) checks this over
+a real node link with a leaf whose goal is held by its running check, and no
+agent turn. `tests/unit/qa-remote-goal-hold.test.ts` runs the same seeded goal
+through the leaf's registry, `NodeCoordinatorRemote` and the coordinator in
+process, in the default suite.
+
 **Status reads.** `get_worker_goal` and `get_tab_state` report the goal through
 `goalForModel`, and `list_agents` adds its status and counts, so an `idle` tab whose
 `goal.running` is true reads as between iterations. A model reads what a worker or
@@ -4146,8 +4200,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`
 
-The runs that qualify each platform, and the scenarios still to add, are in
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).
+The runs that qualify each platform are recorded in
+[coordinator-live-conformance.md](../development/coordinator-live-conformance.md)
+(to-do 0024, retired); the runs still owed are on the manual-test checklist.
 
 ### Build admission provenance
 

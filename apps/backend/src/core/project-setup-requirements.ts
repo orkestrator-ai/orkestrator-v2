@@ -1,3 +1,7 @@
+import {
+  declaredAptPackagesFromText,
+  type DeclaredAptPackages,
+} from "@orkestrator/protocol/apt-packages";
 import type { CommandContext } from "./commands-context.js";
 import { readDefaultBranchConfigText, type GitBlobReader } from "./setup-approval.js";
 
@@ -38,6 +42,12 @@ export type ProjectSetupRequirements = {
    * (no checkout, no such branch, or an unreadable file).
    */
   rootSteps: number | null;
+  /**
+   * The Debian packages the default branch's `aptPackages` declares, which a
+   * container's setup installs from Debian's archive (to-do 7770); `null`
+   * when this machine cannot tell. Empty when none are declared.
+   */
+  aptPackages: DeclaredAptPackages | null;
 };
 
 export async function readProjectSetupRequirements(
@@ -47,9 +57,12 @@ export async function readProjectSetupRequirements(
 ): Promise<ProjectSetupRequirements> {
   const project = await context.storage.getProject(projectId);
   if (!project) throw new Error(`Project not found: ${projectId}`);
-  if (!project.localPath) return { rootSteps: null };
+  if (!project.localPath) return { rootSteps: null, aptPackages: null };
   const { defaultBranch } = await context.storage.getRepositoryConfig(projectId);
   const text = await readDefaultBranchConfigText(project.localPath, defaultBranch, readBlob);
-  if (text === null) return { rootSteps: null };
-  return { rootSteps: text.trim() ? countRootSetupSteps(text) : 0 };
+  if (text === null) return { rootSteps: null, aptPackages: null };
+  if (!text.trim()) {
+    return { rootSteps: 0, aptPackages: { packages: [], refused: [], invalid: false } };
+  }
+  return { rootSteps: countRootSetupSteps(text), aptPackages: declaredAptPackagesFromText(text) };
 }

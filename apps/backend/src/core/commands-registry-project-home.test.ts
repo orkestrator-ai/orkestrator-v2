@@ -278,17 +278,18 @@ test("toolbar and external switches clear home PR identity before selection, ref
     prUrl: "https://github.com/org/repo/pull/1",
     prState: "open",
   });
-  await expect(invoke("merge_pr_local", { environmentId: home.id })).rejects.toThrow(
+  await expect(invoke("merge_environment_pr", { environmentId: home.id })).rejects.toThrow(
     "branch changed",
   );
 });
 
-for (const [command, cleanup] of [
-  ["merge_pr_local", true],
-  ["merge_environment_pr", false],
-  ["merge_environment_pr", true],
+// Unguarded, a home merge may ask to delete the branch (a guarded one is refused).
+for (const [guarded, cleanup] of [
+  [false, false],
+  [true, false],
+  [true, true],
 ] as const) {
-  test(`${command} merges a home with cleanup=${cleanup} and preserves every branch`, async () => {
+  test(`merges a home with guarded=${guarded}, cleanup=${cleanup} and preserves every branch`, async () => {
     const home = await ensure();
     await runCommand("git", ["switch", "-c", "feature/A"], { cwd: checkout });
     await ensure();
@@ -299,11 +300,11 @@ for (const [command, cleanup] of [
     });
     const gh = await fakeGh();
     try {
-      const result = await invoke(command, {
+      const result = await invoke("merge_environment_pr", {
         environmentId: home.id,
         cleanupAfterMerge: cleanup,
-        deleteBranch: command === "merge_pr_local",
-        ...(command === "merge_environment_pr"
+        deleteBranch: !guarded,
+        ...(guarded
           ? {
               expectedPrUrl: "https://github.com/org/repo/pull/1",
               expectedHeadSha: "a".repeat(40),
@@ -321,8 +322,8 @@ for (const [command, cleanup] of [
       );
       expect(log).not.toContain("DELETE");
       expect(log).not.toContain("--delete-branch");
-      if (command === "merge_environment_pr") expect(log).toContain(`sha=${"a".repeat(40)}`);
-      if (command === "merge_environment_pr" && cleanup) {
+      if (guarded) expect(log).toContain(`sha=${"a".repeat(40)}`);
+      if (cleanup) {
         expect(result).toMatchObject({ cleanupOutcome: "completed" });
         expect(await storage.getEnvironment(home.id)).toBeNull();
       }

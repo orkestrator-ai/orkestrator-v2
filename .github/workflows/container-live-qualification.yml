@@ -48,9 +48,13 @@ on:
       - "docker/update-firewall.sh"
       - "docker/orkestrator-egress-gateway.sh"
       - "docker/orkestrator-egress-filter.pl"
+      - "docker/orkestrator-apt-install.sh"
+      - "apps/backend/src/core/container-apt-packages.ts"
       - "apps/backend/src/core/egress-gateway.ts"
       - "apps/backend/src/core/github-ranges-cache.ts"
       - "apps/backend/scripts/github-ranges-seed.ts"
+      - "docker/artifact-preview-worker/**"
+      - "apps/backend/src/core/transcript-artifacts/preview-container.test.ts"
 
 # Only pull request runs supersede each other. Scheduled and manual runs need
 # unique groups so a newer pending run cannot replace an older one.
@@ -208,6 +212,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-filter.test.ts --parallel=1
 
+      # Declared Debian packages (aptPackages, to-do 7770): a restricted runtime
+      # behind its gateway installs one from deb.debian.org and refuses denied ones.
+      - name: Live declared Debian packages
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-apt-packages.test.ts --parallel=1
+
       # Claude Code, Codex, OpenCode, Pi and Grok finish fake-provider turns with the
       # telemetry hosts refused (6100); Cursor remains unqualified (7420).
       - name: Live agent CLIs without telemetry hosts
@@ -284,12 +294,30 @@ jobs:
 
       # Design export through real `docker exec` into the run's image: client
       # kills, the daemon closing the helper's stdin, and digest reconciliation
-      # (todo 0036 task 2).
+      # (todo 0036 task 2, retired; docs/architecture/design-canvas.md).
       - name: Live design export
         if: ${{ !cancelled() }}
         env:
           ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/design/export-container.test.ts --parallel=1
+
+      # The artifact preview worker under its own seccomp profile on this
+      # runner's runc, on both architectures: the profile once stopped runc 1.5
+      # from starting the worker at all (2026-11-13, container-qualification.md).
+      # The default builder, not the Buildx container one, so the image lands in
+      # the daemon's store; the live case skips only when the image is missing,
+      # which a failed build step already reports.
+      - name: Build the preview worker image
+        if: ${{ !cancelled() }}
+        env:
+          BUILDX_BUILDER: default
+        run: bash docker/artifact-preview-worker/build.sh "orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}"
+
+      - name: Live preview worker under its seccomp profile
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
+        run: docker image inspect "$ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE" > /dev/null && mise run test:logged -- --name preview-worker-container -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1
 
       # Numbers only, compared by hand with the Docker Desktop figures
       # (container-qualification.md, "Exec cost and container change signals").

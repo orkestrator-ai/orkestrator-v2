@@ -70,6 +70,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
     installed: "/usr/local/bin/orkestrator-bridge-launch",
     source: "docker/orkestrator-bridge-launch.sh",
   },
+  {
+    installed: "/usr/local/bin/orkestrator-apt-install",
+    source: "docker/orkestrator-apt-install.sh",
+  },
 ];
 
 // Names may hold digits (`opencode2-launch`); a narrower class skipped such a

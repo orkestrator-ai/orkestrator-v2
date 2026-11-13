@@ -462,8 +462,13 @@ blocks that, but the renderer compares its bundled version with the backend's
 (`apps/web/src/components/BackendVersionReminder.tsx`). On a mismatch it shows
 a warning toast saying which side is older and how to update: reload a page
 the backend served, update the desktop app (**Check for Updates…**), or update
-Orkestrator on the backend's machine. Dismissing it hides it for the session
-until either version changes. The Settings **Debug** section shows the same
+Orkestrator on the backend's machine. When the server is older than a page it
+served, the warning says so ("This server runs an older Orkestrator"; some
+features are unavailable until it is updated) rather than calling the server
+updated. A reload is offered once per pair of versions: if the page comes
+back with the same pair (a renderer the server does not bundle, such as a
+development or hosted one), the warning drops the reload. Dismissing it hides
+it for the session until either version changes. The Settings **Debug** section shows the same
 note. The public CLI has its own schema handshake instead
 ([public-cli.md](public-cli.md)).
 

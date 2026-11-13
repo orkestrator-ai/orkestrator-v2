@@ -8,15 +8,16 @@ decisions T11.1 and T11.2); these are what it left for a decision.
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `e6c3da899`.
+Analysed 2026-11-06 against `main` at `e6c3da899`. All five tasks done
+2026-11-13 against `main` at `17d28238c`.
 
 ### Tasks
 
-1. **Queued prompt after a restart-interrupted turn**: a prompt queued behind a turn that a backend restart cut off waits for a later turn, and then runs after a prompt the user typed later. Status: open.
-2. **Reconnected client freshness**: a client whose link drops converges only on its reconnect ladder (p50 6.3 s, p95 13.1 s after the link returns, over 10 rounds), outside every per-row budget. Status: open.
-3. **Register the CLI's local-connection refusal for older backends**: on Linux, `--profile`/`--data-dir` connections refuse every backend from before #1848, which is every published release; `--url` with `--credential-file` works. Status: open.
-4. **Version notice against an older backend**: today's renderer against v2.21.0 says "Orkestrator has been updated" and asks for a reload that cannot help a hosted client. Status: open.
-5. **A committed older-backend launcher**: the v2.21.0 run used a launcher kept under `output/`; make it repeatable. Status: open.
+1. **Queued prompt after a restart-interrupted turn**: a prompt queued behind a turn that a backend restart cut off waits for a later turn, and then runs after a prompt the user typed later. Status: done (2026-11-13: the drain treats `interruption: "restart"` like an idle turn).
+2. **Reconnected client freshness**: a client whose link drops converges only on its reconnect ladder (p50 6.3 s, p95 13.1 s after the link returns, over 10 rounds), outside every per-row budget. Status: done (2026-11-13: recorded as a budget row bounded by the ladder).
+3. **Register the CLI's local-connection refusal for older backends**: on Linux, `--profile`/`--data-dir` connections refuse every backend from before #1848, which is every published release; `--url` with `--credential-file` works. Status: done (2026-11-13: registered; the refusal names the workaround).
+4. **Version notice against an older backend**: today's renderer against v2.21.0 says "Orkestrator has been updated" and asks for a reload that cannot help a hosted client. Status: done (2026-11-13: the notice names an older server and drops a reload that did not help).
+5. **A committed older-backend launcher**: the v2.21.0 run used a launcher kept under `output/`; make it repeatable. Status: done (2026-11-13: `scripts/older-release-stack.ts`).
 
 ### 1. Queued prompt after a restart-interrupted turn
 
@@ -110,6 +111,64 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
   - **Keep the documented commands only.**
     - Pros: nothing to maintain.
     - Cons: easy to get the Docker isolation wrong, as the first attempt did.
+
+## Assumptions and decisions
+
+### Task 1: drain after a restart interruption
+
+Chose the recommended option. `readProviderStatus` already carried the
+bridges' `interruption: "restart"` (Claude and Codex report it), so no bridge
+contract change was needed: `drainReadyPromptQueue` now treats
+`status: "error"` with that interruption as idle and sends the head. Every
+other terminal error still defers and parks, so the at-capacity guard is
+unchanged. A session that keeps restarting takes one queued prompt per
+restart, each one the user queued. Covered by
+`native-agent-prompt-queue-dispatcher.test.ts` ("after a restart-interrupted
+turn"), which fails without the change; `multi-client-restarts-live.spec.ts`
+now expects the queued prompt before the later one.
+
+### Task 2: freshness after a client's own outage
+
+Chose the recommended option: a row in recurring-work.md's latency budgets,
+bounded by the ladder (≤ 16 s plus one read), pinned by
+`web-gateway-reconnect.test.ts`. No retry-on-success signal was added; the
+page's only traffic during an outage is the stream.
+
+### Task 3: the CLI refusal
+
+Chose the recommended option: a Register row in version-compatibility.md
+(owner 7570 task 6, since #1848 has shipped only in betas so far) and a
+refusal that names the first release that publishes the identity
+(v2.36.4-beta) and the `--url <its URL> --credential-file <its data
+directory>/gateway-auth.json` route. The start-time fallback was not taken: it
+would reopen the pid-reuse window #1848 closed.
+
+### Task 4: the version notice
+
+Chose the recommended wording for an older server ("This server runs an older
+Orkestrator"; some features are unavailable until it is updated). A hosted
+client already got "The Orkestrator backend is out of date" with no reload;
+the run's page was classified `backend-served` (the older backend served
+today's renderer from a dev server), so the fix is in that branch. A reload
+still helps a real rollback (the server then serves its own renderer), so it
+is offered once per pair of versions; when the page comes back with the same
+pair, the notice drops it. Checked against a real v2.21.0 backend on
+2026-11-13: first load offered Reload, the reload came back without it.
+
+### Task 5: the launcher
+
+Chose `scripts/older-release-stack.ts`, reusing the mixed-version harness's
+constructed environment and port rules. It archives the tag (npm carries no
+v2.21.0 and no renderer), installs it frozen without lifecycle scripts, and
+builds only what the mode needs. Two modes: `backend` (an older backend
+serving a renderer URL or a profile's renderer) and `renderer` (this backend
+serving the tag's renderer, used by 4880 task 3). Beyond 0048's recipe it
+sets `ORKESTRATOR_CONTROL_MCP_PORT=0`, because v2.21.0 otherwise binds the
+production Control MCP port, and writes the gateway token to the data
+directory's owner-only `gateway-auth.json` instead of printing it. Started
+v2.21.0 on 2026-11-13: it answered `2.21.0`, bound loopback ports plus its
+agent-tools listener on `0.0.0.0` (v2.21.0's own default), and reported
+Docker unavailable without probing a container.
 
 ## Related
 

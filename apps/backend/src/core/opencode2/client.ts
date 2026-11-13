@@ -2,7 +2,7 @@
  * A small typed client for the OpenCode 2.x server API (`/api/*`).
  *
  * OpenCode 2.x serves no legacy routes, so the 1.x SDK cannot drive it
- * (docs/todo/agent-engines/0008-opencode-v2.md). This client covers only the
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)). This client covers only the
  * routes the 2.x provider uses, verified against the pinned 2.2.6 server and
  * its committed `packages/protocol/openapi.json`. It is written here rather
  * than taken from `@opencode/client` because that package pins `effect` to an

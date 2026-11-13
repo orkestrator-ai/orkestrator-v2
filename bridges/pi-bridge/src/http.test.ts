@@ -1761,9 +1761,8 @@ describe("successful lifecycle routes", () => {
     process.env.PI_SESSION_DIR = directory;
     process.env.PI_BRIDGE_STATE_DIR = stateDir;
     const state = seedSession();
-    state.session = fakeAgentSession({
+    const parent = fakeAgentSession({
       sessionManager: {
-        createBranchedSession: (entryId: string) => (entryId ? forkedFile : null),
         getBranch: () => [
           {
             type: "message",
@@ -1776,7 +1775,31 @@ describe("successful lifecycle routes", () => {
         getLeafId: () => "entry-1",
       },
     });
-    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    state.session = parent;
+    const forks: Array<{ entryId: string; position?: string }> = [];
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => composer,
+      // The fork attaches its own runtime on the parent's file, then asks that
+      // runtime to fork, which swaps in the branched session as Pi's does.
+      createAgentSession: async (attaching) => {
+        let current = parent;
+        attaching.runtime = {
+          get session() {
+            return current;
+          },
+          fork: async (entryId: string, options?: { position?: "before" | "at" }) => {
+            forks.push({ entryId, ...(options?.position ? { position: options.position } : {}) });
+            current = fakeAgentSession({
+              sessionId: "forked-pi-session",
+              sessionFile: forkedFile,
+            });
+            return { cancelled: false, selectedText: "hello" };
+          },
+          dispose: async () => undefined,
+        } as never;
+        return parent;
+      },
+    });
     try {
       const response = await call(`/session/${state.id}/fork`, {
         method: "POST",
@@ -1785,8 +1808,10 @@ describe("successful lifecycle routes", () => {
 
       expect(response.status, await response.clone().text()).toBe(200);
       const body = await response.json();
+      expect(forks).toEqual([{ entryId: "entry-1", position: "before" }]);
       expect(body.sessionId).not.toBe(state.id);
-      expect(sessions.get(body.sessionId)?.sessionFile).toBe(await realpath(forkedFile));
+      expect(body.draft).toBe("hello");
+      expect(sessions.get(body.sessionId)?.sessionFile).toBe(forkedFile);
 
       // The fork is a real conversation on disk from the moment it is minted.
       // Losing its pointer to a restart would strand the branched JSONL file

@@ -19,7 +19,6 @@ import {
   getPrMonitorStateCommand,
   mergeEnvironmentPrCommand,
   mergePrCommand,
-  mergePrLocalCommand,
   prMonitorAgentTurnCompletedCommand,
   prMonitorProbeEnvironmentCommand,
   prMonitorWatchCommand,
@@ -251,19 +250,6 @@ export function registerPullRequestCommands(
       hasMergeConflicts: detection.hasMergeConflicts,
       checkSummary: detection.checkSummary,
     };
-  });
-  registerDefined(mergePrLocalCommand, async ({ environmentId, method, deleteBranch }, context) => {
-    const id = asString(environmentId, "environmentId");
-    const environment = await context.storage.getEnvironment(id);
-    if (!environment?.worktreePath) throw new Error("Local environment worktree is not available");
-    if (!environment.prUrl) throw new Error("Local environment PR URL is not available");
-    return runStoredEnvironmentMerge(
-      environment,
-      parseMergeMethod(method),
-      asBoolean(deleteBranch, true),
-      context,
-      async (result) => result,
-    );
   });
   registerDefined(mergePrCommand, async ({ containerId, method, deleteBranch }, context) => {
     const resolvedContainerId = asString(containerId, "containerId");

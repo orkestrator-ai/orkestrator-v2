@@ -53,3 +53,23 @@ not if the subscription's send awaits real I/O (storage or a timer) that a
 loaded host delays. Per the testing guide, reproduce it first (for example
 under `scripts/test-under-contention.ts`) before changing the test, and await
 the send itself rather than adding microtask rounds.
+
+## Recurrence (2026-11-13)
+
+- **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; `mise run flaky:recurrence -- 9962 --base 17d28238c --registry-ref origin/main` answered open.
+- **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at
+  `5d3ddf201` (7571 removals). It changes no coordinator, node-coordination
+  or agent-mail file.
+- **Failure:** the same assertion, `expect(world.received(main)).toHaveLength(1)`
+  received length 0 at line 390 (82.72 ms), after a
+  `node-reconnect.notice-failed scope=bk_leaf kind=Error` log line.
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun3 -- mise run test`
+  on Linux at load average about 50 to 76. Backend 18,150 passed and 1
+  failed across 1,279 files; web 14,711 passed and 0 failed; root, bridges and
+  protocol groups passed.
+- **Isolated rerun:** the aggregate runner's automatic rerun of the unchanged
+  owning file reported `PASSED ALONE (1.5s)`.
+- **Evidence:** inner `orkestrator-test-run.D8gQ1A/` and outer
+  `orkestrator-test-run.raSa3l/review-default-tests-rerun3.log.gz` under the
+  host temporary directory. The `notice-failed` line suggests the reconnect
+  notice's send rejected rather than arrived late.

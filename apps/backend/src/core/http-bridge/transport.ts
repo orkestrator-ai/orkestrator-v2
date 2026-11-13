@@ -8,7 +8,7 @@ import {
   type NativeAgentReadiness,
   type NativeAgentSignInRoute,
 } from "@orkestrator/protocol/native-agent";
-import type { PlanUsageState } from "../plan-usage-cache.js";
+import type { PlanUsageState } from "../plan-usage/index.js";
 import type { PromptAttachment } from "../prompt-attachments.js";
 import {
   type BridgeConnection,

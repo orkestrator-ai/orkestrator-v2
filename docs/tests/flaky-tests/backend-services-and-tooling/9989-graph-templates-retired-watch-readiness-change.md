@@ -22,7 +22,7 @@
   `mise run test:logged -- --name review-default-tests-rerun3 -- mise run test`,
   default workers, load average about 34 to 52 on 16 threads. Counts: backend
   18,150 passed and 1 failed; web 14,721 passed and 1 failed (flake
-  [9996](../design-canvas-and-artifacts/9996-static-html-read-failure-search-withheld.md));
+  [9995](../design-canvas-and-artifacts/9995-static-html-read-failure-withheld-aggregate.md));
   desktop 2,149, protocol 5,835, toolchain 135, CLI 526, web-public 52, root,
   bridge and codex protocol lockfile groups passed. The aggregate runner's own
   lone rerun, while other worktrees still held the host, **failed** the same

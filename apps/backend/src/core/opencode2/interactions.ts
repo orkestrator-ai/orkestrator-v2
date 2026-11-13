@@ -1,6 +1,6 @@
 /**
  * OpenCode 2.x permission requests and forms as the shared approval and
- * question cards (docs/todo/agent-engines/0008-opencode-v2.md, build plan
+ * question cards (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), build plan
  * phase 4).
  *
  * - **Authoritative on every read.** `GET /api/session/:id/permission` and

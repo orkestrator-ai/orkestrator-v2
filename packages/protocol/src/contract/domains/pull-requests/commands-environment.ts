@@ -70,18 +70,6 @@ const mergeMethod = optionalUnknown;
 /** Read leniently; anything but a boolean is `true`. */
 const deleteBranch = optionalUnknown;
 
-export const mergePrLocalCommand = defineCommand({
-  domain: pullRequestsDomain,
-  name: "merge_pr_local",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ environmentId: Schema.String, method: mergeMethod, deleteBranch }),
-  result: MergePrResultSchema,
-  // Ignored, the merge squashes and deletes the branch (both defaults).
-  critical: ["method", "deleteBranch"],
-});
-
 export const mergePrCommand = defineCommand({
   domain: pullRequestsDomain,
   name: "merge_pr",
@@ -90,6 +78,7 @@ export const mergePrCommand = defineCommand({
   read: false,
   args: Schema.Struct({ containerId: Schema.String, method: mergeMethod, deleteBranch }),
   result: MergePrResultSchema,
+  // Ignored, the merge squashes and deletes the branch (both defaults).
   critical: ["method", "deleteBranch"],
 });
 
@@ -256,7 +245,6 @@ export const verifyReviewPackageCommand = defineCommand({
 export const ENVIRONMENT_PR_COMMANDS = [
   detectPrLocalCommand,
   detectPrCommand,
-  mergePrLocalCommand,
   mergePrCommand,
   mergeEnvironmentPrCommand,
   getPrMonitorStateCommand,

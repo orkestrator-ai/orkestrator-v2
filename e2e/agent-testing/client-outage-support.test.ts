@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import http, { type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo, type Socket } from "node:net";
 import {
   retriesAreSpread,
   retryRungs,
@@ -190,6 +190,67 @@ describe("outage link", () => {
     expect(seen).toEqual([{ path: "/login?code=one-shot" }, { path: "/", cookie: "session=s1" }]);
     // Sign-in is a page load, not API traffic: nothing recorded.
     expect(outage.requests).toHaveLength(0);
+  });
+
+  test("a stream is recorded as open until its client closes it", async () => {
+    const gateway = await serve((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": connected\n\n");
+    });
+    const outage = await link(gateway.url);
+    const stream = await fetch(`${outage.url}/__orkestrator/events?includeEvents=a,b`);
+    const reader = stream.body!.getReader();
+    await reader.read();
+    expect(outage.requests[0]).toMatchObject({ kind: "terminal-stream", status: 200 });
+    expect(outage.requests[0]!.closedAt).toBeUndefined();
+
+    await reader.cancel();
+    const deadline = Date.now() + 5_000;
+    while (outage.requests[0]!.closedAt === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(outage.requests[0]!.closedAt).toBeGreaterThanOrEqual(outage.requests[0]!.at);
+  });
+
+  test("a terminal socket is recorded as open until its client closes it", async () => {
+    const gateway = await serve((_request, response) => response.end());
+    const upgraded = new Set<Socket>();
+    // An upgraded socket is outside closeAllConnections; destroy it before the
+    // gateway's own close waits on it.
+    closers.unshift(async () => {
+      for (const socket of Array.from(upgraded)) socket.destroy();
+    });
+    gateway.server.on("upgrade", (_request, socket: Socket) => {
+      upgraded.add(socket);
+      socket.on("error", () => {});
+      // A WebSocket server closes its side when the client's half ends.
+      socket.once("end", () => socket.end());
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+      );
+    });
+    const outage = await link(gateway.url);
+    const { port } = new URL(outage.url);
+    const client = net.connect(Number(port), "127.0.0.1");
+    client.on("error", () => {});
+    await new Promise<void>((resolve) => client.once("connect", () => resolve()));
+    client.write(
+      "GET /__orkestrator/terminal HTTP/1.1\r\nHost: link\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    );
+    const first = await new Promise<Buffer>((resolve) => client.once("data", resolve));
+    expect(first.toString("latin1")).toStartWith("HTTP/1.1 101");
+    const deadline = Date.now() + 5_000;
+    while (outage.requests[0]?.status === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(outage.requests[0]).toMatchObject({ kind: "terminal-socket", status: 101 });
+    expect(outage.requests[0]!.closedAt).toBeUndefined();
+
+    client.destroy();
+    while (outage.requests[0]!.closedAt === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(outage.requests[0]!.closedAt).toBeGreaterThanOrEqual(outage.requests[0]!.at);
   });
 
   test("reset refuses new requests and ends an open stream", async () => {

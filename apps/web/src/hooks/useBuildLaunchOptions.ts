@@ -21,6 +21,7 @@ import {
 import { useConfigStore, useProjectStore } from "@/stores";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { DeclaredAptPackages } from "@orkestrator/protocol/apt-packages";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
@@ -180,21 +181,35 @@ export function useReviewModelCatalog(projectId: string, enabled: boolean) {
   );
 }
 
+/** What a project's default branch asks of a new container (`get_project_setup_requirements`). */
+export interface ProjectSetupRequirementsView {
+  /** `root` steps, which run only with Full access. */
+  rootSteps: number | null;
+  /**
+   * Declared Debian packages (`aptPackages`), which setup installs from
+   * Debian's archive. `null` when the machine cannot tell or predates them.
+   */
+  aptPackages: DeclaredAptPackages | null;
+}
+
 /**
- * How many `root` setup steps the project's default branch names, as the
- * project's machine reads them (`get_project_setup_requirements`). Root steps
- * run only in containers with full network access, so the build launcher
- * warns when Restricted is chosen. `null` while loading, when the machine
- * cannot tell, or when it predates the command: no warning rather than a
- * guessed one.
+ * What the project's default branch asks of a new container, as the
+ * project's machine reads it (`get_project_setup_requirements`): its `root`
+ * setup steps, which run only in containers with full network access, and the
+ * Debian packages it declares, which a restricted container reaches Debian's
+ * archive for. `null` while loading, when the machine cannot tell, or when it
+ * predates the command: no warning rather than a guessed one.
  */
-export function useProjectRootSetupSteps(projectId: string, enabled: boolean): number | null {
+export function useProjectSetupRequirements(
+  projectId: string,
+  enabled: boolean,
+): ProjectSetupRequirementsView | null {
   const nodeBackend = useScopeBackend();
   // Keyed by project and machine, so an answer for one never shows for another.
   const [loaded, setLoaded] = useState<{
     projectId: string;
     backend: typeof nodeBackend;
-    rootSteps: number | null;
+    requirements: ProjectSetupRequirementsView | null;
   } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -209,20 +224,34 @@ export function useProjectRootSetupSteps(projectId: string, enabled: boolean): n
     // Any failure, a synchronous one included, means "cannot tell".
     void Promise.resolve()
       .then(() => nodeBackend.getProjectSetupRequirements(projectId))
-      .then(({ rootSteps }) => {
-        if (!cancelled) setLoaded({ projectId, backend: nodeBackend, rootSteps });
+      .then(({ rootSteps, aptPackages }) => {
+        if (!cancelled)
+          setLoaded({
+            projectId,
+            backend: nodeBackend,
+            requirements: { rootSteps, aptPackages: aptPackages ?? null },
+          });
       })
       .catch((error: unknown) => {
         log.debug("setup-requirements.load-failed", { projectId, error: formatLogError(error) });
-        if (!cancelled) setLoaded({ projectId, backend: nodeBackend, rootSteps: null });
+        if (!cancelled) setLoaded({ projectId, backend: nodeBackend, requirements: null });
       });
     return () => {
       cancelled = true;
     };
   }, [enabled, projectId, nodeBackend]);
   return enabled && loaded?.projectId === projectId && loaded.backend === nodeBackend
-    ? loaded.rootSteps
+    ? loaded.requirements
     : null;
+}
+
+/**
+ * How many `root` setup steps the project's default branch names
+ * ({@link useProjectSetupRequirements}). Root steps run only in containers
+ * with full network access, so the launchers warn when Restricted is chosen.
+ */
+export function useProjectRootSetupSteps(projectId: string, enabled: boolean): number | null {
+  return useProjectSetupRequirements(projectId, enabled)?.rootSteps ?? null;
 }
 
 /** Shared defaults and repository-scoped model catalog for every build launcher. */
@@ -240,7 +269,9 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     }),
     [config, projectHasLocalPath, projectId],
   );
-  const rootSetupSteps = useProjectRootSetupSteps(projectId, enabled);
+  const setupRequirements = useProjectSetupRequirements(projectId, enabled);
+  const rootSetupSteps = setupRequirements?.rootSteps ?? null;
+  const aptPackages = setupRequirements?.aptPackages ?? null;
   const projectCatalog = useProjectModelCatalog(projectId, enabled);
   const catalog = useMemo(() => {
     const allowedProviders = normalizeOpenCodeModelProviders(config.global.openCodeModelProviders);
@@ -311,8 +342,8 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
   }, [openCodeModelPreferences.favorite]);
 
   const launchDefaults = useMemo(
-    () => ({ ...defaults, rootSetupSteps }),
-    [defaults, rootSetupSteps],
+    () => ({ ...defaults, rootSetupSteps, aptPackages }),
+    [defaults, rootSetupSteps, aptPackages],
   );
 
   return { catalog, defaults: launchDefaults, favoriteOpenCodeModelIds };

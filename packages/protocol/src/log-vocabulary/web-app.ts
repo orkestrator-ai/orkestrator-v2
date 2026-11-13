@@ -11,8 +11,6 @@ export const WEB_APP_LOG_AREAS = defineLogAreas({
       "docker.sync-failed": "Reconciling environments with Docker failed; non-fatal.",
       "prompt-queues.restore-failed": "An environment's prompt queues could not be restored.",
       "multi-reviews.restore-failed": "An environment's multi reviews could not be restored.",
-      "build-pipelines.migrate-failed":
-        "Migrating legacy build pipelines failed; the next launch retries.",
       "build-pipelines.restore-failed": "A project's build pipelines could not be restored.",
       "macos-permissions.check-failed": "Reading macOS file permission status failed.",
       "cli-check.failed": "One startup CLI check failed; its result stays unknown.",

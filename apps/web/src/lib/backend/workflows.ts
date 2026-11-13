@@ -1062,7 +1062,6 @@ export {
   skipBuildPipelineStep,
   retryBuildPipelineInteractionFailure,
   retryBuildPipelineCompletionComment,
-  importLegacyBuildPipelines,
   getBuildPipeline,
   getBuildPipelineSessionProjection,
   getBuildPipelineConditional,

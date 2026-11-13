@@ -1011,6 +1011,35 @@ Reloading must retain the delivered status without sending the carrier again.
 The native mail-steer suite separately exercises a turn changing between the
 active-run lookup and the provider's check of `expectedRunId`.
 
+The queued-steering inactive-path scenario has its own spec,
+`e2e/agent-testing/steer-inactive-live.spec.ts`, one case per platform. Codex
+runs on a real model under `ORKESTRATOR_AGENT_TEST_REVIEW=1`. Claude and
+Cursor run with no login and nothing billed under
+`ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1`: Claude's real CLI on a scripted
+loopback model, Cursor's real bridge over its fake SDK, which the case swaps in
+for `bridges/cursor-bridge/dist/index.js` and puts back afterwards. That entry
+is shared by every profile started from the checkout, so the swap holds an
+owner lock (`dist/index.qa-lock.json`) and a second run is refused while the
+first is alive; the bundle runs the fake only for the owning profile's bridges,
+and any other profile's launch runs the real entry kept as
+`dist/index.qa-real.js`. Claude's scripted model appends the marker once per
+delivered steer, so a duplicate delivery fails the case:
+
+```bash
+mise run dev:test --profile steer7 --fixture --no-agent-credentials --no-host-seed \
+  --agent-platforms claude,cursor --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=steer7 ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1 \
+  mise run test:logged -- --name steer-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/steer-inactive-live.spec.ts
+mise run dev:stop --profile steer7
+mise run dev:reset --profile steer7
+```
+
+`ORKESTRATOR_AGENT_TEST_STEER_PLATFORMS` narrows the scripted platforms, and
+`ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS=claude,cursor` runs them on the
+profile's real logins instead (billed).
+
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
 so without a pin the native-tab case starts on the default your connected

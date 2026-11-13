@@ -15,7 +15,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 1. **Manual tests and live checks** (307 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (53 items): make each call
+2. **Decisions, approvals and outward actions** (55 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -40,7 +40,10 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`.
+were done; both are in Git history at `1fd391e3a`. 0036 was retired on
+2026-11-13, once its macOS bundle run and v2.22.3 renderer pairing were done
+and its other tasks were closed or moved; it is in Git history at
+`f2c4cee71`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -84,11 +87,11 @@ agent can apply it.
 | Containers and environments | 24 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
 | Cross-cutting | 75 | 20 |
-| Design canvas | 5 | 0 |
+| Design canvas | 5 | 2 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 307 | 53 |
+| **Total** | 307 | 55 |
 
 ## Outstanding work
 
@@ -562,10 +565,10 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 #### Design canvas
 
-- [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 3: native menu key equivalents on macOS.** In an unshared macOS desktop session, run the desktop app on a disposable `mise run dev:test` profile (not headless), open a design canvas, change the canvas zoom, focus the canvas and press ⌘0, ⌘=, ⌘- and ⌘Z. Pass: each key acts on the canvas only, the app zoom (View → Actual Size, Zoom In, Zoom Out) does not change, and ⌘Z undoes the canvas edit. Record: per-key result, macOS and app versions, in 0036's Electron evidence; a failure opens a new to-do.
-- [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 4: human screen-reader pass.** A daily screen-reader user, VoiceOver on macOS first, then NVDA on Windows, completes every journey step of `e2e/DesignCanvasAccessibility.spec.ts` by speech alone on a design canvas in a disposable profile, covering the layer tree, frame list, inspector and both status regions: verbosity, live-region timing during nudge bursts, the frame `aria-description`, Preview-mode frames, rotor and browse-mode navigation. Record: findings per area, reader, OS and browser versions, and whether the label-only inspector naming is confirmed or reversed, in 0036's accessibility evidence; file each defect as a new numbered to-do.
-- [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 5: client performance on a slower laptop.** On a laptop clearly slower than beelink (Intel Core Ultra 9 285H) and the M5 Max, on a quiet host, run `mise exec -- bun e2e/perf/design-canvas-perf.ts --runs 3 --samples 20 --moves 3 --html-samples 5 --cycles 12 --skip-library --rev HEAD --browser chromium`, then `--skip-canvas --library-samples 5 --rev HEAD --browser chromium`, each through `mise run test:logged` (drop `--browser chromium` if Google Chrome is installed). Record: the host (CPU, RAM, OS), load during the run, the two JSON report names and the headline figures (pan frame drops, acknowledgment p95, live iframes, library open time) next to the Linux and M5 Max ones, in a new 0036 "Qualification evidence" section.
-- [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 12: 64-frame retention run on the Apple M5 Max.** On the Apple M5 Max (the 2026-10-22 host), quiet, at current `main`: `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames 1,64 --cycles 100 --skip-library --rev HEAD` (Google Chrome, so no `--browser chromium`). Keep the final JSON report under `output/benchmarks/design-canvas/`. Pass: all three runs report `converged true`, with `windowListeners` and `cdpFrames` settled at 64 frames and at most 8 iframes. Record: pass/fail, the settled counts, the report name and commit, compared with the 2026-10-22 run on `60a75b73`, in 0036's "Retention run" evidence.
+- [ ] **0036 (retired) task 3: native menu key equivalents on macOS.** (Background: [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `f2c4cee71`.) The macOS packaged bundle passed the design journey on 2026-11-13, with keys sent through Chromium, not the OS. In an unshared macOS desktop session, run the desktop app on a disposable `mise run dev:test` profile (not headless), open a design canvas, change the canvas zoom, focus the canvas and press ⌘0, ⌘=, ⌘- and ⌘Z. Pass: each key acts on the canvas only, the app zoom (View → Actual Size, Zoom In, Zoom Out) does not change, and ⌘Z undoes the canvas edit. Record: per-key result, macOS and app versions; reply to the coordinator. A failure opens a new to-do.
+- [ ] **0036 (retired) task 4: human screen-reader pass.** (Background: [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `f2c4cee71`.) A daily screen-reader user, VoiceOver on macOS first, then NVDA on Windows, completes every journey step of `e2e/DesignCanvasAccessibility.spec.ts` by speech alone on a design canvas in a disposable profile, covering the layer tree, frame list, inspector and both status regions: verbosity, live-region timing during nudge bursts, the frame `aria-description`, Preview-mode frames, rotor and browse-mode navigation. Record: findings per area, reader, OS and browser versions, and whether the label-only inspector naming is confirmed or reversed; reply to the coordinator, and file each defect as a new numbered to-do.
+- [ ] **0036 (retired) task 5: client performance on a slower laptop.** (Background: [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `f2c4cee71`.) On a laptop clearly slower than beelink (Intel Core Ultra 9 285H) and the M5 Max, on a quiet host, run `mise exec -- bun e2e/perf/design-canvas-perf.ts --runs 3 --samples 20 --moves 3 --html-samples 5 --cycles 12 --skip-library --rev HEAD --browser chromium`, then `--skip-canvas --library-samples 5 --rev HEAD --browser chromium`, each through `mise run test:logged` (drop `--browser chromium` if Google Chrome is installed). Record: the host (CPU, RAM, OS), load during the run, the two JSON report names and the headline figures (pan frame drops, acknowledgment p95, live iframes, library open time) next to the Linux and M5 Max ones; reply to the coordinator, who records them in `design-canvas.md` → Qualification.
+- [ ] **0036 (retired) task 12: 64-frame retention run on the Apple M5 Max.** (Background: [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `f2c4cee71`.) On the Apple M5 Max (the 2026-10-22 host), quiet, at current `main`: `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames 1,64 --cycles 100 --skip-library --rev HEAD` (Google Chrome, so no `--browser chromium`). Keep the final JSON report under `output/benchmarks/design-canvas/`. Pass: all three runs report `converged true`, with `windowListeners` and `cdpFrames` settled at 64 frames and at most 8 iframes. Record: pass/fail, the settled counts, the report name and commit, compared with the 2026-10-22 run on `60a75b73`; reply to the coordinator, who records it in `design-canvas.md` → Qualification.
 - [ ] **0038 (retired) task 1 (live part): a design link to an archived Codex conversation.** (Background: [`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context).) The archived state is covered by backend, dialog and browser tests against fixed answers; no run has archived a real Codex thread, because that needs a Codex login and a billed turn. On a disposable `mise run dev:test` profile signed in to Codex (`--fixture --credential-source codex --agent-platforms codex`), start a design workspace with Codex and a one-word brief, close the design conversation's tab, open a new Codex tab's resume list, **Remove from list** that conversation, then open **Ask agent** on the canvas. Expect the link to read "Closed — archived by the agent" with **Unarchive and resume** and **Remove link**, and a new conversation (not the archived one) as the default destination. Press **Unarchive and resume**: the conversation must reopen in a new tab with its transcript and nothing sent, and the resume list must show it again without "Show archived". Also stop the profile's Codex bridge before opening **Ask agent** once: the link must read "Closed — can be resumed" (the archived list is asked only of a running bridge). Record: each state seen, the Codex CLI version, the commit, and whether the reopened transcript kept its user turns.
 
 #### MCP
@@ -754,6 +757,11 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 7: claim or release the unmounted dialog and uncalled admin commands.** `NetworkWhitelistDialog.tsx` is never mounted; `set_workflow_result_tools_rollout` and `graph_capability_ceiling_set` have never been called by a client. Say whether any of them is wanted; the recommendation is to delete whatever nobody claims within a release. Record: the answer in 7571's Assumptions and decisions.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 11: keep or delete the root `conductor.json`.** Nothing in the repository references it. Say whether anyone still opens this repository in Conductor; if not, an agent deletes it. Record: the answer in 7571's Assumptions and decisions.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 13: decide the Linear integration.** `connect_linear` and `disconnect_linear` have no UI caller. Choose one: remove the Linear integration as a whole if nothing uses it (recommended) or keep it and give it UI. Record: the choice in 7571's Assumptions and decisions.
+
+#### Design canvas
+
+- [ ] **0036 (retired) task 9: are design library thumbnails wanted?** (Background: [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `f2c4cee71`.) The saved-designs library lists facts only, and its first page paints in about 35 ms at 256 canvases (M5 Max, 2026-10-22). Choose: no thumbnails until users ask (recommended; avoids a render-queue workload that would then justify a capture cache), or build library and offscreen thumbnails as a product feature (a visual library, but it brings in bounded capture jobs, invalidation and a cache together). Record the choice in [8010](../design-canvas/8010-design-canvas-deferred-optimisations.md) task 1's Decisions, or reply to the coordinator; "yes" unblocks 8010 task 1.
+- [ ] **0036 (retired) task 11: build a cross-environment design transfer UI?** (Background: [`design-canvas.md` → Qualification](../../architecture/design-canvas.md#qualification); the to-do is in Git history at `f2c4cee71`.) Recovery copies, download and import cover copying a canvas between environments today. Choose: no, keep "download then import" as the supported path and say so in `design-canvas.md` (recommended; no cross-environment lock order to design), or add "Copy to environment…" (one step for the user, but a new kind of concurrent operation across two canvases' lanes, whose lock order must be designed and tested first). Reply to the coordinator; "yes" becomes a new to-do.
 
 #### MCP
 

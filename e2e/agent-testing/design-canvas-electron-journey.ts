@@ -148,7 +148,7 @@ export async function openDesignWindow(
  * stopped and deleted at the end of a passing run.
  *
  * `electronApp` is null for an app reached only over CDP: a shipped build
- * whose Node inspect fuse is off, such as a published release in the 0036
+ * whose Node inspect fuse is off, such as a published release in the 0036 (retired)
  * renderer pairing (design-canvas-renderer-pairing-electron.spec.ts). Then the
  * steps that need main skip: the window size, the Save-dialog and open-dialog
  * instrumentation, the window zoom factor around Ctrl/⌘+0, and the download.
@@ -157,8 +157,8 @@ export async function openDesignWindow(
  * `olderRenderer` marks a published renderer that predates renderer fixes
  * and features the journey checks on the way. Both skip for it: the app-wide
  * keyboard shortcuts dialog (#1240, after v2.22.3), and Ctrl/⌘+0 resetting a
- * focused canvas, which App's zoom listener swallowed until the fix 0036
- * records on 2026-10-22 (v2.22.3 shipped on 2026-10-17). Neither depends on
+ * focused canvas, which App's zoom listener swallowed until the fix 0036 (retired)
+ * recorded on 2026-10-22 (v2.22.3 shipped on 2026-10-17). Neither depends on
  * the backend.
  */
 export async function runDesignCanvasJourney({
@@ -629,7 +629,7 @@ async function runMainInstrumentation(
   // The OS Save dialog of a download is Electron's own, not Orkestrator's: the
   // product installs no `will-download` handler on the window's session (the
   // artifact host's isolated session cancels downloads, and is not this one).
-  // 0036 task 3 retired a manual Save dialog check on that basis, so a product
+  // 0036 (retired) task 3 dropped a manual Save dialog check on that basis, so a product
   // handler added later must bring its own test of the dialog it shows.
   expect(
     await electronApp.evaluate(({ BrowserWindow }) =>

@@ -1391,7 +1391,8 @@ The profile title shows only in the native window title: the packaged
 renderer is built without `VITE_ORKESTRATOR_PROFILE`, so its document title
 stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
 nothing waits for Vite. Native menu key equivalents are still not exercised:
-Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
+Playwright sends keys through Chromium, not the OS (0036 (retired) task 3; that pass
+is in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 `log-controls-packaged-electron.spec.ts` runs against the same build (macOS too:
 `mise run package:mac:unpacked:test`). It turns on the real Settings switch, reads

@@ -2,7 +2,12 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md).
+[8011](../todo/design-canvas/8011-design-ask-agent-and-resume-across-versions.md)
+(Ask agent and Resume across versions),
+[8010](../todo/design-canvas/8010-design-canvas-deferred-optimisations.md)
+(optimisations deferred until measured) and
+[7820](../todo/design-canvas/7820-design-perf-cdp-frames-transient.md).
+What has been qualified is under [Qualification](#qualification).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
 dialog has three tabs: **New design** (optionally with Claude or Codex, or a
@@ -27,7 +32,12 @@ not hold up the first turn. Until that queue write lands, the prompt also
 stays on the tab as a renderer fallback, sent under the same request id, which
 the backend dedupes. The fallback never joins a running turn's id-less queue
 (`noQueue` in the controller's `submit`). The review action's opening prompt
-uses the same helper.
+uses the same helper. One window is accepted: the queue write is issued by the
+renderer that created the tab, so a renderer that dies between creating the
+tab and that write loses the brief. It lasts a few milliseconds of renderer
+work, every renderer-created tab has the same exposure, and closing it would
+need a backend command that creates the tab and queues the prompt together,
+while the pane layout deliberately never stores prompts.
 
 Images pasted into the **New design** brief are written into the environment
 (`.orkestrator/clipboard/`, like a composer paste). They travel as attachments
@@ -398,7 +408,12 @@ overwritten bytes (≤16 per canvas). The replace path is check-then-rename, not
 an atomic compare-and-swap against arbitrary external writers. Filesystems
 without hard links cannot export new files.
 
-Download fetches a committed snapshot and names its revision.
+Download fetches a committed snapshot and names its revision. In the desktop
+app the download goes through Electron's download manager and Electron's own
+Save dialog: the product installs no `will-download` handler on the window's
+session (the artifact host's isolated session has one, and it cancels
+downloads). The Electron design journey asserts that, so a handler added
+later has to bring a test of the dialog it changes.
 
 ## MCP
 
@@ -558,8 +573,19 @@ and narrow-pane checks, and
 drives the canvas in the real Electron window, with the renderer served by
 Vite; `design-canvas-packaged-electron.spec.ts`
 (`mise run test:agent:electron:packaged`, after
-`mise run package:linux:unpacked` and `mise run package:linux:unpacked:test`) runs the same journey against the packaged
-Linux app and its `file://` renderer. The opt-in
+`mise run package:linux:unpacked:test`, or `mise run package:mac:unpacked:test`
+on macOS, an ad-hoc identity that is never signed with a Developer ID or
+notarised) runs the same journey against the packaged
+Linux or macOS app and its `file://` renderer, with hidden windows on macOS.
+`design-canvas-renderer-pairing-electron.spec.ts` (same task) runs that journey
+across versions through the connection manager: this checkout's packaged
+renderer on a published `orkestrator` backend from npm (2.22.3 by default,
+`ORKESTRATOR_PAIRING_RELEASE`), and, when `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE`
+names a published desktop build, that build's renderer on this checkout's
+backend, driven over CDP because its inspect fuse is off. The interrupted
+migration (record written, legacy file not yet moved) is not reachable from
+outside the process and is covered only by "an interrupted migration (record
+written, legacy not retired) reads the record" in `records.test.ts`. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
 exports from a running container and interrupts it.
 `e2e/DesignAgentLinks.spec.ts` renders the Ask agent dialog's closed-link
@@ -593,3 +619,44 @@ on two late samples, on a heavily loaded host
 investigation; it perturbs the page, so it is never used for measured
 numbers. The 2026-11-06 failures that prompted it are in the retired to-do
 7440 (`git show 14df96544:docs/todo/design-canvas/7440-design-perf-listener-count-two-states.md`).
+
+## Qualification
+
+To-do 0036 collected the evidence that the canvas works beyond its unit and
+browser tests; it was retired on 2026-11-13 and its full record, with every
+command, host and figure, is in Git history
+(`git show f2c4cee71:docs/todo/design-canvas/0036-design-canvas-qualification.md`).
+In short:
+
+- **Live agents.** `design-live.spec.ts` passed for Codex (2026-10-18) and
+  Claude (2026-10-21, twice): create, inspect, refine, capture,
+  `save_canvas`, Ask agent on a stale selection, an approval across an
+  environment switch and the implementation handoff.
+- **Container export.** `export-container.test.ts` passed on Docker Desktop
+  for macOS (2026-10-22) and Docker Engine on Linux x64 (2026-11-01), and runs
+  in the Linux Engine CI workflow on amd64 and arm64; the Docker fixture spec
+  passed on both. Rootless Engine and SELinux hosts are not covered.
+- **Electron.** The Vite-served Electron spec (2026-10-22, which found and
+  fixed the Ctrl/⌘+0 defect), the packaged Linux app (2026-11-02) and an
+  unsigned macOS bundle (2026-11-13, 8 of 8 after flake 9969). Ctrl/⌘+0
+  passed in all 17 runs of the packaged spec on macOS that reached it.
+- **Mixed versions.** The backend over one data directory with the published
+  2.22.3 (2026-10-25, `scripts/qualify-design-mixed-versions.ts`): upgrade,
+  legacy migration, the downgrade fence and export-then-import. The renderer
+  pairing (2026-11-13, both directions with v2.22.3) passed and found no
+  compatibility defect. In the v2.22.3 renderer ⌘0 still leaves a focused
+  canvas off 100%, which is the defect fixed on 2026-10-22.
+- **Accessibility.** The automated keyboard, focus, tree, zoom and
+  narrow-pane pass (`DesignCanvasAccessibility.spec.ts`).
+- **Client performance.** Apple M5 Max with Chrome (2026-10-22) and a busy
+  Linux host with Chromium (2026-11-01, rerun 2026-11-06, with a 100-cycle
+  64-frame retention run that converged). Chrome stands in for the Electron
+  renderer; the harness has no Electron mode, and one is built only if an
+  Electron-only regression is reported. The numbers are host evidence, not
+  thresholds.
+
+Still to do by a person, in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md):
+the native menu key equivalents on macOS, a screen-reader pass, a slower
+laptop, the M5 Max retention run, and the decisions on library thumbnails
+and a cross-environment transfer UI.

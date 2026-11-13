@@ -26,7 +26,7 @@
  *   its native Save dialog; the spec adds a main-process `will-download`
  *   listener that sets the save path, which replaces only that OS dialog.
  *   The journey first asserts the window's session has no handler of its
- *   own: the Save dialog is Electron's, which is why 0036 retired a manual
+ *   own: the Save dialog is Electron's, which is why 0036 (retired) dropped a manual
  *   check of it, and a product handler would need its own test.
  * - Open design (`design_import_host_file`): this picker is Orkestrator's own
  *   in-app host path picker (it lists the backend host's directories), not an

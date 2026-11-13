@@ -197,11 +197,16 @@ export async function seedCoordinatorWorkflowRecords(
   };
 }
 
-/** `--records`: a count, `near-limit` or `full`. */
+/**
+ * `--records`: a count, `near-limit` or `full`. A count has no sign or
+ * leading zeros, the rule the launcher's `parseWorkflowRecordSeed` applies,
+ * so `dev:test` and a direct run accept the same values; the range is checked
+ * by {@link seedCoordinatorWorkflowRecords}.
+ */
 export function resolveSeedRecordCount(value: string | undefined): number {
   if (value === "near-limit") return COORDINATOR_WORKFLOW_NEAR_LIMIT;
   if (value === "full") return MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS;
-  return value !== undefined && /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  return value !== undefined && /^[1-9]\d*$/.test(value) ? Number(value) : Number.NaN;
 }
 
 function argument(name: string): string | undefined {

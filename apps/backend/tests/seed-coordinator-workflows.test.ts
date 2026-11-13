@@ -40,6 +40,10 @@ describe("seeding in-use coordinator workflow records", () => {
     expect(resolveSeedRecordCount("full")).toBe(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS);
     expect(resolveSeedRecordCount("12")).toBe(12);
     expect(resolveSeedRecordCount("lots")).toBeNaN();
+    // Written as the launcher's parser requires: no sign, no leading zeros.
+    expect(resolveSeedRecordCount("0012")).toBeNaN();
+    expect(resolveSeedRecordCount("0")).toBeNaN();
+    expect(resolveSeedRecordCount("+5")).toBeNaN();
     expect(resolveSeedRecordCount(undefined)).toBeNaN();
   });
 

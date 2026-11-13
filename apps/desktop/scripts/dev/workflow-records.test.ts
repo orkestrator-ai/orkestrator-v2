@@ -13,8 +13,11 @@ import { parseAgentTestArguments, parseDevArguments } from "./arguments.js";
 import * as bridgeBuilds from "./bridge-builds.js";
 import { startDevelopment } from "./lifecycle.js";
 import * as profileIo from "./profile-io.js";
+import { resolveSeedRecordCount } from "../../../backend/scripts/seed-coordinator-workflows.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "../../../backend/src/core/coordinator-workflow-retention.js";
 import {
   formatSeededWorkflowRecords,
+  MAX_SEEDED_WORKFLOW_RECORDS,
   parseWorkflowRecordSeed,
   seededWorkflowCheckout,
   seedProfileWorkflowRecords,
@@ -50,11 +53,18 @@ describe("--seed-workflow-records", () => {
     expect(parseAgentTestArguments(["--seed-workflow-records", "1850"]).seedWorkflowRecords).toBe(
       1850,
     );
-    for (const value of ["0", "-3", "1.5", "nearly", "1e3"]) {
+    expect(parseAgentTestArguments(["--seed-workflow-records", "2000"]).seedWorkflowRecords).toBe(
+      2000,
+    );
+    for (const value of ["0", "-3", "1.5", "nearly", "1e3", "0012", "+5", "2001", "5000"]) {
       expect(() => parseWorkflowRecordSeed(value)).toThrow(
-        "--seed-workflow-records accepts a positive count, near-limit or full",
+        "--seed-workflow-records accepts a count from 1 to 2000, near-limit or full",
       );
     }
+    // A count above the store's limit fails at parsing, before any build.
+    expect(() => parseAgentTestArguments(["--seed-workflow-records", "2001"])).toThrow(
+      "accepts a count from 1 to 2000",
+    );
     expect(() => parseAgentTestArguments(["--seed-workflow-records"])).toThrow(
       "Missing value for --seed-workflow-records",
     );
@@ -62,6 +72,29 @@ describe("--seed-workflow-records", () => {
     expect(() => parseDevArguments(["--seed-workflow-records", "near-limit"])).toThrow(
       "only supported by mise run dev:test",
     );
+  });
+
+  test("caps a count at the store's own limit and parses counts as the backend script does", () => {
+    expect(MAX_SEEDED_WORKFLOW_RECORDS).toBe(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS);
+    for (const value of ["1", "12", "0012", "0", "+5", "1.5", "1e3", "2000", "2001", "lots"]) {
+      const launcher = (() => {
+        try {
+          return parseWorkflowRecordSeed(value);
+        } catch {
+          return undefined;
+        }
+      })();
+      const backend = resolveSeedRecordCount(value);
+      const backendAccepts =
+        Number.isInteger(backend) &&
+        backend >= 1 &&
+        backend <= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS;
+      expect({ value, accepted: launcher !== undefined }).toEqual({
+        value,
+        accepted: backendAccepts,
+      });
+      if (launcher !== undefined) expect(launcher).toBe(backend);
+    }
   });
 
   test("runs the backend script against the profile's data directory and reads its result", async () => {

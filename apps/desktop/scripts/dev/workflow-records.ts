@@ -18,10 +18,31 @@ const MAX_SEED_OUTPUT_CHARS = 256 * 1024;
  */
 export type WorkflowRecordSeed = number | "near-limit" | "full";
 
+/**
+ * The most records a seed may ask for: the store's own limit,
+ * `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`. The launcher checks it at argument
+ * parsing so a count the backend script would refuse fails before the
+ * Electron and bridge builds rather than after them. It is a copy, not an
+ * import, so the launcher does not load backend modules;
+ * `workflow-records.test.ts` pins it to the backend constant.
+ */
+export const MAX_SEEDED_WORKFLOW_RECORDS = 2_000;
+
+/**
+ * A count is written without a sign or leading zeros, the same rule the
+ * backend script's `resolveSeedRecordCount` applies, so a value is valid on
+ * both entry paths or on neither.
+ */
+const SEED_COUNT_PATTERN = /^[1-9]\d*$/;
+
 export function parseWorkflowRecordSeed(value: string): WorkflowRecordSeed {
   if (value === "near-limit" || value === "full") return value;
-  if (/^[1-9]\d*$/.test(value)) return Number(value);
-  throw new Error("--seed-workflow-records accepts a positive count, near-limit or full");
+  if (SEED_COUNT_PATTERN.test(value) && Number(value) <= MAX_SEEDED_WORKFLOW_RECORDS) {
+    return Number(value);
+  }
+  throw new Error(
+    `--seed-workflow-records accepts a count from 1 to ${MAX_SEEDED_WORKFLOW_RECORDS}, near-limit or full`,
+  );
 }
 
 /** Where the seeded records' own project is checked out. */

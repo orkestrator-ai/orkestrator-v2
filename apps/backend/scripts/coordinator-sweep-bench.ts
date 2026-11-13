@@ -9,6 +9,7 @@ import { runCommand } from "../src/core/shell.js";
 import type { StorageContext } from "../src/core/storage-context.js";
 import { createEnvironment, createProject, StorageService } from "../src/core/storage.js";
 import { benchOption as option } from "./agent-mail-bench-fixture.js";
+import { patchMethod } from "./bench-method-patch.js";
 
 /**
  * What the coordinator-repair sweep and a coordinator read cost, against a
@@ -246,7 +247,7 @@ try {
       if (!workspace || !main?.agent) return realEnsure(projectId);
       return { workspace, main };
     };
-    storage.synchronizeAgentMailboxes = async () => {
+    const restoreSync = patchMethod(storage, "synchronizeAgentMailboxes", async () => {
       const started = performance.now();
       try {
         return await realSync();
@@ -256,7 +257,8 @@ try {
           syncCalls += 1;
         }
       }
-    };
+    });
+    const restoreEnsure = patchMethod(service, "ensureMainConversation", timedEnsure);
     const withRepair = zero();
     const withoutRepair = zero();
     const run = async (repair: boolean, totals: WakeTotals) => {
@@ -265,17 +267,22 @@ try {
       await wakePass(totals);
       counting = false;
     };
-    // Warm-up of both variants, not counted.
-    await run(true, zero());
-    await run(false, zero());
-    ensureCalls = ensureMs = syncCalls = syncMs = 0;
-    for (let index = 0; index < iterations; index += 1) {
-      const repairFirst = index % 2 === 0;
-      await run(repairFirst, repairFirst ? withRepair : withoutRepair);
-      await run(!repairFirst, repairFirst ? withoutRepair : withRepair);
+    try {
+      // Warm-up of both variants, not counted.
+      await run(true, zero());
+      await run(false, zero());
+      ensureCalls = ensureMs = syncCalls = syncMs = 0;
+      for (let index = 0; index < iterations; index += 1) {
+        const repairFirst = index % 2 === 0;
+        await run(repairFirst, repairFirst ? withRepair : withoutRepair);
+        await run(!repairFirst, repairFirst ? withoutRepair : withRepair);
+      }
+    } finally {
+      // Also when a pass throws (an undelivered wake), so nothing after it
+      // runs against the patched methods.
+      restoreEnsure();
+      restoreSync();
     }
-    service.ensureMainConversation = realEnsure;
-    storage.synchronizeAgentMailboxes = realSync;
     return {
       wakes: perPass(withRepair),
       wakesWithoutRepair: perPass(withoutRepair),

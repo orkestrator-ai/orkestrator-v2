@@ -517,9 +517,10 @@ ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile workflow-sto
   --seed-workflow-records near-limit
 ```
 
-The value is a count, `near-limit` (1,800, where the banner first shows) or
-`full` (2,000, where new launches are refused). `dev:test` only; `dev` rejects
-it. After the bridge build and before Electron starts, the launcher runs
+The value is a count from 1 to 2,000 (no sign or leading zeros), `near-limit`
+(1,800, where the banner first shows) or `full` (2,000, where new launches are
+refused); anything else fails at argument parsing, before any build.
+`dev:test` only; `dev` rejects it. After the bridge build and before Electron starts, the launcher runs
 `apps/backend/scripts/seed-coordinator-workflows.ts` against the profile's
 data directory. No backend has the store open then, and the records go in
 through the store's own API, never by editing the database. The script refuses

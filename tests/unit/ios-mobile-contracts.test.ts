@@ -251,6 +251,34 @@ describe("iOS UI and WebKit security contracts", () => {
     expect(source).toContain("Self.sameOrigin(url, requestedConnection.address)");
   });
 
+  test("page-initiated changes to saved servers wait for a native answer", () => {
+    // The Swift tests that exercise this need a simulator; this pins the shape
+    // on every host (docs/architecture/renderer-security.md, iOS app).
+    const bridge = read("apps/ios/OrkestratorMobile/Views/RemoteWebView.swift");
+    const consent = read("apps/ios/OrkestratorMobile/Views/BridgeConsent.swift");
+    expect(bridge).toContain("try await requireConsent(.replaceToken(saved, switches: selects))");
+    expect(bridge).toContain(
+      "try await requireConsent(.save(address: normalizedAddress, switches: selects))",
+    );
+    expect(bridge).toContain("try await requireConsent(.switchTo(target))");
+    expect(bridge).toContain("if let forgotten { try await requireConsent(.forget(forgotten)) }");
+    expect(bridge).toContain(
+      "presenter: AlertBridgeConsentPresenter { [weak self] in self?.webView }",
+    );
+    expect(bridge).toContain('addInNativeEditor: () => call("open-editor")');
+    // Consent is asked before the switch flag is raised and before any network check.
+    const connect = bridge.slice(bridge.indexOf('case "connect":'), bridge.indexOf('case "use":'));
+    expect(connect.indexOf("requireConsent")).toBeLessThan(
+      connect.indexOf("isSwitchingThroughBridge = true"),
+    );
+    expect(connect.indexOf("requireConsent")).toBeLessThan(connect.indexOf("model.connect("));
+    // Teardown and a new document withdraw the question; silence refuses.
+    expect(bridge.match(/consentGate\.cancelPending\(\)/g)?.length).toBe(2);
+    expect(consent).toContain("settle(entry, .timedOut, withdrawPrompt: true)");
+    expect(consent).toContain("guard pending == nil else { return .busy }");
+    expect(consent).toContain("settle(entry, .declined, withdrawPrompt: false)");
+  });
+
   test("application entry point provides the shared model and forced dark appearance", () => {
     const source = read("apps/ios/OrkestratorMobile/OrkestratorMobileApp.swift");
     expect(source).toContain("@StateObject private var connectionModel");

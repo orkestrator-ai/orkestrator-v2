@@ -215,6 +215,16 @@ export function ServerConnectionSwitcher() {
   };
 
   const openConnectionDialog = (connection?: ConnectionSummary) => {
+    const nativeEditor = getConnectionsApi()?.addInNativeEditor;
+    if (nativeEditor) {
+      // The iOS app takes the token in its own editor, so a token for another
+      // machine never passes through this machine's page
+      // (docs/architecture/renderer-security.md, iOS app).
+      void nativeEditor().catch((caught) => {
+        toast.error("Could not open the server editor", { description: errorMessage(caught) });
+      });
+      return;
+    }
     setAddress(connection?.address ?? "");
     setToken("");
     setShowToken(false);

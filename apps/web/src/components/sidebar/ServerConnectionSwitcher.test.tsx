@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
+import { toast } from "sonner";
 import { publishConnections } from "@/lib/connections";
 import { PROBE_SUPERSEDE_AFTER_MS, ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
@@ -25,6 +26,7 @@ function installConnections(
     updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
     use: (connectionId: string) => Promise<ConnectionList>;
     forget: (connectionId: string) => Promise<ConnectionList>;
+    addInNativeEditor: () => Promise<boolean>;
   }> = {},
 ) {
   const listConnections = mock(overrides.list ?? (async () => list));
@@ -49,6 +51,7 @@ function installConnections(
       updateToken,
       use,
       forget,
+      ...(overrides.addInNativeEditor ? { addInNativeEditor: overrides.addInNativeEditor } : {}),
     },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
@@ -689,6 +692,77 @@ describe("server connection switcher", () => {
       ).toBe(true);
     },
   );
+
+  test("asks the iOS app's own editor for a new server instead of taking its token here", async () => {
+    const list: ConnectionList = {
+      activeConnectionId: "remote-1",
+      connections: [
+        {
+          id: "remote-1",
+          name: "Desk",
+          address: "https://desk.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    };
+    const addInNativeEditor = mock(async () => true);
+    const { connect } = installConnections(list, { addInNativeEditor });
+    window.__orkestratorClientPlatform = "iphone-wkwebview";
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Desk" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "touch",
+    });
+    fireEvent.click(await screen.findByText("New connection"));
+
+    await waitFor(() => expect(addInNativeEditor).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("Gateway token")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  test("reports a native editor that could not open and shows no token field", async () => {
+    const list: ConnectionList = {
+      activeConnectionId: "remote-1",
+      connections: [
+        {
+          id: "remote-1",
+          name: "Desk",
+          address: "https://desk.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    };
+    const addInNativeEditor = mock(async () => {
+      throw new Error("editor unavailable");
+    });
+    installConnections(list, { addInNativeEditor });
+    const toastError = spyOn(toast, "error").mockImplementation(() => "toast-id");
+    try {
+      renderInAppCommandScope(<ServerConnectionSwitcher />);
+      fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Desk" }), {
+        button: 0,
+        ctrlKey: false,
+        pointerType: "touch",
+      });
+      fireEvent.click(await screen.findByText("New connection"));
+
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith("Could not open the server editor", {
+          description: "editor unavailable",
+        }),
+      );
+      expect(screen.queryByLabelText("Gateway token")).toBeNull();
+    } finally {
+      toastError.mockRestore();
+    }
+  });
 
   test("handles an initial connection-list failure without crashing", async () => {
     const list = { activeConnectionId: "local", connections: [] };

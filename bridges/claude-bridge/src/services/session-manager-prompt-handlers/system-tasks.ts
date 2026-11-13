@@ -1,5 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackgroundTaskSnapshot } from "../../types/index.js";
+import { backgroundTasksForSnapshot } from "../background-task-snapshot.js";
 import { eventEmitter } from "../event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
@@ -63,12 +64,18 @@ interface TaskSystemMessage {
   };
 }
 
+/**
+ * Publish the task map after an edge. Like every `session.updated` emitter it
+ * sends the bounded projection, never the raw map: this runs on every
+ * `task_progress`, so a long history would otherwise push a frame of hundreds
+ * of KB into the SSE replay ring on each edge.
+ */
 function emitBackgroundTasks(turn: TurnState): void {
   noteBackgroundTasksChanged(turn.session);
   eventEmitter.emit({
     type: "session.updated",
     sessionId: turn.sessionId,
-    data: { backgroundTasks: turn.session.backgroundTasks },
+    data: { backgroundTasks: backgroundTasksForSnapshot(turn.session.backgroundTasks) },
   });
 }
 

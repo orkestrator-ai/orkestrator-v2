@@ -214,6 +214,14 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   interruption marker) must be produced by both the live loop and
   `normalizePersistedSessionMessages`, or a reload will disagree with the live
   tab.
+- **That snapshot is bounded, not the record behind it.** Serve
+  `backgroundTasks` through `backgroundTasksForSnapshot`
+  (`background-task-snapshot.ts`): fields cut to what the backend keeps, and
+  the map to `SNAPSHOT_BACKGROUND_TASKS_MAX_BYTES`, live tasks always listed.
+  The task history is bounded only by count, and 128 shell tasks at their own
+  per-field bounds once outgrew the backend's read and failed the tab on every
+  poll. Any new field that grows with the session needs its own bound here too;
+  the backend reads the resource with `sessionSnapshotBudget`, never its own cap.
 - **The SSE stream keeps no replay.** `routes/events.ts` serves only
   `?observe=1` (anything else is a 400): one content-free frame per emitter
   revision, under a `generation:revision` cursor. A reconnect whose cursor is

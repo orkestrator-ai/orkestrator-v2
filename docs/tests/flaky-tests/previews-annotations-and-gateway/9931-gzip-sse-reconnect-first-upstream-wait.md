@@ -50,3 +50,32 @@ branch. No budget, assertion or retry was changed for this record.
 If it recurs, record which phase the proxy reached (route open, upstream
 connect, first byte) before changing the 2 s default; a slow-machine user
 reconnecting would see the same delay.
+
+## Recurrence 2026-11-13
+
+Counted with `mise run flaky:recurrence -- 9931 --base 17d28238c` (verdict:
+open, record as a recurrence). Same failure in a sibling test of the same
+file, so it is recorded here rather than as a new case.
+
+- **Branch:** `claude-session-error-2c23b6960226-r1`, base `17d28238c`
+  (`main`), tested commit `1f8261920`. The branch changes the Claude session
+  read budget (`apps/backend/src/core/http-bridge/`) and the Claude bridge's
+  background-task snapshot; the test reaches `http-bridge/provider.ts` only
+  through six imports and exercises no Claude session read.
+- **Test:** `gzip proxied event stream through an HTTP/1.1 proxy > a client
+  with no header streams identity and takes no compressor`.
+- **Original command:** `mise run test:logged -- --name review-default-tests
+  -- mise run test` (default tier, all groups concurrently, local Linux host).
+- **Failure:** `Proxy never reached the upstream`, thrown by `waitUntil`
+  (`apps/backend/tests/gateway-test-harness.ts:328`) at the test's first wait
+  (`gateway-sse-gzip-routes.test.ts:768`), 2,047.86 ms.
+- **Counts:** backend 18,153 passed, 143 skipped, 1 failed; 18,297 tests
+  across 1,280 files in 279.95 s, beside the web group's 14,732 tests
+  (356.62 s).
+- **Isolated rerun:** passed alone, exit 0, 5.9 s:
+  `mise run test:logged -- --name gateway-sse-gzip-rerun -- bun --cwd=apps/backend test tests/gateway-sse-gzip-routes.test.ts --parallel=2`.
+
+Two tests in this file now fail at the same first upstream wait under
+aggregate load, which points at the gateway-plus-proxy start-up rather than
+either test's own assertions. Cause still unconfirmed.
+

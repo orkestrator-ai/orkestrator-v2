@@ -3391,6 +3391,42 @@ describe("persisted session routes", () => {
       expect(data.rewindInProgress).toBe(true);
     });
 
+    test("bounds a long background-task history in the snapshot", async () => {
+      // 128 settled shell tasks at the bridge's own per-task bounds came to
+      // ~800 KB, past what the backend accepted, and failed the tab on every poll.
+      const backgroundTasks = Object.fromEntries(
+        Array.from({ length: 128 }, (_, index) => [
+          `shell-${index}`,
+          {
+            id: `shell-${index}`,
+            status: "completed" as const,
+            endedAt: 1_000 + index,
+            command: "c".repeat(4_000),
+            outputTail: "o".repeat(2_000),
+          },
+        ]),
+      );
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        backgroundTasks,
+      } as ReturnType<typeof mockGetSession>);
+
+      const response = await app.request("/session/s-1");
+      const text = await response.text();
+      const data = JSON.parse(text) as { backgroundTasks: Record<string, { command?: string }> };
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThan(300 * 1024);
+      expect(Object.keys(data.backgroundTasks)).toHaveLength(128);
+      expect(data.backgroundTasks["shell-127"]?.command).toHaveLength(4_000);
+      expect(data.backgroundTasks["shell-0"]?.command).toBeUndefined();
+      // The session's own record keeps everything.
+      expect(backgroundTasks["shell-0"]?.command).toHaveLength(4_000);
+    });
+
     test("serves the running turn's activity and thinking estimate", async () => {
       mockGetSession.mockReturnValueOnce({
         id: "s-1",

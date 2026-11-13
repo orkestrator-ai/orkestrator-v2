@@ -994,7 +994,8 @@ Generate the reference before making the change; no artifact is committed
   counters.
 - **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
   runs the real native activity sweep and queue scan against fake providers,
-  in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
+  with shared observation (its rollback mode went with
+  `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, todo 0048 task 13). `workflows` (`recurring-baseline-workflows.ts`)
   runs the real feature-planning, build-pipeline and multi-review
   supervisors over a temporary store in keyed mode, and feature planning and
   build pipelines also in rollback mode, on one manual clock. Rollback is what
@@ -1044,10 +1045,9 @@ intervals partial; kinds that disappear remain in the report. A reset or
 disappearance inside an observed interval invalidates that rate.
 
 Arms are `candidate` (defaults), `rollback`
-(`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
-`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend activity
-and Multi Review stay keyed in both arms, since their rollback drivers were
-removed)
+(`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`; native queues, backend activity
+and Multi Review stay keyed and native observation stays shared in both arms,
+since their rollback drivers and the observation-sharing switch were removed)
 and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
 freshness probes use it.

@@ -1006,8 +1006,18 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   names each environment's machine. A row that no longer exists leaves the
   selection.
 
-[2190](../todo/cross-cutting/2190-direct-and-command-node-sidebar-parity.md)
-records how the two paths were merged and what remains.
+The summary's activity keeps up with the machine's own row. On 2026-11-13
+`mise run test:agent:federation:two-profile` (two `dev:test` profiles on one
+host, a command node and its leaf, the leaf running real Pi turns against a
+loopback model) timed six working and idle transitions. The command node's row
+followed the leaf's backend record by 460–613 ms (median 548 ms) and the
+leaf's own row by 180–395 ms, through the leaf's `resource-changed`, the read
+model's debounce and the clients' re-read, not the 60 s reconcile
+([agent-testing.md](../development/agent-testing.md#federation-between-two-profiles-remote-activity-relayed-events)).
+How the two paths were merged is in 2190 (retired 2026-11-13; read it with
+`git show 17d28238c:docs/todo/cross-cutting/2190-direct-and-command-node-sidebar-parity.md`);
+the checks on the user's real machines are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 ## Project search
 

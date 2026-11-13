@@ -501,6 +501,22 @@ A command node attached to another command node operates in leaf mode:
     from before its main process took per-node events asks for the old name
     explicitly (`relayedEvents=legacy`). See the
     [register](version-compatibility.md#register).
+  - *Qualified between two backends in a browser* (2026-11-13,
+    `mise run test:agent:federation:two-profile`; 5840 (retired), read it with
+    `git show 17d28238c:docs/todo/cross-cutting/5840-relayed-events-live-evidence.md`).
+    With a command node and its leaf as two `dev:test` profiles, the page's
+    main stream carried no relayed frame, its one relayed stream named the
+    leaf, and 40 leaf file changes moved the relayed ring by 10 and the main
+    ring by 0. A tab hidden and offline while the leaf changed and started a
+    turn reopened its relayed stream from its cursor and showed the leaf's
+    badge and activity within 0.3 s of coming back, and again after a reload.
+    A page made to look like an older peer on the wire (no
+    `relayedEvents=per-node`, no `perNodeEvents`) opened no relayed stream,
+    got the leaf's events as `relayed-node-event` and a `resync` after a
+    reconnect, kept the badge right, and was the only thing that moved
+    `relayed-node-event.legacy-stream`. Real older releases and two real
+    machines are in the
+    [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
   - In the renderer, `lib/federation/node-events.ts` holds one lease per
     node for every view and tells each view when to read (first after its
     subscription, then after any possible gap). The sidebar's change badge

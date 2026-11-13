@@ -2869,6 +2869,64 @@ It attaches the leaf, adds projects and changes both profiles' messaging and
 Pi settings, so reset both afterwards. The link setup it shares with the
 notice suite below is in `coordinator-two-node-support.ts`.
 
+### Federation between two profiles (remote activity, relayed events)
+
+`mise run test:agent:federation:two-profile` qualifies what a command node
+shows of its leaf on two real backends in headless Chromium, with no login and
+nothing billed (to-dos 2190 task 3 and 5840 tasks 1 and 2, both retired once it
+passed). It starts two disposable `dev:test --fixture --headless
+--no-agent-credentials --no-host-seed --agent-platforms pi` profiles, the
+second as a companion profile, with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`,
+runs `e2e/agent-testing/federation-two-profile.spec.ts`, then stops and resets
+both. The command node attaches the leaf with `add_node` over the leaf's real
+gateway (token read in memory, never printed). The leaf's isolated Pi
+`models.json` names `federation-two-profile-fake-model.ts`, which holds every
+turn carrying its marker until the spec releases it, so a real Pi native turn
+moves the leaf's activity between working and idle on cue.
+
+- **Remote-row activity.** One page on the command node, one on the leaf. For
+  three held turns, the spec times when the leaf backend's record, the leaf's
+  own row and the command node's row each first show working, then idle (the
+  rows' `environment-status-marker` `data-state`). The command node's row must
+  follow the leaf's record within 10 s, far inside the 60 s reconcile.
+- **Per-node relayed events.** An init script records the command page's
+  `EventSource`s, reduced to event names, node ids and frame kinds. The main
+  stream must carry no relayed frame and every relayed stream's filter must
+  name the leaf. Under a flood of 40 file changes in the leaf's worktree the
+  relayed ring (`replay.relayedRing` on `/__orkestrator/metrics`) must move
+  more than the main ring, and the remote row's change badge must match the
+  leaf's own. Then the window switches to its own environment and the tab
+  goes away (document hidden, offline, streams dropped) while the leaf changes
+  and starts a turn; on return, and again after a reload, the badge and the
+  activity must match the leaf's.
+- **Older peers on the wire.** A second command page has
+  `relayedEvents=per-node` stripped from its main stream and `perNodeEvents`
+  removed from `watch_node_events` answers, which is what an older renderer
+  sends and what an older command node answers. It must open no relayed
+  stream, receive the leaf's events as `relayed-node-event`, get a `resync`
+  for the leaf after a reconnect, keep the badge right, and move the
+  `relayed-node-event.legacy-stream` counter, which must not move while every
+  client asks for per-node names. Real older releases are a manual check
+  (7568).
+
+First passed on Linux on 2026-11-13 (three cases, 138 s including both
+profile starts): the command node's row followed the leaf's record by
+460–613 ms, the flood moved the relayed ring by 10 and the main ring by 0, the
+returning tab showed the leaf's badge in 0.14 s and its activity in 0.28 s,
+and the older-peer page moved the legacy counter by 3 with one `resync`.
+
+Both backends share one kernel and loopback, so a cross-machine or slow link is
+not exercised. The content-free summary (timings, counts, ring deltas, badge
+texts) is
+`output/agent-testing/<command-profile>/federation-two-profile/summary.json`.
+To run the spec against two profiles you started yourself, start both with the
+same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_FEDERATION_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_FEDERATION_TWO_PROFILE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.federation-two-profile.config.ts`. It
+attaches the leaf, sets both display names and changes the leaf's Pi
+settings, so reset both afterwards.
+
 ### Coordinator usage-limit notices between two profiles (fixture accounts)
 
 `mise run test:agent:coordinator:notice-live` runs the coordinator notice

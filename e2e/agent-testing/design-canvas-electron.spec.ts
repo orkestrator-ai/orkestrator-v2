@@ -25,6 +25,9 @@
  *   The product installs no `will-download` handler, so Electron would show
  *   its native Save dialog; the spec adds a main-process `will-download`
  *   listener that sets the save path, which replaces only that OS dialog.
+ *   The journey first asserts the window's session has no handler of its
+ *   own: the Save dialog is Electron's, which is why 0036 retired a manual
+ *   check of it, and a product handler would need its own test.
  * - Open design (`design_import_host_file`): this picker is Orkestrator's own
  *   in-app host path picker (it lists the backend host's directories), not an
  *   OS file dialog, so nothing is stubbed. The spec drives the real picker to
@@ -33,7 +36,7 @@
  *
  * The journey itself lives in design-canvas-electron-journey.ts, shared with
  * design-canvas-packaged-electron.spec.ts, which runs it against the packaged
- * Linux app and its `file://` renderer. Here, like the other Electron specs,
+ * Linux or macOS app and its `file://` renderer. Here, like the other Electron specs,
  * the renderer is served by Vite. On a shared Linux host, set
  * `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` to run Electron headless.
  *

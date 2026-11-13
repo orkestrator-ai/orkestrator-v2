@@ -14,6 +14,7 @@ import {
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  packagedResourcesPath,
   stopPackagedAppThenRemoveProfile,
 } from "./packaged-electron-app";
 import packaged from "./playwright.packaged-electron.config";
@@ -51,6 +52,18 @@ describe("packaged Electron app launch", () => {
         "release/packaged-test/mac/OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
       ),
     );
+  });
+
+  test("expects resources beside a Linux executable and in a macOS bundle's Contents/Resources", () => {
+    expect(packagedResourcesPath("/r/linux-unpacked/orkestrator-v2", "linux")).toBe(
+      "/r/linux-unpacked/resources",
+    );
+    expect(
+      packagedResourcesPath(
+        "/r/mac-arm64/OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
+        "darwin",
+      ),
+    ).toBe("/r/mac-arm64/OrkestratorV2.app/Contents/Resources");
   });
 
   test("passes on only allowlisted host variables and puts every home under the profile", () => {
@@ -117,6 +130,7 @@ describe("packaged Electron app launch", () => {
   test("the packaged spec has its own config, outside the default Electron run", () => {
     expect(packaged.testMatch).toEqual([
       "design-canvas-packaged-electron.spec.ts",
+      "design-canvas-renderer-pairing-electron.spec.ts",
       "log-controls-packaged-electron.spec.ts",
       "packaged-native-shortcuts-electron.spec.ts",
       "packaged-security-electron.spec.ts",
@@ -124,6 +138,7 @@ describe("packaged Electron app launch", () => {
     ]);
     expect(electron.testMatch).not.toContain("packaged-security-electron.spec.ts");
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("design-canvas-renderer-pairing-electron.spec.ts");
     expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("watcher-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("packaged-native-shortcuts-electron.spec.ts");

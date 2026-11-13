@@ -15,24 +15,30 @@ the packaged Linux `file://` renderer against `38d55ee1` (2026-11-02, see
 [Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02));
 the Linux retention run, the Linux performance rerun and the v1 renderer
 fallback's retirement against `b8033daf` (2026-11-06, see
-[Qualification evidence (2026-11-06)](#qualification-evidence-2026-11-06)).
+[Qualification evidence (2026-11-06)](#qualification-evidence-2026-11-06));
+the unsigned macOS packaged bundle and the v2.22.3 renderer pairing in both
+directions against `17d28238c` (2026-11-13, see
+[Qualification evidence (2026-11-13)](#qualification-evidence-2026-11-13)).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; statuses updated
+2026-11-13 against `17d28238c`, when every task was closed, moved to a new
+to-do or moved to the manual-test checklist (see
+[Assumptions and decisions](#assumptions-and-decisions), 24–34).
 
 ### Tasks
 
-1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). One accepted residual window and a stale test name remain.
+1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). The residual renderer-death window is accepted and recorded in `design-canvas.md` (decision 32); the stale test name in "Current state" is corrected.
 2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
-3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle. The macOS menu-key pass needs a person at an unshared macOS desktop and moved to 7568 on 2026-11-10.
-5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures were a false reading: to-do 7440 (retired 2026-11-11) found the counter also counts listener objects Blink has not finalized yet, and the check now compares that signal's floor ([`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests)). The Electron decision stays open. The slower-machine run needs hardware the fleet lacks (beelink is not a slow laptop) and moved to 7568 on 2026-11-10.
-6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open. The v1 renderer fallback is retired (2026-11-06, decision 21); the run of a published v2.22.3 desktop build against this backend, and the reverse, is still open.
-7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
+3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: done (2026-11-13). The packaged renderer passed on Linux (2026-11-02) and on an unsigned macOS bundle (2026-11-13, 8 of 8 after fixing flake 9969). The Save dialog check is retired, and the journey now asserts the product installs no `will-download` handler (decision 25). The Ctrl/⌘+0 item is closed: it passed every one of 15 macOS packaged runs that reached it (decision 26). The macOS menu-key pass needs a person at an unshared macOS desktop and moved to 7568 on 2026-11-10.
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures were a false reading: to-do 7440 (retired 2026-11-11) found the counter also counts listener objects Blink has not finalized yet, and the check now compares that signal's floor ([`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests)). The Electron decision is taken: Chrome stands in for the Electron renderer, and no `--electron` harness mode is built unless an Electron-only regression is reported (decision 32). The slower-machine run needs hardware the fleet lacks (beelink is not a slow laptop) and moved to 7568 on 2026-11-10. Status: done here.
+6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: done (2026-11-13). The v1 renderer fallback is retired (2026-11-06, decision 21). The published v2.22.3 desktop renderer ran the design journey on this checkout's backend, and this checkout's packaged renderer on a published `orkestrator@2.22.3` backend, both through the connection manager; both passed, nothing broke (`design-canvas-renderer-pairing-electron.spec.ts`). Ask agent and Resume across the pairing need an agent turn and moved to to-do 8011 (decision 31).
+7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: done (2026-11-13): retired as covered by the unit test, as recommended (decision 32).
 8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: done (2026-11-01): 0208 was a picker race, fixed in the product; 0174 was the journey's page loads spending its budget under parallel load, fixed in the test. Both are resolved in the registry, and a host cause that hits any browser suite on a Linux host with Docker churn is recorded as [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
-9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: deferred.
+9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: moved (2026-11-13): the five items to new to-do 8010, as recommended; whether thumbnails are wanted is the user's call, in 7568 (decision 33).
 10. **Shared live-provider harness (open question)**: whether design joins a shared live harness. Status: done in practice (own specs with a shared support module).
-11. **Cross-environment transfer UI (open question)**: whether to build one. Status: open (question only).
+11. **Cross-environment transfer UI (open question)**: whether to build one. Status: moved (2026-11-13) to 7568 as a decision for the user (decision 33).
 12. **Full 64-frame retention run after the bridge fix**: the `--frames 1,64 --cycles 100` harness converges on Linux at current `main`. Moved from to-do 2140 (deleted 2026-11-06). Status: done. The Linux half is done (2026-11-06): all three runs converged at 1 and 64 frames, and window listeners and CDP frames stayed flat at 64 frames (see [Retention run on Linux](#retention-run-on-linux)). The Apple M5 Max half needs the user's machine and moved to 7568 on 2026-11-10, so nothing is left here.
 
 ### 1. Opening prompt without the tab mounted
@@ -131,6 +137,18 @@ The menu gap has a concrete risk. The application menu binds the same keys the c
 
 **Outcome (2026-11-02), packaged renderer only.** The recommended option was taken, for Linux. The spec's journey moved to `e2e/agent-testing/design-canvas-electron-journey.ts`, which the Vite-served spec and the new `design-canvas-packaged-electron.spec.ts` both run. The new spec launches `release/linux-unpacked/orkestrator-v2` through `_electron.launch({ executablePath })` on a disposable profile, headless, with an allowlisted environment. It passed 3 of 3 runs on beelink (13–17 s each) and found no defect in the packaged renderer. It builds with the new `mise run package:linux:unpacked`, not `package:linux`, because `package:linux` would also install the app into the user's `~/.local`. The menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a macOS bundle run were not attempted. See [Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02) and decisions 16–20.
 
+**Outcome (2026-11-13), the rest of task 3.** The macOS bundle ran: `mise
+run package:mac:unpacked:test` (ad-hoc identity, no Developer ID, no
+notarisation; the Node inspect fuse back on for Playwright) built
+`release/packaged-test/mac-arm64/OrkestratorV2.app`, and
+`design-canvas-packaged-electron.spec.ts`, now enabled on macOS with hidden
+agent-test windows, passed. Its one Linux assumption, resources beside the
+executable, became `packagedResourcesPath`. Two journey races (flake 9969)
+failed 4 of 8 repeats on a loaded host and are fixed; 8 of 8 then passed. The
+Save dialog check is retired (decision 25) and the Ctrl/⌘+0 item closed
+(decision 26). See
+[Qualification evidence (2026-11-13)](#qualification-evidence-2026-11-13).
+
 ### 5. Client performance on other hosts and Electron
 
 **Problem.** The client numbers come from one Apple M5 Max running headless Chrome. A slower laptop or Linux GPU stack could drop pan frames or slow acknowledgments, and nobody would know.
@@ -214,6 +232,19 @@ backend without design_capabilities is refused, not read as v1") replace
 the two v1 tests; the dialog, canvas tab, library, inspector, layer tree and
 launch button tests now run against a v2 backend. The first decision above,
 running the published binaries, is unchanged and still open.
+
+**Outcome (2026-11-13).** The published binaries ran, as the first decision
+recommended, in a new spec rather than by hand:
+`e2e/agent-testing/design-canvas-renderer-pairing-electron.spec.ts` (in
+`mise run test:agent:electron:packaged`). Each half connects a desktop window
+to a headless backend of the other version with `connections.connect`, then
+runs the shared Electron design journey. This checkout's packaged renderer
+(2.38.1-beta) on `orkestrator@2.22.3` from npm passed the whole journey; the
+published v2.22.3 desktop renderer (reached over CDP, inspect fuse off) on
+this checkout's backend passed every step that does not need main. No
+compatibility defect was found, so nothing needed a product fix. Ask agent and
+Resume need an agent turn and moved to to-do 8011. See
+[Qualification evidence (2026-11-13)](#qualification-evidence-2026-11-13).
 
 ### 7. Interrupted migration on a real binary
 
@@ -404,7 +435,8 @@ nobody builds them speculatively.
   has three tests: "real gateway saves a design and rehydrates another client's
   edits", "private canvases survive reload and can be retired to recover
   quota" and "a new design tab's brief is sent while its environment is
-  inactive". It drives the backend through the `design_action` gateway command
+  inactive" (since #1262 named "an image brief drains after enqueue
+  acknowledgement and fallback failure while inactive"). It drives the backend through the `design_action` gateway command
   and the UI, never through an agent.
 - Opening prompt: since 2026-10-25 the backend owns it. The **New design
   workspace** brief goes onto the new tab's durable prompt queue
@@ -1532,6 +1564,105 @@ Focused only, as this stage requires: `bun check` of `apps/web`
 web tests (`src/components/design`, `src/lib/design-client`, all passed);
 oxlint and `bun fmt --check` on the changed files (clean).
 
+## Qualification evidence (2026-11-13)
+
+Tasks 3 and 6 on branch `20261113-000850-4a57ed16412c` from `17d28238c`.
+Host: Apple M5 Pro (18 cores, 64 GiB), macOS 27.2, Bun 1.4.4, Playwright
+1.65.0. Nine other builds shared the host throughout (load averages 35 to 96);
+no timing here is a reference figure. Every app ran on a disposable
+agent-test profile under a temporary root with HOME, the XDG roots and an
+allowlisted environment, and every backend on its own temporary data
+directory on loopback, never on ports 34121, 34122 or 45507, with no agent
+credentials and no provider turn. Nothing was signed with a Developer ID or
+notarised.
+
+### macOS packaged bundle (task 3)
+
+- **Build.** `mise run package:mac:unpacked:test` passed and wrote
+  `release/packaged-test/mac-arm64/OrkestratorV2.app`. `codesign -dv`:
+  `Signature=adhoc`, no team identifier (the build's `mac.identity` is `-`
+  and `CSC_IDENTITY_AUTO_DISCOVERY=false`, so no keychain was read).
+- **First run.** The packaged spec failed one check: it expected
+  `process.resourcesPath` beside the executable, which is the Linux layout; a
+  macOS bundle keeps it in `Contents/Resources`. Fixed with
+  `packagedResourcesPath` (unit-tested in `packaged-electron-app.test.ts`).
+  Then it passed (31.0 s) with Electron 45.2.3, Chromium 156.0.8078.80:
+  `app.isPackaged`, the `file://…/Contents/Resources/web/index.html` window,
+  `userData` inside the profile, open, drag, keyboard (Ctrl/⌘+0 included),
+  export, download and host import.
+- **Repeats.** `--repeat-each=8` failed 4 of 8 at load 44–96: twice the
+  export step read **File name** before the backend's preview filled it, and
+  twice a startup dialog took the project's Expand click, so the environment
+  row never showed. Both are journey races, fixed in
+  `design-canvas-electron-journey.ts` and recorded as flake
+  [9969](../../tests/flaky-tests/design-canvas-and-artifacts/9969-design-electron-journey-file-name-and-expand-races.md).
+  Afterwards `--repeat-each=8` passed 8 of 8 (20.3–30.3 s, load 41–46), and
+  2 of 2 more in the final run below.
+- **Ctrl/⌘+0.** Every macOS packaged run that reached the step passed it: 15
+  of 15 before the final run, 17 of 17 with it. The key-event dump never
+  fired.
+- **Save dialog.** The product installs no `will-download` handler on the
+  window's session (only the artifact host's isolated session has one, and it
+  cancels downloads), so the dialog is Electron's. The journey now asserts the
+  window's session has no `will-download` listener before installing its own,
+  in the Vite-served and both packaged specs.
+- **Windows.** The app ran with `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1`, so
+  no window reached the desktop.
+
+### Renderer pairing with v2.22.3 (task 6)
+
+`e2e/agent-testing/design-canvas-renderer-pairing-electron.spec.ts`, two
+tests. Each makes a headless backend of the other version the window's active
+connection with `connections.connect({ address, token })`, waits until
+`get_app_version` from the page answers that backend's version, then runs the
+shared Electron design journey, whose commands therefore all go to that
+backend.
+
+| Direction | Renderer | Backend | Result |
+| --- | --- | --- | --- |
+| New renderer, old backend | this checkout's packaged-test macOS app (2.38.1-beta) | `orkestrator@2.22.3` from npm (`--ignore-scripts`), `serve` | passed 3 of 3 (34.3, 40.4, 37.0 s): open, drag, keyboard with Ctrl/⌘+0, export with the byte and digest check, download, host import |
+| Old renderer, new backend | the published v2.22.3 macOS app (Electron 44.7.0) from the GitHub release zip, unpacked with `ditto -x -k` | this checkout's `apps/backend/src/main.ts` (2.38.1-beta) | passed 3 of 3 (31.4, 37.7, 42.4 s): open, drag, keyboard, export with the byte and digest check, host import |
+
+- **The old backend's gaps were harmless.** Against 2.22.3 the new renderer
+  logged "Unknown backend command" for commands newer than that release
+  (`get_node_status`, `get_node_summaries`, `get_portal_layout`,
+  `list_environment_hydration` and others) and showed the "backend is out of
+  date" notice, as designed; the design canvas worked throughout.
+- **Harness findings, not product defects.**
+  - Commands from the page fail authentication until the window reloads onto
+    the new connection; the spec reloads until `get_app_version` answers
+    the remote's version (as `multi-node-window.spec.ts` does).
+  - An isolated 2.22.3 backend has no agent at all, so `get_available_ai_cli`
+    answers `null` and the renderer opens its blocking "AI CLI Required"
+    dialog. This checkout's packaged backend answers `cursor` (it ships the
+    Cursor bridge). Both backends now get a toolchain directory with a stub
+    `pi` that only exits 1 (decision 29).
+- **Old renderer, as shipped.** The v2.22.3 app is reached only over CDP
+  (`--remote-debugging-port=0`), because its Node inspect fuse is off. So the
+  journey ran without main: no window size, no download save path (the
+  download step is skipped), no window zoom factor (the page's CSS width
+  stands in for it). Two checks are skipped for a renderer that predates
+  them, and neither depends on the backend: the app-wide shortcuts dialog
+  (#1240) and Ctrl/⌘+0 resetting a focused canvas. In v2.22.3, ⌘0 left the
+  canvas at 77% in all three runs. That is the App zoom-listener defect fixed
+  on 2026-10-22 ([Electron](#electron)), after v2.22.3 shipped on 2026-10-17.
+  That release predates hidden agent-test windows, so its window showed on
+  the desktop during each run.
+- **Final run.** `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE=<app>/Contents/MacOS/OrkestratorV2
+  mise run test:logged -- --name design-final -- bunx playwright test --config
+  e2e/agent-testing/playwright.packaged-electron.config.ts
+  design-canvas-packaged-electron.spec.ts
+  design-canvas-renderer-pairing-electron.spec.ts --repeat-each=2` passed 6 of
+  6 (237.4 s, load 50–75).
+- **Not covered.** Ask agent and Resume (to-do 8011); the Linux packaged
+  app in the pairing (the spec supports it, not run); a v2.22.3 AppImage.
+
+### Repository checks (2026-11-13)
+
+Focused only: `bun check -p e2e/agent-testing/tsconfig.json`,
+`packaged-electron-app.test.ts`, oxlint and `bun fmt --check` on the changed
+files, and the number-claims and docs index tests.
+
 ## Constraints and rationale
 
 - Runs use a unique isolated profile and only its fixture repository, with
@@ -1849,15 +1980,80 @@ Made on 2026-11-06 while working tasks 12, 6 and 5.
       unchanged. Cons: the first attempt's failure stays unclassified, and
       a rerun costs another 43 minutes.
 
+Made on 2026-11-13 while working tasks 3 and 6.
+
+24. **Task 3: which macOS build.** Options: the shipping `--dir` build
+    (`test:package:security`'s), which Playwright's `_electron.launch`
+    cannot start (inspect fuse off); `mise run package:mac:unpacked:test`.
+    Chosen: the packaged-test build, as on Linux. It has an ad-hoc identity
+    and `CSC_IDENTITY_AUTO_DISCOVERY=false`, so nothing is signed with a
+    Developer ID, notarised or read from the keychain. Windows stay hidden
+    through `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS`, which keeps painting and
+    timers running. Pros: the same journey and assertions as Linux, off the
+    shared desktop. Cons: one fuse differs from the shipped app.
+25. **Task 3: the Save dialog.** Chose the recommended option, retire it,
+    and pinned its premise: the journey asserts the window's session has no
+    `will-download` listener before installing its own. Pros: a future
+    product handler fails the Electron specs with a message saying to test
+    its dialog. Cons: none; Electron's own dialog stays untested, as before.
+26. **Task 3: the Ctrl/⌘+0 failure.** Chose the recommended option, close
+    it: no recurrence in 15 macOS packaged runs (17 with the final run),
+    with the key-event dump still in place. Pros: no time on a failure that
+    no longer happens. Cons: the spec's re-measure wait stays, so a narrow
+    timing issue could still hide behind it.
+27. **Task 6: a spec, not a manual run or a Bun runner.** Options: the
+    recommended manual run; a Bun script like
+    `qualify-design-mixed-versions.ts` starting backends and calling
+    Playwright; a Playwright spec that starts its own backends. Chosen: the
+    spec, with its process code in `design-renderer-pairing-support.ts`
+    (Node, because Playwright runs under Node; `scripts/mixed-version/harness.ts`
+    needs Bun). It reuses the shared journey, so both directions are held to
+    the assertions every Electron design run makes. Pros: repeatable, and in
+    the packaged Electron suite. Cons: the backend environment is built
+    again here rather than imported from the harness.
+28. **Task 6: driving the published app.** Its inspect fuse is off, so it
+    runs with `--remote-debugging-port=0` and is driven over CDP. The journey
+    takes `electronApp: null` and skips only what needs main. Re-signing a
+    copy with the fuse flipped was rejected: it changes the binary users run
+    and needs signing. Pros: the real published bytes. Cons: no download
+    step and no zoom factor for that half; its window shows on the desktop.
+29. **Task 6: an agent for the gate.** Options: dismiss "AI CLI Required"
+    (it has no dismiss, only Retry and Close Application); run the old
+    backend in the production flavor so it searches PATH; a stub in
+    `--toolchain-bin-dir`. Chosen: the stub `pi`, a script that exits 1.
+    Both versions look agents up there in an agent-test profile. Pros: the
+    backend stays agent-test, with no PATH search and no host tool. Cons:
+    the backend reports an agent it cannot run; only the gate reads it.
+30. **Task 6: checks older than the renderer.** `olderRenderer` skips the
+    app-wide shortcuts dialog (#1240) and asserts nothing about Ctrl/⌘+0,
+    which is recorded instead. Pros: the run measures the pairing, not
+    features and fixes that postdate the release. Cons: a regression in
+    those two checks on an old renderer would not show here; neither depends
+    on the backend.
+31. **Task 6: Ask agent and Resume.** Not run: both need an agent turn, and
+    the pairing has none. Moved to to-do 8011 with a loopback-model plan
+    rather than to 7568, because no login or billed turn is needed.
+32. **Tasks 1, 5 and 7: took the recommended options.** Task 1: accept the
+    renderer-death window, now recorded in `design-canvas.md`. Task 5: Chrome
+    stands in for the Electron renderer; no `--electron` mode unless an
+    Electron-only regression is reported. Task 7: retire the real-binary
+    interrupted migration as covered by `records.test.ts`. None builds
+    anything, and each is reversible by reopening a to-do with new evidence.
+33. **Tasks 9 and 11 and the open questions.** The five deferred
+    optimisations move to new to-do 8010 (task 9's recommendation). Whether
+    thumbnails are wanted, and whether to build a cross-environment transfer
+    UI, are product decisions, so they are items in 7568's decisions. The
+    shared live harness question is answered by task 10.
+34. **Retire this file.** With 33 done, nothing agent-buildable is left
+    here. The file is retired in the same change, and the durable summary is
+    in `design-canvas.md` ("Qualification").
+
 ## Open questions
 
-- Should design join a shared live-provider harness (like
-  `e2e/agent-testing/opencode-live.spec.ts`) rather than get its own spec?
-- Are thumbnails wanted as a product feature on their own merits? The library
-  shipped without them.
-- Is a cross-environment design transfer UI wanted? Recovery copies, download
-  and import cover copying today. If it is built, define and test the lock
-  order for two-canvas operations before adding them.
+All three moved on 2026-11-13 (decision 33): the shared live-provider harness
+is answered by task 10 (no); whether thumbnails are wanted and whether to
+build a cross-environment transfer UI are decisions in the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ## Related
 

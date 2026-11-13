@@ -637,13 +637,6 @@ export interface NativeAgentServiceOptions {
   directHistoryPageCacheLimits?: Partial<DirectHistoryPageCacheLimits>;
   /** Test seam for the obsolete-provider disposal grace period. */
   providerRetirementGraceMs?: number;
-  /**
-   * Observation sharing (step 07): stable-idle group backoff and busy-queue
-   * reuse of the sweep's answer. `false` is the rollback — every group is
-   * read on every sweep and every queue pass reads the provider again, as
-   * before. Dispatch/generation fences and the mail freshness gate stay.
-   */
-  observationSharing?: boolean;
   /** Safety discovery for the keyed launch/queue driver. */
   queueDiscoveryIntervalMs?: number;
   /** Test seam: the keyed launch/queue driver's monotonic clock and timers. */

@@ -33,6 +33,10 @@ const directory = import.meta.dirname;
 /** Specs that keep Chromium's own network path for module loads, and why. */
 const DIRECT_SPECS = new Map([
   ["client-outage.spec.ts", "outages of the browser's own network path"],
+  [
+    "background-tab-reconnect-live.spec.ts",
+    "a hidden tab needs a browser Playwright did not launch",
+  ],
 ]);
 
 /** Specs with cases that load modules through Chromium themselves, and how many. */

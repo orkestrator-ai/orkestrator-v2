@@ -30,9 +30,11 @@ run side by side in one platform, so bridge keys, tab records and the agent
 settings tiers are unchanged by accounts.
 
 Every machine (node) keeps its own accounts and its own active account per
-platform; see [Machines](#machines). Outstanding work and known gaps are in
-[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md);
-to-do 0722 (per-machine accounts) was retired on 2026-11-10.
+platform; see [Machines](#machines). To-do 0003 (accounts and sign-in) was
+retired on 2026-11-13 and its evidence summarised under
+[Qualification](#qualification); to-do 0722 (per-machine accounts) was
+retired on 2026-11-10. The live checks still waiting on a person are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 ## Account directories
 
@@ -639,7 +641,15 @@ active account's last good reading as stale.
 
 Session-reported usage windows are folded into the platform's card only when
 the reporting bridge was launched on the active account
-(`contextUsageWithPlanUsage` in `plan-usage/cache.ts`).
+(`contextUsageWithPlanUsage` in `plan-usage/cache.ts`). The reporting account
+is the one the bridge's launch resolved (`applyActiveAgentAccountEnvironment`,
+kept as the connection's `accountId`); a container bridge reports `"unknown"`,
+so its windows never fold. A bridge still finishing a turn on the previous
+account therefore cannot put its windows on the new account's card: proved
+live for Codex on 2026-10-26, and for Claude, whose bridge reports windows only
+near a limit (`rate_limit_event` and the SDK usage report), by
+`agent-accounts.test.ts` ("a Claude bridge still on the previous account
+cannot fold its windows into the new account's usage").
 
 ### How old a reading is
 
@@ -1462,6 +1472,40 @@ local tmux server keeps the environment it was first started with. A container
 terminal is handed the active login when it opens (see
 [Containers](#containers)); one opened while that platform has live work, or
 one already open, keeps the login the container held.
+
+## Qualification
+
+Summarised from to-do 0003, retired on 2026-11-13 (the whole record is
+`git show 17d28238c:docs/todo/agent-engines/0003-agent-accounts-and-sign-in.md`).
+The live runs used disposable `dev:test` profiles and made-up logins in
+throwaway directories on 2026-10-26 (macOS, Claude Code 2.1.310, Codex
+0.164.0); no real login was signed out, renewed or written.
+
+- **Auth states.** Every state renders in the per-session account card and in
+  the settings sign-in card for every enabled platform
+  (`AgentInfoButton.test.tsx`, `AgentSignInCard.test.tsx`,
+  `e2e/GlobalSettings.spec.ts`).
+- **Codex sign-out and sign-in.** Sign-out locked the composer and offered
+  **Sign in to Codex**; the browser and device-code flows started, and
+  **Cancel sign-in** made app-server close its login listener; a login stored
+  outside the tab unlocked it within one 10-second read. Approving a real
+  sign-in needs a person and is in the manual-test checklist.
+- **An expired Claude login mid-turn** ends the turn with Claude's own 401
+  reply, a warning and the pinned sign-in card, never a spawn failure (see
+  [Turn-time auth notice](#turn-time-auth-notice)).
+- **Usage windows after a switch.** Live for Codex; for Claude by unit test
+  (see [Plan usage](#plan-usage)).
+- **Switching gaps.** A container from an image without staged inputs picked
+  up the active added accounts at boot; a container terminal opened after a
+  switch received the new login while other containers kept theirs; and
+  `dev:test` from a shell whose `CLAUDE_CONFIG_DIR` names an added account ran
+  on that account.
+
+The runs found four defects, each fixed with tests: Claude's sign-in card did
+not appear for an expired login; a locked Codex tab did not notice a login made
+elsewhere; a Codex tab lost its conversation when its bridge was replaced after
+a switch (now `CODEX_BRIDGE_STATE_DIR`, see [Switching](#switching)); and a
+Codex `needs-auth` notice could never clear.
 
 ## Provider behaviour relied on
 

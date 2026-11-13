@@ -183,7 +183,7 @@ Analysed 2026-11-11 against `main` at `14df96544`.
 
 **Problem.** Every path is covered by tests with real storage and a faked Linear API and node link, but no run has used two real backends and a real Linear key.
 
-**Context.** `docs/development/agent-testing.md` describes linked `dev:test` profiles; to-do 1030 task 2 uses the same set-up.
+**Context.** `docs/development/agent-testing.md` describes linked `dev:test` profiles; to-do 1030 (retired) task 2 used the same set-up, through the mixed-version runner ([Choosing a machine](../../architecture/coordinator.md#choosing-a-machine)).
 
 **Investigation.** Not run. The steps: connect on the leaf profile, link a board, attach the leaf to a command profile, wait for a sync pass, and check the command profile's Linear tab shows the same board and offers Use it here; then disconnect on one and check the other clears.
 

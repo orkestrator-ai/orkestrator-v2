@@ -100,6 +100,9 @@ export const CROSS_PACKAGE_CONTRACTS: ReadonlySet<string> = new Set([
   "tests/unit/migrate-copy-drain-window.test.ts",
   // Deferred backend references must survive the browser's normalization.
   "tests/unit/native-agent-deferred-normalization.test.ts",
+  // The goal scripts/qa-remote-goal-hold.ts seeds must be the one the backend's
+  // registry, NodeCoordinatorRemote and coordinator hold on (4860 (retired)).
+  "tests/unit/qa-remote-goal-hold.test.ts",
   // The busy driver badge limit must match the backend untracked-file scan cap.
   "tests/unit/recurring-live-ab-busy.test.ts",
   "tests/unit/test-host-isolation.test.ts",

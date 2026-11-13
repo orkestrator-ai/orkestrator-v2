@@ -614,7 +614,10 @@ on `self` and on each node:
 - **Restarts.** History is in memory (`MachineLoadSampler`,
   `apps/backend/src/core/machine-load.ts`) and starts empty on each start;
   persisting it would add a database write on every machine all day for a
-  figure the coverage field already keeps honest. A bucket a minute for the
+  figure the coverage field already keeps honest. Whether to persist it after
+  all is a conditional decision on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+  taken only once a coordinator is seen misled by short 24-hour coverage. A bucket a minute for the
   shorter windows and one every 15 minutes for the longest bound it to about
   160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
   [recurring-work.md](recurring-work.md) B29.
@@ -627,6 +630,17 @@ on `self` and on each node:
   `packages/protocol/src/unknown-command.ts`) and `error`.
   Last-known figures are never shown. `detail` is fixed wording, so a node's
   error text does not reach the coordinator.
+  The mixed-version runner's `nodes` module runs this `list_nodes` against a
+  real leaf of any published release
+  (`mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`):
+  a leaf from before `get_machine_load` reads as `older-version`, and each
+  node's `buildCommit` matches its hello. Run on 2026-11-13 on one Linux host
+  (to-do 1030 (retired) tasks 2 and 7): leaves of this checkout, 2.36.1 and
+  2.36.4-beta reported their load, a 2.34.4-beta leaf read as
+  `older-version`, a source build and 2.36.1 reported `buildCommit: null`,
+  and 2.36.4-beta reported the commit its tag points to. The `older-version`
+  branch retires with its [register](version-compatibility.md#register) row
+  (`machine-load.older-node`).
 - **Who sees it.** Read-only, for main coordinators and side agents
   (`list_nodes` is under `discovery`). The answer is parsed down to the fields
   above; no hostname, account, path or process detail crosses. The operator
@@ -2960,7 +2974,10 @@ when one opens. The one exception is the backfill rule, for work older than stat
 wakes: a non-terminal status with no earlier notice, unchanged for over 24 hours, on
 an association over 14 days old is recorded without a wake
 (`coordinator-status-backfill.ts`), so a project idle for longer than that does lose
-such a notice.
+such a notice. The rule and its module are deleted once a count of the user's real
+coordinator stores finds no association older than status wakes (to-do 4860
+(retired) task 1, on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 **What wakes it.** Each resource is reduced to one settled status with a
 stable key; a key is sent once, recorded on the association
@@ -3812,6 +3829,17 @@ settles the delegation once. A worker's own mail is that wake as usual. Otherwis
 the notice names the outcome (`Its goal is limited (iteration-cap) after 3 of 3
 iterations`) and `get_worker_goal`. A coordinator's own pause or clear of a running
 goal ends the wait too, so that wake arrives at once.
+
+A worker on another node has no edge on the command node, so the remote sweep
+holds while that node's `get_agent_registry` entry says `goal.running`
+(`NodeCoordinatorRemote.workerState`), and the first read after the goal stops
+closes the delegation. An older node sends no `goal`, which reads as not
+running. `mise run qa:remote-goal-hold` (`scripts/qa-remote-goal-hold.ts`,
+weekly in `.github/workflows/mixed-version-qualification.yml`) checks this over
+a real node link with a leaf whose goal is held by its running check, and no
+agent turn. `tests/unit/qa-remote-goal-hold.test.ts` runs the same seeded goal
+through the leaf's registry, `NodeCoordinatorRemote` and the coordinator in
+process, in the default suite.
 
 **Status reads.** `get_worker_goal` and `get_tab_state` report the goal through
 `goalForModel`, and `list_agents` adds its status and counts, so an `idle` tab whose

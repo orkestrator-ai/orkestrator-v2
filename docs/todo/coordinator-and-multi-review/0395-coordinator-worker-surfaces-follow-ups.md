@@ -417,7 +417,7 @@ An older leaf answers an unknown controller command, and `coordinatorNodeTarget`
 turns that into "update it, then retry". (Corrected 2026-11-01: this said the
 answer was `Unknown command: …`, but a real leaf answers
 `Unknown backend command: …`, so the check never matched one until todo 1030
-task 4.) An older `controller_multi_review_surface` answers
+(retired) task 4.) An older `controller_multi_review_surface` answers
 the new surfaces with "Expected surface root, fix or address.", and the
 command node maps that text to the same message.
 

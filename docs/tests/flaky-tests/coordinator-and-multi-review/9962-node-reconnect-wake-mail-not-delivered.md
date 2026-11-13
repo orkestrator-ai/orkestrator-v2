@@ -26,6 +26,24 @@
 - **Evidence:** `orkestrator-test-run.QABp0N/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
   under the host temporary directory.
 
+## Recurrences
+
+- **2026-11-13**, base `17d28238c098b4443d1289df5c4ed75e7cc2802e`, branch
+  `dev-test-checks-415ac044ae03-r1` at `6f8c4c6fe`. The branch changes docs,
+  `scripts/`, `tests/unit/`, `mise.toml` and a workflow; nothing under
+  `apps/`, `packages/` or `bridges/`. Same assertion at line 390 (Expected
+  length 1, Received length 0, 80.17 ms), with the `heard` assertion before it
+  passing. Command: `mise run test:logged -- --name review-default-tests-rerun -- mise run test`,
+  default worker counts, load average about 49 to 84 on 16 threads. Counts:
+  backend 18,150 passed and 1 failed; web 14,722, desktop 2,149, protocol
+  5,835, toolchain 135 and web-public 52 passed; root, bridge and codex
+  protocol lockfile groups passed. The aggregate runner's rerun of the
+  unchanged owning file reported `PASSED ALONE (2.4s)`. `mise run
+  flaky:recurrence -- 9962 --base 17d28238c` gave the verdict "open, record
+  as a recurrence". Evidence:
+  `orkestrator-test-run.yWLSpY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  under the host temporary directory.
+
 ## Hypothesis
 
 Unconfirmed. The mail the production reconnect subscription sends to the

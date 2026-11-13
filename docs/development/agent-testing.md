@@ -1532,10 +1532,17 @@ that the screen is locked is not permission to show one, so the lock-screen
 fixture checks again before each step that shows a window and, on
 `unlock-screen`, hides its windows and stops (the case then skips). On
 Windows, which has no process groups, the spec stops Electron's process tree
-with `taskkill /T` rather than the POSIX group helpers. Chromium tracks occlusion on macOS and Windows only, so on
-Linux the covered state is recorded in the `desktop-window-polls` attachment
-rather than asserted, as is a minimise that a display with no window manager
-ignores. The hidden agent-test windows turn background throttling off, so a
+with `taskkill /T` rather than the POSIX group helpers. Whether Chromium sees
+a covered window on Linux depends on the display server and window manager
+(under Xvfb with openbox it did, on 2026-11-13), so on Linux the covered state
+is recorded in the `desktop-window-polls` attachment rather than asserted, as
+is a minimise that a display with no window manager ignores.
+
+On a Mac with Docker, the Linux run fits in a throwaway container: Xvfb and
+openbox give it a display nobody sees, and Electron's sandbox needs
+`--security-opt seccomp=unconfined` there (Docker's default profile refuses
+the user namespace it creates). The commands are in to-do 2181's Current
+state. The hidden agent-test windows turn background throttling off, so a
 hidden profile's renderer keeps polling; that is intended, since its windows
 are never shown.
 

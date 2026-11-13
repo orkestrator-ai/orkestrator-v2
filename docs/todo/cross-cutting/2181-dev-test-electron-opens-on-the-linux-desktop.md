@@ -42,8 +42,11 @@ a real Electron window there reports `hidden`, so the renderer's polls pause,
 when it is hidden, minimised or covered. The suite's
 `window-visibility-polls-electron.spec.ts` checks this; its desktop case runs
 on Linux whenever the suite has a display. On macOS it passed on 2026-11-13
-(Current state). Chromium tracks occlusion on macOS and Windows only, so the
-spec records a covered Linux window's state rather than asserting it. Read the
+(Current state), and on 2026-11-13 on Linux under Xvfb with openbox in a
+throwaway container, where a covered window also reported `hidden` (Current
+state). Whether Chromium sees a covered window on Linux depends on the display
+server and window manager, so the spec records a covered Linux window's state
+rather than asserting it and the fleet host's run still counts. Read the
 `desktop-window-polls` attachment for the `covered` step and record it in
 Current state. If the window stayed `visible`, choosing between an occlusion
 relay and accepting it is the user's decision, on
@@ -701,6 +704,31 @@ locked:
 | Shown under the lock screen (run while locked) | `isVisible()` true but the document `hidden`, 0 reads in 2 s; read again 636 ms after throttling was turned off. Since the review repair the case needs `ORKESTRATOR_AGENT_TEST_SHOWN_WINDOWS=1`, so these runs predate it; later agent runs skip it |
 | Hidden, minimised, covered on a desktop | Skipped: no disposable display on a Mac (on 7568 for a person at an unlocked Mac) |
 
+**5460 task 3 on Linux, in a throwaway container (2026-11-13).** On the same
+Mac's Docker (linux/arm64, the released image
+`ghcr.io/orkestrator-ai/orkestrator-v2:2.37.4-beta`, Debian 13, run `--rm`
+and never retagged), from this branch's commit `7542820b4` unpacked with
+`git archive`: as root, `apt-get install` of `xvfb xauth openbox` and
+Electron's GTK, NSS, ALSA and X libraries; as `node`, `bun install
+--frozen-lockfile` and Electron's own `install.js`; then
+`xvfb-run -a -s "-screen 0 1280x800x24"` running openbox and
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts
+window-visibility-polls-electron.spec.ts`. Chromium's sandbox needs the
+container started with `--security-opt seccomp=unconfined`: under Docker's
+default profile the zygote fails with `Failed to move to new namespace`, and a
+setuid `chrome-sandbox` fails the same way without `CAP_SYS_ADMIN`. Result:
+2 passed, 1 skipped (the lock-screen case, macOS only), 26.4 s, Electron
+45.2.3:
+
+| Case | Result |
+| --- | --- |
+| Never-shown window | `hidden`, 0 reads; `visible` with throttling off, first read after 422 ms and 5 reads in 2 s; `hidden` with 0 reads once it was back on |
+| Hidden, minimised, covered on a desktop | Shown: `visible`, 5 reads in 2 s. Hidden: `hidden`, 0 reads. Shown again: read after 597 ms. Minimised (openbox minimised it): `hidden`, 0 reads. Restored: read after 348 ms, 5 reads. Covered: `isVisible()` true but the document `hidden`, coordinator paused, 0 reads. Uncovered: `visible`, 6 reads. No read while hidden in the whole run |
+
+So on X11 with a window manager a covered window pauses its polls too, and
+7568's covered-window decision is needed only if the fleet host's display
+(another window manager, or a Wayland compositor) shows it staying `visible`.
+
 Exploratory runs before the spec, without Playwright, gave the reasons for its
 design. A window shown while the screen is locked is reported occluded within
 40 ms. A window created while the screen is locked and never changed
@@ -722,10 +750,12 @@ polling, as intended.
   Xvfb; its run on this branch's pull request is still to confirm the
   `electron-cleanup.spec.ts` repair on a real display (see Current state). Until
   it has run, the repair's evidence is the headless 10-of-10 run on `omarchy-hp`.
-- The Linux answer for `window-visibility-polls-electron.spec.ts`, from the
-  same run: its `desktop-window-polls` attachment says whether a hidden,
-  minimised and covered window reports `hidden` there (task 1's
-  Investigation). Until then only macOS has run it.
+- The Linux answer for `window-visibility-polls-electron.spec.ts` on the fleet
+  host's display, from the same run: its `desktop-window-polls` attachment
+  says whether a hidden, minimised and covered window reports `hidden` there
+  (task 1's Investigation). So far it has run on macOS and, on 2026-11-13,
+  under Xvfb with openbox in a throwaway container, where all three paused
+  (Current state).
 
 ## Related
 

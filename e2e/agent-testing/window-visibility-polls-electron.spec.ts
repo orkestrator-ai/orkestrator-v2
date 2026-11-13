@@ -518,9 +518,10 @@ test("hidden, minimised and covered windows on a desktop pause their polls", asy
   const shown = shownWindowsAllowed();
   test.skip(!shown.allowed, shown.reason);
   test.setTimeout(180_000);
-  // Chromium tracks occlusion on macOS and Windows only, so a covered window
-  // on Linux may stay visible: that is recorded, not asserted (the
-  // manual-test checklist 7568's covered-window decision says what then).
+  // On Linux whether a covered window turns hidden depends on the display
+  // server and window manager (Xvfb with openbox: it does), so there it is
+  // recorded, not asserted (the manual-test checklist 7568's covered-window
+  // decision says what to do if it stays visible).
   const coveredExpect = process.platform === "linux" ? "any" : "hidden";
   const result = await runSteps("desktop-window-polls", [
     { name: "start", action: "start-polls", expect: "hidden" },

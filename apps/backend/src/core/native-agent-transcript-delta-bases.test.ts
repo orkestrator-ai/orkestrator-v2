@@ -197,7 +197,7 @@ describe("transcript readers behind the newest view (TX-1)", () => {
   test("a viewer one view behind a head row over a million characters gets a small patch", async () => {
     // About 3 MB encoded, and a new copy on every read: no two views share it,
     // so each superseded view costs more than the 2 MiB key bound. That used
-    // to empty the ring and send the viewer the whole 3 MB view (todo 7845).
+    // to empty the ring and send the viewer the whole 3 MB view (to-do 7845 (retired)).
     const streamed = "streamed ".repeat(330_000);
     await withStream([row("prompt", "prompt"), row("head", streamed)], async (context) => {
       const { history, service, advance } = context;
@@ -481,7 +481,7 @@ describe("TranscriptDeltaBases", () => {
 
   test("a recovered head row over a million characters keeps its base under the default bounds", () => {
     // About 3 MB encoded: over the 2 MiB key bound that used to empty the ring
-    // on every recovery (todo 7845 task 1).
+    // on every recovery (to-do 7845 (retired), task 1).
     const bases = new TranscriptDeltaBases();
     const content = "streamed ".repeat(330_000);
     const grown = (extra: string) => view([row("head", content + extra)]);

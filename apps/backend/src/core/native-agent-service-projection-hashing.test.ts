@@ -309,7 +309,7 @@ describe("head-row recovery", () => {
   /**
    * A head row whose exact read the test releases by hand, so a newer revision
    * can arrive while it is in flight: what happens once reading and parsing the
-   * row outlasts the gap between two revisions (todo 7845 task 2).
+   * row outlasts the gap between two revisions (to-do 7845 (retired), task 2).
    */
   function slowRecoveryProvider() {
     let revision = 1;

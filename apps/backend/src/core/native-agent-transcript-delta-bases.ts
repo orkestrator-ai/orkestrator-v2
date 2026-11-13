@@ -20,7 +20,7 @@
  * every recovery, so consecutive views never share it and a base holding it
  * costs the whole row. Past about a million characters that is more than the
  * per-key bound, which used to empty the ring on every recovery and send
- * every reader a whole snapshot (todo 7845 task 1). The per-key bound now
+ * every reader a whole snapshot (to-do 7845 (retired), task 1). The per-key bound now
  * sheds older bases but always keeps the newest one: a base over the key
  * bound replaces the ring rather than emptying it, so a reader one view
  * behind still gets a delta, and with patches the grown row travels as its

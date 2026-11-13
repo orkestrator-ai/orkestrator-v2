@@ -326,7 +326,7 @@ type ProgressiveTranscriptEntry = {
    * Moves only when the view's content does, not when a held preview, an
    * `unchanged` answer or an artifact overlay re-commits the same content
    * under a new token. A head-row recovery compares it to decide whether what
-   * it read is still no older than what the view shows (todo 7845 task 2).
+   * it read is still no older than what the view shows (to-do 7845 (retired), task 2).
    */
   contentSequence: number;
 };
@@ -2269,7 +2269,7 @@ export class NativeAgentTranscriptProjection {
              * reading and parsing the exact row outlasts the gap between two
              * revisions, that is every read, and discarding them all froze
              * the view on the last recovery that finished in a quiet gap
-             * (todo 7845 task 2). The read is still newer than what the view
+             * (to-do 7845 (retired), task 2). The read is still newer than what the view
              * shows if the view has not moved since it started, and a newer
              * revision's recovery is still pending (so the view is a held
              * preview, not a complete snapshot): commit it, and let that

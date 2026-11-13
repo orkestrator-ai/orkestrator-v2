@@ -9,8 +9,9 @@ item, the open questions and the verification items worked through on
 
 Analysed 2026-11-06 against `main` at `e6c3da89` for tasks 2 and 7, and
 against `main` at `c1724ab7` for task 9's macOS half; 2026-11-10 against
-`main` at `c98b20e6f` for task 9's Linux half; the other tasks as analysed
-2026-10-27 against `main` at `863b5782`.
+`main` at `c98b20e6f` for task 9's Linux half; task 3 built 2026-11-13
+against `main` at `17d28238c`; the other tasks as analysed 2026-10-27
+against `main` at `863b5782`.
 
 Code items 1 to 5, 7, 8, 10, 11 and 13 are done on `main` and are not
 repeated as tasks; their live checks are. The open questions and the
@@ -20,7 +21,7 @@ repeated as tasks; their live checks are. The open questions and the
 
 1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67). Filing the upstream request moved to 7568 on 2026-11-10.
 2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: done (the hook canary is added, the slash-catalogue risk was already closed, and a skill written during a running turn is kept as residual risk).
-3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: open. The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
+3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: done (2026-11-13; see "Task 3: assert the kind after finding the card"). The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
 9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented, and since 2026-11-11 Agent Info carries a note for it (7563 (retired))).
@@ -98,6 +99,13 @@ Running the file first showed it was stale on main: its three pinned cases faile
   - **Check the card kind by eye during the run.**
     - Pros: no code.
     - Cons: not repeatable.
+
+**Done, 2026-11-13.** Built as the recommended option: the `grok-approval`
+case now fails unless its approval arrives as `command-approval`
+(`EXPECTED_APPROVAL_KINDS` and `approvalKindProblem` in
+`e2e/agent-testing/paused-interactions-live-support.ts`, pinned by
+`paused-interactions-live-support.test.ts`). The run with a Grok login is
+the 7568 item.
 ### 7. Browser interaction checks
 
 **Problem.** MCP elicitation rehydration, Claude's `ask` and `deny` policy overrides and a delegating coordinator turn have no real-browser evidence.
@@ -1090,6 +1098,21 @@ server as loaded; the address is never contacted.
 - **Toolchain downloads on a host with Docker churn.** Electron downloads with Chromium's `net.fetch`, which aborts on every interface change. Two options were weighed. The first was more unattended retries in Electron for agent-test profiles: it is simple, but a burst of interface changes could still exhaust them. The second was to download in the `dev:test` launcher with Bun's `fetch`, which interface changes do not abort, through the same manager and hash checks. Chose the launcher download, keeping Electron's download as the fallback. Also chose to let `downloadArchive` retry a request Chromium aborted with `ERR_NETWORK_CHANGED` before any bytes arrived, so the desktop app gets the same help.
 - **A refused first send in the Pi cell.** Chose to record the refusal and resend once, only when the projection proves the prompt never reached the session. Pros: a refusal leaves evidence in the results, and nothing can run twice. Cons: a refusal that a resend fixes no longer fails the case. That gap is recorded in [7042](7042-pi-container-cell-first-send-refused.md).
 
+### Task 3: assert the kind after finding the card (2026-11-13)
+
+- **Where the assertion sits.** Options: (a) narrow the set of kinds the
+  case waits for to `command-approval`; (b) keep waiting for any approval
+  kind and then require `command-approval` for the cases that name one.
+  Chose (b). With (a), a Grok approval that still arrived as a generic
+  `permission` would never be found, and the run would fail after five
+  minutes as "never asked"; with (b) it fails at once, naming the kind it
+  got. The cost is a second check beside the wait.
+- **Which cases.** Only `grok-approval` names a kind. The prompt asks for one
+  shell command, which Grok sends as an ACP `execute` call; the ACP bridge
+  describes an `execute` call with a command as a command approval and falls
+  back to a generic permission without one. Other providers' approval cases
+  keep accepting any approval kind, as the ticket asked for Grok only.
+
 ## Related
 
 - `0160-codex-saved-rules-list-and-revoke.md` (deleted 2026-11-06),
@@ -1104,8 +1127,8 @@ server as loaded; the address is never contacted.
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
 - [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
   (coordinator safety tiers, `coordinator-providers.ts`; to-do 0026, retired 2026-11-11).
-- [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md) (provider
-  sign-in and readiness).
+- [agent-accounts.md](../../architecture/agent-accounts.md#sign-in-readiness), to-do
+  0003 (retired 2026-11-13) (provider sign-in and readiness).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md)
   (deferred Claude pending-permission re-arm and MCP permission provenance).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)

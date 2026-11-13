@@ -1,15 +1,16 @@
 # Mid-turn steer and interrupt
 
-Checked against `main` at `0658de646` (2026-11-01) for tasks 1, 2, 3 and 9, and
-at `c98b20e6f` (2026-11-10) for task 8; the other tasks were last checked at
-`863b5782` (2026-10-27).
+Checked against `main` at `0658de646` (2026-11-01) for tasks 1, 2, 3 and 9,
+at `c98b20e6f` (2026-11-10) for task 8, and at `17d28238c` (2026-11-13) for
+task 7; the other tasks were last checked at `863b5782` (2026-10-27).
 
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
 2026-11-01 against `0658de646` at Agent SDK and CLI `0.3.314` / `2.1.314`;
 task 10 added and built 2026-11-08 against `02f55ea9b`; task 8 built and run
-2026-11-10 against `c98b20e6f` at Agent SDK and CLI `0.3.319` / `2.1.319`.
+2026-11-10 against `c98b20e6f` at Agent SDK and CLI `0.3.319` / `2.1.319`;
+task 7 built and run 2026-11-13 against `17d28238c`.
 
 ### Tasks
 
@@ -19,9 +20,9 @@ task 10 added and built 2026-11-08 against `02f55ea9b`; task 8 built and run
 4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
 5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by 0008 (retired) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x never could steer, and was retired on 2026-11-11, so every OpenCode session is a 2.x session and can steer (see 0008 "OpenCode 1.x retired (2026-11-11)"). Live qualification of 2.x steer belongs to 0008 task 7, done for host environments on 2026-11-11 (a composer steer through the app on a scripted model, and the live provider and steer tests on Linux). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
-7. **Inactive-path steer qualification on Claude and Cursor**: parameterise the Codex inactive-path steer spec by platform for Claude and Cursor (steer, switch away, return, reload). Status: open (the runs with real Claude and Cursor logins moved to 7568).
+7. **Inactive-path steer qualification on Claude and Cursor**: parameterise the Codex inactive-path steer spec by platform for Claude and Cursor (steer, switch away, return, reload). Status: done (2026-11-13: `e2e/agent-testing/steer-inactive-live.spec.ts` runs it for Codex on a real model and for Claude and Cursor on scripted models; both passed; see "Inactive-path steer on scripted models"). The runs with real Claude and Cursor logins are in 7568.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: done (2026-11-10, loopback model; see "One warm CLI through the app"). The same reads with a real login moved to 7568 (2026-11-10).
-10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: done (built 2026-11-08 against `main` at `02f55ea9b`; see "A missed steer becomes the next turn"). Live qualification on a real bridge is still open (see "Needs verification").
+10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: built (2026-11-08 against `main` at `02f55ea9b`; see "A missed steer becomes the next turn"); open for its live check on real bridges, which an agent can run with scripted models (see "Needs verification").
 
 ### 1. Collapse Claude task-to-process maps
 
@@ -153,7 +154,7 @@ work; running it with real Claude and Cursor logins is in the
 [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 (2026-11-10).
 
-**Investigation.** A real-stack spec exists for Codex only: "queued native steering survives a lost gateway response, inactive environment and reload" (`e2e/agent-testing/browser-gateway.spec.ts:967`, opt-in, `agent: "codex"`).
+**Investigation.** A real-stack spec existed for Codex only: "queued native steering survives a lost gateway response, inactive environment and reload" (then in `e2e/agent-testing/browser-gateway.spec.ts`, opt-in, `agent: "codex"`; now `e2e/agent-testing/steer-inactive-live.spec.ts`).
 
 **Decisions.**
 
@@ -164,6 +165,12 @@ work; running it with real Claude and Cursor logins is in the
   - **One-off manual run.**
     - Pros: faster today.
     - Cons: no regression guard.
+
+**Done, 2026-11-13.** Built as the recommended option, with scripted models
+in place of the Claude and Cursor credentials: the scenario moved into its
+own spec, one case per platform, and the Claude and Cursor cases passed
+three runs in a row on a credential-free profile. See "Inactive-path steer on
+scripted models" under "Assumptions and decisions".
 
 ### 8. Warm Claude CLI app-path qualification
 
@@ -191,8 +198,10 @@ ladder are live on Claude, Codex, Cursor and Pi. Claude's CLI now stays warm
 between turns and releases itself after an idle window, so a follow-up is
 written into the running process. Background-task ownership is that
 process's own state, and bridge-wide reads (models, account, plan usage) ask a
-running CLI before spawning a probe. What is left is live qualification
-through the app and the browser. OpenCode steer works on every OpenCode
+running CLI before spawning a probe. The inactive-path steer is proved
+through the app for Codex, Claude and Cursor (task 7). What is left for
+agents is the live check of the missed-steer rule and of a stop after several
+turns, on real bridges with scripted models. OpenCode steer works on every OpenCode
 session (OpenCode 2, the only line since 1.x was retired on 2026-11-11). Grok steer is
 blocked upstream and is recorded here; the Cursor `force` send is deferred
 until a wedged agent is seen.
@@ -382,10 +391,11 @@ at-most-once dispatch.
 
 ### Qualification
 
-- Browser, inactive path, on Claude and Cursor (task 7): start a long turn,
+- ~~Browser, inactive path, on Claude and Cursor (task 7): start a long turn,
   steer it, switch environment, return and reload. The steered message and its
-  outcome must come back from the snapshot. The spec work is task 7; the runs
-  with real logins are in the manual-test checklist.
+  outcome must come back from the snapshot.~~ Done 2026-11-13 on scripted
+  models (`steer-inactive-live.spec.ts`); the runs with real logins are in the
+  manual-test checklist.
 - ~~Through the app, on one warm Claude CLI: a follow-up, a plan-mode toggle, a
   permission-mode change, a parked approval answered after a pause, and an MCP
   server added and removed between turns.~~ Done 2026-11-10 on a loopback model
@@ -840,6 +850,84 @@ an opt-in spec drives one Claude tab through the app and asserts it.
   (the fake-model wiring is local only), and a model change through the app
   (the loopback model answers any model name, so it would prove only that the
   turn ran; the bridge test covers `setModel` on the warm CLI).
+
+### Inactive-path steer on scripted models (2026-11-13, task 7)
+
+Built against `main` at `17d28238c`. The Codex scenario ("queued native
+steering survives a lost gateway response, inactive environment and
+reload") now has one case per platform in
+`e2e/agent-testing/steer-inactive-live.spec.ts`. Each case starts a long
+turn, queues two prompts, steers the first from the Queued Prompts dialog
+while the browser drops the command's response, switches to another
+environment until the steer has taken effect, then returns and reloads. The
+queue must hold only the second prompt, from the backend's snapshot, and the
+steer must have reached the agent exactly once.
+
+- **Claude's model.** Options: (a) the profile's real Claude CLI and bridge
+  on a scripted loopback Anthropic endpoint; (b) a fake Claude bridge. Chose
+  (a), as the warm-CLI run (task 8) did: the CLI's own handling of a
+  `priority: "now"` steer is part of what is proved. The script
+  (`steer-inactive-fake-claude.ts`) writes the ready file, keeps the turn
+  running with short `sleep` calls, and appends the steer's marker once per
+  delivery, looking for the steer in every user text of the request because
+  the CLI decides where mid-turn input goes. The request carries the whole
+  conversation, so the number of steer texts in it is the number of
+  deliveries; a duplicated steer makes a second append and the case's
+  exactly-once check on `.qa-queued-received` fails (review round 1). Its
+  decisions are pinned by `steer-inactive-fake-claude.test.ts`.
+- **Cursor's engine.** Options: (a) swap the profile's Cursor bridge entry
+  (`bridges/cursor-bridge/dist/index.js`, what the host launch runs) for a
+  bundle of the bridge over its fake SDK for the length of the case, as the
+  Docker cells swap the image's entry (0001 task 8); (b) a test-only launch
+  override in the backend. Chose (a): production launch code stays unaware of
+  the fake. The cost is a write to the checkout's build output; the real
+  entry is kept beside it (`index.qa-real.js`) and put back in `finally`, a
+  backup left by a killed run is kept and restored by the next run, and the
+  profile's bridge-build check reports a stale entry before any later run.
+  Every profile started from the checkout launches that one entry, so (review
+  round 1) the swap holds an owner lock (`index.qa-lock.json`, created
+  exclusively; a live owner refuses a second run, a dead owner's lock is taken
+  over) and the bundle serves the fake only to bridges whose
+  `CURSOR_BRIDGE_STATE_DIR` is inside the owner's data directory; any other
+  launch imports the real entry. A per-profile bridge path would need a
+  launch seam in the backend, which option (b) already rejected.
+  The new host entry (`src/testing/host-fake-engine-server.ts`) keeps the
+  fake's store in the environment's own `CURSOR_BRIDGE_STATE_DIR`, and the
+  fake SDK now records each steer's text on the run, so the case counts what
+  reached the vendor and checks the steer joined the held run rather than
+  starting a turn.
+- **Where the spec lives.** `browser-gateway.spec.ts` was over 3,000 lines,
+  so the scenario moved to its own file instead of growing it. Codex keeps
+  its real model and its `ORKESTRATOR_AGENT_TEST_REVIEW=1` opt-in; Claude and
+  Cursor run behind `ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1`
+  (`ORKESTRATOR_AGENT_TEST_STEER_PLATFORMS` narrows them), or on the
+  profile's real logins when `ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS`
+  names them, which takes Codex's file-based path and is how the 7568 item
+  runs. The real-model path for Claude and Cursor has not been run (billed).
+- **What the runs found.** On a credential-free profile the startup "Claude
+  Code Is Not Logged In" dialog can open while the case is choosing an
+  environment, and it hides the sidebar from the accessibility tree, so the
+  project's expand button read as absent. The case dismisses that dialog and
+  retries the expand-and-select step.
+- **Runs.** beelink (Linux), profile `steer7b6` (`--fixture
+  --no-agent-credentials --no-host-seed --agent-platforms claude,cursor
+  --headless`), 2026-11-13, with `--repeat-each=3`: Claude 3/3 and Cursor
+  3/3 passed (21 to 37 s each), Codex skipped (not opted in). The same counts
+  held on a second, fresh profile after the real-model opt-in was added.
+  Each profile was stopped and reset, and the Cursor entry was back in place.
+  While the dialog handling was being written, two earlier Cursor runs failed
+  on that startup dialog (a wrong role for its locator, then the
+  accessibility-tree race above). After the review round 1 fixes (per-delivery
+  appends, the entry lock and owner-only fake), profile `steer7fix` with the
+  same flags and `--repeat-each=2`: Claude 2/2 and Cursor 2/2 passed, Codex
+  skipped; the real entry was back in place with no lock left, and the
+  profile was stopped and reset.
+- **Not covered.** Two overlapping live runs against one checkout (the lock's
+  refusal and the owner-only fake are unit-tested in
+  `steer-inactive-live-support.test.ts`, including a run of the built bundle).
+  Real Claude and Cursor models (the 7568 item), a container
+  environment, and Cursor's real SDK steer path, which the fake answers with
+  `complete_delivered`.
 
 ### Task 5: OpenCode steer recorded as built for 2.x (2026-11-10 housekeeping)
 

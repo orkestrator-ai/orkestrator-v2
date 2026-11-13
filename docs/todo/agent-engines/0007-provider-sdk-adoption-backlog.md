@@ -644,7 +644,8 @@ reason.
 - **OpenCode `find.*` file search.** Orkestrator owns workspace file search;
   the provider's search has no consumer.
 - **Pi provider login.** Status stays read-only (see
-  [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)).
+  [agent-engines.md](../../architecture/agent-engines.md) § Pi; to-do 0003, retired
+  2026-11-13).
 - **Codex `thread/delete`.** Never.
 - **Claude `verbatimPrompts` / `client_composed`.** It skips the CLI's
   turn-start attachment pass, which is a real behaviour cost with no reported
@@ -819,7 +820,7 @@ The billed Grok `costUsdTicks` run moved to the
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md),
   [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md),
   [0006-session-titles-and-history.md](0006-session-titles-and-history.md),
-  [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md),
+  [agent-accounts.md](../../architecture/agent-accounts.md) (to-do 0003, retired 2026-11-13),
   [0004-composer-model-parameters.md](0004-composer-model-parameters.md),
   0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed Grok turns of task 11) moved there on 2026-11-10.

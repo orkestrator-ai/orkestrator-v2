@@ -134,16 +134,18 @@ function stopChild(child: ChildProcess): Promise<void> {
 /**
  * Point a profile's Claude, Codex, Pi or OpenCode at a scripted loopback model. Call before
  * the environment's bridge starts its CLI, so the first process reads it.
+ * `script` names another scripted model speaking the same API (the steer
+ * spec's Claude model, `steer-inactive-fake-claude.ts`).
  */
 export async function startLocalFakeModel(
   platform: FakeModelPlatform,
   dataDir: string,
-  options: Parameters<typeof startModel>[1] = {},
+  options: Parameters<typeof startModel>[1] & { script?: string } = {},
 ): Promise<FakeModelHandle> {
   const file = fakeModelSettingsFile(platform, dataDir);
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const restore = snapshotFixtureFiles([file]);
-  const model = await startModel(FAKE_SCRIPTS[platform], options);
+  const model = await startModel(options.script ?? FAKE_SCRIPTS[platform], options);
   try {
     if (platform === "opencode") {
       writeOpenCodeFakeConfig(file, model.origin);

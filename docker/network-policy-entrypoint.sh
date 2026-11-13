@@ -162,7 +162,7 @@ printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 # and content, read from the read-only mount, never from node's copy) in its
 # own STAGED_INPUT_RELAY_STATE_DIR. A mount whose digest is unchanged and
 # whose copy is still there is left as it is: rebuilding it cost as much as
-# the rest of a restart (to-do 4580 task 3). node owns its copy, so editing it
+# the rest of a restart (to-do 4580 (retired), task 3). node owns its copy, so editing it
 # only changes node's own input, as editing its home does. Every other copy is
 # removed, and when no copy is kept the whole directory is rebuilt as before.
 STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs

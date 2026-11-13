@@ -156,7 +156,6 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   // Recurring-work policy switches (rollback and metrics), so an isolated
   // profile can qualify the previous drivers. Policy only, never credentials.
   "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK",
-  "ORKESTRATOR_NATIVE_OBSERVATION_SHARING",
   "ORKESTRATOR_RECURRING_METRICS",
   // Service-preview transport overrides (`PreviewRuntime.effectiveSettings`),
   // so an isolated profile can qualify the tunnel and relay. Policy only.

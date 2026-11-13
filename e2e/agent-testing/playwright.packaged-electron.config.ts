@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "design-canvas-packaged-electron.spec.ts",
+    "design-canvas-renderer-pairing-electron.spec.ts",
     "log-controls-packaged-electron.spec.ts",
     "packaged-native-shortcuts-electron.spec.ts",
     "packaged-security-electron.spec.ts",

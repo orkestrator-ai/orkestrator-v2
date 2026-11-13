@@ -8,7 +8,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6e`.
 
 1. **Codex: continue a turn the model refused for capacity**: the bridge retries `serverOverloaded` and `policyCapacityUnavailable` with backoff and jitter, keeps the session `running`, and continues the same turn under the same request id. Status: done (2026-10-30; `policyCapacityUnavailable` added 2026-10-31).
 3. **Claude: unattended sessions and Claude Code's own 529 retry**: Multi Review, build and graph sessions run with a longer Claude Code overload backoff. Status: done (2026-10-31); seeing a real overload through it moved to 7568 on 2026-11-10.
-4. **Cursor: classify capacity refusals from `@cursor/sdk`**: the SDK bridge has no retry for transient provider errors; classify a capacity refusal on its structured field and retry it like Codex. Status: blocked (waits on 7568: 1010 task 4, a real Cursor capacity refusal's error shape; the 1.2.0 SDK reading in 1020 does not give it).
+4. **Cursor: classify capacity refusals from `@cursor/sdk`**: the SDK bridge has no retry for transient provider errors; classify a capacity refusal on its structured field and retry it like Codex. Status: blocked (waits on 7568: 1010 task 4, a real Cursor capacity refusal's error shape; the 1.2.0 SDK reading in 1020 (retired) does not give it).
 5. **Grok (ACP bridge): bring the existing retry in line**: the ACP retry uses the shared backoff with jitter and a per-wait cap, shows its wait, and ends at once on Stop. Status: done (2026-10-31); how a real Grok overload reaches the bridge moved to 7568 on 2026-11-10.
 6. **OpenCode: unattended sessions skip turn recovery**: unattended turns ended by an overload are continued inside the provider, keeping their request and grant. Status: done (2026-10-31) for OpenCode 1.x; seeing a real overload through it moved to 7568 on 2026-11-10. The continuation was removed with OpenCode 1.x on 2026-11-11 (see [0008](0008-opencode-v2.md) "OpenCode 1.x retired (2026-11-11)"): OpenCode 2 schedules its own retries (a `retry` part, `opencode2/transcript.ts`), and nothing in Orkestrator continues a 2.x turn after it gives up.
 7. **Pi: rely on the SDK's own retry**: Pi's `auto_retry_start`/`auto_retry_end` already covers overloads. Status: done (no change needed).
@@ -68,7 +68,7 @@ Read from the 2.1.314 bundle, not run:
 
 **Context.** `@cursor/sdk` 1.2.0. A failed run settles the session `error` (`agent-session.ts:1094-1097`).
 
-**Investigation.** The SDK's error shape for a capacity refusal is not known from the code, and no fixture shows one. 1020's reading of 1.2.0 does not change that: the error classes are unchanged (`RateLimitError`, `NetworkError`, `isRetryable` on `CursorSdkError`), no overload or capacity code exists, and the SDK's own retries have usually run out by the time the bridge sees an error. `RateLimitError` must stay excluded, and `isRetryable` does not separate a capacity refusal from a rate limit, so there is still nothing safe to classify on.
+**Investigation.** The SDK's error shape for a capacity refusal is not known from the code, and no fixture shows one. The reading of 1.2.0 in 1020 (retired) does not change that: the error classes are unchanged (`RateLimitError`, `NetworkError`, `isRetryable` on `CursorSdkError`), no overload or capacity code exists, and the SDK's own retries have usually run out by the time the bridge sees an error. `RateLimitError` must stay excluded, and `isRetryable` does not separate a capacity refusal from a rate limit, so there is still nothing safe to classify on.
 
 **Decisions.**
 - **How to proceed?**
@@ -232,7 +232,7 @@ Read from the 2.1.314 bundle, not run:
     - Pros: no wait if the capacity never returns.
     - Cons: a transient refusal keeps failing unattended work, which is the problem this to-do exists for.
 - **Why not like `flexUnavailable`:** flex is a tier the user chose, reported as a 429. This is a 503 with a retry-later message.
-- **Evidence:** `codex-rs/protocol/src/error.rs` and `codex-api/src/api_bridge.rs` upstream, and 1020 task 7. No real refusal has been seen.
+- **Evidence:** `codex-rs/protocol/src/error.rs` and `codex-api/src/api_bridge.rs` upstream, and 1020 (retired) task 7. No real refusal has been seen.
 - **Transcript:** the cards keep the "Model at capacity" wording for both codes.
 
 ### Task 3: longer overload backoff for unattended Claude sessions

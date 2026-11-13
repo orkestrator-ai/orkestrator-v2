@@ -40,7 +40,10 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`. 6141 was retired on
+were done; both are in Git history at `1fd391e3a`. 1020 was retired on
+2026-11-13, once its no-login Claude checks passed (recorded in
+[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9); it is
+in Git history at `17d28238c`. 6141 was retired on
 2026-11-13, once its macOS readings, packaged-app check and two-profile
 export passed; it is in Git history at `17d28238c`. 0023 and 0248 were
 retired on 2026-11-13, once their macOS runs were done; both are in Git
@@ -175,12 +178,14 @@ agent can apply it.
   Record: both tick values, both billed amounts, whether the ratios agree within rounding and whether ticks are per turn or cumulative, in 0007 task 11.
 - [ ] **0062 (retired) task 2, with task 3: Pi on a fresh `openai` ChatGPT login with no saved default** ([durable doc](../../development/credentials-and-models.md#default-model)). In a temporary directory run the pinned `pi` with `HOME=<tmp> PI_CODING_AGENT_DIR=<tmp>/agent`, `/login` → OpenAI → "Sign in with ChatGPT"; save no default. Then run the opt-in test from the [testing guide](../../development/testing-guide.md#opt-in-pi-chatgpt-default-model-check) with `ORKESTRATOR_PI_CHATGPT_LIVE=1` and `ORKESTRATOR_PI_CHATGPT_AUTH_FILE=<tmp>/agent/auth.json`. Afterwards revoke the extra ChatGPT OAuth grant on the account and delete the directory. Record: pass/fail, the selected model, the date; it also closes task 3 (the agent-test path) with the caveat that only the bridge-level path ran. Reply to the coordinator.
 - [ ] **0062 (retired) task 4: terminal `pi` on the same `openai` ChatGPT login.** Before revoking the grant in the item above, run the pinned `pi -p` with no `--model` in the same temporary `HOME` and `PI_CODING_AGENT_DIR`. Record: the model it starts on and whether it fails with "not supported when using Codex with a ChatGPT account" (code reading predicts `openai/gpt-5.5`, refused). Reply to the coordinator.
-- [ ] **[1020](../agent-engines/1020-provider-upgrade-2026-10-30.md) task 9 (signed-in part): signed-in checks left from the 2026-10-30 upgrade.** The pins have moved since; run these at the current pins in the same throwaway profile as 1031 task 9's item.
+- [ ] **1020 (retired) task 9 (signed-in part): signed-in checks left from the 2026-10-30 upgrade** ([runbook](../../development/upgrade-agents.md)). The pins have moved since; run these at the current pins in the same throwaway profile as 1031 task 9's item.
   1. Grok, signed in: `session/new`, an edit without an approval card, a `use_tool` match, `/compact` over ACP, `session_info_update`.
   2. Cursor: `close-retention-live.spec.ts` resume; does the original user row show after picking the resume entry (it did not at 1.2.0)?
   3. `slash-command-inactive.spec.ts` for OpenCode, Cursor, Grok and Pi; the billed Codex web-search canary.
   4. The rollout user-segment scan of your real `~/.codex/sessions` (the `find … jq` command in upgrade-agents.md's Codex section).
-  Record: pass/fail per step with result paths, in 1020's "Release qualification still open".
+  5. Claude, signed in: a local and a container native session with the managed CLI, checking streaming, a question, abort, resume, model discovery and a background task (the release check in upgrade-agents.md's Claude section; never run at 2.1.314 or 2.1.319).
+  6. Cursor, signed in: sign-in through the bridge's `--login`, then a turn that uses tools and leaves a diff.
+  Record: pass/fail per step with result paths, in [1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9's Investigation (1020 is retired).
 - [ ] **[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9 (signed-in part): signed-in runs at the 2026-11-06 pins.** Throwaway `dev:test` profile with real logins for every platform, on a host whose firewall lets Docker reach the agent-tools port (see the firewall item below).
   1. The billed coordinator-skills probe: `CLAUDE_CLI_PATH=<managed claude> bun src/services/coordinator-skills.live-probe.ts` from `bridges/claude-bridge`.
   2. Signed-in Pi and Grok sessions; `close-retention-live.spec.ts` for Cursor and OpenCode.

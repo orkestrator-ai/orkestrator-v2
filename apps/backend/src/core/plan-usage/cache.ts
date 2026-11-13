@@ -4,7 +4,7 @@
  * Deliberately a leaf module: every provider read path imports it to hand over
  * the account quota a session just reported, and it must not drag the reader's
  * credential machinery — the Keychain, config and container command modules —
- * into that graph. `plan-usage.ts` owns the provider requests and uses the same
+ * into that graph. `reader.ts` owns the provider requests and uses the same
  * cache from the other side.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -20,7 +20,7 @@ import {
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
-import { normalizeProviderContextUsage } from "./agent-provider-runtime.js";
+import { normalizeProviderContextUsage } from "../agent-provider-runtime.js";
 
 /**
  * How long one read serves every caller, and how far a session update pushes

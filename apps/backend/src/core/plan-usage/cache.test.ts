@@ -6,9 +6,9 @@ import {
   createPlanUsageCache,
   okSnapshot,
   PlanUsageState,
-} from "./plan-usage-cache.js";
+} from "./cache.js";
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
-import { claudePlanWindows } from "./plan-usage.js";
+import { claudePlanWindows } from "./reader.js";
 
 let planUsage: PlanUsageState;
 

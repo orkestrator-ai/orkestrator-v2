@@ -6,9 +6,9 @@ import {
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { CommandContext } from "./commands-context.js";
-import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./plan-usage-cache.js";
-import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
+import type { CommandContext } from "../commands-context.js";
+import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./cache.js";
+import { AgentAccountsRuntime } from "../agent-accounts-runtime.js";
 import {
   claudePaidOverage,
   codexPaidOverage,
@@ -22,7 +22,7 @@ import {
   OPENCODE_USAGE_URL,
   openCodePlanWindows,
   RATE_LIMIT_BACKOFF_MS,
-} from "./plan-usage.js";
+} from "./reader.js";
 
 /** Storage for a runtime with no added agent accounts: reads use the host login. */
 const NO_AGENT_ACCOUNTS = {

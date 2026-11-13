@@ -1,6 +1,6 @@
 import { expect, test, setSystemTime } from "bun:test";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
-import { CACHE_TTL_MS, createPlanUsageCache } from "./plan-usage-cache.js";
+import { CACHE_TTL_MS, createPlanUsageCache } from "./plan-usage/cache.js";
 import {
   cachedPlanUsage,
   readProjectUsageLimits,

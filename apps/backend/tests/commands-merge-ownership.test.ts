@@ -94,7 +94,7 @@ for (const scenario of cases) {
         );
         calls.length = 0;
         const commandResult = await createCommandRegistry().get(
-          mode === "api" ? "merge_pr_local" : "merge_pr",
+          mode === "api" ? "merge_environment_pr" : "merge_pr",
         )!(
           {
             ...(mode === "api" ? { environmentId } : { containerId: "container-test" }),
@@ -103,7 +103,11 @@ for (const scenario of cases) {
           },
           context,
         );
-        expect(commandResult).toEqual({ outcome: "merged" });
+        expect(commandResult).toEqual(
+          mode === "api"
+            ? { outcome: "merged", cleanupOutcome: "not-requested" }
+            : { outcome: "merged" },
+        );
         expect(
           calls.some((call) => call.includes("DELETE") || call.includes("--delete-branch")),
         ).toBe(scenario.deletes);

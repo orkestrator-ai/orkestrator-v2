@@ -413,7 +413,7 @@ describe("Electron backend command registry", () => {
         },
       );
 
-      const command = kind === "local" ? "merge_pr_local" : "merge_pr";
+      const command = kind === "local" ? "merge_environment_pr" : "merge_pr";
       const argumentsFor = (method: string) =>
         kind === "local"
           ? { environmentId: environment.id, method, deleteBranch: false }

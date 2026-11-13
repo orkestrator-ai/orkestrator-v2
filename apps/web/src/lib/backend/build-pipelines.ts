@@ -223,13 +223,6 @@ export function createBuildPipelinesApi(client: BackendClient) {
     return domain().retry_build_pipeline_completion_comment({ pipelineId });
   }
 
-  async function importLegacyBuildPipelines(
-    projectId: string,
-    snapshots: unknown[],
-  ): Promise<{ importedIds: string[]; skipped: number }> {
-    return domain().import_legacy_build_pipelines({ projectId, snapshots });
-  }
-
   async function getBuildPipeline<T = unknown>(
     pipelineId: string,
   ): Promise<PersistedBuildPipeline<T> | null> {
@@ -448,7 +441,6 @@ export function createBuildPipelinesApi(client: BackendClient) {
     skipBuildPipelineStep,
     retryBuildPipelineInteractionFailure,
     retryBuildPipelineCompletionComment,
-    importLegacyBuildPipelines,
     getBuildPipeline,
     getBuildPipelineSessionProjection,
     getBuildPipelineConditional,
@@ -491,7 +483,6 @@ export const {
   skipBuildPipelineStep,
   retryBuildPipelineInteractionFailure,
   retryBuildPipelineCompletionComment,
-  importLegacyBuildPipelines,
   getBuildPipeline,
   getBuildPipelineSessionProjection,
   getBuildPipelineConditional,

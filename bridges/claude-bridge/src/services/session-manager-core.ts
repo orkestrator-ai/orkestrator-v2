@@ -1519,15 +1519,6 @@ export async function persistSessionTitle(session: SessionState, title: string):
   });
 }
 
-/**
- * Monotonic tick, bumped by every durable deletion.
- *
- * Deliberately not `Date.now()`: a delete and the read that has to be ordered
- * against it routinely land in the same millisecond, and a wall-clock
- * comparison then has to guess. A counter makes "did this deletion happen after
- * that read started" exact.
- */
-
 export function nextTurnGeneration(): number {
   turnGenerationCounter += 1;
   return turnGenerationCounter;

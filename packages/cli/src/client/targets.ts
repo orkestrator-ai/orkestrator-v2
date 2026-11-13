@@ -483,8 +483,8 @@ export async function resolveProfile(
   const refresh = () => resolveProfile(profileName, env, readStart);
   if (manifest.dataDir) {
     const descriptorFile = path.join(manifest.dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE);
-    // A missing descriptor means a backend that predates it; a refused one
-    // must stop here rather than fall back to the manifest's endpoint.
+    // A missing descriptor means its backend could not publish one (below); a
+    // refused one must stop here rather than fall back to the manifest's endpoint.
     const descriptor = await readDescriptor(descriptorFile).catch((error: unknown) => {
       if (error instanceof CliError && error.details?.descriptor === "missing") return null;
       throw error;
@@ -499,8 +499,13 @@ export async function resolveProfile(
       return descriptorTarget(located.id, "profile", descriptor, undefined, refresh, readStart);
     }
   }
-  // Backends that predate the instance descriptor: the manifest's own
-  // endpoint and auth file, with identity checked from capabilities only.
+  // A ready profile without a descriptor: the manifest's own endpoint and auth
+  // file, with identity checked from capabilities only. Kept although every
+  // backend from v2.21.0 on writes the descriptor before its ready line
+  // (`apps/backend/src/main.ts`): the write is best effort there. A failed
+  // capabilities read or file write is only logged, and the backend still
+  // serves and reports ready, so dev:test can mark the profile ready with no
+  // descriptor on disk.
   if (!manifest.browserUrl || !manifest.authFile) {
     throw new CliError(
       "profile-unavailable",

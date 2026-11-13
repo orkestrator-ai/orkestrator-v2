@@ -77,3 +77,7 @@ controlled.
 position and the terminal's size`, failed deterministically with a strict mode
 violation because `getByRole('tab', { name: /Shell/ })` also matched the new
 environment tab. The same change scoped that lookup to the `Split panes` tablist.
+
+## Recurrence (2026-11-13)
+
+Desktop `closing a OpenCode tab during a turn stops it and keeps the conversation` (`e2e/CloseRetention.spec.ts:432`) failed at line 462: within 5 s the fake OpenCode vendor had recorded only the first prompt, not the held one. `mise run test:logged -- --name browser-rerun2 -- mise run test:browser` on beelink (Linux) at load about 12 to 30, base `17d28238c098b4443d1289df5c4ed75e7cc2802e` (`mise run flaky:recurrence` answered open), branch `remove-dead-bridge-be98778b92d1-r1` at `3d8c39043` (7571 removals), which changes none of the spec's components. The component suite reported 1,726 passed, 4 failed and 154 skipped (21.2 min). The four failures were this case and its sibling cases 1012, 0252 and 6460. The unchanged owners (`ToolGroupFold.spec.ts`, `ClaudeInteractions.spec.ts`, `CloseRetention.spec.ts`) then passed together with one worker: `mise run test:logged -- --name browser-owners-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/ClaudeInteractions.spec.ts e2e/CloseRetention.spec.ts --workers=1` (251.8 s). Evidence: `orkestrator-test-run.qZ6kD5/browser-rerun2.log.gz` under the host temporary directory.

@@ -39,6 +39,14 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
     "A setup command exited with an error. The setup output shows which one; fix it, then retry setup.",
   rootSetupNeedsFullNetwork:
     'This project\'s orkestrator-ai.json has "root" setup steps. They run as root, which could get round a network restriction whatever addresses they use, so they only run in containers with full network access. This environment\'s network is restricted. Create the environment again with network access set to Full, or remove the "root" field from orkestrator-ai.json.',
+  aptPackagesRefused:
+    "A package in this project's orkestrator-ai.json \"aptPackages\" was refused: it is not a Debian package name, not in Debian's archive, or could change the container's protections (sudo, firewalls, SSH servers), as could anything it would bring in. The setup output names it. Change the list, then retry setup.",
+  aptPackagesUnsupportedRuntime:
+    "This project's orkestrator-ai.json declares \"aptPackages\", and this container's firewall runs inside it, where a package's install scripts could change it. Rebuild the environment on a current image, which keeps the firewall in a separate egress gateway, or set its network access to Full.",
+  aptPackagesArchiveUnreachable:
+    "This project's orkestrator-ai.json declares \"aptPackages\", and Debian's archive (deb.debian.org) could not be reached. Add deb.debian.org to this environment's allowed domains, or rebuild it so Orkestrator opens the archive, then retry setup.",
+  aptPackagesInstallFailed:
+    "Installing this project's \"aptPackages\" failed. The setup output has apt-get's error; fix the list, then retry setup.",
   setupStillRunning:
     "The previous setup run's processes did not stop, so setup was not started again. Retry setup in a moment.",
   timedOut: "Environment start timed out. Check the container runtime and retry.",
@@ -144,6 +152,12 @@ export const SETUP_TERMINAL_STILL_RUNNING_MESSAGE = "Previous setup terminal did
 
 const SETUP_FAILURE_MESSAGES: Record<SetupFailureReason, string> = {
   "root-steps-need-full-network": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.rootSetupNeedsFullNetwork,
+  "apt-packages-refused": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesRefused,
+  "apt-packages-unsupported-runtime":
+    ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesUnsupportedRuntime,
+  "apt-packages-archive-unreachable":
+    ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesArchiveUnreachable,
+  "apt-packages-install-failed": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesInstallFailed,
 };
 
 function setupFailureReasonOf(error: unknown): SetupFailureReason | undefined {

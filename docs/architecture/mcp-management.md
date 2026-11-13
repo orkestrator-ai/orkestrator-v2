@@ -1,10 +1,15 @@
 # MCP server management
 
 Status: living. Outstanding work is in
-[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md) and
-[0040-mcp-environment-delivery.md](../todo/mcp/0040-mcp-environment-delivery.md);
-the human-only checks are in the
+[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md); the human-only
+checks are in the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+Container delivery (the environment overlay, the container writer, Cursor
+staging, defaults refresh and the location hints) came from to-do 0040,
+retired on 2026-11-13; its decision record, Multi Review outcome and run
+notes are in Git history
+(`git show 17d28238c:docs/todo/mcp/0040-mcp-environment-delivery.md`), and its
+evidence is under [Verification status](#verification-status).
 
 Users add, edit, rename, remove and (where the provider has a saved switch)
 enable or disable the MCP servers each agent platform connects to, without
@@ -840,6 +845,19 @@ In-app sign-in is not advertised for container targets
 reach a container from the browser; host OAuth stores are never copied into
 containers.
 
+**What a save leaves alone.** A container-private save is one file write
+through the writer; it schedules no container restart and injects nothing
+into a terminal. Terminal sessions get guidance only
+(`apply.terminalGuidance`), and materialisation runs only after a boot,
+before anything launches. A running terminal job keeps running through
+"Save" and "Save and apply" (`e2e/agent-testing/mcp-overlay-terminal.spec.ts`,
+see [Verification status](#verification-status)). Host homes are never
+mounted writable into a container, and an edit made in a container home is
+never written through to the host or to the staged input: a defaults refresh
+rewrites only the environment's own staged server map, from the backend
+user's file. The overlay records intent relative to the inherited inputs; it
+is not a second registry and never a copy of a whole provider home.
+
 ## Events and rehydration
 
 `mcp-management-changed` carries `{ revision, targetIds, operationIds }` only.
@@ -887,6 +905,8 @@ worktrees; nothing reads or writes the operator's configuration):
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Environment overlay | `overlay.test.ts` (merge, rebase, tombstones, conflicts, divergence, import, server-map rewrite), `service-overlay.test.ts` (private save, host file unchanged, backend restart, stop/start and rebuild reapply, pending restart, conflicts and both resolutions, divergence blocks edits, import, reapply, reset, unreadable record, defaults refresh and stale token, persistent project writes, container apply plan, network and `localhost` warnings, path audit, sign-in) |
 | Containers (live) | 2026-10-23, `apps/backend/tests/mcp-overlay-live.test.ts` on an image built from this tree (`RUN_LIVE_DOCKER_TESTS=1`): Cursor `mcp.json` copied alone with 0600; writer conflict, private and preserved modes, refusals outside the homes, through file and directory symlinks; boot id and path probe; overlay across backend restart, a real stop and start, a replacement container and an in-container edit with import; a real `volume-v1` rebuild re-staging the backend user's current Codex file and dropping an in-container edit, then the real start path reapplying the overlay |
+| Overlay UI (real browser) | 2026-11-01, `dev:test` with a `volume-v1` restricted container fixture, headless Chromium, Codex target: every overlay state and action (no overlay, refresh with an added server, in sync, diverged and import or reapply, pending and reapply, a refused edit while pending, a stale refresh token, both conflict resolutions, reset), each with a reload; 390 px layout; a real-stack environment deletion removed only that environment's `mcp-environment-overlays` directory. `e2e/agent-testing/mcp-overlay-recovery.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_DOCKER=1`) covers the corrupt-record reset. Three bugs found and fixed with tests: the spec did not close the host reachability notice, a refresh with nothing staged warned about its staged copy, and the add dialog preselected a blocked default file |
+| Container terminal (live) | 2026-11-13, `e2e/agent-testing/mcp-overlay-terminal.spec.ts` (a `Docker fixture` spec, so part of `mise run test:agent:docker`; no agent, login or provider turn), on a profile started with `--fixture --fixture-environments local,container --no-agent-credentials --no-host-seed --agent-platforms codex` against a disposable rootless daemon (`mise run docker:disposable`), commit `17d28238c` plus this spec. A container terminal runs a job that prints a numbered line every half second until released; meanwhile one environment-private Codex server is saved with "Save" and another with "Save and apply". After each save the shell and the job are the same processes, at least two new lines arrive, the terminal session is still running and the container's start time is unchanged. Both servers are in the container's file with the overlay `in sync`; once released the job exits 0 with every line in order (9 lines) and the shell stays. Passed twice in a row; the spec resets the overlay afterwards. With no session in the container, "Save and apply" reported `not-requested` (nothing to apply to). Rerun on 2026-11-13 at `42b14bf95`, which also asserts each save's apply outcome ("Save" `not-requested` with no runtime; "Save and apply" neither `failed` nor with a failed runtime) and runs every cleanup step independently: passed twice (13 ticks), with an injected body failure plus a failing release-file removal still reporting the body's assertion and leaving the overlay reset, which the next run's opening check confirmed |
 | Inactive environment (live) | 2026-10-18, `e2e/agent-testing/mcp-apply-inactive.spec.ts` with real Claude sessions (CLI 2.1.296): save and apply during a running turn (turn uninterrupted, `pending-next-turn` held after it), the next turn while inactive with the page's event stream cut, a hard reload, a bridge restart (`applied` names the newer generation), a removal while a refresh fails offline, a pre-marker bridge, and a user file shared by two environments. The apply half passed in full; the model's tool calls were proven for the first add only, because the provider rate limited the seeded login. Record and remaining reruns in the todo file. |
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |
 

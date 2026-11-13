@@ -26,7 +26,7 @@ const WAITS_ON = "Waits on:";
 // A checklist item is one top-level checkbox whose bold label names its source
 // to-do, the task or check within it, and a title, followed by the steps and
 // what to record, e.g.
-// `- [ ] **[0040](../mcp/0040-mcp-environment-delivery.md) task 1: title.** Steps. Record: ...`.
+// `- [ ] **[0039](../mcp/0039-mcp-management.md) task 1: title.** Steps. Record: ...`.
 // The label must close, the task identity and title must be non-empty, and at
 // least a short instruction must follow it (longer steps may continue in
 // sub-bullets), so a bare source such as `**0009 (retired) **` is refused.

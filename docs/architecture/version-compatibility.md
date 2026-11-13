@@ -56,7 +56,7 @@ Only the pairings a rolling upgrade produces, never a combinatorial matrix.
 | --- | --- |
 | Hosted web client (`apps/web-public`, follows `main`) → any user's backend | The renderer works with every backend in the window. |
 | Desktop app → a remote backend (`connection-manager.ts`), either side newer | Renderer and backend each work with the other side in the window. The bundled local backend always matches. |
-| Open browser tab → upgraded backend | The backend serves renderers in the window; `BackendVersionReminder` asks the user to reload. |
+| Open browser tab → upgraded backend | The backend serves renderers in the window; `BackendVersionReminder` asks the user to reload. When the server is the older side it says so ("This server runs an older Orkestrator"), and it stops offering a reload once one brought back the same pair of versions (a renderer the server does not bundle). |
 | Backend → bridges (a running container, or a bridge process that predates the backend upgrade) | The backend drives every bridge in the window. A bridge newer than its backend only happens after a downgrade, and is covered the same way. |
 | Public CLI → backend | Its own schema handshake ([public-cli.md](public-cli.md)); outside it the CLI reports `backend-incompatible`. |
 | iOS app | A shell around the web interface the backend serves, so renderer and backend match. Its native contract (the `/__orkestrator/status` probe and the cookie sign-in) only changes additively. |
@@ -84,6 +84,48 @@ below and the version reminder naming which side to update.
   and unmigrated user state (old containers, legacy URL tabs) are not version
   skew. The window does not retire them; their owners retire them on
   qualification evidence or after a migration.
+
+### Checking a pairing live
+
+`scripts/older-release-stack.ts` starts one side of a pairing from a release
+tag on a throwaway root under `output/older-release/<tag>/`: the tag is
+archived from this repository (npm carries no v2.21.0 and no renderer),
+installed with `--frozen-lockfile --ignore-scripts`, and only what the mode
+needs is built. The backend runs as `agent-test` on loopback, never on 34121,
+34122 or 45507, with Docker unreachable, no inherited credentials, and its
+gateway token in the data directory's owner-only `gateway-auth.json`
+(`--url <url> --credential-file <file>` for the CLI, or the login form).
+
+```bash
+# An older backend serving today's renderer (a dev:test profile's, or any loopback URL)
+bun scripts/older-release-stack.ts backend --tag v2.21.0 --renderer-profile <profile>
+# Today's backend serving an older release's renderer
+bun scripts/older-release-stack.ts renderer --tag v2.36.1
+```
+
+`--toolchain-bin-dir` hands the backend a managed toolchain (a profile's, for
+a fake-model turn). `--root` picks another throwaway root; the launcher replaces
+`<root>/source` only when it is absent, empty or carries the launcher's own
+marker, and otherwise refuses with nothing deleted. The launcher stays attached and stops its backend on
+SIGINT or SIGTERM; a profile restart changes the renderer URL, so restart a
+`backend` stack after it.
+
+Recorded runs:
+
+- 2026-11-06, v2.21.0's backend with today's renderer and CLI:
+  [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md#multi-client-restarts-and-an-older-backend-2026-11-06-linux).
+- 2026-11-13, v2.21.0's backend with today's renderer (the launcher's first
+  run): the version reminder named the older server and offered a reload
+  once; after a reload that brought back the same versions it offered none.
+- 2026-11-13, today's backend with v2.36.1's renderer, the last Stable
+  release before per-conversation startup errors (C6): a coordinator
+  conversation whose Claude bridge exited before becoming healthy (a stub
+  `bun` in the toolchain) showed in the old pane as "Connection Failed" naming
+  the error, with the rest of the panel working; the pane's Retry repeated the
+  refusal, and opening the panel again cleared the error and counted
+  `coordinator-ensure.conversation-errors-cleared`, as the Register row says.
+  The full record is 4880 (retired), in Git history at
+  the parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/coordinator-and-multi-review/4880-c6-live-checks.md`).
 
 ## Usage counters
 
@@ -233,6 +275,7 @@ supported peer already has the newer behaviour.
 | Backends without the coordinator activity or launch-override commands: each store latches unsupported and stops reading for that load | `stores/coordinatorActivityStore.ts`, `stores/coordinatorLaunchOverrideStore.ts` | None (renderer side) | Backends before v2.37.4-beta | The floor is at or above the first Stable release with both commands | [7570](../todo/cross-cutting/7570-compatibility-paths-waiting-on-the-floor.md) task 6 |
 | The legacy one-line `/tmp/.claude-state` file the image's hook writes beside `/tmp/.claude-state-snapshot`: v2.21.0 and v2.21.1 backends read only the legacy file (current backends read the snapshot first and the legacy file only when no snapshot exists) | `docker/orkestrator-state-signal.sh` | None (container side) | Backends v2.21.0 and v2.21.1 (the snapshot reader arrived in #1041, first published in v2.22.3) | The floor is at or above v2.22.3 (2026-12-16 at the earliest); then stop writing the legacy file. The backend's fallback read serves containers built before #1041, which is unmigrated user state, not skew | [7570](../todo/cross-cutting/7570-compatibility-paths-waiting-on-the-floor.md) task 7 |
 | Backends without `claude_tmux_renew_interactive_terminal`: the renderer reads `unknown-command` from its first renewal as a backend that never detaches on its own and stops renewing; the `leased` argument of `claude_tmux_create_interactive_terminal` is ignored there, so the terminal keeps capturing until the tab detaches it, as before | `renewInteractiveTerminal` (`apps/web/src/lib/claude-tmux-client.ts`), `ClaudeTmuxInteractiveTerminal.tsx` | None (renderer side) | Backends before the interactive terminal lease (to-do 7745, 2026-11-11) | The floor is at or above the first Stable release with `claude_tmux_renew_interactive_terminal` | [recurring-work.md](recurring-work.md) row B19 |
+| CLI local connections to backends without a Linux process identity: on Linux, `connection add --profile`/`--data-dir` (and those targets on any command) refuse a descriptor with no `processIdentity` before any token is read, and the refusal names the workaround, `--url <its URL> --credential-file <its data directory>/gateway-auth.json`. A stated limitation, not a fallback: falling back to the start-time check macOS uses would reopen the pid-reuse window #1848 closed | `descriptorProcessRefusal` (`packages/cli/src/client/targets.ts`, `FIRST_LINUX_PROCESS_IDENTITY_RELEASE`) | None (runs in the CLI, before any backend sees the request) | Backends before #1848 (first published in v2.36.4-beta), v2.21.0 included, reached with a CLI from v2.36.4-beta on. Observed 2026-11-06 against v2.21.0: `--data-dir` refused, `--url` with `--credential-file` ran project, environment and session commands (to-do 7120 (retired), task 3) | The floor is at or above the first Stable release with #1848; then drop this row and the workaround text. The refusal itself stays: a descriptor without an identity is never trusted on Linux | [7570](../todo/cross-cutting/7570-compatibility-paths-waiting-on-the-floor.md) task 6 |
 
 Not governed by the window (listed so nobody waits on it):
 

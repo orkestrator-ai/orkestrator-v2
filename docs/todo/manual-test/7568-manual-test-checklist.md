@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (307 items): run each check under
+1. **Manual tests and live checks** (308 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -40,7 +40,11 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`.
+were done; both are in Git history at `1fd391e3a`. 0023 and 0248 were
+retired on 2026-11-13, once their macOS runs were done; both are in Git
+history at `17d28238c`, and the runs are recorded in
+[disk usage](../../development/disk-usage.md#a-development-profiles-macos-keychain-item)
+and [testing-guide.md](../../development/testing-guide.md).
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -81,14 +85,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
-| Containers and environments | 24 | 9 |
+| Containers and environments | 25 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
 | Cross-cutting | 75 | 20 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 307 | 53 |
+| **Total** | 308 | 53 |
 
 ## Outstanding work
 
@@ -306,13 +310,14 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **0735 (retired) task 4: the fingerprint probe's Windows process cleanup.** (Background: [git-scan-caches.md](../../architecture/git-scan-caches.md#tests), the bounded `taskkill /pid <pid> /t /f` branch in `apps/backend/src/core/review-worktree-fingerprint.ts`.) Needs a Windows host, which the fleet lacks. Either run it on a Windows machine with Git for Windows and Bun, or approve iterating a Windows variant of the blocking-hook case on CI's `windows-latest` runner (the file's recommended option, which costs CI minutes and needs the backend test preload to work on Windows). The variant has to observe Git calls without a POSIX `sh` wrapper (for example `GIT_TRACE` to a file), because `spawn("git")` on Windows resolves only `git.exe`/`.cmd`, and its hook fixture needs no `#!` and no SIGTERM. Pass: the probe returns the fallback status within its timeout plus the 1 s `taskkill` bound, and no hook process survives. Record: Windows, Git and Bun versions, how it was run (machine or CI run URL), the time to the fallback status and whether any hook process survived; reply to the coordinator (0735 is retired), and on a CI approval say so, so an agent can build the variant.
 - [ ] **0735 (retired) task 6: per-call git latency with and without fsmonitor on Windows.** On a Windows machine with Git for Windows, in a new temporary directory make a throwaway clone of orkestrator-v2 (and, optionally, a synthetic 100,000-file repository), and set `core.untrackedCache=true` and `core.fsmonitor=true` in that repository only. After three warm-up calls, time 20 `git -c core.fsmonitor=false status --porcelain` calls, then, as a separate block, 20 `git status --porcelain` calls with the daemon running; do two rounds and take the p50 of each form. Do not alternate the two forms call by call: that rescans the index and hides the daemon's effect. Afterwards run `git -c core.fsmonitor=false -C <repo> fsmonitor--daemon stop` and delete the directory. Record: Windows and Git versions, disk type, file count and the two p50 figures, in the latency table in [git-scan-caches.md](../../architecture/git-scan-caches.md) (or reply to the coordinator; 0735 is retired). Say whether the daemon is faster by more than 100 ms per call, which is the threshold for reconsidering an opt-in setting.
-- [ ] **[0248](../containers-and-environments/0248-playwright-profile-dir-leaks.md) task 6: where `ork-artifact-preview-*` scratch comes from, from a day of production logs.** On the production install (any release from 2026-10-28 or later, which logs the stop-time count), use transcript artifact previews normally for a day. Then grep that day's app log (`~/.config/orkestrator-v2/logs/orkestrator-ai-<UTC date>.log` on Linux, or the macOS equivalent) for `worker scratch left for startup recovery`, and run `mise run disk:report` and read its `ork-artifact-preview-*` row. Record: the number of matching lines and their counts and isolation modes, roughly how many previews were opened, and the report row's count and oldest age, in 0248's evidence (or reply to the coordinator). Zero lines with previews used means production does not leak preview scratch; any line means it does.
-- [ ] **[0248](../containers-and-environments/0248-playwright-profile-dir-leaks.md) task 7 (user part): the credentialed real-stack Playwright runs under a private `TMPDIR`.** On a Linux host with a throwaway `dev:test` profile signed in to the providers with `mise run dev:login` (paid model turns):
+- [ ] **0023 (retired) task 3: `dev:reset` removes the Keychain item of a development profile started through the real launcher.** (Background: [the Keychain item](../../development/disk-usage.md#a-development-profiles-macos-keychain-item); an agent run on 2026-11-13 made the item with a minimal Electron main, found and fixed the account mismatch, and passed.) On a Mac, from a checkout of this repository, run `bun run --cwd apps/desktop dev --profile qa-keychain-launcher` (not `mise run dev --profile ...`, which hands `--profile` to turbo). Choose one agent platform in the first-run chooser and answer the macOS privacy prompts, wait for the main window, then run `mise run dev:stop --profile qa-keychain-launcher`. Check that `security find-generic-password -s "Orkestrator AI — DEV [qa-keychain-launcher] Safe Storage"` exits 0, then run `mise run dev:reset --profile qa-keychain-launcher`. Check that it prints `Removed 1 login Keychain item(s).` and that the same `find-generic-password` now exits 44. If macOS asks for the login password at any step, cancel and record that instead. Record: the macOS and Electron versions, the item's `"acct"` line from the first lookup, and the reset's output (reply to the coordinator; a failure opens a new to-do).
+- [ ] **0248 (retired) task 6: where `ork-artifact-preview-*` scratch comes from, from a day of production logs.** (Background: [disk usage](../../development/disk-usage.md#what-prunes-itself), the preview scratch row.) On the production install (any release from 2026-10-28 or later, which logs the stop-time count), use transcript artifact previews normally for a day. Then grep that day's app log (`~/.config/orkestrator-v2/logs/orkestrator-ai-<UTC date>.log` on Linux, or the macOS equivalent) for `worker scratch left for startup recovery`, and run `mise run disk:report` and read its `ork-artifact-preview-*` row. Record: the number of matching lines and their counts and isolation modes, roughly how many previews were opened, and the report row's count and oldest age (reply to the coordinator; 0248 is retired, so a leak found opens a new to-do). Zero lines with previews used means production does not leak preview scratch; any line means it does.
+- [ ] **0248 (retired) task 7 (user part): the credentialed real-stack Playwright runs under a private `TMPDIR`.** (Background: [testing-guide.md](../../development/testing-guide.md), the private `TMPDIR` paragraph; the credential-free design and preview runs passed on Linux and macOS.) On a Linux host with a throwaway `dev:test` profile signed in to the providers with `mise run dev:login` (paid model turns):
   1. Run the specs that restart `dev:test` with their opt-ins: `cold-restart-live`, `graph-run-view` with `ORKESTRATOR_AGENT_TEST_GRAPH_RESTART=1`, `multi-review-live`, `permission-rules`, `web-annotations-approval-live`. Check that the restarted launcher still has a working, non-private `TMPDIR` after Playwright exits.
   2. Run `mise run test:agent:coordinator` (the scenarios beyond the Codex `read-only` one) and the rest of `mise run test:agent:electron`.
   3. Then `mise run dev:stop` and `mise run dev:reset` the profile.
 
-  Record: pass or fail for each spec and scenario, and whether any `playwright_chromiumdev_profile-*` or `playwright-artifacts-*` directory was left in each run's `TMPDIR`, in 0248's evidence (or reply to the coordinator).
+  Record: pass or fail for each spec and scenario, and whether any `playwright_chromiumdev_profile-*` or `playwright-artifacts-*` directory was left in each run's `TMPDIR` (reply to the coordinator; 0248 is retired, so a leak found opens a new to-do).
 
 - [ ] **[4580](../containers-and-environments/4580-input-stamp-follow-ups.md) task 4: a real Claude sign-out reaches a running container's next start.** On a Mac and on a Linux host, each with your own Claude login and a throwaway `mise run dev:test` profile that has a container environment of a current image: start the environment, check `~/.claude/.credentials.json` exists in it, run `claude /logout` on the host, then stop and start the environment and check the file again. On the Mac, before starting it again, also run `security find-generic-password -s "Claude Code-credentials"; echo $?` (no `-w`). Sign back in afterwards. Record: per host, whether the host's `.credentials.json` was deleted or emptied by the logout, the `security` exit status, and whether the container's file was gone after the restart, in 4580 task 4's Investigation or a reply to the coordinator.
 - [ ] **[4982](../containers-and-environments/4982-bridge-credential-live-evidence.md) task 1: a user's approval on a real provider turn with a verifier-only bridge.** On a throwaway `mise run dev:test` profile with real logins, using a `bridge-credential=1` image, create an `ask` environment and, for each provider (Claude, Codex, Cursor, Grok, OpenCode, Pi), send one prompt that makes the agent run a shell command; approve one command and deny one. Billed turns, one approval and one denial per provider. Record: per provider, whether the approval ran the command, the denial refused it, and whether the turn failed in any way under the bridge's non-dumpable flag (Cursor and Pi run inside the bridge process), as a dated note in 4982's task 2 Investigation or a reply to the coordinator.

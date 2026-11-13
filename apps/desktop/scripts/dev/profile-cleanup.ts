@@ -154,10 +154,10 @@ export type KeychainItemRemoval = { removed: number; warning: string | null };
  * profile's app name is its `electronTitle`, so every reset profile used to
  * leave one behind. The match is on that service alone: its account is not
  * stable across Electron versions. Electron 45.2.3 writes "<app name> Key"
- * (seen on a live macOS 27.2 run, to-do 0023), where earlier builds wrote
- * "<app name>", and matching the old account deleted nothing while reporting
- * success. The service already names this profile's title, so no other
- * item can share it. The item is named by title alone, so two guards keep
+ * (seen on a live macOS 27.2 run; docs/development/disk-usage.md), where
+ * earlier builds wrote "<app name>", and matching the old account deleted
+ * nothing while reporting success. The service already names this profile's
+ * title, so no other item can share it. The item is named by title alone, so two guards keep
  * this to the profile's own item:
  *
  * - The title must be the one `dev:test` gives this profile id. A

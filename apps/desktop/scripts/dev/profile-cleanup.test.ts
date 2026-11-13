@@ -220,8 +220,9 @@ describe("profile Keychain item", () => {
   test("reset deletes only the profile's own Safe Storage items, after its state", async () => {
     const profile = await createProfile("keychain");
     const title = profile.electronTitle;
-    // Electron 45.2.3 names the account "<title> Key" (live macOS run, to-do
-    // 0023); earlier builds named it "<title>". Both are the profile's.
+    // Electron 45.2.3 names the account "<title> Key" (live macOS run, see
+    // docs/development/disk-usage.md); earlier builds named it "<title>".
+    // Both are the profile's.
     const current = `${title} Safe Storage\n${title} Key`;
     const legacy = `${title} Safe Storage\n${title}`;
     const production = "Orkestrator AI Safe Storage\nOrkestrator AI Key";

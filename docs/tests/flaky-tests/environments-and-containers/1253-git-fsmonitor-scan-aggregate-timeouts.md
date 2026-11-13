@@ -459,6 +459,31 @@ reported `open`: record it as a recurrence.
   lose the race with the follow-up `status` call when the host is loaded; a
   one-file rerun straight after a loaded aggregate is not free of that load.
 
+## Recurring-work 0048 review preparation recurrence — 2026-11-13
+
+`mise run flaky:recurrence 1253 --base 17d28238c098b4443d1289df5c4ed75e7cc2802e`
+reported `open`: record it as a recurrence.
+
+- **Branch / base:** `ios-simulator-reconnect-a7cc6ab8b418-r1` at `f6ddfe0a1`,
+  merge base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch removes
+  `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and adds an opt-in browser spec.
+  The failure triage reached `native-agent-service-shared.ts` only
+  indirectly (11 import hops, verdict `undetermined`); the owner,
+  `git-fsmonitor.ts` and `ProjectGitService` are unchanged.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups).
+- **Failure:** the same signature: `git fsmonitor > project-home status
+  auto-starts and preserves the configured daemon` failed at 11,447.79 ms
+  because `git fsmonitor--daemon status` rejected at
+  `git-fsmonitor.test.ts:281` after `status` returned.
+- **Suite counts:** backend 18,098 pass, 200 skip, 1 fail; web 14,722 pass.
+  The runner's one-file rerun never ran: it queued behind another
+  worktree's exclusive resource until the 1,800 s group deadline ended the
+  run, so the command was recorded as incomplete.
+- **Isolated rerun:** the address-findings stage reran the unchanged owner
+  alone (`bun --cwd=apps/backend test src/core/git-fsmonitor.test.ts
+  --parallel=1`) and it passed (7.8 s).
+
 ## Hidden-window Electron specs review preparation recurrence — 2026-11-13
 
 `mise run flaky:recurrence 1253 --base 17d28238c098b4443d1289df5c4ed75e7cc2802e`

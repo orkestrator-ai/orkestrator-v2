@@ -85,6 +85,24 @@ describe("setup failure messages", () => {
     expect(root).toContain('"root"');
   });
 
+  test("each declared-package reason gets its own message (to-do 7770)", () => {
+    const messages = {
+      "apt-packages-refused": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesRefused,
+      "apt-packages-unsupported-runtime":
+        ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesUnsupportedRuntime,
+      "apt-packages-archive-unreachable":
+        ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesArchiveUnreachable,
+      "apt-packages-install-failed": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.aptPackagesInstallFailed,
+    } as const;
+    for (const [reason, message] of Object.entries(messages)) {
+      expect(
+        environmentLifecycleErrorMessage(setupScriptFailedError(reason as keyof typeof messages)),
+      ).toBe(message);
+      expect(message).toContain("aptPackages");
+    }
+    expect(messages["apt-packages-archive-unreachable"]).toContain("deb.debian.org");
+  });
+
   test("an unknown reason value falls back to the generic message", () => {
     const forged = Object.assign(new Error("Setup script failed"), {
       setupFailureReason: "anything-else",

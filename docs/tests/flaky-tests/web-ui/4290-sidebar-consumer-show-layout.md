@@ -1,7 +1,7 @@
 # Sidebar consumer show layout count
 
 - **ID:** 4290
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-11-04
 - **Tests:** `the sidebar’s animated width lays out a real terminal and editor at most twice`
 - **File:** `e2e/agent-testing/sidebar-width-consumers.spec.ts`
@@ -32,3 +32,17 @@ asserts one main-content layout for hidden→full and compact→full (with frame
 on time and 300 ms late) and for hiding; with the handle width ignored, the
 hidden→full and hiding cases fail, and with the fix all 12 cases pass.
 `useSidebarPanelMotion.test.tsx` covers the three pin cases.
+
+## Recurrence (2026-11-13, reopened)
+
+Base `17d28238c` contains fix `9dcdcee6e3`, and `mise run flaky:recurrence -- 4290`
+said reopen. The branch was `remove-dead-bridge-be98778b92d1-r1` at `98ff78d0f`,
+which changes no sidebar or motion code. The symptom is new: during
+`mise run test:agent:browser:isolated`, at load about 40,
+`expect(steps.size).toBeGreaterThan(3)` at line 245 received `2`. The panel was
+sampled at only two distinct widths, which is consistent with a renderer too
+loaded to paint intermediate frames. It is not the layout over-count that was
+fixed. The unchanged owner case
+(`bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/sidebar-width-consumers.spec.ts:119 --workers=1`
+against a fresh `--fixture --headless` profile at load about 7) passed
+(19.6 s). No assertion was changed.

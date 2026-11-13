@@ -71,7 +71,7 @@ import {
 } from "./agent-accounts-login.js";
 import type { AgentAccountLogin } from "./agent-accounts-runtime.js";
 import { shareAndMergeUsage } from "./agent-accounts-usage-sharing.js";
-import { readAgentAccountPlanUsage, type PlanUsageRead } from "./plan-usage.js";
+import { readAgentAccountPlanUsage, type PlanUsageRead } from "./plan-usage/index.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 import {

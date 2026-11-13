@@ -204,9 +204,13 @@ Not proven live:
   others rely on fakes.
 - A context overflow during a goal. A compact while a goal waits stands in for it.
 - A goal extension on Pi, or a stop hook in a user's Cursor config.
-- A worker on another node: its delegation holds while that node's registry says the
-  goal is running, which only fakes have exercised
-  ([4860](../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md)).
+- A worker on another node between two real turns. Its delegation holds while that
+  node's registry says the goal is running: shown over a real node link on
+  2026-11-13 with a leaf whose goal was held by its running check
+  (`scripts/qa-remote-goal-hold.ts`, `mise run qa:remote-goal-hold`, weekly in
+  CI), not yet with a real agent's iterations
+  (to-do 4860 (retired) task 2; the real-agent run is on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 Known problems found on the way, not caused by goals and not fixed here: Grok's shell
 fails to spawn in Orkestrator sessions, and a typed `/compact` delivered through the

@@ -28,9 +28,10 @@ export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 const log = createLogger("native-agent");
 
 /**
- * Session catalogue reads answered 404 by a bridge older than the contract,
- * per agent, since this backend started. Content-free: no command names,
- * sessions or environments. The legacy-route support window rests on it.
+ * Session catalogue reads refused because the bridge is older than the
+ * contract (a 404, or an answer without `catalogueVersion`), per agent, since
+ * this backend started. Content-free: no command names, sessions or
+ * environments. The legacy-route support window rests on it.
  */
 const outdatedBridgeCatalogueReads = new Map<HttpBridgeAgent, number>();
 
@@ -55,15 +56,18 @@ export class HttpBridgeCatalogAdapter {
     return `${this.agent}:${this.connection.baseUrl}`;
   }
 
-  /** Count every 404 from the session route; throttle the warning per bridge. */
-  private noteOutdatedBridge(): void {
+  /** Count every outdated-bridge read; throttle the warning per bridge. */
+  private noteOutdatedBridge(kind: "session-route-404" | "unversioned-catalogue"): never {
     const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
     outdatedBridgeCatalogueReads.set(this.agent, count);
     compatibilityPathUsage.record("slash-catalogue.outdated-bridge");
     log.throttled("warn", "catalogue.outdated-bridge", {
       scope: this.logScope,
-      kind: "session-route-404",
+      kind,
       fields: () => ({ agent: this.agent, readsSoFar: count }),
+    });
+    throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
+      catalogueErrorCode: "outdated-bridge",
     });
   }
 
@@ -76,11 +80,12 @@ export class HttpBridgeCatalogAdapter {
    * Cursor or Grok bridge that does not hold the session. Either way the
    * answer is `outdated-bridge`, counted, and never a fallback to a global
    * list: those legacy routes were retired, and their rows were not this
-   * session's. Without a session there is nothing to read: the answer is
-   * `missing`, with no request. An old bridge's 200 answer (rows without
-   * `catalogueVersion`) is still accepted as non-enhanced rows that run as
-   * typed text. Rows are normalized and bounded by the shared protocol
-   * normalizer; nothing is seeded — a successful empty list stays empty.
+   * session's. A 200 answer without `catalogueVersion` is the same pre-2.21
+   * bridge and gets the same answer: every bridge from v2.21.0 on stamps
+   * every answer of this route with it. Without a session there is nothing to
+   * read: the answer is `missing`, with no request. Rows are normalized and
+   * bounded by the shared protocol normalizer; nothing is seeded — a
+   * successful empty list stays empty.
    */
   async commandCatalogue(sessionId?: string): Promise<ProviderCommandCatalogue> {
     if (!sessionId) return { enhanced: true, status: "missing", commands: [] };
@@ -92,10 +97,7 @@ export class HttpBridgeCatalogAdapter {
     );
     if (response.status === 404) {
       await response.body?.cancel().catch(() => undefined);
-      this.noteOutdatedBridge();
-      throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
-        catalogueErrorCode: "outdated-bridge",
-      });
+      this.noteOutdatedBridge("session-route-404");
     }
     assertOk(response, `${this.agent} slash command list`);
     const payload = asRecord(
@@ -108,8 +110,10 @@ export class HttpBridgeCatalogAdapter {
         catalogueErrorCode: "malformed",
       });
     }
+    if (payload.catalogueVersion === undefined) this.noteOutdatedBridge("unversioned-catalogue");
     const normalized = normalizeCommandCataloguePayload(payload);
-    if (normalized.enhanced) log.recovered("catalogue.outdated-bridge", this.logScope);
+    // A versioned answer is a current bridge, whichever version it speaks.
+    log.recovered("catalogue.outdated-bridge", this.logScope);
     return {
       enhanced: normalized.enhanced,
       commands: normalized.commands,

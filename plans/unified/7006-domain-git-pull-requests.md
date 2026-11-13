@@ -89,7 +89,7 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
   - `pathIds` on `changes_prepare_restore`: ignored, the restore preview (and its apply) covers every file.
   - `expectedHeadSha` on `merge_environment_pr` and `merge_github_pull_request`: the compare-and-swap guard; ignored, a head pushed after the review merges.
   - `expectedPrUrl`, `autoMergeEnabledAt` on `merge_environment_pr`: guards; ignored, another PR or withdrawn auto-merge options merge.
-  - `method`, `deleteBranch` on `merge_environment_pr`, `merge_pr`, `merge_pr_local`: ignored, the merge squashes and deletes the branch (both defaults), which cannot be undone.
+  - `method`, `deleteBranch` on `merge_environment_pr`, `merge_pr` (and `merge_pr_local` until its removal on 2026-11-13): ignored, the merge squashes and deletes the branch (both defaults), which cannot be undone.
   - `comments`, `commitId` on `submit_github_pull_request_review`: ignored, the review posts without its inline comments, or anchors them to whatever the head is now.
   - `expectedHead` on `generate_review_package`: ignored, a package of a newer head is reviewed as this one; `validationPlan`, `additionalLimitations`: ignored, the package drops what reviewers were told to check and what it cannot show.
   - Not critical: `idempotencyKey` and `armedAt` (required in every version), the conditional-read keys (older backends already ignore them and callers read both forms), `refresh`, `includeUncommitted`, `fingerprint` (a read answers less, which the caller sees), `cleanupAfterMerge` (ignored, nothing is deleted: the safe direction), `query`, `display`.

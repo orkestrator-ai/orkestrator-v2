@@ -17,9 +17,15 @@
  * `coordinator-live-gap-tools.ts`), `graph-profiles` (one-node graphs with the
  * reviewer, builder and researcher capability profiles, the tier the launch
  * picker shows against what the provider lets the node do, see
- * `coordinator-live-graph-profiles.ts`; no coordinator turn) and `peer`. Every
- * scenario with mail also judges each echoed carrier through the renderer's
- * tile parser (`coordinator-mail-tiles.ts`).
+ * `coordinator-live-graph-profiles.ts`; no coordinator turn), `ask` (a worker
+ * launched and a question asked in one turn, answered from the card, see
+ * `coordinator-live-ask.ts`), `identity` (each tab its own mailbox `self`, an
+ * `idle`-policy injection and a resume into another tab, see
+ * `coordinator-live-identity.ts`), `account-switch` (self-timers, a seeded
+ * usage limit and a switch to a fixture account, by request and under a
+ * timer's permission, see `coordinator-live-account-switch.ts`) and `peer`.
+ * Every scenario with mail also judges each echoed carrier through the
+ * renderer's tile parser (`coordinator-mail-tiles.ts`).
  *
  * Opt-in only: each case runs a real coordinator turn on the host's
  * credentials, so every case is skipped unless
@@ -141,6 +147,15 @@ import {
   runGraphProfilesProbe,
 } from "../../apps/desktop/scripts/dev/coordinator-live-graph-profiles-orchestration";
 import { enableExperimentalGraphs } from "./experimental-graphs";
+import { runAskScenario } from "../../apps/desktop/scripts/dev/coordinator-live-ask-orchestration";
+import { askApplies } from "../../apps/desktop/scripts/dev/coordinator-live-ask";
+import { runIdentityScenario } from "../../apps/desktop/scripts/dev/coordinator-live-identity-orchestration";
+import { runAccountSwitchScenario } from "../../apps/desktop/scripts/dev/coordinator-live-account-switch-orchestration";
+import {
+  ACCOUNT_SWITCH_HOLD_REQUEST_ENV,
+  accountSwitchApplies,
+} from "../../apps/desktop/scripts/dev/coordinator-live-account-switch";
+import { profileAccountFixtures } from "./coordinator-live-account-fixtures";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
 import {
@@ -1247,6 +1262,106 @@ async function researchCase(input: {
   expect(failures, `${platform}: the research scenario`).toEqual([]);
 }
 
+/**
+ * The ask scenario: one turn launches a worker and asks the user a two-option
+ * question; the harness answers the card with the second option and the
+ * coordinator must report it. Pi and Cursor, which raise no questions, are
+ * skipped with the reason before any turn is spent.
+ */
+async function askCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const { checks, observed, watch } = await runAskScenario({
+    ...input,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
+  const projection = watch.projection();
+  summary.toolCalls = transcriptToolCalls(projection?.messages ?? []).map(({ name, state }) => ({
+    name,
+    state,
+  }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, checks, {
+    ...observed,
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the ask scenario`).toEqual([]);
+}
+
+/**
+ * The identity scenario: three tabs of one harness-made environment, no
+ * coordinator. Two each see themselves as `self`, user mail under the `idle`
+ * policy starts a turn, and the first conversation resumed in the third tab
+ * is the same conversation under that tab's own credential.
+ */
+async function identityCase(input: {
+  page: Page;
+  entry: CoordinatorLivePlatform;
+  summary: CoordinatorLivePlatformSummary;
+  skip: (reason: string) => never;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { entry, summary, skip, cleanup } = input;
+  const { invoke, fixture } = await openProfile(input.page);
+  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
+  const enabled = config.global.enabledAgentPlatforms;
+  if (Array.isArray(enabled) && !enabled.includes(entry.platform)) {
+    skip(`${entry.platform} is not enabled in this profile (start it with --agent-platforms)`);
+  }
+  const { checks, observed } = await runIdentityScenario({
+    invoke,
+    projectId: fixture.id,
+    platform: entry.platform,
+    summary,
+    skip,
+    cleanup,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
+  const failures = recordChecks(summary, checks, observed);
+  expect(failures, `${entry.platform}: the identity scenario`).toEqual([]);
+}
+
+/**
+ * The account-switch scenario: a seeded usage-limited worker and one fixture
+ * account in the profile; the coordinator sets a self-timer, is woken, reads
+ * the limits, lists the accounts and switches, once as a request the harness
+ * rejects and once under a timer that carries the user's permission.
+ */
+async function accountSwitchCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary, cleanup } = input;
+  const platform = coordinator.identity.agent;
+  const dataDir = profileStatus().dataDir;
+  if (!dataDir) throw new Error("dev:status reported no data directory");
+  const { checks, observed, watch } = await runAccountSwitchScenario({
+    coordinator,
+    summary,
+    cleanup,
+    fixtures: profileAccountFixtures({ repositoryRoot, dataDir, cleanup }),
+    pollIntervalMs: POLL_INTERVAL_MS,
+    holdRequestForPerson: process.env[ACCOUNT_SWITCH_HOLD_REQUEST_ENV] === "1",
+  });
+  const projection = watch.projection();
+  summary.toolCalls = transcriptToolCalls(projection?.messages ?? []).map(({ name, state }) => ({
+    name,
+    state,
+  }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, checks, {
+    ...observed,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the account-switch scenario`).toEqual([]);
+}
+
 test.describe("live coordinator", () => {
   test.skip(
     !LIVE,
@@ -1507,6 +1622,64 @@ test.describe("live coordinator", () => {
         page.setDefaultTimeout(30_000);
         await runCase(entry, "graph-profiles", async ({ summary, skip, cleanup }) => {
           await graphProfilesCase({ page, entry, summary, skip, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("ask")) {
+      test(`delegate and ask on ${platform}: one turn launches a worker and asks the user, and the answer from the card is the one reported`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.ask);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "ask", async ({ summary, skip, cleanup }) => {
+          const applies = askApplies(platform);
+          if (!applies.applies) skip(applies.reason);
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await askCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("identity")) {
+      test(`mailbox identity on ${platform}: each tab is its own self, idle-policy mail starts a turn, and a resume keeps the conversation under the new tab's credential`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.identity);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "identity", async ({ summary, skip, cleanup }) => {
+          await identityCase({ page, entry, summary, skip, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("account-switch")) {
+      test(`account switch on ${platform}: a self-timer wakes the coordinator, which reads a usage limit and switches to a fixture account, by request and under the timer's permission`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests["account-switch"]);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "account-switch", async ({ summary, skip, cleanup }) => {
+          const applies = accountSwitchApplies(platform);
+          if (!applies.applies) skip(applies.reason);
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            // The schedule tools are offered only while experimental
+            // scheduling, off by default, is on.
+            settings: { experimentalScheduling: true },
+            skip,
+            cleanup,
+          });
+          await accountSwitchCase({ coordinator, summary, cleanup });
         });
       });
     }

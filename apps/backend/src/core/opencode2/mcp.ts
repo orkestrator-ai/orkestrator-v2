@@ -1,6 +1,6 @@
 /**
  * Orkestrator's MCP servers on an OpenCode 2.x server
- * (docs/todo/agent-engines/0008-opencode-v2.md, owner decision 2 of 2026-11-09).
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), owner decision 2 of 2026-11-09).
  *
  * 2.x adds a runtime server with `PUT /api/experimental/mcp/:server` and
  * reports its status through `GET /api/mcp`. Both are scoped to the server's

@@ -35,6 +35,12 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     "gap-tools": step * 11,
     // Three probes (reviewer, builder, researcher), each an environment start and one node turn.
     "graph-profiles": step * 6,
+    // The delegate-and-ask turn, the worker's wake and the settle after it.
+    ask: step * 3,
+    // Three tab turns, the idle-policy mail turn and the resumed tab's turn.
+    identity: step * 5,
+    // Per phase: the set turn, the timer and its wake, the switch's outcome.
+    "account-switch": step * 8,
     // Two environment starts, then the exchange.
     peer: step * 2 + peer,
   };

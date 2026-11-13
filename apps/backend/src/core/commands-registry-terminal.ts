@@ -76,7 +76,6 @@ import {
   getEnvironmentUncommittedPathsCommand,
   getGitStatusCommand,
   getLocalGitStatusCommand,
-  refreshEnvironmentDiffStatsCommand,
 } from "@orkestrator/protocol/contract/domains/git";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -996,14 +995,6 @@ export function registerTerminalCommands(
           entries: context.runtime.diffStats.service.snapshot(),
         }),
       ) satisfies EnvironmentDiffStatsSnapshotOutcome;
-    },
-    ASYNC_HANDLER,
-  );
-  register(
-    refreshEnvironmentDiffStatsCommand,
-    async ({ environmentId }, context) => {
-      await context.runtime.diffStats.sync(context);
-      context.runtime.diffStats.refreshExplicitly(asString(environmentId, "environmentId"));
     },
     ASYNC_HANDLER,
   );

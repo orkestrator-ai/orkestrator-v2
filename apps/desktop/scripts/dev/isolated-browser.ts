@@ -183,8 +183,10 @@ const IMAGE_QUALIFICATION_TIMEOUT_MS = 420_000;
  * this split), so the rebuild cycle, draft attachments, design export and root
  * terminal specs (about 85 s together) moved to the second shard: 310 s and
  * 242 s after it. Rebalance once a shard drifts by more than a minute. A spec
- * that gains a `Docker fixture` test must be added to one shard;
- * `isolated-browser.test.ts` fails while one is in no shard or in two.
+ * that gains a `Docker fixture` test must be added to the browser config and
+ * to one shard; `isolated-browser.test.ts` fails while one is in neither, in
+ * no shard or in two. The two opt-in Multi Review canaries skip unless their
+ * fake-review variable is set, so they cost the shard nothing by default.
  */
 export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
   [
@@ -204,8 +206,10 @@ export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
     "e2e/agent-testing/design-container-export.spec.ts",
     "e2e/agent-testing/container-root-terminal.spec.ts",
     "e2e/agent-testing/container-multi-review-read-only.spec.ts",
+    "e2e/agent-testing/container-multi-review-codex-read-only.spec.ts",
     "e2e/agent-testing/container-claude-terminal-signal.spec.ts",
     "e2e/agent-testing/container-approval-stop.spec.ts",
+    "e2e/agent-testing/mcp-overlay-terminal.spec.ts",
   ],
 ];
 

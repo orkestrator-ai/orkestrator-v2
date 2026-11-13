@@ -1,6 +1,6 @@
 /**
  * The user's global OpenCode configuration on an OpenCode 2.x server
- * (docs/todo/agent-engines/0008-opencode-v2.md, "the user's global MCP
+ * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`), "the user's global MCP
  * servers").
  *
  * A 1.x server reads `$XDG_CONFIG_HOME/opencode` (`config.json`,

@@ -53,3 +53,28 @@ the full `mise run test:browser` (both configs) was not completed on this
 snapshot. This evidence is recorded here rather than as a new case because
 the run belonged to work whose flake-number range was 9988-9989. Status
 stays open.
+
+## Recurrence (2026-11-13)
+
+- **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; `mise run flaky:recurrence -- 9988 --base 17d28238c --registry-ref origin/main` answered open.
+- **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at
+  `16561abbc` (7571 removals). Its only startup change removes one background
+  effect from `App.tsx` (the localStorage pipeline import); it touches no
+  design, usage, background-task or keyboard component.
+- **Command:** `mise run test:logged -- --name browser-rerun -- mise run test:browser`
+  on Linux at load average about 78 to 92, beside a full `mise run test`. The
+  1,800 s deadline killed it at 677 of 1,884 tests, all in mobile-chromium,
+  with 114 failures. Every one was a timeout: 56 `page.reload`, 14 `page.goto`,
+  the rest a 30 s test budget, across about 30 owners including
+  `DesignLaunchDialog.spec.ts:88` again.
+- **Owner reruns:** seven failing owners (`AgentUsage`, `BackgroundTaskOutcome`,
+  `ChangeTracking`, `DiffBase`, `EnvironmentNetworkPolicy`,
+  `ClaudeInteractions`, `KeyboardShortcuts`) rerun together at load about 85
+  failed 27 of 118. At load about 40 to 60 the same command failed only the two
+  `AgentUsage.spec.ts:38` mobile cases (116 passed, 3.9 min), and
+  `AgentUsage.spec.ts` with `--workers=1` then passed (49.9 s; flake
+  [0749](../web-ui/0749-agent-usage-browser-startup-timeout.md)).
+- **Evidence:** `orkestrator-test-run.85R6PV/browser-rerun.log.gz`,
+  `orkestrator-test-run.qWhDhm/` and `orkestrator-test-run.KhvAja/` under the
+  host temporary directory. The full browser suite was not completed on this
+  snapshot. Status stays open.

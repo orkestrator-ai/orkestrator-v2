@@ -200,7 +200,7 @@ describe("revalidating a static file with no precompressed sibling", () => {
   });
 });
 
-// To-do 6160 kept this path as it is: a date names no variant, so the 304 can
+// To-do 6160 (retired; docs/architecture/remote-gateway.md) kept this path as it is: a date names no variant, so the 304 can
 // only describe what a 200 would send now, and that takes the compression.
 // Browsers send the tag as well (`scripts/static-revalidation-probe.ts`).
 describe("revalidating a static file by date alone", () => {

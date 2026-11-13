@@ -86,7 +86,7 @@ model's wording.
 
 **Context.** Platforms are run one at a time by the suite with
 `--credential-source <platform>`. Grok has no login on the usual hosts
-([0024](0024-coordinator-live-conformance.md) task 1).
+(0024 (retired) task 1, now on the manual-test checklist).
 
 **Investigation.** Run on 2026-11-08 against `main` at `30bce6895` plus
 this change, with
@@ -484,7 +484,7 @@ found"; `mise run test` strips that variable, so those are not real failures.
   task 3, launches that leave defaults alone.
 - To-do 7544 (retired 2026-11-10), the completion handoff; see
   [coordinator.md](../../architecture/coordinator.md#status-wakes).
-- [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md),
+- [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired),
   the live suite.
 - To-do 7546 (retired 2026-11-10), found by this scenario's Codex run; the
   fix is in [build-pipeline-view.md](../../architecture/build-pipeline-view.md#starting-a-build).

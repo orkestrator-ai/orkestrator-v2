@@ -506,3 +506,54 @@ describe("exact branch selection", () => {
     });
   }
 });
+
+describe("forking", () => {
+  test("a fork at a prompt goes through Pi's runtime and hands the prompt back as a draft", async () => {
+    await withSdkSession({ clientSessionKey: "sdk-fork" }, async ({ state, prompt }) => {
+      for (const text of ["First.", "Second."]) {
+        await prompt(text);
+        await state.session!.agent.waitForIdle();
+        await waitFor(() => state.status === "idle");
+      }
+      const userText = (entry: { type: string; message?: unknown }) => {
+        const message = entry.type === "message" ? (entry.message as { role?: string }) : {};
+        return message.role === "user" ? JSON.stringify(entry.message) : undefined;
+      };
+      const second = state
+        .session!.sessionManager.getBranch()
+        .find((entry) => userText(entry)?.includes("Second."))!;
+      expect(second).toBeDefined();
+
+      const response = await call(`/session/${state.id}/fork`, {
+        method: "POST",
+        body: JSON.stringify({ upToMessageId: second.id }),
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+      const body = (await response.json()) as { sessionId: string; draft?: string };
+      const forked = sessions.get(body.sessionId)!;
+      try {
+        expect(forked).not.toBe(state);
+        expect(body.draft).toBe("Second.");
+        // The fork owns the runtime that made it, so its extensions are Pi's.
+        expect(forked.runtime).toBeDefined();
+        expect(forked.session).toBe(forked.runtime!.session);
+        expect(forked.sessionFile).not.toBe(state.sessionFile);
+        expect(forked.piSessionId).not.toBe(state.piSessionId);
+        // Cut before the prompt: the first exchange is kept, the second is not.
+        const prompts = forked
+          .session!.sessionManager.getBranch()
+          .map(userText)
+          .filter((text) => text !== undefined);
+        expect(prompts.some((text) => text.includes("First."))).toBe(true);
+        expect(prompts.some((text) => text.includes("Second."))).toBe(false);
+        // The parent is untouched.
+        expect(
+          state.session!.sessionManager.getBranch().some((entry) => entry.id === second.id),
+        ).toBe(true);
+      } finally {
+        await closeSession(forked);
+        sessions.delete(forked.id);
+      }
+    });
+  });
+});

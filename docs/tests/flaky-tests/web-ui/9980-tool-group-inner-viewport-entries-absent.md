@@ -1,7 +1,7 @@
 # Tool group fold: a long group's inner viewport shows no entries in time
 
 - **ID:** 9980
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-11-11
 - **Base:** `14df965440e658e09a7b3ce03530bc1781ac2b01` (`main`).
 - **Observed head:** `aa7b41b35` on branch `fix-failing-ci-fc33ea27615f-r1`.
@@ -113,3 +113,9 @@ Base `51456e887` (`main`), branch `fix-flaky-tests-400972eda2c6-r1`.
   `VirtualizedMessageList.keep-mounted.test.tsx` cover these ends,
   `pointercancel`, focus that supersedes a pending protection, and a second
   press that begins before the first's protection runs.
+
+## Recurrence — 2026-11-13 (container live evidence review repairs)
+
+Desktop `a selection inside a long group's viewport survives nearby inner scrolling` (`e2e/ToolGroupFold.spec.ts:449`) failed in (b): `expect(received).toBeGreaterThan(expected)`, expected more than 2 entries, received 0. It passed in (a), (c), (d) and (e). `mise run flaky:recurrence -- 9980 --base 17d28238c` answered that the base contains the fix (`51456e887b`) and that this is a real recurrence, so the case is reopened.
+
+Branch `container-live-evidence-4156bad5e3b0-r1` at `eedd4f1ba`, base `17d28238c098b4443d1289df5c4ed75e7cc2802e`, Linux x86_64 (beelink2, shared with other worktrees' suites), Bun 1.4.4. The branch changes no file under `apps/web`, `packages`, `apps/desktop` or `e2e` (backend tests, the preview worker's seccomp profile, a CI workflow and docs only). Runs: (a) `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name address-browser-2 -- mise run test:browser` (one retry per test): 22 failed, 11 flaky, 154 skipped, 1,697 passed (41.1 m), host load average 22 to 50 on 16 cores; (b) the 13 failing owners together with `--workers=2`: 2 failed, 5 skipped, 249 passed (5.1 m); (c) to (e) `mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1` three times on a quiet host (load average 3 to 5): 1 failed, 38 passed (1.5 m); 3 failed, 36 passed (1.7 m); 1 failed, 38 passed (1.5 m). The complete owner never ran green alone in these four runs, and a different case failed each time, so this records intermittence in the unchanged owner, not a branch regression. The cause is unconfirmed. 

@@ -159,3 +159,29 @@ test("cancelling a pending FETCH keeps live and resumed history cancelled", asyn
     await agent[Symbol.asyncDispose]();
   }
 });
+
+test("a held run keeps every steer it accepted, in order, without the frame", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "cursor-fake-steer-"));
+  directories.push(directory);
+  const storePath = join(directory, "vendor.json");
+  const api = createFakeCursorAgentApi({ storePath });
+  const agent = await api.create({ name: "Orkestrator" });
+  const run = await agent.send({ text: "HOLD until steered" });
+  expect(run.status).toBe("running");
+  await expect(run.steer("turn left")).resolves.toBe("complete_delivered");
+  await expect(
+    run.steer(
+      "turn right\n\n<orkestrator-system-instructions>\nProvider-only guidance\n</orkestrator-system-instructions>",
+    ),
+  ).resolves.toBe("complete_delivered");
+  const stored = () =>
+    JSON.parse(readFileSync(storePath, "utf8")).agents[agent.agentId].turns[0] as {
+      status: string;
+      steers?: string[];
+    };
+  expect(stored()).toMatchObject({ status: "running", steers: ["turn left", "turn right"] });
+  await run.cancel();
+  // Settling the run keeps what it was steered with.
+  expect(stored()).toMatchObject({ status: "cancelled", steers: ["turn left", "turn right"] });
+  await agent[Symbol.asyncDispose]();
+});

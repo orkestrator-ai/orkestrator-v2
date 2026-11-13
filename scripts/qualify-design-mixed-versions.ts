@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 0036 qualification: design canvases across a published backend release and
+ * 0036 (retired) qualification: design canvases across a published backend release and
  * this checkout's backend, on one data directory.
  *
  *   bun scripts/qualify-design-mixed-versions.ts [options]

@@ -43,7 +43,7 @@ unchanged.
 
 **Context.** 0034 fixed the support window at published releases from the floor; `docs/architecture/version-compatibility.md:16-31` still gives the floor as v2.21.0 (it first moves on 2026-12-15). The only catalogue protocol change since v2.21.0 is #1184's `normalizeAvailability`. 0016 (needs verification) defers to this item.
 
-**Investigation.** The v2.21.0 tag exists (2026-10-16) and its GitHub release ships desktop artifacts (`orkestrator-v2-linux-x86_64.AppImage`, `orkestrator-v2-mac-arm64.dmg`, a pacman package). It is **not** on npm: the oldest `orkestrator` npm release is 2.22.3, which is why `scripts/qualify-design-mixed-versions.ts:57` defaults to 2.22.3 for 0036's mixed-version run; that 2.22.3 tarball carries `dist/main.js` plus the Claude and Codex bridges, not a renderer. `version-compatibility.md:25` says nothing before v2.21.0 was published "as a release or on npm", which is true but hides that v2.21.0 itself is absent from npm. The renderer error the item watches for is still `"Invalid native agent projection update response"` at `apps/web/src/lib/backend/workflows.ts:639`. The precedent harness (`qualify-design-mixed-versions.ts`, #1262) already runs a published backend and the current one over one temporary data directory and HOME, which is most of what this run needs. The earlier note that `dev:test` needs a display still holds; this Linux host has one.
+**Investigation.** The v2.21.0 tag exists (2026-10-16) and its GitHub release ships desktop artifacts (`orkestrator-v2-linux-x86_64.AppImage`, `orkestrator-v2-mac-arm64.dmg`, a pacman package). It is **not** on npm: the oldest `orkestrator` npm release is 2.22.3, which is why `scripts/qualify-design-mixed-versions.ts:57` defaults to 2.22.3 for 0036's (retired) mixed-version run; that 2.22.3 tarball carries `dist/main.js` plus the Claude and Codex bridges, not a renderer. `version-compatibility.md:25` says nothing before v2.21.0 was published "as a release or on npm", which is true but hides that v2.21.0 itself is absent from npm. The renderer error the item watches for is still `"Invalid native agent projection update response"` at `apps/web/src/lib/backend/workflows.ts:639`. The precedent harness (`qualify-design-mixed-versions.ts`, #1262) already runs a published backend and the current one over one temporary data directory and HOME, which is most of what this run needs. The earlier note that `dev:test` needs a display still holds; this Linux host has one.
 
 **Decisions.**
 
@@ -54,7 +54,7 @@ unchanged.
   - **Extract components from the published v2.21.0 AppImage or dmg.**
     - Pros: the real shipped bytes.
     - Cons: unpacking an Electron bundle to run its bridges and renderer separately is fiddly and platform-specific; downloaded artifacts must be handled as untrusted.
-  - **Use npm 2.22.3, as 0036 did.**
+  - **Use npm 2.22.3, as 0036 (retired) did.**
     - Pros: reuses `qualify-design-mixed-versions.ts`'s install path directly.
     - Cons: 2.22.3 is not the floor; it has no renderer, and only two of the five bridges.
 - **Which pairings count as a pass?**

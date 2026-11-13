@@ -16,7 +16,9 @@ export * from "@playwright/test";
  * streams still go through the browser.
  *
  * `client-outage.spec.ts` keeps `@playwright/test` on purpose: it is about the
- * browser's own network path through outages. `browser-gateway.spec.ts` has one
+ * browser's own network path through outages. So does
+ * `background-tab-reconnect-live.spec.ts`, whose hidden tab needs a browser
+ * Playwright did not launch (it still fetches modules through this file). `browser-gateway.spec.ts` has one
  * case that sets `modulesThroughChromium`, so a gateway fault that only a
  * browser sees still shows there.
  */

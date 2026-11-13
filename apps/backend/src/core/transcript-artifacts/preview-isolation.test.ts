@@ -326,6 +326,77 @@ describe("capacity after an unverified worker exit", () => {
 });
 
 describe("closing the runner", () => {
+  /**
+   * Runs `close` while recording every 10 s timer it arms and every handle it
+   * clears. A bound timer left pending keeps the backend process alive for its
+   * full 10 s after every worker has already exited.
+   */
+  async function closeTrackingBoundTimer(close: () => Promise<void>) {
+    const armed: unknown[] = [];
+    const cleared = new Set<unknown>();
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const arm = spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      const handle = realSetTimeout(handler as () => void, delay, ...args);
+      if (delay === 10_000) armed.push(handle);
+      return handle;
+    }) as unknown as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((
+      handle?: Parameters<typeof clearTimeout>[0],
+    ) => {
+      cleared.add(handle);
+      realClearTimeout(handle);
+    }) as typeof clearTimeout);
+    try {
+      await close();
+    } finally {
+      arm.mockRestore();
+      clear.mockRestore();
+    }
+    return { armed, cleared };
+  }
+
+  test("an idle runner clears its shutdown bound timer once close settles", async () => {
+    const target = create();
+    const { armed, cleared } = await closeTrackingBoundTimer(() => target.close());
+    expect(armed).toHaveLength(1);
+    expect(cleared.has(armed[0])).toBe(true);
+  });
+
+  test("clears the shutdown bound timer once a running worker's exit settles", async () => {
+    let resolveOutcome!: (outcome: SupervisedOutcome) => void;
+    let resolveExited!: (report: ExitReport) => void;
+    const exited = new Promise<ExitReport>((resolve) => {
+      resolveExited = resolve;
+    });
+    const target = create({
+      supervise: (): SupervisedJob => ({
+        outcome: new Promise<SupervisedOutcome>((resolve) => {
+          resolveOutcome = resolve;
+        }),
+        exited,
+        cancel: () => {
+          resolveOutcome({ type: "cancelled" });
+          queueMicrotask(() => resolveExited({ verified: true, pids: [], browserPid: null }));
+        },
+        browserPid: () => null,
+        workerPid: () => null,
+        scratchDir: () => null,
+        reap: async () => true,
+      }),
+    });
+    const probing = target.probe(true);
+    expect(await until(() => resolveOutcome !== undefined)).toBe(true);
+    const { armed, cleared } = await closeTrackingBoundTimer(() => target.close());
+    expect(armed).toHaveLength(1);
+    expect(cleared.has(armed[0])).toBe(true);
+    expect((await probing).available).toBe(false);
+  });
+
   test("does not launch a worker when Docker inspection finishes after close", async () => {
     const inspection = Promise.withResolvers<{ code: number | null; stdout: string }>();
     const inspect = spyOn(supervisor, "runDocker").mockImplementation(() => inspection.promise);

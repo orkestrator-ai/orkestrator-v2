@@ -14,8 +14,8 @@ export const LOCAL_SERVER_EXIT_POLL_INTERVAL_MS = 100;
 export const LOCAL_SERVER_POLL_OVERRIDE_ENV = "ORKESTRATOR_TEST_LOCAL_SERVER_POLL_MS";
 
 /** `defaultMs`, or the test override when that is a shorter positive whole number. */
-function localServerPollMs(defaultMs: number): number {
-  const override = Number(process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV]);
+export function localServerPollMs(defaultMs: number, env: NodeJS.ProcessEnv = process.env): number {
+  const override = Number(env[LOCAL_SERVER_POLL_OVERRIDE_ENV]);
   return Number.isInteger(override) && override >= 1 ? Math.min(defaultMs, override) : defaultMs;
 }
 
@@ -24,7 +24,7 @@ function localServerPollMs(defaultMs: number): number {
  * interval polls more often over the same wait rather than giving up sooner;
  * at the default interval this is exactly `attempts`.
  */
-function pollsForBudget(attempts: number, defaultMs: number, intervalMs: number): number {
+export function pollsForBudget(attempts: number, defaultMs: number, intervalMs: number): number {
   return Math.ceil((attempts * defaultMs) / intervalMs);
 }
 /**

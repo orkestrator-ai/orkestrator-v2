@@ -42,6 +42,13 @@ describe("AcpProcess tree ownership", () => {
     expect(termGraceMs({ ACP_TERM_GRACE_MS: "soon" })).toBe(2_000);
   });
 
+  test("the TERM grace override never lengthens the grace past the default", () => {
+    expect(termGraceMs({ ACP_TERM_GRACE_MS: "2000" })).toBe(2_000);
+    expect(termGraceMs({ ACP_TERM_GRACE_MS: "2001" })).toBe(2_000);
+    expect(termGraceMs({ ACP_TERM_GRACE_MS: "60000" })).toBe(2_000);
+    expect(termGraceMs({ ACP_TERM_GRACE_MS: String(Number.MAX_SAFE_INTEGER) })).toBe(2_000);
+  });
+
   // Each probe owns its process group and descendants, so the two shutdown
   // paths run side by side and each test reads its own result.
   const runs = new Map<boolean, Promise<ProbeRun>>();

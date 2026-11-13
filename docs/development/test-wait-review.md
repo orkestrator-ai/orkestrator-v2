@@ -265,8 +265,9 @@ Spawns fell sharply (`acp-transcript` 66 to 17, `acp-context` 54 to 23,
 Fixed clocks became release-file gates in the fake agents
 (`FAKE_ACP_LATE_USAGE_FILE`, `FAKE_CLOSE_CANCEL_HOLD_FILE`,
 `FAKE_ACP_FAIL_LOAD_RELEASE_FILE`, `FAKE_ACP_LOAD_RELEASE_FILE`), and the
-SIGTERM grace in `acp-process-tree.ts` is overridable with `ACP_TERM_GRACE_MS`
-(default 2000, a test pins it).
+SIGTERM grace in `acp-process-tree.ts` can be shortened with `ACP_TERM_GRACE_MS`
+(default 2000, a test pins it; a larger value is capped at the default, so the
+override never lengthens an agent close).
 
 ### Files split so `bun test --parallel` can spread them
 

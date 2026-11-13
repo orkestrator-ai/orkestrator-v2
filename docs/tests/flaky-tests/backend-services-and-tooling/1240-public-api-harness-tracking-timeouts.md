@@ -34,3 +34,15 @@ established beyond the timing. The 0731 change only adds a small stub file
 write to `createPublicApiHarness`. No assertion, timeout or implementation
 changed. Evidence: `orkestrator-test-run.CuYUNo` under the host temporary
 directory.
+
+## Recurrence — 2026-11-13
+
+`mise run flaky:recurrence 1240 --base 17d28238c098b4443d1289df5c4ed75e7cc2802e`
+reported `open`. In the hidden-window Electron specs review repair's
+`mise run test` rerun on `electron-hidden-window-9b885cf8c702-r1` at
+`a9a66681e` (no backend change), `cleanup drains lifecycle work before
+releasing tracking and diagnostics` timed out at 5,018.57 ms with the host load
+about 35 and the backend group twice as slow as an hour earlier (665.7 s). The
+runner's rerun of the unchanged owner alone passed (6.6 s). The run's other
+deadline failures are in aggregate case
+[9970](../aggregate-validation-runs/9970-hidden-window-specs-review-rerun-under-host-load.md).

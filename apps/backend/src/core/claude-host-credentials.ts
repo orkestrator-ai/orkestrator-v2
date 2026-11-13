@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CommandFailedError, runCommand } from "./shell.js";
@@ -171,10 +171,42 @@ export type KeychainItemPresence = "present" | "absent" | "unknown";
 
 /**
  * `security`'s exit status for errSecItemNotFound. Every other failure (a
- * locked or missing keychain, a timeout, a declined prompt) says nothing about
- * whether the record exists.
+ * locked keychain, a timeout, a declined prompt) says nothing about whether
+ * the record exists. Measured on macOS 27.2 against a temporary keychain
+ * (2026-11-13, to-do 4580 (retired), task 4): 44 for a record the keychain
+ * lacks, also after the record was deleted, and 0 once it exists. The same 44
+ * comes back for a keychain path that is missing, empty, not a keychain or a
+ * directory, so a 44 from a pinned path counts only when that path is a
+ * keychain file ({@link isKeychainFile}).
  */
 const SECURITY_ITEM_NOT_FOUND_EXIT = 44;
+
+/** The first bytes of a keychain file (`login.keychain-db` included). */
+const KEYCHAIN_FILE_MAGIC = Buffer.from("kych", "latin1");
+
+/**
+ * Whether `file` is a keychain `security` could search: a regular file that
+ * starts with the keychain magic. A missing, empty or foreign file, a
+ * directory or a special file is not, and `security` would answer
+ * item-not-found for it all the same. The open does not block (a FIFO with no
+ * writer would otherwise hold the sign-out reading forever), and the type is
+ * checked on the opened descriptor, so a file swapped in after a path check
+ * cannot slip past it.
+ */
+export async function isKeychainFile(file: string): Promise<boolean> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    if (!(await handle.stat()).isFile()) return false;
+    const head = Buffer.alloc(KEYCHAIN_FILE_MAGIC.length);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    return bytesRead === head.length && head.equals(KEYCHAIN_FILE_MAGIC);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
 
 /**
  * Whether a Keychain record exists, without reading its secret. Leaving out
@@ -234,7 +266,10 @@ async function credentialFileSignedOut(file: string): Promise<boolean> {
  * looks, with the same options, and answers true only when every place says
  * there is no login: each credential file is absent or empty of logins and,
  * on macOS, every Keychain lookup reports the record missing
- * (`probeKeychainItemCommand`). Any unreadable file or inconclusive Keychain
+ * (`probeKeychainItemCommand`). The pinned `login.keychain-db` lookup runs
+ * only when that file is a keychain; without one, a pinned-only lookup (an
+ * agent-test profile) reads as not signed out and an ordinary install relies on
+ * the default search list alone. Any unreadable file or inconclusive Keychain
  * answer makes it false, so a misread never signs a container out.
  */
 export async function hostClaudeSignedOut(
@@ -250,8 +285,15 @@ export async function hostClaudeSignedOut(
       "-s",
       options.keychainService ?? HOST_CLAUDE_KEYCHAIN_SERVICE,
     ];
-    const attempts = [[...args, path.join(homeDir, "Library", "Keychains", "login.keychain-db")]];
-    if (options.allowDefaultKeychainSearchList === true) attempts.push(args);
+    const pinned = path.join(homeDir, "Library", "Keychains", "login.keychain-db");
+    const defaultSearchList = options.allowDefaultKeychainSearchList === true;
+    const attempts: string[][] = [];
+    if (await isKeychainFile(pinned)) attempts.push([...args, pinned]);
+    // `security` says item-not-found for a keychain that is not there, so a
+    // pinned lookup with no keychain behind it (an agent-test profile's home)
+    // is nowhere to look, not evidence of a sign-out.
+    else if (!defaultSearchList) return false;
+    if (defaultSearchList) attempts.push(args);
     for (const attempt of attempts) {
       if ((await probeKeychain(attempt)) !== "absent") return false;
     }

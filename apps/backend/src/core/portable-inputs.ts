@@ -30,6 +30,7 @@ import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude
 import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
 import { claudeContainerConfig } from "./claude-container-config.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
+import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs-clone.js";
 
 /**
  * Portable agent inputs, staged per environment (containers plan step 08).
@@ -651,6 +652,12 @@ export interface StagingOptions {
   cloneFiles?: boolean;
   copyFile?: typeof copyFile;
   /**
+   * Test seam: the descriptor clone to use instead of this platform's
+   * (`platformDescriptorClone`), so the macOS path and its fallback can be
+   * driven anywhere.
+   */
+  cloneDescriptor?: DescriptorClone;
+  /**
    * Test seam: runs after a directory unit is listed and admitted and before
    * its files are copied, so a test can change the source in between.
    */
@@ -661,8 +668,10 @@ export interface StagingOptions {
  * Reflinks staged files (DK-14). A reflink shares the source's blocks until
  * either side writes, so each revision is still an independent copy: a write
  * to it never reaches the host file or another environment's revision, unlike
- * a hard link. Where the filesystem cannot (ext4, tmpfs, another device than
- * the source, any platform but Linux) the file is copied as before.
+ * a hard link. On Linux that is a reflink through `/proc/self/fd`, on macOS
+ * an APFS clone through `fclonefileat` (`portable-inputs-clone.ts`). Where the
+ * filesystem cannot (ext4, tmpfs, HFS+, another device than the source, any
+ * other platform, macOS outside Bun) the file is copied as before.
  *
  * Only a file staged byte for byte is cloned. A filtered or guarded one must
  * be read anyway, and cloning after the read could stage bytes nobody checked.
@@ -671,13 +680,14 @@ class FileCloner {
   cloned = 0;
   /** Source devices a clone failed from, so the rest of the run copies at once. */
   private readonly refused = new Set<number>();
-  private readonly enabled: boolean;
-  private readonly copy: typeof copyFile;
+  private readonly cloneDescriptor: DescriptorClone | undefined;
 
   constructor(options: StagingOptions = {}) {
-    // `/proc/self/fd` reopens the very file the caller checked, never the path.
-    this.enabled = options.cloneFiles !== false && process.platform === "linux";
-    this.copy = options.copyFile ?? copyFile;
+    // Both platform clones take the descriptor the caller checked, never the path.
+    this.cloneDescriptor =
+      options.cloneFiles === false
+        ? undefined
+        : (options.cloneDescriptor ?? platformDescriptorClone(options.copyFile ?? copyFile));
   }
 
   /**
@@ -690,14 +700,10 @@ class FileCloner {
     destination: string,
     limit: number,
   ): Promise<number | undefined> {
-    if (!this.enabled || this.refused.has(device)) return undefined;
+    if (!this.cloneDescriptor || this.refused.has(device)) return undefined;
     await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     try {
-      await this.copy(
-        `/proc/self/fd/${handle.fd}`,
-        destination,
-        fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE_FORCE,
-      );
+      await this.cloneDescriptor(handle.fd, destination);
     } catch (error) {
       // An existing destination is the copy's error too, so it must surface.
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;

@@ -31,8 +31,8 @@ import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
 import type { CommandContext } from "./commands-context.js";
-import type { PlanUsageReader } from "./plan-usage.js";
-import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
+import type { PlanUsageReader } from "./plan-usage/reader.js";
+import { contextUsageWithPlanUsage } from "./plan-usage/cache.js";
 import { StorageService } from "./storage.js";
 
 let root: string;
@@ -1468,6 +1468,72 @@ describe("agent accounts", () => {
     await expect(
       fs.stat(path.join(context.storage.agentAccounts.agentAccountsDirectory(), "last-usage.json")),
     ).rejects.toThrow();
+  });
+
+  // Todo 0003 task 2: the Codex gate above, for Claude. A Claude bridge sends
+  // its plan windows only near a limit (`rate_limit_event`, and the SDK usage
+  // report's account windows), so a live run could not be arranged; the gate
+  // is the same code for both platforms, and the reporting account is what
+  // the bridge's launch resolved (`applyActiveAgentAccountEnvironment`, kept
+  // as the connection's `accountId`).
+  test("a Claude bridge still on the previous account cannot fold its windows into the new account's usage", async () => {
+    const planUsage = context.runtime.accounts.planUsage;
+    const hostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME!;
+    const reader = (async () =>
+      planUsage.cache.peek("claude") ?? {
+        platform: "claude",
+        status: "unavailable",
+        windows: [],
+        fetchedAt: new Date().toISOString(),
+      }) as unknown as PlanUsageReader;
+    const fiveHour = (usedPercent: number) => ({
+      usedTokens: 1,
+      rateLimits: [{ label: "5-hour limit", usedPercent }],
+    });
+
+    // Bridge A starts on the host login and reports while it is active.
+    const onA = await applyActiveAgentAccountEnvironment(context, "claude", { HOME: hostHome });
+    expect(onA).toBe("default");
+    contextUsageWithPlanUsage(planUsage, "claude", fiveHour(50), onA);
+    expect(planUsage.cache.peek("claude")?.windows).toEqual([
+      expect.objectContaining({ window: "five_hour", usedPercent: 50 }),
+    ]);
+
+    await startAgentAccountLogin(context, "claude", {
+      spawnImpl: fakeClaudeLogin("claude-b", "b@example.com"),
+      executable: "claude",
+    });
+    const progress = await settledLogin();
+    expect(progress.state).toBe("succeeded");
+    cancelAgentAccountLogin(context);
+    const b = progress.accountId!;
+    await setActiveAgentAccount(context, "claude", b);
+    // The switch drops A's session windows from the shared cache.
+    expect(planUsage.cache.peek("claude")).toBeUndefined();
+
+    // A is still finishing its turn: both of Claude's window sources are refused.
+    contextUsageWithPlanUsage(planUsage, "claude", fiveHour(97), onA);
+    contextUsageWithPlanUsage(
+      planUsage,
+      "claude",
+      { usedTokens: 1, account: [{ window: "five_hour", label: "5-hour limit", usedPercent: 98 }] },
+      onA,
+    );
+    // So is a report whose account the provider could not name.
+    contextUsageWithPlanUsage(planUsage, "claude", fiveHour(99), "unknown");
+    expect(planUsage.cache.peek("claude")).toBeUndefined();
+    expect((await readAgentAccountUsage(context, "claude", b, { reader })).windows).toEqual([]);
+
+    // A bridge launched after the switch reports for B, and that lands.
+    const onB = await applyActiveAgentAccountEnvironment(context, "claude", { HOME: hostHome });
+    expect(onB).toBe(b);
+    contextUsageWithPlanUsage(planUsage, "claude", fiveHour(4), onB);
+    expect(planUsage.cache.peek("claude")?.windows).toEqual([
+      expect.objectContaining({ window: "five_hour", usedPercent: 4 }),
+    ]);
+    expect((await readAgentAccountUsage(context, "claude", b, { reader })).windows).toEqual([
+      expect.objectContaining({ window: "five_hour", usedPercent: 4 }),
+    ]);
   });
 
   async function usableInactiveAccount() {

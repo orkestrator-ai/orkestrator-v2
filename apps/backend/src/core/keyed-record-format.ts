@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 /**
- * On-disk format shared by the keyed record store and the record manifest.
+ * On-disk record format and private-file primitives, shared by the build
+ * pipeline's transcript store (and its legacy manifest import) and
+ * `transcript-artifacts/store.ts`. Because two domains use it, it is part of
+ * the shared kernel at the `core/` root rather than either domain's folder
+ * (to-do 0012, task 7).
  *
  * One record is one private file: a single line of compact JSON header, a
  * newline, then the opaque payload bytes. The header is small and bounded so

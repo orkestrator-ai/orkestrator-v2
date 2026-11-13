@@ -69,6 +69,14 @@ function directoryOf(executable: string): string | null {
  * and the system directories, HOME and the XDG roots under `home`, the
  * gateway token, no fixed Control MCP port and no boot-time reachability
  * probe.
+ *
+ * Git's fsmonitor is forced off through Git's environment config, which
+ * overrides a worktree's own config. Releases before #1386 (2.22.3 among them)
+ * write `core.fsmonitor=true` into every environment worktree, and on macOS
+ * each such worktree started a `git fsmonitor--daemon` that hung its git
+ * clients and outlived the backend, its own session leader, after the
+ * backend was stopped (seen 2026-11-13). This checkout's backend never
+ * enables it, so the setting changes nothing there.
  */
 export function pairingBackendEnvironment(
   base: Readonly<Record<string, string | undefined>>,
@@ -92,6 +100,9 @@ export function pairingBackendEnvironment(
     XDG_CACHE_HOME: path.join(node.home, ".cache"),
     TMPDIR: node.tmp,
     GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.fsmonitor",
+    GIT_CONFIG_VALUE_0: "false",
     ORKESTRATOR_GATEWAY_TOKEN: node.token,
     ORKESTRATOR_CONTROL_MCP_PORT: "0",
     ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",

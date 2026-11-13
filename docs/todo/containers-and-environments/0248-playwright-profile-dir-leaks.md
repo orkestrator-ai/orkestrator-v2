@@ -4,7 +4,7 @@ Checked against `main` at `7809191f` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-11-11 against `main` at `498b68766` (earlier: 2026-10-27 at `863b5782`).
+Analysed 2026-11-13 against `main` at `17d28238c` (earlier: 2026-11-11 at `498b68766`, 2026-10-27 at `863b5782`).
 
 ### Tasks
 
@@ -13,7 +13,7 @@ Analysed 2026-11-11 against `main` at `498b68766` (earlier: 2026-10-27 at `863b5
 3. **Report profiles in `disk:report`**: show their count, size and age. Status: done (2026-10-28).
 4. **Qualification run**: `mise run test` plus design and preview use, a backend SIGKILL and a restart, then `/tmp` holds nothing stale. Status: done (2026-11-11): `mise run test` ran on macOS on 2026-10-28, and the `dev:test` session (design renders, process-isolated previews, two backend SIGKILLs, three restarts) ran on beelink (Linux); see [Evidence from beelink](#evidence-from-beelink-2026-11-11).
 5. **Where the sweep lives (open question)**: a shared helper, or a private `TMPDIR` for the backend's launches. Status: settled (2026-10-28): one owner-scoped path per owner, no helper shared across `tests/` and `apps/`.
-7. **Private `TMPDIR` in the real-stack Playwright suites**: the credential-free design and preview suites leave no Playwright profile or artifact directory behind, on Linux and macOS. Moved from to-do 0830 (deleted 2026-11-06). Status: open (step 2 only: the macOS design and preview runs need a macOS node, which beelink is not). Step 1, the Linux design run, and the Linux preview run were done on 2026-11-11. The restart, coordinator and Electron runs that need live provider credentials moved to the manual-test checklist.
+7. **Private `TMPDIR` in the real-stack Playwright suites**: the credential-free design and preview suites leave no Playwright profile or artifact directory behind, on Linux and macOS. Moved from to-do 0830 (deleted 2026-11-06). Status: done (2026-11-13): step 2, the macOS design and preview runs, left no profile or artifact directory ([Evidence from arktech-mini](#evidence-from-arktech-mini-macos-2026-11-13)). Step 1, the Linux design run, and the Linux preview run were done on 2026-11-11. The restart, coordinator and Electron runs that need live provider credentials moved to the manual-test checklist.
 8. **Orphaned fake preview workers**: a test process that dies leaves its detached fake preview worker running, which pins the test's private `TMPDIR` as in use. Found and fixed on 2026-11-11 ([decision 13](#13-task-8-the-fake-preview-worker-leaves-when-its-launcher-is-gone)). Status: done.
 
 ### 1. Find the 2026-10-25 burst
@@ -143,6 +143,10 @@ in [`testing-guide.md`](../../development/testing-guide.md).
 
 The restart specs and the remaining coordinator and Electron runs need live
 provider credentials; they are in the manual-test checklist (see Related).
+
+Step 2 was done on 2026-11-13 on arktech-mini (macOS 27.2); see
+[Evidence from arktech-mini](#evidence-from-arktech-mini-macos-2026-11-13).
+Nothing leaked, so no fix was needed.
 
 Step 1 was done on 2026-11-11 on beelink rather than omarchy-hp (same
 platform, Linux x86_64), together with task 4 as recommended, and the preview
@@ -425,6 +429,57 @@ inside `/tmp/ork-test-tmp-3324099-*`. Because its command line names that
 directory, the in-use check keeps it, correctly. It was not started by this
 work and was left alone. Task 8 fixes the cause (decision 13).
 
+## Evidence from arktech-mini (macOS, 2026-11-13)
+
+arktech-mini is macOS 27.2 (26B123) arm64, Bun 1.4.4, `playwright-core`
+1.65.0, at `main` `17d28238c` plus the 0023 Keychain fix (which touches no
+test or Playwright code). Nine other builds were running tests on the host
+throughout, so `/private/tmp` (where every process's private
+`ork-test-tmp-<pid>-*` goes on macOS) was shared. Each run got a new empty
+`TMPDIR`, `/private/tmp/ork0248-mac-<suite>.<random>`, passed through
+`test:logged` to the suite alone (so the logged runner's own failure
+directory stayed in the per-user temporary directory). A throwaway sampler
+recorded, every 2 s, each `/private/tmp/ork-test-tmp-<pid>-*` whose owner PID
+was alive with a working directory or command line in this worktree. No
+provider credentials, logins or model turns were used, and the host's own
+temporary directories were only listed.
+
+| Run | Result | What the run left |
+| --- | --- | --- |
+| `mise run test:agent:design:isolated --no-agent-credentials --no-host-seed` (profile `qa-browser-1daf6db2-f0d`, credential-free Codex, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) | 2 passed, 1 failed (247.7 s): the known open flake [0380](../../tests/flaky-tests/design-canvas-and-artifacts/0380-design-text-fallback-pane-persistence.md), recorded there | `TMPDIR`: `node-compile-cache` and `playwright-transform-cache-501` only. The design renderer's `playwright_chromiumdev_profile-*`, seen there during the run, was gone. |
+| The same, again (profile reset and recreated) | Passed (288.5 s logged) | `TMPDIR`: the same two caches. The sampler saw one private directory of this worktree's, the Playwright runner's `ork-test-tmp-63300-*`; it was gone after the runner exited. |
+| `mise run test:preview:browser --project=chromium --project=webkit` | Passed (65.6 s logged) | `TMPDIR`: `playwright-transform-cache-501` only. The runner's `ork-test-tmp-28131-*` was gone after it exited. |
+
+No `playwright_chromiumdev_profile-*`, `playwright-artifacts-*` or
+`ork-test-tmp-*` of this work was left in any run's `TMPDIR` or in
+`/private/tmp`. No loose `playwright_chromiumdev_profile-*` or
+`playwright-artifacts-*` appeared in `/private/tmp` at all. The listing did
+gain 21 `ork-test-tmp-*` across the three runs (10, 7 and 4), none of them
+this work's:
+
+- 10 belonged to live test processes whose working directory is another
+  build's worktree, and 7 had already been removed by their owners when
+  checked.
+- 2 from the first design run (`ork-test-tmp-38174-*` and
+  `ork-test-tmp-39402-*`, owners exited, each holding only a Node
+  `node-compile-cache` of 201 entries) were compared with this worktree's
+  runs. Node keys its compile cache by script path; this worktree's two
+  design runs' caches shared 200 of 201 entries, these two shared none with
+  either, and nor did a live control directory from another build.
+- 2 from the second design run had exited owners: one holds
+  `ork-input-stamps-*`, a backend unit-test fixture this work never ran (no
+  Git hook runs tests here), and one is empty. In this run only the
+  Playwright runner creates a private directory (its workers inherit it),
+  and the sampler showed that runner's directory removed at exit.
+
+The exited owners' directories are contained as decision 2 intends: the
+next test process sweeps them once they are an hour old. They were left
+alone.
+
+Firefox was not run: this host's Playwright cache has no `firefox-1572` (as
+on beelink), and a Firefox launch makes no Chromium profile anyway. Each
+private `TMPDIR` was removed by its exact path afterwards.
+
 ## Assumptions and decisions
 
 ### 1. Task 1: stop chasing the burst
@@ -614,6 +669,18 @@ starts a grandchild. Without the flag it falls back to the parent it first
 observes. The test "a fake worker whose launcher died before it started exits
 at once (0248)" makes the shell exit before it `exec`s the worker; it passed
 with the change and timed out with the startup check reverted.
+
+### 14. Task 7 step 2: how the macOS runs were attributed
+
+Options: (a) list the run's `TMPDIR` and diff `/private/tmp` before and
+after, as the steps say; (b) also sample the owners of new private
+directories while the run is live. Chose (b) on top of (a). On a host shared
+with other builds, (a) alone cannot tell whose an exited owner's directory
+is, which is exactly what the first design run showed. The sampler and the
+compile-cache comparison are read-only, and neither needs a change to the
+harness. Cons: a private directory whose owner lives under 2 s could be
+missed by the sampler; the runner's lives for minutes, and the caches showed
+the two dead-owner directories were not this worktree's.
 
 ## Related
 

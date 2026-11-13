@@ -805,7 +805,30 @@ minutes old, and the two together cover a reused pid.
 | `external` | Followed the `Buffer` only after a garbage collection | Yes, as a trend |
 | `arrayBuffers` | Stayed 0 with 200 MiB held in a `Buffer` | No |
 
-SQLite's memory appears only in `rss`. This was measured on Linux; macOS was not run.
+SQLite's memory appears only in `rss`. The same holds on macOS (measured 2026-11-13 on
+macOS 27.2, arm64, Bun 1.4.4, after a forced collection, in MiB):
+
+| Held | `rss` | `heapUsed` | `heapTotal` | `external` | `arrayBuffers` |
+| --- | --- | --- | --- | --- | --- |
+| Nothing | 5.5 | 0.2 | 0.6 | 0 | 0 |
+| 2 million objects | 245 | 180 | 156 | 12.3 | 0 |
+| A 200 MiB `Buffer` (before a collection) | 213 | 0.2 | 0.7 | 0 | 0 |
+| The same `Buffer`, after a collection | 213 | 200 | 0.7 | 200 | 0 |
+| 100 MiB in an in-memory SQLite database | 124 | 0.3 | 0.7 | 0.1 | 0 |
+
+So the table above stands on both platforms: `heapUsed` passes `heapTotal`, `external`
+and `heapUsed` see a `Buffer` only after a collection, `arrayBuffers` stays 0, and only
+`rss` sees SQLite.
+
+**Checked in a packaged app.** `exit-marker-packaged-electron.spec.ts`
+([agent-testing.md](../development/agent-testing.md#packaged-app-electron-spec)) runs
+the app's own executable, `app.asar` and bundled Bun three times on one disposable
+profile: the desktop's essential log file appears under `logs/essential/` with mode
+`0600`, a bundle read through `plan_diagnostics_bundle` and `read_diagnostics_bundle`
+arrives whole and holds it, a normal quit is followed by `previous-run` `clean`
+(`info`), and a SIGKILL of the app's process tree by `previous-run` `crashed` (`warn`).
+It passed on an unsigned local macOS build (macOS 27.2, arm64) on 2026-11-13. The native
+save dialog a release candidate shows for the bundle is a manual check.
 
 ## The diagnostics bundle
 
@@ -879,6 +902,18 @@ never read by default and the dialog says so. A container bridge has no relay to
 essential log, so this is also how its essential events (`session.resume-fell-back`)
 reach the evidence: on request, until the log rotates past them. The public
 `diagnostics.plan` action and the CLI do not offer the choice.
+
+**From another machine.** Settings exports the bundle of the machine chosen in its
+machine strip, and the CLI of the node named by `--node`; both are ordinary node-routed
+reads. A plan is held by the backend that built it, so a plan made on a leaf is unknown
+to the command node (`not-found`) and every piece has to go to the same node.
+`diagnostics-across-nodes-live.spec.ts`
+([agent-testing.md](../development/agent-testing.md#live-diagnostics-export-across-nodes-two-profiles))
+checks both paths between two `dev:test` profiles, with the leaf's bundle made about
+1 MiB (five 256 KiB pieces) by a synthetic debug log. It passed on macOS on 2026-11-13:
+the leaf's bundle arrived whole through Settings (planned in 1.4 s, saved in 0.3 s) and
+through `--node` (1.8 s), and the command node refused the leaf's plan. Two profiles on
+one host share loopback, so a real network route between machines is not covered.
 
 ## Command failures
 

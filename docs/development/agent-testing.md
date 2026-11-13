@@ -1400,6 +1400,24 @@ and separately waits for the running backend's one-minute check to revert raised
 log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
 macOS. Headless on Linux means the native menu bar itself is not drawn or read.
 
+`exit-marker-packaged-electron.spec.ts` runs against the same build, on macOS and
+Linux. It launches the app three times on one disposable profile and checks the
+desktop's essential log file (`logs/essential/essential.jsonl`, mode `0600`), a
+diagnostics bundle read through the same two commands Settings uses (whole, and holding
+that log), then `previous-run` `clean` after a normal quit and `crashed` after it kills
+the app's own process tree with SIGKILL
+([logging.md](../architecture/logging.md#health-summary-and-the-clean-exit-marker)).
+It does not drive the native save dialog. Outcomes and durations go to
+`output/agent-testing/electron-packaged/evidence-exit-marker-packaged.json`. A pass took
+10 s on arktech-mini (2026-11-13).
+
+```bash
+mise run package:mac:unpacked:test
+ORKESTRATOR_AGENT_TEST_RUN_ID=exit-marker-packaged \
+mise run test:logged -- --name exit-marker-packaged -- bunx playwright test \
+  --config e2e/agent-testing/playwright.packaged-electron.config.ts exit-marker-packaged-electron.spec.ts
+```
+
 `packaged-native-shortcuts-electron.spec.ts` is in the same config but skips
 unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`. It is the one packaged spec that
 is not headless: it opens the packaged Linux app as an X11 window and presses
@@ -2135,6 +2153,38 @@ beside the run: numbers and cell labels only. Each cell carries an `outcome`
 unfinished or unsettled terminal burst, or a p95 past the 3 s completion or
 2 s approval budget. The test fails at the end of its run unless every cell
 qualified; the evidence file is written either way.
+
+### Live diagnostics export across nodes (two profiles)
+
+`e2e/agent-testing/diagnostics-across-nodes-live.spec.ts` exports a leaf's
+diagnostics bundle from a command node, between two running `dev:test` profiles
+(to-do 6141 task 4, [logging.md](../architecture/logging.md#the-diagnostics-bundle)).
+It turns on Save Logs to Disk on the leaf and writes a synthetic debug log of plain
+words there, so the bundle spans several 256 KiB pieces. Through Settings (the leaf's
+machine chip, Debug, Export diagnostics, Save bundle) and through
+`orkestrator --profile <command> --node <leaf> diagnostics export`, it checks that the
+saved file is the leaf's own bundle (its backend pid in `health-summary.json`, and the
+synthetic log), and that the command node refuses a plan made on the leaf. No agent
+runs. Build the CLI first; reset both profiles afterwards.
+
+```bash
+mise run build:cli
+FLAGS="--fixture --headless --no-agent-credentials --no-host-seed --agent-platforms pi"
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile diag-cmd $FLAGS    # own terminal
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile diag-leaf $FLAGS   # own terminal
+ORKESTRATOR_AGENT_TEST_DIAGNOSTICS_ACROSS_NODES=1 \
+ORKESTRATOR_AGENT_TEST_PROFILE=diag-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=diag-leaf \
+  mise run test:logged -- --name diagnostics-across-nodes -- \
+  bunx playwright test --config e2e/agent-testing/playwright.diagnostics-across-nodes.config.ts
+mise run dev:stop --profile diag-leaf && mise run dev:reset --profile diag-leaf
+mise run dev:stop --profile diag-cmd && mise run dev:reset --profile diag-cmd
+```
+
+Evidence (sizes, piece counts, durations) goes to
+`output/agent-testing/<run>/diagnostics-across-nodes/evidence.json`. The first run
+(2026-11-13, macOS) passed in 27 s: about 1 MiB in five pieces each way.
 
 ### Live second node scope (two profiles)
 

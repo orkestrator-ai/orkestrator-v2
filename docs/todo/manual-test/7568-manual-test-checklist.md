@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (307 items): run each check under
+1. **Manual tests and live checks** (309 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -40,7 +40,9 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`.
+were done; both are in Git history at `1fd391e3a`. 6141 was retired on 2026-11-13, once
+its macOS readings, packaged-app check and two-profile export passed; it is
+in Git history at `17d28238c`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -83,12 +85,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 24 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
-| Cross-cutting | 75 | 20 |
+| Cross-cutting | 77 | 20 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 307 | 53 |
+| **Total** | 309 | 53 |
 
 ## Outstanding work
 
@@ -549,8 +551,10 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
   This unblocks 5821 task 2.
 - [ ] **[5821](../cross-cutting/5821-ledger-retention-live-evidence.md) task 3: time a first retention run on an old real ledger.** On a fresh copy of the same long-lived ledger, opened by a throwaway profile, let the first retention pass run with the 30-day window until the backlog is gone. Record: passes and total time to clear the backlog, the longest event-loop stall, and whether requests stayed responsive, against the synthetic 773,000 rows over 8 passes (78 s, worst stall 120 ms). Reply to the coordinator. If a pass or a stall is out of proportion, the recommended follow-up is to spread the work further.
-- [ ] **[6141](../cross-cutting/6141-health-and-diagnostics-live-evidence.md) task 2: health and diagnostics on a long-running real install.** After a week on your own install, open Settings → diagnostics, or read `/metrics`. Record: the `health-summary` row bytes, that store's share of the database file, the time of a sample's commit, the top tables (from `dbstat`, including whether `store_rows` swamps them), and the essential log's growth per day. Reply to the coordinator.
-- [ ] **[6141](../cross-cutting/6141-health-and-diagnostics-live-evidence.md) task 3 (user part): the diagnostics bundle from a release candidate.** In a packaged release candidate, export the diagnostics bundle from Settings. Record: whether the native save dialog appears and the file saves complete, and the `previous-run` line after a normal quit. Write it in 6141 task 3's Investigation.
+- [ ] **6141 (retired) task 2: health and diagnostics on a long-running real install.** (Background: [health summary and the clean exit marker](../../architecture/logging.md#health-summary-and-the-clean-exit-marker); the to-do is in Git history at `17d28238c`.) After a week on your own install, open Settings → diagnostics, or read `/metrics`. Record: the `health-summary` row bytes, that store's share of the database file, the time of a sample's commit, the top tables (from `dbstat`, including whether `store_rows` swamps them), and the essential log's growth per day. Reply to the coordinator.
+- [ ] **6141 (retired) task 3 (user part): the diagnostics bundle from a release candidate.** (Background: [the diagnostics bundle](../../architecture/logging.md#the-diagnostics-bundle). The agent part passed on 2026-11-13: in a locally packaged unsigned macOS build, `exit-marker-packaged-electron.spec.ts` read a whole bundle and saw `previous-run` `clean` after a quit and `crashed` after a kill.) In a packaged release candidate, export the diagnostics bundle from Settings. Record: whether the native save dialog appears and the file saves complete, and the `previous-run` line after a normal quit. Reply to the coordinator.
+- [ ] **6141 (retired) task 1 (user part): `dbstat` on an older macOS.** (Background: [snapshots](../../architecture/storage.md#snapshots); only macOS 27.2 was checked, on 2026-11-13, and the app supports macOS 13.0 and later.) Bun on macOS loads the system SQLite, which changes with the macOS release. On a Mac running an older macOS (13 to 26), with the app's Bun 1.4.4, run `bun -e 'const d = new (require("bun:sqlite").Database)(":memory:"); console.log(d.query("select sqlite_version() v").get().v, d.query("PRAGMA compile_options").all().some((r) => r.compile_options === "ENABLE_DBSTAT_VTAB"))'`. Record: the macOS version, the SQLite version and whether `dbstat` is there (`true`). Without it Settings shows no top tables on that Mac, which is expected and needs no fix. Reply to the coordinator.
+- [ ] **6141 (retired) task 4 (user part): a leaf's diagnostics bundle over a real route.** (Background: [the diagnostics bundle](../../architecture/logging.md#the-diagnostics-bundle); two `dev:test` profiles on one Mac passed `diagnostics-across-nodes-live.spec.ts` on 2026-11-13, over loopback only.) On your command node with a leaf on another machine attached (over Tailscale or SSH), choose the leaf in Settings' machine strip, then Debug → Export diagnostics → Save bundle; then run `orkestrator --node <leaf id> diagnostics export` from the command node. Record: whether each saves complete, the bundle size and how long the save took. Reply to the coordinator.
 - [ ] **0997 (retired) task 1: why usage reads never return on the affected command node.** (Background: [recurring work](../../architecture/recurring-work.md).) The next time the Process usage popover stays empty on that command node, look at what it shows. "Couldn't read processes" with "Data unavailable" tiles means the reads themselves fail: capture the console error and the failing request. Only disk or GPU missing means a stalled source: find `[host] usage.source-stalled` with `scope=disk` or `scope=gpu-sysfs` in that node's backend log. Check a desktop window as well as a browser. Record: the node, its build, which case it was, and the error or log line. Reply to the coordinator.
 - [ ] **0998 (retired) task 3: confirm the stalled-disk cause on the affected node.** (Background: [recurring work](../../architecture/recurring-work.md).) On the affected node, running a build with the bounded usage reads (2026-11-05 or later), search its backend log for `[host] usage.source-stalled`. Record: whether it appears, its `scope`, and when it happened relative to the empty meters. Reply to the coordinator.
 - [ ] **6301 (retired) task 1 (user part): look at the drawn Help menu.** (Background: [Application logging, the renderer](../../architecture/logging.md#the-renderer); the to-do is in Git history at `498b68766`.) The workflow results are recorded: `native-application-menu.yml` passed the menu spec on real Electron on Linux, macOS and Windows and the packaged log controls on Linux and macOS (run 42914911189, 2026-11-10). On a real Mac running the packaged app, and on a Linux desktop with a drawn menu bar, turn on debug logging in Settings. Check that Help → Open Developer Tools appears and opens DevTools, and that it disappears when debug logging is off. Record: on each platform, whether the item appears and works, and how the otherwise empty macOS Help menu is drawn. Reply to the coordinator.

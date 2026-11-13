@@ -257,6 +257,9 @@ export const DESCRIPTOR_START_AFTER_TOLERANCE_MS = 30 * 1000;
  * whoever took over the old port. A start time that cannot be read is refused
  * rather than trusted, since nothing then ties the pid to the backend.
  */
+/** The first published release whose backend descriptor carries `processIdentity` (#1848). */
+export const FIRST_LINUX_PROCESS_IDENTITY_RELEASE = "2.36.4-beta";
+
 export async function descriptorProcessRefusal(
   descriptor: Pick<BackendInstanceDescriptor, "pid" | "startedAt" | "processIdentity">,
   readStart: ProcessStartReader = readProcessStartTime,
@@ -265,7 +268,10 @@ export async function descriptorProcessRefusal(
   if (!alive(descriptor.pid)) return "is not running as your user (its descriptor is stale)";
   if (process.platform === "linux" && readStart === readProcessStartTime) {
     if (!descriptor.processIdentity) {
-      return "cannot be confirmed: restart an upgraded backend to publish its Linux process identity";
+      // Registered limitation (version-compatibility.md, "Register"): backends
+      // before #1848 publish no identity, and the start-time check is not a
+      // safe fallback here, so the refusal names the explicit-URL route.
+      return `cannot be confirmed: it publishes no Linux process identity (Orkestrator ${FIRST_LINUX_PROCESS_IDENTITY_RELEASE} and later do). Update and restart that backend, or connect with --url <its URL> --credential-file <its data directory>/gateway-auth.json`;
     }
     const identity = await readLinuxProcessIdentity(descriptor.pid);
     if (identity === null)

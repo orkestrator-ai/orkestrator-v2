@@ -1059,13 +1059,17 @@ for (const mode of ["crash", "graceful"] as const) {
       expect(model.callsWith(next)[0]!.context.some((prompt) => prompt.includes(running))).toBe(
         true,
       );
-      // The queued prompt is held while the interrupted turn reads as failed
-      // (the drain never auto-sends after a failed turn); a later turn's end
-      // releases it. It must still arrive exactly once.
+      // A turn a restart cut short is not a model failure, so the queue drains
+      // as after an idle turn: the queued prompt goes out once, before the
+      // prompt typed later (to-do 7120 (retired) task 1). Before that fix it was
+      // held until the later turn ended, which inverted the user's order.
       await expect.poll(() => model.callsWith(queued).length, { timeout: 60_000 }).toBe(1);
       const queuedCall = model.callsWith(queued)[0]!;
       const followUpCall = model.callsWith(next)[0]!;
       record(scenario, "queued-sent-after-later-prompt", queuedCall.index > followUpCall.index);
+      expect(queuedCall.index, "queued prompt goes out before the later one").toBeLessThan(
+        followUpCall.index,
+      );
       record(scenario, "queued-dispatch-after-ready-ms", queuedCall.receivedAt - restart.readyAt);
       await msUntil(
         Date.now(),

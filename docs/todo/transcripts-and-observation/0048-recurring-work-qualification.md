@@ -2,6 +2,15 @@
 
 ## Task analysis
 
+Analysed 2026-11-13 against main at 17d28238c (tasks 8, 13 and 18 on
+macOS, arktech-mini: task 18's reconnect timing measured in a real headed
+background tab, see
+[Background-tab reconnect](#background-tab-reconnect-2026-11-13-macos);
+task 8's simulator run moved to 7568 because the host has no iOS simulator
+runtime; task 13's `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` removed;
+decisions Q1 to Q4). Tasks 12 and 13 are what is left, both blocked on
+7568's live GitHub run (0048 task 5).
+
 Analysed 2026-11-11 against main at 498b68766 (task 12: the client-only and
 validation candidates measured on Linux and decided, decisions C1 to C7, see
 [Client-only and validation candidates](#client-only-and-validation-candidates-2026-11-11-linux);
@@ -47,14 +56,14 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 (now in 7568) and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 6. **Live providers**: delegated to 0049. Status: done (2026-11-11: 0049 finished and was retired; what it qualified is summarised in [agent-testing.md](../../development/agent-testing.md), and its Grok and Cursor runs are on the manual-test checklist, 7568).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
-8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 and 2026-11-11 runs were on Linux; the physical-device run moved to 7568 on 2026-11-10).
+8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: done (moved to 7568 on 2026-11-13: the macOS node, arktech-mini, has Xcode but no iOS simulator runtime, and installing one changes a shared host; the wrapper also needs a Tailscale Serve HTTPS origin and a typed gateway token, decision Q1; the physical-device run moved to 7568 on 2026-11-10).
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
-12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (only the two PR candidates are left, blocked (waits on 7568: 0048 task 5)) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to to-do 7745, decision C5, which leased the terminal and observed the orphan and its end live on 2026-11-11 before it was retired; see [recurring-work.md](../../architecture/recurring-work.md) row B19) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
-13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open for `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, whose wait on 0049 ended on 2026-11-11 (0049 finished and was retired); the `feature-planning` and `build-pipeline` rollback drivers and the switch itself still wait for task 5's live GitHub run (7568: 0048 task 5) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (waits on 7568: 0048 task 5; only the two PR candidates are left) (2026-11-11: the six client-only and validation candidates measured on Linux and decided: Docker availability sharing, the design canvas cursor interval, a shared display clock, the validation reader's spawn per poll and B20's split all kept unchanged, decisions C1 to C4 and C6; B19's demand gating is needed only for terminals no client detached, which keep capturing, moved to to-do 7745, decision C5, which leased the terminal and observed the orphan and its end live on 2026-11-11 before it was retired; see [recurring-work.md](../../architecture/recurring-work.md) row B19) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (waits on 7568: 0048 task 5) for the `feature-planning` and `build-pipeline` rollback drivers and the switch itself (2026-11-13: `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` is removed with its code paths, desktop allowlist entry, the recurring baseline's rollback mode and the A/B rollback arm's value; sharing is the only driver, decision Q3) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
-18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 and 2026-11-11 hosts run browsers headless only, with no virtual display, and the busy profile's hidden client is emulated, so its timers are not throttled).
+18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: done (2026-11-13: `background-tab-reconnect-live.spec.ts` in headed Chromium on macOS, the tab hidden behind another tab with Chromium's own throttling on; 4 of 4 passing runs: hidden timers woke once a second, the hidden tab reconnected 4.9 to 10.0 s after the link returned (budget 20 s), and showing it retried both streams 52 to 149 ms later, against a next rung at least 8 s away; decisions Q2 and Q4).
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
 20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in 7200, two fixed with tests).
 21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: done (2026-11-06).
@@ -363,6 +372,19 @@ says nothing about iOS suspension.
 **Outcome (2026-11-11, not done).** Not run: the host was Linux again
 (beelink2), with no Xcode or simulator.
 
+**Outcome (2026-11-13, moved to 7568).** The host was macOS (arktech-mini,
+macOS 27.2) with Xcode 27.2 and its iOS 27.2 simulator SDK, but
+`xcrun simctl list runtimes` listed no simulator runtime and
+`xcrun simctl list devices available` no device. Installing one
+(`xcodebuild -downloadPlatform iOS -architectureVariant arm64`, several
+gigabytes) changes the Xcode install of a host shared with other builds,
+which this build did not do. The wrapper also accepts only an HTTPS origin
+and a gateway token typed into the app (`apps/ios/README.md`), so the run
+needs a profile published through Tailscale Serve. The simulator run is a
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) item
+beside the device run (decision Q1); nothing agent-buildable is left in this
+task.
+
 ### 10. Long soak and cache gauges
 
 **Problem.** A 10-cycle soak left no leaked footprint, but a slow leak or an RSS that never plateaus would only show over a long run with sessions open. Worktree snapshot and row caches have no gauge.
@@ -623,6 +645,32 @@ Not done here: the `feature-planning` and `build-pipeline` rollback drivers,
 and with them the switch and its desktop allowlist entry, still wait for
 task 5 (decision W7); observation sharing waits for 0049.
 
+**Outcome (2026-11-13).** Rechecked on `17d28238c`. 0049, the wait for
+observation sharing, was retired on 2026-11-11, so
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING` is removed (decision Q3):
+
+- The backend no longer reads it (`index.ts`), and `NativeAgentServiceOptions`
+  no longer accepts `observationSharing`, so a stably idle group of a
+  qualified provider always backs off and a busy queue always reuses the
+  sweep's fresh observation (`native-agent-launch-activity-reconciler.ts`).
+  Dispatch and generation fences and the mail freshness gate are unchanged.
+- The desktop allowlist (`backend-process.ts`) drops it; its test no longer
+  passes it through.
+- `recurring-live-ab.ts`'s `rollback` arm sets only
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`; its runner test checks that.
+- The recurring baseline's `nativeObservation` block drives one mode,
+  `shared` (`recurring-baseline-native.ts`); `recurring-baseline.test.ts`
+  checks the shared counts on their own: no status reads, fewer observation
+  reads than one per session per sweep, retained group passes, discovery
+  within budget and two turn-end edges.
+- `recurring-work.md`, `version-compatibility.md`, `testing-guide.md` and
+  7570's current state describe the change. The catalogue
+  (`RECURRING_JOB_CATALOGUE`) named no switch for sharing, so it is
+  unchanged.
+
+Left: the `feature-planning` and `build-pipeline` drivers and the switch,
+which wait for task 5's live GitHub run (7568: 0048 task 5, decision W7).
+
 ### 14. Metrics switch decision
 
 **Problem.** None left; decided on 2026-10-25.
@@ -702,6 +750,18 @@ covers the read coordinator's pause and resume but not timer throttling.
 headless browsers only and no virtual display (Xvfb), so a page can still not
 be put in a real background tab. The next run needs a host with a display or a
 disposable one.
+
+**Outcome (2026-11-13, done).** Run on macOS (arktech-mini) with headed
+Chromium, the recommended option, through a new opt-in spec,
+`e2e/agent-testing/background-tab-reconnect-live.spec.ts`. Its results are in
+[Background-tab reconnect](#background-tab-reconnect-2026-11-13-macos):
+every step held in four passing runs, within the budgets the spec sets. Two
+things had kept earlier attempts from seeing a hidden tab at all, and the
+spec now avoids both (decision Q2): Playwright's default Chromium switches
+turn background throttling off, and Playwright enables DevTools focus
+emulation on every page it attaches, which keeps a page `visible` behind
+another tab or in a minimised window. Safari, the other option, stays
+unmeasured; nothing here needs it.
 
 ### 19. Changes-tab remote freshness
 
@@ -930,7 +990,8 @@ and the decisions below were recorded.
     whole-store driver instead of the keyed one (`graph-run` is turned off).
     `multi-review`, `native-queues` and `backend-activity` are no longer
     revertible (2026-11-10, task 13).
-  - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` (read in `core/index.ts`).
+  - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` was removed on 2026-11-13
+    (task 13, decision Q3); observation sharing has no switch.
   - `ORKESTRATOR_RECURRING_METRICS=0` turns the recorder off.
 - Multi review's own rollback gates (`adaptiveScheduling: false`, the legacy
   1 s tick, and `evidencePermits`) were removed on 2026-10-25 by
@@ -1731,6 +1792,71 @@ What each pays at its cadence, from the rows above:
 - B20: two ticks a second, about 0.15 ms of CPU a second for a 20-command
   run; the split would save about 0.07 ms a second.
 
+### Background-tab reconnect (2026-11-13, macOS)
+
+Task 18, on arktech-mini (macOS 27.2, Apple silicon) at `1e5e8692a` (main at
+`17d28238c` plus the task 13 removal), against a disposable profile started
+with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile
+q48t18 --fixture --no-agent-credentials --no-host-seed --agent-platforms pi
+--headless`, then stopped and reset. Command:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=q48t18 ORKESTRATOR_AGENT_TEST_LIVE_BACKGROUND_TAB=1 \
+  mise run test:logged -- --name background-tab -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  background-tab-reconnect-live.spec.ts --workers=1
+```
+
+The spec starts Playwright's Chromium 158 headed itself, without the
+`--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`
+and `--disable-renderer-backgrounding` switches, and attaches with
+`connectOverCDP(..., { noDefaults: true })`, so no focus emulation keeps the
+page visible (decision Q2). It opens the real app over the outage link
+(`client-outage-support.ts`; the machine's network is untouched), with one
+local environment and one terminal over HTTP/SSE, then opens a second tab
+in the same window. The link drop is `reset` mode (connections refused),
+45 s each time, long enough to reach the ladder's 16 s cap.
+
+| Run | Hidden by | Hidden timer p50 / p95 (visible p50) | Hidden attempts during outage, main / terminal | Main / terminal back after restore, still hidden | Shown by | Main / terminal retry after shown | Main / terminal answered after shown |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | another tab | 1000 / 1001 ms (100) | 5 / 5 | 4.9 / 3.9 s | bring to front | 81 / 106 ms | 236 / 236 ms |
+| 2 | another tab | 1000 / 1001 ms (100) | 6 / 5 | 10.0 / 3.0 s | bring to front | 149 / 160 ms | 298 / 300 ms |
+| 3 | another tab | 1000 / 1001 ms (100) | 5 / 6 | 9.2 / 9.2 s | bring to front | 146 / 163 ms | 355 / 355 ms |
+| 4 | another tab | 1000 / 1001 ms (100) | 5 / 5 | 7.0 / 2.0 s | bring to front | 52 / 54 ms | 70 / 110 ms |
+
+- **Throttling is real.** A 100 ms interval in the hidden tab woke once a
+  second (p50 1000 ms, p95 1001 ms), against 100 ms just before it was
+  hidden. Every hidden attempt gap was a whole number of seconds give or
+  take 40 ms (for example 3999, 8001, 10035, 8969 and 11006 ms in run 2).
+- **A hidden tab reconnects on its own.** In every run the page stayed
+  `hidden` from the hide until both streams were back (no visibility edge),
+  and the main stream and the terminal stream came back 2.0 to 10.0 s after
+  the link returned, within the ladder's 16 s cap plus a second of timer
+  alignment (budget 20 s). Throttling only rounded the ladder's delays to
+  whole seconds. Each tab was hidden for about two minutes, so Chromium's
+  intensive throttling, which starts after five minutes hidden, was not
+  exercised; a longer hidden period is not measured.
+- **Showing the tab retries at once.** The tab was shown 0.7 to 1.5 s after
+  a refused attempt, so the ladder's next rung was at least 6.5 s away. Both
+  streams were retried 52 to 163 ms after the tab became `visible` and were
+  answered 70 to 355 ms after (budget 1 s): `retryWaitingStreams` clears the
+  waiting timers on the visibility edge, as designed. No product change was
+  needed.
+- **Earlier attempts that day.** Two development runs did not reach these
+  checks. While the Mac's screen was locked, every window was occluded:
+  only the tab Chromium opened at launch was hidden, and in one run it
+  turned `visible` again during the outage, so the spec failed its "still
+  hidden" check, as it should. The spec now drives that launch tab and
+  falls back from occlusion to a second tab to minimising, and shows the tab
+  with DevTools focus emulation only when bringing it to the front does not
+  work (`hiddenBy`, `shownBy` in its evidence). The four runs above used a
+  real tab switch both ways.
+- **Cleanup.** The profile was stopped and reset (`dev:status` reports
+  `missing`); the spec deletes its environment and its Chromium user-data
+  directory. Chromium ran with `--use-mock-keychain` and
+  `--password-store=basic`. Two short probe launches made while finding why
+  Playwright's pages stayed visible ran Chromium without those two switches.
+
 ## Outstanding work
 
 ### Qualification
@@ -1777,9 +1903,10 @@ credentials or a platform CI lacks are batched in
   watcher's burst-overflow and failure-to-polling paths on macOS.~~ Done
   2026-11-06 (task 7; see
   [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos)).
-- iOS: the `apps/ios` wrapper running the web client on the simulator,
+- ~~iOS: the `apps/ios` wrapper running the web client on the simulator,
   checking the read coordinator's hidden pause and resume across backgrounding
-  and screen lock (task 8; the device run is in 7568).
+  and screen lock.~~ Moved to 7568 on 2026-11-13 with the device run (task 8,
+  decision Q1).
 - Soak: repeated add, remove, stop and restart cycles. Timer, subscriber and
   cache counts return to baseline, and profile logs hold zero
   `Unhandled promise rejection (continuing)` guard lines. The ten idle
@@ -1803,7 +1930,9 @@ credentials or a platform CI lacks are batched in
   [Container app wiring, follow-up](#container-app-wiring-follow-up-2026-11-01-linux)).
   Still owed elsewhere: a validation plan written by a real model turn and a
   live running-output stream in a pipeline (the live provider runs, 0049,
-  batched in 0031), and real timer throttling in a backgrounded tab (task 8).
+  batched in 0031). Real timer throttling in a backgrounded tab was measured
+  on 2026-11-13 (task 18, see
+  [Background-tab reconnect](#background-tab-reconnect-2026-11-13-macos)).
 
 ### Measured candidates
 
@@ -1868,9 +1997,10 @@ freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
 footprint, and on 2026-11-06 a 60-cycle local soak over more than an hour
 with fake-model sessions open left none either. The busy profile ran on
 2026-11-06 (task 1), so the `backend-activity`, `native-queues` and
-`multi-review` domains can go (decision B8); live GitHub and providers have
-not run, so the `feature-planning` and `build-pipeline` drivers and
-observation sharing stay.
+`multi-review` domains can go (decision B8); live GitHub has not run, so
+the `feature-planning` and `build-pipeline` drivers stay. Observation
+sharing's switch went on 2026-11-13, once the live providers (0049) had run
+(decision Q3).
 
 - ~~Remove the `backend-activity` and `native-queues` rollback drivers.~~
   Done 2026-11-10 (task 13, decision W2).
@@ -1883,7 +2013,8 @@ observation sharing stay.
   runs off and goes with the switch). Both drivers wait for task 5 (now in
   7568) and 0049
   (decision W7).
-- Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
+- ~~Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.~~
+  Done 2026-11-13 (task 13, decision Q3).
 - ~~Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
   switch.~~ Decided 2026-10-25: it stays, as a permanent diagnostic kill
   switch rather than a rollback driver (see "Assumptions and decisions"). On
@@ -2688,7 +2819,7 @@ collide with other tasks' decisions.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 5, 9, 16 and 17, and the device run of task 8) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 5, 9, 16 and 17, and the device run of task 8) moved there on 2026-11-10, and the simulator run of task 8 on 2026-11-13.
 - 7745 (retired 2026-11-11): an interactive tmux terminal no client detached
   kept capturing (task 12, decision C5); now leased, row B19 of
   [recurring-work.md](../../architecture/recurring-work.md).
@@ -2931,3 +3062,77 @@ Numbered Cn so they do not collide with other tasks' decisions. Numbers are in
   the gateway hop of a design check and a validation poll is not included,
   Docker ran on a rootless daemon rather than the host's, and the B19 orphan
   is inferred from the code rather than seen.
+
+### Tasks 8, 13 and 18 on macOS (2026-11-13)
+
+#### Q1. Task 8: install a simulator runtime, or move the run to 7568
+
+- **Install the iOS 27.2 runtime on arktech-mini and run it.**
+  - Pros: the run could finish here.
+  - Cons: a multi-gigabyte change to the Xcode install of a host other
+    builds share; the wrapper also needs an HTTPS origin through Tailscale
+    Serve and a gateway token typed into the app.
+- **Move the simulator run to the manual-test checklist beside the device
+  run (chosen).**
+  - Pros: the host is left as it was; the user decides on the install or
+    names a node, and one item holds the steps.
+  - Cons: the simulator evidence waits on the user.
+
+Chosen because the build may not change shared hosts, and an install of this
+size is a host change. Task 8 is done here; its two runs are 7568 items.
+
+#### Q2. Task 18: how to get a really hidden tab
+
+- **A browser Playwright launches, with `ignoreDefaultArgs` for the three
+  throttling switches.**
+  - Pros: the shared browser fixture and `test.use`.
+  - Cons: does not work. Playwright enables DevTools focus emulation on
+    every page it attaches, which keeps the page `visible` behind another
+    tab and in a minimised window (observed: `visibilityState` stayed
+    `visible` both ways).
+- **Start Chromium itself and attach with `connectOverCDP` and `noDefaults`
+  (chosen).**
+  - Pros: no focus emulation on the default context, so the browser alone
+    decides visibility; Chromium's own throttling is on; module loads still
+    go through `fetchModulesOutsideChromium`.
+  - Cons: the spec owns a child process (stopped through its own handle) and
+    is listed as a direct spec in `browser-test.test.ts`.
+- **An emulated hidden document (the busy profile's way).**
+  - Pros: headless and simple.
+  - Cons: timers are not throttled, which is what the task measures.
+
+#### Q3. Task 13: what goes with `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`
+
+- **Remove the switch and the `observationSharing` option, its checks and
+  the recurring baseline's rollback mode (chosen).**
+  - Pros: one code path; a caller that still passes the option fails the
+    typecheck; nothing can run the old cadence by accident.
+  - Cons: the baseline no longer shows the before-and-after saving; earlier
+    artifacts still carry a `rollback` mode, which the comparison reports
+    against zero.
+- **Keep `observationSharing` as a test-only seam for the baseline.**
+  - Pros: the baseline keeps its comparison.
+  - Cons: keeps the branch the removal is meant to delete, for a comparison
+    whose decision was taken.
+
+The baseline test now checks the shared counts on their own (no status
+reads, fewer observation reads than one per session per sweep, retained
+group passes, discovery within budget, two turn-end edges).
+
+#### Q4. Task 18: where the spec runs and its budgets
+
+- **An opt-in live spec in the browser suite's config
+  (`ORKESTRATOR_AGENT_TEST_LIVE_BACKGROUND_TAB=1`), skipped with no display
+  (chosen).**
+  - Pros: repeatable on any host with a display; it opens a window, so it
+    never runs in the default suite.
+  - Cons: on a locked display only the launch tab is hidden, and showing it
+    needs focus emulation; the evidence says which (`hiddenBy`,
+    `shownBy`).
+- **A one-off script.**
+  - Pros: nothing to maintain.
+  - Cons: the next background-tab question starts from nothing.
+
+Budgets: a hidden tab is back within the ladder's 16 s cap plus 4 s for the
+once-a-second timer alignment (20 s), and a shown tab retries within 1 s; the
+measured worst cases were 10.0 s and 163 ms.

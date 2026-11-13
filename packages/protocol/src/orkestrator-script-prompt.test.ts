@@ -35,6 +35,19 @@ describe("createOrkestratorScriptPrompt", () => {
     expect(prompt).toContain("`setupLocal`");
   });
 
+  test("guides system packages into aptPackages rather than root steps (to-do 7770)", () => {
+    for (const local of [true, false]) {
+      const prompt = createOrkestratorScriptPrompt(local);
+      expect(prompt).toContain("`aptPackages`: array of Debian package names (optional)");
+      expect(prompt).toContain(
+        "Never use it to install Debian packages; use `aptPackages` instead",
+      );
+      expect(prompt).toContain("at most 32 names");
+      expect(prompt).toContain("no versions (`name=1.2`)");
+      expect(prompt).toContain("Move an existing `root` step that only runs `apt-get install`");
+    }
+  });
+
   test("enforces strict JSON compatibility instructions", () => {
     const prompt = createOrkestratorScriptPrompt(false);
 

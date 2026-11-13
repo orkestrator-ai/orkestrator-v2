@@ -6,6 +6,7 @@ import { networkOwnerContainer } from "./container-network-owner.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { allowlistForNetworkPolicy } from "@orkestrator/protocol/network-allowlist";
+import { DEBIAN_ARCHIVE_DOMAINS } from "@orkestrator/protocol/apt-packages";
 import {
   ContainerLifecycleError,
   type ContainerProbeRunner,
@@ -14,6 +15,7 @@ import {
   requiredAgentNetworkDomains,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
+  DOCKER_LABEL_DEBIAN_ARCHIVE,
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_NETWORK_POLICY,
   DOCKER_LABEL_OWNER,
@@ -222,18 +224,33 @@ function boundedTimestamp(value: unknown): string | null {
 }
 
 /**
+ * What a runtime's own creation added to its allowlist, read back from its
+ * labels so every later revision agrees with what it was created with.
+ */
+export interface RuntimeAllowlistAdditions {
+  /**
+   * Debian's archive, for a project that declared `aptPackages` when the
+   * runtime was created (`DOCKER_LABEL_DEBIAN_ARCHIVE`, to-do 7770).
+   */
+  debianArchive?: boolean;
+}
+
+/**
  * The allowlist a restricted container is configured with: the environment's
  * own list or the global one, plus the hosts the enabled agent platforms
- * require.
+ * require, plus Debian's archive for a runtime created to install declared
+ * packages.
  */
 export function configuredAllowedDomains(
   environment: Pick<Environment, "allowedDomains">,
   config: Pick<AppConfig, "global">,
+  additions: RuntimeAllowlistAdditions = {},
 ): string[] {
   return [
     ...new Set([
       ...savedAllowedDomains(environment, config),
       ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
+      ...(additions.debianArchive ? DEBIAN_ARCHIVE_DOMAINS : []),
     ]),
   ];
 }
@@ -248,8 +265,12 @@ export function containerAllowedDomains(
   environment: Pick<Environment, "allowedDomains">,
   config: Pick<AppConfig, "global">,
   policyVersion: NetworkPolicyVersion,
+  additions: RuntimeAllowlistAdditions = {},
 ): string[] {
-  return allowlistForNetworkPolicy(configuredAllowedDomains(environment, config), policyVersion);
+  return allowlistForNetworkPolicy(
+    configuredAllowedDomains(environment, config, additions),
+    policyVersion,
+  );
 }
 
 /**
@@ -405,6 +426,7 @@ async function networkIdentity(
 
 interface ContainerNetworkFacts {
   policyVersion: NetworkPolicyVersion;
+  additions: RuntimeAllowlistAdditions;
   liveUpdates: boolean;
   running: boolean;
   hasGitMirror: boolean;
@@ -421,16 +443,19 @@ async function containerNetworkFacts(
       [
         "inspect",
         "-f",
-        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}\t{{range .Mounts}}{{if eq .Destination "/orkestrator-git-mirror"}}mirror{{end}}{{end}}\n{{range .Config.Env}}{{if eq (index (split . "=") 0) "GIT_URL"}}{{println .}}{{end}}{{end}}`,
+        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}\t{{range .Mounts}}{{if eq .Destination "/orkestrator-git-mirror"}}mirror{{end}}{{end}}\t{{ index .Config.Labels "${DOCKER_LABEL_DEBIAN_ARCHIVE}" }}\n{{range .Config.Env}}{{if eq (index (split . "=") 0) "GIT_URL"}}{{println .}}{{end}}{{end}}`,
         containerId,
       ],
       { timeoutMs: 10_000 },
     );
     const [summary = "", ...env] = stdout.split("\n");
-    const [policy = "", imageId = "", running = "", mirror = ""] = summary.trim().split("\t");
+    const [policy = "", imageId = "", running = "", mirror = "", debianArchive = ""] = summary
+      .trim()
+      .split("\t");
     const capabilities = await imageCapabilities(imageId || undefined, context).catch(() => null);
     return {
       policyVersion: policy === "3" ? 3 : policy === "2" ? 2 : 1,
+      additions: { debianArchive: debianArchive === "1" },
       liveUpdates: (capabilities?.["network-refresh"] ?? 0) >= 1,
       running: running === "true",
       hasGitMirror: mirror === "mirror",
@@ -477,7 +502,7 @@ export async function environmentNetworkPolicy(
   if (!facts) return result;
   result.policyVersion = facts.policyVersion;
   result.configured.domainsRevision = allowedDomainsRevision(
-    containerAllowedDomains(environment, config, facts.policyVersion),
+    containerAllowedDomains(environment, config, facts.policyVersion, facts.additions),
   );
   if (facts.policyVersion >= 2) {
     result.network = await networkIdentity(
@@ -514,7 +539,7 @@ export async function environmentNetworkPolicy(
     state !== "applied" &&
     !restrictedContainerReachesGitRemote(
       facts.gitUrl,
-      containerAllowedDomains(environment, config, facts.policyVersion),
+      containerAllowedDomains(environment, config, facts.policyVersion, facts.additions),
       facts.policyVersion,
     )
       ? "rebuild-required"
@@ -563,7 +588,12 @@ async function applyAllowedDomainsNow(
   if (!facts.liveUpdates) return { kind: "rebuild-required", policy: before };
   if (before.configured.mode !== "restricted") return { kind: "rebuild-required", policy: before };
   const config = await context.storage.loadConfig();
-  const domains = containerAllowedDomains(environment, config, facts.policyVersion);
+  const domains = containerAllowedDomains(
+    environment,
+    config,
+    facts.policyVersion,
+    facts.additions,
+  );
   // Changing a running container's firewall is a container mutation: a
   // backend that does not hold the registry writer (a newer writer's data
   // directory, or another backend's lease) keeps the save but refuses to

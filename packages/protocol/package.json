@@ -245,6 +245,7 @@
     "./native-agent-observation": "./src/native-agent-observation.ts",
     "./native-agent-transcript-patch": "./src/native-agent-transcript-patch.ts",
     "./network-allowlist": "./src/network-allowlist.ts",
+    "./apt-packages": "./src/apt-packages.ts",
     "./environment-attention": "./src/environment-attention.ts",
     "./notification-sounds": "./src/notification-sounds.ts",
     "./opencode-message-id": "./src/opencode-message-id.ts",

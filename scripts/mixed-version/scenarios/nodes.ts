@@ -15,9 +15,11 @@
  *   (`coordinator-list-nodes.ts`) lists the leaf connected with its copy of
  *   the project; a leaf that serves `get_machine_load` reports its OS, size
  *   and load once it has a reading, and an older one is shown as
- *   `older-version` over the real link; each machine's `buildCommit` is the
- *   one its hello reports, `null` for a release before the field and for a
- *   build from source (to-do 1030 tasks 2 and 7).
+ *   `older-version` over the real link; the leaf's `buildCommit` is present
+ *   and is the one its hello reports, `null` for a release before the field
+ *   and for a build from source (to-do 1030 tasks 2 and 7). `self` is not
+ *   checked: the handler runs in this runner, so its `self.buildCommit` is the
+ *   runner's own `BUILD_COMMIT`, not the command node's.
  *
  * Version 1 decodes each answer with the definitions' schemas (a node that
  * advertises `nodes`); version 0 sends today's untyped calls.
@@ -25,7 +27,12 @@
 import { nodesClient } from "@orkestrator/protocol/contract/domains/nodes";
 import { until } from "../harness.ts";
 import { defineScenario, type ScenarioContext } from "../scenario.ts";
-import { coordinatorListNodes, hasReadings, machineEvidence } from "./coordinator-list-nodes.ts";
+import {
+  buildCommitCheck,
+  coordinatorListNodes,
+  hasReadings,
+  machineEvidence,
+} from "./coordinator-list-nodes.ts";
 import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
 
 const NO_ARGS = undefined as never;
@@ -161,23 +168,26 @@ async function coordinatorListNodesChecks(ctx: ScenarioContext): Promise<void> {
       : leaf?.machine.status === "unavailable" && leaf.machine.reason === "older-version",
     JSON.stringify(machineEvidence(leaf?.machine)).slice(0, 300),
   );
+  // Only the leaf: `self` comes from the handler, which runs in this runner, so
+  // its buildCommit is the runner's BUILD_COMMIT and would always match.
+  const commit = buildCommitCheck(leaf, ctx.leaf.hello.buildCommit);
   ctx.check(
     "NO-C8",
-    "list_nodes reports each machine's buildCommit as its hello does: null when the build reports none",
-    (leaf?.buildCommit ?? null) === (ctx.leaf.hello.buildCommit ?? null) &&
-      listed.self.buildCommit === (ctx.command.hello.buildCommit ?? null),
-    `leaf ${String(leaf?.buildCommit)}, self ${String(listed.self.buildCommit)}`,
+    "list_nodes reports the leaf's buildCommit as its hello does: present, and null when the build reports none",
+    commit.passed,
+    `leaf ${String(commit.observed)}, hello ${String(commit.expected)}`,
   );
   ctx.note("coordinator list_nodes", {
     self: {
       version: listed.self.version,
-      buildCommit: listed.self.buildCommit,
+      runnerBuildCommit: listed.self.buildCommit,
       machine: machineEvidence(listed.self.machine),
     },
+    command: { helloBuildCommit: ctx.command.hello.buildCommit ?? null },
     leaf: {
       version: leaf?.version ?? null,
-      buildCommit: leaf?.buildCommit ?? null,
-      helloBuildCommit: ctx.leaf.hello.buildCommit ?? null,
+      buildCommit: commit.observed,
+      helloBuildCommit: commit.expected,
       machine: machineEvidence(leaf?.machine),
     },
   });

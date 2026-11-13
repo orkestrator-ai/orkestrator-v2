@@ -13,7 +13,7 @@ rechecked the same day: neither can start yet.
 2. **Live check across two linked nodes**: `list_nodes` on a real command node with a real leaf, including a leaf on an older release. Status: done (2026-11-13, over a real node link on one host).
 3. **Native Linux and Windows check**: real OS strings and readings on those platforms. Status: done for Linux (2026-11-01); the Windows check moved to the manual-test checklist on 2026-11-10.
 4. **Older-node detection elsewhere matches the wrong wording**: two existing checks look for `Unknown command:`, while a real backend answers `Unknown backend command:`. Status: done (2026-11-01).
-5. **Keep history across a backend restart**: decide once coordinators are seen using the 24-hour figure. Status: blocked (waits on a recurrence: a coordinator seen misled by short 24-hour coverage).
+5. **Keep history across a backend restart**: whether to persist is the user's decision, a conditional item on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#decisions-approvals-and-outward-actions) taken once a coordinator is seen misled by short 24-hour coverage; an agent builds persistence only if the user chooses it. Status: blocked (waits on that 7568 decision, which itself waits on the recurrence).
 6. **Retire the older-node path**: remove it when the support window allows. Status: blocked (waits on the support floor reaching 2.36.0, the first Stable release with `get_machine_load`).
 7. **`list_nodes` reports each real node's build commit**: an older or development node reports `buildCommit: null` and still lists normally, checked on task 2's linked nodes (one from a release before `buildCommit` existed). Moved from to-do 4840 (deleted 2026-11-06). Status: done (2026-11-13). The check that real release builds report their own commit, on two real machines, moved to the manual-test checklist on 2026-11-10.
 
@@ -144,7 +144,7 @@ No real release has carried it yet.
 [`releasing.md`](../../development/releasing.md). Task 2's two-machine run can
 take this check at the same time.
 
-**Investigation.** Run with task 2 on 2026-11-13 (check NO-C8: each node's
+**Investigation.** Run with task 2 on 2026-11-13 (check NO-C8: the leaf's
 `buildCommit` in `list_nodes` equals what its hello reports):
 
 - A leaf on release 2.36.1, built before `buildCommit` existed (`533acf703`
@@ -152,7 +152,14 @@ take this check at the same time.
   and load.
 - A leaf running this checkout from source: `buildCommit: null`, listed
   normally.
-- The command node, from source: `self.buildCommit: null`.
+- `self.buildCommit` was also `null`, but that value is not the command
+  node's: the qualification runs the `list_nodes` handler in the runner's own
+  process, so `self.buildCommit` is the runner's `BUILD_COMMIT` (`null` for a
+  source checkout). The command node's own commit is in its hello, which
+  reported none for this source build. Since 2026-11-13 NO-C8 checks only the
+  leaf, and fails when the leaf's entry omits the field rather than reporting
+  `null` (`buildCommitCheck`, unit-tested in
+  `tests/unit/qa-two-node-checks.test.ts`).
 - A leaf on release 2.36.4-beta, the first with the field: `buildCommit`
   `209b1249b965618855d928d9fde3cdeaaa2b9373`, the commit `v2.36.4-beta` points
   to. That is the published npm package on one host; the desktop release and
@@ -170,7 +177,7 @@ take this check at the same time.
 
 ## Current state
 
-`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink), and since 2026-11-13 a real node link on beelink: a current, a 2.36.1 and a 2.36.4-beta leaf report their load, a 2.34.4-beta leaf reads as `older-version`, and `buildCommit` is `null` for builds that report none (tasks 2 and 7). The Windows check and the release-build commit check on two real machines are on the manual-test checklist. Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`). What is left waits: task 5 on a coordinator misled by short coverage, task 6 on the support window. To rerun: `mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`.
+`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink), and since 2026-11-13 a real node link on beelink: a current, a 2.36.1 and a 2.36.4-beta leaf report their load, a 2.34.4-beta leaf reads as `older-version`, and `buildCommit` is `null` for builds that report none (tasks 2 and 7). The Windows check and the release-build commit check on two real machines are on the manual-test checklist. Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`). What is left waits: task 5 on the user's decision in 7568 (taken once a coordinator is seen misled by short coverage), task 6 on the support window. To rerun: `mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`.
 
 ## Constraints and rationale
 
@@ -238,6 +245,27 @@ command to the command node's gateway, which is what the Control MCP
 server's in-process invoker does. The 2 s per-node limit and its abort still
 apply. It runs only when this checkout is the command node, because an older
 command node would run its own handler.
+
+### Task 7: what NO-C8 compares (2026-11-13, review round 1)
+
+Review found two ways the first NO-C8 could pass without evidence. It
+coerced a missing `buildCommit` to `null`, so an entry that dropped the field
+would have matched an older leaf's hello; and its `self` half compared the
+runner's own `BUILD_COMMIT` (the handler runs in the runner) with the command
+node's hello, which for a source build are both `null` whatever the command
+node does. NO-C8 now checks only the leaf, requires the field to be present,
+and records the field as it arrived (`absent` when missing). The `self`
+value stays in the run's notes, labelled as the runner's. The release-build
+commit of a real command node stays on the manual-test checklist (task 7,
+user part), where the command node runs its own handler.
+
+### Task 5: the decision moved to the checklist (2026-11-13, review round 1)
+
+Whether to persist load history is a decision the to-do reserves to a
+person once coordinators are seen using the 24-hour figure, so it is now a
+conditional decision item in 7568 (Decisions, Coordinator and Multi Review),
+with the recommended option kept. This file keeps task 5 blocked on that
+item; building persistence is agent work only if the user chooses it.
 
 ## Related
 

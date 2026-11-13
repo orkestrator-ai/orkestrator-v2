@@ -36,7 +36,8 @@ export interface ListedNode {
   readonly available: boolean;
   readonly state: string;
   readonly version: string | null;
-  readonly buildCommit: string | null;
+  /** Always present, `null` when the build reports none; optional here so an omission is visible. */
+  readonly buildCommit?: string | null;
   readonly hasProject: boolean;
   readonly machine: ListedMachine;
 }
@@ -45,23 +46,35 @@ export interface ListNodesResult {
   readonly self: {
     readonly nodeId: string;
     readonly version: string;
+    /**
+     * The handler's own `BUILD_COMMIT`: the process that runs the handler,
+     * which in qualification is the runner, not the command node.
+     */
     readonly buildCommit: string | null;
     readonly machine: ListedMachine;
   };
   readonly nodes: readonly ListedNode[];
 }
 
+/** The Web platform the invoker uses; a test under Happy DOM passes Bun's own. */
+export interface InvokerPlatform {
+  readonly fetch: typeof fetch;
+  readonly AbortSignal: typeof AbortSignal;
+}
+
 /** The invoker the tool handler calls, over `node`'s gateway with the caller's signal. */
-export function gatewayInvoker(node: PeerNode): ControlMcpInvoker {
+export function gatewayInvoker(
+  node: Pick<PeerNode, "origin" | "token">,
+  platform: InvokerPlatform = { fetch: globalThis.fetch, AbortSignal: globalThis.AbortSignal },
+): ControlMcpInvoker {
   return async <T>(
     command: string,
     args: Record<string, unknown> = {},
     options?: { signal?: AbortSignal },
   ): Promise<T> => {
-    const signal = options?.signal
-      ? AbortSignal.any([options.signal, AbortSignal.timeout(120_000)])
-      : AbortSignal.timeout(120_000);
-    const response = await fetch(`${node.origin}/__orkestrator/invoke`, {
+    const timeout = platform.AbortSignal.timeout(120_000);
+    const signal = options?.signal ? platform.AbortSignal.any([options.signal, timeout]) : timeout;
+    const response = await platform.fetch(`${node.origin}/__orkestrator/invoke`, {
       method: "POST",
       headers: { authorization: `Bearer ${node.token}`, "content-type": "application/json" },
       body: JSON.stringify({ command, args }),
@@ -111,6 +124,34 @@ export async function coordinatorListNodes(
   const listNodes = handlers.get("list_nodes");
   if (!listNodes) throw new Error("registerNodeTools registered no list_nodes");
   return (await listNodes()).structuredContent as ListNodesResult;
+}
+
+/** What NO-C8 saw: the listed field exactly as it arrived, and whether it matches. */
+export interface BuildCommitCheck {
+  readonly passed: boolean;
+  /** The listed `buildCommit`, or `"absent"` when the entry or the field is missing. */
+  readonly observed: string | null;
+  readonly expected: string | null;
+}
+
+/**
+ * A listed node's `buildCommit` against its hello. `list_nodes` promises the
+ * field on every entry, `null` when the build reports none, so an entry that
+ * omits it fails even when the hello has no commit either.
+ */
+export function buildCommitCheck(
+  entry: ListedNode | undefined,
+  helloBuildCommit: string | undefined,
+): BuildCommitCheck {
+  const expected = helloBuildCommit ?? null;
+  if (!entry || !Object.hasOwn(entry, "buildCommit")) {
+    return { passed: false, observed: "absent", expected };
+  }
+  const observed = entry.buildCommit;
+  if (observed !== null && typeof observed !== "string") {
+    return { passed: false, observed: String(observed), expected };
+  }
+  return { passed: observed === expected, observed, expected };
 }
 
 /** Whether a machine reports figures from at least one reading. */

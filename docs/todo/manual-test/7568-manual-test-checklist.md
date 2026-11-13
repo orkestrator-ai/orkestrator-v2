@@ -12,10 +12,10 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (308 items): run each check under
+1. **Manual tests and live checks** (309 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (53 items): make each call
+2. **Decisions, approvals and outward actions** (54 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -82,13 +82,13 @@ agent can apply it.
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 24 | 9 |
-| Coordinator and Multi Review | 81 | 6 |
-| Cross-cutting | 75 | 20 |
+| Coordinator and Multi Review | 81 | 7 |
+| Cross-cutting | 76 | 20 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 308 | 53 |
+| **Total** | 309 | 54 |
 
 ## Outstanding work
 
@@ -717,6 +717,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **[0395](../coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md) task 2: root changes into a worker on another node.** Choose between (a) a new leaf command that applies a patch the command node builds after your approval (keeps the feature for remote workers; needs a patch size bound over the node link and the node named in the approval dialog), and (b) refusing across nodes and telling the coordinator to have you commit and push (nothing new to keep in step, but the feature stops working on remote workers, which is where workers usually run). Record: the choice in 0395 task 2; an agent then builds it.
 - [ ] **4941 (retired) task 1: should a coordinator report raise a desktop notification?** (behaviour: [Mail tiles and the report cue](../../architecture/coordinator.md#mail-tiles-and-the-report-cue)). Choose between nothing beyond the sound until use shows it is not enough (recommended), and building a desktop notification (new permission handling, nothing on the web client without a separate answer, and a call on what may show on a lock screen). Record: the choice; if you choose to build it, say what the notification may show so an agent can file a new to-do.
+- [ ] **[1030](../coordinator-and-multi-review/1030-coordinator-machine-load.md) task 5: keep machine-load history across a backend restart?** Only once a coordinator is seen misled by short 24-hour coverage: it weighs a machine's 24-hour figure while that window's `coveredSeconds` is far below its `windowSeconds` (the backend restarted recently). Choose between staying in memory (recommended: no database writes and no stored format to keep compatible; the 24-hour figure is short after a restart, and the 5-minute and 1-hour figures recover within the hour) and persisting through a database document (the 24-hour figure survives updates; about 15 KB written every few minutes on every machine, validation of a stored document, downgrade behaviour and a new shutdown step). Record: the choice and when the misleading placement was seen (no prompt or transcript content), in 1030's Assumptions and decisions section; if you choose to persist, an agent builds it from task 5.
 
 #### Cross-cutting
 

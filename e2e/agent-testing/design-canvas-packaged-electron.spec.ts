@@ -1,12 +1,15 @@
 /**
  * The design canvas journey of design-canvas-electron.spec.ts, run against the
- * packaged Linux app instead of the dev bundle and Vite: the app's own
+ * packaged app (Linux or macOS) instead of the dev bundle and Vite: the app's own
  * executable, `app.asar`, the bundled Bun backend and bridges, and the
  * renderer loaded from `file://<resources>/web/index.html`. That renderer is
  * what users run, and no dev-served spec ever loads it.
  *
- * Build the app first with `mise run package:linux:unpacked:test`, which
- * writes `release/packaged-test/linux-unpacked/` and installs nothing. That is
+ * Build the app first with `mise run package:linux:unpacked:test` (or
+ * `mise run package:mac:unpacked:test` on macOS, an ad-hoc identity that is
+ * never signed with a Developer ID or notarised), which writes
+ * `release/packaged-test/linux-unpacked/` (`mac-arm64/OrkestratorV2.app`) and
+ * installs nothing. That is
  * the shipped build with the Node inspect fuse back on, which Playwright's
  * `_electron.launch` needs; every other fuse is as shipped. Then run `mise run
  * test:agent:electron:packaged`, which tests that existing build without rebuilding. Set
@@ -22,7 +25,9 @@
  * On Linux it runs on Chromium's headless Ozone platform with no `DISPLAY` or
  * `WAYLAND_DISPLAY` (as `dev:test --headless` does), so it never opens
  * a window on the signed-in desktop. Playwright drives the page over CDP,
- * which needs no display.
+ * which needs no display. macOS has no headless platform, so there every
+ * window stays hidden with no Dock icon (`ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS`,
+ * which keeps painting and timers running).
  */
 import { expect, test } from "./electron-fixtures";
 import { _electron as electron } from "playwright";
@@ -33,7 +38,10 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import {
+  AGENT_TEST_HIDDEN_WINDOWS_ENV,
+  resolveRuntimeProfile,
+} from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { closeElectron, electronProcessTree } from "./design-electron-cleanup";
 import { waitForStopped, withCleanup } from "../process-cleanup";
@@ -44,20 +52,23 @@ import {
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  packagedResourcesPath,
 } from "./packaged-electron-app";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 test("the packaged app's file:// renderer opens, edits, exports, downloads, takes shortcuts and opens a host .orkdes", async () => {
   test.skip(
-    process.platform !== "linux" && !process.env.ORKESTRATOR_PACKAGED_APP_EXECUTABLE,
-    "Only the unpacked Linux build has a default location; set ORKESTRATOR_PACKAGED_APP_EXECUTABLE elsewhere",
+    process.platform !== "linux" &&
+      process.platform !== "darwin" &&
+      !process.env.ORKESTRATOR_PACKAGED_APP_EXECUTABLE,
+    "Only the unpacked Linux and macOS builds have a default location; set ORKESTRATOR_PACKAGED_APP_EXECUTABLE elsewhere",
   );
   test.setTimeout(480_000);
   const executablePath = packagedAppExecutable(repositoryRoot, process.env);
   expect(
     existsSync(executablePath),
-    `No packaged app at ${executablePath}. Run \`mise run package:linux:unpacked:test\` first.`,
+    `No packaged app at ${executablePath}. Run \`mise run package:${process.platform === "darwin" ? "mac" : "linux"}:unpacked:test\` first.`,
   ).toBe(true);
 
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-design-packaged-"));
@@ -84,7 +95,11 @@ test("the packaged app's file:// renderer opens, edits, exports, downloads, take
       executablePath,
       args: [...ELECTRON_TEST_SWITCHES, ...packagedLaunchSwitches(process.platform)],
       cwd: temporaryRoot,
-      env: packagedLaunchEnvironment(process.env, { home, profilePath }),
+      env: {
+        ...packagedLaunchEnvironment(process.env, { home, profilePath }),
+        // macOS cannot run headless: keep the window off the shared desktop.
+        ...(process.platform === "darwin" ? { [AGENT_TEST_HIDDEN_WINDOWS_ENV]: "1" } : {}),
+      },
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
@@ -102,7 +117,7 @@ test("the packaged app's file:// renderer opens, edits, exports, downloads, take
         userData: electronApp.getPath("userData"),
       }));
       expect(runtime.isPackaged).toBe(true);
-      expect(path.dirname(runtime.resourcesPath)).toBe(path.dirname(executablePath));
+      expect(runtime.resourcesPath).toBe(packagedResourcesPath(executablePath));
       expect(window.url()).toBe(
         pathToFileURL(path.join(runtime.resourcesPath, "web", "index.html")).href,
       );

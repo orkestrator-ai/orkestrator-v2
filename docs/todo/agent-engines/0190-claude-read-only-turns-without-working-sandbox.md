@@ -281,7 +281,7 @@ Updated 2026-11-11 (task 3 and 7565), 2026-11-10 (task 3); the rest 2026-10-28 o
    - `claude-query-config.reported-policy.test.ts`, protocol
      `review-fanout.test.ts` and `multi-review.test.ts` (bounded record
      fields), backend `http-bridge-provider.test.ts` (parsing and bounds),
-     `multi-review-service.test.ts` (a packaged review records it on every
+     `multi-review-service-part-4.test.ts` (a packaged review records it on every
      read-only reviewer and on consolidation, not on preparation; a working
      host records nothing), web `MultiReviewTab.test.tsx` (the notes).
    - Live: `conformance-coordinator-sandbox-live.test.ts` gains

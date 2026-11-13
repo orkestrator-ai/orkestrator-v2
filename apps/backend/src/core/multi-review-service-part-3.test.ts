@@ -1,4 +1,4 @@
-// Part 3 of 4 of the MultiReviewService suite, split from multi-review-service.test.ts so
+// Part 3 of 4 of the MultiReviewService suite, split from the former multi-review-service.test.ts so
 // `bun test --parallel` can spread it across workers. Shared helpers live in
 // multi-review-service-test-support.ts.
 import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";

@@ -609,7 +609,7 @@ export function enginesNamed(name: EngineSpec["name"]): EngineSpec[] {
   for (const engine of matching) {
     if (!engine.executablePath) {
       process.stderr.write(
-        `[content-server.engines.test] ${engine.name} skipped: browser not installed (run \`bunx playwright install ${engine.name}\`)\n`,
+        `[content-server.engines] ${engine.name} skipped: browser not installed (run \`bunx playwright install ${engine.name}\`)\n`,
       );
     }
   }
@@ -726,7 +726,7 @@ export function registerEngineFixtures(engineName: string, onDecoyRequest: () =>
     const reportFile = process.env.ARTIFACT_ENGINE_REPORT;
     if (reportFile)
       writeFileSync(reportFile, JSON.stringify(mergedEngineReport(reportFile), null, 2));
-    process.stderr.write(`[content-server.engines.test] results\n${summary}\n`);
+    process.stderr.write(`[content-server.engines] results\n${summary}\n`);
   });
 }
 

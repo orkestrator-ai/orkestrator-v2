@@ -428,7 +428,7 @@ Fixed in this change:
   the dead provider so the next pass restarts the bridge, and the idle-poll
   bound still ends a bridge that never returns
   (`review-fanout-unreachable.test.ts`, and "reconnects a reviewer whose
-  bridge became unreachable" in `multi-review-service.test.ts`).
+  bridge became unreachable" in `multi-review-service-part-3.test.ts`).
 - **The coordinator Multi Review agent-browser case** asserted text the flow
   graph no longer renders.
 
@@ -534,7 +534,7 @@ Tests:
   session, the second restart failing closed, a report submitted before the
   restart, retiring the tool slot, and an ordinary failure still failing.
   Three of the five fail without the runner change.
-- `multi-review-service.test.ts` covers the preparation reminder and its bound,
+- `multi-review-service-part-2.test.ts` covers the preparation reminder and its bound,
   a consolidation continued after a restart, a second restart failing the
   step, and one reminder before a pasted-report failure. All four fail without
   the service change.
@@ -649,7 +649,7 @@ Tests:
   bridge resumes the rollout), and fails closed on a second restart. Both
   cases fail without the bridge change; the step case also fails without the
   step unreachable fix.
-- `multi-review-service.test.ts`: a step whose bridge became unreachable
+- `multi-review-service-part-2.test.ts`: a step whose bridge became unreachable
   keeps its request and continues once the reconnected bridge reports the
   interruption; one whose bridge never comes back fails after the bound. Both
   fail without the fix.
@@ -706,7 +706,7 @@ Code:
 - **Transcript fallback (item 2).** `readReviewerTranscript` throws when the
   provider has no `transcriptSnapshot` instead of reading `messages`. Tests
   whose fakes lacked the surface now give it one; five progress and usage
-  tests in `multi-review-service.test.ts` opt out because they exercise the
+  tests in the `multi-review-service-part-*.test.ts` files opt out because they exercise the
   messages-based progress path, which is a separate surface.
 - **Build Pipeline reminders (item 3).** At the structured-result deadline
   (`awaitStructuredResult`) a tool-mode stage turn gets one reminder in the
@@ -765,7 +765,7 @@ Tests:
   still fails without one; a tool-mode consolidation gets one and either
   delivers or fails after its idle bound. The four tool-mode cases fail with
   the reminder calls disabled.
-- `review-validation-worker.test.ts`: local and container verification report
+- `review-validation-worker.lifecycle.test.ts`: local and container verification report
   artifact counts and bytes; a container artifact over 32 MiB is refused.
   `review-validation-service.test.ts` checks the real runner's report
   (`artifacts: 2, artifactBytes: 8`).

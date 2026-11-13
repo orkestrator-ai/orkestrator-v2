@@ -1,4 +1,4 @@
-// Part 4 of 4 of the terminal history suite, split from terminal-history.test.ts so
+// Part 4 of 4 of the terminal history suite, split from the former terminal-history.test.ts so
 // `bun test --parallel` can spread its large on-disk fixtures across workers. The shared
 // harness lives in terminal-history-test-support.ts.
 import { describe, expect, spyOn, test } from "bun:test";

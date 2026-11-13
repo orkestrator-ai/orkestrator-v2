@@ -122,7 +122,8 @@ Recorded runs:
   the error, with the rest of the panel working; the pane's Retry repeated the
   refusal, and opening the panel again cleared the error and counted
   `coordinator-ensure.conversation-errors-cleared`, as the Register row says.
-  The full record is 4880 (retired), `git show f486caaac:docs/todo/coordinator-and-multi-review/4880-c6-live-checks.md`.
+  The full record is 4880 (retired), in Git history at
+  the parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/coordinator-and-multi-review/4880-c6-live-checks.md`).
 
 ## Usage counters
 

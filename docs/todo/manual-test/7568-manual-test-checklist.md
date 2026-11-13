@@ -42,7 +42,7 @@ storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
 were done; both are in Git history at `1fd391e3a`. 4880 was retired on 2026-11-13, once its
 older-renderer run (task 3) was recorded; it is in Git history at
-`f486caaac`, and its two items here keep their source.
+the parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/coordinator-and-multi-review/4880-c6-live-checks.md`), and its two items here keep their source.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.

@@ -64,6 +64,9 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
+| Live tmux transcript reopen | same command, `./tests/tmux-transcript-reopen-docker.test.ts` | A claude-tmux tab reopen through `docker exec` on a 37 MB transcript: one exec of one bounded page, equal to the local read, and bounded paging back to the first record (to-do 5120 task 2) |
+| Live container media streams | same command, `./tests/media-stream-container-docker.test.ts` | The file viewer's streamed read for a container environment: the backend's container reader on the image's Node, ranges from the content listener, confinement, foreign-container refusal and revocation (to-do 5800 task 1) |
+| Preview worker container cases | `docker/artifact-preview-worker/build.sh`, then `bun test --cwd apps/backend ./src/core/transcript-artifacts/<suite>.test.ts --parallel=1` for `preview-static-search-text`, `preview-print`, `preview-container`, `preview-escape`, `preview-runaway` and `preview-modules` | The artifact preview worker image under its seccomp profile: static text for Find, printing, escape and runaway bounds; each skips its container case with a warning when the image is missing |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`), design export into an Orkestrator container (`design-container-export.spec.ts`) |
@@ -308,6 +311,108 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## Tmux reopen, static search text and streamed reads in real containers (2026-11-13)
+
+Three reads that had been proven only on the host, run against real
+containers: to-do 5120 task 2 (a claude-tmux tab reopen through `docker
+exec`), 7670 (retired) task 1 (static-document text in the prepared preview
+worker image) and 5800 task 1 (streamed file reads for a container
+environment and for detached-transcript media). Run in worktree
+`orkestrator-v2-20261113-000504-4156bad5e3b0` (branch at `17d28238c` plus
+this change). No agent ran and no provider was called.
+
+- **Host:** beelink2 (Omarchy, Arch Linux, kernel 7.2.15, x86_64, 16 cores),
+  shared with other builds. The build account cannot use the host's rootful
+  Docker socket; it was not touched.
+- **Daemon:** `mise run docker:disposable -- start --name lv5120`: the host's
+  rootless Engine 29.9.2 under RootlessKit (runc 1.5.2, containerd 2.4.2,
+  systemd cgroup driver on cgroup v2, overlayfs), host loopback off.
+- **Images**, both built inside that daemon from this checkout:
+  - the environment image, `bash docker/build.sh
+    orkestrator-v2:lv5120-17d28238c` (tagged `orkestrator-v2:qualification-lv5120`
+    for the suites; id `sha256:eab7397ddef2…`, 5.78 GB);
+  - the preview worker, `docker/artifact-preview-worker/build.sh` (id
+    `sha256:1d3b8c67f998…`, context `sha256:0cc35121e96b…`).
+
+```bash
+eval "$(mise run docker:disposable -- env --name lv5120)"
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:qualification-lv5120 \
+  mise run test:logged -- --name tmux-transcript-reopen-docker -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/tmux-transcript-reopen-docker.test.ts --parallel=1
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:qualification-lv5120 \
+  mise run test:logged -- --name media-stream-container-docker -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/media-stream-container-docker.test.ts --parallel=1
+mise run test:logged -- --name static-search-text-container -- bun test --cwd apps/backend \
+  ./src/core/transcript-artifacts/preview-static-search-text.test.ts --parallel=1
+```
+
+- **Tmux reopen** (`tmux-transcript-reopen-docker.test.ts`, new): a
+  36,853,890-byte transcript of 9,000 records in the container's Claude
+  home, read by the real `TmuxSession` through counted `docker exec`s.
+  Passed in three runs. The first read in the process, which owes the tail's one
+  pass, took 37,378,196 bytes in 2 execs. The reopen of the running session
+  took 524,306 bytes in 1 exec (56 ms, then 171 ms on the busier host), 128
+  records, equal to the page and cursor a local read of the same file cuts.
+  Paging back took 70 more reads, each one exec of at most 524,306 bytes,
+  and every record arrived once, in order. These match the fake-`docker`
+  figures of `apps/backend/scripts/tmux-reopen-read-size.ts`.
+- **Static search text** (`preview-static-search-text.test.ts`, new
+  container case): the first run failed. Every container worker job ended
+  "The preview worker stopped unexpectedly", and so did the existing
+  container cases of `preview-print.test.ts` and `preview-container.test.ts`.
+  Run by hand, `docker run` with the worker's seccomp profile crashed inside
+  runc's own init (a SIGSEGV in libpathrs, then "container process is already
+  dead"), and an image's plain `true` exited 127 under the profile alone.
+  The profile is an older copy of Playwright's and does not list
+  `faccessat2`, which runc 1.5 needs. Listing it let runc start the
+  container, but Node then aborted in `uv_thread_create`: runc answers ENOSYS
+  only for syscalls numbered above the highest one a profile names, so
+  `clone3` (435) began answering EPERM and glibc does not fall back to
+  `clone` on EPERM. The fix in `docker/artifact-preview-worker/seccomp_profile.json`
+  follows Docker's default profile: allow `faccessat2`, `close_range`,
+  `openat2`, `pidfd_open` and `pidfd_send_signal`, and answer `clone3` with
+  ENOSYS (errno 38). With it the new case passed in three runs: the prepared image
+  read `Quarterly report\nRevenue grew 😀\nMethod\nClosed body\na\nb` from the
+  test document, the same text and the same effective HTML as process
+  isolation, and bounded a long document to the frame's 64 Ki characters.
+  On the same image every container case of `preview-print` (13 tests),
+  `preview-container` (3), `preview-escape` (3), `preview-runaway` (10) and
+  `preview-modules` (4) passed, none skipped; with the old profile restored,
+  `preview-print` and `preview-container` each failed their container case
+  again. `preview-container.test.ts` now pins the added rules. The profile is
+  not part of the worker's context digest, so prepared images stay current.
+- **Streamed reads, container environment**
+  (`media-stream-container-docker.test.ts`, new): the backend's
+  `spawnDockerMediaReader` against a network-less container of the
+  environment image. A valid 9,190,713-byte PNG in `/workspace/qa-media/`
+  (over the 8 MiB range cap), opened with the environment id and the short
+  container id as the file viewer does, was staged in 241 ms and served from
+  the real content listener: 200 with every byte, `bytes=0-99` 206, an
+  open-ended range 206 capped at 8 MiB. A WAV by absolute `/workspace` path
+  served 206. Inside the container the reader refused a symbolic link to
+  `/tmp`, a `../` escape, an HTML file and a missing file; another
+  container's id was refused; closing the stream answered 404 and released
+  its staged copy. Passed in three runs.
+- **Streamed reads, detached transcript**
+  (`media-stream.browser.test.ts`, new case, real Chromium on the host): the
+  environment-less stream `FilePreview` opens for a detached transcript (an
+  absolute path under the readable roots, no environment) played and seeked
+  in an `<audio>` element from the content origin through ranged 206
+  requests; a path outside the roots was refused; a closed stream no longer
+  loaded. Passed.
+- **Not covered:** the file viewer and the claude-tmux tab of a running app
+  in a container environment (both differ from the local paths driven on
+  2026-11-11 and 2026-11-04 only in the container branch these suites run),
+  Docker Desktop and arm64 for the worker profile, which are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (7670 (retired) task 1), and a rootful daemon.
+- **Cleanup:** each suite removed its container (`docker ps -a` empty after
+  the runs). `docker:disposable -- stop --name lv5120` then removed the
+  daemon with its data root and both images in 7.9 s, and `status` listed no
+  daemon. The instance root with its downloaded tools cache, the worker
+  build's `image-pin.json` and the run's logs under `output/` were deleted
+  by hand.
 
 ## Pre-gateway images under the current backend on rootless Linux Engine (2026-11-11)
 

@@ -1,6 +1,6 @@
 {
   "name": "cursor-bridge",
-  "version": "2.38.1-beta",
+  "version": "2.38.2-beta",
   "private": true,
   "type": "module",
   "main": "dist/index.js",

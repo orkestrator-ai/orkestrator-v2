@@ -444,6 +444,73 @@ describe("cached target process binding", () => {
   }
 });
 
+describe("a target follows its backend through a restart", () => {
+  async function restartable(installationAfter = "install-a") {
+    const box = await sandbox();
+    const first = await gateway();
+    const second = await gateway();
+    const dataDir = await box.publishDescriptor(first);
+    let start: number | null = Date.now();
+    const target = await resolveSavedConnection(
+      "local",
+      {
+        kind: "descriptor",
+        descriptorPath: path.join(dataDir, "backend-instance.json"),
+        addedAt: new Date().toISOString(),
+      },
+      async () => start,
+    );
+    const transport = new GatewayTransport(target);
+    return {
+      first,
+      second,
+      target,
+      transport,
+      /** The old process exits; nothing has replaced it yet. */
+      exit() {
+        start = Date.now() + 120_000;
+      },
+      /** Its successor (same pid here, a later start) publishes its descriptor. */
+      async publishSuccessor() {
+        await rewriteDescriptor(dataDir, {
+          installationId: installationAfter,
+          generation: "gen-2",
+          startedAt: new Date(start!).toISOString(),
+          url: second.url,
+        });
+      },
+    };
+  }
+
+  test("the next request reaches the successor of the same installation", async () => {
+    const backend = await restartable();
+    await backend.transport.invoke("test", {}, { mutation: false });
+    backend.exit();
+    // Until the successor publishes, the original refusal stands: a --wait
+    // observer reads this as "the backend is away" and keeps waiting.
+    await expect(backend.transport.invoke("test", {}, { mutation: false })).rejects.toMatchObject({
+      code: "connection-failed",
+    });
+    await backend.publishSuccessor();
+    await backend.transport.invoke("test", {}, { mutation: false });
+    expect(backend.first.requests).toHaveLength(1);
+    expect(backend.second.requests).toHaveLength(1);
+    expect(backend.target.baseUrl).toBe(backend.second.url);
+    expect(backend.target.identity.generation).toBe("gen-2");
+    expect(backend.target.descriptorGeneration).toBe("gen-2");
+  });
+
+  test("a different installation at the same data directory is refused", async () => {
+    const backend = await restartable("install-b");
+    backend.exit();
+    await backend.publishSuccessor();
+    await expect(backend.transport.invoke("test", {}, { mutation: false })).rejects.toMatchObject({
+      code: "identity-mismatch",
+    });
+    expect(backend.second.requests).toHaveLength(0);
+  });
+});
+
 test.skipIf(process.platform !== "linux")(
   "Linux binding ignores shifted btime and detects changed ticks and boot ID",
   async () => {

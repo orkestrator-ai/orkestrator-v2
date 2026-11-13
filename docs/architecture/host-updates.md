@@ -14,11 +14,9 @@ From there it can:
 - switch `gh` to its newest release;
 - pull the release container image.
 
-Real-release qualification is still open in
-[0033-remote-host-upgrades.md](../todo/cross-cutting/0033-remote-host-upgrades.md).
-`scripts/qualify-standalone-service.ts` automates the standalone part. Run it
-only in a disposable VM, container or user account: it installs real service
-units, and it refuses to start when it finds another Orkestrator on the host.
+What has been qualified against real releases, and how to run it again, is
+in [Qualification](#qualification). Its scripts install real service units:
+run them only in a disposable VM, container or user account.
 
 ## Who does what
 
@@ -402,3 +400,98 @@ reloads a page served by that backend, once. `BackendVersionReminder` offers
 
 `orkestrator service install|uninstall|status` manages the standalone service.
 See [public-cli.md](public-cli.md).
+
+## Qualification
+
+Remote host maintenance was qualified against real published releases on
+Linux in a disposable systemd container on 2026-11-13 (to-do 0033, retired
+that day: `git show 17d28238c:docs/todo/cross-cutting/0033-remote-host-upgrades.md`). The macOS
+runs (the remote desktop update between signed releases, the launchd service,
+and `gh`'s zip layout) need a spare Mac account or VM and are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+**How to run it.** `scripts/qualify-host-upgrades-container.ts` builds a
+Debian 13 image that boots systemd as PID 1, with a user `qual` whose linger
+is on, and runs everything there, on a disposable rootless Docker daemon
+(never the host's):
+
+```bash
+mise run build:cli
+mise run docker:disposable -- start --name q0033
+eval "$(mise run docker:disposable -- env --name q0033)"
+bun scripts/qualify-host-upgrades-container.ts --report output/qualification-0033/report.json
+mise run docker:disposable -- stop --name q0033
+```
+
+It mounts this checkout read-only and the daemon's socket, so the service's
+backend pulls the release image into that daemon (about 7 GB unpacked).
+`--phases service,linger,host-tasks` selects parts; `--from`, `--to`,
+`--engines-from` and `--engines-to` choose the releases (defaults 2.38.0-beta,
+2.38.1-beta, 2.29.0-beta and `--to`). It removes its container and the images
+it built or pulled; `--keep` leaves them for inspection.
+`scripts/qualify-standalone-service.ts` is the service part on its own, for a
+disposable VM or a spare macOS account.
+
+**What it checks.**
+
+- **service**: `qualify-standalone-service.ts` as `qual`: `service install`
+  of `--from` from npm; an update cancelled during its countdown, which must
+  not restart the backend; a `--when-idle --wait` self-update to `--to`; a
+  broken `<to>.990` served by a private registry, which the launcher boots
+  twice and rolls back; and a second service, installed with Bun 1.4.3,
+  refusing a release whose `engines.bun` is `>=1.4.4` before any restart.
+- **linger**: a service installed from npm in a TTY login session
+  (`su - qual` under a pseudo-terminal, a `user`-class session) keeps running,
+  with the same backend, after that session ends; a second login finds it
+  active; after a reboot with nobody logged in it starts and serves. As a
+  control, turning linger off stops the backend, and turning it on starts the
+  unit again. systemd 256 and later list the lingering user manager as a
+  `manager`-class session, which does not count as a login.
+- **host-tasks**: on that service, started with a private
+  `--docker-image orkestrator-v2:qualify-0033`: `host image update --wait`
+  pulls `ghcr.io/orkestrator-ai/orkestrator-v2:<to>`, the private tag moves
+  to the same image ID, and `host status` reports it present, compatible and
+  not older than the backend; `host gh latest --wait` installs the newest
+  upstream `gh` under `toolchains/gh-latest/<version>` (checksum, tar layout,
+  `--version` probe) and selects it, marked `latest`; `host gh pinned --wait`
+  returns to the managed pin.
+
+**Results on 2026-11-13** (beelink, Linux x64, Debian 13 container with
+systemd 257, disposable rootless daemon):
+
+One run of `qualify-host-upgrades-container.ts` with its defaults, 00:51 to
+00:59 UTC, passed all 32 checks (the 18 of the service part and 14 of its
+own). Earlier attempts the same night found the two problems below.
+
+| Phase | Check | Observed |
+| --- | --- | --- |
+| service | `service install` of 2.38.0-beta from npm (Bun 1.4.4) starts and serves | systemd user unit, data-directory connection |
+| service, cancel | apply to 2.38.1-beta, cancelled during the countdown | `downloading` → `awaiting-restart` → `cancelled`; same backend generation and `current` 15 s past `restartAt` |
+| service, update | `apply --when-idle --wait` to 2.38.1-beta | exits 0, receipt `succeeded`; new PID on 2.38.1-beta; `current` 2.38.1-beta, `previous` 2.38.0-beta |
+| service, rollback | apply of a broken `2.38.1-beta.990` from the private registry | exits 1: "2.38.1-beta.990 did not start, so the host went back to 2.38.1-beta"; booted twice; `launcher-state.json` records the rollback |
+| service, engines | a 2.29.0-beta service under Bun 1.4.3 asked for 2.38.1-beta | refused before any restart: "2.38.1-beta needs Bun >=1.4.4; the service runs 1.4.3" |
+| linger | 2.38.1-beta installed and enabled in a `Class=user` login session | serves; linger `yes` |
+| linger | logout, then a second login and logout | unit active throughout, same generation |
+| linger | reboot with nobody logged in | unit starts and serves, no login session |
+| linger, control | linger off, then on | backend stops; unit starts again |
+| host-tasks | `host image update --wait` | pulled `ghcr.io/orkestrator-ai/orkestrator-v2:2.38.1-beta` (linux/amd64) in under 2 min; `orkestrator-v2:qualify-0033` has the same image ID; status: present, compatible, built for 2.38.1-beta, not older |
+| host-tasks | `host gh latest --wait` | gh 2.104.0 (pin 2.102.0) under `toolchains/gh-latest/2.104.0`, `channel: latest`; `gh --version` runs |
+| host-tasks | `host gh pinned --wait` | back on managed 2.102.0, `channel: pinned` |
+
+The macOS `gh` archive was inspected, not run: `gh_2.104.0_macOS_arm64.zip`
+is listed in `gh_2.104.0_checksums.txt` with the SHA-256 it has, and holds
+`gh_2.104.0_macOS_arm64/bin/gh`, the path the code extracts.
+
+**What the runs found.**
+
+- `host update apply --wait` over a data-directory connection never saw its
+  own update finish: the client kept the dead backend's descriptor and
+  refused every read as `connection-failed`, which `--wait` treats as the
+  backend being away. The update itself had succeeded. Fixed in the client
+  (`descriptorTarget` in `packages/cli/src/client/targets.ts`; see
+  [public-cli.md](public-cli.md#instance-descriptor)).
+- A release before 2.30.0-beta (the engines phase's 2.29.0-beta) publishes no
+  Linux `processIdentity`, so today's client refuses a data-directory
+  connection to it. `qualify-standalone-service.ts` now connects to such a
+  backend by its descriptor's URL and auth file instead.
+

@@ -311,7 +311,24 @@ async function descriptorTarget(
     );
   }
   const baseUrl = normalizeBaseUrl(descriptor.url);
-  return {
+  // The process whose token this target hands out until a restart replaces
+  // it (an update, a rollback, a service manager restart).
+  const original = async () => {
+    // The service's own auth file is created mode 0600 by the backend.
+    const refusal = await descriptorProcessRefusal(descriptor, readStart);
+    if (refusal)
+      throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
+    return readTokenFile(descriptor.authFile, true);
+  };
+  /** The successor's target once one was adopted; it follows later restarts itself. */
+  let successor: ResolvedTarget | null = null;
+  const adopt = (next: ResolvedTarget) => {
+    target.baseUrl = next.baseUrl;
+    target.identity.endpoint = next.identity.endpoint;
+    if (next.identity.generation) target.identity.generation = next.identity.generation;
+    if (next.descriptorGeneration) target.descriptorGeneration = next.descriptorGeneration;
+  };
+  const target: ResolvedTarget = {
     identity: {
       name,
       kind,
@@ -320,17 +337,48 @@ async function descriptorTarget(
       generation: descriptor.generation,
     },
     baseUrl,
-    // The service's own auth file is created mode 0600 by the backend.
+    // Once the process it was resolved from has gone, follow the descriptor
+    // its successor publishes, but only for the same installation. Until one
+    // is published the original refusal stands, so a caller observing through
+    // a restart keeps waiting (`connection-failed`) instead of failing.
     readToken: async () => {
-      const refusal = await descriptorProcessRefusal(descriptor, readStart);
-      if (refusal)
-        throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
-      return readTokenFile(descriptor.authFile, true);
+      try {
+        if (!successor) return await original();
+        const token = await successor.readToken();
+        adopt(successor);
+        return token;
+      } catch (error) {
+        if (successor || !(error instanceof CliError) || error.code !== "connection-failed")
+          throw error;
+        const next = await refresh().catch((refreshError: unknown) => {
+          if (refreshError instanceof CliError && refreshError.code === "identity-mismatch")
+            throw refreshError;
+          return null;
+        });
+        if (!next) throw error;
+        if (next.expectedInstallationId !== descriptor.installationId) {
+          throw new CliError(
+            "identity-mismatch",
+            `The backend at ${kind} '${name}' is a different installation than the one resolved`,
+            {
+              details: {
+                expected: descriptor.installationId,
+                actual: next.expectedInstallationId ?? null,
+              },
+            },
+          );
+        }
+        const token = await next.readToken();
+        successor = next;
+        adopt(next);
+        return token;
+      }
     },
     expectedInstallationId: descriptor.installationId,
     descriptorGeneration: descriptor.generation,
     refresh,
   };
+  return target;
 }
 
 export interface TargetSelection {

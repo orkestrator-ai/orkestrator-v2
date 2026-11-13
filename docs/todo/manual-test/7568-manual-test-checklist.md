@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (307 items): run each check under
+1. **Manual tests and live checks** (309 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -40,7 +40,10 @@ were retired the same day, once their agent work was done; all three are
 in Git history at `14df96544`. 4961 was retired on 2026-11-11 once its
 storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
-were done; both are in Git history at `1fd391e3a`.
+were done; both are in Git history at `1fd391e3a`. 0033 was retired on
+2026-11-13, once its Linux systemd-container qualification passed; it is in
+Git history at `17d28238c`, and its record is in
+[host-updates.md](../../architecture/host-updates.md#qualification).
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -83,12 +86,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 24 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
-| Cross-cutting | 75 | 20 |
+| Cross-cutting | 77 | 20 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 307 | 53 |
+| **Total** | 309 | 53 |
 
 ## Outstanding work
 
@@ -473,14 +476,15 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) task 5: record a live Codex sub-agent turn.** In a `dev:test --fixture` profile with Codex credentials and `CODEX_BRIDGE_RECORD_NOTIFICATIONS` set, run one multi-agent v2 turn that spawns sub-agents on the current Codex pin, with a synthetic prompt. Hand the raw recording to an agent privately (it contains prompts and paths; do not commit it). Record: Codex pin, the recording's location, and whether the live transcript showed one row and the reloaded one two; reply to the coordinator.
 - [ ] **[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) task 10: remaining graph capability profile live runs.** On a disposable `dev:test --fixture` profile whose fixture project has a throwaway remote, run 0031 task 10's steps (use the `graph-profiles` scenario if it exists by then, otherwise `orkestrator graph launch` as on 2026-10-29) for: Grok and Cursor (steps 1 and 2); Claude on Linux with and without a working bubblewrap, including step 4 (break bubblewrap between launch and dispatch); and step 3 (`gh auth status` and `git push` over HTTPS from the node's shell, with a GitHub credential present on the host so withholding can be told from absence) on Claude, Grok, Codex and Pi. Record: per provider and platform the tier shown, the outcome and whether it matches, in a table like the 2026-10-29 one in 0031's task 10 section.
 
-- [ ] **[0033](../cross-cutting/0033-remote-host-upgrades.md) task 1: remote desktop update between two signed releases.** In a macOS VM or a spare Mac user account (quit any other Orkestrator on that host first, see 0244), and in a Linux VM with a desktop session (AppImage), install the older of two consecutive signed releases (recommended: `v2.32.0-beta`, then update to `v2.33.0-beta`, or the next consecutive pair). Never use a machine someone works on. Start one native agent turn in a fixture environment, then from a second machine run `orkestrator host update apply --yes --wait` (and `--when-idle` for the idle case). Exercise each in turn:
+- [ ] **0033 (retired) task 1: remote desktop update between two signed releases.** In a macOS VM or a spare Mac user account (quit any other Orkestrator on that host first, see 0244), and in a Linux VM with a desktop session (AppImage), install the older of two consecutive signed releases (recommended: `v2.32.0-beta`, then update to `v2.33.0-beta`, or the next consecutive pair). Never use a machine someone works on. Start one native agent turn in a fixture environment, then from a second machine run `orkestrator host update apply --yes --wait` (and `--when-idle` for the idle case). Exercise each in turn:
   - Postpone, and an unanswered 60 s countdown (it must restart);
   - cancel during the countdown and during `waiting-for-idle`;
   - the relaunch with one pinned tool's download blocked in the VM firewall: the retry must happen without a dialog;
   - with the iOS shell kept connected to that backend: it reconnects and the backend-served page reloads;
   - Settings → Machines → Updates: Rebuild… on an outdated environment, and the restart impact's host and container terminal counts.
-  Record: release pair, platform, the job states from `orkestrator host status --json` and the desktop dialog for each case, in 0033's Outstanding work, Qualification item 1.
-- [ ] **[0033](../cross-cutting/0033-remote-host-upgrades.md) task 2 (launchd half): standalone service on macOS launchd.** In a macOS VM or a spare Mac user account with no other Orkestrator running, install mise and this checkout, run `mise run build:cli`, then `bun scripts/qualify-standalone-service.ts --from 2.32.0-beta --to 2.33.0-beta --engines-bun <path to Bun 1.4.3> --report report.json` (check that `--engines-to` still names a release whose `engines.bun` the old Bun fails). The launchd branch of the script has never run anywhere. Record: the `report.json` (cancel during countdown, `--when-idle` self-update, broken `.990` release rolling back, `engines.bun` refusal), attached to 0033's Qualification item 2.
+  Record: release pair, platform, the job states from `orkestrator host status --json` and the desktop dialog for each case, in [host-updates.md, Qualification](../../architecture/host-updates.md#qualification).
+- [ ] **0033 (retired) task 2 (launchd half): standalone service on macOS launchd.** In a macOS VM or a spare Mac user account with no other Orkestrator running, install mise and this checkout, run `mise run build:cli`, then `bun scripts/qualify-standalone-service.ts --engines-bun <path to Bun 1.4.3> --report report.json` (its defaults are the pair the Linux run passed on 2026-11-13: 2.38.0-beta to 2.38.1-beta, a broken `2.38.1-beta.990`, and 2.29.0-beta under Bun 1.4.3 refusing 2.38.1-beta; pass a newer `--from`/`--to` pair if one is published). The launchd branch of the script has never run anywhere; the systemd branch passed in a container. Record: the `report.json` (cancel during countdown, `--when-idle` self-update, broken `.990` release rolling back, `engines.bun` refusal), summarised in [host-updates.md, Qualification](../../architecture/host-updates.md#qualification).
+- [ ] **0033 (retired) task 3 (macOS half): `gh` latest and pinned through the zip layout on macOS.** In the same spare Mac account or macOS VM (never a machine someone works on), start a headless backend from this checkout on a private data directory with the Control MCP off and a free port: `ORKESTRATOR_CONTROL_MCP_DISABLED=1 bun apps/backend/src/main.ts --data-dir <dir> --host 127.0.0.1 --allow-non-tailscale-bind --port <port> --runtime-flavor agent-test`, add it with `orkestrator connection add q --data-dir <dir>`, then run `orkestrator --connection q host gh latest --wait --json`, `host status --json`, and `host gh pinned --wait --json`. The Linux tar layout passed on 2026-11-13, and the macOS archive was inspected then (`gh_2.104.0_macOS_arm64.zip` is listed in `gh_2.104.0_checksums.txt` and holds `gh_2.104.0_macOS_arm64/bin/gh`, the path the code extracts), but nothing has unzipped and run it on a Mac. Pass: the `gh` tool row shows the newest upstream version, `channel: "latest"`, under `toolchains/gh-latest/<version>`, and `pinned` returns it to the pin. Record: the macOS version, architecture, the upstream `gh` version and both tool rows, in [host-updates.md, Qualification](../../architecture/host-updates.md#qualification).
 - [ ] **[7020](../cross-cutting/7020-browser-suites-after-network-churn-qualification.md) task 2 (other-kernel host): `test:browser`'s loopback namespace beyond beelink's kernel.** On a Linux host with a kernel other than beelink's, ideally Ubuntu 24.04 with its default `kernel.apparmor_restrict_unprivileged_userns=1`, run `mise run test:browser` and then the same files with `ORKESTRATOR_E2E_HOST_NETWORK=1` and a free `ORKESTRATOR_E2E_PORT`. Record: the host's distribution and kernel, the `[loopback-network]` notice line (isolated, or which prerequisite is missing), and whether the two results match, in 7020's Outstanding work.
 - [ ] **[7020](../cross-cutting/7020-browser-suites-after-network-churn-qualification.md) task 3: `agent-accounts.spec.ts:229` (390px) with Claude credentials.** On a host where using the Claude login is allowed, start a profile with Claude credentials and run `e2e/agent-testing/agent-accounts.spec.ts` case `:229` alone with `--repeat-each=3`. The 2026-11-05 failure left the Settings dialog over the drawer toggle with its modules loaded. Record: pass/fail per repeat and, for a failure, the trace's step, in 7020 (a new dated note under task 2's Investigation or Outstanding work).
 - [ ] **[4400](../cross-cutting/4400-gateway-502-under-load-live-evidence.md) task 1: count Serve's proxy errors after the fix ships.** On each node running a build with the 120 s keep-alive (beelink, rkmbp, arktech-mini), count `http: proxy error` lines per day over several days of normal use before and after, split by cause (`read: connection reset by peer`, `EOF`, `use of closed network connection`, dial failures). Linux: `journalctl -u tailscaled`; standalone Tailscale on macOS: `log show --predicate 'eventMessage CONTAINS "proxy error" AND eventMessage CONTAINS "34121"'`. Success: the three race causes fall to about zero (beelink's before-rate was about 1.5 a day). Record: per node, the date range and counts by cause, in 4400's Current state.

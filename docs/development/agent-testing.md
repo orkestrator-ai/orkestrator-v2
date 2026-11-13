@@ -1011,6 +1011,35 @@ Reloading must retain the delivered status without sending the carrier again.
 The native mail-steer suite separately exercises a turn changing between the
 active-run lookup and the provider's check of `expectedRunId`.
 
+The queued-steering inactive-path scenario has its own spec,
+`e2e/agent-testing/steer-inactive-live.spec.ts`, one case per platform. Codex
+runs on a real model under `ORKESTRATOR_AGENT_TEST_REVIEW=1`. Claude and
+Cursor run with no login and nothing billed under
+`ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1`: Claude's real CLI on a scripted
+loopback model, Cursor's real bridge over its fake SDK, which the case swaps in
+for `bridges/cursor-bridge/dist/index.js` and puts back afterwards. That entry
+is shared by every profile started from the checkout, so the swap holds an
+owner lock (`dist/index.qa-lock.json`) and a second run is refused while the
+first is alive; the bundle runs the fake only for the owning profile's bridges,
+and any other profile's launch runs the real entry kept as
+`dist/index.qa-real.js`. Claude's scripted model appends the marker once per
+delivered steer, so a duplicate delivery fails the case:
+
+```bash
+mise run dev:test --profile steer7 --fixture --no-agent-credentials --no-host-seed \
+  --agent-platforms claude,cursor --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=steer7 ORKESTRATOR_AGENT_TEST_STEER_FAKE_MODELS=1 \
+  mise run test:logged -- --name steer-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/steer-inactive-live.spec.ts
+mise run dev:stop --profile steer7
+mise run dev:reset --profile steer7
+```
+
+`ORKESTRATOR_AGENT_TEST_STEER_PLATFORMS` narrows the scripted platforms, and
+`ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS=claude,cursor` runs them on the
+profile's real logins instead (billed).
+
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
 so without a pin the native-tab case starts on the default your connected
@@ -1391,7 +1420,8 @@ The profile title shows only in the native window title: the packaged
 renderer is built without `VITE_ORKESTRATOR_PROFILE`, so its document title
 stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
 nothing waits for Vite. Native menu key equivalents are still not exercised:
-Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
+Playwright sends keys through Chromium, not the OS (0036 (retired) task 3; that pass
+is in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
 
 `log-controls-packaged-electron.spec.ts` runs against the same build (macOS too:
 `mise run package:mac:unpacked:test`). It turns on the real Settings switch, reads
@@ -1850,6 +1880,51 @@ started (`qa-outage-7835`, `qa-outage-7835r2` and the review runs'
 only the env and log files it wrote; the `output/agent-testing/<profile>/`
 results and the previews written by review runs are kept, as is everything
 that was there before. Nothing under `/tmp/orkestrator-test-run.*` was removed.
+
+### Live background-tab reconnect
+
+`e2e/agent-testing/background-tab-reconnect-live.spec.ts` measures reconnects
+from a tab the browser has really put in the background (to-do 0048 task 18).
+Headless Chromium never hides a page, and neither does a browser Playwright
+launches: its default switches turn background throttling off, and it enables
+DevTools focus emulation on every page, which keeps the page `visible` behind
+another tab or in a minimised window. So the spec starts Playwright's
+Chromium headed itself, without those switches, and attaches with
+`connectOverCDP(..., { noDefaults: true })`. It opens the app over the outage
+link of `client-outage-support.ts`, with one local terminal, lets the browser
+hide the tab (occlusion, another tab of the same window, or minimising), and
+checks that hidden timers are throttled, that a link that drops and returns
+while hidden is reconnected by the hidden tab on its own (within the ladder's
+16 s cap plus 4 s), and that showing the tab retries the main and terminal
+streams within 1 s. For that last check it waits, during the second outage,
+until both streams have just failed (each runs its own jittered ladder), so
+neither ladder's next rung can fall before the tab is shown; an attempt by
+either stream between the link returning and the tab becoming `visible`
+fails the run. Those rules and the browser's exception-safe startup (a
+failed start terminates the child before it rejects) are in
+`background-tab-reconnect-support.ts`, unit-tested by the default suite. It
+needs a display (it opens a window for a few minutes) and is opt-in:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile q48t18 \
+  --fixture --no-agent-credentials --no-host-seed --agent-platforms pi --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=q48t18 ORKESTRATOR_AGENT_TEST_LIVE_BACKGROUND_TAB=1 \
+  mise run test:logged -- --name background-tab -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  background-tab-reconnect-live.spec.ts --workers=1
+```
+
+`ORKESTRATOR_AGENT_TEST_OUTAGE_MS` sets each outage (45 s by default; 330000
+keeps the tab hidden past Chromium's five-minute intensive-throttling
+threshold, and the spec prints a line every 30 s so the logged runner's
+no-output watchdog does not end it). On a
+locked display every window is occluded: only the tab Chromium opened at
+launch is hidden, and the spec shows it with focus emulation, because
+bringing it to the front cannot. The evidence (`evidence-*.json`) names which
+happened (`hiddenBy`, `shownBy`). Chromium runs with `--use-mock-keychain`
+and `--password-store=basic`, and the spec removes its user-data directory
+and environment. The 2026-11-13 runs on macOS are recorded in
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md#background-tab-reconnect-2026-11-13-macos).
 
 ### Live cold restart
 

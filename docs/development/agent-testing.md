@@ -178,7 +178,10 @@ host refused the namespace, with the kernel's own message (for example Ubuntu
 24.04's AppArmor restriction or a container's seccomp profile).
 `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
 `test:browser` fails on a Linux host other than the one it was qualified on
-(to-do 7020 task 2).
+(to-do 7020 task 2). On macOS the wrapper runs both suites unchanged on the host
+network and prints no line, because Docker Desktop keeps its networks inside its
+VM; it creates no namespace and changes nothing in the Mac's network
+configuration (qualified 2026-11-13, to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so

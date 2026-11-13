@@ -3,7 +3,7 @@
  * (`ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1`, todo 0049): starts the scripted
  * loopback models and points the profile's own isolated Claude settings or
  * Codex config at them, or installs the Claude model, or OpenCode's
- * chat-completions model (todo 0008 task 7), inside a container.
+ * chat-completions model (todo 0008 (retired) task 7), inside a container.
  * Every change is undone by the returned `stop`. Never a real provider home:
  * the paths are under the profile's data directory, or the container's.
  */
@@ -218,7 +218,7 @@ function writeOpenCodeFakeConfig(file: string, baseUrl: string): void {
   );
 }
 
-/** Where the OpenCode fake serves inside a container (todo 0008 task 7). */
+/** Where the OpenCode fake serves inside a container (todo 0008 (retired) task 7). */
 export const CONTAINER_OPENCODE_FAKE_PORT = 47_124;
 /** Its base URL as the container's OpenCode server sees it. */
 export const CONTAINER_OPENCODE_FAKE_BASE_URL = `http://127.0.0.1:${CONTAINER_OPENCODE_FAKE_PORT}/v1`;
@@ -227,7 +227,7 @@ export const CONTAINER_OPENCODE_FAKE_SCRIPT = "/tmp/orkestrator-qa-fake-opencode
 
 /**
  * Point the profile's global OpenCode configuration at the fake a container
- * serves on its own loopback (todo 0008 task 7). A container's OpenCode
+ * serves on its own loopback (todo 0008 (retired) task 7). A container's OpenCode
  * server reads the profile's `opencode.json` through the read-only
  * `/opencode-config` input, which the backend stages when it creates a
  * runtime (`portable-inputs.ts`), so call this before the environment is
@@ -302,7 +302,7 @@ function dockerContainerExec(containerId: string): ContainerExec {
 
 /**
  * Serve the scripted chat-completions model on a container's loopback for
- * its OpenCode server (todo 0008 task 7). The configuration that points
+ * its OpenCode server (todo 0008 (retired) task 7). The configuration that points
  * OpenCode at it comes from the profile ({@link pointProfileOpenCodeAtContainerFake}).
  * The fake runs as `node`; its PID is recorded at spawn and checked against
  * its command line before it is signalled, so nothing else in the container

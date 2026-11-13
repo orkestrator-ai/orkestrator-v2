@@ -634,7 +634,7 @@ part of this qualification.
   [agent-engines.md](../../architecture/agent-engines.md) "Closing a tab retains
   the conversation" (archive semantics must agree with the explicit-delete
   path).
-- [0008-opencode-v2.md](0008-opencode-v2.md) (staged revert is
+- 0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`) (staged revert is
   2.x only).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the provider runs.

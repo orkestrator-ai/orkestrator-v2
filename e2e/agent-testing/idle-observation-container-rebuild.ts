@@ -1,5 +1,5 @@
 /**
- * The `rebuild` case of `idle-observation-live.spec.ts` (todo 0008 task 7):
+ * The `rebuild` case of `idle-observation-live.spec.ts` (todo 0008 (retired) task 7):
  * an OpenCode 2.x conversation in a container environment survives a
  * preserving rebuild, because the rebuild carries `opencode2.db` to the new
  * runtime's persistent mount.

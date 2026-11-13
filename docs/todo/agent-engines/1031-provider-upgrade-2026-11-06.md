@@ -26,7 +26,7 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 
 **Problem.** Every pinned SDK and CLI except OpenCode had a newer stable release, so upstream fixes and features were unused.
 
-**Context.** The runbook is [upgrade-agents.md](../../development/upgrade-agents.md); the previous round is [1020](1020-provider-upgrade-2026-10-30.md). OpenCode stays on 1.x until [0008](0008-opencode-v2.md)'s gate opens.
+**Context.** The runbook is [upgrade-agents.md](../../development/upgrade-agents.md); the previous round is [1020](1020-provider-upgrade-2026-10-30.md). OpenCode stays on 1.x until 0008 (retired)'s gate opens.
 
 **Investigation.** Upstream on 2026-11-06 (`npm view … dist-tags`, the Grok `stable` pointer, GitHub releases):
 
@@ -470,7 +470,7 @@ Signed out against 1.0.77: `agent stdio` reads `GROK_STORAGE_MODE` (the `--stora
 
 - [1020-provider-upgrade-2026-10-30.md](1020-provider-upgrade-2026-10-30.md)
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md) (candidates)
-- [0008-opencode-v2.md](0008-opencode-v2.md)
+- 0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)
 - [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md) (task 4, task 11)
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
 - [upgrade-agents.md](../../development/upgrade-agents.md)

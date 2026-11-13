@@ -40,7 +40,7 @@
  *   steered into it from its queue strip. The turn must end on the steer's
  *   reply, never the first prompt's, with the steer shown once, before and
  *   after a reload. Every other platform records it `skipped`.
- * - `rebuild`: OpenCode in a container only (todo 0008 task 7). A preserving
+ * - `rebuild`: OpenCode in a container only (todo 0008 (retired) task 7). A preserving
  *   rebuild moves the environment to a new runtime; the conversation's
  *   `opencode2.db` must come with it, so a follow-up turn settles on the same
  *   session with the earlier rows kept (`idle-observation-container-rebuild.ts`).
@@ -78,10 +78,10 @@
  * so no turn or title request can reach a hosted model; it needs no
  * credential source either. OpenCode's `shell` can background a command, so
  * `background` exercises OpenCode too (todo 0049 task 8). OpenCode's server
- * mirrors the same profile configuration (todo 0008 task 7).
+ * mirrors the same profile configuration (todo 0008 (retired) task 7).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude or OpenCode
- * in a new container environment (todo 0049 task 9, todo 0008 task 7) instead
+ * in a new container environment (todo 0049 task 9, todo 0008 (retired) task 7) instead
  * of a local one, from the profile's development image. With fake models the
  * scripted model is copied into the container and serves on its loopback,
  * because a host firewall may refuse the container's route to the host. For
@@ -1940,7 +1940,7 @@ test.describe("live idle observation", () => {
 
         await runCase("steer", async (record) => {
           // OpenCode is the platform whose composer steer had not been driven
-          // through the UI (todo 0008 task 7); the other fakes do not script it.
+          // through the UI (todo 0008 (retired) task 7); the other fakes do not script it.
           if (platform !== "opencode") {
             record.status = "skipped";
             record.notes.push("composer steer is checked on OpenCode only");

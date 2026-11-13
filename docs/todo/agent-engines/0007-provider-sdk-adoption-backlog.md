@@ -759,7 +759,7 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `PI_SELF_UPDATE_COMMAND` so `pi update` in a terminal tab defers to the
     managed pin.
 - OpenCode: `reference.list` and the other Session V2 features wait for
-  [0008-opencode-v2.md](0008-opencode-v2.md).
+  0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 
 ### Qualification
 
@@ -821,7 +821,7 @@ The billed Grok `costUsdTicks` run moved to the
   [0006-session-titles-and-history.md](0006-session-titles-and-history.md),
   [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md),
   [0004-composer-model-parameters.md](0004-composer-model-parameters.md),
-  [0008-opencode-v2.md](0008-opencode-v2.md).
+  0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed Grok turns of task 11) moved there on 2026-11-10.
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) owns removing the Claude
   `services/mcp-config.ts` parse.

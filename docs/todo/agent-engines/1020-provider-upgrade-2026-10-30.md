@@ -14,7 +14,7 @@ Analysed 2026-10-30 against main at `6ce02251b`.
 6. **Adopt-later and not-relevant calls**: every other change in the changelogs. Status: done (adopt-later items moved to 0007's Candidates).
 7. **Capacity and overload findings**: recorded for the retry-with-backoff work. Status: done (record only; no retry built here).
 8. **OpenCode 2.x gate**: whether anything in 2.x changed 0008's gate. Status: done (unchanged).
-9. **Live evidence at the new pins**: the checks the fixture and fake-model suites did not make that need no login: the Linux Claude sandbox probe, `claude-host-login-refresh.ts` in a container with a fake login, and `scripts/qualify-opencode-seeded-data.sh` with the OpenCode UI and build-pipeline smoke tests against a built image. Status: open for the two Claude checks (the signed-in checks moved to 7568 on 2026-11-10). The OpenCode check is done (obsolete: OpenCode 1.x and its seeded-data script were retired on 2026-11-11, see [0008](0008-opencode-v2.md) "OpenCode 1.x retired (2026-11-11)"; OpenCode 2's container qualification is 0008 task 7).
+9. **Live evidence at the new pins**: the checks the fixture and fake-model suites did not make that need no login: the Linux Claude sandbox probe, `claude-host-login-refresh.ts` in a container with a fake login, and `scripts/qualify-opencode-seeded-data.sh` with the OpenCode UI and build-pipeline smoke tests against a built image. Status: open for the two Claude checks (the signed-in checks moved to 7568 on 2026-11-10). The OpenCode check is done (obsolete: OpenCode 1.x and its seeded-data script were retired on 2026-11-11, see 0008 (retired) "OpenCode 1.x retired (2026-11-11)"; OpenCode 2's container qualification is 0008 task 7).
 
 ### 1. Upgrade decision for each provider
 
@@ -401,7 +401,7 @@ must be resolved before claiming release qualification.
 ## Related
 
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md) (candidates, corrected Codex goals entry)
-- [0008-opencode-v2.md](0008-opencode-v2.md)
+- 0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
 - [upgrade-agents.md](../../development/upgrade-agents.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in part of task 9) moved there on 2026-11-10.

@@ -8,7 +8,6 @@ import {
   type DatabaseEvidence,
   type RebuildCaseContext,
   type RebuildCaseRecord,
-  type RebuildEnvironment,
   type RebuildProjection,
 } from "./idle-observation-container-rebuild";
 

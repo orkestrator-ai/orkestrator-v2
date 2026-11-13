@@ -14,12 +14,12 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * ends the turn with the reply. OpenCode reaches the same endpoint through a
  * custom provider (`idle-observation-fake-models.ts`, todo 0049 task 6); its
  * `bash` tool also takes a description, which the call adds when the offered
- * schema names one. OpenCode 2.x names the same tool `shell` (todo 0008 task 7),
+ * schema names one. OpenCode 2.x names the same tool `shell` (todo 0008 (retired) task 7),
  * so the call uses whichever of the two the request offers, and its schema
  * offers `background`, which a background step sets (todo 0049 task 8). Pi has no sub-agent,
  * background or question tool, so those steps reply in text or run in the
  * foreground. It keeps no request body and logs
- * nothing. A container OpenCode run (todo 0008 task 7) bundles it into one
+ * nothing. A container OpenCode run (todo 0008 (retired) task 7) bundles it into one
  * file and serves it on the container's loopback on a fixed `--port`
  * (`installContainerFakeOpenCode`).
  */

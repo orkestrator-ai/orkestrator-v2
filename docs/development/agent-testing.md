@@ -2013,6 +2013,67 @@ viewer to `output/visual-previews/`. Stop and reset the profile afterwards.
 The latest figures are in
 [native-transcripts.md](../architecture/native-transcripts.md#one-request-per-round).
 
+### Live bytes per prompt send and turn check (loopback model)
+
+`e2e/agent-testing/transcript-read-bytes-live.spec.ts` counts what a real
+Claude bridge answers the backend for one prompt send and one turn check
+(efficiency batch E9), with no billed turn. It writes the profile's own Claude
+`settings.json` (pointing the CLI at `fake-anthropic-model.ts`) and the same
+counting `bun` wrapper as the conditional-reads spec, and removes both at the
+end. No page renders the session: commands go through `/invoke`, so every
+bridge read counted is the backend's own. After six streamed history turns it
+measures five prompt sends (the model parks each call, so a 6 s window holds the
+dispatch but no streaming), ten turn checks
+(`get_native_agent_session_state_update`), ten one-message projections (what
+turn checks called before E9) and idle and running background windows. The
+backend's own timers (the activity sweep and the change-evidence poll) are
+counted apart (`transcript-read-bytes-support.ts`).
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile e9-reads \
+  --fixture --headless --no-agent-credentials --no-host-seed --agent-platforms claude
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off ORKESTRATOR_AGENT_TEST_PROFILE=e9-reads \
+  ORKESTRATOR_AGENT_TEST_E9_READS=1 \
+  mise run test:logged -- --name e9-reads -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts \
+  transcript-read-bytes-live.spec.ts --workers=1
+```
+
+It fails when a turn check reads transcript rows. Counts, bytes and
+milliseconds go to `output/agent-testing/<run id>/transcript-read-bytes.json`;
+the latest figures are in
+[native-transcripts.md](../architecture/native-transcripts.md#live-bytes-per-prompt-send-and-turn-check).
+
+### Live bearer terminal stream
+
+`e2e/agent-testing/bearer-terminal-stream-live.spec.ts` shows, in headless
+Chromium, that a bearer client carries all its terminals on one stream while
+`/invoke` stays prompt. Like the direct clients of the client-outage spec, it
+loads the web client's own gateway module into a blank page on a loopback link
+(`client-outage-support.ts`) and hands it the profile's gateway token as a page
+argument, so traces, screenshots and video are off. The link records each
+request's kind and open and close times. Seven terminals print for 20 s while
+the page times `/invoke` one at a time and in bursts; an eighth terminal then
+joins (one rebuild, a re-read for each earlier terminal), and a control opens
+six per-terminal bearer streams by hand on a second link and checks that an
+`/invoke` behind them is held. Use any credential-free profile:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off ORKESTRATOR_AGENT_TEST_PROFILE=<profile> \
+  ORKESTRATOR_AGENT_TEST_LIVE_BEARER_TERMINALS=1 \
+  mise run test:logged -- --name bearer-terminals -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts \
+  bearer-terminal-stream-live.spec.ts --workers=1
+```
+
+A blank page that imports renderer modules from Vite first runs
+`installReactRefreshPreamble` (`client-outage-support.ts`):
+`web-gateway.ts` reaches a `.tsx` module, which `@vitejs/plugin-react` refuses
+to run without the preamble the app's `index.html` installs. Evidence goes to
+`output/agent-testing/<run id>/bearer-terminal-stream.json`; the latest result
+is in
+[remote-gateway.md](../architecture/remote-gateway.md#event-stream-reconnects).
+
 ### Loopback plan-usage origin
 
 A spec that scripts Claude or Codex account usage on a separate-process

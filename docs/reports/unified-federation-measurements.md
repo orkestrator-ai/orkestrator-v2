@@ -171,7 +171,7 @@ The run deliberately left out the spec suite's
 | Direct over the LAN | Not measured: one host, and `dev:test` binds loopback only |
 | Tailscale Serve | Not measured: `dev:test` never configures Tailscale Serve, and the production instance was not touched |
 
-Todo 5380 task 2 stays open for the LAN and Tailscale Serve rows.
+Todo 5380 (retired) task 2, now an item on the manual-test checklist (`docs/todo/manual-test/7568-manual-test-checklist.md`), stays open for the LAN and Tailscale Serve rows.
 
 ### Long-lived requests per origin (P5)
 

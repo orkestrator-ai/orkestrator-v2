@@ -914,6 +914,8 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/claude-warm-runtime-support.test.ts",
   "./e2e/agent-testing/opencode-fake-provider.test.ts",
   "./e2e/agent-testing/mcp-probe-server.integration.test.ts",
+  // Slow tier (`*.integration.test.ts`): spawns the real backend-store.ts helper.
+  "./e2e/agent-testing/coordinator-live-account-fixtures.integration.test.ts",
   "./test-fixtures/agent-project/server.test.ts",
 ];
 

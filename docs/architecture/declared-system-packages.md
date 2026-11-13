@@ -128,6 +128,16 @@ network choice for a container (`aptPackagesNotice`,
 Restricted, that `deb.debian.org` becomes reachable; or a warning that setup
 will stop on the list.
 
+## Generating `orkestrator-ai.json`
+
+The Run Script agent writes the file from `createOrkestratorScriptPrompt`
+(`packages/protocol/src/orkestrator-script-prompt.ts`). Its guidance lists
+`aptPackages` among the allowed keys with the rules above (names only, at most
+`MAX_APT_PACKAGES`, real trixie packages, the refused kinds), names the tools
+the image already has so they are not declared, and tells the agent to declare
+system packages there instead of in `root` steps and to move an existing
+`root` step that only runs `apt-get install` into the field.
+
 ## Tests
 
 - `tests/unit/apt-packages-installer.test.ts`: the installer's rules match the

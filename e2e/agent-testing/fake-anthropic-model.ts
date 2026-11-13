@@ -78,6 +78,13 @@ export interface FakeModelCall {
 export interface FakeToolStep {
   /** The tool's exact name, or `*<suffix>` for the offered tool ending in `<suffix>`. */
   tool: string;
+  /** Called instead of the bare suffix when no offered tool ends in it (a deferred MCP tool). */
+  fallback?: string;
+  /**
+   * The call's input. The string `{{resultKey}}` anywhere in it becomes the
+   * workflow result key the turn's instructions quote, so a script can submit
+   * a result the way a model following those instructions would.
+   */
   input: Record<string, unknown>;
 }
 
@@ -324,7 +331,25 @@ export function retryOf(prompt: string): { id: string; failures: number } | unde
 export function resolveStepTool(step: FakeToolStep, offered: readonly string[]): string {
   if (!step.tool.startsWith("*")) return step.tool;
   const suffix = step.tool.slice(1);
-  return offered.find((name) => name.endsWith(suffix)) ?? suffix;
+  return offered.find((name) => name.endsWith(suffix)) ?? step.fallback ?? suffix;
+}
+
+const RESULT_KEY_PATTERN =
+  /resultKey\W{1,4}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/** The workflow result key a request's instructions quote, if any. */
+export function quotedResultKey(body: unknown): string | undefined {
+  return RESULT_KEY_PATTERN.exec(JSON.stringify(body ?? null))?.[1];
+}
+
+/** A step's input with `{{resultKey}}` replaced by the key the request quotes. */
+export function resolveStepInput(step: FakeToolStep, body: unknown): Record<string, unknown> {
+  const raw = JSON.stringify(step.input);
+  if (!raw.includes("{{resultKey}}")) return step.input;
+  const key = quotedResultKey(body);
+  return key
+    ? (JSON.parse(raw.replaceAll("{{resultKey}}", key)) as Record<string, unknown>)
+    : step.input;
 }
 
 /** The number of extra lines a `[stream:<n>]` prompt asks for, bounded. */
@@ -525,7 +550,7 @@ export async function startFakeAnthropicModel(
           if (streaming) {
             response
               .writeHead(200, { "content-type": "text/event-stream" })
-              .end(toolCallStreamFrames(id, model, tool, step.input));
+              .end(toolCallStreamFrames(id, model, tool, resolveStepInput(step, body)));
           } else {
             response.writeHead(200, { "content-type": "application/json" }).end(
               JSON.stringify({
@@ -533,7 +558,14 @@ export async function startFakeAnthropicModel(
                 type: "message",
                 role: "assistant",
                 model,
-                content: [{ type: "tool_use", id: `toolu_${id}`, name: tool, input: step.input }],
+                content: [
+                  {
+                    type: "tool_use",
+                    id: `toolu_${id}`,
+                    name: tool,
+                    input: resolveStepInput(step, body),
+                  },
+                ],
                 stop_reason: "tool_use",
                 stop_sequence: null,
                 usage: { input_tokens: 1, output_tokens: 1 },

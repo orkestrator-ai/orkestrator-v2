@@ -63,6 +63,7 @@ export default defineConfig({
     "remote-bandwidth-live.spec.ts",
     "restore-apply-bulk-live.spec.ts",
     "transcript-parts-live.spec.ts",
+    "graph-profiles-fake.spec.ts",
     "codex-typed-prompts-live.spec.ts",
     "codex-refused-login-live.spec.ts",
     "codex-saved-rules-live.spec.ts",

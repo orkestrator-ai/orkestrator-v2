@@ -9,6 +9,8 @@ import {
   MAX_RETRY_FAILURES,
   MAX_STREAM_DELTAS,
   offeredToolNames,
+  quotedResultKey,
+  resolveStepInput,
   resolveStepTool,
   retryOf,
   scriptIdOf,
@@ -295,9 +297,33 @@ describe("endpoint", () => {
     expect(model.calls()[0]!.tools).toEqual(["Write", "mcp__orkestrator__submit_report"]);
   });
 
-  test("a suffix step with no matching tool calls the bare name", () => {
+  test("a suffix step with no matching tool calls its fallback, else the bare name", () => {
     expect(resolveStepTool({ tool: "*submit_report", input: {} }, ["Read"])).toBe("submit_report");
+    expect(
+      resolveStepTool(
+        { tool: "*__submit_report", fallback: "mcp__orkestrator__submit_report", input: {} },
+        ["Read"],
+      ),
+    ).toBe("mcp__orkestrator__submit_report");
     expect(resolveStepTool({ tool: "Bash", input: {} }, [])).toBe("Bash");
+  });
+
+  test("a step's {{resultKey}} becomes the key the turn's instructions quote", () => {
+    const key = "f01ce923-284c-5f76-b40d-1c10d26ca222";
+    const body = {
+      system: [
+        { type: "text", text: `call \`submit_report\` with resultKey "${key}" and the result` },
+      ],
+      messages: [],
+    };
+    expect(quotedResultKey(body)).toBe(key);
+    expect(quotedResultKey({ messages: [] })).toBeUndefined();
+    const step = { tool: "x", input: { resultKey: "{{resultKey}}", result: { text: "t" } } };
+    expect(resolveStepInput(step, body)).toEqual({ resultKey: key, result: { text: "t" } });
+    // No key to fill: the input is sent as written, and the tool refuses it.
+    expect(resolveStepInput(step, { messages: [] })).toEqual(step.input);
+    const plain = { tool: "x", input: { a: 1 } };
+    expect(resolveStepInput(plain, body)).toBe(plain.input);
   });
 
   test("a retry prompt fails its first n calls with 500, then answers", async () => {

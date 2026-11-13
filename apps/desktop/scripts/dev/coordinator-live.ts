@@ -57,7 +57,11 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * has the root-changes approval accepted in the dialog (Claude only, see
  * `coordinator-live-surfaces.ts`); `gap-tools` calls each tool from the
  * coordinator gap review once against one worker
- * (`coordinator-live-gap-tools.ts`); `peer` drives two ordinary environments' mail with Wake peers on, and runs
+ * (`coordinator-live-gap-tools.ts`); `graph-profiles` launches one-node graphs
+ * whose agent node has the reviewer, builder and (Claude only) researcher
+ * capability profile and checks the tier the launch picker showed against
+ * what the provider let the node do (`coordinator-live-graph-profiles.ts`);
+ * `peer` drives two ordinary environments' mail with Wake peers on, and runs
  * last because it is the one case that changes the messaging defaults. Each
  * writes its own summary, and the platform's verdict combines them.
  */
@@ -72,6 +76,7 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "routing",
   "surfaces",
   "gap-tools",
+  "graph-profiles",
   "peer",
 ] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];

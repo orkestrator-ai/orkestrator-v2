@@ -279,7 +279,7 @@ override never lengthens an agent close).
 | `multi-review-service.test.ts` (371) | `-part-1` to `-part-4`; the 2.2 s lease sleep runs on a 3x clock | 12.8 s to 3.5 s |
 | `terminal-history.test.ts` (66) | `-part-1` to `-part-4` | 12.9 s to 4.2-6.2 s |
 | `project-git-mirror.integration.test.ts` (72) | four `.integration` files; the two 5 s copy-guard tests land in different files | 19.7 s to 6.5 s |
-| `content-server.engines.test.ts` (27) | nine files, three lanes per engine | 29.3 s to 10.3 s (chromium part) |
+| `content-server.engines.test.ts` (27) | nine files, three lanes per engine; each lane's tests are written once in `content-server.engines-lane-<n>-test-support.ts` | 29.3 s to 10.3 s (chromium part) |
 | `AgentNativeTab.test.tsx` (390) | three files plus a support module | longest piece 12-15 s to 5.1 s |
 
 The test-name multisets match the originals for multi-review, terminal history,
@@ -344,9 +344,13 @@ interval read `getConfig().asyncUtilInterval` (default still 50), and
 - **Guard coverage.** Moving `settle` and `pause` into
   `content-server.engines-test-support.ts` first hid the engine parts' windows
   from the `sleep-before-negative-assertion` guard (baseline 5 became 3). The
-  guard now follows sleep helpers imported from relative test-support modules,
-  so it counts the original five windows once per engine (3 in each `-1` part,
-  2 in each `-2` part). The waits are unchanged.
+  guard now follows sleep helpers imported from relative test-support modules.
+  The engine parts were then nine copies of the same test bodies, so the
+  baseline allowed the five windows once per engine (15 in all). Each lane's
+  tests now live once in `content-server.engines-lane-<n>-test-support.ts`
+  and each engine part only calls `defineEngineLane<n>` for its engine, so the
+  baseline holds the original five (3 in lane 1, 2 in lane 2). The waits are
+  unchanged.
 - **Engine report.** With `ARTIFACT_ENGINE_REPORT` set, the nine engine parts
   merge into one report from separate workers. The merge
   (`content-server.engines-report-test-support.ts`) holds a lock file and

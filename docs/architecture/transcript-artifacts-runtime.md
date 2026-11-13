@@ -820,7 +820,8 @@ packaged `.app`.
 
 ### Browser engine qualification (2026-10-20)
 
-`content-server.engines-*.test.ts` (one file per engine and lane) serves prepared documents from the real
+`content-server.engines-*.test.ts` (one file per engine and lane; each lane's tests are defined once in
+`content-server.engines-lane-<n>-test-support.ts`) serves prepared documents from the real
 `LoopbackArtifactContentServer` (content on `localhost`, the test
 "application" on `127.0.0.1`) and drives each engine through playwright-core
 1.64.0: Chromium is the design renderer's resolved browser (Google Chrome

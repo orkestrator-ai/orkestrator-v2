@@ -29,8 +29,10 @@
  * firefox webkit` for the repository's pinned playwright-core).
  *
  * Shared by the `content-server.engines-<engine>-<n>.test.ts` parts: one file per engine and
- * lane, so `bun test --parallel` overlaps the engines' fixed negative-observation windows. Every part
- * starts its own sink, parent servers and content server, and launches its own browser.
+ * lane, so `bun test --parallel` overlaps the engines' fixed negative-observation windows. Each
+ * lane's tests are defined once, in `content-server.engines-lane-<n>-test-support.ts`, and every
+ * part calls its lane for its own engine. Every part starts its own sink, parent servers and
+ * content server, and launches its own browser.
  */
 import { afterAll, beforeAll } from "bun:test";
 import { createHash } from "node:crypto";

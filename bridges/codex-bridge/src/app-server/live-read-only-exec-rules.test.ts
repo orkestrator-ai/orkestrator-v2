@@ -21,7 +21,9 @@
  *
  * The container itself (bubblewrap refused, the marker files) is not part of
  * this check: the exec-policy decision does not depend on the platform outside
- * Windows. A full reviewer turn in a container is to-do 7872.
+ * Windows. A whole reviewer turn is `live-read-only-reviewer-turn.test.ts`, and
+ * the same review in a real container is
+ * `e2e/agent-testing/container-multi-review-codex-read-only.spec.ts`.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";

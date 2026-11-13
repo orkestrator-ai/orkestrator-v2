@@ -531,8 +531,23 @@ and a direct (bearer) or cross-origin client with `fetch`, because an
 commands queued behind them on HTTP/1.1, which allows about six connections per
 host, and would hold one of the gateway's eight streaming-gzip slots per
 terminal. Changing the filter reopens the stream, and every terminal it
-already carried is told to re-read its snapshot. A
-backend restart drops all of them in every open tab at once, so each stream
+already carried is told to re-read its snapshot.
+
+A real headless Chromium showed this on 2026-11-13 (`17d28238c`,
+`bearer-terminal-stream-live.spec.ts`,
+[how to run it](../development/agent-testing.md#live-bearer-terminal-stream)):
+a bearer client over plain HTTP/1.1 held one terminal stream and one main
+stream while seven terminals printed, every terminal's output arrived on it,
+and `/invoke` answered in p90 25 ms one at a time (max 45 ms) and p90 35 ms in
+bursts of five, against p90 25 ms before the output started. An eighth
+terminal rebuilt the stream once (the new one opens before the old one closes,
+so two were open for about a second) and sent all seven earlier terminals a
+re-read. Six per-terminal bearer streams opened by hand, as clients did
+before, held an `/invoke` unanswered for the whole 4 s the control waited.
+Which protocol real Tailscale Serve and hosted routes negotiate is an item on
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
+A backend restart drops these streams in every open tab at once, so each stream
 reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 `packages/protocol/src/reconnect-backoff.ts`, wired in
 `apps/web/src/lib/native/web-gateway.ts`):

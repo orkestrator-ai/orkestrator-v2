@@ -8,6 +8,7 @@ import {
 import { CoordinatorService } from "../src/core/coordinator-service.js";
 import {
   COORDINATOR_WORKFLOW_NEAR_LIMIT,
+  COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
 } from "../src/core/coordinator-workflow-retention.js";
 import { runCommand } from "../src/core/shell.js";
@@ -44,6 +45,15 @@ import { isDefaultDataDir } from "../src/data-dir.js";
  * are moved two days back instead, which leaves them as finished history a
  * cleanup may clear, so a smaller count takes effect on the next start.
  *
+ * The store's limit is shared with every other project, so the seeded records
+ * share it too. When the store reaches its limit, each new record goes in the
+ * way any launch's does: the store clears a batch of the oldest finished
+ * records, whichever project they belong to, and refuses once every record
+ * left is in use. Other projects' records in use are never cleared. When that
+ * refusal comes before the requested count, seeding stops there with the
+ * store full, which is the state `full` asks for, and the result counts the
+ * records it could not add (`refused`) instead of failing part-way.
+ *
  * Refuses the platform's default data directory and any directory that is not
  * the `data` folder of a development profile.
  */
@@ -62,6 +72,11 @@ export interface SeedCoordinatorWorkflowsResult {
   inUse: number;
   /** Seeded records left as clearable history. */
   stale: number;
+  /**
+   * Requested records not added because every record left in the store was
+   * in use (other projects' work included): the store is full.
+   */
+  refused: number;
   /** Every workflow record in the store, seeded or not. */
   storeRecords: number;
 }
@@ -157,7 +172,15 @@ export async function seedCoordinatorWorkflowRecords(
       createdAt: at,
       workerOutcome: { ended: endedWatch },
     };
-    await storage.coordinators.saveCoordinatorWorkflowAssociation(association);
+    try {
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(association);
+    } catch (error) {
+      // Every record left is in use: the store is full, which is as far as
+      // seeding can go. Anything else is a real failure.
+      if (error instanceof Error && error.message === COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR)
+        break;
+      throw error;
+    }
     added += 1;
   }
 
@@ -169,6 +192,7 @@ export async function seedCoordinatorWorkflowRecords(
     added,
     inUse: keep.size + added,
     stale: seeded.length - keep.size,
+    refused: records - keep.size - added,
     storeRecords,
   };
 }

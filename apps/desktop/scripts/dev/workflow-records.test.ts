@@ -18,6 +18,7 @@ import {
   parseWorkflowRecordSeed,
   seededWorkflowCheckout,
   seedProfileWorkflowRecords,
+  type WorkflowSeedRunner,
 } from "./workflow-records.js";
 
 const directories: string[] = [];
@@ -102,11 +103,23 @@ describe("--seed-workflow-records", () => {
       added: 1800,
       inUse: 1800,
       stale: 0,
+      // The result line above carries no `refused`; a missing count reads as none.
+      refused: 0,
       storeRecords: 1800,
     });
     expect(logged.join("")).toContain("storage noise");
     expect(formatSeededWorkflowRecords(seeded, seededWorkflowCheckout(profile))).toBe(
       "Seeded coordinator workflow records: 1800 in use (1800 new), 1800 in the store; " +
+        "open the coordinator of /profile/fixtures/seeded-workflows",
+    );
+    expect(
+      formatSeededWorkflowRecords(
+        { ...seeded, added: 1970, inUse: 1970, refused: 30, storeRecords: 2000 },
+        seededWorkflowCheckout(profile),
+      ),
+    ).toBe(
+      "Seeded coordinator workflow records: 1970 in use (1970 new) " +
+        "(30 refused: the store is full of records in use), 2000 in the store; " +
         "open the coordinator of /profile/fixtures/seeded-workflows",
     );
   });
@@ -135,7 +148,7 @@ describe("--seed-workflow-records", () => {
 
     await writeFile(path.join(root, DEV_PROFILE_SENTINEL), "{}");
     const first = await seedProfileWorkflowRecords(profile, 3);
-    expect(first).toMatchObject({ added: 3, inUse: 3, stale: 0, storeRecords: 3 });
+    expect(first).toMatchObject({ added: 3, inUse: 3, stale: 0, refused: 0, storeRecords: 3 });
     expect(existsSync(path.join(seededWorkflowCheckout(profile), ".git"))).toBe(true);
     // A restart refreshes the same records rather than adding more.
     const again = await seedProfileWorkflowRecords(profile, 2);
@@ -148,7 +161,12 @@ describe("--seed-workflow-records", () => {
     });
   }, 30_000);
 
-  test("a dev:test start seeds after the bridge build, before Electron, and stops on a failure", async () => {
+  /**
+   * Starts a `dev:test` profile with `--seed-workflow-records near-limit` up to
+   * the Vite spawn, which the injected `spawn` refuses: nothing reaches a real
+   * Vite, Electron or backend. `seed` answers for the backend script.
+   */
+  async function startSeeded(seed: WorkflowSeedRunner) {
     const root = await temporaryDirectory("ork-dev-workflow-seed-start-");
     const roots = {
       developmentRoot: path.join(root, "dev"),
@@ -171,6 +189,10 @@ describe("--seed-workflow-records", () => {
     });
     const order: string[] = [];
     const seedCalls: string[][] = [];
+    const signals = {
+      SIGINT: process.listeners("SIGINT"),
+      SIGTERM: process.listeners("SIGTERM"),
+    };
     const bridges = spyOn(bridgeBuilds, "prepareProfileBridgeBuilds").mockImplementation(
       async () => {
         order.push("bridges");
@@ -185,52 +207,101 @@ describe("--seed-workflow-records", () => {
     const request = spyOn(globalThis, "fetch").mockImplementation((async () => {
       throw new Error("Outbound fetch forbidden in lifecycle test");
     }) as unknown as typeof fetch);
+    let error: unknown;
+    let printed: string[] = [];
     try {
       await mkdir(roots.developmentRoot, { recursive: true });
-      await expect(
-        startDevelopment(args, "agent-test", {
-          roots,
-          prune: async () => [],
-          typecheck: () => {
-            order.push("typecheck");
-            return { status: 0 };
-          },
-          bundle: async () => {
-            order.push("bundle");
-            return { success: true, outputs: [], logs: [] } as unknown as Bun.BuildOutput;
-          },
-          seedWorkflowRecords: async (seedArgs) => {
-            order.push("seed");
-            seedCalls.push(seedArgs);
-            return { code: 1, output: "Coordinator workflow store is full\n" };
-          },
-        }),
-      ).rejects.toThrow("Seeding coordinator workflow records failed");
-      // Nothing after the seeding ran: no Vite, no Electron, so no backend.
-      expect(order).toEqual(["typecheck", "bundle", "bridges", "seed"]);
-      expect(seedCalls[0]).toEqual([
-        "--data-dir",
-        profile.dataDir,
-        "--checkout",
-        seededWorkflowCheckout(profile),
-        "--records",
-        "near-limit",
-      ]);
-      expect(
-        await readFile(path.join(profile.logDir, "workflow-records-seed.log"), "utf8"),
-      ).toContain("store is full");
-      const status = JSON.parse(await readFile(statusManifestPath(profile), "utf8")) as {
-        status: string;
-        error: string;
-      };
-      expect(status.status).toBe("failed");
-      expect(status.error).toContain("Seeding coordinator workflow records failed");
+      await startDevelopment(args, "agent-test", {
+        roots,
+        prune: async () => [],
+        typecheck: () => {
+          order.push("typecheck");
+          return { status: 0 };
+        },
+        bundle: async () => {
+          order.push("bundle");
+          return { success: true, outputs: [], logs: [] } as unknown as Bun.BuildOutput;
+        },
+        seedWorkflowRecords: async (seedArgs) => {
+          order.push("seed");
+          seedCalls.push(seedArgs);
+          return seed(seedArgs);
+        },
+        spawn: ((command: string) => {
+          order.push(command === "bun" ? "vite" : "electron");
+          throw new Error("Spawn refused in lifecycle test");
+        }) as unknown as typeof import("node:child_process").spawn,
+      });
+    } catch (caught) {
+      error = caught;
     } finally {
+      printed = log.mock.calls.map((call) => String(call[0]));
       request.mockRestore();
       log.mockRestore();
       credentials.mockRestore();
       prefetch.mockRestore();
       bridges.mockRestore();
+      for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        for (const listener of process.listeners(signal)) {
+          if (!signals[signal].includes(listener)) process.removeListener(signal, listener);
+        }
+      }
     }
+    return { profile, order, seedCalls, printed, error };
+  }
+
+  test("a dev:test start seeds after the bridge build, before Electron, and stops on a failure", async () => {
+    const { profile, order, seedCalls, error } = await startSeeded(async () => ({
+      code: 1,
+      output: "Coordinator workflow store is full\n",
+    }));
+    expect(String(error)).toContain("Seeding coordinator workflow records failed");
+    // Nothing after the seeding ran: no Vite, no Electron, so no backend.
+    expect(order).toEqual(["typecheck", "bundle", "bridges", "seed"]);
+    expect(seedCalls[0]).toEqual([
+      "--data-dir",
+      profile.dataDir,
+      "--checkout",
+      seededWorkflowCheckout(profile),
+      "--records",
+      "near-limit",
+    ]);
+    expect(
+      await readFile(path.join(profile.logDir, "workflow-records-seed.log"), "utf8"),
+    ).toContain("store is full");
+    const status = JSON.parse(await readFile(statusManifestPath(profile), "utf8")) as {
+      status: string;
+      error: string;
+    };
+    expect(status.status).toBe("failed");
+    expect(status.error).toContain("Seeding coordinator workflow records failed");
+  });
+
+  test("a successful seeding prints its summary and the start goes on to Vite", async () => {
+    const seeded = {
+      projectId: "p",
+      coordinatorId: "c",
+      added: 1800,
+      inUse: 1800,
+      stale: 0,
+      refused: 0,
+      storeRecords: 1800,
+    };
+    const { profile, order, printed, error } = await startSeeded(async () => ({
+      code: 0,
+      output: `${resultLine(seeded)}\n`,
+    }));
+    // The launch carried on past the seeding to the Vite spawn, which this
+    // test refuses; that refusal, not the seeding, is what stopped it.
+    expect(order).toEqual(["typecheck", "bundle", "bridges", "seed", "vite"]);
+    expect(String(error)).toContain("Spawn refused in lifecycle test");
+    expect(printed).toContain(formatSeededWorkflowRecords(seeded, seededWorkflowCheckout(profile)));
+    expect(
+      await readFile(path.join(profile.logDir, "workflow-records-seed.log"), "utf8"),
+    ).toContain("orkestrator-seeded-workflow-records");
+    const status = JSON.parse(await readFile(statusManifestPath(profile), "utf8")) as {
+      error?: string;
+    };
+    expect(status.error ?? "").not.toContain("Seeding coordinator workflow records failed");
   });
 });

@@ -35,6 +35,8 @@ export type SeededWorkflowRecords = {
   added: number;
   inUse: number;
   stale: number;
+  /** Requested records the store refused because every record left was in use. */
+  refused: number;
   storeRecords: number;
 };
 
@@ -107,6 +109,7 @@ export async function seedProfileWorkflowRecords(
     added: Number(result.added),
     inUse: Number(result.inUse),
     stale: Number(result.stale),
+    refused: Number(result.refused ?? 0),
     storeRecords: Number(result.storeRecords),
   };
 }
@@ -115,8 +118,10 @@ export function formatSeededWorkflowRecords(
   records: SeededWorkflowRecords,
   checkout: string,
 ): string {
+  const refused =
+    records.refused > 0 ? ` (${records.refused} refused: the store is full of records in use)` : "";
   return (
-    `Seeded coordinator workflow records: ${records.inUse} in use (${records.added} new), ` +
+    `Seeded coordinator workflow records: ${records.inUse} in use (${records.added} new)${refused}, ` +
     `${records.storeRecords} in the store; open the coordinator of ${checkout}`
   );
 }

@@ -540,6 +540,13 @@ seeded records back into it: the state lasts a day after the last seeded
 start. A smaller count on a later start leaves the rest as finished history
 that a cleanup may clear; `dev:reset` removes everything.
 
+The limit is shared with the profile's other projects. At the limit each
+seeded record goes in the way any launch's does: the store clears the oldest
+finished records, whichever project they belong to, and never one still in
+use. When only records in use are left before the requested count is reached,
+seeding stops there with the store full and the summary names how many were
+refused, so `full` on a profile with other live work seeds fewer than 2,000.
+
 ## Sign a browser in
 
 ```bash

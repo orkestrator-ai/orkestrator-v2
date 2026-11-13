@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import {
   assertProfileDataDir,
   resolveSeedRecordCount,
@@ -133,5 +134,68 @@ describe("seeding in-use coordinator workflow records", () => {
     });
     expect(refreshed).toMatchObject({ added: 0, inUse: COORDINATOR_WORKFLOW_NEAR_LIMIT });
     expect(await storage.coordinators.getCoordinatorWorkflowStoreState()).toBe("near-limit");
+  }, 60_000);
+
+  test("full shares the store with other projects' records and stops when it is full", async () => {
+    const { storage, checkout } = await profile();
+    const day = 24 * 60 * 60 * 1000;
+    // Another project's launch records for environments that no longer
+    // exist: some still inside the replay window (in use), some finished.
+    const other = (index: number, createdAt: number): CoordinatorWorkflowAssociation => ({
+      id: `other-${index}`,
+      projectId: "other-project",
+      coordinatorId: "other-coordinator",
+      kind: "environment",
+      resourceId: `other-environment-${index}`,
+      requestId: `other-request-${index}`,
+      createdAt: new Date(createdAt).toISOString(),
+      workerOutcome: {
+        ended: { key: "untracked", at: new Date(createdAt).toISOString(), notified: false },
+      },
+    });
+    const inUse = 30;
+    const finished = 50;
+    for (let index = 0; index < inUse; index += 1) {
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(other(index, Date.now()));
+    }
+    for (let index = inUse; index < inUse + finished; index += 1) {
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(
+        other(index, Date.now() - 3 * day),
+      );
+    }
+
+    const full = await seedCoordinatorWorkflowRecords(storage, {
+      checkout,
+      records: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+    });
+    // The store made room by clearing the other project's finished records,
+    // as it does for any launch, then refused once only records in use were
+    // left: seeding stops there instead of failing part-way.
+    expect(full).toMatchObject({
+      added: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - inUse,
+      inUse: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - inUse,
+      stale: 0,
+      refused: inUse,
+      storeRecords: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+    });
+    expect(await storage.coordinators.getCoordinatorWorkflowStoreState()).toBe("full");
+    const { workflows } = await storage.coordinators.getCoordinatorReconciliationState();
+    const others = workflows
+      .filter((association) => association.projectId === "other-project")
+      .map((association) => association.id)
+      .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+    // Every record the other project still uses is kept.
+    expect(others).toEqual(Array.from({ length: inUse }, (_, index) => `other-${index}`));
+
+    // A repeat start refreshes what it seeded and refuses the same shortfall.
+    const again = await seedCoordinatorWorkflowRecords(storage, {
+      checkout,
+      records: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+    });
+    expect(again).toMatchObject({
+      added: 0,
+      inUse: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - inUse,
+      refused: inUse,
+    });
   }, 60_000);
 });

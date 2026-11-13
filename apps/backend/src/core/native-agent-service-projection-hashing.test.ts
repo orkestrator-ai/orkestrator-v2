@@ -315,16 +315,25 @@ describe("head-row recovery", () => {
     let revision = 1;
     let trimmed = false;
     let complete = true;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
+    // One gate per exact read, in the order the reads start.
+    const gates: Array<{ promise: Promise<void>; release: () => void }> = [];
+    const gate = (call: number) => {
+      while (gates.length <= call) {
+        let release!: () => void;
+        const promise = new Promise<void>((resolve) => (release = resolve));
+        gates.push({ promise, release });
+      }
+      return gates[call]!;
+    };
     const full = (at: number) =>
       row("response", `Update ${at}`, [
         toolPart(0, "done"),
         { type: "text", content: `Update ${at}` },
       ]);
+    let reads = 0;
     const messages = mock(async () => {
       const at = revision;
-      await gate;
+      await gate(reads++).promise;
       return [full(at)];
     });
     const stub = createProviderStub("codex", {
@@ -352,7 +361,11 @@ describe("head-row recovery", () => {
     return {
       stub,
       messages,
-      release: () => release(),
+      /** Lets exact read number `call` (from 0) answer. */
+      release: (call = 0) => gate(call).release(),
+      releaseAll: () => {
+        for (const { release } of gates) release();
+      },
       stream: () => {
         trimmed = true;
         complete = false;
@@ -371,14 +384,15 @@ describe("head-row recovery", () => {
       provider: ReturnType<typeof slowRecoveryProvider>;
       shown: () => Promise<{ content: string; parts: number }>;
     }) => Promise<void>,
+    // By default only the first recovery starts within the test.
+    settleMs = 60_000,
   ) {
     const provider = slowRecoveryProvider();
     await withService(
       {
         prefix: `orkestrator-7845-${name}-`,
         provider: async () => provider.stub.provider,
-        // Only the first recovery starts within the test.
-        progressiveHydrationSettleMs: 60_000,
+        progressiveHydrationSettleMs: settleMs,
       },
       async ({ service }) => {
         const identity = {
@@ -399,7 +413,11 @@ describe("head-row recovery", () => {
           const head = update.value.messages[0] as Row;
           return { content: head.content, parts: head.parts.length };
         };
-        await run({ provider, shown });
+        try {
+          await run({ provider, shown });
+        } finally {
+          provider.releaseAll();
+        }
       },
     );
   }
@@ -434,6 +452,36 @@ describe("head-row recovery", () => {
       await Bun.sleep(20);
       expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
     });
+  });
+
+  test("an overtaken recovery does not replace a newer recovery that landed first", async () => {
+    await withSlowRecovery(
+      "out-of-order",
+      async ({ provider, shown }) => {
+        expect(await shown()).toEqual({ content: "Update 1", parts: 2 });
+        // Read 0 recovers revision 2 and stays in flight.
+        provider.stream();
+        await shown();
+        await waitForCondition(() => provider.messages.mock.calls.length === 1);
+        // Read 1 recovers revision 3 once the interval has passed.
+        provider.stream();
+        await shown();
+        await waitForCondition(() => provider.messages.mock.calls.length === 2);
+        // The newer read answers first, and the view shows revision 3.
+        provider.release(1);
+        await waitForCondition(async () => (await shown()).content === "Update 3");
+        // Revision 4 streams in, so a newer recovery is pending while the
+        // view holds revision 3.
+        provider.stream();
+        expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
+        // The read of revision 2 now answers. The view moved since it
+        // started, so committing it would take the view backwards.
+        provider.release(0);
+        await Bun.sleep(20);
+        expect(await shown()).toEqual({ content: "Update 3", parts: 2 });
+      },
+      20,
+    );
   });
 
   test("a cached summary still recovers while its token keeps moving", async () => {

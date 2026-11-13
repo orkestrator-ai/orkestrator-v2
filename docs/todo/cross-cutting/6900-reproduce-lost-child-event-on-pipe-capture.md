@@ -5,11 +5,14 @@
 Analysed 2026-11-06 against `main` at `e6c3da899`.
 Updated 2026-11-11 against `main` at `14df96544`: the Linux half of task 1
 reproduced on beelink2; macOS and the reduction remain.
+Updated 2026-11-13 against `main` at `17d28238c`: the macOS half of task 1
+reproduced on arktech-mini, and task 2 ruled out the commands, the harness, a
+watch helper and aborts as the trigger.
 
 ### Tasks
 
-1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: open (Linux done 2026-11-11, reproduced: 47 lost `close` events in 100 runs; the macOS half needs a macOS host).
-2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: open (started 2026-11-11 on Linux: the standalone script does not reproduce, and every loss comes from the file's one real-Git test).
+1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: done (Linux 2026-11-11: 47 lost `close` events in 100 runs; macOS 2026-11-13: 4 lost `exit` and 3 lost `close` events in 100 runs).
+2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: open (2026-11-13: test 1 alone still loses events, while the same commands replayed at the same times lose none, with or without the harness; next, delete the test's service calls one at a time).
 
 ### 1. Reproduce on the old pipe capture
 
@@ -51,7 +54,7 @@ So every lost `close` was a real loss: the child had exited, nothing else held i
   - **Copy the old capture into a standalone harness that imports the backend's services.**
     - Pros: no branch.
     - Cons: it is not the real test, which is the only thing that has reproduced.
-- **What if macOS does not reproduce?**
+- **What if macOS does not reproduce?** (Moot since 2026-11-13: it reproduced.)
   - **Record it, and narrow the macOS half of the upstream report to the 2026-11-04 traces (recommended).**
     - Pros: honest about what is current; the Linux half now has a current reproduction.
     - Cons: a weaker macOS claim.
@@ -59,7 +62,22 @@ So every lost `close` was a real loss: the child had exited, nothing else held i
     - Pros: case 1537's macOS rows used 36 CPU hogs.
     - Cons: open-ended, and hogs on the user's command node are disruptive.
 
-What remains: the macOS half, on a macOS host. The probe needs three changes there: `waitid` from `/usr/lib/libSystem.B.dylib` with flags `0x25` and `si_pid` as the fourth int; no `/proc`, so the descriptor ownership and `poll` checks need `proc_pidinfo` or `lsof`-free equivalents, or can be dropped since a lost `exit` is the macOS symptom; and the macOS watchdog and reaper removed from the copy as on Linux.
+**macOS, 2026-11-13**, on arktech-mini (macOS 27.2, arm64, 18 cores, Bun 1.4.4), natively. Host load average was 20 to 121 throughout, from the other builds sharing the host; no CPU hogs were added. The scratch copy was again a throwaway `git worktree` (under this worktree's git-ignored `output/`, never committed, removed afterwards) whose `runCommandBytes` called the old pipe capture with the git output-close grace, the lost-exit watchdog and the reaper removed. The probe is now committed as `scripts/lost-child-event/probe.ts` with its `bun test` preload (`preload.ts`): it picks `waitid` from `libSystem` (flags `0x25`, `si_pid` the fourth int) or `libc` (flags `0x01000005`, the fifth), lists this process's descriptors from `/dev/fd` or `/proc/self/fd`, and records the group's state and a zero-timeout `poll()` of our ends at a lost `close`; the cross-process descriptor scan is Linux-only and was dropped. On macOS too, `node:child_process` makes `stdio: "pipe"` three Unix sockets.
+
+Controls, all passing on macOS: a child held between `spawn` and a busy-wait reads as a zombie twice and its `exit` still arrives; the ends of a child whose EOF the blocked loop has not read poll `IN|HUP`; and `sh -c 'sleep 7 & exit 0'` is flagged `LOST_CLOSE` with its group alive and its output ends polling `none`, then closes at 7.0 s.
+
+The real test on the pipe capture, 100 runs, one at a time:
+
+| Measure | Result |
+| --- | --- |
+| Test runs passed | 100 of 100 |
+| Children tracked | 10,297 |
+| Lost `exit` (unreaped zombie for 5 s) | **4, in 4 runs**: `git rev-parse` 2, `config` 1, and one recorded before the probe named subcommands. Each became a zombie 49 to 74 ms after spawn and **was still an unreaped zombie when the process exited**, 30 s later: Bun never delivered its `exit`, even after the command's own timeout had destroyed its streams |
+| Lost `close` (no `close` 5 s after `exit`) | **3, in 2 runs**: `git merge-base` 2, `rev-parse` 1. Each had its group gone and our stdout end polling `IN\|HUP` (an EOF nothing read), and closed only when the command's timeout destroyed the streams (2 at about 30 s, 1 at about 10 s) |
+| Slow but delivered | 1 `exit` (`git init`) 110 ms after the zombie appeared |
+| Where | All 7 in test 1, "saved/reset overrides retarget real scans …", as on Linux |
+
+So macOS shows both symptoms on the pipe capture, and the lost `exit` is the macOS-specific one that case 1537's traces showed (`Z <defunct>` with no `exit`): the kernel holds the zombie and Bun never reaps it. The lost `close` matches Linux exactly: an EOF the kernel reports and Bun does not deliver. The rate (7 in 10,297 children) is well below beelink2's (47 in 10,175).
 
 ### 2. Reduce it from there
 
@@ -74,6 +92,24 @@ What remains: the macOS half, on a macOS host. The probe needs three changes the
 
 So the trigger is in what that test brings and the script lacks: the public API harness and its storage, and the diff-stats service's watchers, admission pool and scan retargeting. That is where to delete from next.
 
+**macOS, 2026-11-13.** Each step ran 100 times, against the same pipe-capture copy and strict probe as task 1. The probe recorded test 1's exact spawn schedule (98 children: every command, its working directory and its offset from the first spawn) so it could be replayed without the services that produced it:
+
+| Step | Children | Lost | Runs with a loss |
+| --- | --- | --- | --- |
+| Test 1 alone (`-t saved/reset`) | 10,151 | **12**: 9 `exit`, 3 `close` | 8 of 100 |
+| Test 1 alone, with the capture marking any child it aborted or timed out (80 runs) | 8,191 | **12**: 7 `exit`, 5 `close` | 12 of 80 |
+| Test 1's recorded schedule replayed inside `bun test` through the same scratch `runCommand`, the public API harness created first and left idle | 9,800 | 0 | 0 |
+| The same replay without the harness | 9,800 | 0 | 0 |
+| The same replay standalone (`reduction.ts replay`, 300 times) | 29,400 | 0 | — |
+| 4260's command pattern standalone, with a long-lived `bun -e` watch helper on pipes, as the backend's macOS watch helper (`reduction.ts pattern --host`, twice 3,000 iterations) | 36,600 | 0 | — |
+| The pattern with half the children SIGKILLed and their streams destroyed 0 to 80 ms after spawn, as an aborted scan is (`reduction.ts pattern --abort=80`) | 12,200 | 0 | — |
+
+At test 1's rate (12 in 10,151) the two in-test replays would expect about 23 losses between them, so their zero is not chance. In the marked runs no lost child had been aborted or had timed out when it was lost; the capture's abort path never ran at all, and 11 other children timed out. Every lost child whose position was recorded (10 of 12) was among the test's later spawns, the 66th to the 100th of about 100, from about the replacement checkout's `git clone` on, which matches 4260's note that a stuck child was spawned just before the clone exited. The replays ran that clone too and lost nothing.
+
+So on macOS the trigger is neither the commands nor their timing, nor the harness's presence, nor a watch helper, nor an abort racing the exit: the same 98 spawns lose nothing unless the test's own service calls run between them. What those calls add is in-process work around each spawn: the diff-stats service's scans and their admission pool, `set_environment_diff_base` and the other commands through the harness, storage writes, and the environment's worktree watch. That is the next deletion, inside test 1 itself.
+
+The scripts are committed as `scripts/lost-child-event/` (`probe.ts`, `preload.ts`, `reduction.ts`) so the next step can start from them. `reduction.ts` is also what to attach to the upstream report as the non-reproducing reduction.
+
 **Decisions.**
 
 - **How to reduce?**
@@ -83,10 +119,24 @@ So the trigger is in what that test brings and the script lacks: the public API 
   - **Add the remaining real-test ingredients to the standalone script.**
     - Pros: the result is directly reportable.
     - Cons: about 1.2 million children across macOS and Linux without a loss, and no signal yet about which ingredient to add.
+- **Where to run the next step?** (2026-11-13)
+  - **Linux on beelink2, deleting the test's service calls one at a time (recommended).**
+    - Pros: about one loss in two runs there, so 20 runs a step suffice.
+    - Cons: the replay was run on macOS only, so the first step there is to repeat it with `reduction.ts replay` and the preload (cheap at that rate); the macOS symptom (a lost `exit`) is checked only at the end.
+  - **macOS on arktech-mini.**
+    - Pros: tests the platform-specific lost `exit` directly.
+    - Cons: 8 runs in 100 with a loss, so each step needs about 100 runs (about 10 minutes) to tell zero from the baseline.
+- **Which call to delete first?** (2026-11-13)
+  - **Replace the diff-stats service's scans (`readFileList` with `refresh`, `diffStats.sync`) with the recorded commands, keeping the harness's commands and storage (recommended).**
+    - Pros: they spawn most of the children, and their admission pool and retargeting are what the replay lacked.
+    - Cons: the scans also drive the test's assertions, which must be dropped for that step.
+  - **Drop the harness commands (`set_environment_diff_base` and the rest) first.**
+    - Pros: smaller change to the test.
+    - Cons: those commands start the scans, so the step removes both at once and says less.
 
 ## Current state
 
-Task 1's Linux half reproduced the loss on 2026-11-11 (above); its macOS half and task 2 are open. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
+Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is open: on macOS the loss needs test 1's service calls, not just its commands. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
 
 ## Constraints and rationale
 
@@ -108,6 +158,22 @@ Case 1537's Linux rows ran in an `oven/bun:1.4.4` container with `--cpus=4`. Thi
 
 The 2026-11-06 hold was 7 s, long enough to report a loss but not to see whether its `close` ever came. A 30 s hold showed that 43 of 47 came only when the command's own timeout destroyed the streams, which separates a lost event from a slow one.
 
+### Task 1: the macOS run used a worktree under this build's own `output/` (2026-11-13)
+
+The scratch worktree was created under the build's git-ignored `output/agent-testing/` rather than the system temporary directory, so everything the run made stayed inside the build's own directory and was removed with it. It was never committed, and the pipe capture never reached a pushed branch.
+
+### Task 1: no descendant-holder scan on macOS (2026-11-13)
+
+macOS has no `/proc`, and every way to list another process's descriptors (`lsof`, `proc_pidinfo` across processes) either starts a process or reads other processes' state. The macOS symptom is a lost `exit`, which `waitid(WNOWAIT)` settles on its own, and for a lost `close` the group check (`kill(-pid, 0)` answering `ESRCH`) already shows no descendant is left to hold the output. So the scan was dropped there, and the `sleep 7` control checks the group check tells the cases apart.
+
+### Task 2: replay the recorded schedule before deleting services (2026-11-13)
+
+Deleting services one at a time from test 1 needs a stand-in for each, and at macOS's rate (8 runs in 100 with a loss) each step costs 100 runs. Replaying the exact recorded spawn schedule answers the larger question first, whether the commands alone are enough, at the cost of three runs. They are not, which narrows every later step to the test's service calls.
+
+### Task 2: the scripts are committed, the pipe capture is not (2026-11-13)
+
+4260 kept its probe in the to-do's text. The probe now has a macOS and a Linux path, a preload and two reduction modes, which is more than a to-do should carry, and the upstream report needs a file to attach. They live in `scripts/lost-child-event/`, run nothing at build or test time, and never touch `runCommand`. The pipe capture itself stays out of the repository, as the constraint below requires; the scratch copy is described in task 1.
+
 ### Task 2: the reduction started on Linux before the macOS half of task 1 (2026-11-11)
 
 Task 2 depended on task 1 for a reproduction to reduce from. The Linux half gives one, so the first two reduction steps were taken there rather than waiting for a macOS host.
@@ -116,6 +182,7 @@ Task 2 depended on task 1 for a reproduction to reduce from. The Linux half give
 
 - To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and filing the report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
+- `scripts/lost-child-event/`: the strict probe, its `bun test` preload and the standalone reductions (`pattern`, `replay`)
 
 ## Replaces
 

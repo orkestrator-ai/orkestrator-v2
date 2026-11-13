@@ -458,3 +458,27 @@ reported `open`: record it as a recurrence.
 - **Hypothesis (unconfirmed):** as above, the asynchronous daemon start can
   lose the race with the follow-up `status` call when the host is loaded; a
   one-file rerun straight after a loaded aggregate is not free of that load.
+
+## Hidden-window Electron specs review preparation recurrence — 2026-11-13
+
+`mise run flaky:recurrence 1253 --base 17d28238c098b4443d1289df5c4ed75e7cc2802e`
+reported `open`: record it as a recurrence.
+
+- **Branch / base:** `electron-hidden-window-9b885cf8c702-r1` at `4a9290b53`,
+  merge base `17d28238c098b4443d1289df5c4ed75e7cc2802e`. The branch changes
+  two Electron Playwright specs, the Electron Playwright config and docs only;
+  no backend code. The failure triage named the config as a global change
+  (verdict `undetermined`); a backend `bun test` file does not load it.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run
+  test` (review preparation; default concurrent groups).
+- **Failure:** the same signature: `git fsmonitor > project-home status
+  auto-starts and preserves the configured daemon` failed at 11,400.42 ms,
+  `git fsmonitor--daemon status` rejecting at `git-fsmonitor.test.ts:281`.
+- **Suite counts:** backend 18,098 pass, 200 skip, 1 fail across 1,279 files
+  (274.86 s); web 14,732 tests across 1,015 files passed; the root, bridge and
+  protocol-lockfile groups passed.
+- **Isolated reruns:** the runner's own one-file rerun never got host capacity
+  and ended `INCOMPLETE` after 600 s. In the address-findings stage the
+  unchanged owner passed alone on the fix commit `7542820b4`
+  (`bun test --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts
+  --parallel=1` from `apps/backend`, through `test:logged`, 10.8 s).

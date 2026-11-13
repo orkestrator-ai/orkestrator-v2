@@ -7,14 +7,15 @@ import {
   type FixtureTreeDigest,
 } from "./coordinator-live.js";
 import {
-  attemptedToolCalls,
   evaluateGraphProfilesProbe,
   GRAPH_PROFILES_NODE,
   GRAPH_PROFILES_ROLE,
+  graphProfilesAttempts,
   graphProfilesTemplate,
   graphProfilesTemplateId,
   type GraphProfileProbe,
   type GraphProfilesActivation,
+  type GraphProfilesAttempts,
   type GraphProfilesEvidence,
   type GraphProfilesShownTier,
   type GraphProfilesWorkspaceState,
@@ -151,7 +152,7 @@ export async function runGraphProfilesProbe(input: {
     const before = await input.workspace.state();
     let runStatus = "not launched";
     let activation: GraphProfilesActivation | null = null;
-    let attempted: number | null = null;
+    let attempts: GraphProfilesAttempts | null = null;
     let runId: string | undefined;
     if (shown?.allowed) {
       const launched = await invoke<{ runId: string }>("graph_run_launch", {
@@ -207,7 +208,7 @@ export async function runGraphProfilesProbe(input: {
           { runId, activationKey: key },
         ).catch(() => null);
         if (transcript?.status === "found")
-          attempted = attemptedToolCalls(transcript.messages ?? []);
+          attempts = graphProfilesAttempts(transcript.messages ?? []);
       }
     }
     const after = await input.workspace.state();
@@ -230,7 +231,7 @@ export async function runGraphProfilesProbe(input: {
       before,
       after,
       workspaceChanges,
-      attemptedToolCalls: attempted,
+      attempts,
       ...(offeredTools ? { offeredTools: [...offeredTools] } : {}),
     };
     return { ...evaluateGraphProfilesProbe(evidence), evidence, ...(runId ? { runId } : {}) };

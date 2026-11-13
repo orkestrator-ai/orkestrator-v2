@@ -33,7 +33,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import type { BrowserContext } from "@playwright/test";
-import { expect, test, type Page } from "./browser-test";
+import { expect, fetchModulesOutsideChromium, test, type Page } from "./browser-test";
 import {
   fakeModelClaudeSettings,
   startFakeAnthropicModel,
@@ -151,8 +151,11 @@ test("graph-profiles on Claude with a scripted model: the tier shown is the tier
   priorSettings = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null;
   await fs.writeFile(settingsPath, JSON.stringify(fakeModelClaudeSettings(model.origin)));
 
-  browserContext = await browser.newContext();
-  const page = await browserContext.newPage();
+  // A context of its own routes its modules itself, like the fixture's default one.
+  const context = await browser.newContext();
+  browserContext = context;
+  await fetchModulesOutsideChromium(context);
+  const page = await context.newPage();
   invoke = await signIn(page, status.browserUrl!);
   await enableExperimentalGraphs(invoke);
   const testProject = status.testProject ?? path.join(runtime().fixtureDir, "test-project");
@@ -221,7 +224,7 @@ test("graph-profiles on Claude with a scripted model: the tier shown is the tier
       summary.checks!.push(
         ...result.checks.map((check) => ({ ...check, name: `${probe}: ${check.name}` })),
       );
-      summary.observed![`${probe}ToolCalls`] = result.evidence.attemptedToolCalls ?? -1;
+      summary.observed![`${probe}ToolCalls`] = result.evidence.attempts?.toolCalls ?? -1;
       summary.observed![`${probe}ModelCalls`] = model
         .calls()
         .filter((call) => call.script?.id === scriptId).length;

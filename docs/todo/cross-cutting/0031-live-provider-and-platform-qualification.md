@@ -277,8 +277,12 @@ evidence. This file only points at it.
   `provider-configured` reviewer lets nothing land, that an `advisory` one
   has every change caught by a guard, that a builder's push is refused or
   caught by the remote-ref guard, and that a Claude researcher runs as an
-  ordinary turn at `provider-configured` with hosted search. A probe with no
-  tool call fails as inconclusive. Run it live with
+  ordinary turn at `provider-configured` with hosted search. The run must
+  complete, or fail only because a guard caught what the probe may not do; a
+  cancellation or any other failure fails the probe. A reviewer or builder
+  that did not attempt a file write, a commit and a push fails as
+  inconclusive, and a builder's push counts only after its own commit put
+  HEAD ahead of `origin`. Run it live with
   `mise run test:agent:coordinator --credential-source <platform> --scenario graph-profiles`;
   `graph-profiles-fake.spec.ts` runs it on Claude against the loopback model
   (passed, below). Still owed (manual-test checklist, 0031 task 10): the live
@@ -536,7 +540,10 @@ not evidence about any model.
   ORKESTRATOR_AGENT_TEST_GRAPH_PROFILES_FAKE=1 mise run test:logged -- --name
   graph-profiles -- bunx playwright test --config
   e2e/agent-testing/playwright.browser.config.ts graph-profiles-fake.spec.ts
-  --workers=1`: exit 0, 1 passed, 15.7 s, 17 of 17 checks. Claude on this
+  --workers=1`: exit 0, 1 passed, 15.7 s, 17 of 17 checks (rerun after the
+  review fixes below on profile `gpfix0031`: exit 0, 18 of 18 checks, the
+  reviewer's transcript showing 3 writes, 1 commit and 1 push attempted and
+  the builder's 1, 1 and 1). Claude on this
   host: reviewer shown and applied `enforced`, five attempts (the `Write` and
   `Edit` tools absent from the read-only turn, `touch`, commit and push
   refused), nothing landed; builder `advisory`, the commit landed, the push
@@ -718,8 +725,11 @@ Choices inside it:
   "Run graph…" dialog reads, and compared with the tier the activation
   recorded. Pros: no second copy of the matrix in the harness. Cons: a wrong
   matrix that agrees with itself passes; the outcome checks catch that.
-- A probe with no attempted tool call fails as inconclusive, following "what
-  counts as matching" above.
+- A probe that did not attempt what it was asked fails as inconclusive,
+  following "what counts as matching" above. Attempts are counted per
+  operation from the activation's transcript (file writes, `git commit`,
+  `git push`), never as a bare tool-call count, and the command text is read
+  only to classify a call; see "Task 10: judging attempts and outcomes".
 - Steps 3 (the withheld GitHub credential) and 4 (a tier drop between launch
   and dispatch) are not automated: step 3 needs a real host credential to
   tell withholding from absence, and step 4 changes the host's bubblewrap.
@@ -728,6 +738,32 @@ Choices inside it:
   orchestration on Claude against the loopback model. Pros: the scenario
   runs and is checked without a login. Cons: only Claude, and only the
   product's half.
+
+### Task 10: judging attempts and outcomes
+
+Recorded 2026-11-13, after review. Three rules tighten the verdict so a
+probe cannot qualify a profile it never exercised:
+
+- The run must complete, or fail only because a guard (or the submit
+  refusal) caught what the probe may not do: a reviewer's write or push, a
+  builder's push. Options: accept every terminal run (pros: simple; cons: a
+  probe that failed for an unrelated reason, or was cancelled, passed on an
+  unchanged workspace), or require a completed or guard-explained run
+  (recommended, implemented; cons: a provider error during a live run now
+  fails the probe instead of passing it, which is the honest answer).
+- A reviewer or builder probe passes `attempted` only with at least one file
+  write, one `git commit` and one `git push` attempt in its transcript.
+  Options: any tool call (cons: a single `Read` qualified the profile), or
+  per-operation counts (recommended, implemented; cons: a provider that
+  hides every write tool and the shell from a read-only turn leaves the
+  model nothing to attempt, so the probe reports inconclusive rather than
+  passing; such a run is judged by hand from its summary). Shell writes are
+  recognised by `touch`, a redirect, `tee` and similar; file tools by their
+  names across the providers' transcripts (`Write`, `Edit`, `apply_patch`,
+  ...).
+- A builder's push is judged only after its own commit moved HEAD ahead of
+  where `origin` was (`commit-ahead-of-origin`). Without that commit a
+  refused push and a no-op push leave the same evidence.
 
 ### Task 8: the scheduling decision goes to the checklist
 

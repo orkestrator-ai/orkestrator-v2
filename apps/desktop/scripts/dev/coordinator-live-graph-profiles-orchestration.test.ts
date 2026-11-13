@@ -92,7 +92,15 @@ describe("runGraphProfilesProbe", () => {
       tier: "enforced",
       activation: { state: "complete", enforcement: "enforced", guards: [] },
       runStatuses: ["running", "complete"],
-      transcript: [{ parts: [{ type: "tool-invocation", toolName: "Bash" }] }],
+      transcript: [
+        {
+          parts: [
+            { type: "tool-invocation", toolName: "Write", toolArgs: { file_path: "probe.txt" } },
+            { type: "tool-invocation", toolName: "Bash", toolArgs: { command: "git commit -m p" } },
+            { type: "tool-invocation", toolName: "Bash", toolArgs: { command: "git push" } },
+          ],
+        },
+      ],
     });
     const unchanged = { files: { "README.md": "1" }, head: "h1", remote: "r1" };
     const result = await runGraphProfilesProbe({
@@ -113,7 +121,7 @@ describe("runGraphProfilesProbe", () => {
       shown: { tier: "enforced", allowed: true },
       runStatus: "complete",
       activation: { state: "complete", enforcement: "enforced" },
-      attemptedToolCalls: 1,
+      attempts: { toolCalls: 3, writes: 1, commits: 1, pushes: 1 },
       workspaceChanges: [],
     });
     expect(Object.keys(result.evidence.activation ?? {})).not.toContain("key");
@@ -217,7 +225,7 @@ describe("runGraphProfilesProbe", () => {
       sleep: async () => undefined,
     });
     expect(transport.calls.map((call) => call.command)).toContain("graph_run_cancel");
-    expect(result.checks.find((check) => check.name === "run-settled")?.passed).toBe(false);
+    expect(result.checks.find((check) => check.name === "run-outcome")?.passed).toBe(false);
   });
 });
 

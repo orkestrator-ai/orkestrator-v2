@@ -1159,7 +1159,7 @@ async function graphProfilesCase(input: {
     }
     summary.tier ??= result.evidence.shown?.tier;
     checks.push(...result.checks.map((check) => ({ ...check, name: `${probe}: ${check.name}` })));
-    observed[`${probe}ToolCalls`] = result.evidence.attemptedToolCalls ?? -1;
+    observed[`${probe}ToolCalls`] = result.evidence.attempts?.toolCalls ?? -1;
   }
   const failures = recordChecks(summary, checks, observed);
   expect(failures, `${platform}: the graph-profiles scenario`).toEqual([]);

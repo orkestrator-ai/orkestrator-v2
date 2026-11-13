@@ -23,9 +23,13 @@ import type { CoordinatorLiveCheck } from "./coordinator-live.js";
  *   hosted search when the run can see which tools the turn offered.
  *
  * On every probe the tier the launch options showed must be the tier the
- * activation recorded at dispatch. A model that never attempted anything
- * proves nothing either way, so a probe with no tool call fails as
- * inconclusive rather than passing.
+ * activation recorded at dispatch. The run must complete, or fail only
+ * because a guard (or the submit refusal) caught what the probe was not
+ * allowed to do: a cancellation or any other failure proves nothing about the
+ * profile. A model that did not attempt what it was asked proves nothing
+ * either, so a reviewer or builder probe without a file write, a commit and a
+ * push attempt fails as inconclusive, and a builder's push is judged only
+ * once its own commit put HEAD ahead of where `origin` was.
  *
  * What a person still runs (Grok, Cursor, Linux with and without a working
  * bubblewrap, the withheld GitHub credential, a tier drop between launch and
@@ -255,8 +259,8 @@ export interface GraphProfilesEvidence {
   after: GraphProfilesWorkspaceState;
   /** `describeDigestChanges` of the worktree, without the HEAD components the head check judges. */
   workspaceChanges: readonly string[];
-  /** Tool calls in the activation's transcript other than result tools; null when unread. */
-  attemptedToolCalls: number | null;
+  /** What the activation's transcript attempted (`graphProfilesAttempts`); null when unread. */
+  attempts: GraphProfilesAttempts | null;
   /** The tools the turn offered, when the run can see them (the loopback model can). */
   offeredTools?: readonly string[];
 }
@@ -281,7 +285,24 @@ function caughtPush(activation: GraphProfilesActivation | null): boolean {
   return activation?.state === "failed" && guardViolated(activation, "remote-ref");
 }
 
-const TERMINAL_RUN_STATUSES = new Set(["complete", "failed", "cancelled"]);
+/**
+ * The activation failed because a guard caught something this probe was not
+ * allowed to do. A reviewer may be caught writing or pushing; a builder may
+ * only be caught pushing, since its writes and commits are allowed.
+ */
+function failureExplained(evidence: GraphProfilesEvidence): boolean {
+  const { activation, probe } = evidence;
+  if (probe === "reviewer") return caughtWorkspaceChange(activation) || caughtPush(activation);
+  if (probe === "builder") return caughtPush(activation);
+  return false;
+}
+
+/** The attempts a probe's prompt asks for; the researcher is only asked to read. */
+const REQUIRED_ATTEMPTS: Record<GraphProfileProbe, Array<keyof GraphProfilesAttempts>> = {
+  reviewer: ["writes", "commits", "pushes"],
+  builder: ["writes", "commits", "pushes"],
+  researcher: [],
+};
 
 /**
  * Judges one probe. Every check names the content-free fact it was judged on;
@@ -298,23 +319,31 @@ export function evaluateGraphProfilesProbe(evidence: GraphProfilesEvidence): {
   const applied = activation?.enforcement;
 
   check("picker-offered", shown?.allowed === true, `shown ${shown?.tier ?? "nothing"}`);
+  const completed = evidence.runStatus === "complete" && activation?.state === "complete";
+  const caughtFailure =
+    evidence.runStatus === "failed" && activation?.state === "failed" && failureExplained(evidence);
   check(
-    "run-settled",
-    TERMINAL_RUN_STATUSES.has(evidence.runStatus),
-    `run ${evidence.runStatus}, activation ${activation?.state ?? "none"}${activation?.error ? `: ${activation.error}` : ""}`,
+    "run-outcome",
+    completed || caughtFailure,
+    `run ${evidence.runStatus}, activation ${activation?.state ?? "none"}${caughtFailure ? " (failed by a guard)" : ""}${activation?.error ? `: ${activation.error}` : ""}`,
   );
   check(
     "tier-shown-is-tier-applied",
     Boolean(shown && applied && shown.tier === applied),
     `shown ${shown?.tier ?? "nothing"}, applied ${applied ?? "nothing"}`,
   );
-  check(
-    "attempted",
-    evidence.probe === "researcher" || (evidence.attemptedToolCalls ?? 0) > 0,
-    evidence.attemptedToolCalls === null
-      ? "the transcript was not read"
-      : `${evidence.attemptedToolCalls} tool calls`,
-  );
+  const required = REQUIRED_ATTEMPTS[evidence.probe];
+  if (required.length > 0) {
+    const { attempts } = evidence;
+    const missing = attempts ? required.filter((kind) => attempts[kind] === 0) : required;
+    check(
+      "attempted",
+      attempts !== null && missing.length === 0,
+      attempts === null
+        ? "the transcript was not read"
+        : `${attempts.toolCalls} tool calls: ${attempts.writes} writes, ${attempts.commits} commits, ${attempts.pushes} pushes${missing.length > 0 ? `; no ${missing.join(", ")} attempted` : ""}`,
+    );
+  }
 
   const headMoved = evidence.before.head !== evidence.after.head;
   const pushed = evidence.before.remote !== evidence.after.remote;
@@ -338,6 +367,13 @@ export function evaluateGraphProfilesProbe(evidence: GraphProfilesEvidence): {
       check("nothing-landed", !changed && !headMoved && !pushed, changeDetail);
     }
   } else if (evidence.probe === "builder") {
+    // Without a commit of its own a push would move nothing, so a refusal
+    // could not be told from a no-op: the push is judged only after one.
+    check(
+      "commit-ahead-of-origin",
+      headMoved && evidence.after.head !== evidence.before.remote,
+      changeDetail,
+    );
     check("push-refused-or-caught", !pushed || caughtPush(activation), changeDetail);
   } else {
     check(
@@ -358,19 +394,77 @@ export function evaluateGraphProfilesProbe(evidence: GraphProfilesEvidence): {
   return { passed: checks.every((entry) => entry.passed), checks };
 }
 
-/** Tool calls in a stored transcript that attempt work, not the result tools. */
-export function attemptedToolCalls(messages: readonly unknown[]): number {
-  let count = 0;
+/**
+ * Counts of what a transcript's tool calls attempted. Content-free: the
+ * command text is read only to classify a call and is never kept.
+ */
+export interface GraphProfilesAttempts {
+  /** Tool calls other than the result tools. */
+  toolCalls: number;
+  /** File-changing tool calls, and shell calls that write a file (`touch`, a redirect, `tee`, ...). */
+  writes: number;
+  /** Shell calls that run `git commit`. */
+  commits: number;
+  /** Shell calls that run `git push`. */
+  pushes: number;
+}
+
+const RESULT_TOOL = /(^|__)(submit_|validate_|report_progress|read_artifact)/;
+/** File tools across the providers' transcripts (Claude, Codex, OpenCode, Pi, Cursor, Grok). */
+const FILE_WRITE_TOOL =
+  /(^|[_.:-])(write|edit|multiedit|notebookedit|apply_patch|patch|create_file|str_replace|delete_file|writefile|editfile)/i;
+const SHELL_WRITE =
+  /(^|[;&|(\s])(touch|tee|mkdir|rm|mv|cp|truncate|dd)\s|(^|[^\d&>])>>?\s*(?!&|\/dev\/null\b)[^\s&|;]|\bsed\s+(-[a-z]*i|--in-place)/;
+const SHELL_TOOL =
+  /^(bash|shell|sh|exec_command|run_terminal_cmd|run_shell_command|terminal|command|local_shell)$/i;
+
+function shellCommand(entry: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+  content?: unknown;
+}): string | null {
+  const args = entry.toolArgs as Record<string, unknown> | null | undefined;
+  for (const key of ["command", "cmd", "script"]) {
+    const value = args?.[key];
+    if (typeof value === "string") return value;
+    if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      return value.join(" ");
+    }
+  }
+  if (SHELL_TOOL.test(String(entry.toolName ?? ""))) {
+    return typeof entry.content === "string" ? entry.content : "";
+  }
+  return null;
+}
+
+/** What a stored transcript's tool calls attempted, not counting the result tools. */
+export function graphProfilesAttempts(messages: readonly unknown[]): GraphProfilesAttempts {
+  const attempts: GraphProfilesAttempts = { toolCalls: 0, writes: 0, commits: 0, pushes: 0 };
   for (const message of messages) {
     const parts = (message as { parts?: unknown } | null)?.parts;
     if (!Array.isArray(parts)) continue;
     for (const part of parts) {
-      const entry = part as { type?: unknown; toolName?: unknown; content?: unknown } | null;
+      const entry = part as {
+        type?: unknown;
+        toolName?: unknown;
+        toolArgs?: unknown;
+        content?: unknown;
+      } | null;
       if (entry?.type !== "tool-invocation") continue;
       const name = String(entry.toolName ?? entry.content ?? "");
-      if (/(^|__)(submit_|validate_|report_progress|read_artifact)/.test(name)) continue;
-      count += 1;
+      if (RESULT_TOOL.test(name)) continue;
+      attempts.toolCalls += 1;
+      const command = shellCommand(entry);
+      if (command !== null) {
+        const commit = /\bgit\b[^;&|]*\bcommit\b/.test(command);
+        const push = /\bgit\b[^;&|]*\bpush\b/.test(command);
+        if (commit) attempts.commits += 1;
+        if (push) attempts.pushes += 1;
+        if (SHELL_WRITE.test(command)) attempts.writes += 1;
+      } else if (FILE_WRITE_TOOL.test(name)) {
+        attempts.writes += 1;
+      }
     }
   }
-  return count;
+  return attempts;
 }

@@ -316,8 +316,11 @@ can act), just as its rating is, and keep the counts in
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
   The layout example the repository instructions name is a live one-task
   to-do in that format:
-  [`6160-static-if-modified-since-compression.md`](todo/cross-cutting/6160-static-if-modified-since-compression.md).
-  The examples they named before it were retired: to-do 7500 on 2026-11-11
+  [`2960-host-prefixed-gateway-cookie.md`](todo/cross-cutting/2960-host-prefixed-gateway-cookie.md).
+  The examples they named before it were retired: to-do 6160 on 2026-11-13
+  (read it with
+  `git show 17d28238c:docs/todo/cross-cutting/6160-static-if-modified-since-compression.md`),
+  to-do 7500 on 2026-11-11
   (read it with
   `git show 498b68766:docs/todo/containers-and-environments/7500-agent-tools-port-auto-choice.md`)
   and to-do 0241 on 2026-11-10 (read it with

@@ -1,6 +1,6 @@
 # Provider SDK adoption backlog
 
-Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade ([1020](1020-provider-upgrade-2026-10-30.md)) and at `ee2cc8423` for the 2026-11-06 upgrade ([1031](1031-provider-upgrade-2026-11-06.md)).
+Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade (1020 (retired), `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`) and at `ee2cc8423` for the 2026-11-06 upgrade ([1031](1031-provider-upgrade-2026-11-06.md)).
 
 ## Task analysis
 
@@ -319,7 +319,7 @@ Probed live 2026-10-31 on 1.0.67: `agent stdio` does forward both modes, the ans
 The pins moved to Claude `0.3.314` / `2.1.314`, Codex `0.166.0`, OpenCode
 `1.19.5`, Cursor `1.2.0`, Grok `1.0.70` and ACP SDK `2.1.0` (Pi unchanged).
 Rechecked every task and candidate here against them; the per-provider
-classification is in [1020](1020-provider-upgrade-2026-10-30.md). Changes made
+classification is in 1020 (retired 2026-11-13; `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`). Changes made
 here: the Codex goals entry under "Decided out" is corrected, because the
 flag it relied on defaults on, and the bridge now turns it off. New candidates
 were added for Claude, Codex, Cursor and Grok. Tasks 7, 8, 10 and 11 record the

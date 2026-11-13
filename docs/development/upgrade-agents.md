@@ -875,8 +875,19 @@ members, `initialize_not_first` and `config_file_invalid`, now mapped in
 `claudeStartupFailureMessage`. A startup failure now also carries the CLI's own
 `errors` text after the guidance (`withStartupFailureDetail`), because
 `config_file_invalid` and `worktree_resume_refused` put the specifics there.
-Not rerun at 2.1.319: the macOS sandbox live test, the Linux sandbox probe
-and the billed coordinator-skills probe. `claude-host-login-refresh.ts`'s
+Not rerun at 2.1.319: the macOS sandbox live test and the billed
+coordinator-skills probe. The Linux sandbox probe passed at 2.1.319 on
+2026-11-13 on an Arch Linux host with bubblewrap 0.13.1
+(`conformance-coordinator-sandbox-live.test.ts` 19 of 19,
+`verify:claude:sandbox-live`'s file and the read-boundary live test), and the
+binary still nests its `apply-seccomp` user namespace; inside an Orkestrator
+container the probe answers `missing-programs`, and only the cases that need
+a working sandbox fail there, with the CLI's "Sandbox required but
+unavailable" (task 9 of
+[1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md)). The
+refresh trigger probe below also passed again that day in a container
+(`docker run --network none`) with the image's managed 2.1.319, all nine
+cases matching. `claude-host-login-refresh.ts`'s
 trigger was re-checked on 2.1.319 on 2026-11-11 with
 `scripts/claude-host-refresh-trigger-probe.ts`, on Linux in a network
 namespace with only loopback (`unshare -rn`), the nine cases run together:

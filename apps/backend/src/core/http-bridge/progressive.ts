@@ -21,7 +21,7 @@ import {
   setBoundedMapEntry,
 } from "../agent-provider-runtime.js";
 import type { HttpBridgeAgent } from "./catalog.js";
-import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
+import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage/cache.js";
 import { claudeTurnActivityFromPayload, normalizeClaudeBackgroundTasks } from "./claude-runtime.js";
 import type { HttpBridgeRuntimeMetadata } from "./runtime-metadata.js";
 import {

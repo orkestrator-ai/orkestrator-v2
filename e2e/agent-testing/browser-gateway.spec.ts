@@ -2718,7 +2718,12 @@ for (const width of [1280, 390]) {
         // On a phone the sidebar's bottom bar, with Settings, is in the
         // projects drawer, which may already be open on first load.
         const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
+        const settingsDialog = page.getByRole("dialog", { name: "Settings", exact: true });
         await expect(async () => {
+          // An earlier attempt's click can open Settings after its 1 s check
+          // gave up (a loaded Mac takes longer). The drawer is closed by then
+          // and Settings covers its button, so reopening it can never succeed.
+          if (await settingsDialog.isVisible()) return;
           if (!(await drawer.isVisible())) {
             await page
               .getByRole("button", { name: "Open projects and environments" })
@@ -2727,9 +2732,7 @@ for (const width of [1280, 390]) {
           await drawer
             .getByRole("button", { name: "Global settings", exact: true })
             .click({ timeout: 1_000 });
-          await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible({
-            timeout: 1_000,
-          });
+          await expect(settingsDialog).toBeVisible({ timeout: 1_000 });
         }).toPass({ timeout: 15_000 });
       } else {
         await globalSettings.click();
@@ -2782,9 +2785,23 @@ for (const width of [1280, 390]) {
   });
 }
 
+/**
+ * Mirrors `DIFF_SAFETY_NET_INTERVAL_MS` in apps/backend/src/core/diff-stats-service.ts,
+ * which Playwright cannot import (it loads `bun:` modules).
+ */
+const DIFF_SAFETY_NET_INTERVAL_MS = 120_000;
+
 test("persisted diff baselines keep Files, the badge and diff tabs aligned after background changes and reload", async ({
   page,
 }) => {
+  // The baseline moves when a scan of the worker's worktree runs, and its
+  // background scans follow watcher hints. Where file events are late or lost
+  // (a Mac whose fseventsd is saturated delivered none within 60 s,
+  // 2026-11-14), the backend's safety tick is what scans: every
+  // DIFF_SAFETY_NET_INTERVAL_MS, skipped when a scan ran within half of it, so
+  // a change can wait up to 1.5 intervals plus one scan.
+  const baselineReconcileMs = DIFF_SAFETY_NET_INTERVAL_MS * 1.5 + 30_000;
+  test.setTimeout(2 * baselineReconcileMs + 120_000);
   page.setDefaultTimeout(15_000);
   const status = await profileStatus();
   expect(status.status).toBe("ready");
@@ -2862,7 +2879,7 @@ test("persisted diff baselines keep Files, the badge and diff tabs aligned after
         async () =>
           (await invoke<BaselineEnvironment>("get_environment", { environmentId: worker.id }))
             .diffBaseline?.commit,
-        { timeout: 15_000 },
+        { timeout: baselineReconcileMs },
       )
       .toBe(tip);
     await openWorker();
@@ -2897,7 +2914,7 @@ test("persisted diff baselines keep Files, the badge and diff tabs aligned after
         async () =>
           (await invoke<BaselineEnvironment>("get_environment", { environmentId: worker.id }))
             .diffBaseline,
-        { timeout: 15_000 },
+        { timeout: baselineReconcileMs },
       )
       .toBeNull();
     await page.reload();

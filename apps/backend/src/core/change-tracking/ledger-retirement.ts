@@ -53,6 +53,20 @@ interface Budget {
 }
 
 /** The half-open key range of everything starting with `prefix`. */
+/** A page of `LedgerRetirement.ledgerEnvironmentIdPage`; `next` is null on the last. */
+export interface LedgerEnvironmentIdPage {
+  ids: string[];
+  next: string | null;
+}
+
+/**
+ * SQLite's BINARY collation compares UTF-8 bytes; JavaScript's default sort
+ * compares UTF-16 code units, which disagree above U+FFFF. A page cursor has
+ * to sort the way the `>` seek compares, or a page could skip an id.
+ */
+const compareLedgerText = (a: string, b: string): number =>
+  Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+
 const under = (prefix: string): [string, string] => [prefix, `${prefix}￿`];
 
 export class LedgerRetirement {
@@ -152,14 +166,18 @@ export class LedgerRetirement {
   }
 
   /**
-   * Every environment id the ledger's environment-keyed rows name, up to
-   * `limit`: bindings, turn boundaries, thread segments and environment-net
-   * measurements. Each table is read as a skip scan of its environment index,
-   * one seek per distinct id, so the cost follows the number of environments
-   * rather than the number of rows. The reconcile of environments deleted
-   * before purges were recorded (to-do 5821 task 5) is its only caller.
+   * One page of the environment ids the ledger's environment-keyed rows name:
+   * bindings, turn boundaries, thread segments and environment-net
+   * measurements. The page holds the `limit` smallest ids above `after`, in
+   * the ledger's own (byte) order, and `next` is the cursor for the following
+   * page, or null once every id has been named. Each table is read as a skip
+   * scan of its environment index, one seek per distinct id, so the cost
+   * follows the number of environments rather than the number of rows. The
+   * reconcile of environments deleted before purges were recorded (to-do 5821
+   * task 5) is its only caller, and it pages to the end: a cap with no cursor
+   * let the first `limit` ids starve every later one on every restart.
    */
-  ledgerEnvironmentIds(limit = 4_096): string[] {
+  ledgerEnvironmentIdPage(after = "", limit = 4_096): LedgerEnvironmentIdPage {
     this.ensureIndexes();
     const sources = [
       this.db.query(
@@ -178,17 +196,28 @@ export class LedgerRetirement {
          WHERE owner_kind = 'environment' AND owner_id > ?`,
       ),
     ];
-    const ids = new Set<string>();
+    const found = new Set<string>();
+    // A source that filled its share may hold more ids above what it returned.
+    let sourceFull = false;
     for (const next of sources) {
-      let after = "";
-      while (ids.size < limit) {
-        const row = next.get(after) as { id: string | null } | null;
+      let cursor = after;
+      let read = 0;
+      while (read < limit) {
+        const row = next.get(cursor) as { id: string | null } | null;
         if (!row?.id) break;
-        ids.add(row.id);
-        after = row.id;
+        found.add(row.id);
+        cursor = row.id;
+        read += 1;
       }
+      if (read === limit) sourceFull = true;
     }
-    return Array.from(ids);
+    // The page is the smallest `limit` of the union. Every unread id of a full
+    // source sorts above that source's last read id, which is at or above the
+    // page's last, so the next page's `> cursor` seeks miss nothing.
+    const sorted = Array.from(found).sort(compareLedgerText);
+    const ids = sorted.slice(0, limit);
+    const more = sorted.length > limit || sourceFull;
+    return { ids, next: more && ids.length > 0 ? ids[ids.length - 1]! : null };
   }
 
   /** One checkout can serve several environments; their rows keep it alive. */

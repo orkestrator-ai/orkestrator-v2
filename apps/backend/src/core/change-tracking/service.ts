@@ -344,27 +344,29 @@ export class ChangeTrackingService {
 
   /** The first pass after start, preceded by the one reconcile of deleted environments. */
   private firstRetention(): void {
-    const live = this.options.liveEnvironmentIds;
-    if (!live) {
+    if (!this.options.liveEnvironmentIds) {
       this.retainNow();
       return;
     }
-    void this.reconcileDeletedEnvironments(live).finally(() => {
+    void this.reconcileDeletedEnvironments().finally(() => {
       if (!this.stopped) this.retainNow();
     });
   }
 
   /**
    * Requests a purge for every environment the ledger names but `live` does
-   * not hold (to-do 5821 task 5; see `deleted-environment-reconcile.ts`). A
-   * failed read purges nothing and is logged; the result is null then.
+   * not hold (to-do 5821 task 5; see `deleted-environment-reconcile.ts`).
+   * `live` defaults to the service's own strict owner read. A failed read
+   * purges nothing more and is logged; the result is null then, and also when
+   * there is no owner read to compare with.
    */
   async reconcileDeletedEnvironments(
-    live: () => Promise<ReadonlySet<string>>,
+    live: (() => Promise<ReadonlySet<string>>) | undefined = this.options.liveEnvironmentIds,
   ): Promise<DeletedEnvironmentReconcileResult | null> {
+    if (!live) return null;
     try {
       const result = await reconcileDeletedEnvironments({
-        ledgerEnvironmentIds: () => this.retention.purges.ledgerEnvironmentIds(),
+        ledgerEnvironmentIds: (after) => this.retention.purges.ledgerEnvironmentIdPage(after),
         liveEnvironmentIds: live,
         purgePending: (environmentId) => this.deletedEnvironments.has(environmentId),
         requestPurge: (environmentId) => this.environmentDeleted(environmentId),

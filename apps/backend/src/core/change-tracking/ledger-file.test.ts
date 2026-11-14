@@ -116,6 +116,9 @@ describe("the change ledger's own file (report 0760)", () => {
         loadConfig: async () => {
           throw new Error("unused");
         },
+        loadEnvironmentIdsForCleanup: async () => {
+          throw new Error("unused");
+        },
       },
       emit: () => {},
       diffStats: { service: { refresh: () => {} }, refreshExplicitly: () => {} },

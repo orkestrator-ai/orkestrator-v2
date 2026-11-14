@@ -2,8 +2,9 @@
  * The startup reconcile of environments deleted before purges were recorded
  * (to-do 5821 task 5). It deletes history on an inference, so most of these
  * tests are about what it must not purge: a live environment, a coordinator
- * runtime, an environment created while the store was being read, and
- * everything when the store read fails.
+ * or bug-report runtime, an environment created while the store was being
+ * read, and everything when the store read fails. The rest are about what it
+ * must reach: every page of the ledger, however many ids come before.
  */
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
@@ -19,6 +20,7 @@ import { turnIdFor } from "./turn-boundaries.js";
 const HOUR = 60 * 60_000;
 const SESSION = "tab";
 const COORDINATOR = "coordinator:c1:conversation";
+const BUG_REPORT = "bug-report:r1";
 
 const harnesses: Harness[] = [];
 afterEach(() => {
@@ -27,7 +29,9 @@ afterEach(() => {
 });
 
 function setup() {
-  const h = createHarness({ aliases: ["env-2", "env-3", COORDINATOR] });
+  const h = createHarness({
+    aliases: ["env-2", "env-3", "env-4", "env-5", COORDINATOR, BUG_REPORT],
+  });
   harnesses.push(h);
   return h;
 }
@@ -90,6 +94,18 @@ async function scanEnvironment(h: Harness, environmentId: string) {
   await h.service.environments.idle();
 }
 
+/** Every id, one page at a time, as the reconcile reads them. */
+function allPages(h: Harness, limit: number): string[][] {
+  const pages: string[][] = [];
+  let after: string | null = "";
+  while (after !== null) {
+    const page = h.service.retention.purges.ledgerEnvironmentIdPage(after, limit);
+    pages.push(page.ids);
+    after = page.next;
+  }
+  return pages;
+}
+
 const pending = (h: Harness) =>
   h.service.retention.purges
     .pendingPurges()
@@ -103,15 +119,42 @@ describe("the ledger's environment ids", () => {
     // Only an environment scan: no turn, no segment, just measurements.
     await scanEnvironment(h, "env-2");
     expect(count(h, "change_turn_boundaries", "environment_id = 'env-2'")).toBe(0);
-    expect(h.service.retention.purges.ledgerEnvironmentIds().sort()).toEqual(["env-1", "env-2"]);
+    expect(h.service.retention.purges.ledgerEnvironmentIdPage()).toEqual({
+      ids: ["env-1", "env-2"],
+      next: null,
+    });
   });
 
-  test("an empty ledger names none, and a limit bounds the answer", async () => {
+  test("an empty ledger names none", () => {
     const h = setup();
-    expect(h.service.retention.purges.ledgerEnvironmentIds()).toEqual([]);
+    expect(h.service.retention.purges.ledgerEnvironmentIdPage()).toEqual({ ids: [], next: null });
+  });
+
+  test("pages reach every id, in order, whichever table names it", async () => {
+    const h = setup();
+    await runTurn(h, "env-1", "r1");
+    await runTurn(h, "env-3", "r1");
+    await runTurn(h, "env-5", "r1");
+    // Named only by measurements, between ids every table names.
+    await scanEnvironment(h, "env-2");
+    await scanEnvironment(h, "env-4");
+    expect(allPages(h, 2)).toEqual([["env-1", "env-2"], ["env-3", "env-4"], ["env-5"]]);
+    expect(allPages(h, 1).flat()).toEqual(["env-1", "env-2", "env-3", "env-4", "env-5"]);
+  });
+
+  test("a page every table fills says there may be more", async () => {
+    const h = setup();
     await runTurn(h, "env-1", "r1");
     await runTurn(h, "env-2", "r1");
-    expect(h.service.retention.purges.ledgerEnvironmentIds(1)).toHaveLength(1);
+    // Each table returns its full share, so the union is exactly one page.
+    expect(h.service.retention.purges.ledgerEnvironmentIdPage("", 2)).toEqual({
+      ids: ["env-1", "env-2"],
+      next: "env-2",
+    });
+    expect(h.service.retention.purges.ledgerEnvironmentIdPage("env-2", 2)).toEqual({
+      ids: [],
+      next: null,
+    });
   });
 });
 
@@ -186,7 +229,7 @@ describe("reconciling deleted environments", () => {
   test("a coordinator runtime is never taken for a deleted environment", async () => {
     const h = setup();
     await runTurn(h, COORDINATOR, "r1");
-    expect(h.service.retention.purges.ledgerEnvironmentIds()).toEqual([COORDINATOR]);
+    expect(h.service.retention.purges.ledgerEnvironmentIdPage().ids).toEqual([COORDINATOR]);
     const live = spyOn({ read: async () => new Set<string>() }, "read");
     const result = await h.service.reconcileDeletedEnvironments(live);
     expect(result).toEqual({ kind: "reconciled", ledgerEnvironments: 0, requested: [] });
@@ -194,6 +237,90 @@ describe("reconciling deleted environments", () => {
     expect(live).not.toHaveBeenCalled();
     expect(pending(h)).toEqual([]);
     expect(rowsOf(h, COORDINATOR)).toEqual({ boundaries: 1, segments: 1 });
+  });
+
+  test("a bug-report runtime is never taken for a deleted environment", async () => {
+    const h = setup();
+    await runTurn(h, BUG_REPORT, "r1");
+    expect(h.service.retention.purges.ledgerEnvironmentIdPage().ids).toEqual([BUG_REPORT]);
+    const live = spyOn({ read: async () => new Set<string>() }, "read");
+    const result = await h.service.reconcileDeletedEnvironments(live);
+    expect(result).toEqual({ kind: "reconciled", ledgerEnvironments: 0, requested: [] });
+    expect(live).not.toHaveBeenCalled();
+    expect(pending(h)).toEqual([]);
+    expect(rowsOf(h, BUG_REPORT)).toEqual({ boundaries: 1, segments: 1 });
+  });
+
+  test("an orphan after a full page of live and excluded ids is still reached", async () => {
+    const h = setup();
+    // Live, coordinator and bug-report ids fill the first pages; the orphan,
+    // named only by measurements, sorts last.
+    await runTurn(h, BUG_REPORT, "r1");
+    await runTurn(h, COORDINATOR, "r1");
+    await runTurn(h, "env-1", "r1");
+    await scanEnvironment(h, "env-5");
+    const reads: number[] = [];
+    const requested: string[] = [];
+    const result = await reconcileDeletedEnvironments({
+      ledgerEnvironmentIds: (after) => h.service.retention.purges.ledgerEnvironmentIdPage(after, 1),
+      liveEnvironmentIds: async () => {
+        reads.push(reads.length);
+        return new Set(["env-1"]);
+      },
+      purgePending: () => false,
+      requestPurge: (id) => requested.push(id),
+      stopped: () => false,
+    });
+    expect(requested).toEqual(["env-5"]);
+    expect(result).toEqual({ kind: "reconciled", ledgerEnvironments: 2, requested: ["env-5"] });
+    // One store read per page that had a candidate, each after its page.
+    expect(reads).toHaveLength(2);
+  });
+
+  test("a backlog larger than one page is purged in one pass", async () => {
+    const h = setup();
+    for (const id of ["env-1", "env-2", "env-3", "env-4", "env-5"]) await runTurn(h, id, "r1");
+    const result = await reconcileDeletedEnvironments({
+      ledgerEnvironmentIds: (after) => h.service.retention.purges.ledgerEnvironmentIdPage(after, 2),
+      liveEnvironmentIds: async () => new Set(["env-3"]),
+      purgePending: (id) =>
+        h.service.retention.purges.pendingPurges().some((p) => p.environmentId === id),
+      requestPurge: (id) => h.service.environmentDeleted(id),
+      stopped: () => false,
+    });
+    expect(result).toEqual({
+      kind: "reconciled",
+      ledgerEnvironments: 5,
+      requested: ["env-1", "env-2", "env-4", "env-5"],
+    });
+    expect(pending(h)).toEqual(["env-1", "env-2", "env-4", "env-5"]);
+  });
+
+  test("every page is compared with a store read taken after it", async () => {
+    const order: string[] = [];
+    const pages: Record<string, { ids: string[]; next: string | null }> = {
+      "": { ids: ["a", "b"], next: "b" },
+      b: { ids: ["c", "d"], next: "d" },
+      d: { ids: ["e"], next: null },
+    };
+    const requested: string[] = [];
+    const result = await reconcileDeletedEnvironments({
+      ledgerEnvironmentIds: (after) => {
+        order.push(`ledger:${after}`);
+        return pages[after]!;
+      },
+      liveEnvironmentIds: async () => {
+        order.push("store");
+        // "d" was created between the first and second store reads.
+        return new Set(order.filter((step) => step === "store").length > 1 ? ["a", "d"] : ["a"]);
+      },
+      purgePending: () => false,
+      requestPurge: (id) => requested.push(id),
+      stopped: () => false,
+    });
+    expect(order).toEqual(["ledger:", "store", "ledger:b", "store", "ledger:d", "store"]);
+    expect(requested).toEqual(["b", "c", "e"]);
+    expect(result).toEqual({ kind: "reconciled", ledgerEnvironments: 5, requested });
   });
 
   test("an environment created while the store is read is not purged", async () => {
@@ -238,7 +365,7 @@ describe("reconciling deleted environments", () => {
     const result = await reconcileDeletedEnvironments({
       ledgerEnvironmentIds: () => {
         order.push("ledger");
-        return ["a", "b", "coordinator:x", "c"];
+        return { ids: ["a", "b", "bug-report:x", "c", "coordinator:x"], next: null };
       },
       liveEnvironmentIds: async () => {
         order.push("store");

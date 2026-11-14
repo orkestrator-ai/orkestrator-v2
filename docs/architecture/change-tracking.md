@@ -840,10 +840,14 @@ distinct id) with `loadEnvironmentIdsForCleanup`, and requests the same purge
 for each id the store does not hold (`deleted-environment-reconcile.ts`). That
 read throws on a missing, corrupt or incomplete environment store instead of
 answering empty, and a throw purges nothing (`deleted-environments.reconcile-failed`).
-The ledger is read first, so an environment created while the store is read has no
-rows yet and cannot be taken for a deleted one; coordinator runtime ids, which the
-environment store never holds, are never candidates; and an id already being
-purged is not requested again. `deleted-environment-reconcile.test.ts` covers
+The ledger is read in pages of up to 4,096 ids to its end, each page before a
+fresh store read, so an environment created while the store is read has no rows
+in that page and cannot be taken for a deleted one, and no number of live ids
+ahead of an orphan keeps it from being reached; coordinator and bug-report
+runtime ids, which the environment store never holds, are never candidates; and
+an id already being purged is not requested again. The backend wiring requires
+the strict read, so omitting it is a type error rather than a reconcile that
+silently never runs. `deleted-environment-reconcile.test.ts` covers
 those cases, and on 2026-11-14 a throwaway profile purged only a made-up
 deleted environment's rows on its first pass (5821 task 5).
 

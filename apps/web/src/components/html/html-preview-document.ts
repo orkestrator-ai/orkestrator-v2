@@ -17,6 +17,12 @@
  *   rather than loading the embedder's URL. Any other link targets a popup, which
  *   the sandbox refuses; left alone, a click would replace the file with the
  *   destination (or `about:blank#blocked`, for a relative URL).
+ *
+ * One thing is let in, and it is text rather than a request: a stylesheet linked
+ * from the file's own folder or below is read by the app and inlined as a
+ * `<style>`, so the frame still loads nothing. See `resolveSiblingFilePath`.
+ * Links to sibling pages are not followed inside the frame (it cannot report a
+ * click without scripts); the tab lists them instead.
  */
 
 /** Sandbox flags of the preview iframe: none, deliberately. */
@@ -66,12 +72,122 @@ export interface HtmlPreviewDocument {
   hasRefusedContent: boolean;
 }
 
+/** Stylesheets inlined per page, and the largest one the app will read for it. */
+export const MAX_SIBLING_STYLESHEETS = 16;
+export const MAX_SIBLING_STYLESHEET_BYTES = 512 * 1024;
+const MAX_SIBLING_PAGE_LINKS = 200;
+
+const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/**
+ * Resolve a reference found in an HTML file to a workspace-relative path, only
+ * when it names a file in that file's own folder or below. URLs, absolute and
+ * network-path references, backslashes and any `..` that would climb out of the
+ * folder yield null. The path is decoded first, so `%2e%2e` cannot hide a climb.
+ * This is the page's own boundary; the backend's file reads add the workspace
+ * and symlink checks.
+ */
+export function resolveSiblingFilePath(htmlFilePath: string, href: string): string | null {
+  const reference = href.trim();
+  if (!reference || reference.startsWith("#") || reference.startsWith("/")) return null;
+  if (URL_SCHEME.test(reference)) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(reference.split(/[?#]/, 1)[0] ?? "");
+  } catch {
+    return null;
+  }
+  if (!decoded || decoded.endsWith("/") || /[\\\0\r\n]/.test(decoded)) return null;
+  const inside: string[] = [];
+  for (const segment of decoded.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (inside.length === 0) return null;
+      inside.pop();
+    } else inside.push(segment);
+  }
+  if (inside.length === 0) return null;
+  return [...htmlFilePath.split("/").slice(0, -1), ...inside].join("/");
+}
+
+function isStylesheetLink(element: Element): boolean {
+  const rel = element.getAttribute("rel")?.toLowerCase().split(/\s+/) ?? [];
+  return rel.includes("stylesheet") && !rel.includes("alternate") && element.hasAttribute("href");
+}
+
+/** Workspace paths of the page's stylesheets that live in its folder or below. */
+export function findSiblingStylesheetPaths(html: string, htmlFilePath: string): string[] {
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const paths = new Set<string>();
+  for (const link of Array.from(parsed.querySelectorAll("link"))) {
+    if (!isStylesheetLink(link)) continue;
+    const path = resolveSiblingFilePath(htmlFilePath, link.getAttribute("href") ?? "");
+    if (path) paths.add(path);
+    if (paths.size >= MAX_SIBLING_STYLESHEETS) break;
+  }
+  return Array.from(paths);
+}
+
+export interface SiblingPageLink {
+  /** Workspace-relative path of the linked HTML file. */
+  path: string;
+  label: string;
+}
+
+/** The page's links to other HTML files in its folder or below, in document order. */
+export function findSiblingPageLinks(html: string, htmlFilePath: string): SiblingPageLink[] {
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const links = new Map<string, SiblingPageLink>();
+  for (const anchor of Array.from(parsed.querySelectorAll("a[href], area[href]"))) {
+    const path = resolveSiblingFilePath(htmlFilePath, anchor.getAttribute("href") ?? "");
+    if (!path || path === htmlFilePath || !/\.html?$/i.test(path) || links.has(path)) continue;
+    const text = (anchor.textContent ?? "").replace(/\s+/g, " ").trim();
+    links.set(path, { path, label: text.slice(0, 80) || path.split("/").pop() || path });
+    if (links.size >= MAX_SIBLING_PAGE_LINKS) break;
+  }
+  return Array.from(links.values());
+}
+
+export interface HtmlPreviewOptions {
+  /** Workspace path of the file being previewed, which its relative references resolve against. */
+  filePath: string;
+  /** Text of stylesheets already read, keyed by the workspace path they resolve to. */
+  stylesheets: ReadonlyMap<string, string>;
+}
+
+/**
+ * Raw-text elements end at the first `</style`, and the serializer does not
+ * escape their text, so a stylesheet containing one would close its own element
+ * and have the rest parsed as markup.
+ */
+function escapeStyleText(css: string): string {
+  return css.replace(/<\/(style)/gi, "<\\/$1");
+}
+
+/** Replace each readable sibling stylesheet link with the file's text as an inline style. */
+function inlineSiblingStylesheets(parsed: Document, options: HtmlPreviewOptions): void {
+  for (const link of Array.from(parsed.querySelectorAll("link"))) {
+    if (!isStylesheetLink(link)) continue;
+    const path = resolveSiblingFilePath(options.filePath, link.getAttribute("href") ?? "");
+    const css = path ? options.stylesheets.get(path) : undefined;
+    if (css === undefined) continue;
+    const style = parsed.createElement("style");
+    const media = link.getAttribute("media");
+    if (media) style.setAttribute("media", media);
+    style.textContent = escapeStyleText(css);
+    link.replaceWith(style);
+  }
+}
+
 function isFragmentLink(element: Element): boolean {
   const href = element.getAttribute("href") ?? element.getAttribute("xlink:href");
   return href?.trim().startsWith("#") ?? false;
 }
 
-export function buildHtmlPreviewDocument(html: string): HtmlPreviewDocument {
+export function buildHtmlPreviewDocument(
+  html: string,
+  options?: HtmlPreviewOptions,
+): HtmlPreviewDocument {
   // A DOMParser document is inert: nothing in it runs or loads here.
   let candidate = html;
   let refused = false;
@@ -80,6 +196,9 @@ export function buildHtmlPreviewDocument(html: string): HtmlPreviewDocument {
   // publish a document that still changes when reparsed.
   for (let pass = 0; pass < 5; pass++) {
     const parsed = new DOMParser().parseFromString(candidate, "text/html");
+    // Inline first, so the inlined text is checked like any other style: its own
+    // @import and url() references are still refused.
+    if (options) inlineSiblingStylesheets(parsed, options);
     refused ||= hasRefusedContent(parsed);
     for (const animation of Array.from(
       parsed.querySelectorAll("animate, set, animateMotion, animateTransform, discard"),
@@ -114,5 +233,6 @@ export function buildHtmlPreviewDocument(html: string): HtmlPreviewDocument {
   const fallback = new DOMParser().parseFromString("<pre></pre>", "text/html");
   fallback.querySelector("pre")!.textContent = html;
   const safe = buildHtmlPreviewDocument(fallback.documentElement.outerHTML);
+  // `options` is deliberately not passed: the fallback is plain text.
   return { ...safe, hasRefusedContent: refused };
 }

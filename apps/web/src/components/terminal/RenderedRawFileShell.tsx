@@ -31,6 +31,8 @@ interface RenderedRawFileShellProps {
   onSave: SaveFile;
   /** Shown between the header and the content, in whichever mode the caller chooses. */
   notice?: ReactNode;
+  /** Controls shown in the header, left of the Rendered/Raw switch. */
+  headerActions?: ReactNode;
   /** The Rendered view. Unmounted while the tab shows Raw. */
   children: ReactNode;
 }
@@ -51,6 +53,7 @@ export function RenderedRawFileShell({
   onChange,
   onSave,
   notice,
+  headerActions,
   children,
 }: RenderedRawFileShellProps) {
   const terminalAppearance =
@@ -77,6 +80,7 @@ export function RenderedRawFileShell({
               Saving...
             </span>
           )}
+          {headerActions}
           <TabsList className="h-7 rounded-md p-0.5">
             <TabsTrigger className="h-6 px-2 text-xs" value="rendered">
               Rendered

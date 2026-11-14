@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildHtmlPreviewDocument,
+  findSiblingPageLinks,
+  findSiblingStylesheetPaths,
   HTML_PREVIEW_CSP,
   HTML_PREVIEW_SANDBOX,
+  resolveSiblingFilePath,
 } from "./html-preview-document";
 
 function parse(srcDoc: string): Document {
@@ -120,5 +123,154 @@ describe("buildHtmlPreviewDocument", () => {
       '<style>p{color:red}</style><img src="data:image/png;base64,AAAA"><a href="#x">x</a>',
     );
     expect(hasRefusedContent).toBe(false);
+  });
+});
+
+describe("resolveSiblingFilePath", () => {
+  const page = "design/00000-index.html";
+
+  test.each([
+    ["assets/design.css", "design/assets/design.css"],
+    ["./assets/design.css?v=2#x", "design/assets/design.css"],
+    ["assets/../design.css", "design/design.css"],
+    ["a%20b.css", "design/a b.css"],
+    ["  design.css  ", "design/design.css"],
+  ])("resolves %s inside the page's folder", (href, expected) => {
+    expect(resolveSiblingFilePath(page, href)).toBe(expected);
+  });
+
+  test("resolves against the workspace root for a page there", () => {
+    expect(resolveSiblingFilePath("index.html", "a.css")).toBe("a.css");
+  });
+
+  test.each([
+    ["a parent folder", "../other/a.css"],
+    ["a parent folder, escaped", "%2e%2e/a.css"],
+    ["a climb past the folder after descending", "assets/../../a.css"],
+    ["an absolute path", "/etc/passwd"],
+    ["a network path", "//evil.invalid/a.css"],
+    ["an http URL", "https://evil.invalid/a.css"],
+    ["a file URL", "file:///etc/passwd"],
+    ["a data URL", "data:text/css,p{}"],
+    ["a Windows drive", "C:/a.css"],
+    ["a backslash path", "assets\\a.css"],
+    ["an encoded separator climb", "..%2fa.css"],
+    ["a fragment", "#top"],
+    ["a folder", "assets/"],
+    ["an empty reference", "  "],
+    ["a malformed escape", "%E0%A4%A.css"],
+  ])("refuses %s", (_name, href) => {
+    expect(resolveSiblingFilePath(page, href)).toBeNull();
+  });
+});
+
+describe("sibling stylesheets", () => {
+  const filePath = "design/00000-index.html";
+  const link = '<link rel="stylesheet" href="assets/design.css">';
+  const stylesheets = new Map([["design/assets/design.css", "body{color:#123456}"]]);
+
+  test("lists only stylesheets inside the page's folder", () => {
+    expect(
+      findSiblingStylesheetPaths(
+        `${link}<link rel="stylesheet" href="../x.css"><link rel="stylesheet" href="https://e.invalid/a.css"><link rel="icon" href="a.ico"><link rel="alternate stylesheet" href="alt.css">${link}`,
+        filePath,
+      ),
+    ).toEqual(["design/assets/design.css"]);
+  });
+
+  test("inlines a read stylesheet in place of its link, with its media", () => {
+    const { srcDoc, hasRefusedContent } = buildHtmlPreviewDocument(
+      '<link rel="stylesheet" media="screen" href="assets/design.css"><p>x</p>',
+      { filePath, stylesheets },
+    );
+    const parsed = parse(srcDoc);
+    expect(parsed.querySelector("link") === null).toBe(true);
+    const style = parsed.querySelector("style");
+    expect(style?.textContent).toBe("body{color:#123456}");
+    expect(style?.getAttribute("media")).toBe("screen");
+    expect(hasRefusedContent).toBe(false);
+    expect(srcDoc).toContain(HTML_PREVIEW_CSP);
+  });
+
+  test("keeps a link whose file was not read, and still reports it", () => {
+    const { srcDoc, hasRefusedContent } = buildHtmlPreviewDocument(link, {
+      filePath,
+      stylesheets: new Map(),
+    });
+    expect(parse(srcDoc).querySelector("link")).not.toBeNull();
+    expect(hasRefusedContent).toBe(true);
+  });
+
+  test("never inlines a link that resolves outside the folder, even if offered", () => {
+    const { srcDoc, hasRefusedContent } = buildHtmlPreviewDocument(
+      '<link rel="stylesheet" href="../secret.css">',
+      { filePath, stylesheets: new Map([["secret.css", "SECRET"]]) },
+    );
+    expect(srcDoc).not.toContain("SECRET");
+    expect(hasRefusedContent).toBe(true);
+  });
+
+  test("a stylesheet cannot close its own style element into markup", () => {
+    const css = "p{color:red}</style><h1 id=injected>Injected</h1><style>";
+    const { srcDoc } = buildHtmlPreviewDocument(link, {
+      filePath,
+      stylesheets: new Map([["design/assets/design.css", css]]),
+    });
+    const parsed = parse(srcDoc);
+    expect(parsed.getElementById("injected") === null).toBe(true);
+    expect(parsed.querySelectorAll("style")).toHaveLength(1);
+    expect(buildHtmlPreviewDocument(srcDoc).srcDoc).toBe(srcDoc);
+  });
+
+  test("an inlined stylesheet's own imports and remote URLs are still refused", () => {
+    for (const css of ["@import 'b.css';p{}", "p{background:url(https://evil.invalid/a.png)}"]) {
+      const { hasRefusedContent } = buildHtmlPreviewDocument(link, {
+        filePath,
+        stylesheets: new Map([["design/assets/design.css", css]]),
+      });
+      expect(hasRefusedContent).toBe(true);
+    }
+  });
+
+  test("an inlined stylesheet adds no script, so the policy is unchanged", () => {
+    const { srcDoc } = buildHtmlPreviewDocument(link, { filePath, stylesheets });
+    expect(srcDoc).not.toContain("<script");
+    expect(HTML_PREVIEW_SANDBOX).toBe("");
+  });
+});
+
+describe("findSiblingPageLinks", () => {
+  const filePath = "design/00000-index.html";
+
+  test("lists links to html files in the folder or below, once each and in order", () => {
+    const links = findSiblingPageLinks(
+      `<a href="00001-a.html">  First
+         page </a><a href="sub/b.htm#x">B</a><a href="00001-a.html">again</a>
+       <map><area href="c.html" alt="C"></map>`,
+      filePath,
+    );
+    expect(links).toEqual([
+      { path: "design/00001-a.html", label: "First page" },
+      { path: "design/sub/b.htm", label: "B" },
+      { path: "design/c.html", label: "c.html" },
+    ]);
+  });
+
+  test("skips everything that is not an html file inside the folder", () => {
+    expect(
+      findSiblingPageLinks(
+        [
+          '<a href="../up.html">up</a>',
+          '<a href="/abs.html">abs</a>',
+          '<a href="https://example.com/x.html">web</a>',
+          '<a href="notes.md">md</a>',
+          '<a href="assets/design.css">css</a>',
+          '<a href="#top">frag</a>',
+          '<a href="00000-index.html">self</a>',
+          '<a href="javascript:alert(1)">script</a>',
+        ].join(""),
+        filePath,
+      ),
+    ).toEqual([]);
   });
 });

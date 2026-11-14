@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext";
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
 import { appCommandStore } from "@/test/app-command-store";
@@ -167,5 +169,129 @@ describe("HtmlFileTab", () => {
     renderInAppCommandScope(renderTab());
 
     expect(screen.queryByText(/does not run scripts/) === null).toBe(true);
+  });
+
+  describe("pages that use files from their own folder", () => {
+    const STYLED = '<link rel="stylesheet" href="assets/site.css"><h1>Styled</h1>';
+
+    function Registrar() {
+      const { setCreateFileTab } = useTerminalContext();
+      useEffect(() => {
+        setCreateFileTab(openFile);
+        return () => setCreateFileTab(null);
+      }, [setCreateFileTab]);
+      return null;
+    }
+    function Providers({ children }: { children: ReactNode }) {
+      return (
+        <TerminalProvider>
+          <Registrar />
+          {children}
+        </TerminalProvider>
+      );
+    }
+    function renderWithFiles(readSiblingFile?: (path: string) => Promise<string>) {
+      return renderInAppCommandScope(
+        <HtmlFileTab
+          tabId={TAB_ID}
+          filePath="docs/report.html"
+          initialContent={HTML}
+          language="html"
+          isActive
+          isSaving={false}
+          onSave={onSave}
+          readSiblingFile={readSiblingFile}
+        />,
+        { wrapper: Providers },
+      );
+    }
+    const openFile = mock((_path: string) => {});
+
+    beforeEach(() => openFile.mockClear());
+
+    test("inlines the stylesheet the app read, without the frame loading anything", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      const read = mock(async (_path: string) => "h1{color:#123456}");
+      renderWithFiles(read);
+
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("color:#123456"));
+      expect(read.mock.calls.map(([path]) => path)).toEqual(["docs/assets/site.css"]);
+      expect(frame().getAttribute("sandbox")).toBe("");
+      expect(frame().getAttribute("srcdoc")).not.toContain("<link");
+      expect(screen.queryByText(/does not run scripts/) === null).toBe(true);
+    });
+
+    test("does not show the page until its stylesheets are in", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      let release: (css: string) => void = () => {};
+      renderWithFiles(() => new Promise<string>((resolve) => (release = resolve)));
+
+      expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
+      release("h1{color:red}");
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("color:red"));
+    });
+
+    test("a stylesheet that cannot be read leaves the page showing, with the notice", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      renderWithFiles(async () => {
+        throw new Error("missing");
+      });
+
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("Styled"));
+      expect(screen.getByText(/does not run scripts or load external files/)).toBeTruthy();
+    });
+
+    test("never reads a stylesheet outside the page's folder", async () => {
+      appCommandStore(fileDirtyStore)
+        .getState()
+        .setContent(
+          TAB_ID,
+          '<link rel="stylesheet" href="../secret.css"><link rel="stylesheet" href="/etc/passwd"><h1>Up</h1>',
+        );
+      const read = mock(async (_path: string) => "SECRET");
+      renderWithFiles(read);
+
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("Up"));
+      expect(read).not.toHaveBeenCalled();
+      expect(frame().getAttribute("srcdoc")).not.toContain("SECRET");
+    });
+
+    test("renders as before when the file cannot be read through this tab", () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      renderWithFiles(undefined);
+
+      expect(frame().getAttribute("srcdoc")).toContain("<link");
+      expect(screen.getByText(/does not run scripts or load external files/)).toBeTruthy();
+    });
+
+    test("lists linked pages in the folder and opens the chosen one in a tab", async () => {
+      appCommandStore(fileDirtyStore)
+        .getState()
+        .setContent(
+          TAB_ID,
+          '<a href="next.html">Next page</a><a href="sub/deep.html">Deep</a><a href="../up.html">Up</a><a href="https://example.com/x.html">Web</a>',
+        );
+      renderWithFiles(async () => "");
+
+      const trigger = screen.getByRole("button", { name: /Linked pages \(2\)/ });
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+      expect(await screen.findByRole("menuitem", { name: /Deep/ })).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: /Up/ }) === null).toBe(true);
+      fireEvent.click(await screen.findByRole("menuitem", { name: /Next page/ }));
+
+      expect(openFile).toHaveBeenCalledWith("docs/next.html");
+      // The frame itself stays inert: links in it still target a refused popup.
+      expect(frame().getAttribute("sandbox")).toBe("");
+    });
+
+    test("offers no list without links to other pages, or in Raw", async () => {
+      renderWithFiles(async () => "");
+      expect(screen.queryByRole("button", { name: /Linked pages/ }) === null).toBe(true);
+
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, '<a href="next.html">n</a>');
+      selectMode("Raw");
+      await screen.findByRole("textbox", { name: "Monaco html" });
+      expect(screen.queryByRole("button", { name: /Linked pages/ }) === null).toBe(true);
+    });
   });
 });

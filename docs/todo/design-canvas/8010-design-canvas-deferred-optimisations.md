@@ -2,15 +2,16 @@
 
 ## Task analysis
 
-Analysed 2026-11-13 against `main` at `17d28238c`. Moved from to-do 0036 task 9
+Analysed 2026-11-13 against `main` at `17d28238c`; task 1 closed 2026-11-14
+by the user's decision. Moved from to-do 0036 task 9
 (0036 retired 2026-11-13; `git show 17d28238c:docs/todo/design-canvas/0036-design-canvas-qualification.md`,
 "Deferred until measured"), as that task recommended, so the qualification
 file could close while these stay gated on evidence.
 
 ### Tasks
 
-1. **Library and offscreen thumbnails**: bounded capture jobs behind interactive work. Status: blocked (waits on 7568: 0036 (retired) task 9, whether thumbnails are wanted).
-2. **Capture and inspection cache**: only once thumbnails or a measurement show repeated identical captures. Status: blocked (depends on 1, or on a measurement of repeated captures).
+1. **Library and offscreen thumbnails**: bounded capture jobs behind interactive work. Status: done (2026-11-14: the user decided no thumbnails until users ask; nothing is built).
+2. **Capture and inspection cache**: only once a measurement shows repeated identical captures. Status: blocked (waits on a measurement of repeated captures; thumbnails, the other trigger, are not being built).
 3. **Second render worker**: raise `DESIGN_LIMITS.renderWorkers` only after measuring several environments rendering at once. Status: blocked (waits on a measurement of render-worker contention).
 4. **Warm browser-context pool**: only if context setup dominates once the rest is done. Status: blocked (depends on 3, or on a measurement where context setup dominates).
 5. **Storage redesign**: only if full-record rewrites dominate at high edit frequency on near-limit documents. Status: blocked (waits on a measurement of rewrite cost).
@@ -25,7 +26,7 @@ file could close while these stay gated on evidence.
 
 **Decisions.**
 
-- **Build them?** Reserved to the user (7568, decisions, "Design canvas").
+- **Build them?** Reserved to the user. Decided 2026-11-14: no, not until users ask (see Assumptions and decisions).
   - **No, not until users ask (recommended).**
     - Pros: no render-queue workload that would then justify task 2's cache.
     - Cons: a long library stays text only.
@@ -110,6 +111,19 @@ file could close while these stay gated on evidence.
   - **Redesign now.**
     - Pros: lower commit cost on large documents.
     - Cons: a storage migration with no measured need.
+
+## Assumptions and decisions
+
+### Task 1: no thumbnails until users ask (user decision, 2026-11-14)
+
+- **Chose:** no library or offscreen thumbnails until users ask for them (the
+  recommended option). The user (maintainer) decided this on 2026-11-14,
+  answering the manual-test checklist item from 0036 (retired) task 9.
+- **Why:** it avoids a render-queue workload that would then justify task 2's
+  cache. Task 1 closes with nothing built; a user request for a visual library
+  would be a new to-do. Task 2 now waits only on a measurement of repeated
+  identical captures. Also recorded in
+  [design-canvas.md](../../architecture/design-canvas.md#qualification).
 
 ## Constraints and rationale
 

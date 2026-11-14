@@ -19,7 +19,7 @@ repeated as tasks; their live checks are. The open questions and the
 
 ### Tasks
 
-1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67). Filing the upstream request moved to 7568 on 2026-11-10.
+1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67). The upstream request is drafted in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (2026-11-14: upstream reports are not to-dos); the user files it.
 2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: done (the hook canary is added, the slash-catalogue risk was already closed, and a skill written during a running turn is kept as residual risk).
 3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: done (2026-11-13; see "Task 3: assert the kind after finding the card"). The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model went to 0024 and then 6940 (both retired 2026-11-13): the live suite's `ask` scenario, whose billed runs are on the manual-test checklist.
@@ -43,7 +43,7 @@ repeated as tasks; their live checks are. The open questions and the
   - **Qualify a throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointing at the real login, resume included, and ship it for policy-off sessions.**
     - Pros: closes the leak now.
     - Cons: loses user-level config and skills; resume depends on a session store in the throwaway home; the very qualification decision 14 found too costly.
-- **Ask xAI?** Filing is an outward action, moved to 7568 (0001 task 1) on 2026-11-10.
+- **Ask xAI?** Filing is an outward action; the report is drafted in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (Status `draft` until its "Before filing" checks pass), and filing it once it is marked ready is the manual-test checklist's "File the upstream reports" item.
   - **File an upstream request for a per-process "never trust" switch (recommended).**
     - Pros: the only clean fix; small for xAI.
     - Cons: no control over timing.
@@ -614,7 +614,8 @@ or a person.
       the user's config, skills, MCP servers and the session store
       `session/load` reads. Not shipped (decision 14).
     - To close: xAI adds a per-process "never trust" switch (an environment
-      variable or a `session/new` meta key), or a live qualification of a
+      variable or a `session/new` meta key; requested in
+      [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md)), or a live qualification of a
       throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointed at the real login,
       with resume checked. Then honour `false` and drop the note, as item 6
       did for Codex.
@@ -1140,7 +1141,7 @@ server as loaded; the address is never contacted.
   task 9's Linux finding, a full-network provider sandbox does not reach
   loopback directly; done as the Agent Info note described in
   [agent-engines.md](../../architecture/agent-engines.md#execution-policy).
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (filing the xAI request from task 1, the live Grok runs from task 3, tasks 4, 5 and 6) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the live Grok runs from task 3, tasks 4, 5 and 6) moved there on 2026-11-10; filing the xAI request from task 1 is its "File the upstream reports" item, pointing at [`docs/upstream-issues/`](../../upstream-issues/0000-index.md).
 
 ## Replaces
 

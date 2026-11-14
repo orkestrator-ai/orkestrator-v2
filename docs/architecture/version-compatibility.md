@@ -38,6 +38,16 @@ once the floor is at or above X: that is, 60 days after the first Stable
 release at or above X was published. For anything older than v2.21.0 that is
 already true.
 
+**One-time sweep, 2026-11-14.** The user (maintainer) decided that all legacy
+support retires now, everywhere in the repository: every machine and client
+is updated together, so no path waits for the floor, and the mixed-version
+qualification workflow and scenarios retire with it. The sweep is to-do
+[8108](../todo/cross-cutting/8108-legacy-retirement-sweep.md); each removal
+moves its register row to [Retired](#retired). This records the sweep only.
+Whether later changes still need older-version adapters is not settled, and
+the window above stays the written policy until the user approves a
+replacement.
+
 Why this shape: releases ship several times a week, so a count of releases
 would last days, while hosts update on their own schedule, a remote backend
 can sit unattended and a container keeps its bridge until it restarts.

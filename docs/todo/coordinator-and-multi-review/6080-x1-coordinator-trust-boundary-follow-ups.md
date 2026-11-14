@@ -1,6 +1,7 @@
 ## Task analysis
 
 Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at `af2e566e5`, again 2026-11-06 at `c1724ab74`), from what the X1 batch (Coordinator trust boundary) could not prove or close. X1's outcome is the table ending `docs/reports/security/0090-x1-coordinator-trust-boundary.md`, in the parent of the commit that deleted it. Tasks 2 to 4 were worked on a Linux host on 2026-11-06, task 5's code on 2026-11-09 (its live check is still open) and task 6's counter on 2026-11-14 against `main` at `dc90609bf`; see Assumptions and decisions.
+Updated 2026-11-14 for the user's legacy-retirement decision.
 
 ### Tasks
 
@@ -9,7 +10,7 @@ Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at 
 4. **Decide what a read-only review turn may read**: a worker bridge's read-only turns have no read boundary. Status: done (decided: leave as is).
 5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. The note is on every path and tested (2026-11-09); the billed live run showing a real worker reads it moved to the manual-test checklist. Left here: reword the note if that run shows a model ignores it. Status: blocked (waits on 7568: 6080 task 5 live run).
 6. **Measure the default**: how often coordinators need environments they did not create. The content-free counter is built (2026-11-14). Left: an exception for replies, built only if the user's reading of the counter calls for one. Status: blocked (waits on 7568: 6080 task 6 decision).
-7. **Retire the two compatibility paths**: the carrier's `selfReminder` spelling and the leaf capability. Status: blocked (waits on the version floor: until 2026-12-15 it is v2.21.0, older than both paths).
+7. **Retire the two compatibility paths**: the carrier's `selfReminder` spelling and the leaf capability. Status: open (2026-11-14: no longer waits on the version floor; see Assumptions and decisions).
 
 ### 2. Prove the read boundary under bubblewrap
 
@@ -149,7 +150,7 @@ The refusal is decided in two functions of `coordinator-environment-scope.ts`, `
 
 **Investigation.** Neither has a usage counter, because the first is renderer-side and the second loses nothing.
 
-**Decisions.** None: remove each when the floor is at or above the first Stable release that has it.
+**Decisions.** None: remove each when the floor is at or above the first Stable release that has it. Since 2026-11-14 both can go now, under the user's legacy-retirement decision (see Assumptions and decisions).
 
 ## Assumptions and decisions
 
@@ -196,6 +197,17 @@ Kept in memory and exposed in the existing `/__orkestrator/metrics` snapshot, ra
 
 Did not build the reply exception. The recommended option keeps today's strict rule until the count shows replies dominate, and an exception in a security check with no evidence is what its alternative was rejected for.
 
+### Task 7: the two compatibility paths no longer wait on the floor (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the version floor no longer blocks task 7. The carrier's
+`source: "workflow"` with `selfReminder: true` spelling and the
+`node-mail-turn-origin` leaf capability gate can be removed now, with their
+rows in the version-compatibility register; no older-version adapter is kept.
+Tasks 5 and 6 are unchanged: they wait on user items in 7568 (a billed live
+run and a decision), not on a version.
+
 ## Constraints and rationale
 
 - The data directory is denied as a whole, with an allowance, rather than file by file. A list goes stale silently when a store adds a secret. The allowance is the part to extend: see `coordinatorReadBoundary`.
@@ -210,6 +222,7 @@ Did not build the reply exception. The recommended option keeps today's strict r
 - to-do 7400 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#provider-qualification)), [7401](7401-grok-coordinator-data-dir-reads.md), and 7402 (retired 2026-11-10): follow-ups from task 3
 
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on)
+- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
 - [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
 - [Provider secrets at rest](../../architecture/storage.md#provider-secrets-at-rest)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live run of task 5, and the real Pi and OpenCode coordinator turns from Needs verification) moved there on 2026-11-10, and the reading of task 6's counter and the reply decision on 2026-11-14.

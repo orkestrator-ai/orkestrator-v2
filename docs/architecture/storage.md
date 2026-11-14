@@ -516,12 +516,15 @@ primitives above serialize their writes.
   repeats the timing on another release; the full write-up is
   `git show 498b68766:docs/todo/cross-cutting/5180-sqlite-durability-tiers.md`
   (task 3).
-- Whether to tier `synchronous` and `secure_delete` further by data (beyond the
-  ledger's NORMAL) waits on a busy real session's commit counts
-  ([commits and reads](#commits-and-reads)) and the maintainer's sign-off; both
-  are in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
-  (5180, retired, tasks 1 and 2). The maintainer's deferral (to-do 1202 task 2,
-  ST-12: "unchanged, revisited only if fsync cost still shows") stands.
+- **Durability tiers, decided 2026-11-14 by the user (5180, retired, task 2).**
+  #1996, which put the ledger file on `synchronous = NORMAL`, settles the
+  durability tiers; nothing else changes. No further `synchronous` or
+  `secure_delete` tiering by data, no `secure_delete = FAST` on the ledger or
+  the display tails, and no `fullfsync = ON` on macOS. The maintainer's earlier
+  deferral (to-do 1202 task 2, ST-12: "unchanged, revisited only if fsync cost
+  still shows") stands. The busy real session's commit counts (5180 task 1,
+  [commits and reads](#commits-and-reads)) stay a manual-test checklist item
+  as evidence only; they no longer gate a decision.
 - Every connection sets `checkpoint_fullfsync = ON`, so a checkpoint, which
   copies WAL frames into the database file and then resets the WAL, syncs
   with a write barrier on macOS. Apple's SQLite already defaults to that

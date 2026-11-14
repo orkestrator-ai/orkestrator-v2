@@ -615,12 +615,12 @@ on `self` and on each node:
   end at the newest reading while sampling is on schedule, so a steady machine
   reads as fully covered; `latestSampleAgeSeconds` says how old that reading is.
 - **Restarts.** History is in memory (`MachineLoadSampler`,
-  `apps/backend/src/core/machine-load.ts`) and starts empty on each start;
-  persisting it would add a database write on every machine all day for a
-  figure the coverage field already keeps honest. Whether to persist it after
-  all is a conditional decision on the
-  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
-  taken only once a coordinator is seen misled by short 24-hour coverage. A bucket a minute for the
+  `apps/backend/src/core/machine-load.ts`) and starts empty on each start.
+  On 2026-11-14 the user decided to persist it through a database document so
+  the 24-hour figure survives a restart or update (not prompted by an observed
+  misplacement); that is to-do
+  [8104](../todo/coordinator-and-multi-review/8104-persist-machine-load-history.md),
+  and until it lands the coverage field keeps the short figure honest. A bucket a minute for the
   shorter windows and one every 15 minutes for the longest bound it to about
   160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
   [recurring-work.md](recurring-work.md) B29.
@@ -2030,10 +2030,10 @@ page is on screen in a visible window. A worker's "agent stopped" cue and its wa
 within 500 ms are one sound. A backend that predates the event never sends it, and
 an older client ignores it. A report raises no desktop notification: that
 is a wider feature (new permission handling, nothing on the web client, and a
-choice of what may show on a lock screen), and the event names no worker. Whether
-to build one is the user's call, on the
-[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
-(to-do 4941, retired 2026-11-10).
+choice of what may show on a lock screen), and the event names no worker. On
+2026-11-14 the user decided on nothing beyond the sound for now (to-do 4941,
+retired 2026-11-10, task 1); a desktop notification would be a new to-do that
+says what it may show.
 
 ## User `!` commands
 

@@ -13,9 +13,10 @@ were rechecked, and task 6 run, against `main` at `498b68766` on 2026-11-11
 
 1. **Record the human review of sign-offs A to C**: once a person has
    reviewed the three agent-written sign-off records and answered the
-   gate-scope questions (manual-test checklist 7568), record the outcome and
-   drop the README catalogue pointer. Status: blocked (waits on 7568: 0044
-   task 1).
+   gate-scope questions, record the outcome and drop the README catalogue
+   pointer. Status: open (the user reviewed them on 2026-11-14 and accepted A
+   to C; see Assumptions and decisions. What is left is the agent's
+   recording).
 5. **Linux re-run after #969 and #983**: the first "Needs verification" item.
    Status: done (2026-11-06, headless; see "Runs on 2026-11-06").
 6. **Quiet-host baselines and targets**: repeat the baselines and decide
@@ -67,7 +68,8 @@ path that milestone A depends on (`cdaa1bb1`); the 2026-11-06 Linux runs of
 (task 5) were on `c1724ab7`, which contains it, so the real-stack specs have
 run on the new commit path.
 
-**Steps.** After the reviewer's answer is recorded in 7568: fill each record's
+**Steps.** The reviewer's answer was given on 2026-11-14 (see Assumptions
+and decisions, "Task 1: the user's review of sign-offs A to C"). Fill each record's
 "Reviewer / date" line, move whatever the reviewer accepts as a deferral (the
 remote backend, the iOS wrapper, native focus and keyboard resolve) into the
 capability matrix in `web-page-annotations.md`, and drop the README catalogue
@@ -1328,6 +1330,28 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   assumed SLA.
 
 ## Assumptions and decisions
+
+### Task 1: the user's review of sign-offs A to C (user decision, 2026-11-14)
+
+The reviewer is the user (maintainer), on 2026-11-14. They accepted
+milestones A, B and C, with the runs still open recorded as deferrals in the
+capability matrix, and answered the four gate-scope questions:
+
+- **(a) Native-window gate:** Linux is enough; macOS is deferred.
+- **(b) Remote backend:** deferred, recorded in the capability matrix; not
+  in scope now.
+- **(c) Gate A:** the unit-level fault, race and migration tests count; no
+  real-stack runs of the acceptance race or migration restart are required.
+- **(d) iOS:** the WebKit run of the web review case is the engine-level iOS
+  signal only; it does not qualify the `WKWebView` wrapper, which stays a
+  matrix deferral.
+
+What task 1 does with it (agent work): write "Reviewer: the user (maintainer)
+/ 2026-11-14 / accepted" into each record's line in "Sign-off records,
+2026-10-25", add the deferrals above (macOS native window, the remote
+backend, the iOS wrapper, and native focus and keyboard resolve) to the
+capability matrix in `web-page-annotations.md`, and drop the catalogue
+pointer to this file from `docs/README.md`.
 
 ### Task 6: baselines only, from a shared host at a quarter of the earlier load (2026-11-11)
 

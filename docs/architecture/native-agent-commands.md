@@ -4,8 +4,13 @@ Status: living. Owner modules:
 [`agent-command-catalogue.ts`](../../packages/protocol/src/agent-command-catalogue.ts)
 (wire contract, bounds, intent parsing) and
 [`agent-slash-commands.ts`](../../packages/protocol/src/agent-slash-commands.ts)
-(lexical parsing, resolution, session-action collisions). Outstanding work:
-[0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
+(lexical parsing, resolution, session-action collisions). No agent work is
+outstanding: to-do 0015 (slash-command qualification) was retired on
+2026-11-14, when the user's decision to retire all legacy support closed its
+last task (mixed versions against real v2.21.0 builds) without a run, and
+flake 0710 kept its picker-lag task (`git show 066992035:docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md`), and its remaining logged-in container picker check is on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(0015 (retired) task 4).
 The catalogue decisions below come from to-do 0016, retired on 2026-11-11
 (its last version, with every option weighed, is
 `git show 14df96544:docs/todo/cli-and-slash-commands/0016-slash-command-catalogue.md`).
@@ -265,8 +270,8 @@ model turn (`slash-command-picker.spec.ts`,
 [agent-testing.md](../development/agent-testing.md#live-slash-command-picker)).
 
 The record, including what each run did not cover (a backend restart,
-and OpenCode, Grok and Pi in the browser scenario), is in
-[0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
+and OpenCode, Grok and Pi in the browser scenario), is in the retired to-do
+0015 (`git show 066992035:docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md`, "Qualification record").
 Mocks do not confer support: a behaviour that could not be qualified is listed
 unavailable with a reason. Re-qualify on every pin change
 ([`upgrade-agents.md`](../development/upgrade-agents.md#repository-wide-validation)).
@@ -336,7 +341,11 @@ catalogue read cannot let `/clear` reach the CLI.
   and delete the remembered list; every SDK bump checks for it
   ([upgrade-agents.md](../development/upgrade-agents.md#how-to-upgrade-claude)).
   Still absent at 0.3.319 (the pin) and 0.3.322 (the newest published, checked
-  2026-11-11).
+  2026-11-11). The feature request for the marker (to-do 0016, retired, task
+  1) is drafted in
+  [`docs/upstream-issues/claude-agent-sdk-slash-command-terminal-flag.md`](../upstream-issues/claude-agent-sdk-slash-command-terminal-flag.md)
+  (Status `draft` until its "Before filing" checks pass); the user files it
+  once it is marked ready, and its URL is recorded there.
 - **Codex**: skills run as structured `skill` input (`$name`, alias
   `/skill:name`); templates are an Orkestrator compatibility feature with
   bounded discovery and `$ARGUMENTS` only. Inline `` !`…` `` shell spans are

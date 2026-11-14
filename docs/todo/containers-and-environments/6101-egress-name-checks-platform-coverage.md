@@ -11,7 +11,7 @@ on PATH), so the file is blocked.
 1. **Run the live suite on rootful Linux Engine**: CI's container workflow on x64 and arm64. Status: open (depends on a green Container live qualification CI run on linux-arm64; x64 passed on beelink 2026-11-06, host daemon and a disposable rootful daemon, and two test defects fixed; arm64 has only CI's hosted-runner run 42128741746, from before those fixes).
 2. **Run the live suite on rootless Docker**: a real rootless host. Status: done (2026-11-10, beelink, disposable rootless daemons from 4730: slirp4netns 6/6 and gvisor-tap-vsock 5/5; pasta is task 4).
 3. **Exercise the path where Docker names its upstreams by address**: controlled addressed upstreams, forged UDP replies and TCP failover. Status: done (Docker Desktop, 2026-11-05; on rootful Linux x64 2026-11-06, where the host daemon itself names its upstream by address).
-4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: blocked (waits on 7568: 6101 task 4).
+4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: blocked (waits on 7568: 6101 task 4 and 7390 task 2, the user installing `passt` on beelink; decided 2026-11-14).
 
 ### 1. Run the live suite on rootful Linux Engine
 
@@ -90,7 +90,7 @@ on PATH), so the file is blocked.
 
 **Problem.** Task 2's problem names slirp4netns and pasta. The 2026-11-10 run covered slirp4netns and gvisor-tap-vsock; pasta's user-mode stack has not run the name checks.
 
-**Context.** `mise run docker:disposable -- start --net pasta` supports it and uses RootlessKit's `implicit` port driver with it. It needs the `pasta` binary (the `passt` package) on the host. Installing that package is a host change for the user ([7568](../manual-test/7568-manual-test-checklist.md)); this task is the run once a host has it.
+**Context.** `mise run docker:disposable -- start --net pasta` supports it and uses RootlessKit's `implicit` port driver with it. It needs the `pasta` binary (the `passt` package) on the host. On 2026-11-14 the user decided the host is beelink and that they install `passt` there themselves (packages only, no firewall or network change); that is a [7568](../manual-test/7568-manual-test-checklist.md) item. This task is the run once beelink has it.
 
 **Investigation.** On 2026-11-10 beelink had no `pasta` or `passt` on PATH. Installing a package needs `sudo` and changes the host, which this run was not allowed to do. The name checks run inside the gateway's namespace, a Docker bridge network whatever RootlessKit uses to reach the outside, so no difference is expected; that is an expectation, not an observation. The two drivers that ran passed the same cases.
 
@@ -105,6 +105,17 @@ on PATH), so the file is blocked.
     - Cons: pasta's `implicit` port driver and its own NAT are the one path not observed.
 
 ## Assumptions and decisions
+
+### Task 4: beelink gets `passt` (user decision, 2026-11-14)
+
+- **Chose:** run it once where `passt` is installed (the recommended option).
+  The user (maintainer) decided on 2026-11-14 to install `passt` and a
+  `vpnkit` binary on beelink: packages only, with no firewall or network
+  change. The user installs them, so that stays a manual-test checklist item
+  (shared with 7390 task 2).
+- **What follows:** once the item is ticked, an agent on beelink runs
+  `mise run docker:disposable -- start --net pasta` and the M12 suite, and
+  records the result here and in container qualification.
 
 ### Task 1: a disposable daemon, because the host's pools are full
 
@@ -195,7 +206,7 @@ the two probe defects fixed on 2026-11-06. On rootless Docker x64 (beelink,
 daemons, and the conditions suite, with two rootless daemon restarts, on
 slirp4netns. Remaining: a green CI run on linux-arm64 after the probe fixes
 (task 1, by the recommended decision that CI's run counts), and rootless with
-pasta (task 4, waits on a host with `passt`, 7568).
+pasta (task 4, waits on the user installing `passt` on beelink, 7568).
 
 ## Related
 
@@ -207,4 +218,4 @@ pasta (task 4, waits on a host with `passt`, 7568).
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`
 - [7390](7390-rootless-restart-remaining-settings.md): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`
 - To-do 0241 (retired 2026-11-10): the leaked networks that fill the host's pools; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 4: installing `passt` on a Linux host) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only part of this to-do (the user part of task 4: installing `passt` on beelink, decided 2026-11-14).

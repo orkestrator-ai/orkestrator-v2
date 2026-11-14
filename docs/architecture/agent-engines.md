@@ -250,6 +250,28 @@ The public CLI reaches both: `session rewind SESSION --message ID`,
 ([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
 a branch switch, as it refuses fork and resume.
 
+**Claude offers fork at a message, not message rewind** (decided by the user
+on 2026-11-14; to-do 0006, retired, task 5). Claude reports only
+`rewindFiles`; to go back, fork at the message (`forkSession(upToMessageId)`),
+which leaves the original conversation unchanged. A truncating resume with a
+staged marker was probed and not built: it would retire the warm CLI on
+rewind and every reader would have to honour the marker across restarts
+(`bridges/claude-bridge/AGENTS.md`, "One CLI per session"). A resumed Claude
+session rehydrates its subagents' steps eagerly, bounded, once per session per
+bridge process (`session-manager-subagent-rehydration.ts`).
+
+### Qualification of fork, rewind and titles
+
+Fork and rewind were qualified end to end for Codex and Pi on loopback models
+on 2026-11-06 (Codex 0.166.0, Pi SDK 1.4.0), and titles offline on every
+platform; the full records (2026-10-27, 2026-10-31 and 2026-11-06) are in the
+retired to-do 0006
+(`git show 066992035:docs/todo/agent-engines/0006-session-titles-and-history.md`,
+the "Qualification" sections). The signed-in halves, Cursor fork and rewind on
+a real login and the title run with real cost, are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(0006 (retired) tasks 6 and 7); record their results here.
+
 ## Session titles
 
 The backend owns every native session's title (`native-agent-session-titles.ts`).
@@ -910,13 +932,24 @@ restart interruption (`opencode2/restart-cut.ts`,
 Orkestrator request: 2.2.6 writes no `idle` for the cut run, so a
 continuation joins it, and a second restart that cuts the continuation
 reports the continuation. The backend's host plugin stops a server whose
-backend is gone. The
-mitigations OpenCode 2 runs under (an exact pin, auto-update and file
-watchers off, an isolated database, model, agent and permission switches
-under the dispatch lock, the backend-held steer guard and its bounded
-journal, experimental routes used only at the exact pin) await the owner's
-review in the manual-test checklist; record that review, and any
-real-provider run, here.
+backend is gone. Record any real-provider run here.
+
+**Mitigations, accepted by the user on 2026-11-14** (0008, retired, task 7;
+`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`, "Task 2:
+owner decision (2026-11-08)"). OpenCode 2 runs under all nine, and each stays
+in force until the user decides otherwise:
+
+1. An exact pin of the `opencode2` binary.
+2. `OPENCODE_DISABLE_AUTOUPDATE`.
+3. `OPENCODE_DISABLE_FILEWATCHER`.
+4. An isolated `OPENCODE_DB` for storage.
+5. `switchModel`, `switchAgent` and session permissions applied under the
+   dispatch lock.
+6. LSP and the `CLAUDE.md` fallback dropped.
+7. The backend-held steer guard.
+8. Orkestrator's own bounded steer journal.
+9. The experimental MCP, instructions and log routes used only at the exact
+   pin.
 
 | Component                        | Purpose                                                           |
 | -------------------------------- | ----------------------------------------------------------------- |

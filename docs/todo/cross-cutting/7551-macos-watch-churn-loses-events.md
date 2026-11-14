@@ -11,7 +11,7 @@ done then.
 ### Tasks
 
 1. **Decide how a watch owner learns that its events were lost by a stream rebuild**: choose between telling every other watch after a rebuild, one helper per worktree, and leaving it to the next event and the safety scan; then implement and test the choice. Status: done (2026-11-11).
-2. **Ask Bun to rebuild its FSEvents stream from the last event it saw**: read Bun's macOS `fs.watch` source to confirm the rebuild starts from "now", and draft the upstream report with the reproduction below in this file. Status: done (2026-11-11); approving and filing the report is in 7568 (7551 task 2).
+2. **Ask Bun to rebuild its FSEvents stream from the last event it saw**: read Bun's macOS `fs.watch` source to confirm the rebuild starts from "now", and draft the upstream report with the reproduction below in this file. Status: done (2026-11-11); the report is drafted in [`docs/upstream-issues/bun-fsevents-rebuild-loses-events.md`](../../upstream-issues/bun-fsevents-rebuild-loses-events.md) (2026-11-14; Status `draft` until its "Before filing" checks pass), and the user files it once it is marked ready.
 3. **Measure the `lost` flag through the helper on a healthy `fseventsd`**: run the `--host` benchmark and record how many lost writes no flag covered. Status: open (blocked: waits on a healthy `fseventsd` on arktech-mini).
 
 ### 1. Tell a watch when a rebuild may have lost its events
@@ -151,7 +151,7 @@ comment: the old stream's last delivered id is one id for the whole stream, and
 the past-event problem applies only to paths new to the stream. The draft below
 proposes resuming from it and filtering for new paths.
 
-Draft upstream report (not filed; filing it is 7568, 7551 task 2):
+Draft upstream report (not filed; its maintained, ready-to-paste copy is [`docs/upstream-issues/bun-fsevents-rebuild-loses-events.md`](../../upstream-issues/bun-fsevents-rebuild-loses-events.md), and that file is the one to update):
 
 > **Title:** macOS `fs.watch`: starting or closing any watch loses events for
 > every other watch in the process
@@ -198,8 +198,8 @@ changed.
 - **Report upstream?**
   - **Yes, with the reproduction and a request for `sinceWhen` on rebuild (recommended).**
     - Pros: fixes it for every Bun program; no workaround to maintain here.
-    - Cons: an outward-facing action, so it needs the user's go-ahead (in the
-      manual-test checklist, 7568: 7551 task 2); no timeline, so task 1 is
+    - Cons: an outward-facing action, so the user files it (the manual-test
+      checklist's "File the upstream reports" item); no timeline, so task 1 is
       still wanted.
   - **No.**
     - Pros: nothing to track outside this repository.
@@ -312,4 +312,5 @@ on 2026-11-11. Kept as an agent task, blocked on the host rather than moved to
 - 5060 worktree watch leftovers (retired 2026-11-10), task 3; its measurements are in [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out)
 - [git-scan-caches.md](../../architecture/git-scan-caches.md#lost-events-on-macos): how the flag works.
 - [environment-deletion.md](../../architecture/environment-deletion.md#watches-and-the-event-loop)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: approving and filing the Bun upstream report) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): filing the Bun upstream report (task 2's user part) is its "File the upstream reports" item.
+- Upstream report: [`docs/upstream-issues/bun-fsevents-rebuild-loses-events.md`](../../upstream-issues/bun-fsevents-rebuild-loses-events.md).

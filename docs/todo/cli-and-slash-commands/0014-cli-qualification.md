@@ -12,10 +12,13 @@ Rechecked 2026-11-01 against `main` at `93b99bfb`: tasks 2 and 3 are done
 Rechecked 2026-11-06 against `main` at `c1724ab74`: task 5 is done (see its
 outcome); tasks 1, 4 and 7 are unchanged.
 
+Rechecked 2026-11-14: the user settled task 7 (see Assumptions and
+decisions); task 1 is unchanged.
+
 Rechecked 2026-11-11 against `main` at `14df96544` on beelink2 (Linux): task 4
 is done (see its outcome). Task 1 is unchanged and still waits on the
 credentialed runs in 7568; task 7 had already moved to the checklist on
-2026-11-10 (7568: 0014 task 7). Nothing an agent can do alone is left here.
+2026-11-10 (7568: 0014 task 7; answered 2026-11-14). Nothing an agent can do alone is left here.
 
 Code items 1 to 4 and qualification items 2 to 4 are done and on `main`
 (`c23f6be9` #1274, with the harness toolchain install from `a51045a4` #1287).
@@ -30,6 +33,7 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
 4. **Token cost of a live run: record usage in the manifest** (qualification item 5; the paid measurement run moved to the manual-test checklist). Status: done (2026-11-11; a live scenario's result carries `usage`, proved credential-free with fake-model Pi turns).
 5. **Fresh Linux evidence**: the latest Linux CLI run was 2026-09-26. Status: done (2026-11-06, credential-free; Cursor's task 1 run left to task 1).
 6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: done (settled by #1491 on 2026-10-31).
+7. **Re-run qualified providers after an agent upgrade?** (shared with 0031 task 6). Status: done (2026-11-14, the user's rule, written into `docs/development/upgrade-agents.md`).
 
 ### 1. Completion flip for Pi, Cursor and Grok
 
@@ -930,6 +934,16 @@ model).
   their shape. The recorder writes off the projection path, so a read that
   counts no turns waits one second and reads again; a missing count is
   otherwise recorded as zero, not guessed.
+- **Task 7: re-run qualified providers after an agent upgrade? (user
+  decision, 2026-11-14).** Shared with
+  [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md)
+  task 6. The user (maintainer) chose no blanket re-run: on a bump, re-run
+  only the bumped engine's opt-in live specs, re-qualify a feature only when
+  the changelog touches its surface, and run the slash-command
+  re-qualification, including `live-session` for that provider, as the one
+  mandatory step. The rule is in
+  [upgrade-agents.md](../../development/upgrade-agents.md#re-qualify-live-features-after-a-bump),
+  so task 7 is closed and its checklist item removed.
 
 ## Constraints and rationale
 

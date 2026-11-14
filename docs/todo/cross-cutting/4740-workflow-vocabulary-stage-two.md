@@ -3,10 +3,11 @@
 ## Task analysis
 
 Analysed 2026-11-04 against `main` at `67db62362`.
+Updated 2026-11-14 for the user's legacy-retirement decision.
 
 ### Tasks
 
-1. **Flip stored and transmitted values and fields to the new names**: backend writes the new vocabulary, with a one-way storage migration. Status: blocked (waits on 7568: 4740 task 2).
+1. **Flip stored and transmitted values and fields to the new names**: backend writes the new vocabulary, with a one-way storage migration. Status: open (2026-11-14: task 2, the stage-one confirmation, is answered by the user's legacy-retirement decision; see Assumptions and decisions).
 3. **Rename the public names**: coordinator tools and their fields, CLI wire fields, `submit_fix_result`, graph template names. Status: open (depends on 1).
 4. **Give package preparation its own phase**: stop storing the preparation session as phase `fix`. Status: open (depends on 1).
 5. **Retire the compatibility paths**: the former names and readers, once nothing needs them. Status: open (depends on 1 and 3).
@@ -36,7 +37,7 @@ Analysed 2026-11-04 against `main` at `67db62362`.
     - Pros: no old word left.
     - Cons: orphans transcripts unless every hashed path moves with them.
 - **What the backend sends to clients still on an older build?**
-  - **Send only the new names once task 2 is confirmed (recommended).**
+  - **Send only the new names once task 2 is confirmed (recommended).** Task 2 is answered since 2026-11-14: every machine and client updates together under the user's legacy-retirement decision, so this applies now.
     - Pros: simple; stage-one clients already read them.
     - Cons: a client older than stage one fails to load these snapshots until it updates, which is the accepted cost of flipping before the 60-day window ends.
   - **Wait for the support window (the first Stable with stage one, plus 60 days).**
@@ -54,12 +55,12 @@ Analysed 2026-11-04 against `main` at `67db62362`.
 **Decisions.**
 
 - **How to retire the old public names?**
-  - **Accept both for one support window, documenting only the new ones (recommended).**
+  - **Accept both for one support window, documenting only the new ones (recommended until 2026-11-14).**
     - Pros: scripts and saved templates keep working; running agents are not stranded.
     - Cons: two names to carry for a while.
-  - **Replace them outright.**
+  - **Replace them outright (recommended since 2026-11-14, the user's legacy-retirement decision), upgrading saved graph templates once.**
     - Pros: nothing left to retire.
-    - Cons: breaks saved templates, scripts and in-flight sessions.
+    - Cons: breaks saved templates, scripts and in-flight sessions, unless the stored templates are upgraded (see Assumptions and decisions).
 
 ### 4. Give package preparation its own phase
 
@@ -90,12 +91,52 @@ Analysed 2026-11-04 against `main` at `67db62362`.
 **Decisions.**
 
 - **When do the readers go?**
-  - **When the floor is at or above the first Stable with the flip (recommended).**
+  - **When the floor is at or above the first Stable with the flip (recommended until 2026-11-14).**
     - Pros: follows the standing rule in `version-compatibility.md`.
     - Cons: dead-looking code in the meantime.
-  - **With the flip itself.**
+  - **With the flip itself (recommended since 2026-11-14, the user's legacy-retirement decision).**
     - Pros: removes it at once.
-    - Cons: a stage-two client talking to a stage-one backend has no path, which breaks the hosted client's rule.
+    - Cons: a stage-two client talking to a stage-one backend has no path, which breaks the hosted client's rule. Under the 2026-11-14 decision no stage-one backend or client stays in use, so this no longer applies.
+
+## Assumptions and decisions
+
+### Task 1: task 2's confirmation is answered by the policy (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on task 2 (confirming every machine and client runs a stage-one build) no
+longer blocks task 1. Task 2 closes: all of the user's machines and clients
+update together, which is what the confirmation was to establish. Task 1, the
+stored-name flip with its one-way migration, can happen now, and through it
+tasks 3 to 5 are agent work. The downgrade fence the migration's schema bump
+gives is unchanged.
+
+### Task 3: no support window for the old public names (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the
+recommended "accept both for one support window" no longer applies to task 3:
+no older CLI, backend or client needs the old coordinator tool names, CLI
+wire fields or graph names, and no older-version adapter is kept for them.
+User-saved graph templates are stored data, not version skew, so they keep
+working through a one-time upgrade of the saved templates (as task 1 does for
+stored records) rather than through a dual reader. Whether an agent
+conversation already running when the names change needs anything is the
+task 3 worker's call; it is not an older-version peer.
+
+### Task 5: the readers go with the flip (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the floor reaching the first Stable release with the flip no longer blocks
+task 5. Once tasks 1 and 3 land, stage one's peer-facing readers and the
+CLI's former flags can go in the same sweep; no older-version adapter is kept.
+What stays is what serves stored data rather than older peers: the old
+prompt text matched against stored transcripts
+(`MULTI_REVIEW_CONSOLIDATION_PROMPT_PREFIX` and the custom instructions
+prefix) and the former tab title held by restored layouts
+(`MULTI_REVIEW_FORMER_FIX_TAB_TITLE`), unless the worker upgrades that stored
+state once instead.
 
 ## Current state
 
@@ -103,7 +144,7 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 
 ## Constraints and rationale
 
-- `version-compatibility.md`: a persisted format changes additively with a recorded downgrade behaviour. The user approved an exception to the window's timing for task 1; the downgrade fence still applies.
+- `version-compatibility.md`: a persisted format changes additively with a recorded downgrade behaviour. The user approved an exception to the window's timing for task 1; the downgrade fence still applies. On 2026-11-14 the user's legacy-retirement decision (one sweep; all machines and clients update together) removed the window waits for tasks 1, 3 and 5 as well; see Assumptions and decisions.
 - `apps/backend/src/core/storage-record-upgrades.ts`: an older shape is upgraded once by a migration.
 - "fix" must not be replaced globally. It means Rework in a pipeline and Address Findings in a Multi Review, and `fix-result`, `fixModel` and `fixer` all mean Address Findings.
 
@@ -116,4 +157,5 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 
 - [`docs/architecture/version-compatibility.md`](../../architecture/version-compatibility.md)
 - [`docs/architecture/build-pipeline-view.md`](../../architecture/build-pipeline-view.md)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, confirming every machine and client runs a stage-one build) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, confirming every machine and client runs a stage-one build) moved there on 2026-11-10; task 2 was answered on 2026-11-14 by the user's legacy-retirement decision, so that item goes.
+- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.

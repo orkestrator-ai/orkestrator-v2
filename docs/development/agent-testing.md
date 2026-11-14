@@ -2037,8 +2037,10 @@ ORKESTRATOR_AGENT_TEST_PROFILE=history-qa ORKESTRATOR_AGENT_TEST_LIVE_SESSION_HI
 ```
 
 A bridge change needs a profile restart first (the spec runs the bridges'
-`dist`). The 2026-11-06 record is in
-[0006](../todo/agent-engines/0006-session-titles-and-history.md#qualification-2026-11-06-loopback-models).
+`dist`). The 2026-11-06 record is in the retired to-do 0006
+(`git show 066992035:docs/todo/agent-engines/0006-session-titles-and-history.md`,
+"Qualification (2026-11-06, loopback models)"); its summary is in
+[agent-engines.md](../architecture/agent-engines.md#qualification-of-fork-rewind-and-titles).
 
 ### Live client outage
 

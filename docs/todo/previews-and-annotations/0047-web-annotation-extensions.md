@@ -341,6 +341,15 @@ until 0042 task 3 passes (task 6); none of the product extensions has started
 (task 7). Their statuses now read `open`, as `AGENTS.md` asks, with the reason
 or dependency in brackets.
 
+### Task 7: no product extensions for now (user decision, 2026-11-14)
+
+The user (maintainer) answered on 2026-11-14 that no product extension is
+chosen for now (shared-component grouping of notes, issue-tracker export,
+multi-user discussion and generated thread summaries all stay unbuilt).
+Task 7 is closed here as deferred: nothing an agent builds waits on it. The
+checklist item stays open so the user can pick one later; when they do, an
+agent opens one new to-do per chosen item with its own design and rating.
+
 ### Task 6: retain the block under the recorded embedding deferral
 
 Updated 2026-10-30 to follow 0046 task 1's decision: revisit after 0042 task 3
@@ -551,7 +560,7 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
   iOS `WKWebView` surfaces).
 - [web-page-annotations.md](../../architecture/web-page-annotations.md)
   §"Client capability matrix" and §"Known limitations".
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 7, choosing which product extensions are wanted) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 7, choosing which product extensions are wanted) moved there on 2026-11-10; on 2026-11-14 the user chose none for now and the item stays open for a later choice.
 - The design canvas renderer is a precedent for a bounded worker only. Its
   isolated authored HTML is not the user's authenticated application session
   ([design-canvas.md](../../architecture/design-canvas.md)).

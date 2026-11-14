@@ -310,8 +310,9 @@ What that shows:
 Nothing here names the caller that makes the burst, or the job: the stall
 lines name different jobs each time. That is task 2's first step, with one
 measured lead (the public CLI's operation namespace). The R1 run also recorded a recurrence of the Multi Review stall
-[7202](../transcripts-and-observation/7202-busy-profile-follow-ups.md) task 2
-waits for (a validation run queued 623 s in the host test queue), noted there.
+7202 (retired) task 2 waited for (a validation run queued 623 s in the host
+test queue); that task was closed on 2026-11-14 as the host queue (see
+[0048's Related](../transcripts-and-observation/0048-recurring-work-qualification.md#related)).
 
 ### Task 2: named the burst by caller before choosing a fix
 

@@ -40,6 +40,7 @@ import {
   TokenReader,
   TaskCaseEvidence,
   rowText,
+  type BackgroundTask,
   type Row,
 } from "./claude-revision-token-reader.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -405,6 +406,28 @@ async function readUntilSettled(reader: TokenReader, finalMarker: string, label:
   return evidence.settledTask!;
 }
 
+/**
+ * Check the launching row's final output, and note the row's content-free
+ * shape history and the comparison whether or not the check passes (5040).
+ */
+async function expectLaunchRowOutput(
+  reader: TokenReader,
+  task: BackgroundTask,
+  toolName: string,
+  output: string,
+  label: string,
+) {
+  try {
+    await reader.expectTaskOutput(task, toolName, output);
+  } finally {
+    note(`${label}-launch-row`, {
+      shapes: reader.launchRowHistory(task),
+      droppedShapes: reader.droppedLaunchRowShapes,
+      check: reader.lastLaunchRowCheck ?? null,
+    });
+  }
+}
+
 /** The page sent nothing for the session from `from` on. */
 function expectNoReads(reads: BrowserRead[], from: number, what: string) {
   const late = readTimeline(reads, from);
@@ -551,7 +574,7 @@ test.describe("Claude content-revision tokens, inactive views and background tas
       await expect.poll(() => activeTabId(invoke, environment.id)).toBe("side-tab");
       const tabInactiveAt = Date.now();
       const bashTask = await readUntilSettled(reader, markers.background, "inactive-tab");
-      await reader.expectTaskOutput(bashTask, "Bash", `bg-${nonce}`);
+      await expectLaunchRowOutput(reader, bashTask, "Bash", `bg-${nonce}`, "inactive-tab");
       await reader.expectForcedComparison();
       note("inactive-tab-inactive-timeline", readTimeline(reads, tabInactiveAt));
       expectNoReads(reads, tabInactiveAt + DEACTIVATION_GRACE_MS, "an inactive tab");
@@ -580,7 +603,13 @@ test.describe("Claude content-revision tokens, inactive views and background tas
       await expect(tabs.side).toBeHidden({ timeout: 30_000 });
       const environmentInactiveAt = Date.now();
       const agentTask = await readUntilSettled(reader, markers.subagent, "inactive-environment");
-      await reader.expectTaskOutput(agentTask, "Agent", `sub-${nonce}`);
+      await expectLaunchRowOutput(
+        reader,
+        agentTask,
+        "Agent",
+        `sub-${nonce}`,
+        "inactive-environment",
+      );
       await reader.expectForcedComparison();
       note("inactive-environment-inactive-timeline", readTimeline(reads, environmentInactiveAt));
       expectNoReads(

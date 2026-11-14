@@ -5,6 +5,7 @@ import type {
   NativeAgentTranscriptView,
 } from "@orkestrator/protocol/native-agent";
 import {
+  LAUNCH_ROW_SHAPE_LIMIT,
   TokenReader,
   TaskCaseEvidence,
   rowText,
@@ -248,5 +249,200 @@ describe("case-specific inactive task evidence", () => {
       true,
     );
     expect(() => evidence.expectComplete()).toThrow("never completed");
+  });
+});
+
+/**
+ * A reader whose state reports `tasks` and whose transcript answers each read
+ * with the next snapshot. Detail references resolve to `outputs`.
+ */
+function shapeFixture(
+  reads: Array<{ rows: Row[]; tasks: BackgroundTask[]; phase?: string }>,
+  outputs: Record<string, string | Error>,
+) {
+  const detailReads: string[] = [];
+  let index = -1;
+  const reader = new TokenReader(async <T>(command: string, args?: Record<string, unknown>) => {
+    let result: unknown;
+    if (command === "get_native_agent_transcript_update") {
+      index += 1;
+      const next = reads[index];
+      if (!next) throw new Error("Unexpected transcript read");
+      result = snapshot(`token-${index}`, next.rows);
+    } else if (command === "get_native_agent_tool_details") {
+      const ref = String(args?.detailRef);
+      detailReads.push(ref);
+      const output = outputs[ref];
+      if (output instanceof Error) throw output;
+      result = { toolOutput: output };
+    } else {
+      const current = reads[index]!;
+      result = {
+        status: "snapshot",
+        token: `state-${index}`,
+        value: { turn: { phase: current.phase ?? "idle" }, backgroundTasks: current.tasks },
+      };
+    }
+    return result as T;
+  }, identity);
+  return { reader, detailReads };
+}
+
+const SECRET_OUTPUT = "bg-secret-output";
+const SECRET_SUMMARY = "secret summary text";
+
+describe("content-free launching row shape (5040)", () => {
+  const running: BackgroundTask = { id: "task-secret-id", status: "running", toolUseId: "call" };
+  const completed: BackgroundTask = { ...running, status: "completed", summary: SECRET_SUMMARY };
+
+  test("records the row before and after the notification, one record per change", async () => {
+    const { reader, detailReads } = shapeFixture(
+      [
+        { rows: [launch("placeholder-ref", "success")], tasks: [running], phase: "running" },
+        { rows: [launch("placeholder-ref", "success")], tasks: [running], phase: "idle" },
+        { rows: [launch("placeholder-ref", "success")], tasks: [running], phase: "idle" },
+        { rows: [launch("final-ref", "success"), answer], tasks: [completed] },
+      ],
+      { "placeholder-ref": "task launched", "final-ref": `output ${SECRET_OUTPUT}` },
+    );
+    for (let read = 0; read < 4; read += 1) await reader.read();
+    await reader.expectTaskOutput(completed, "Bash", SECRET_OUTPUT);
+
+    expect(reader.launchRowHistory(completed).map(({ atMs: _atMs, ...shape }) => shape)).toEqual([
+      {
+        task: 1,
+        taskStatus: "running",
+        phase: "running",
+        row: "present",
+        toolName: "Bash",
+        toolState: "success",
+        hasDetailRef: true,
+        detailRefs: 1,
+        outputLength: "task launched".length,
+        summaryLength: 0,
+      },
+      {
+        task: 1,
+        taskStatus: "running",
+        phase: "idle",
+        row: "present",
+        toolName: "Bash",
+        toolState: "success",
+        hasDetailRef: true,
+        detailRefs: 1,
+        outputLength: "task launched".length,
+        summaryLength: 0,
+      },
+      {
+        task: 1,
+        taskStatus: "completed",
+        phase: "idle",
+        row: "present",
+        toolName: "Bash",
+        toolState: "success",
+        hasDetailRef: true,
+        detailRefs: 2,
+        outputLength: `output ${SECRET_OUTPUT}`.length,
+        summaryLength: SECRET_SUMMARY.length,
+      },
+    ]);
+    // Each distinct reference is resolved once for the history, plus the check's own read.
+    expect(detailReads).toEqual(["placeholder-ref", "final-ref", "final-ref"]);
+    expect(reader.lastLaunchRowCheck).toEqual({
+      task: 1,
+      row: "present",
+      toolState: "success",
+      hasDetailRef: true,
+      outputLength: `output ${SECRET_OUTPUT}`.length,
+      containsOutput: true,
+      containsSummary: false,
+      summaryLength: SECRET_SUMMARY.length,
+    });
+  });
+
+  test("keeps the failed comparison and writes no ids, references or text", async () => {
+    const { reader } = shapeFixture(
+      [
+        { rows: [launch("placeholder-ref", "success")], tasks: [running] },
+        { rows: [launch("placeholder-ref", "success"), answer], tasks: [completed] },
+      ],
+      { "placeholder-ref": "task launched" },
+    );
+    await reader.read();
+    await reader.read();
+    await expect(reader.expectTaskOutput(completed, "Bash", SECRET_OUTPUT)).rejects.toThrow(
+      "lacks the final background output",
+    );
+
+    expect(reader.lastLaunchRowCheck).toMatchObject({
+      outputLength: "task launched".length,
+      containsOutput: false,
+      containsSummary: false,
+    });
+    expect(reader.launchRowHistory(completed).map((shape) => shape.detailRefs)).toEqual([1, 1]);
+    const written = JSON.stringify({
+      shapes: reader.launchRowShapes,
+      check: reader.lastLaunchRowCheck,
+    });
+    for (const secret of [
+      "task-secret-id",
+      "call",
+      "placeholder-ref",
+      "task launched",
+      SECRET_OUTPUT,
+      SECRET_SUMMARY,
+      "FINAL-MARKER",
+    ]) {
+      expect(written).not.toContain(secret);
+    }
+  });
+
+  test("an absent row, an inline output and an unreadable reference are shapes too", async () => {
+    const inline: Row = {
+      id: "launch",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolUseId: "call",
+          toolName: "Bash",
+          toolState: "success",
+          toolOutput: "inline",
+        },
+      ],
+    };
+    const { reader } = shapeFixture(
+      [
+        { rows: [], tasks: [running] },
+        { rows: [inline], tasks: [running] },
+        { rows: [launch("broken-ref", "success")], tasks: [running] },
+      ],
+      { "broken-ref": new Error("detail unavailable") },
+    );
+    await reader.read();
+    await reader.read();
+    await reader.read();
+
+    expect(
+      reader
+        .launchRowHistory(running)
+        .map(({ row, hasDetailRef, outputLength }) => ({ row, hasDetailRef, outputLength })),
+    ).toEqual([
+      { row: "absent", hasDetailRef: false, outputLength: null },
+      { row: "present", hasDetailRef: false, outputLength: "inline".length },
+      { row: "present", hasDetailRef: true, outputLength: null },
+    ]);
+  });
+
+  test("the history is bounded and counts what it drops", async () => {
+    const reads = Array.from({ length: LAUNCH_ROW_SHAPE_LIMIT + 5 }, (_, read) => ({
+      rows: [launch("ref", "success")],
+      tasks: [{ ...running, summary: "x".repeat(read) }],
+    }));
+    const { reader } = shapeFixture(reads, { ref: "task launched" });
+    for (let read = 0; read < reads.length; read += 1) await reader.read();
+
+    expect(reader.launchRowShapes).toHaveLength(LAUNCH_ROW_SHAPE_LIMIT);
+    expect(reader.droppedLaunchRowShapes).toBe(5);
   });
 });

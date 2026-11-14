@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (325 items): run each check under
+1. **Manual tests and live checks** (326 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (62 items): make each call
@@ -88,6 +88,10 @@ built; it is in Git history at `17d28238c`. 6360 was retired on
 is in Git history at `17d28238c`.
 2190 and 5840 were retired on 2026-11-13, once their two-profile browser
 run passed; both are in Git history at `17d28238c`.
+4982 was retired on 2026-11-14, once its bridge credential suite passed on
+a rootless daemon; it is in Git history at `dc90609bf`, and the runs on every
+daemon are in
+[container qualification](../../development/container-qualification.md#bridge-credential-suite-on-rootless-docker-2026-11-14).
 5600 and 6300 were retired on 2026-11-13, once their agent work was
 done; both are in Git history at `17d28238c`.
 0223 and 0041 were retired on 2026-11-14, once nothing but these items was
@@ -141,14 +145,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 67 | 7 |
 | CLI and slash commands | 6 | 2 |
-| Containers and environments | 27 | 11 |
+| Containers and environments | 28 | 11 |
 | Coordinator and Multi Review | 82 | 8 |
 | Cross-cutting | 83 | 23 |
 | Design canvas | 5 | 2 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 29 | 3 |
-| **Total** | 325 | 62 |
+| **Total** | 326 | 62 |
 
 ## Outstanding work
 
@@ -380,7 +384,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **4580 (retired) task 4: a real Claude sign-out reaches a running container's next start.** (Background: the host sign-out item under [Portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs), which records the `security` exit statuses measured against a temporary keychain.) On a Mac and on a Linux host, each with your own Claude login and a throwaway `mise run dev:test` profile that has a container environment of a current image: start the environment, check `~/.claude/.credentials.json` exists in it, run `claude /logout` on the host, then stop and start the environment and check the file again. On the Mac, before starting it again, also run `security find-generic-password -s "Claude Code-credentials"; echo $?` (no `-w`). Sign back in afterwards. Record: per host, whether the host's `.credentials.json` was deleted or emptied by the logout, the `security` exit status, and whether the container's file was gone after the restart, in a reply to the coordinator (4580 is retired), who has an agent add them to that item of container-lifecycle.md.
 - [ ] **4580 (retired) task 4: `security`'s answer for a locked keychain.** (Background: as above; the unlocked, missing and non-keychain cases were measured on 2026-11-13, but a locked one raises an unlock prompt on the desktop, so it needs a person to dismiss it.) On a Mac, in Terminal, use only a throwaway keychain in a throwaway HOME: `T=$(mktemp -d); mkdir -p $T/Library/Keychains $T/Library/Preferences; export HOME=$T CFFIXED_USER_HOME=$T; K=$T/Library/Keychains/probe.keychain-db; security create-keychain -p throwaway $K; security lock-keychain $K; security find-generic-password -s orkestrator-locked-probe $K; echo $?`. When the unlock prompt appears, press Cancel; run the lookup once more and leave the prompt until it goes away on its own, if it does. Then `security delete-keychain $K; rm -rf $T` and close that Terminal window. Record: macOS version and the exit status after Cancel and after leaving the prompt (or that it stayed until the 10 s the backend allows), in a reply to the coordinator. A 44 means a locked keychain reads as signed out, and an agent must make `hostClaudeSignedOut` (`apps/backend/src/core/claude-host-credentials.ts`) refuse it.
-- [ ] **[4982](../containers-and-environments/4982-bridge-credential-live-evidence.md) task 1: a user's approval on a real provider turn with a verifier-only bridge.** On a throwaway `mise run dev:test` profile with real logins, using a `bridge-credential=1` image, create an `ask` environment and, for each provider (Claude, Codex, Cursor, Grok, OpenCode, Pi), send one prompt that makes the agent run a shell command; approve one command and deny one. Billed turns, one approval and one denial per provider. Record: per provider, whether the approval ran the command, the denial refused it, and whether the turn failed in any way under the bridge's non-dumpable flag (Cursor and Pi run inside the bridge process), as a dated note in 4982's task 2 Investigation or a reply to the coordinator.
+- [ ] **4982 (retired) task 1: a user's approval on a real provider turn with a verifier-only bridge.** On a throwaway `mise run dev:test` profile with real logins, using a `bridge-credential=1` image, create an `ask` environment and, for each provider (Claude, Codex, Cursor, Grok, OpenCode, Pi), send one prompt that makes the agent run a shell command; approve one command and deny one. Billed turns, one approval and one denial per provider. Record: per provider, whether the approval ran the command, the denial refused it, and whether the turn failed in any way under the bridge's non-dumpable flag (Cursor and Pi run inside the bridge process), as a dated section in [container qualification](../../development/container-qualification.md) or a reply to the coordinator (4982 is retired; the suite's own runs are in [Bridge credential suite on rootless Docker](../../development/container-qualification.md#bridge-credential-suite-on-rootless-docker-2026-11-14)).
+- [ ] **4982 (retired) task 2: the bridge credential suite's topology line on rootful Linux Engine and Docker Desktop.** (Background: [Bridge credential suite on rootless Docker](../../development/container-qualification.md#bridge-credential-suite-on-rootless-docker-2026-11-14); the rootless line was recorded on beelink on 2026-11-14, and the earlier rootful and Desktop passes predate the case that writes it.) Needs the rootful Linux Engine of a real host and a Mac with Docker Desktop, which agents may not use. On each, from a checkout of this repository, build the image with `mise run docker:build:dev --profile topo4982` and run the suite with no credentials and no provider turns: `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<the built tag> ORKESTRATOR_QUALIFICATION_EVIDENCE=$PWD/output/topology-4982.jsonl ORKESTRATOR_HOST_REACHABILITY_CHECK=off bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/bridge-credential-docker.test.ts --parallel=1`. Expect every case to pass and one JSON line in the evidence file. Afterwards remove that image tag and the evidence file. Record: per daemon, the Docker version, the pass count and the line's values (rootless flag, uid map, Yama scope, root's capabilities and ptrace result, what the host user reaches of `/run/orkestrator-bridge` and the Claude bridge's `/proc/<pid>/mem`, and `bridgeHostUid`), as a dated section in [container qualification](../../development/container-qualification.md) beside the rootless table or a reply to the coordinator (4982 is retired). On rootful the host user is expected to reach neither; a reach there is a defect to file as a new to-do.
 - [ ] **[5860](../containers-and-environments/5860-legacy-host-mounts-live-evidence.md) task 1: count legacy host-mount runtimes on your real machines.** On each of your real installs, open Settings, Docker, "Review cleanup…" (read-only) and count the environments listed as having agent home directories mounted (`legacyRuntimes`). Record: machine name and count for each, in 5860 task 4's Investigation; this count decides whether the old-runtime paths can be removed.
 - [ ] **6741 (retired) task 3: qualify the Git mirror's credential paths against real GitHub** ([Project Git mirror](../../architecture/container-lifecycle.md#project-git-mirror)). On an isolated `mise run dev:test` profile with a container fixture, using a disposable GitHub account that owns a private test repository:
   1. `containerGitHubCredential` `none`, environment of the private repo: refresh refused by the remote probe, nothing seeded from the host checkout, no `mirror.git` under `mount-anonymous/`.

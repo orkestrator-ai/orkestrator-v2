@@ -1998,7 +1998,7 @@ describe("session routes", () => {
       expect(passed.status).toBe(202);
     });
 
-    test("a read-only review turn is accepted and runs on the hook alone (todo 0190)", async () => {
+    test("a read-only review turn is accepted and runs on the hook alone (todo 0190 (retired))", async () => {
       // Even in a session that requires the provider sandbox: the turn runs
       // under the read-only policy, whose sandbox is off where none can run.
       mockGetSession.mockImplementation((id) =>
@@ -3254,7 +3254,7 @@ describe("persisted session routes", () => {
       mockGetSession.mockImplementation(defaultGetSession);
     });
 
-    test("reports a read-only turn's missing command sandbox past the turn (todo 0190)", async () => {
+    test("reports a read-only turn's missing command sandbox past the turn (todo 0190 (retired))", async () => {
       const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
       const review = {
         id: "s-1",

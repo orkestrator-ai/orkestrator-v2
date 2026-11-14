@@ -148,7 +148,7 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ modelSubstitution: "substituted" as never }))).toBe(false);
   });
 
-  test("carries a bounded reason its commands ran without the sandbox (todo 0190)", () => {
+  test("carries a bounded reason its commands ran without the sandbox (todo 0190 (retired))", () => {
     const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
     expect(isReviewerRecord(reviewer({ commandSandboxOff: reason }))).toBe(true);
     expect(

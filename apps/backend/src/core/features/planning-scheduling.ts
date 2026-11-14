@@ -3,8 +3,8 @@ import {
   isTerminalFeaturePlanningPhase,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
-import type { KanbanStorage } from "./storage.js";
-import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
+import type { KanbanStorage } from "../storage.js";
+import type { WorkflowDiscoveryResult } from "../workflow-supervisor.js";
 
 /**
  * What a feature-planning record still owes the backend (step 08, task 1).

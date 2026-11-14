@@ -33,29 +33,29 @@ import {
   createBuildPipelineProvider,
   readProviderStatus,
   type BuildPipelineProvider,
-} from "./build-pipeline-provider.js";
+} from "../build-pipeline-provider.js";
 import {
   FeaturePlanningFenceError,
   type FeaturePlan,
   type FeaturePlanMessage,
   type StorageService,
-} from "./storage.js";
-import type { Environment } from "./models.js";
-import type { AgentToolConnection } from "./agent-tools.js";
+} from "../storage.js";
+import type { Environment } from "../models.js";
+import type { AgentToolConnection } from "../agent-tools.js";
 import {
   beginWorkflowArtifactTurn,
   settleArtifactDispatchTurn,
   type ArtifactTurnDispatch,
-} from "./workflow-artifact-turns.js";
-import type { PlanUsageState } from "./plan-usage/index.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+} from "../workflow-artifact-turns.js";
+import type { PlanUsageState } from "../plan-usage/index.js";
+import type { WorkflowResultService } from "../workflow-result-service.js";
+import { WorkflowResultRollout } from "../workflow-result-rollout.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
 import {
   createAgentModelCatalogReader,
   resolveFastMode,
-} from "./build-pipeline-service-helpers.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+} from "../build-pipeline-service-helpers.js";
+import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 import {
   DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
@@ -65,12 +65,12 @@ import {
   type WorkflowReconcileReport,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+} from "../workflow-supervisor.js";
 import {
   discoverFeaturePlanning,
   featurePlanningObligation,
   type FeaturePlanningObligation,
-} from "./feature-planning-scheduling.js";
+} from "./planning-scheduling.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("feature");

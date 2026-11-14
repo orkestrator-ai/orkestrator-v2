@@ -71,6 +71,16 @@ Analysed 2026-11-14 against `main` at `dc90609bf`.
 - **Chose:** the scenario accepts the start run ending `succeeded` or `unknown` with the "turn ended" reason, and follows the turn through the session's transcript.
 - **Why:** `public-cli.md` says a steer is a receipt, not a run, and the outcome of a turn a steer joined is recorded against the steer's request; requiring `succeeded` would hold OpenCode to a rule no provider meets.
 
+### Task 4: the scenario runs on local environments only
+
+- **Chose:** `opencode-steer` sets `environmentTypes: ["local"]`, and its `prepare` stops the scripted model when a later setup write fails.
+- **Why:** the scripted model listens on the harness host's loopback, which a container cannot reach; a container run needs a container-local model first. The runner learns the undo only from `prepare`'s return value, so a failed write would otherwise leave the model listening.
+
+### Tasks 2, 3 and 4: always-run coverage beside the live evidence
+
+- **Chose:** keep the live tests and the named-only scenario as the qualifying evidence, and add default-run checks of the backend's own side: `opencode2/concurrency.test.ts` on the fake server (three sessions on two providers, the shared gate, a steer reaching only its session, a steer held behind a permission card until the next step boundary and kept by a stop) and an OpenCode steer test in `public-api-sessions.test.ts`.
+- **Why:** the live tests need `RUN_LIVE_OPENCODE2` and the scenario must be named, so without these `mise run test` exercised none of these paths. The fake server now models what the live test pinned for 2.2.6: a steer sent while a card is parked waits in the inbox.
+
 ### Task 1: left open
 
 - **Chose:** leave task 1 open with the reason that it needs a container.

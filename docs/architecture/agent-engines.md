@@ -884,8 +884,11 @@ still to run, in to-do
 server is stopped under it (a backend restart reaps the server, a crash)
 is never resumed by plain `opencode serve`; the provider reports it as a
 restart interruption (`opencode2/restart-cut.ts`,
-`opencode2-restart.live.test.ts`), and the backend's host plugin stops a
-server whose backend is gone. The
+`opencode2-restart.live.test.ts`), naming the open run's newest
+Orkestrator request: 2.2.6 writes no `idle` for the cut run, so a
+continuation joins it, and a second restart that cuts the continuation
+reports the continuation. The backend's host plugin stops a server whose
+backend is gone. The
 mitigations OpenCode 2 runs under (an exact pin, auto-update and file
 watchers off, an isolated database, model, agent and permission switches
 under the dispatch lock, the backend-held steer guard and its bounded

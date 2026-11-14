@@ -2084,6 +2084,11 @@ export class StorageService {
     return this.repos.agentMailInjects.listPendingAgentMailInjects(limit, options);
   }
 
+  /** Expire ride-along notices that waited too long for a batch to join. */
+  expireStaleAgentMailRiders(): Promise<number> {
+    return this.repos.agentMailInjects.expireStaleAgentMailRiders();
+  }
+
   resetAgentMailInjectBackoff(mailboxId: string): Promise<void> {
     return this.repos.agentMailInjects.resetAgentMailInjectBackoff(mailboxId);
   }

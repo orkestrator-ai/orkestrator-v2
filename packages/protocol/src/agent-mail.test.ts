@@ -285,7 +285,7 @@ describe("agent mail protocol", () => {
   });
 
   test("keeps the two accounts of an account switch, bounded, and drops half a pair", () => {
-    const resource = { kind: "account-switch", id: "claude", label: "mini" };
+    const resource = { kind: "account-switch" as const, id: "claude", label: "mini" };
     expect(
       normalizeAgentMailNotice({
         resource,

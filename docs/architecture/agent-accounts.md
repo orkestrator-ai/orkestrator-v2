@@ -1350,9 +1350,10 @@ node still hears through `AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`, where a link that 
 down loses the notice and `lastSwitch` still records the move. A notice never delays
 a switch, and an automatic switch notice starts no coordinator, because it belongs to
 no repository. Nor does it wake one: it rides along with the coordinator's next
-delivery (`rideAlong`, [agent-messaging.md](agent-messaging.md#scheduling)) and the
-transcript draws it as one line, old account to new, rather than a mail tile and a
-reply.
+delivery (`rideAlong`, [agent-messaging.md](agent-messaging.md#scheduling)). The
+coordinator's transcript draws it as one line, old account to new, as soon as it
+arrives, from the coordinator's mailbox until a delivery carries it, rather than a mail
+tile and a reply.
 
 A session stopping on a usage limit is a separate notice
 ([Usage-limit stop notices](coordinator.md#usage-limit-stop-notices)), and it can

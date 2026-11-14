@@ -357,6 +357,13 @@ export interface AgentMailMessage {
   route?: AgentMailRoute;
   /** A person asked for this one message to be delivered despite the policy. */
   userReleasedAt?: string;
+  /**
+   * Awareness only (`sendAgentMail`'s `rideAlong`, system senders only): it is
+   * delivered inside a batch some other message starts and never starts a turn
+   * of its own. Kept on the message, not the queue entry, so every placement
+   * and retry keeps it; a person's Deliver now (`userReleasedAt`) overrides it.
+   */
+  rideAlong?: true;
   placement: AgentMailPlacement;
   placementReason?: string;
   /** Coordinator delegation whose completion releases this held report. */

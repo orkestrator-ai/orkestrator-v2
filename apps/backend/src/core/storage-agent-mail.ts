@@ -882,6 +882,7 @@ export class AgentMailRepository {
         !heldForLoopBudget &&
         overHourlyLimit &&
         canInject;
+      const rideAlong = options.rideAlong === true && sender.kind === "system";
       const message: AgentMailMessage = {
         version: 1,
         id,
@@ -917,6 +918,9 @@ export class AgentMailRepository {
         ...(notice ? { notice } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(statusBudgetKey ? { statusBudgetKey } : {}),
+        // On the message, not the queue entry, so promotion from stored mail,
+        // retries and verification all keep it.
+        ...(rideAlong ? { rideAlong: true as const } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
           : heldForDelegation || heldForLoopBudget || heldForHourlyLimit
@@ -980,13 +984,11 @@ export class AgentMailRepository {
           mailboxId: destinationId,
           messageId: id,
         };
-        const rideAlong = options.rideAlong === true && sender.kind === "system";
-        if (shouldScheduleInject && rideAlong) expireStaleRiders(store, destinationId);
+        if (rideAlong) expireStaleRiders(store, destinationId);
         if (shouldScheduleInject) {
           store.pendingInject.push({
             mailboxId: destinationId,
             messageId: id,
-            ...(rideAlong ? { rideAlong: true as const } : {}),
             ...(options.coalesceMs && options.coalesceMs > 0 && !rideAlong
               ? {
                   retryAt: coalescingWindow(store, destinationId, options.coalesceMs),

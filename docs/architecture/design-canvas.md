@@ -2,11 +2,8 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[8011](../todo/design-canvas/8011-design-ask-agent-and-resume-across-versions.md)
-(Ask agent and Resume across versions),
 [8010](../todo/design-canvas/8010-design-canvas-deferred-optimisations.md)
-(optimisations deferred until measured) and
-[7820](../todo/design-canvas/7820-design-perf-cdp-frames-transient.md).
+(optimisations deferred until measured).
 What has been qualified is under [Qualification](#qualification).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
@@ -582,7 +579,13 @@ across versions through the connection manager: this checkout's packaged
 renderer on a published `orkestrator` backend from npm (2.22.3 by default,
 `ORKESTRATOR_PAIRING_RELEASE`), and, when `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE`
 names a published desktop build, that build's renderer on this checkout's
-backend, driven over CDP because its inspect fuse is off. The interrupted
+backend, driven over CDP because its inspect fuse is off. After the canvas
+journey each direction runs Ask agent (a new Claude conversation, one turn,
+the link, closing its tab) on a real Claude Code whose model calls go to a
+loopback Anthropic endpoint (`fake-anthropic-model.ts`) with a fixture key,
+and the second direction then resumes that conversation in this checkout's
+renderer on the same backend (`design-agent-pairing-journey.ts`). The
+interrupted
 migration (record written, legacy file not yet moved) is not reachable from
 outside the process and is covered only by "an interrupted migration (record
 written, legacy not retired) reads the record" in `records.test.ts`. The opt-in
@@ -613,10 +616,19 @@ simulates both). With the
 2026-10-22 parameters (3 runs × 1, 16 and 64 frames, 12 cycles) on beelink2 on
 2026-11-11, the floor rule passed all nine runs, including runs that read both
 values; one 16-frame run failed instead on `cdpFrames` reading 10 rather than 9
-on two late samples, on a heavily loaded host
-([7820](../todo/design-canvas/7820-design-perf-cdp-frames-transient.md)).
-`--listener-census` (with `--heap-snapshots <dir>`) repeats that
-investigation; it perturbs the page, so it is never used for measured
+on two late samples, on a heavily loaded host. That extra frame was a product
+retention, found and fixed on 2026-11-14 (to-do 7820, retired; see
+[Evidence of 2026-11-14](#evidence-of-2026-11-14)): a culled design iframe's
+closed `DesignFrameBridge` stayed reachable from the previous render of
+`DesignFrameView` (React keeps it until the component renders again, and its
+closures share that render's scope, which holds the bridge), and the bridge
+still held the frame's `Window`, which kept the frame's `blink::RemoteFrame`
+alive. `close()` now drops the `Window`, so `cdpFrames` keeps its strict
+peak rule. `--listener-census` (with `--heap-snapshots <dir>`) repeats these
+investigations; beside each sample it also records where the frames
+`cdpFrames` counts are (the renderer's frame tree, the iframe elements owning
+a frame, the browser's out-of-process iframe targets, and `Frames` read again
+once settled). It perturbs the page, so it is never used for measured
 numbers. The 2026-11-06 failures that prompted it are in the retired to-do
 7440 (`git show 14df96544:docs/todo/design-canvas/7440-design-perf-listener-count-two-states.md`).
 
@@ -646,7 +658,9 @@ the 2026-11-13 runs that closed it are in
   legacy migration, the downgrade fence and export-then-import. The renderer
   pairing (2026-11-13, both directions with v2.22.3) passed and found no
   compatibility defect. In the v2.22.3 renderer ⌘0 still leaves a focused
-  canvas off 100%, which is the defect fixed on 2026-10-22.
+  canvas off 100%, which is the defect fixed on 2026-10-22. Ask agent and
+  Resume across the same pairing passed on 2026-11-14
+  ([Evidence of 2026-11-14](#evidence-of-2026-11-14)).
 - **Accessibility.** The automated keyboard, focus, tree, zoom and
   narrow-pane pass (`DesignCanvasAccessibility.spec.ts`).
 - **Client performance.** Apple M5 Max with Chrome (2026-10-22) and a busy
@@ -736,7 +750,113 @@ journey, so every design command goes to that backend.
   design-canvas-packaged-electron.spec.ts
   design-canvas-renderer-pairing-electron.spec.ts --repeat-each=2` passed 6 of
   6 (237.4 s, load 50–75).
-- Not covered: Ask agent and Resume
-  ([8011](../todo/design-canvas/8011-design-ask-agent-and-resume-across-versions.md)),
-  the Linux packaged app in the pairing (the spec supports it; not run) and a
-  v2.22.3 AppImage.
+- Not covered: Ask agent and Resume (run on 2026-11-14, below), the Linux
+  packaged app in the pairing (the spec supports it; not run) and a v2.22.3
+  AppImage.
+
+### Evidence of 2026-11-14
+
+To-do 8011 (retired 2026-11-14; its record is
+`git show dc90609bf:docs/todo/design-canvas/8011-design-ask-agent-and-resume-across-versions.md`),
+on arktech-mini (Apple Silicon, macOS 27.2, load averages 8 to 21 from other
+workers), at `dc90609bf` plus this change, with Playwright 1.65.0. Every app
+and backend ran as on 2026-11-13: disposable agent-test profiles under a
+temporary root, loopback backends with their own data directories, never
+ports 34121, 34122 or 45507, no agent credentials and no real data
+directory.
+
+**Ask agent and Resume across the pairing.** Each pairing backend's toolchain
+directory now also holds this checkout's pinned Claude Code (2.1.319,
+downloaded and hash-verified by the toolchain installer into
+`output/agent-testing/design-pairing-toolchain`, never the real data
+directory's `toolchains/`). Its `CLAUDE_CONFIG_DIR` is a run-unique directory
+whose `settings.json` sends every model call to a loopback Anthropic endpoint
+in the Playwright process (`fake-anthropic-model.ts`) with a fixture key, and
+session-title generation is off, so the only model calls are the
+conversation's. Naming the directory explicitly also means Claude's macOS
+Keychain lookup is under a service named after that run-unique path, which no
+existing Keychain item has. No login, no billed turn.
+
+| Direction | Ask agent | Closed link | Resume |
+| --- | --- | --- | --- |
+| This renderer (packaged-test, 2.38.2-beta), `orkestrator@2.22.3` backend | a new Claude conversation opened with the design context (frame and canvas ids) in its draft, the canvas recorded the link, and **Start agent** sent exactly one turn carrying it; the answer showed in the transcript | the backend answered `design_session_link_states` with "Unknown backend command"; the renderer mapped that to `unsupported` and listed the link as "Closed — conversation ended" with no Resume | not offered: 2.22.3 has no `design_session_resume` |
+| v2.22.3 renderer (published macOS app, over CDP), this backend | the same, through v2.22.3's dialog (which shows no chip for the context; the turn's prompt carried it) | the backend recorded the session on the link at tab teardown (`missing` with a `sessionId`); v2.22.3 lists the link as "Closed — conversation ended" from its own layout, with no Resume (it predates it) | this checkout's packaged renderer, connected next to the same backend, listed it as "Closed — can be resumed"; **Resume** reopened it in one `design-resume-…` tab with its transcript, the link moved there, and no model call was made |
+
+- So Resume across versions runs in one place only: a link made by an
+  older renderer, resumed after the desktop is upgraded. Neither pure pair
+  can press it, because v2.22.3 has it on neither side. No compatibility
+  defect was found.
+- What the first direction expects of the backend follows the selected
+  release (`pairingBackendDesignCapabilities` in
+  `design-renderer-pairing-support.ts`): `design_session_link_states` and
+  `design_session_resume` arrived together in v2.30.0-beta, so an
+  `ORKESTRATOR_PAIRING_RELEASE` of v2.30.0-beta or later expects
+  "Closed — can be resumed" and presses Resume in the same window, and an
+  earlier one expects the `unsupported` fallback above.
+- "No model call" in the run above counted only tool-offering calls whose
+  prompt carried the canvas id. Since the review of 2026-11-14 the spec
+  snapshots every call the loopback model has received before closing the
+  tab and before pressing Resume, and fails on any later call, whatever its
+  prompt. With it, and with the cleanup below, the same pairing command
+  without `--repeat-each` passed 2 of 2 on 2026-11-14 (93.2 s; 51.5 s and
+  41.3 s): no call of any kind followed closing the tab or Resume.
+- When the second direction's two apps share the run's root, its cleanup
+  (`stopPackagedAppsThenRemoveProfile` in `packaged-electron-app.ts`)
+  removes the root only once both apps and the backend are proven stopped;
+  either app's failed snapshot or stop keeps it.
+- Both renderers open "Claude Code Is Not Logged In" for a CLI with only an
+  API key in its settings; the notice is non-blocking and the spec dismisses
+  it, as the other fake-model specs do. Both releases retitle the tab after
+  the first message ("Design chat 3", then the first-message title), and
+  v2.22.3's tabs have no `tab` role, so the spec follows the tab by its close
+  control.
+- `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE=<app>/Contents/MacOS/OrkestratorV2
+  mise run test:logged -- --name pairing-agent-final -- bunx playwright test
+  --config e2e/agent-testing/playwright.packaged-electron.config.ts
+  design-canvas-packaged-electron.spec.ts
+  design-canvas-renderer-pairing-electron.spec.ts --repeat-each=2` passed 6 of
+  6 (178.4 s; the pairing tests 31.5–47.2 s). The Vite-served
+  `design-canvas-electron.spec.ts`, which shares the refactored journey
+  setup, passed once.
+- Not covered: Codex conversations (Ask agent also offers Codex; only Claude
+  ran), and, as before, the Linux packaged app in the pairing.
+
+**The extra `cdpFrames` frame.** To-do 7820 (retired 2026-11-14; its record
+is `git show dc90609bf:docs/todo/design-canvas/7820-design-perf-cdp-frames-transient.md`)
+asked what the frame was that the 2026-11-11 beelink2 run counted on some
+samples and not others, and whether the leak check should tolerate it.
+`e2e/perf/design-canvas-perf.ts --listener-census` now records, beside each
+sample, the renderer's frame tree, the iframe elements that own a frame, the
+browser's out-of-process iframe targets, and `Frames` read again after two
+more forced collections. Runs used Google Chrome 157.0.8103.51, headless,
+the 2026-10-22 parameters (3 runs, 12 cycles) with `--skip-library`, at
+load averages 7 to 22; every run's leak check converged, before the fix and
+after.
+
+| Build | Runs | Samples one frame over (main + live iframes) |
+| --- | --- | --- |
+| Before the fix (web code at `dc90609bf`) | 3 × (1, 16, 64 frames × 3) and 16 frames × 3 at 3 cycles | none at 1 frame; at 16 and 64 frames, 15 of 21 runs. Some read one over from cycle 0 and dropped back, some went over at cycle 1 and stayed for the whole run; never two over. Every run still converged, because no early/late split landed on it |
+| After the fix | 2 × (1, 16, 64 frames × 3) | none: 234 of 234 samples exact, 0 of 12 runs at 16 and 64 frames |
+
+- Where the extra frame was: no iframe element owned it, the renderer's
+  tree and the browser's targets did not hold it, and it survived the two
+  extra collections, so it was a detached frame object not yet destroyed.
+- What kept it: heap snapshots (`--heap-snapshots`) taken at readings one
+  over held nine `blink::RemoteFrame` objects and only eight
+  `RemoteFrameClientImpl`, `RemoteFrameView` and `LayoutIFrame` objects. The
+  clientless RemoteFrame's retainer path, in both snapshots examined: a React
+  props object → an event-handler closure (`onSelect` in one, `onPointerDown`
+  in the other) → that render's closure scope → a `DesignFrameBridge`
+  (minified) → its private `#target`, the culled frame's `Window` → the
+  RemoteFrame. A snapshot at a reading that was not over had no clientless
+  RemoteFrame.
+- Fix: `DesignFrameBridge.close()` drops the `Window`
+  (`frame-bridge.ts`, tested in `frame-bridge.test.ts` with a `WeakRef`; the
+  test fails without the fix). The leak check's `cdpFrames` rule stays
+  strict (halves' peaks, no slack).
+- Decision: fix the retention rather than tolerate it in the check. Comparing
+  the halves' minimums, as for `jsEventListeners`, would have passed the
+  beelink2 pattern but failed a frame that goes over mid-run and stays (seen
+  here from cycle 1), and a slack of one frame would have hidden a one-frame
+  leak in a 12-cycle run. Neither was needed once the frame was released.
+  This is a check on the measurement, not a product decision.

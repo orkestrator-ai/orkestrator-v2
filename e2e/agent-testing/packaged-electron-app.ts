@@ -113,6 +113,32 @@ export function packagedLaunchSwitches(platform: NodeJS.Platform): readonly stri
   return platform === "linux" ? HEADLESS_ELECTRON_SWITCHES : [];
 }
 
+/** One launched app in {@link stopPackagedAppsThenRemoveProfile}'s cleanup. */
+export interface PackagedAppStop {
+  /** False only for an app that was never launched: there is nothing to stop. */
+  launched: boolean;
+  snapshot: () => number[];
+  close: (owned: number[]) => Promise<void>;
+  waitForStopped: (owned: number[]) => Promise<void>;
+}
+
+/** {@link PackagedAppStop} for `app`, which is null when it was never launched. */
+export function packagedAppStop<App>(
+  app: App | null,
+  steps: {
+    snapshot: (app: App) => number[];
+    close: (app: App, owned: number[]) => Promise<void>;
+    waitForStopped: (owned: number[]) => Promise<void>;
+  },
+): PackagedAppStop {
+  return {
+    launched: app !== null,
+    snapshot: () => steps.snapshot(app!),
+    close: (owned) => steps.close(app!, owned),
+    waitForStopped: steps.waitForStopped,
+  };
+}
+
 /**
  * A packaged spec's final cleanup: stop the app it launched, release what the
  * run served, then remove the temporary profile. It runs after the journey,
@@ -134,18 +160,38 @@ export async function stopPackagedAppThenRemoveProfile<App>(
     removeProfile: () => Promise<void>;
   },
 ): Promise<void> {
+  await stopPackagedAppsThenRemoveProfile([packagedAppStop(app, steps)], steps);
+}
+
+/**
+ * {@link stopPackagedAppThenRemoveProfile} for several apps sharing one root:
+ * every launched app is snapshotted and closed, in order, even after an
+ * earlier one failed; then `release` runs; then the root is removed only once
+ * every app's tree is proven stopped. One app whose tree could not be
+ * snapshotted, or that did not stop, keeps the whole root, so no app's
+ * cleanup can delete a profile another app may still be writing.
+ */
+export async function stopPackagedAppsThenRemoveProfile(
+  apps: readonly PackagedAppStop[],
+  steps: { release: () => Promise<void>; removeProfile: () => Promise<void> },
+): Promise<void> {
   // Nothing to wait for only when nothing was launched.
-  let owned: number[] | undefined = app === null ? [] : undefined;
-  await withCleanup(async () => {
-    if (app === null) return;
-    owned = steps.snapshot(app);
-    await steps.close(app, owned);
-  }, [
-    async () => {
-      await steps.release();
-      if (!owned) throw new Error("Cannot remove profile without an owned-process snapshot");
-      await steps.waitForStopped(owned);
-      await steps.removeProfile();
-    },
-  ]);
+  const owned: Array<number[] | undefined> = apps.map((app) => (app.launched ? undefined : []));
+  await withCleanup(
+    async () => undefined,
+    [
+      ...apps.map((app, index) => async () => {
+        if (!app.launched) return;
+        owned[index] = app.snapshot();
+        await app.close(owned[index]!);
+      }),
+      async () => {
+        await steps.release();
+        if (owned.some((tree) => !tree))
+          throw new Error("Cannot remove profile without an owned-process snapshot");
+        for (const [index, app] of apps.entries()) await app.waitForStopped(owned[index]!);
+        await steps.removeProfile();
+      },
+    ],
+  );
 }

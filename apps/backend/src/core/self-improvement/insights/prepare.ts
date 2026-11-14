@@ -212,6 +212,8 @@ export interface SelectOptions {
   maxTranscriptBytes?: number;
   /** Awaited between files; yields to the event loop once per slice by default. */
   slice?: () => Promise<void>;
+  /** Called after each history file is checked, for a run's progress. */
+  onFile?: (checked: number, total: number) => void;
 }
 
 export interface Selection {
@@ -255,9 +257,11 @@ export async function selectSegments(options: SelectOptions): Promise<Selection>
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
   const selection: Selection = { segments: [], skipped: [], waiting: 0 };
   const seen = new Set<string>();
+  let checked = 0;
   for (const file of files) {
     await slice();
     const conversation = readConversation(file, options.maxTranscriptBytes ?? MAX_TRANSCRIPT_BYTES);
+    options.onFile?.(++checked, files.length);
     if (!conversation || seen.has(conversation.id)) continue;
     seen.add(conversation.id);
     if (excluded(conversation.cwd, options.excludeDirs)) continue;

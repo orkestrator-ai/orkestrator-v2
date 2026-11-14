@@ -21,6 +21,7 @@ import {
 } from "./model.js";
 import { cursorAfter, type InsightCursor, type Segment } from "./prepare.js";
 import { loadLedger } from "../ledger.js";
+import { RunProgress } from "../progress.js";
 import { FakeBoard } from "../testing/fake-board.js";
 import {
   bundleData,
@@ -440,6 +441,67 @@ describe("a run with the conversation review", () => {
     const judged = await loop(NOW);
     expect(judged.verified.map((item) => item.signature)).toContain("insight:use-mise-not-npm");
     expect(ticket.comments.at(-1)).toContain("the fix is verified");
+  });
+
+  test("tells the run's progress as files are checked and parts are read", async () => {
+    const { dir, remove } = temporaryDirectory("improvement-insight-progress-");
+    cleanups.push(remove);
+    const claudeDir = path.join(dir, "claude", "projects", "-p");
+    const sources = {
+      claudeProjectDirs: [path.join(dir, "claude", "projects")],
+      codexSessionDirs: [],
+    };
+    const start = NOW - 10 * DAY;
+    for (const [id, offset, text] of [
+      ["a", 1, "Use mise, not npm."],
+      ["b", 2, "npm again?"],
+    ] as const) {
+      const at = start + offset * DAY;
+      writeTranscript(
+        path.join(claudeDir, `${id}.jsonl`),
+        claudeJsonl(id, CWD, [
+          { user: text, at },
+          { assistant: "OK.", at: at + 1000 },
+        ]),
+        at + 2000,
+      );
+    }
+    const progress = new RunProgress(
+      { conversations: true, dryRun: false, modelTimeoutMs: 600_000 },
+      () => new Date(NOW),
+    );
+    const seen: Array<string> = [];
+    const original = progress.fileChecked.bind(progress);
+    progress.fileChecked = (checked, total) => {
+      seen.push(`${checked}/${total}`);
+      original(checked, total);
+    };
+
+    await runLoop({
+      stateDir: path.join(dir, "state"),
+      data: bundleData({
+        createdAt: start + 5 * DAY,
+        appVersion: "2.30.0",
+        essential: [starting(start, "2.30.0")],
+      }),
+      board: new FakeBoard(),
+      now: () => new Date(start + 5 * DAY),
+      onStep: (step) => progress.begin(step),
+      insightProgress: progress,
+      insights: { runner: progress.track(fakeModel([])), sources, excludeDirs: [] },
+    });
+
+    expect(seen).toEqual(["1/2", "2/2"]);
+    expect(progress.snapshot().conversations).toEqual({
+      filesChecked: 2,
+      files: 2,
+      parts: 2,
+      read: 2,
+      failed: 0,
+      notesAdded: 2,
+      waiting: 0,
+    });
+    expect(progress.snapshot().modelCalls.inFlight).toBe(0);
   });
 });
 

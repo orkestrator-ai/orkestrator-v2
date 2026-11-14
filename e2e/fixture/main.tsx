@@ -53,6 +53,7 @@ import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
+import { SelfImprovementSettingsFixture } from "./SelfImprovementSettingsFixture";
 import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
@@ -2072,6 +2073,8 @@ function fixtureForPath() {
       </>
     );
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
+  if (window.location.pathname === "/self-improvement-settings")
+    return <SelfImprovementSettingsFixture />;
   if (window.location.pathname === "/scheduler-status") return <SchedulerStatusFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;

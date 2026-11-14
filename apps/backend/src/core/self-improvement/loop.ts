@@ -32,6 +32,7 @@ import {
 import type { BundleData } from "./bundle.js";
 import { type InsightRun, runInsights } from "./insights/analyze.js";
 import type { ModelRunner } from "./insights/model.js";
+import type { InsightProgress } from "./progress.js";
 import { IMPROVEMENT_LABEL, INSIGHT_LABEL, insightTicketFor, LABELS } from "./insights/tickets.js";
 import type { TranscriptSources } from "./insights/transcripts.js";
 import {
@@ -113,6 +114,8 @@ export interface LoopOptions {
   dryRun?: boolean;
   now?: () => Date;
   onStep?: (step: SelfImprovementStep) => void;
+  /** Told as the conversation review checks files and reads parts. */
+  insightProgress?: InsightProgress;
   /** The conversation review: a model runner and where transcripts are. `false` turns it off. */
   insights?: { runner: ModelRunner; sources: TranscriptSources; excludeDirs: string[] } | false;
 }
@@ -300,6 +303,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         dryRun,
         statusOf: (slug) => ledger.entries[`insight:${slug}`]?.status ?? null,
         onThemes: () => step("grouping-themes"),
+        ...(options.insightProgress ? { progress: options.insightProgress } : {}),
       });
       extracted.signals.push(...insightRun.signals);
       // Saved notes not yet grouped would make every theme look rarer than it

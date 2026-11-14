@@ -151,6 +151,31 @@ describe("starting a run", () => {
     expect(h.board.tickets.size).toBe(1);
   });
 
+  test("reports which stage a run is on while it works, then drops the progress", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const h = harness({
+      exportBundle: async () => {
+        await gate;
+        return bundleArchive({ createdAt: NOW, appVersion: "2.30.0", essential: ESSENTIAL });
+      },
+    });
+    const started = await h.service.run({ trigger: "manual" });
+    const progress = started.status.running?.progress;
+    expect(progress?.lastActivityAt).toBe(new Date(NOW).toISOString());
+    expect(progress?.stages.map((stage) => `${stage.step}:${stage.state}`)).toEqual([
+      "exporting:running",
+      "board:pending",
+      "reading-conversations:skipped",
+      "grouping-themes:skipped",
+      "digesting:pending",
+      "filing:pending",
+    ]);
+    release();
+    await settle(h.service);
+    expect((await h.service.status()).running).toBeNull();
+  });
+
   test("a failed export is recorded with a fixed reason, never the error text", async () => {
     const h = harness();
     h.failExport = true;

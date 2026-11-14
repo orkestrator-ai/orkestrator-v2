@@ -27,10 +27,11 @@ import {
 } from "@orkestrator/protocol/self-improvement";
 import { type BundleData, readBundleArchive } from "./bundle.js";
 import { insightsDir, loadThemes } from "./insights/analyze.js";
-import { claudeCodeRunner } from "./insights/model.js";
+import { claudeCodeRunner, MODEL_TIMEOUT_MS } from "./insights/model.js";
 import { defaultSources, type TranscriptSources } from "./insights/transcripts.js";
 import { loadLedger, writeAtomic } from "./ledger.js";
 import { type Board, runLoop } from "./loop.js";
+import { RunProgress } from "./progress.js";
 
 const log = createLogger("self-improvement");
 
@@ -78,6 +79,7 @@ interface Running {
   trigger: SelfImprovementRunTrigger;
   startedAt: string;
   step: SelfImprovementStep;
+  progress: RunProgress;
   done: Promise<void>;
 }
 
@@ -224,6 +226,7 @@ export class SelfImprovementService {
             trigger: this.running.trigger,
             startedAt: this.running.startedAt,
             step: this.running.step,
+            progress: this.running.progress.snapshot(),
           }
         : null,
       lastRun: this.lastRun(),
@@ -254,6 +257,14 @@ export class SelfImprovementService {
       trigger: options.trigger,
       startedAt,
       step: "exporting",
+      progress: new RunProgress(
+        {
+          conversations: settings.conversationReview,
+          dryRun: options.trigger === "dry-run",
+          modelTimeoutMs: MODEL_TIMEOUT_MS,
+        },
+        () => this.now(),
+      ),
       done: Promise.resolve(),
     };
     this.running = running;
@@ -280,6 +291,7 @@ export class SelfImprovementService {
     const dryRun = running.trigger === "dry-run";
     const onStep = (step: SelfImprovementStep) => {
       running.step = step;
+      running.progress.begin(step);
     };
     let summary: SelfImprovementRunSummary;
     try {
@@ -288,11 +300,13 @@ export class SelfImprovementService {
       if (settings.conversationReview) {
         const launch = await this.deps.claudeLaunch();
         insights = {
-          runner: claudeCodeRunner({
-            cwd: this.ensureStateDir(),
-            ...launch,
-            signal: this.abort.signal,
-          }),
+          runner: running.progress.track(
+            claudeCodeRunner({
+              cwd: this.ensureStateDir(),
+              ...launch,
+              signal: this.abort.signal,
+            }),
+          ),
           sources: this.deps.transcriptSources?.() ?? defaultSources(this.deps.dataDir),
           excludeDirs: [path.resolve(this.stateDir), path.resolve(this.deps.dataDir)],
         };
@@ -305,6 +319,7 @@ export class SelfImprovementService {
         dryRun,
         now: () => this.now(),
         onStep,
+        insightProgress: running.progress,
         insights,
       });
       summary = {

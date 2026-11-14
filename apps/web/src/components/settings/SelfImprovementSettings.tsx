@@ -8,6 +8,7 @@ import type {
 } from "@orkestrator/protocol/self-improvement";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import * as backend from "@/lib/backend";
+import { openTicketOnBoard } from "@/lib/open-ticket-on-board";
 import { useConfigStore } from "@/stores";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,6 +63,8 @@ export interface SelfImprovementSettingsProps {
     typeof backend,
     "getSelfImprovementStatus" | "runSelfImprovement" | "getProjects" | "patchGlobalConfig"
   >;
+  /** Opens a ticket on a project's board, leaving Settings; tests pass a fake. */
+  openTicket?: (projectId: string, ticketId: string) => void;
 }
 
 /**
@@ -70,7 +73,10 @@ export interface SelfImprovementSettingsProps {
  * what runs have found. The backend owns every run; this page only reads its
  * status, so a run carries on while the page is closed.
  */
-export function SelfImprovementSettings({ api = backend }: SelfImprovementSettingsProps) {
+export function SelfImprovementSettings({
+  api = backend,
+  openTicket = openTicketOnBoard,
+}: SelfImprovementSettingsProps) {
   const { machine } = useAccountMachine();
   const setConfig = useConfigStore((state) => state.setConfig);
   const [status, setStatus] = useState<SelfImprovementStatus | null>(null);
@@ -164,6 +170,11 @@ export function SelfImprovementSettings({ api = backend }: SelfImprovementSettin
   }
 
   const settings = status?.settings;
+  // Tickets live on the board of the project that receives them.
+  const ticketProjectId = status?.project?.id;
+  const onOpenTicket = ticketProjectId
+    ? (ticket: string) => openTicket(ticketProjectId, ticket)
+    : undefined;
   const models = status
     ? `${MODEL_NAMES[status.models.notes] ?? status.models.notes} reads each conversation, ${MODEL_NAMES[status.models.themes] ?? status.models.themes} groups the notes into themes`
     : "";
@@ -225,6 +236,7 @@ export function SelfImprovementSettings({ api = backend }: SelfImprovementSettin
                   titles={Object.fromEntries(
                     status.tracked.map((item) => [item.signature, item.title]),
                   )}
+                  onOpenTicket={onOpenTicket}
                 />
               </>
             ) : (
@@ -316,7 +328,7 @@ export function SelfImprovementSettings({ api = backend }: SelfImprovementSettin
           </section>
         ) : null}
 
-        {status ? <TrackedTickets items={status.tracked} /> : null}
+        {status ? <TrackedTickets items={status.tracked} onOpenTicket={onOpenTicket} /> : null}
         {status ? (
           <Themes themes={status.themes} enabled={status.settings.conversationReview} />
         ) : null}

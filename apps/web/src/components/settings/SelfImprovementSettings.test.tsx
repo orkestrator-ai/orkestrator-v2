@@ -130,8 +130,12 @@ function fakeApi(initial: SelfImprovementStatus) {
   return api;
 }
 
-function render(api: ReturnType<typeof fakeApi>, machine?: string | null) {
-  const props = { api: api as unknown as SelfImprovementSettingsProps["api"] };
+function render(
+  api: ReturnType<typeof fakeApi>,
+  machine?: string | null,
+  openTicket?: SelfImprovementSettingsProps["openTicket"],
+) {
+  const props = { api: api as unknown as SelfImprovementSettingsProps["api"], openTicket };
   return renderInAppCommandScope(
     machine === undefined ? (
       <SelfImprovementSettings {...props} />
@@ -211,6 +215,31 @@ describe("Settings → Self-improvement", () => {
         selfImprovement: { projectId: "p1", conversationReview: false, dailyRun: true },
       }),
     );
+  });
+
+  test("a tracked ticket opens on the board of the project that receives tickets", async () => {
+    const openTicket = mock((_projectId: string, _ticketId: string) => {});
+    render(fakeApi(status()), undefined, openTicket);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open ticket: Agents keep reaching for npm" }),
+    );
+    expect(openTicket).toHaveBeenLastCalledWith("p1", "418");
+    // A ticket number in the last run's lists opens it too.
+    fireEvent.click(screen.getByRole("button", { name: /^Open ticket 412:/ }));
+    expect(openTicket).toHaveBeenLastCalledWith("p1", "412");
+  });
+
+  test("tracked tickets are plain text while no project receives them", async () => {
+    render(
+      fakeApi(
+        status({
+          settings: { projectId: null, conversationReview: true, dailyRun: false },
+          project: null,
+        }),
+      ),
+    );
+    expect((await screen.findAllByText("Agents keep reaching for npm")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /Open ticket/ }) === null).toBe(true);
   });
 
   test("on another machine it says where it runs and calls nothing", async () => {

@@ -15,7 +15,12 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
+import {
+  kanbanStore,
+  useKanbanStore,
+  type KanbanStatus,
+  type KanbanTask,
+} from "@/stores/kanbanStore";
 import { useConfigStore, useEnvironmentStore, useUIStore, type ProjectBoardTab } from "@/stores";
 import {
   useBuildPipelineStore,
@@ -351,6 +356,25 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     },
     [projectTasks, handleClickTask],
   );
+
+  // A ticket opened from outside the board (a tracked ticket in Settings →
+  // Self-improvement) is a request in the board's store. Follow the store, so a
+  // request made while the board is mounted and one that waits for the board to
+  // load the ticket are handled alike. A ticket that no longer exists never
+  // matches, so its request does no harm and the next request replaces it.
+  const kanbanScopeStore = launchScope.store(kanbanStore);
+  useEffect(() => {
+    return kanbanScopeStore.subscribe((state) => {
+      const request = state.openTicketRequest;
+      if (!request || request.projectId !== projectId) return;
+      const task = state.tasks.find(
+        (candidate) => candidate.id === request.ticketId && candidate.projectId === projectId,
+      );
+      if (!task) return;
+      state.clearOpenTicketRequest();
+      handleClickTask(task);
+    });
+  }, [kanbanScopeStore, projectId, handleClickTask]);
 
   const shareTask = useCallback((task: KanbanTask) => void shareTickets([task.id]), [shareTickets]);
 

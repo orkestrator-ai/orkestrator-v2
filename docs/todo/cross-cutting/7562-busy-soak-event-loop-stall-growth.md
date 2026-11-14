@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-12 against `main` at `0c9f7e5f8` (earlier 2026-11-11 at `963ffa6ab`, first analysed 2026-11-10
+Analysed 2026-11-14 against `main` at `dc90609bf` (task 5; earlier 2026-11-12 at `0c9f7e5f8`, earlier 2026-11-11 at `963ffa6ab`, first analysed 2026-11-10
 at `c98b20e6f`, task 1 against `498b68766`). Written from the 4960 busy soak of 2026-11-10 ([Change tracking: busy live
 soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)),
 which measured the change-tracking row cap and saw this on the side.
@@ -13,7 +13,7 @@ which measured the change-tracking row cap and saw this on the side.
 2. **Decide the fix once the cause is known**. Status: done (2026-11-11: the burst was public operation records; three fixes landed, see task 2 and Assumptions and decisions).
 3. **Confirm on a complete 150-round busy run with the fixes**: the confirming run was cut off at minute 58 of its busy phase. Status: done (2026-11-12: a complete R1-shaped run logged no stall and met every client budget R1 missed; see Assumptions and decisions, task 3).
 4. **Stop re-observing public runs that can no longer change**: ended runs of a provider without qualified completion stay active and every reconciler pass reads them. Status: done (2026-11-11: the pass has its own recurring kind, `public-operation-reconcile`, and skips such runs; see Assumptions and decisions, task 4).
-5. **Check the disk waits on a filesystem other than btrfs**: every run so far had its profile on btrfs. Status: open (not doable on beelink2: its only writable filesystems are btrfs, tmpfs and the vfat `/boot`, and mounting an ext4 image needs root; needs a Linux host with an ext4 or XFS home, or a Mac).
+5. **Check the disk waits on a filesystem other than btrfs**: every run so far had its profile on btrfs. Status: done (2026-11-14 on mini's APFS: a FULL commit costs 0.05 to 0.2 ms and 14 to 52 KB against btrfs's 2.6 to 8 ms and 85 to 260 KB, and about 60 busy rounds logged one stall, a host-wide sync wait; see Assumptions and decisions, task 5).
 
 ### 1. Find what makes the stalls grow over a long busy run
 
@@ -207,8 +207,9 @@ filesystem. beelink2 has only btrfs (`/`, `/home`), tmpfs (`/tmp`,
 `/dev/shm`) and vfat (`/boot`) mounted, and an agent cannot mount a loop
 ext4 image without root.
 
-**Investigation.** Not run: no non-btrfs, non-tmpfs filesystem is available
-to an agent on beelink2.
+**Investigation.** Done 2026-11-14 on mini (APFS); see Assumptions and
+decisions ("Task 5"). Before that: not run, because no non-btrfs, non-tmpfs
+filesystem is available to an agent on beelink2.
 
 **Decisions.**
 
@@ -219,6 +220,7 @@ to an agent on beelink2.
   - **Leave it: the fixes reduce syncs on any filesystem.**
     - Pros: no work.
     - Cons: leaves open whether the original growth was btrfs-specific.
+  - Taken 2026-11-14: the recommended option on a Mac (mini), see Assumptions and decisions ("Task 5").
 
 ## Assumptions and decisions
 
@@ -446,17 +448,155 @@ rows-and-leases build stalled 1.0 to 1.8 s (task 2), logged no stall. The
 backend used 18.1 s of CPU a minute in the busy window, with a median RSS of
 473 MiB (R1: 429) and a maximum of 689 MiB (R1: 751).
 
+### Task 5: the same attribution on APFS (mini, 2026-11-14)
+
+Followed the recommended option on a Mac: task 2's benchmark recreated, then
+busy runs of the R1 driver on the current build with a sampler beside the
+backend. Everything ran on mini (macOS 27.2, Apple Silicon, 18 cores, Bun
+1.4.4) at `dc90609bf`, whose `dev:test` profiles live on the internal APFS
+SSD (`~/Library/Application Support/orkestrator-v2-dev/profiles/`), in
+headless profiles with no agent credentials, `--no-host-seed`, only the Pi
+toolchain on the driver's loopback fake model, the reachability check off,
+each profile reset afterwards. Evidence (git-ignored):
+`output/benchmarks/q7562-apfs/` (`bench/`, `run1-aborted/`, `run2-aborted/`,
+`run/`).
+
+**Machine load.** mini was running other worktrees' work throughout: other
+`bun test` suites (four workers at 25 to 120% CPU each when looked at),
+200-odd `docker` and 40-odd `bun` processes, and `fseventsd` at 100 to 150%
+CPU with Spotlight's `mds_stores` at about 15%. The one-minute load average
+was 2.5 to 28 over the runs (6 to 28 for most of them).
+
+**Per-commit cost.** `bench/namespace-write.ts` rebuilds task 2's
+measurement with `bun:sqlite` and `StorageDatabase`'s pragmas (WAL,
+`synchronous = FULL`, `checkpoint_fullfsync`, `secure_delete`): one
+namespace of 100, 500 and 2,000 records of 1,240 bytes (task 2's 395 KB for
+319 records), 200 updates each, disk bytes from `proc_pid_rusage`
+(`ri_diskio_byteswritten`, the macOS counterpart of `/proc/self/io`), in a
+directory on the profiles' volume, load average about 13:
+
+| Records | Document (pre-fix) | Row | Row with the lease at FULL | Row with the lease at NORMAL |
+| --- | --- | --- | --- | --- |
+| 100 | 0.24 ms, 264 KB | 0.05 ms, 14 KB | 0.15 ms, 51 KB | 0.08 ms, 31 KB |
+| 500 | 1.48 ms, 1.4 MB | 0.05 ms, 14 KB | 0.15 ms, 52 KB | 0.08 ms, 32 KB |
+| 2,000 | 9.81 ms, 9.1 MB | 0.06 ms, 14 KB | 0.17 ms, 52 KB | 0.09 ms, 32 KB |
+
+Medians. On beelink2's btrfs (task 2) the same updates cost 3.0, 6.2 and
+18.6 ms as a document and 2.6 ms and 85 to 96 KB as a row; a leased write
+7.5 to 8.3 ms and 250 to 260 KB with the lease at FULL, 2.5 to 2.7 ms and
+95 KB at NORMAL. The external APFS volume the worktree is on gave the same
+bytes and row times (document 0.43, 2.91 and 14.14 ms). So a FULL commit on
+APFS costs about a fiftieth of btrfs's time and a sixth of its bytes, because
+macOS's SQLite syncs a commit with plain `fsync`, which does not flush the
+drive's cache ([storage](../../architecture/storage.md#durability-and-deletion)).
+What stays expensive on APFS is the pre-fix document's own work: parsing,
+hashing and rewriting the whole namespace, 9.8 ms an update at 2,000 records,
+which grows with the namespace on any filesystem and is what the row layout
+removed.
+
+**The busy runs.** Three, all with the R1 workload per round (10
+environments, 2,500-file bursts and 2,500 held-turn files):
+
+| Run | Rounds | Busy phase | Load average | Stall lines | Longest |
+| --- | --- | --- | --- | --- | --- |
+| R1-shaped (0, 1, 2 clients), stopped | about 7 (0 clients) | 13 min | 10 to 23 | 0 | under 1 s |
+| 0 and 1 clients, stopped | about 15 (0 clients) | 27 min | 6 to 28 | 1 | 1.28 s |
+| 0 clients, complete | 40 | 80 min | 2.5 to 28 | 0 | under 1 s |
+
+The first two were stopped (SIGINT, the driver cleaning up) because a round
+took 1.6 to 2.5 minutes here against about 22 s on beelink2, so they would
+have outrun the session's two-hour limit; an interrupted busy phase keeps no
+rows, so their evidence is the stall log and the sampler. The complete run
+met every obligation (40 held turns, queued prompts, approvals, mails and
+reviews; no duplicated dispatch; no guard line), and its queued prompt was
+dispatched in 1.6 s median, 2.3 s p95 (budget 3 s). It exited 1 because 39
+of its 40 `burst-backend` waits ran out at 60 s: on mini the backend did not
+rescan most bursted worktrees within a minute (269 of the other
+environments' 351 readings did not move), which is also why its rounds were
+slow. That is a change-detection latency on macOS, not a stall, and it is
+[8171](8171-macos-burst-rescans-time-out.md). It also means this run's
+change-tracking ledger did less work than beelink2's: the backend wrote 10
+to 24 MiB a minute to disk in all, against 70 to 320 MiB a minute of ledger
+writes alone on btrfs. The main-database work this to-do is about (public
+operation updates, leases, sessions, mail) ran at the same per-round rate,
+because the driver issues the same CLI calls each round.
+
+**Where the thread waited.** The sampler (`bench/sampler.ts`) read the
+backend's main thread through `libproc` every 50 ms (run state and CPU;
+macOS has no wait channel to read), the process's disk bytes, and timed a
+4 KiB write and `fsync` every 250 ms in a scratch file on the same volume:
+
+- **No burst of short calls.** The one stall line (02:40:24, 1,284 ms) had
+  41 SQLite calls, 6 of them writes, with 1,655 of its 1,702 ms in four
+  `lease:public-operations` commits, and 11 ms of CPU. Those commits run at
+  NORMAL, so the one that waited was most likely running SQLite's automatic
+  checkpoint, which syncs with `F_BARRIERFSYNC`. On btrfs a stall was 850 to
+  2,264 calls, each short.
+- **The wait was the host's, not the backend's.** The fsync probe, in
+  another directory, took 1,820 ms in the same 10 s window. Its median was
+  0.08 to 0.55 ms across all runs; in 2 h 6 min of sampling it exceeded
+  250 ms in 6 windows (1.3, 0.27, 1.8, 1.6, 0.35 and 0.32 s), and only one
+  of them coincided with a backend stall. With other builds writing, an APFS
+  sync can wait a second or more, but not often.
+- **No growth.** Over the 80-minute run the main thread used 1.3 to 2.2 s of
+  CPU a minute and its longest stretch off the idle state was 156 to 670 ms
+  in every 10-minute window, with no upward trend (beelink2's R1 grew from
+  no stall to 10 s medians in the same span). The backend used 4.0 s of CPU
+  a minute in the busy window, RSS median 493 MiB, maximum 628 MiB.
+- **Idle during a burst.** A five-second `sample` of the backend while
+  25,000 burst files were in the worktrees found the main thread in
+  `kevent64` (the event loop's idle wait) for 3,538 of 3,583 samples, with no
+  SQLite or `fsync` frame on top.
+- **Thread state is no witness on macOS.** The sampler saw the main thread
+  "uninterruptible" in at most 0.2% of samples, including through the one
+  stall: a thread blocked in a sync reports as "waiting", like an idle one.
+  Unlike Linux's `D` state and wait channel, it cannot tell a disk wait from
+  idle; the stall line's storage fields and the probe can.
+
+What that answers: the disk-wait half of the original growth was btrfs's.
+On APFS each of R1's 850 to 2,264 calls in a stall would have cost about
+0.05 to 0.2 ms, 0.1 to 0.5 s for the largest burst, under the 1 s stall
+threshold; that is an estimate from the benchmark, not a measurement,
+because the pre-fix build was not run here. Its CPU half, the namespace
+document rewritten on every update, grew on any filesystem and is gone with
+the row layout.
+
+Choices made:
+
+- **The current build only, not the pre-fix one.** A pre-fix checkout
+  (`2a502c28b`, task 2's callers run) has no `dev:test --no-host-seed`, so
+  its profile would read toolchains and model caches from the real data
+  directory, which this work may not touch. Cost: the APFS side of the
+  original growth is the benchmark's estimate.
+- **The driver now passes `--no-host-seed` by default** (`--host-seed`
+  restores seeding, also for a `--checkout` whose launcher predates the
+  flag), matching the isolated browser runners; the driver's runs were
+  already credential-free.
+- **40 rounds without clients for the complete run**, the size this task
+  recommended, instead of R1's 150 with clients: at 1.6 to 2.5 minutes a
+  round, R1's shape would have taken four to six hours.
+- **No ext4 or XFS run.** APFS answered whether the waits were btrfs's; no
+  host in the fleet was checked for an ext4 or XFS home, and the fixes cut
+  syncs whatever the filesystem.
+
+The 40-round run also recorded a recurrence of the Multi Review wait
+[7202](../transcripts-and-observation/7202-busy-profile-follow-ups.md)
+task 2 waits for (one validation run queued 520 s in the host test queue),
+noted there.
+
 ## Needs verification
 
 - Whether the growth appears at a normal host load; the soak ran at a load
   average of 50 to 64. Answered 2026-11-11: it does (stalls of 7 to 13 s at a
   load average of 8 to 9, see Assumptions and decisions).
 - Whether a filesystem other than btrfs (ext4, APFS) shows the same disk
-  waits under this workload; every run so far was on btrfs. Now task 5.
+  waits under this workload; every run so far was on btrfs. Answered
+  2026-11-14 for APFS (task 5): it does not; ext4 and XFS were not measured.
 
 ## Related
 
 - [0741](0741-backend-responsiveness-under-load.md)
 - [7560](7560-large-ignored-trees-in-the-worktree-watch.md)
+- [8171](8171-macos-burst-rescans-time-out.md): the burst rescans that timed out in task 5's APFS runs.
 - [0048 recurring work qualification](../transcripts-and-observation/0048-recurring-work-qualification.md)
 - 7765 (retired 2026-11-11): the busy driver's burst rescan timeouts these runs found. The held turn's 2,500 removed files and the next burst's 2,500 new ones read as the same diff stats in one scan, so the `diff-scan` changed counter moved one short; the driver now waits for the removal to be rescanned (`turn-clear-backend`, [testing guide](../../development/testing-guide.md#live-idle-ab)).

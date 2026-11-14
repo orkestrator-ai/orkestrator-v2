@@ -1027,8 +1027,11 @@ or the `recurringWork` block of `/__orkestrator/metrics`.
 `scripts/recurring-live-ab.ts` is the committed form of the live idle A/B.
 Per arm and repeat it starts a disposable credential-free profile
 (`dev:test --fixture --fixture-environments local,container
---no-agent-credentials --headless`, with `DISPLAY` and `WAYLAND_DISPLAY`
-unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), waits for `ready`, settles for 60 s, and then samples
+--no-agent-credentials --headless --no-host-seed`, with `DISPLAY` and
+`WAYLAND_DISPLAY` unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; pass
+`--host-seed` to seed toolchains and model caches from the host's
+installation instead, or for a `--checkout` whose launcher predates
+`--no-host-seed`), waits for `ready`, settles for 60 s, and then samples
 `recurringWork` plus the backend and Electron processes' CPU time and RSS
 every 30 s over a 6-minute window (longer than the 5-minute container fetch
 cooldown). It then times edit-to-detection: it appends to a tracked file in

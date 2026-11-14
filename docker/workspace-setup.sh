@@ -113,15 +113,9 @@ BOOT_FAILED=false
 DEADLINE=$(( $(date +%s) + BOOT_WAIT_SECONDS ))
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     show_new_progress
-    if [ -d /run/orkestrator ]; then
-        phase="$(current_boot_phase)"
-        if [ "$phase" = "ready" ]; then BOOT_READY=true; break; fi
-        if [ "$phase" = "failed" ]; then BOOT_FAILED=true; break; fi
-    elif [ -f /tmp/.entrypoint-complete ]; then
-        # An image that predates boot status records.
-        BOOT_READY=true
-        break
-    fi
+    phase="$(current_boot_phase)"
+    if [ "$phase" = "ready" ]; then BOOT_READY=true; break; fi
+    if [ "$phase" = "failed" ]; then BOOT_FAILED=true; break; fi
     sleep 0.2
 done
 show_new_progress

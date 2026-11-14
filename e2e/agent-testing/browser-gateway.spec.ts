@@ -2076,7 +2076,6 @@ test("Docker fixture boots and restarts with access-only Claude, Codex and Grok 
         test "$(stat -c %a "$HOME/.grok/auth.json")" = 600
         jq -e '.tokens.access_token == "fixture-access" and .tokens.refresh_token == "" and (.last_refresh | type == "string")' "$HOME/.codex/auth.json" >/dev/null
         jq -e '.live.key == "fixture-access" and .live.refresh_token == ""' "$HOME/.grok/auth.json" >/dev/null
-        test -f /tmp/.entrypoint-complete
       `,
       ]);
       docker(["stop", "--time", "1", containerId]);

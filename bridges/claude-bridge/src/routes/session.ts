@@ -201,14 +201,35 @@ function isUsageLimitedRejection(error: unknown): boolean {
 }
 
 /**
+ * Whether the turn already logged this rejection itself, as `prompt.failed`
+ * or `prompt.usage-limited`. The turn marks it with a plain
+ * `turnFailureReported` property (`markTurnFailureReported` in the turn
+ * lifecycle), read the same way as `usageLimited`.
+ */
+function isReportedTurnFailure(error: unknown): boolean {
+  try {
+    return (error as { turnFailureReported?: unknown } | null)?.turnFailureReported === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Log a prompt turn that failed after the route accepted it. A turn the
  * provider refused on a used-up plan allowance was already recorded by the
  * turn as `prompt.usage-limited` and is reported to the session; it is an
  * account state, not a processing fault, so it is not logged again as one.
+ * Any other failure the turn already logged as `prompt.failed` is kept at
+ * debug, with its message, so one failed turn is one error in the
+ * diagnostics. Only a rejection the turn never reported is an error here.
  */
-function logPromptProcessingFailure(error: unknown): void {
+export function logPromptProcessingFailure(error: unknown): void {
   if (isUsageLimitedRejection(error)) {
     log.debug("prompt.processing-usage-limited");
+    return;
+  }
+  if (isReportedTurnFailure(error)) {
+    log.debug("prompt.processing-reported", { error: formatLogError(error) });
     return;
   }
   log.error("prompt.processing-failed", { error: formatLogError(error) });

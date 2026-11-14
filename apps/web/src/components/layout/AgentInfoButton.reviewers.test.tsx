@@ -175,7 +175,7 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
     ).toBe(false);
   });
 
-  test("says a running reviewer turn has no sandbox, and why (to-do 0190)", async () => {
+  test("says a running reviewer turn has no sandbox, and why (to-do 0190 (retired))", async () => {
     // What the Claude bridge reports while a read-only turn runs on a host
     // whose command sandbox cannot run (every container).
     const reason =

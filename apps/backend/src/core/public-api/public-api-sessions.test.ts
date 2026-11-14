@@ -440,7 +440,7 @@ describe("session.prompt", () => {
     expect(ended.execution).toMatchObject({ state: "unknown", evidence: "none" });
 
     // A later turn keeps the session busy. The first run's turn is not
-    // running again, and observing it writes nothing (to-do 7562: every such
+    // running again, and observing it writes nothing (to-do 7562 (retired): every such
     // run flipped to running and back with each later turn, a write each).
     stub.setStatus(async () => "idle");
     await prompt("ended-2");

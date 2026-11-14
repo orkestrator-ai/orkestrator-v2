@@ -108,7 +108,7 @@ phase in `recurring-live-ab.ts`). No real provider or login is needed.
 
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: the driver still had no
 client, approval or workflow phase, and the keyed domains are switched at
-`build-pipeline-context.ts:241`, `feature-planning.ts:265`,
+`build-pipeline-context.ts:241`, `features/planning.ts:265`,
 `multi-review-service.ts:751`, `native-agent-service.ts:1438`, `index.ts:525`
 and, since graph runs, `graph-run-service.ts:241` (looped review is retired).
 The recommendation was taken, with every turn on a fake model: a busy phase

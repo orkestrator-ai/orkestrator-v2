@@ -216,10 +216,12 @@ An image with the `boot-status` capability writes
 `/run/orkestrator/boot-status.json` atomically at each phase
 (`initializing`, `network-ready`, `inputs-ready`, `ready`, or `failed` with a
 fixed code such as `firewall-failed`, `firewall-missing`, `entrypoint-failed`).
-The entrypoint removes the legacy markers and the previous record before doing
-anything else. A record counts only when its `pid1Start` equals the start time
-of the container's current PID 1 (`/proc/1/stat`), which changes on every
-start, so a record or marker from an earlier boot can never release work.
+The entrypoint removes the previous record before doing anything else; the
+record is the image's only readiness signal (the `/tmp/.environment-ready`
+and `/tmp/.entrypoint-complete` markers were retired on 2026-11-14). A record
+counts only when its `pid1Start` equals the start time of the container's
+current PID 1 (`/proc/1/stat`), which changes on every start, so a record from
+an earlier boot can never release work.
 
 - A start of a capable runtime waits for `ready` (default 120 s, separate from
   clone/setup/bridge deadlines) before setup or agents run; a failed boot, an

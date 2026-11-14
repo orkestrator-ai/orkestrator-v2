@@ -19,7 +19,7 @@ import {
 } from "./docker-availability-cache.js";
 import { DockerContainerStateCache } from "./docker-container-state-cache.js";
 import { EnvironmentOperations } from "./environment-operations.js";
-import { FeatureBuildTasks } from "./feature-build-tasks.js";
+import { FeatureBuildTasks } from "./features/index.js";
 import { GitHubCliSelection } from "./github-cli-binary.js";
 import { IntegrationLocks } from "./integration-locks.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";

@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * Settings → Permissions: the "always allow" rules Orkestrator keeps and
- * applies itself (todo 0723), per machine. Each rule answers matching agent
+ * applies itself (todo 0723 (retired)), per machine. Each rule answers matching agent
  * requests with a one-time approval, so removing it here takes effect on the
  * very next request. Rules are created only from an approval card.
  *

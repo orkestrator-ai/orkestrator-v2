@@ -14,7 +14,7 @@
  * the next turn. A control answers the same request with the amendment
  * itself, written straight to app-server's stdin as the bridge did before,
  * and finds the saved rule; that proves the check looks in the right place.
- * A third run applies an Orkestrator permission rule (todo 0723) the way the
+ * A third run applies an Orkestrator permission rule (todo 0723 (retired)) the way the
  * backend does: the first approval is answered by a person and remembered as
  * a rule in Orkestrator's own (here in-memory) store, the identical command in
  * the next turn is answered allow-once by the rule, and after the rule is

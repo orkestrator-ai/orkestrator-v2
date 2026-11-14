@@ -463,6 +463,44 @@ describe("agent mail between many actors", () => {
     }
   });
 
+  test("a switch notice filed before the main had an agent still never wakes it", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      await mailAutoSwitchNotice(
+        unused.storage,
+        {
+          platform: "codex",
+          from: "old@example.invalid",
+          to: "new@example.invalid",
+          reason: "limit",
+          at: new Date().toISOString(),
+        },
+        "test machine",
+      );
+      const workspace = (await unused.storage.coordinators.getCoordinatorWorkspace(
+        unused.projectId,
+      ))!;
+      const conversation = workspace.conversations.find((item) => item.role === "main")!;
+      await unused.coordinator.assignConversationAgent(unused.projectId, conversation.id, "codex");
+      const main = await unused.main();
+      const [notice] = await unused.undelivered(main);
+      // Promoted for delivery when the agent was assigned, still as a rider.
+      expect(notice).toMatchObject({ placement: "pending-inject", rideAlong: true });
+      await unused.deliver();
+      expect(unused.wakes(main)).toBe(0);
+      // The next mail that does wake the main carries it.
+      const peer = await unused.addEnvironment("peer");
+      await unused.send(peer, "coordinator", "a worker report");
+      await unused.deliver();
+      expect(unused.wakes(main)).toBe(1);
+      expect(unused.carriers(main)[0]!.map((carrier) => carrier.notice?.resource.kind)).toContain(
+        "account-switch",
+      );
+    } finally {
+      await unused.close();
+    }
+  });
+
   test("with no qualified agent, mail for an unused main stays filed for the person", async () => {
     const unused = await MailWorld.create({ unassignedMain: true });
     try {

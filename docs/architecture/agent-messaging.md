@@ -252,6 +252,28 @@ retried notice keeps its request id at both ends.
 placement reason: its coordinator could not be moved off the limited account, or the
 window already had its wake.
 
+`sendAgentMail`'s `rideAlong` (system senders only) is for awareness that must not cost a
+turn: an automatic account switch. The flag is kept on the message itself
+(`AgentMailMessage.rideAlong`), not on its queue entry, so every placement and transition
+keeps it: mail filed `stored` before a coordinator had an agent and promoted later, a
+batch that was refused and retried, and a dispatch confirmed against the journal. A rider
+never starts a dispatch: `listPendingAgentMailInjects` lists it only for a mailbox that
+also has mail able to start a batch, outside the listing's limit (at most 20 per mailbox,
+so a backlog of riders cannot fill the drain's snapshot), and the drain and the pipeline
+worker claim only let it join a batch another message starts (`joinCoalescing`). It is
+never held by a coalescing window. A rider whose dispatch is unconfirmed is still checked
+against the journal, which starts no turn. The coordinator's next wake for any reason (a
+worker's report, a usage-limit stop) carries it. A person's Deliver now
+(`userReleasedAt`) turns it into an ordinary delivery. A rider that finds no batch lapses
+after `RIDE_ALONG_MAX_AGE_MS` (24 hours): the drain's periodic sweep, or the next rider for
+that mailbox, marks it `expired`. A person's own prompt does not carry it.
+
+The transcript does not wait for that delivery. A coordinator tab reads its own mailbox
+(`usePendingAccountSwitchRows`) and draws each account-switch notice not yet delivered as
+its one-line row, placed by time (`withAccountSwitchRows`), so the switch shows at once,
+with no turn, and again after a reload. Once a batch carries it, the carrier's own row in
+the transcript replaces it, so it is never drawn twice.
+
 A waking route ignores the default inject policy and inject depth. Only an
 explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab
 `idle` and `inherit` both count as on. Mail sent before routes existed keeps
@@ -418,7 +440,10 @@ sender and trust, so a tab cannot make its mail look like a workflow notice. A
 workflow notice (`from.kind === "system"`) may also carry `notice`: the
 resource it reports on (`agent-tab`, `multi-review`, `build-pipeline`, with
 ids and a label), a lower-case `state` (`completed`, `failed`, `waiting`,
-`ready`…) and a `tone` (`success`, `failure`, `attention`, `info`). The store
+`ready`…) and a `tone` (`success`, `failure`, `attention`, `info`). An
+`account-switch` notice also carries `accountSwitch` (`provider`, `from`, `to`,
+each at most 120 characters), which the transcript draws as one line,
+`Claude Code · mini · old → new`, instead of a tile. The store
 persists it on the message (`AgentMailMessage.notice`, only for system senders,
 checked by `normalizeAgentMailNotice`), so `read_messages` and `get_message`
 return it too.

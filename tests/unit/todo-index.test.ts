@@ -43,10 +43,6 @@ const ALLOWED_DUPLICATES: Record<string, string[]> = {
     "cross-cutting/0054-agent-test-pi-default-model.md",
     "design-canvas/0054-design-canvas-accessibility-findings.md",
   ],
-  "0723": [
-    "agent-engines/0723-orkestrator-permission-rules.md",
-    "coordinator-and-multi-review/0723-build-pipeline-resend-without-dispatch-check.md",
-  ],
 };
 
 function areaFolders(todo: string): string[] {

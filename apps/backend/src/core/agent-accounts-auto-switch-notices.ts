@@ -9,6 +9,8 @@ import {
   coordinatorMainConversation,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
+import { noticeText } from "@orkestrator/protocol/coordinator-notices";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { StorageService } from "./storage.js";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -69,13 +71,31 @@ export async function mailAutoSwitchNotice(
   } = {},
 ): Promise<void> {
   const { workspaces } = await storage.coordinators.getCoordinatorReconciliationState();
+  const platformLabel = AGENT_PLATFORM_LABELS[event.platform];
   const { subject, body } = autoSwitchNoticeText({
-    platformLabel: AGENT_PLATFORM_LABELS[event.platform],
+    platformLabel,
     machineName,
     from: event.from,
     to: event.to,
     reason: event.reason,
   });
+  // The transcript draws this as one line from these facts, and it rides in
+  // the coordinator's next batch instead of starting a turn that only
+  // acknowledges it.
+  const notice: AgentMailNotice = {
+    resource: {
+      kind: "account-switch",
+      id: event.platform,
+      label: noticeText(machineName, 120) ?? "this machine",
+    },
+    accountSwitch: {
+      provider: platformLabel,
+      from: noticeText(event.from, 120) ?? "another account",
+      to: noticeText(event.to, 120) ?? "another account",
+    },
+    state: "account-switched",
+    tone: "info",
+  };
   await Promise.all(
     workspaces.map(async (workspace) => {
       const main = coordinatorMainConversation(workspace);
@@ -100,7 +120,11 @@ export async function mailAutoSwitchNotice(
             subject,
             body,
           },
-          options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {},
+          {
+            notice,
+            rideAlong: true,
+            ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
+          },
         )
         .catch((error: unknown) => {
           log.warn("switch-notice.failed", { audience: "coordinator" });

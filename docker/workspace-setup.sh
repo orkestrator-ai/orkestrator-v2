@@ -75,7 +75,7 @@ capture_runtime_env_snapshot() {
 # Wait for this boot's initialization (config files, firewall) to finish.
 # This prevents race conditions where Claude is launched before config is ready.
 # A boot status record counts only when it names the current PID 1 start time:
-# a record or marker left by an earlier start of this container must never
+# a record left by an earlier start of this container must never
 # release setup. On timeout or failure setup stops with a retryable error; it
 # never proceeds on an unfinished container.
 PROGRESS_FILE="/tmp/.entrypoint-progress"
@@ -113,15 +113,9 @@ BOOT_FAILED=false
 DEADLINE=$(( $(date +%s) + BOOT_WAIT_SECONDS ))
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     show_new_progress
-    if [ -d /run/orkestrator ]; then
-        phase="$(current_boot_phase)"
-        if [ "$phase" = "ready" ]; then BOOT_READY=true; break; fi
-        if [ "$phase" = "failed" ]; then BOOT_FAILED=true; break; fi
-    elif [ -f /tmp/.entrypoint-complete ]; then
-        # An image that predates boot status records.
-        BOOT_READY=true
-        break
-    fi
+    phase="$(current_boot_phase)"
+    if [ "$phase" = "ready" ]; then BOOT_READY=true; break; fi
+    if [ "$phase" = "failed" ]; then BOOT_FAILED=true; break; fi
     sleep 0.2
 done
 show_new_progress

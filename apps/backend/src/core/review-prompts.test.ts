@@ -430,7 +430,7 @@ describe("prompt contract edge cases", () => {
     // than a tool restriction.
     expect(prompt).toContain("Run that command yourself to read the diff");
     // A read-only turn without the command sandbox cannot run Git at all
-    // (to-do 0190): it is sent to the sealed diff file instead.
+    // (to-do 0190 (retired)): it is sent to the sealed diff file instead.
     expect(prompt).toContain("When this session refuses Git commands");
     expect(prompt).toContain("`diffArtifact.path`");
     expect(prompt).toContain("Do not rerun the full test suite");

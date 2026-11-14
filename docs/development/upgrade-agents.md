@@ -868,15 +868,31 @@ binary, `verify:claude:plugin-mcp-live`, `verify:claude:first-turn-live`,
 `verify:accounts:resend-live`, the vendored build, the typecheck and the full
 bridge suite. The union changes were a new `system` subtype,
 `session_writes_lost` (a health notice, and since task 14 of
-[1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md) also the
+1031 (retired 2026-11-14; `git show dc90609bf:docs/todo/agent-engines/1031-provider-upgrade-2026-11-06.md`) also the
 shared lost-write advisory in the transcript when `transcript_session_ids`
 names the session), and two `SDKStartupFailureReason`
 members, `initialize_not_first` and `config_file_invalid`, now mapped in
 `claudeStartupFailureMessage`. A startup failure now also carries the CLI's own
 `errors` text after the guidance (`withStartupFailureDetail`), because
 `config_file_invalid` and `worktree_resume_refused` put the specifics there.
-Not rerun at 2.1.319: the macOS sandbox live test and the billed
-coordinator-skills probe. The Linux sandbox probe passed at 2.1.319 on
+Not rerun at 2.1.319: the billed coordinator-skills probe (in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
+The macOS sandbox checks passed at 2.1.319 on 2026-11-14 on arktech-mini
+(macOS 27.2, arm64, Bun 1.4.4), with the SDK's bundled CLI, temporary Claude
+homes, a fixture-only API key and a scripted loopback model:
+`mise run verify:claude:sandbox-live` 1 of 1 (99 assertions: no write outside
+the workspace and no unlisted host, with or without an escape request, and
+no approval card for either; an asking escape writes only once accepted),
+`conformance-coordinator-sandbox-live.test.ts` 18 of 18 with the Linux-only
+`read-only-required-refused` skipped, and the read-boundary live test 6 of
+6. The first run of the coordinator file lost two cases to the fixture's
+15 s turn deadline at a load of about 14 on 18 cores and the next four runs
+passed (flake [1125](../tests/flaky-tests/agent-bridges/1125-claude-offline-cli-qualification-deadlines.md)).
+The 2.1.319 binary writes an `initialize_not_first` result only when the host
+sets `CLAUDE_CODE_STARTUP_FAILURE_RESULTS` (only `org_config_required_unavailable`,
+`org_config_refused` and `config_file_invalid` are written without it), and
+the bridge never sets it, so at this pin the bridge's mapping for that reason
+is not reached; the CLI ends such a start with stderr alone. The Linux sandbox probe passed at 2.1.319 on
 2026-11-13 on an Arch Linux host with bubblewrap 0.13.1
 (`conformance-coordinator-sandbox-live.test.ts` 19 of 19,
 `verify:claude:sandbox-live`'s file and the read-boundary live test), and the
@@ -884,7 +900,7 @@ binary still nests its `apply-seccomp` user namespace; inside an Orkestrator
 container the probe answers `missing-programs`, and only the cases that need
 a working sandbox fail there, with the CLI's "Sandbox required but
 unavailable" (task 9 of
-[1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md)). The
+1031 (retired 2026-11-14; `git show dc90609bf:docs/todo/agent-engines/1031-provider-upgrade-2026-11-06.md`)). The
 refresh trigger probe below also passed again that day in a container
 (`docker run --network none`) with the image's managed 2.1.319, all nine
 cases matching. `claude-host-login-refresh.ts`'s
@@ -1176,7 +1192,13 @@ the pinned binary's parser over the production argument shape.
 
    ```bash
    mise run verify:codex:network-approval
+   mise run verify:codex:network-card
    ```
+
+   The second runs the host request through the real bridge process, the
+   backend's card mapping and the rule enforcer, and checks the card is still
+   "Approve network access" with no amendment
+   ([permission-rules.md](../architecture/permission-rules.md#codex-on-a-managed-network-host)).
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

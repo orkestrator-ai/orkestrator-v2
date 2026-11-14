@@ -240,7 +240,7 @@ export class BuildPipelinePromptDispatch {
    * sent again under its id. Only the provider's proof that it never arrived
    * (`absent`) allows it; acceptance settles the attempt as sent, `lost` fails
    * the stage, and anything else waits within the reconnect deadline and then
-   * fails closed, as the fan-out does (0223). Bridges deduplicate a resend only
+   * fails closed, as the fan-out does (to-do 0223, retired). Bridges deduplicate a resend only
    * while they still hold the id, which a restart or eviction can end.
    */
   private async resendProvenSafe(

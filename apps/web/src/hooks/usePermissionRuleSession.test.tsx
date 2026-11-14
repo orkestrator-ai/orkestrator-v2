@@ -5,7 +5,7 @@ import * as realBackend from "@/lib/backend";
 import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 
 /**
- * The transcript note's data on returning to an environment (todo 0723,
+ * The transcript note's data on returning to an environment (todo 0723 (retired),
  * task 5): a rule may answer while the environment is not on screen and its
  * tab is unmounted, so the tab mounted on return must read what was answered,
  * and a tab for another environment must never show it.

@@ -1718,7 +1718,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(reviewerError.className).not.toContain("line-clamp");
   });
 
-  test("says where a read-only step's commands ran without the sandbox (todo 0190)", async () => {
+  test("says where a read-only step's commands ran without the sandbox (todo 0190 (retired))", async () => {
     const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
     const ready = readyWorkflow();
     ready.reviewers[0] = { ...ready.reviewers[0]!, commandSandboxOff: reason };

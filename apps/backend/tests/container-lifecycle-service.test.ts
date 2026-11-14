@@ -26,6 +26,7 @@ import {
   BlockedRegistryWriter,
   REGISTRY_SCHEMA_MARKER_FILE,
   REGISTRY_WRITER_LEASE_FILE,
+  ReclaimingRegistryWriter,
   RegistrySchemaBlockedError,
   RegistryWriterLease,
   checkRegistrySchemaMarker,
@@ -633,6 +634,91 @@ describe("registry writer lease", () => {
     // A corrupt marker is not permission to write either.
     await fs.writeFile(path.join(dir, REGISTRY_SCHEMA_MARKER_FILE), "{not json");
     expect((await checkRegistrySchemaMarker(dir)).compatible).toBe(false);
+  });
+
+  test("a lease won late admits no mutation until its recovery has settled", async () => {
+    const dir = await dataDir();
+    const { context, environments } = memoryLifecycleContext([lifecycleEnvironment()], dir);
+    // The crashed holder persisted "creating", then died without releasing.
+    const admission = await beginContainerOperation(context, "env-lifecycle", "create");
+    if (admission.kind !== "begun") throw new Error("expected begin");
+    const { operationId } = admission.operation;
+    await advanceContainerOperation(context, "env-lifecycle", operationId, {
+      phase: "creating",
+      details: { generation: 1 },
+    });
+    const { releaseActiveContainerOperation } =
+      await import("../src/core/container-lifecycle-service");
+    releaseActiveContainerOperation(context, operationId);
+    const leasePath = path.join(dir, REGISTRY_WRITER_LEASE_FILE);
+    await fs.writeFile(
+      leasePath,
+      JSON.stringify({ token: "crashed", pid: 1, acquiredAt: "2026-11-14T00:00:00.000Z" }),
+    );
+
+    const events: string[] = [];
+    // Mirrors the backend's wiring: recovery writes with the won lease while
+    // the context's writer (what schedules and commands read) is not held.
+    const writer = await openRegistryWriter(dir, {
+      staleMs: 30_000,
+      retryMs: 60_000,
+      recoverLate: async (lease) => {
+        events.push("recovery-started");
+        await reconcileContainerOperations({ ...context, registryWriterLease: lease });
+        events.push("recovery-settled");
+      },
+      onAcquired: () => events.push("acquired"),
+    });
+    context.registryWriterLease = writer;
+    expect(writer).toBeInstanceOf(ReclaimingRegistryWriter);
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(leasePath, old, old);
+
+    const gate = path.join(await dataDir(), "release-probe");
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+while [ ! -f '${gate}' ]; do sleep 0.02; done
+[ "$1" = "ps" ] && exit 0
+exit 1
+`,
+        async (log) => {
+          const won = (writer as ReclaimingRegistryWriter).tryAcquire();
+          for (let wait = 0; wait < 500 && !(await log.read()).includes("ps"); wait += 1) {
+            await Bun.sleep(10);
+          }
+          // Recovery is mid-probe. The scheduler's gate reads not-held, and a
+          // concurrent start is refused by the lease rather than racing the
+          // reconcile or reading the crashed holder's operation as running.
+          expect(events).toEqual(["recovery-started"]);
+          expect(writer.isHeld()).toBe(false);
+          expect(writer.state()).toBe("busy");
+          await expect(beginContainerOperation(context, "env-lifecycle", "start")).rejects.toThrow(
+            "Another Orkestrator backend",
+          );
+          expect(record(environments.get("env-lifecycle")!).operation).toMatchObject({
+            operationId,
+            phase: "creating",
+          });
+
+          await fs.writeFile(gate, "");
+          expect(await won).toBe(true);
+          expect(events).toEqual(["recovery-started", "recovery-settled", "acquired"]);
+          expect(writer.isHeld()).toBe(true);
+          const settled = record(environments.get("env-lifecycle")!);
+          expect(settled.operation).toBeUndefined();
+          expect(settled.outcomes.at(-1)).toMatchObject({ operationId, status: "interrupted" });
+          // Now a mutation is admitted cleanly.
+          const start = await beginContainerOperation(context, "env-lifecycle", "start");
+          expect(start.kind).toBe("begun");
+          if (start.kind === "begun")
+            releaseActiveContainerOperation(context, start.operation.operationId);
+        },
+      );
+    } finally {
+      await writer.release();
+    }
   });
 
   test("lifecycle writes require the lease when one is configured", async () => {

@@ -5,13 +5,15 @@
  * billed. It answers every request with HTTP 401 in the caller's own error
  * shape: Anthropic's for `/v1/messages` (Claude), OpenAI's for everything else
  * (Codex's Responses, Pi's and OpenCode's chat completions). A WebSocket
- * upgrade (Codex's Responses transport) is refused with the same 401.
+ * upgrade (Codex's Responses transport) is refused with the same 401, and is
+ * held like any other model request.
  *
  *   bun refused-login-model.ts
  *
  * prints its origin (`http://127.0.0.1:<port>`) as the first stdout line.
  *
- * `POST /__qa/hold` with `{"hold":true}` parks every later model request until
+ * `POST /__qa/hold` with `{"hold":true}` parks every later model request (HTTP
+ * or WebSocket upgrade) until
  * `{"hold":false}`, so a spec can hold a turn at "the provider is working"
  * while it stops the turn, kills the bridge or restarts the backend.
  * `GET /__qa/stats` answers `{ requests, held }`. It keeps no request body and
@@ -110,14 +112,31 @@ export async function serveRefusedLoginModel(): Promise<RefusedLoginModel> {
       response.once("close", () => waiting.delete(release));
     });
   });
-  // A WebSocket upgrade (Codex's Responses transport) is refused like any request.
+  // A WebSocket upgrade (Codex's Responses transport) is refused like any
+  // request, and parked like one while the hold is set, so a Codex turn on
+  // that transport is held at "the provider is working" too.
   server.on("upgrade", (request: IncomingMessage, socket: Socket) => {
     requests += 1;
     const body = JSON.stringify(refusalFor(new URL(request.url ?? "/", "http://x").pathname));
-    socket.end(
-      `HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\n` +
-        `content-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
-    );
+    const answer = () => {
+      if (socket.destroyed) return;
+      socket.end(
+        `HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\n` +
+          `content-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
+      );
+    };
+    if (!hold) {
+      answer();
+      return;
+    }
+    const release = () => {
+      waiting.delete(release);
+      answer();
+    };
+    waiting.add(release);
+    socket.once("close", () => waiting.delete(release));
+    // A client that gives up leaves no socket behind.
+    socket.on("error", () => socket.destroy());
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

@@ -44,6 +44,24 @@ test("refuses a WebSocket upgrade instead of accepting it", async () => {
   expect(response.status).toBe(401);
 });
 
+test("holds a WebSocket upgrade like any model request", async () => {
+  model = await serveRefusedLoginModel();
+  model.setHold(true);
+  let settled = false;
+  const pending = fetch(`${model.origin}/v1/responses`, {
+    headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13" },
+  }).then((response) => {
+    settled = true;
+    return response.status;
+  });
+  for (let i = 0; i < 100 && model.stats().held === 0; i += 1) await Bun.sleep(10);
+  expect(model.stats()).toEqual({ requests: 1, held: 1 });
+  expect(settled).toBe(false);
+  model.setHold(false);
+  expect(await pending).toBe(401);
+  expect(model.stats().held).toBe(0);
+});
+
 test("holds requests until released, through the control route too", async () => {
   model = await serveRefusedLoginModel();
   const hold = await fetch(`${model.origin}/__qa/hold`, {

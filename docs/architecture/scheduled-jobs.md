@@ -164,8 +164,12 @@ after now.
   `scheduled-job` change, so an open Settings view rereads. A backend that
   started without the lease (`another-backend`) keeps trying every heartbeat
   and takes it once its holder stops refreshing it for 30 s, which is what a
-  backend restarted just after a crash needs (`ReclaimingRegistryWriter`);
-  winning it announces the same change. A live holder keeps its lease fresh,
+  backend restarted just after a crash needs (`ReclaimingRegistryWriter`).
+  A lease won that way first settles the container operations the crashed
+  holder left, writing with the won lease while the backend still reads as
+  not holding it, so no schedule fires and no container mutation is admitted
+  until that recovery is done; only then does it announce the same change. A
+  live holder keeps its lease fresh,
   so a second backend beside it never wins. The field is
   additive: a renderer that predates it ignores it, and a backend that
   predates it sends none, which reads as no known pause.

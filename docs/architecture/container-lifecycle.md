@@ -90,7 +90,9 @@ replacement never depends on the old name being free.
 ## Recovery
 
 At startup (after the writer lease is acquired, or when a backend that started
-without it wins it later, and before background launch or cleanup) and whenever
+without it wins it later, and before background launch or cleanup; a lease won
+later reads as not held until this pass settles, so no schedule or container
+mutation runs beside it) and whenever
 a new operation finds a stale one, the service reconciles
 by exact identity:
 

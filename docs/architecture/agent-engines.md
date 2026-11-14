@@ -426,7 +426,9 @@ stays without one for `OPENCODE2_UNSETTLED_RUN_GRACE_MS` (60 s) while the
 server reads idle belonged to a server that died (killed, or replaced by the
 backend), and is recorded as cut short, so the bell rings "Agent stopped with
 an error" instead of the tab reading working for good (to-do 5160, measured
-live at 80 s from the kill).
+live at 80 s from the kill). The verdict is kept for the request, so a later
+turn-outcome read (the CLI, a pipeline) gets the same answer at once rather
+than starting a second grace; a boundary row or a busy read replaces it.
 Client backoff also needs a backend that advertises stamped announcements. The
 announcements and the client side are in
 [event-snapshot-recovery.md](event-snapshot-recovery.md#native-observation-invalidations);

@@ -31,9 +31,17 @@ export interface RegistryWriterLeaseOptions {
    */
   onLost?: () => void;
   /**
-   * Called once when a backend that found the lease busy at startup wins it
-   * later, because its holder stopped refreshing it (a crash, say), so the
-   * schedules settings can reread and writer-only startup work can run.
+   * Writer-only startup work for a backend that found the lease busy at
+   * startup and wins it later, because its holder stopped refreshing it (a
+   * crash, say). It runs with the won lease, which it may use to write, while
+   * the writer handle still reports not held: schedules and container
+   * mutations are admitted only once it settles, as on the startup path. A
+   * rejection is logged; the lease is still exposed afterwards.
+   */
+  recoverLate?: (lease: RegistryWriter) => Promise<void>;
+  /**
+   * Called once, after `recoverLate` settled and the writer handle reports
+   * the late-won lease held, so the schedules settings can reread.
    */
   onAcquired?: () => void;
   /** How often a backend without the lease tries again; defaults to the heartbeat. */
@@ -370,6 +378,8 @@ export type RegistryWriter = Pick<
  * restarted within `staleMs` of a crash read "another backend" and refused
  * every container change for its whole life (to-do 5160, seen 2026-11-14).
  * A live holder keeps refreshing, so a second backend never wins against it.
+ * A won lease is exposed only after `recoverLate` settles, so nothing else
+ * writes while the crashed holder's operations are being reconciled.
  * `release` stops the retries; a lease won during shutdown is released too.
  */
 export class ReclaimingRegistryWriter implements RegistryWriter {
@@ -390,14 +400,18 @@ export class ReclaimingRegistryWriter implements RegistryWriter {
     this.timer.unref?.();
   }
 
-  /** One attempt, shared by concurrent callers; true once the lease is held. */
+  /**
+   * One attempt, shared by concurrent callers; true once the lease is held
+   * and its late recovery has settled. Agrees with `isHeld()` throughout,
+   * after a release or a loss included.
+   */
   async tryAcquire(): Promise<boolean> {
-    if (this.lease || this.released) return this.lease !== undefined;
+    if (this.lease || this.released) return this.isHeld();
     this.attempt ??= this.acquireOnce().finally(() => {
       this.attempt = undefined;
     });
     await this.attempt;
-    return this.lease !== undefined;
+    return this.isHeld();
   }
 
   private async acquireOnce(): Promise<void> {
@@ -409,9 +423,21 @@ export class ReclaimingRegistryWriter implements RegistryWriter {
         await lease.release();
         return;
       }
-      this.lease = lease;
       clearInterval(this.timer);
       log.info("writer-lease.acquired-late");
+      // Not exposed yet: until recovery settles, `isHeld` stays false, so no
+      // schedule fires and no container mutation is admitted against
+      // operations the crashed holder left unresolved.
+      if (this.options.recoverLate) {
+        await this.options.recoverLate(lease).catch((error: unknown) => {
+          log.warn("writer-lease.listener-failed", { error: formatLogError(error) });
+        });
+      }
+      if (this.released) {
+        await lease.release();
+        return;
+      }
+      this.lease = lease;
       try {
         this.options.onAcquired?.();
       } catch (error) {

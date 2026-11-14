@@ -321,6 +321,91 @@ describe("a backend that started without the lease", () => {
     );
   });
 
+  test("exposes a late-won lease only once its recovery settles", async () => {
+    const order: string[] = [];
+    let finishRecovery!: () => void;
+    const recoveryHeld = new Promise<void>((resolve) => (finishRecovery = resolve));
+    let recoveryStarted!: () => void;
+    const started = new Promise<void>((resolve) => (recoveryStarted = resolve));
+    let recoveryLease: RegistryWriter | undefined;
+    const { first, second } = await blockedBehind({
+      recoverLate: async (lease) => {
+        recoveryLease = lease;
+        order.push("recover");
+        recoveryStarted();
+        await recoveryHeld;
+      },
+      onAcquired: () => order.push("acquired"),
+    });
+    await first.release();
+    const won = second.tryAcquire();
+    await started;
+    // Recovery writes with the won lease; nothing else may write yet.
+    expect(recoveryLease?.isHeld()).toBe(true);
+    expect(() => recoveryLease?.assertHeld()).not.toThrow();
+    expect(second.isHeld()).toBe(false);
+    expect(second.state()).toBe("busy");
+    expect(() => second.assertHeld()).toThrow("Another Orkestrator backend");
+    expect(order).toEqual(["recover"]);
+    finishRecovery();
+    expect(await won).toBe(true);
+    expect(second.isHeld()).toBe(true);
+    expect(second.state()).toBe("held");
+    expect(order).toEqual(["recover", "acquired"]);
+  });
+
+  test("a failed recovery is logged and the lease is still exposed", async () => {
+    let acquired = 0;
+    const { first, second } = await blockedBehind({
+      recoverLate: async () => {
+        throw new Error("recovery boom");
+      },
+      onAcquired: () => acquired++,
+    });
+    await first.release();
+    expect(await second.tryAcquire()).toBe(true);
+    expect(second.isHeld()).toBe(true);
+    expect(acquired).toBe(1);
+    expect(leaseRecords()).toContainEqual(
+      expect.objectContaining({ event: "writer-lease.listener-failed" }),
+    );
+  });
+
+  test("a release during recovery releases the won lease without exposing it", async () => {
+    let acquired = 0;
+    let finishRecovery!: () => void;
+    const recoveryHeld = new Promise<void>((resolve) => (finishRecovery = resolve));
+    let recoveryStarted!: () => void;
+    const started = new Promise<void>((resolve) => (recoveryStarted = resolve));
+    const { first, second } = await blockedBehind({
+      recoverLate: async () => {
+        recoveryStarted();
+        await recoveryHeld;
+      },
+      onAcquired: () => acquired++,
+    });
+    await first.release();
+    const won = second.tryAcquire();
+    await started;
+    const released = second.release();
+    finishRecovery();
+    await released;
+    expect(await won).toBe(false);
+    expect(second.isHeld()).toBe(false);
+    expect(acquired).toBe(0);
+    await expect(fs.stat(path.join(directory, REGISTRY_WRITER_LEASE_FILE))).rejects.toThrow();
+  });
+
+  test("tryAcquire agrees with isHeld once a won lease is released", async () => {
+    const { first, second } = await blockedBehind();
+    await first.release();
+    expect(await second.tryAcquire()).toBe(true);
+    await second.release();
+    expect(second.isHeld()).toBe(false);
+    expect(second.state()).toBe("released");
+    expect(await second.tryAcquire()).toBe(false);
+  });
+
   test("retries on its own timer, and a release stops it", async () => {
     const { first, second } = await blockedBehind({ retryMs: 20 });
     await first.release();

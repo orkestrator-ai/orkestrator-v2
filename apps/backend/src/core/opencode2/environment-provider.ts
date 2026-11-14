@@ -253,7 +253,9 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
         throw error;
       }
       if (now - since < OPENCODE2_UNSETTLED_RUN_GRACE_MS) throw error;
-      this.unsettledSince.delete(key);
+      // Kept, so every reader gets the same verdict: the bell's reconcile and
+      // a later turn-outcome read must not restart the grace for each other.
+      // A boundary row or a busy read still replaces it.
       return OPENCODE2_RUN_CUT_SHORT_MESSAGE;
     }
   }

@@ -108,7 +108,7 @@ import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-a
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
-import { openRegistryWriter } from "./registry-writer-lease.js";
+import { openRegistryWriter, type RegistryWriter } from "./registry-writer-lease.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
@@ -2105,9 +2105,19 @@ export class OrkestratorBackend {
    * Startup work only the lease holder may do: operations a previous process
    * left unresolved are settled by exact Docker identity (an unreachable
    * daemon leaves them for the next attempt), and leftovers are swept.
+   * `writer` is the lease to write with: a lease won late is not exposed on
+   * the context until this settles (`ReclaimingRegistryWriter`).
    */
-  private async runWriterStartupWork(): Promise<void> {
-    await reconcileContainerOperations(this.context).catch((error: unknown) => {
+  private async runWriterStartupWork(
+    writer: RegistryWriter | undefined = this.context.registryWriterLease,
+  ): Promise<void> {
+    const recoveryContext = {
+      storage: this.context.storage,
+      emit: this.context.emit,
+      strictDockerOwner: this.context.strictDockerOwner,
+      registryWriterLease: writer,
+    };
+    await reconcileContainerOperations(recoveryContext).catch((error: unknown) => {
       log.warn("startup.step-failed", {
         step: "container-operations",
         error: formatLogError(error),
@@ -2214,12 +2224,11 @@ export class OrkestratorBackend {
         // Schedules stop with the lease; Settings → Schedules reads why.
         onLost: () => this.context.storage.announceSchedulerStatus(),
         // Won late, from a holder that stopped refreshing it (a crash just
-        // before this start): schedules fire again, and the writer-only
-        // startup work below runs now instead of never.
-        onAcquired: () => {
-          this.context.storage.announceSchedulerStatus();
-          void this.runWriterStartupWork();
-        },
+        // before this start): the writer-only startup work below runs now
+        // instead of never, with the won lease, and only once it settles do
+        // schedules fire and container mutations get admitted.
+        recoverLate: (lease) => this.runWriterStartupWork(lease),
+        onAcquired: () => this.context.storage.announceSchedulerStatus(),
       },
     );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(

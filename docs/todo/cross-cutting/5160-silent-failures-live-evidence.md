@@ -44,9 +44,11 @@ startup, so a backend restarted within 30 s of a crash read `another-backend`
 for its whole life, fired no schedules and refused every container change.
 `openRegistryWriter` now returns a `ReclaimingRegistryWriter` for a busy
 lease. It retries every heartbeat and becomes the lease once the holder stops
-refreshing it, writes `writer-lease.acquired-late`, announces the scheduler
-change and runs the writer-only startup work (`runWriterStartupWork` in
-`apps/backend/src/core/index.ts`). Screenshots:
+refreshing it, writes `writer-lease.acquired-late`, runs the writer-only
+startup work with the won lease (`runWriterStartupWork` in
+`apps/backend/src/core/index.ts`) and only then reports the lease held and
+announces the scheduler change, so no schedule or container mutation runs
+beside that recovery (review round 1, 2026-11-14). Screenshots:
 `output/visual-previews/5160-schedules-*.png` (not committed).
 
 **Decisions.** See [Assumptions and decisions](#assumptions-and-decisions).

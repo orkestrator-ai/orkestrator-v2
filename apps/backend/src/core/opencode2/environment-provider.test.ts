@@ -482,6 +482,19 @@ describe("a run its server never settled", () => {
     expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
   });
 
+  test("a run given up on reads cut short for every later reader", async () => {
+    const rows = [user("a", "r")];
+    const { provider, advance } = unsettled({ value: "idle" }, rows);
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+    advance(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+    // The bell's reconcile and a turn-outcome read share the one verdict.
+    expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
+    expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
+    // A boundary row written after all is still read as written.
+    rows.push(idle("b"));
+    expect(await provider.turnTerminalError("s", "r")).toBeNull();
+  });
+
   test("a server still running the turn is never given up on", async () => {
     const activity = { value: "working" as "idle" | "working" };
     const { provider, advance } = unsettled(activity, [user("a", "r")]);

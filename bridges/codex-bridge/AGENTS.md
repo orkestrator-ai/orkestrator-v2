@@ -247,8 +247,10 @@ replay shows it as the card, never as a message the user typed. See
   The decision is `codexReadOnlyCommandSandboxOff` (`codex-read-only-sandbox.ts`),
   which counts the container marker files (`/.dockerenv`,
   `/run/.containerenv`) for every session, whatever sandbox its policy names,
-  as well as a container session policy; keep the coordinator and
-  permission-profile exclusions. The session reports it as `readOnlyCommandSandbox` on
+  as well as a container session policy; a Linux host with no marker is
+  probed for a refused user namespace (`codex-user-namespace-probe.ts`; only
+  a refusal it saw turns the sandbox off, never an unknown answer). Keep the
+  coordinator and permission-profile exclusions. The session reports it as `readOnlyCommandSandbox` on
   `/session/:id/status`. See "Codex read-only turns in a container" in
   [`coordinator.md`](../../docs/architecture/coordinator.md).
 - Never read a missing tool row as "the model did not try". Under a sandbox

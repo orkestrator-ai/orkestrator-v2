@@ -1586,9 +1586,16 @@ approval reach `refuseApproval`), it reads the sealed diff file instead, and
 its `submit_review_report` call, made from a code-mode cell
 (`tools.mcp__orkestrator__submit_review_report`), reaches the MCP server
 with no approval asked; nothing is written to the checkout.
-A Linux host, macOS and a coordinator (which runs under its launcher's
-permission profile) keep Codex's sandbox. A Linux host whose policy refuses
-bubblewrap's namespace is not probed for Codex yet.
+macOS and a coordinator (which runs under its launcher's permission
+profile) keep Codex's sandbox. A Linux host with no container marker is
+probed (`codex-user-namespace-probe.ts`): `bwrap` creating a user namespace
+when it is on PATH, else `unshare --user`, cached for five minutes. A host
+that refuses it (Ubuntu's `apparmor_restrict_unprivileged_userns`, a kernel
+with `unprivileged_userns_clone=0`) runs the turn the same way and reports a
+host-worded reason; a host that allows it, or where neither program exists
+to ask, keeps Codex's sandbox. The boundary on such a host is the exec-policy
+allowlist and the declined approvals, with no network denial beyond Codex's
+own setting.
 
 `/session/:id/status` carries `readOnlyCommandSandbox: { state: "off",
 reason }` from the moment such a turn is accepted (or may be running, or is

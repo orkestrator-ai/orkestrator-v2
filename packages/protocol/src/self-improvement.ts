@@ -56,6 +56,72 @@ export const SELF_IMPROVEMENT_LIMITS = {
 export type SelfImprovementStep =
   "exporting" | "board" | "reading-conversations" | "grouping-themes" | "digesting" | "filing";
 
+/** Every step in the order a run takes them; `SelfImprovementProgress.stages` lists them this way. */
+export const SELF_IMPROVEMENT_STEPS: readonly SelfImprovementStep[] = [
+  "exporting",
+  "board",
+  "reading-conversations",
+  "grouping-themes",
+  "digesting",
+  "filing",
+];
+
+/**
+ * `skipped`: the run will not (or did not) do this stage: the conversation
+ * review is off, a preview files nothing, or there were no saved notes to group.
+ */
+export type SelfImprovementStageState = "pending" | "running" | "done" | "skipped";
+
+/**
+ * Why a stage was skipped, decided by the run itself: `review-off` and
+ * `preview` from the plan fixed when the run started (a setting changed
+ * mid-run does not alter them), `no-notes` when grouping had no saved notes to
+ * group, `not-needed` for any other stage the run passed without doing.
+ */
+export type SelfImprovementSkipReason = "review-off" | "preview" | "no-notes" | "not-needed";
+
+export interface SelfImprovementStage {
+  step: SelfImprovementStep;
+  state: SelfImprovementStageState;
+  /** Set whenever `state` is `skipped`. */
+  skipReason?: SelfImprovementSkipReason;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+/**
+ * Whether a run is moving, for a page that otherwise could only say "running".
+ * Numbers and timestamps only, never what was read. Absent from a backend that
+ * predates it.
+ */
+export interface SelfImprovementProgress {
+  stages: SelfImprovementStage[];
+  /**
+   * The backend's clock when this was read. Every other time here is the
+   * backend's too, so a window measures an age from the gap between two of them
+   * rather than trusting its own clock.
+   */
+  observedAt: string;
+  /** The last time the run did anything observable: a step began, a file was checked, a part was read, a model call started or ended. */
+  lastActivityAt: string;
+  /** Present once the conversation review has begun. */
+  conversations?: {
+    /** History files checked for new parts so far. */
+    filesChecked: number;
+    /** History files to check, once they have been listed. */
+    files: number | null;
+    /** Parts this run will read; null until the files have been checked. */
+    parts: number | null;
+    read: number;
+    failed: number;
+    notesAdded: number;
+    /** Parts ready to read but over this run's limit. */
+    waiting: number;
+  };
+  /** Model calls running now, and how long one may run before it is given up. */
+  modelCalls: { inFlight: number; oldestStartedAt: string | null; timeoutMs: number };
+}
+
 export type SelfImprovementRunTrigger = "manual" | "daily" | "dry-run";
 
 export interface SelfImprovementRunSummary {
@@ -132,6 +198,8 @@ export interface SelfImprovementStatus {
     trigger: SelfImprovementRunTrigger;
     startedAt: string;
     step: SelfImprovementStep;
+    /** Where the run is and whether it is moving; absent from an older backend. */
+    progress?: SelfImprovementProgress;
   } | null;
   lastRun: SelfImprovementRunSummary | null;
   /** When the daily run is next due, if it is on. */

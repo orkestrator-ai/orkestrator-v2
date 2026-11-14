@@ -35,8 +35,12 @@ Conversation themes become tickets labelled `insight`. Neither kind has a title 
      on its own.
    - **Preview.** Shows what a run would file. It files nothing, saves
      nothing and calls no model.
-   - **Run now.** Starts a run in the background. The page shows its progress
-     and keeps working if you close it.
+   - **Run now.** Starts a run in the background. The page lists each stage
+     of the run with a tick box (done, in progress, waiting or skipped) and
+     says whether the run is moving. Click a stage to open a window with the
+     detail behind it: how long each stage took, history files checked,
+     parts read, notes found, model calls in flight. The run keeps going if
+     you close the window or the page.
 3. **Work the tickets as usual.** A pipeline, a PR, a merge; the merge moves
    the ticket to Done.
 
@@ -76,7 +80,8 @@ mise run improvement:status
 ## What a run does
 
 The run is `runLoop` in `apps/backend/src/core/self-improvement/loop.ts`; the
-service around it is in `service.ts`. Its steps are those the page shows:
+service around it is in `service.ts`. Its steps are those the page shows
+(see [Progress](#progress)):
 
 1. **Exporting.** Builds this backend's diagnostics bundle in memory
    (`buildDiagnosticsBundle`, redaction included) and reads it.
@@ -109,6 +114,42 @@ retry posts it once.
 One run happens at a time. A run that fails records a fixed reason for the
 step it was on ("Could not export this machine's diagnostics."), never the
 error text.
+
+## Progress
+
+A run reports where it is so the page can show that it is moving, not only
+that it is "running". `status.running.progress` (`SelfImprovementProgress`,
+`packages/protocol/src/self-improvement.ts`) is built by `RunProgress`
+(`progress.ts`) and read afresh by every `status()`:
+
+- **Stages.** All six steps in order, each `pending`, `running`, `done` or
+  `skipped`, with start and finish times. A stage the run does not do is
+  skipped: reading and grouping when the review is off, filing in a preview,
+  and grouping when no saved notes needed it (marked when the run passes it).
+  Each skipped stage carries its `skipReason` (`review-off`, `preview`,
+  `no-notes` or `not-needed`), set by the run. The page shows that reason and
+  never works one out from the current settings: the review switch can change
+  while a run that started with the other value is still working.
+- **Heartbeat.** `lastActivityAt` moves when a step begins, a history file is
+  checked, a part is read or fails, or a model call starts or ends. The
+  history scan reports a file at a time, because on a busy machine it checks
+  thousands of files before the first model call.
+- **Conversation figures.** History files checked of total, parts to read,
+  read, failed, notes found, and parts waiting for the next run. A preview
+  lists the parts it would read but calls no model, so its progress keeps
+  `read` at 0 and the page says "a preview reads none"; the run summary's
+  `conversations.read` counts the parts a real run would have read.
+- **Model calls.** How many are in flight and when the oldest started. A call
+  is given up after `MODEL_TIMEOUT_MS` (10 minutes), so a quiet run waiting on
+  one is waiting, not stuck. The page calls a run **stuck** only when nothing
+  has happened for 2 minutes (`QUIET_MS`) and no model call is in flight.
+- **Clocks.** `observedAt` is the backend's clock when the status was read. The
+  page measures an age as the gap between two backend timestamps plus the time
+  since it received the status, so a window on another machine's clock does not
+  show false stalls.
+
+It holds numbers and timestamps only (the content-free rule below). An older
+backend sends no `progress`, and the page then shows only the status line.
 
 ## Conversation review
 
@@ -229,6 +270,7 @@ fix, the run waits for the next release before judging it.
 | Public actions `self-improvement.status`, `self-improvement.run` | `apps/backend/src/core/public-api/actions-self-improvement.ts`; CLI in `packages/cli/src/client/commands/self-improvement.ts` |
 | Service and run | `apps/backend/src/core/self-improvement/` (`service.ts`, `loop.ts`, `signals.ts`, `ledger.ts`, `bundle.ts`, `report.ts`, `insights/`) |
 | Settings page | `apps/web/src/components/settings/SelfImprovementSettings.tsx`, `SelfImprovementLists.tsx` |
+| Run progress | `apps/backend/src/core/self-improvement/progress.ts`; the stage list and its window in `apps/web/src/components/settings/SelfImprovementProgress.tsx`, with the wording and liveness rules in `apps/web/src/lib/self-improvement-progress.ts` |
 | Config | `global.experimentalSelfImprovement`, `global.selfImprovement` (`projectId`, `conversationReview`, `dailyRun`) |
 | State | `<data dir>/self-improvement/`, owner-only: `ledger.json`, `digests/` (newest 120, as `.json` and `.md`), `last-run.json`, `last-counted-run.json`, and `insights/` (notes for 90 days, at most 3,000; themes; read positions) |
 
@@ -251,6 +293,10 @@ fix, the run waits for the next release before judging it.
 - **Refuse before admission.** The public run action checks the switch, the
   project and a running run before its request key is admitted, so a refused
   run leaves no record. Its receipt says only whether it started.
+- **The progress window sits above fullscreen settings.** Settings is a
+  fullscreen surface, so a dialog launched from it takes `Z_FULLSCREEN_DIALOG`
+  on both its content and its overlay (`apps/web/src/constants/z-index.ts`); the
+  default `z-50` renders behind the panel while Radix freezes the page.
 - **Content-free logs.** The `self-improvement` log area holds triggers,
   steps, counts and fixed labels. Errors are logged by name and code without
   their message, which can quote a path. Notes and themes (paraphrases and short

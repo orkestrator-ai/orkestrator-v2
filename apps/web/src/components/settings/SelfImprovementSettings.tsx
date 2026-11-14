@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { STEP_TEXT } from "@/lib/self-improvement-progress";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import {
   formatWhen,
@@ -27,6 +28,7 @@ import {
   TrackedTickets,
   type OpenTicket,
 } from "./SelfImprovementLists";
+import { RunProgressDialog, RunStages, useNow } from "./SelfImprovementProgress";
 import {
   SETTINGS_CARD_CLASS,
   SettingsPageLayout,
@@ -40,15 +42,6 @@ const log = createLogger("web.settings");
 export const RUNNING_POLL_MS = 3000;
 export const IDLE_POLL_MS = 60_000;
 
-const STEP_TEXT: Record<SelfImprovementStep, string> = {
-  exporting: "Exporting this machine's diagnostics",
-  board: "Reading the project's board",
-  "reading-conversations": "Reading conversations",
-  "grouping-themes": "Grouping notes into themes",
-  digesting: "Ranking problems",
-  filing: "Updating the board",
-};
-
 const REFUSAL_TEXT: Record<SelfImprovementRunRefusal, string> = {
   disabled: "Self-improvement is off. Turn it on in Settings → Experimental.",
   "no-project": "Choose the project that should receive tickets first.",
@@ -60,6 +53,8 @@ const MODEL_NAMES: Record<string, string> = {
   "claude-sonnet-5-5": "Sonnet 5.5",
   "claude-opus-5-5": "Opus 5.5",
 };
+
+const modelName = (id: string) => MODEL_NAMES[id] ?? id;
 
 const TRIGGER_TEXT = { manual: "Run", daily: "Daily run", "dry-run": "Preview" } as const;
 
@@ -95,9 +90,13 @@ export interface SelfImprovementSettingsProps {
     typeof backend,
     "getSelfImprovementStatus" | "runSelfImprovement" | "getProjects" | "patchGlobalConfig"
   >;
+  /** How often the status is re-read, while running and otherwise; tests shorten it. */
+  pollMs?: { running: number; idle: number };
   /** Opens a ticket on a project's board, leaving Settings; tests pass a fake. */
   openTicket?: (projectId: string, ticketId: string) => void;
 }
+
+const POLL_MS = { running: RUNNING_POLL_MS, idle: IDLE_POLL_MS };
 
 /**
  * Settings → Self-improvement (experimental): which project gets tickets,
@@ -107,6 +106,7 @@ export interface SelfImprovementSettingsProps {
  */
 export function SelfImprovementSettings({
   api = backend,
+  pollMs = POLL_MS,
   openTicket = openTicketOnBoard,
 }: SelfImprovementSettingsProps) {
   const { machine } = useAccountMachine();
@@ -116,12 +116,26 @@ export function SelfImprovementSettings({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** When this window received `status`, so progress ages need not trust the backend's clock. */
+  const [receivedAt, setReceivedAt] = useState(() => Date.now());
+  /** The run whose progress window is open, by its start time: a later run does not reopen it. */
+  const [progressFor, setProgressFor] = useState<{
+    startedAt: string;
+    focus: SelfImprovementStep;
+  } | null>(null);
   const windowMachine = isWindowMachine(machine);
 
-  const showStatus = useCallback((value: SelfImprovementStatus) => {
+  const applyStatus = useCallback((value: SelfImprovementStatus) => {
     setStatus(value);
-    setError(null);
+    setReceivedAt(Date.now());
   }, []);
+  const showStatus = useCallback(
+    (value: SelfImprovementStatus) => {
+      applyStatus(value);
+      setError(null);
+    },
+    [applyStatus],
+  );
   const statusFailed = useCallback((caught: unknown) => {
     log.warn("self-improvement.status-failed", { error: formatLogError(caught) });
     setError("Could not read self-improvement's status from this machine.");
@@ -150,11 +164,12 @@ export function SelfImprovementSettings({
   }, [api, showStatus, statusFailed, windowMachine]);
 
   const running = status?.running !== null && status?.running !== undefined;
+  const now = useNow(running);
   useEffect(() => {
     if (!windowMachine) return;
-    const timer = setInterval(() => void refresh(), running ? RUNNING_POLL_MS : IDLE_POLL_MS);
+    const timer = setInterval(() => void refresh(), running ? pollMs.running : pollMs.idle);
     return () => clearInterval(timer);
-  }, [refresh, running, windowMachine]);
+  }, [refresh, running, windowMachine, pollMs.running, pollMs.idle]);
 
   const save = async (change: Partial<Settings>) => {
     if (!status) return;
@@ -181,7 +196,7 @@ export function SelfImprovementSettings({
     setNotice(null);
     try {
       const result = await api.runSelfImprovement({ dryRun });
-      setStatus(result.status);
+      applyStatus(result.status);
       if (!result.started && result.refusal) setNotice(REFUSAL_TEXT[result.refusal]);
     } catch (caught) {
       log.warn("self-improvement.run-failed", { error: formatLogError(caught) });
@@ -202,6 +217,17 @@ export function SelfImprovementSettings({
   }
 
   const settings = status?.settings;
+  const progress = status?.running?.progress;
+  const progressView =
+    status?.running && progress
+      ? {
+          running: status.running,
+          progress,
+          models: status.models,
+          modelName,
+          clock: { now, receivedAt },
+        }
+      : null;
   // A ticket lives on the board of the project that held it when it was filed,
   // which stops being the receiving project once that setting changes. An entry
   // saved before its project was recorded belongs to the receiving project. A
@@ -253,11 +279,21 @@ export function SelfImprovementSettings({
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading…
               </p>
             ) : status.running ? (
-              <p className="flex items-center gap-2 text-sm text-foreground" role="status">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {STEP_TEXT[status.running.step]}… ({TRIGGER_TEXT[status.running.trigger]} started{" "}
-                {formatWhen(status.running.startedAt)})
-              </p>
+              <>
+                <p className="flex items-center gap-2 text-sm text-foreground" role="status">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {STEP_TEXT[status.running.step]}… ({TRIGGER_TEXT[status.running.trigger]} started{" "}
+                  {formatWhen(status.running.startedAt)})
+                </p>
+                {progressView ? (
+                  <RunStages
+                    {...progressView}
+                    onOpen={(focus) =>
+                      setProgressFor({ startedAt: progressView.running.startedAt, focus })
+                    }
+                  />
+                ) : null}
+              </>
             ) : status.lastRun ? (
               <>
                 <p className="text-sm text-foreground">
@@ -360,6 +396,15 @@ export function SelfImprovementSettings({
               </SettingsRow>
             </div>
           </section>
+        ) : null}
+
+        {progressView ? (
+          <RunProgressDialog
+            {...progressView}
+            open={progressFor?.startedAt === progressView.running.startedAt}
+            onOpenChange={(open) => !open && setProgressFor(null)}
+            focus={progressFor?.focus ?? null}
+          />
         ) : null}
 
         {status ? <TrackedTickets items={status.tracked} onOpenTicket={onOpenTicket} /> : null}

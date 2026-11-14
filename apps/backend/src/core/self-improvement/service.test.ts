@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import path from "node:path";
 import type { ResolvedSelfImprovementSettings } from "@orkestrator/protocol/self-improvement";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
@@ -6,6 +7,7 @@ import {
   type SelfImprovementDeps,
   SelfImprovementService,
 } from "./service.js";
+import type { ModelCall, ModelRunner } from "./insights/model.js";
 import { FakeBoard } from "./testing/fake-board.js";
 import {
   bundleArchive,
@@ -14,6 +16,7 @@ import {
   HOUR,
   temporaryDirectory,
 } from "./testing/fixtures.js";
+import { claudeJsonl, writeTranscript } from "./testing/transcript-fixtures.js";
 
 const NOW = Date.parse("2026-11-09T09:00:00.000Z");
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -152,6 +155,128 @@ describe("starting a run", () => {
       }),
     ]);
     expect(h.board.tickets.size).toBe(1);
+  });
+
+  test("reports which stage a run is on while it works, then drops the progress", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const h = harness({
+      exportBundle: async () => {
+        await gate;
+        return bundleArchive({ createdAt: NOW, appVersion: "2.30.0", essential: ESSENTIAL });
+      },
+    });
+    const started = await h.service.run({ trigger: "manual" });
+    const progress = started.status.running?.progress;
+    expect(progress?.lastActivityAt).toBe(new Date(NOW).toISOString());
+    expect(progress?.stages.map((stage) => `${stage.step}:${stage.state}`)).toEqual([
+      "exporting:running",
+      "board:pending",
+      "reading-conversations:skipped",
+      "grouping-themes:skipped",
+      "digesting:pending",
+      "filing:pending",
+    ]);
+    release();
+    await settle(h.service);
+    expect((await h.service.status()).running).toBeNull();
+  });
+
+  test("a setting changed mid-run does not change why the run skipped a stage", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const h = harness({
+      exportBundle: async () => {
+        await gate;
+        return bundleArchive({ createdAt: NOW, appVersion: "2.30.0", essential: ESSENTIAL });
+      },
+    });
+    await h.service.run({ trigger: "manual" });
+    // Turned on while the run that started with it off is still working.
+    h.config.settings = { ...h.config.settings, conversationReview: true };
+    const status = await h.service.status();
+    expect(status.settings.conversationReview).toBe(true);
+    const skipped = status.running?.progress?.stages.filter((stage) => stage.state === "skipped");
+    expect(skipped).toEqual([
+      { step: "reading-conversations", state: "skipped", skipReason: "review-off" },
+      { step: "grouping-themes", state: "skipped", skipReason: "review-off" },
+    ]);
+    release();
+    await settle(h.service);
+  });
+
+  test("with the review on, reports the parts being read and the model call it waits on", async () => {
+    const { dir: transcripts, remove } = temporaryDirectory("self-improvement-service-review-");
+    cleanups.push(remove);
+    const at = NOW - 3 * DAY;
+    writeTranscript(
+      path.join(transcripts, "projects", "-p", "a.jsonl"),
+      claudeJsonl("a", "/home/someone/project", [
+        { user: "Use mise, not npm.", at },
+        { assistant: "OK.", at: at + 1000 },
+      ]),
+      at + 2000,
+    );
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls: ModelCall[] = [];
+    let launched: { executable: string } | null = null;
+    const h = harness({
+      claudeLaunch: async () => ({ executable: "/fake/claude", env: {} }),
+      transcriptSources: () => ({
+        claudeProjectDirs: [path.join(transcripts, "projects")],
+        codexSessionDirs: [],
+      }),
+      modelRunner: (launch) => {
+        launched = launch;
+        return (async (call: ModelCall) => {
+          calls.push(call);
+          await gate;
+          return { output: { notes: [] }, costUsd: 0.01 };
+        }) as ModelRunner;
+      },
+    });
+    h.config.settings = { ...h.config.settings, conversationReview: true };
+    const started = await h.service.run({ trigger: "manual" });
+    expect(started.status.running?.progress?.stages.map((stage) => stage.state)).toEqual([
+      "running",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+    ]);
+
+    // Wait until the notes call is in flight, then read the status the page would.
+    for (let attempt = 0; attempt < 200 && calls.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(calls).toHaveLength(1);
+    expect(launched).toMatchObject({ executable: "/fake/claude" });
+    const progress = (await h.service.status()).running?.progress;
+    expect(progress?.stages.find((stage) => stage.step === "reading-conversations")?.state).toBe(
+      "running",
+    );
+    expect(progress?.conversations).toEqual({
+      filesChecked: 1,
+      files: 1,
+      parts: 1,
+      read: 0,
+      failed: 0,
+      notesAdded: 0,
+      waiting: 0,
+    });
+    expect(progress?.modelCalls).toEqual({
+      inFlight: 1,
+      oldestStartedAt: new Date(NOW).toISOString(),
+      timeoutMs: 600_000,
+    });
+
+    release();
+    await settle(h.service);
+    const status = await h.service.status();
+    expect(status.running).toBeNull();
+    expect(status.lastRun).toMatchObject({ outcome: "succeeded", conversations: { read: 1 } });
   });
 
   test("a failed export is recorded with a fixed reason, never the error text", async () => {

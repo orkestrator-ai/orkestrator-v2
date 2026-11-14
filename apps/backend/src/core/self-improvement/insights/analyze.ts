@@ -13,6 +13,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { BundleData } from "../bundle.js";
 import { writeAtomic } from "../ledger.js";
+import type { InsightProgress } from "../progress.js";
 import { scoreSignal, type Signal, UNKNOWN_VERSION, versionTimeline } from "../signals.js";
 import { type ModelRunner, NOTES_MODEL, THEMES_MODEL } from "./model.js";
 import {
@@ -480,6 +481,8 @@ export interface InsightOptions {
   statusOf: (slug: string) => string | null;
   /** Called when the run moves on to grouping notes into themes. */
   onThemes?: () => void;
+  /** Told as files are checked and parts are read, so a page can show the run moving. */
+  progress?: InsightProgress;
 }
 
 /** Reads new conversation parts, updates themes and returns one signal per theme. */
@@ -510,8 +513,10 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
     cursor,
     now: options.now,
     excludeDirs: options.excludeDirs,
+    ...(options.progress ? { onFile: options.progress.fileChecked.bind(options.progress) } : {}),
   });
   run.waiting = selection.waiting;
+  options.progress?.scanned(selection.segments.length, selection.waiting);
 
   if (options.dryRun) {
     run.read = selection.segments.length;
@@ -538,6 +543,7 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
           run.notesAdded += result.notes.length;
           run.costUsd += result.costUsd;
           run.read += 1;
+          options.progress?.partRead(result.notes.length);
           cursor.conversations[segment.conversationId] = cursorAfter(
             segment,
             true,
@@ -554,6 +560,7 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
           saveCursor(dir, cursor, options.now);
         } catch (error) {
           const message = (error as Error).message;
+          options.progress?.partFailed();
           failures.set(message, (failures.get(message) ?? 0) + 1);
           // Nothing else can succeed without Claude Code, or once the backend stops.
           if (/not installed|backend is stopping/.test(message)) queue.length = 0;

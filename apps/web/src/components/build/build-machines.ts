@@ -31,6 +31,11 @@ export interface BuildLaunchMachine {
   current: boolean;
   /** The command node can reach it now. */
   available: boolean;
+  /**
+   * Its project has a checkout there, so a Local build can own a worktree.
+   * A repository match alone does not mean one: a project can be remote-only.
+   */
+  hasCheckout: boolean;
 }
 
 /** The machine a launch was aimed at, when it is not this tab's own. */
@@ -50,6 +55,7 @@ export function buildLaunchMachines(targets: readonly LinearMachineTarget[]): Bu
     projectId: target.projectId,
     current: target.current,
     available: target.available,
+    hasCheckout: target.hasCheckout,
   }));
 }
 
@@ -59,13 +65,30 @@ export function useBuildLaunchMachines(projectId: string): BuildLaunchMachine[] 
   return useMemo(() => buildLaunchMachines(targets), [targets]);
 }
 
-/** What `onConfirm` reports for a pick: nothing for this tab's own machine. */
+/**
+ * The machine a pick resolves to. A pick that left the offered machines (it
+ * lost its project, say) or can no longer be reached falls back to this tab's
+ * own machine rather than launching somewhere unlisted or offline.
+ */
+export function pickedLaunchMachine(
+  machines: readonly BuildLaunchMachine[] | undefined,
+  key: string | null,
+): BuildLaunchMachine | undefined {
+  const picked = machines?.find((entry) => entry.key === key);
+  if (picked?.available) return picked;
+  return machines?.find((entry) => entry.current);
+}
+
+/**
+ * What `onConfirm` reports for a pick: nothing for this tab's own machine,
+ * nor for a machine that cannot be reached now.
+ */
 export function machineChoiceFor(
   machines: readonly BuildLaunchMachine[] | undefined,
   key: string | null,
 ): BuildLaunchMachineChoice | undefined {
   const picked = machines?.find((entry) => entry.key === key);
-  if (!picked || picked.current) return undefined;
+  if (!picked || picked.current || !picked.available) return undefined;
   return {
     machine: picked.machine,
     nodeId: picked.nodeId,

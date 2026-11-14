@@ -66,6 +66,7 @@ import {
 import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
 import {
   machineChoiceFor,
+  pickedLaunchMachine,
   type BuildLaunchMachine,
   type BuildLaunchMachineChoice,
 } from "./build-machines";
@@ -833,19 +834,23 @@ export function BuildLaunchDialog({
     },
     [favorites, pickerFavorites, reorderFavorites],
   );
-  const currentMachineKey = machines?.find((entry) => entry.current)?.key ?? null;
   const [pickedMachineKey, setPickedMachineKey] = useState<string | null>(null);
-  // A pick that left the offered machines (it lost its project, say) falls
-  // back to this tab's own machine rather than launching somewhere unlisted.
-  const machineKey = machines?.some((entry) => entry.key === pickedMachineKey)
-    ? pickedMachineKey
-    : currentMachineKey;
+  // A pick that left the offered machines or went offline falls back to this
+  // tab's own machine (`pickedLaunchMachine`).
+  const pickedMachine = pickedLaunchMachine(machines, pickedMachineKey);
+  const machineKey = pickedMachine?.key ?? null;
   const machineChoice = machineChoiceFor(machines, machineKey);
   // Docker and the local checkout belong to the machine the build runs on.
   const remoteDocker = useMachineDockerAvailability(machineChoice?.machine, Boolean(machineChoice));
-  const dockerAvailable = machineChoice ? remoteDocker !== false : ownDockerAvailable;
-  // The other machine's project is a checkout there by construction.
-  const localEnvironmentAvailable = machineChoice ? true : ownLocalEnvironmentAvailable;
+  // Until the other machine answers, Container is neither offered nor
+  // switched away from: the answer is unknown, not "no".
+  const dockerChecking = Boolean(machineChoice) && remoteDocker === null;
+  const dockerAvailable = machineChoice ? remoteDocker === true : ownDockerAvailable;
+  // A matching repository does not imply a checkout: the other machine's
+  // project may be remote-only.
+  const localEnvironmentAvailable = machineChoice
+    ? pickedMachine?.hasCheckout === true
+    : ownLocalEnvironmentAvailable;
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   // Pipelines have always created restricted containers; the launcher now
   // shows that choice instead of making it silently.
@@ -1023,7 +1028,13 @@ export function BuildLaunchDialog({
   ]);
 
   // Switch to the only available environment type. Converges in one pass.
-  if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
+  // A pending Docker check on another machine is not a reason to switch.
+  if (
+    !dockerAvailable &&
+    !dockerChecking &&
+    localEnvironmentAvailable &&
+    environmentType === "containerized"
+  ) {
     setEnvironmentType("local");
   } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
     setEnvironmentType("containerized");
@@ -1114,6 +1125,8 @@ export function BuildLaunchDialog({
           onSubmit={(event) => {
             event.preventDefault();
             if (busy || instructionsTooLong || lensError) return;
+            // Covers a pending check too: `dockerAvailable` is false until the
+            // picked machine says Docker runs there.
             if (environmentType === "containerized" && !dockerAvailable) return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
             const selectedSteps = Object.fromEntries(
@@ -1270,8 +1283,12 @@ export function BuildLaunchDialog({
                         <span className="mt-1 text-[11px] leading-snug text-zinc-500">
                           {disabled
                             ? option.value === "containerized"
-                              ? "Containers unavailable while Docker stopped"
-                              : "Unavailable without a local project checkout"
+                              ? dockerChecking
+                                ? `Checking Docker on ${machineChoice?.name ?? "that machine"}…`
+                                : "Containers unavailable while Docker stopped"
+                              : machineChoice
+                                ? `No project checkout on ${machineChoice.name}`
+                                : "Unavailable without a local project checkout"
                             : option.value === "local" && machineChoice
                               ? `Git worktree on ${machineChoice.name}, full network`
                               : option.description}

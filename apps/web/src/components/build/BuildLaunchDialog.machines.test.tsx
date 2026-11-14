@@ -49,6 +49,7 @@ const own: BuildLaunchMachine = {
   projectId: "project-own",
   current: true,
   available: true,
+  hasCheckout: true,
 };
 const builder: BuildLaunchMachine = {
   key: "node:builder",
@@ -58,6 +59,7 @@ const builder: BuildLaunchMachine = {
   projectId: "project-builder",
   current: false,
   available: true,
+  hasCheckout: true,
 };
 const asleep: BuildLaunchMachine = {
   key: "node:asleep",
@@ -67,6 +69,7 @@ const asleep: BuildLaunchMachine = {
   projectId: "project-asleep",
   current: false,
   available: false,
+  hasCheckout: true,
 };
 
 afterEach(cleanup);
@@ -114,9 +117,9 @@ function start() {
 describe("BuildLaunchDialog machine choice", () => {
   test("offers no machine choice without another machine", () => {
     renderDialog({ machines: [own] });
-    expect(screen.queryByRole("radiogroup", { name: "Machine" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Machine" }) === null).toBe(true);
     renderDialog();
-    expect(screen.queryByRole("radiogroup", { name: "Machine" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Machine" }) === null).toBe(true);
   });
 
   test("opens on this machine and launches without a machine choice", () => {
@@ -129,6 +132,7 @@ describe("BuildLaunchDialog machine choice", () => {
   });
 
   test("reports the picked machine with its own project", () => {
+    remoteDocker = true;
     const onConfirm = renderDialog({ machines: [own, builder] });
     fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
 
@@ -212,7 +216,9 @@ describe("BuildLaunchDialog machine choice", () => {
       (within(environmentGroup()).getByRole("radio", { name: /^Local/ }) as HTMLInputElement)
         .disabled,
     ).toBe(false);
+    fireEvent.click(within(environmentGroup()).getByRole("radio", { name: /^Local/ }));
     start();
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
     expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
   });
 
@@ -246,5 +252,151 @@ describe("BuildLaunchDialog machine choice", () => {
     );
     const radios = within(machineGroup()).getAllByRole("radio") as HTMLInputElement[];
     expect(radios.map((radio) => radio.checked)).toEqual([true, false]);
+  });
+
+  test("holds Container while the picked machine's Docker check is pending", () => {
+    const props = {
+      open: true,
+      onOpenChange: () => undefined,
+      catalog,
+      defaultAgent: "claude" as const,
+      defaultEnvironmentType: "containerized" as const,
+      machines: [own, builder],
+    };
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    const view = renderInAppCommandScope(
+      <DockerAvailabilityProvider available>
+        <BuildLaunchDialog {...props} onConfirm={onConfirm} />
+      </DockerAvailabilityProvider>,
+    );
+    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    const container = () =>
+      within(environmentGroup()).getByRole("radio", { name: /^Container/ }) as HTMLInputElement;
+
+    // Unknown is neither "yes" (offer Container) nor "no" (switch to Local).
+    expect(container().disabled).toBe(true);
+    expect(container().checked).toBe(true);
+    expect(within(environmentGroup()).getByText("Checking Docker on Builder…")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    start();
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    remoteDocker = true;
+    view.rerender(
+      <DockerAvailabilityProvider available>
+        <BuildLaunchDialog {...props} onConfirm={onConfirm} />
+      </DockerAvailabilityProvider>,
+    );
+    expect(container().disabled).toBe(false);
+    start();
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("containerized");
+    expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
+  });
+
+  test("a pending check that answers no switches to Local", () => {
+    const props = {
+      open: true,
+      onOpenChange: () => undefined,
+      catalog,
+      defaultAgent: "claude" as const,
+      defaultEnvironmentType: "containerized" as const,
+      machines: [own, builder],
+      onConfirm: () => undefined,
+    };
+    const view = renderInAppCommandScope(
+      <DockerAvailabilityProvider available>
+        <BuildLaunchDialog {...props} />
+      </DockerAvailabilityProvider>,
+    );
+    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    remoteDocker = false;
+    view.rerender(
+      <DockerAvailabilityProvider available>
+        <BuildLaunchDialog {...props} />
+      </DockerAvailabilityProvider>,
+    );
+    const container = within(environmentGroup()).getByRole("radio", {
+      name: /^Container/,
+    }) as HTMLInputElement;
+    expect(container.disabled).toBe(true);
+    expect(
+      within(environmentGroup()).getByText("Containers unavailable while Docker stopped"),
+    ).toBeTruthy();
+    expect(
+      (within(environmentGroup()).getByRole("radio", { name: /^Local/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+  });
+
+  test("offers no Local build when the picked machine's project has no checkout", () => {
+    const remoteOnly = { ...builder, hasCheckout: false };
+    remoteDocker = false;
+    const onConfirm = renderDialog({
+      machines: [own, remoteOnly],
+      defaultEnvironmentType: "local",
+    });
+    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+
+    const local = within(environmentGroup()).getByRole("radio", {
+      name: /^Local/,
+    }) as HTMLInputElement;
+    expect(local.disabled).toBe(true);
+    expect(within(environmentGroup()).getByText("No project checkout on Builder")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    start();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test("a remote-only project with Docker builds in a container, never locally", () => {
+    const remoteOnly = { ...builder, hasCheckout: false };
+    remoteDocker = true;
+    const onConfirm = renderDialog({
+      machines: [own, remoteOnly],
+      defaultEnvironmentType: "local",
+    });
+    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+
+    const local = within(environmentGroup()).getByRole("radio", {
+      name: /^Local/,
+    }) as HTMLInputElement;
+    expect(local.disabled).toBe(true);
+    expect(
+      (within(environmentGroup()).getByRole("radio", { name: /^Container/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    start();
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("containerized");
+    expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
+  });
+
+  test("a picked machine that goes offline falls back to this machine", () => {
+    remoteDocker = true;
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    const dialog = (machines: BuildLaunchMachine[]) => (
+      <DockerAvailabilityProvider available>
+        <BuildLaunchDialog
+          open
+          onOpenChange={() => undefined}
+          catalog={catalog}
+          defaultAgent="claude"
+          defaultEnvironmentType="containerized"
+          machines={machines}
+          onConfirm={onConfirm}
+        />
+      </DockerAvailabilityProvider>
+    );
+    const view = renderInAppCommandScope(dialog([own, builder]));
+    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    view.rerender(dialog([own, { ...builder, available: false }]));
+
+    const radios = within(machineGroup()).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((radio) => radio.checked)).toEqual([true, false]);
+    expect(radios[1]!.disabled).toBe(true);
+    start();
+    expect(onConfirm.mock.calls[0]![0].machine).toBeUndefined();
   });
 });

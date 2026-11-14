@@ -30,6 +30,7 @@ const MACHINES: BuildLaunchMachine[] = [
     projectId: "project-own",
     current: true,
     available: true,
+    hasCheckout: true,
   },
   {
     key: "node:builder",
@@ -39,6 +40,7 @@ const MACHINES: BuildLaunchMachine[] = [
     projectId: "project-builder",
     current: false,
     available: true,
+    hasCheckout: true,
   },
   {
     key: "node:laptop",
@@ -48,6 +50,7 @@ const MACHINES: BuildLaunchMachine[] = [
     projectId: "project-laptop",
     current: false,
     available: false,
+    hasCheckout: true,
   },
 ];
 

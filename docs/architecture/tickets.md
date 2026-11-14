@@ -338,7 +338,10 @@ launch goes to that machine's own project through `launch_build_pipeline`
 source so the leaf links its synced copy. The pipeline is the other machine's,
 so it is not added to this window's pipeline store; the confirmation names the
 machine and offers to open it there. Container availability is read from that
-machine's Docker, not this one's. A ticket created in the same step may not
+machine's Docker, not this one's, and stays unavailable until it answers; Local
+is offered only when that machine's project has a checkout (its summary's
+`pathName`), since a repository match alone may be a remote-only project. A
+machine that goes offline after being picked falls back to this one. A ticket created in the same step may not
 have reached the other machine yet, in which case the build runs from the
 snapshot and does not move the ticket.
 

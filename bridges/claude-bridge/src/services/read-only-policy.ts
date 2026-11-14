@@ -284,25 +284,80 @@ const GIT_SUBCOMMAND_MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>
  * driver names are the checkout's to choose. These flags turn them off for the
  * commands that render diffs, which is where Git runs them. `git diff` honours
  * `diff.external` by default, and `log`, `show` and `blame` textconv by default.
+ *
+ * The flags reach only this Git process. An inline submodule diff
+ * (`--submodule=diff`, or `diff.submodule=diff` in the checkout's config)
+ * runs a second `git diff` inside the submodule without them, where the
+ * submodule's own `diff.external` runs. `--submodule=short` (Git's own
+ * default) pins the rendering to commit ids, and a user `--submodule` is
+ * refused (`HARDENED_GIT_REFUSED_ARGUMENTS`) so it cannot be put back.
+ *
  * The remaining configured programs (`core.fsmonitor`, hooks, GPG, lazy
- * fetches) are outranked by the turn's environment (`withReadOnlyGitConfig`).
+ * fetches, `log.diffMerges`) are outranked by the turn's environment
+ * (`withReadOnlyGitConfig`), which also reaches Git's submodule children.
  */
-const HARDENED_GIT_ARGUMENTS: ReadonlyMap<string, readonly string[]> = new Map([
+const HARDENED_DIFF_ARGUMENTS: readonly string[] = [
+  "--no-ext-diff",
+  "--no-textconv",
+  "--submodule=short",
+];
+const HARDENED_GIT_ARGUMENTS: ReadonlyMap<string, readonly string[]> = new Map<
+  string,
+  readonly string[]
+>([
   ["blame", ["--no-textconv"]],
-  ["diff", ["--no-ext-diff", "--no-textconv"]],
-  ["log", ["--no-ext-diff", "--no-textconv"]],
-  ["show", ["--no-ext-diff", "--no-textconv"]],
-  ["whatchanged", ["--no-ext-diff", "--no-textconv"]],
+  ["diff", HARDENED_DIFF_ARGUMENTS],
+  ["log", HARDENED_DIFF_ARGUMENTS],
+  ["show", HARDENED_DIFF_ARGUMENTS],
+  ["whatchanged", HARDENED_DIFF_ARGUMENTS],
 ]);
 
 /**
  * Forms of admitted subcommands a hardened Git command still refuses, because
- * they render a diff no inserted flag reaches: `git status -v` prints the
- * staged diff through the same machinery as `git diff`.
+ * they run a program no inserted flag reaches:
+ *
+ * - `git status -v` prints the staged diff through the same machinery as
+ *   `git diff`.
+ * - `--submodule` in any form would override the inserted `--submodule=short`,
+ *   and `--submodule=diff` diffs inside the submodule, outside the flags.
+ * - A remerge diff (`--remerge-diff`, `--diff-merges=remerge`/`r`) re-runs the
+ *   merge, which runs the `merge.<driver>.driver` program the checkout's
+ *   attributes name. `remergeDiffSelected` catches the `--diff-merges` forms;
+ *   `log.diffMerges` (what `-m` and `--diff-merges=on` use) is pinned by the
+ *   turn's environment.
  */
-const HARDENED_GIT_REFUSED_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["status", new Set(["-v", "--verbose"])],
+const HARDENED_LOG_REFUSED_ARGUMENTS: ReadonlySet<string> = new Set([
+  "--submodule",
+  "--remerge-diff",
 ]);
+const HARDENED_GIT_REFUSED_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["diff", new Set(["--submodule"])],
+  ["log", HARDENED_LOG_REFUSED_ARGUMENTS],
+  ["show", HARDENED_LOG_REFUSED_ARGUMENTS],
+  ["status", new Set(["-v", "--verbose"])],
+  ["whatchanged", HARDENED_LOG_REFUSED_ARGUMENTS],
+]);
+
+/** Subcommands that take revision options, `--diff-merges` among them. */
+const HARDENED_LOG_SUBCOMMANDS: ReadonlySet<string> = new Set(["log", "show", "whatchanged"]);
+
+/** `--diff-merges` values that re-run the merge (`HARDENED_GIT_REFUSED_ARGUMENTS`). */
+const REMERGE_DIFF_MERGES_VALUES: ReadonlySet<string> = new Set(["r", "remerge"]);
+
+/**
+ * Whether `args` select a remerge diff through `--diff-merges`, given as
+ * `--diff-merges=r` or `--diff-merges r`. Git matches this option exactly, but
+ * an abbreviation is refused too, as `hasFlag` does for every long option.
+ */
+function remergeDiffSelected(args: readonly string[]): boolean {
+  return args.some((arg, index) => {
+    const equals = arg.indexOf("=");
+    const name = equals >= 0 ? arg.slice(0, equals) : arg;
+    if (name.length <= 2 || !"--diff-merges".startsWith(name)) return false;
+    const value = equals >= 0 ? arg.slice(equals + 1) : args[index + 1];
+    return value === undefined || REMERGE_DIFF_MERGES_VALUES.has(value.toLowerCase());
+  });
+}
 
 /**
  * Git subcommands that only inspect, whatever arguments they are given.
@@ -854,7 +909,10 @@ function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
     if (sandboxed) return { allowed: true };
-    if (hasFlag(args, HARDENED_GIT_REFUSED_ARGUMENTS.get(subcommand) ?? new Set())) {
+    if (
+      hasFlag(args, HARDENED_GIT_REFUSED_ARGUMENTS.get(subcommand) ?? new Set()) ||
+      (HARDENED_LOG_SUBCOMMANDS.has(subcommand) && remergeDiffSelected(args))
+    ) {
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
     const hardening = HARDENED_GIT_ARGUMENTS.get(subcommand);

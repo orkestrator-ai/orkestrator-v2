@@ -20,7 +20,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * fake (`container-fake-claude-review-api.ts`) follows a reviewer's
  * instructions: it reads the package, runs `ls`, runs the package's
  * `diffCommand` (which the hook admits hardened: without the sandbox a
- * reviewer's Git gets `--no-ext-diff --no-textconv` inserted, so the
+ * reviewer's Git gets `--no-ext-diff --no-textconv --submodule=short` inserted, so the
  * checkout's diff helpers cannot run), tries a write (refused) and submits. The case checks that the review settles with every
  * report, that the reviewers and consolidation carry the sandbox-off note in
  * the snapshot and in their inspectors, that the diff file holds what

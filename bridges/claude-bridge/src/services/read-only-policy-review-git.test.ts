@@ -132,11 +132,29 @@ describe("a reviewer's Git reads", () => {
 
   test("without the sandbox, a reviewer's Git runs hardened against configured helpers", async () => {
     const expected: [string, string][] = [
-      ["git diff abc..def -- a.ts", "git diff --no-ext-diff --no-textconv abc..def -- a.ts"],
-      ["git show def:apps/a.ts", "git show --no-ext-diff --no-textconv def:apps/a.ts"],
-      ["git --no-pager log -p -1", "git --no-pager log --no-ext-diff --no-textconv -p -1"],
+      [
+        "git diff abc..def -- a.ts",
+        "git diff --no-ext-diff --no-textconv --submodule=short abc..def -- a.ts",
+      ],
+      [
+        "git show def:apps/a.ts",
+        "git show --no-ext-diff --no-textconv --submodule=short def:apps/a.ts",
+      ],
+      [
+        "git --no-pager log -p -1",
+        "git --no-pager log --no-ext-diff --no-textconv --submodule=short -p -1",
+      ],
       ["git blame def -- a.ts", "git blame --no-textconv def -- a.ts"],
-      ["git diff abc..def | head -20", "git diff --no-ext-diff --no-textconv abc..def | head -20"],
+      [
+        "git diff abc..def | head -20",
+        "git diff --no-ext-diff --no-textconv --submodule=short abc..def | head -20",
+      ],
+      // `-m` is safe because the turn's environment pins `log.diffMerges`.
+      ["git show -m def", "git show --no-ext-diff --no-textconv --submodule=short -m def"],
+      [
+        "git log --diff-merges=first-parent -p -1",
+        "git log --no-ext-diff --no-textconv --submodule=short --diff-merges=first-parent -p -1",
+      ],
     ];
     for (const [command, runs] of expected) {
       expect({ command, verdict: isReadOnlyShellCommand(command, hardened) }).toMatchObject({
@@ -176,6 +194,27 @@ describe("a reviewer's Git reads", () => {
       "git status -v",
       "git status --verbose",
       "git status -sv",
+      // An inline submodule diff runs a child Git the inserted flags never
+      // reach; any `--submodule` would also override the inserted one.
+      "git diff --submodule=diff a..b",
+      "git diff --submodule a..b",
+      "git diff --submodule=log a..b",
+      "git diff --submod=diff a..b",
+      "git log -p --submodule=diff -1",
+      "git show --submodule=diff HEAD",
+      "git whatchanged --submodule=diff -1",
+      // A remerge diff re-runs the merge, and with it the configured driver.
+      "git show --remerge-diff HEAD",
+      "git log --remerge-diff -1",
+      "git log --remerge -1",
+      "git log --diff-merges=remerge -1",
+      "git log --diff-merges=r -1",
+      "git log --diff-merges r -1",
+      "git log --diff-merges remerge -1",
+      "git show --diff-merges=R HEAD",
+      "git log --diff-merg=remerge -1",
+      "git whatchanged --diff-merges=r -1",
+      "git log -1 | git show --remerge-diff HEAD",
     ]) {
       expect({ command, allowed: isReadOnlyShellCommand(command, hardened).allowed }).toEqual({
         command,

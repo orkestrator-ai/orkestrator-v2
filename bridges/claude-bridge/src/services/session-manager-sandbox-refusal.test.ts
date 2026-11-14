@@ -119,7 +119,9 @@ describe("a read-only turn where the command sandbox cannot run (todo 0190 (reti
       expect(await decide("git diff abc..def -- a.ts")).toEqual({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
-          updatedInput: { command: "git diff --no-ext-diff --no-textconv abc..def -- a.ts" },
+          updatedInput: {
+            command: "git diff --no-ext-diff --no-textconv --submodule=short abc..def -- a.ts",
+          },
         },
       });
       expect(await decide("git status --porcelain")).toEqual({});

@@ -1412,11 +1412,22 @@ package's `diffCommand`, which is Git, so in a container it could not see
 the change at all, and reviewers fell back to the sealed diff below without
 being able to check files against the reviewed commit. Since 2026-11-14 a
 reviewer's `readOnly` turn outside a coordinator process runs Git reads
-hardened instead: the hook rewrites an admitted `git diff`, `show`, `log`,
-`whatchanged` or `blame` to carry `--no-ext-diff --no-textconv` (blame:
-`--no-textconv`), refuses `git status -v`, and the turn's environment
-already outranks `core.fsmonitor`, hooks, the GPG programs and lazy fetches
-(`withReadOnlyGitConfig`). The residual is a filter driver the checkout's own
+hardened instead: the hook rewrites an admitted `git diff`, `show`, `log`
+or `whatchanged` to carry `--no-ext-diff --no-textconv --submodule=short`
+(blame: `--no-textconv`), and refuses `git status -v`, any user
+`--submodule` and remerge diffs (`--remerge-diff`,
+`--diff-merges=remerge`/`r`). Those three run a program no flag on the
+command reaches: the staged diff, a `git diff` inside each submodule with the
+submodule's own `diff.external`, and the configured `merge.<driver>.driver`.
+The turn's environment already outranks `core.fsmonitor`, hooks, the GPG
+programs and lazy fetches, and pins `diff.submodule=short` and
+`log.diffMerges=separate` so the checkout cannot make a plain `git diff` or
+`git log -m` do the same (`withReadOnlyGitConfig`); Git passes these entries
+on to its submodule children. The rewrite reaches the CLI as a
+decision-less `updatedInput`; `read-only-hardened-git.live.test.ts` proves
+on the pinned CLI that the rewritten command is the one that runs, and
+`read-only-policy-review-git.integration.test.ts` runs every admitted form
+against real Git in a checkout configured with each helper. The residual is a filter driver the checkout's own
 config names, which can run when a command reads worktree files; only the
 environment's own writers can have configured one. A coordinator keeps
 refusing Git, so its tier is unchanged. The backend still seals the reviewed diff as a file

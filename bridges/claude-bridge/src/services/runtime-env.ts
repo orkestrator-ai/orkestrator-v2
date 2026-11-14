@@ -198,11 +198,19 @@ export function withUnattendedOverloadRetry(
  * (the same two keys `SAFE_GIT_CONFIG` sets for the backend's change
  * capture). Signature checks (`log.showSignature`, `git tag -v`, a `%G?`
  * format) run the configured GPG, SSH or X.509 program, so each is pointed at
- * `false`: the check fails instead of running what the checkout names.
+ * `false`: the check fails instead of running what the checkout names. Two
+ * rendering defaults are pinned to Git's own because the checkout's value
+ * would run a program no flag on the command reaches: `diff.submodule=diff`
+ * diffs inside each submodule with the submodule's own `diff.external`, and
+ * `log.diffMerges=remerge` makes `-m` re-run merges through the configured
+ * `merge.<driver>.driver`. Git passes these entries on to its submodule
+ * children, so they hold there too.
  */
 export const READ_ONLY_GIT_CONFIG = Object.freeze([
   ["core.fsmonitor", "false"],
   ["core.hooksPath", "/dev/null"],
+  ["diff.submodule", "short"],
+  ["log.diffMerges", "separate"],
   ["log.showSignature", "false"],
   ["gpg.program", "false"],
   ["gpg.openpgp.program", "false"],

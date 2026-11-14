@@ -807,6 +807,16 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    network reaches loopback directly: on Linux it does not) is in
    `PLATFORM_SANDBOX_EXPECTATIONS` in `claude-provider-sandbox.live-probe.ts`.
 
+   Re-check that the CLI still runs a PreToolUse hook's decision-less
+   `updatedInput`. A reviewer's hardened Git without the sandbox depends on
+   it: the read-only hook rewrites `git diff` to carry `--no-ext-diff
+   --no-textconv`, and if the CLI ignored the rewrite the checkout's
+   configured diff helper would run. Credential-free, with a scripted model:
+
+   ```bash
+   bun test --cwd bridges/claude-bridge ./src/services/read-only-hardened-git.live.test.ts --preload ../../tests/setup-node.ts --parallel=1
+   ```
+
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
    runs a command (bubblewrap, then its `apply-seccomp` helper nesting a user

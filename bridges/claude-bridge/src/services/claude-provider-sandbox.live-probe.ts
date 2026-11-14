@@ -249,29 +249,29 @@ export const SCENARIOS: SandboxScenario[] = [
   },
 ];
 
-type Block = {
+export type Block = {
   type?: string;
   text?: string;
   tool_use_id?: string;
   is_error?: boolean;
   content?: string | Block[];
 };
-type MessagesBody = {
+export type MessagesBody = {
   messages?: Array<{ role?: string; content?: string | Block[] }>;
   tools?: Array<{ name?: string }>;
   stream?: boolean;
 };
 
-function textOf(content: string | Block[] | undefined): string {
+export function textOf(content: string | Block[] | undefined): string {
   if (typeof content === "string") return content;
   return (content ?? []).map((block) => (block.type === "text" ? (block.text ?? "") : "")).join("");
 }
 
-type ScriptedBlock =
+export type ScriptedBlock =
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "text"; text: string };
 
-function reply(content: ScriptedBlock[], stream: boolean, id: number): Response {
+export function reply(content: ScriptedBlock[], stream: boolean, id: number): Response {
   const toolTurn = content.some((block) => block.type === "tool_use");
   const message = {
     id: `msg_probe_${id}`,
@@ -323,7 +323,7 @@ function reply(content: ScriptedBlock[], stream: boolean, id: number): Response 
  * unset), or `ORKESTRATOR_POLICY_CLAUDE_PATH`. The report carries its
  * version so the test can hold it to the pinned toolchain.
  */
-function bundledCli(): string {
+export function bundledCli(): string {
   const explicit = process.env.ORKESTRATOR_POLICY_CLAUDE_PATH?.trim();
   if (explicit) return explicit;
   const sdk = dirname(

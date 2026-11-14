@@ -278,7 +278,11 @@ invariants keep it honest:
   `ls\nrm -rf .` to a harmless-looking `ls`. A plain pipe is the one
   exception: with every other metacharacter refused it can only separate
   stages, so `isReadOnlyShellCommand` splits on it and judges each stage as a
-  command of its own (`git diff a..b | head`), and `||` stays refused.
+  command of its own (`git diff a..b | head`), and `||` stays refused. A pipe
+  also makes a stage's stdin the model's to write, so a path need never
+  appear as a token: a program that takes file names from its input
+  (`du`/`sort`/`wc --files0-from`, `find -files0-from`, `file -f`) is refused
+  by `shellCommandRefused` wherever the sandbox is not behind the hook.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout
@@ -308,12 +312,21 @@ invariants keep it honest:
   to a worker. A reviewer's `readOnly` turn outside a coordinator process
   (`gitWithoutSandbox: "harden"`) runs admitted Git reads without the sandbox
   instead, because checking the reviewed commit is its job: the hook inserts
-  `--no-ext-diff --no-textconv` (`HARDENED_GIT_ARGUMENTS`, through the
-  hook's `updatedInput`), refuses `git status -v`, and the turn's environment
-  outranks fsmonitor, hooks, GPG programs and lazy fetches
-  (`withReadOnlyGitConfig`). A filter driver the checkout's own config names
-  can still run when a command reads worktree files; only the environment's
-  own writers can have configured one.
+  `--no-ext-diff --no-textconv --submodule=short` (`HARDENED_GIT_ARGUMENTS`,
+  through the hook's `updatedInput` with no permission decision), refuses
+  `git status -v`, any user `--submodule` (an inline submodule diff runs a
+  child Git the flags never reach) and remerge diffs (`--remerge-diff`,
+  `--diff-merges=remerge`/`r`, which re-run the merge and its configured
+  driver), and the turn's environment outranks fsmonitor, hooks, GPG programs,
+  lazy fetches, `diff.submodule` and `log.diffMerges`
+  (`withReadOnlyGitConfig`). A new Git option that runs a helper no flag
+  reaches belongs in `HARDENED_GIT_REFUSED_ARGUMENTS`.
+  `read-only-policy-review-git.integration.test.ts` runs every admitted form
+  against real Git and a hostile checkout, and
+  `read-only-hardened-git.live.test.ts` proves the pinned CLI runs the
+  rewritten command; rerun it on every CLI bump. A filter driver the checkout's
+  own config names can still run when a command reads worktree files; only the
+  environment's own writers can have configured one.
 - **A coordinator reads its own runtime and not the rest of the data
   directory.** `read-only-path-boundary.ts` holds the rule for both layers: the
   sandbox's `denyRead`/`allowRead` for commands, and the hook for `Read`, `Grep`

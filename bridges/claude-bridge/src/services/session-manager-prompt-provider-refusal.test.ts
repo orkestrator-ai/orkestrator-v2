@@ -108,6 +108,75 @@ describe("provider refusal log level", () => {
     }
   });
 
+  test("a refused login (the Cloudflare 403) is a warning, not query.failed", async () => {
+    const logs = captureConsole();
+    try {
+      const { session, rejection } = await runFailedTurn("provider-refusal-auth", [
+        apiErrorReply(
+          "authentication_failed",
+          "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+        ),
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 403,
+          result: "Failed to authenticate. API Error: 403",
+        },
+      ]);
+
+      expect(session.status).toBe("error");
+      expect(session.error).toBe("Claude ended the turn on an API error.");
+      expect(session.errorCode).toBeUndefined();
+      expect((rejection as { providerRefused?: unknown }).providerRefused).toBe(true);
+      expect(logs.bridgeErrorLines()).toEqual([]);
+      expect(logs.warnLines()).toContain(
+        "[bridge.claude] prompt.provider-refused errorClass=Error reason=authentication_failed",
+      );
+      expect(
+        logs
+          .warnLines()
+          .some((line) =>
+            line.startsWith(
+              "[bridge.claude] query.provider-refused reason=authentication_failed apiStatus=403 ",
+            ),
+          ),
+      ).toBe(true);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a startup failure stays query.failed even when it carries a provider-state code", async () => {
+    const logs = captureConsole();
+    try {
+      const { session, rejection } = await runFailedTurn("provider-refusal-startup", [
+        apiErrorReply("authentication_failed", "API Error: 401 Invalid authentication"),
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 401,
+          startup_failure_reason: "org_verify_failed",
+        },
+      ]);
+
+      expect(session.status).toBe("error");
+      expect(session.error).toContain("Claude could not verify the signed-in organization.");
+      expect((rejection as { providerRefused?: unknown }).providerRefused).toBeUndefined();
+      const failed = logs
+        .bridgeErrorLines()
+        .find((line) => line.startsWith("[bridge.claude] query.failed "));
+      expect(failed).toContain("reason=authentication_failed");
+      expect(failed).toContain("apiStatus=401");
+      expect(failed).toContain("startupFailure=true");
+      expect(logs.bridgeErrorLines()).toContain("[bridge.claude] prompt.failed errorClass=Error");
+      expect(logs.warnLines().filter((line) => line.includes("provider-refused"))).toEqual([]);
+    } finally {
+      logs.restore();
+    }
+  });
+
   test("a request the bridge built wrongly is still query.failed, with its code", async () => {
     const logs = captureConsole();
     try {

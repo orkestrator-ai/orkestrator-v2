@@ -1103,12 +1103,21 @@ export function registerTerminalCommands(
           const currentRoot = current.worktreePath!;
           if (canonicalWorktreePath(currentRoot) !== canonical)
             throw new Error("The worktree moved; refresh before saving");
-          return precondition
-            ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
-                await assertLocalFileUnchanged(currentRoot, relativePath, precondition);
-                return writeFileBase64(currentRoot, relativePath, data);
-              })
-            : writeFileBase64(currentRoot, relativePath, data);
+          try {
+            return await (precondition
+              ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
+                  await assertLocalFileUnchanged(currentRoot, relativePath, precondition);
+                  return writeFileBase64(currentRoot, relativePath, data);
+                })
+              : writeFileBase64(currentRoot, relativePath, data));
+          } finally {
+            // A write this backend makes is a known mutation, like a delete or
+            // move: the file tree and Changes must not wait for a watcher hint,
+            // which a saturated fseventsd can hold back for minutes (to-do
+            // 8015 (retired)). A failed write may still have changed the file.
+            context.runtime.diffStats.service.invalidateChanges({ worktreePath: currentRoot });
+            context.runtime.diffStats.service.refresh(current.id);
+          }
         });
       } finally {
         release();

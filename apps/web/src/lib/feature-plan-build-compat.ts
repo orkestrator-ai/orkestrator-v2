@@ -4,7 +4,7 @@
  * Such a backend has only the individual steps, so this renderer sequences them
  * as it did before the backend took that over: create the ticket, claim the
  * plan, start the pipeline, record the link, and roll back on failure. Frozen
- * compatibility code; new behaviour goes in the backend's `feature-plan-build.ts`.
+ * compatibility code; new behaviour goes in the backend's `features/plan-build.ts`.
  * Listed in `docs/architecture/version-compatibility.md`; delete it when its row
  * retires.
  */

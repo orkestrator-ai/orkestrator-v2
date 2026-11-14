@@ -667,8 +667,8 @@ stdin from `/dev/null`. Stopped and reset afterwards.
 | The 5 failures, rerun alone | 5 failed again |
 
 The five failing cases drive Playwright's Chromium through the gateway and
-none touches the Electron window. Their causes are tracked in
-[8015](8015-macos-browser-suite-failures.md): one is macOS's
+none touches the Electron window. Their causes were found and fixed in
+8015 (retired 2026-11-14; `git show dc90609bf:docs/todo/cross-cutting/8015-macos-browser-suite-failures.md`): one is macOS's
 `vim -u NONE` starting with `noruler`, which every Mac would hit. The others
 are two late gateway cases (flake 0484), the Docker tab under a busy Docker,
 and a design-tree lookup. `headless-profile.spec.ts` skips on macOS by design.
@@ -763,6 +763,6 @@ polling, as intended.
 - [6303](6303-window-close-during-request-throws.md), whose task 2 asks for the host with a disposable display.
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - 7340 (retired 2026-11-11, see task 3 above), found in task 3's audit.
-- [8015](8015-macos-browser-suite-failures.md), the browser-suite cases that failed on the Mac in task 4's run.
+- 8015 (retired 2026-11-14), the browser-suite cases that failed on the Mac in task 4's run; its fixes are described in flakes 0484 and 0380.
 - 5460 (retired 2026-11-13; `git show 17d28238c:docs/todo/cross-cutting/5460-renderer-polling-live-evidence.md`), whose Linux window-visibility run is now part of task 1.
 - 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

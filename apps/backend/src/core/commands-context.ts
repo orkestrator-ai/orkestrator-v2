@@ -11,7 +11,7 @@ import type { JsonRecord, StorageService } from "./storage.js";
 import type { MultiReviewService } from "./multi-review-service.js";
 import type { NativeAgentSuborkService } from "./native-agent-suborks.js";
 import type { NativeAgentService } from "./native-agent-service.js";
-import type { FeaturePlanningService } from "./feature-planning.js";
+import type { FeaturePlanningService } from "./features/index.js";
 import type {
   ControlMcpSettings,
   CoordinatorControlConnection,

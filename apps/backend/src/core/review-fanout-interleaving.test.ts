@@ -143,7 +143,7 @@ describe("review fan-out interleavings", () => {
     });
   });
 
-  // 0223: the provider proves an id never arrived, so a recovered request is
+  // To-do 0223 (retired): the provider proves an id never arrived, so a recovered request is
   // re-sent under the same id; a crash can leave the first send on the wire,
   // and its late delivery must be the provider's duplicate, never a turn.
   describe("a provider that proves an id never arrived", () => {
@@ -205,8 +205,10 @@ describe("review fan-out interleavings", () => {
     // tool-transport reviewer got the result reminder as its first turn, and a
     // structured-output reviewer failed as idle without its report. Now only
     // the provider's own proof (`dispatched`, or a result for this exact
-    // request) promotes the request; otherwise it parks and fails closed,
-    // because no provider can yet prove an id never arrived (todo 0223).
+    // request) promotes the request; otherwise it parks and fails closed.
+    // This provider cannot prove an id never arrived; one that answers
+    // `absent` gets the request re-sent (to-do 0223, retired; the rules are
+    // "Dispatch recovery" in docs/architecture/review-preparation.md).
     test("a dispatch that never reached the provider is not treated as sent", async () => {
       for (const [flavour, seed] of [
         ["fence-loss", 24],

@@ -6,21 +6,18 @@ import {
   FEATURE_PLANNING_RECORD_VERSION,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
-import { FeaturePlanningService } from "./feature-planning.js";
-import {
-  discoverFeaturePlanning,
-  featurePlanningObligation,
-} from "./feature-planning-scheduling.js";
+import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import { FeaturePlanningService } from "./planning.js";
+import { discoverFeaturePlanning, featurePlanningObligation } from "./planning-scheduling.js";
 import {
   ManualTime,
   advanceKeyedWork,
   deferred,
   settleKeyedWork,
   type Deferred,
-} from "./recurring-test-support.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { StorageService } from "./storage.js";
+} from "../recurring-test-support.js";
+import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { StorageService } from "../storage.js";
 
 const PLANNER_REPLY = [
   "Here is what I understand so far.",

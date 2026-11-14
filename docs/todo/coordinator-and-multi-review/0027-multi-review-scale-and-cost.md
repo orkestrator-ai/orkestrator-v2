@@ -186,9 +186,9 @@ Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-st
 
 **Context.** Under the README rules, items may be corrected in place, and a file is deleted once its last item is done.
 
-**Done 2026-11-11.** Assumption 13 no longer says the recovery bugs ship. Following the first decision, the ten invariants, the load-bearing guarantees, the commit, fence and evidence rules, at-most-once dispatch and the error-scope table moved to [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision); 0223's pointer to them follows. The file itself stays while tasks 3 to 5 are deferred: deleting it would lose their reopen conditions.
+**Done 2026-11-11.** Assumption 13 no longer says the recovery bugs ship. Following the first decision, the ten invariants, the load-bearing guarantees, the commit, fence and evidence rules, at-most-once dispatch and the error-scope table moved to [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision); 0223's pointer to them followed (0223 was retired on 2026-11-14). The file itself stays while tasks 3 to 5 are deferred: deleting it would lose their reopen conditions.
 
-**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review-fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to [0223](0223-provider-non-delivery-proof.md). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) was still present then, with `stableJitterMs` moved out to `multi-review-scheduling.ts:157` as stated; 0048 task 13 removed it on 2026-11-10.
+**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review-fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to 0223 (retired 2026-11-14). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) was still present then, with `stableJitterMs` moved out to `multi-review-scheduling.ts:157` as stated; 0048 task 13 removed it on 2026-11-10.
 
 **Decisions.**
 
@@ -989,7 +989,7 @@ without stopping to ask, as the delegation required.
     reviewable and CI stays green with the bugs pinned. Cons: two known
     recovery bugs shipped until 0112 fixed them in #1288 (`71abfcfb`); 0112
     is retired and its residual work is in
-    [0223](0223-provider-non-delivery-proof.md).
+    0223 (retired 2026-11-14).
 14. **Codex `<environment_context>` rows: fix in this change or file it.**
     Chosen: fix it here, in `isSyntheticPersistedUserText`. Why: the live
     restart case required by this file failed on it with Codex 0.164.0, the

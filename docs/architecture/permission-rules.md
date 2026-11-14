@@ -5,8 +5,10 @@ asks for approval, the backend checks its own rule store first. On a match it
 answers with the provider's plain **allow-once** and records the application;
 the provider never learns a rule exists. Every answer on the wire is
 allow-once, so removing a rule takes effect at once: the next matching request
-simply asks again. Work item and decisions:
-[0723-orkestrator-permission-rules.md](../todo/agent-engines/0723-orkestrator-permission-rules.md).
+simply asks again. Work item and decisions: to-do 0723 (retired 2026-11-14;
+`git show dc90609bf:docs/todo/agent-engines/0723-orkestrator-permission-rules.md`).
+Its billed live card runs are items in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 Orkestrator never writes a rule into a provider's own files
 (`~/.codex/rules/*.rules`, Claude's `settings.json`, Grok's settings): app-server
@@ -203,10 +205,50 @@ any other wildcard.
 - Live, no credits: `bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts`
   ("an Orkestrator rule answers the identical command…"), and its managed-network
   half in a container (`mise run verify:codex:network-approval`).
+- Live, no credits, in a container: `apps/backend/tests/codex-managed-network-card-live.test.ts`
+  (`mise run verify:codex:network-card`), the managed-network card through the
+  real bridge, backend mapping and enforcer (see
+  [Codex on a managed network host](#codex-on-a-managed-network-host)).
 - Browser:
   - `e2e/agent-testing/permission-rules.spec.ts` (Settings → Permissions on a
     `dev:test` profile);
   - `e2e/RememberRulePanel.spec.ts` (the "Approve and remember…" panel on
-    Codex cards built by the real Codex reader, at phone and desktop widths);
+    Codex cards built by the real Codex reader, and the managed-network card
+    as the backend projected it, at phone and desktop widths);
   - `e2e/agent-testing/codex-saved-rules-live.spec.ts` (opt-in, no credits: a
     real Codex card and "Rules outside Orkestrator", against a loopback model).
+
+## Codex on a managed network host
+
+Codex asks about a host only when an administrator's
+`/etc/codex/requirements.toml` turns its network proxy on
+(`[network_proxy] enabled = true`). Checked on 2026-11-14 with the pinned
+Codex 0.167.0 in a disposable container (to-do 0723 (retired) task 7), with a
+made-up API key and a loopback model, through the real codex-bridge process,
+`HttpBridgeInteractionAdapter` and the enforcer
+(`codex-managed-network-card-live.test.ts`, `mise run verify:codex:network-card`):
+
+- With Codex's own sandbox on (Settings → Execution policy: provider sandbox,
+  approvals Ask), the request arrives with `networkHost` and no command or
+  amendment. The card reads "Approve network access", Approve is enabled, and
+  it offers Deny, Cancel turn, Approve for session and "Approve and remember…"
+  (one pattern: the exact host). There is no "Approve with network policy".
+- Approving reaches the host, `CODEX_HOME/rules/` stays empty, and the same
+  request in the next turn asks again; Deny then blocks it.
+- Under the host default (no sandbox, so Codex runs with full access) Codex
+  does not route through its proxy: nothing asks and the request goes
+  straight out. A requirements file whose `allowed_sandbox_modes` leaves out
+  `danger-full-access` makes such a session's turns fail instead (`turn/start`
+  refused, the bridge answers 503). Follow-up:
+  [8085](../todo/agent-engines/8085-codex-managed-host-sandbox-default.md).
+
+`NativeAgentInteractionCard.test.tsx` and `e2e/RememberRulePanel.spec.ts`
+render the card the live test projected
+(`@orkestrator/protocol/testing/codex-managed-network-card`), so a change to
+that presentation fails the live test and the renderer tests together.
+
+## Live card runs
+
+The billed card runs on real logins (0723 (retired) tasks 1 to 5) are items in
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+Record each result here, dated, one line per provider. None recorded yet.

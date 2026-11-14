@@ -386,7 +386,8 @@
     "./artifact-host-ipc": "./src/artifact-host-ipc.ts",
     "./testing/rich-content-fixtures": "./src/testing/rich-content-fixtures.ts",
     "./testing/artifact-tool-fixtures": "./src/testing/artifact-tool-fixtures.ts",
-    "./testing/static-html-fixtures": "./src/testing/static-html-fixtures.ts"
+    "./testing/static-html-fixtures": "./src/testing/static-html-fixtures.ts",
+    "./testing/codex-managed-network-card": "./src/testing/codex-managed-network-card.ts"
   },
   "dependencies": {
     "effect": "4.1.2"

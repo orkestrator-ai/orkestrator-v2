@@ -306,7 +306,7 @@ files on a large page show `changes.body.batch-limit`.
 
 ## Turn and thread boundaries
 
-`NativeAgentService.dispatchAdmittedPrompt` captures the turn start inside the
+`NativeAgentPromptDispatch.dispatchAdmittedPrompt` (`native-agent-prompt-dispatch.ts`) captures the turn start inside the
 at-most-once dispatch window, immediately before `provider.send`, bounded by
 `foregroundBoundaryDeadlineMs` (10 s, a cutoff not a target). A failed
 capture is recorded before dispatch; by default the turn proceeds with an
@@ -1008,7 +1008,7 @@ of unchanged provisional captures was not usable for todo 4962 (retired
 The soak also found, outside the cap: Multi Review launches refused after the
 ninth round because each review left its tab open (a driver fault, fixed: the
 busy driver closes each finished review's tabs), and backend event-loop stalls
-that grew over the run ([7562](../todo/cross-cutting/7562-busy-soak-event-loop-stall-growth.md)).
+that grew over the run (to-do 7562, retired; [storage](storage.md#busy-soak-disk-waits-by-filesystem)).
 
 A host capture does not read or hash a file whose stat stamp
 (size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose

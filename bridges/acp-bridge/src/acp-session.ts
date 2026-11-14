@@ -1610,7 +1610,7 @@ function withdrawResolvedElicitation(state: SessionState, params: JsonObject): v
 /**
  * What a parked permission request asks to run: the card's kind and its detail.
  *
- * `ruleEligible` marks a request an Orkestrator permission rule (todo 0723) may
+ * `ruleEligible` marks a request an Orkestrator permission rule (todo 0723 (retired)) may
  * answer: a command the agent sent as one shell string (an argv array joined
  * with spaces loses its quoting), or every path of a file change, and nothing
  * truncated. The backend auto-answers nothing without it.

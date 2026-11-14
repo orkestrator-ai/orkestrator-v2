@@ -14,9 +14,14 @@
  * Every `POST /v1/messages` gets one text reply. A prompt asking for "the word
  * PONG and then A plus B" is answered `PONG <A+B>`, so the spec's answer check
  * still cannot match its own echoed input; anything else (title or topic
- * requests the CLI makes on the side) gets `PONG`. It keeps no request body
- * and logs nothing. No imports: the file runs on its own inside the image.
+ * requests the CLI makes on the side) gets `PONG`. A request whose last user
+ * message carries `REFUSE_QA_401` is refused with the 401 a wrong key gets,
+ * so a turn can end on an API error (to-do 5160 task 4). It keeps no request
+ * body and logs nothing. No imports: the file runs on its own inside the image.
  */
+
+/** A prompt carrying this is refused as a wrong key would be. */
+export const REFUSE_MARKER = "REFUSE_QA_401";
 
 type ContentBlock = { type?: string; text?: string };
 type MessageBody = {
@@ -96,6 +101,12 @@ export async function handleFakeClaudeApi(request: Request, replyDelayMs = 0): P
     );
   }
   const body = (await request.json().catch(() => ({}))) as MessageBody;
+  if (lastUserText(body).includes(REFUSE_MARKER)) {
+    return Response.json(
+      { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } },
+      { status: 401 },
+    );
+  }
   const model = body.model ?? "claude-fixture";
   const id = `msg_fixture_${crypto.randomUUID().replaceAll("-", "")}`;
   const text = fakeReply(body);

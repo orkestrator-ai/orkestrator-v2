@@ -259,6 +259,17 @@ project templates watch reloads on the flag too. An older helper sends no flag a
 is read as none. The upstream request to rebuild from the last delivered event id
 is to-do [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2.
 
+A saturated `fseventsd` can also deliver nothing at all for minutes. On
+arktech-mini on 2026-11-14, with `fseventsd` at about 160% CPU and a load
+average near 13, a fresh `fs.watch` (Bun or Node, recursive or not) reported no
+event within 60 s. A change made outside the backend is then scanned only by the
+safety tick (`DIFF_SAFETY_NET_INTERVAL_MS`, skipped when a scan ran within half of
+it), which is the bound the persisted-diff-baseline browser case waits for. A file
+the backend changes itself (write, delete, move, rename, revert, create) is a known
+mutation (`invalidateChanges` and a refresh) and never waits for a hint;
+`write_local_file` joined that list after a design-canvas case found an editor
+write missing from the tree (to-do 8015, retired 2026-11-14).
+
 Linux start and close for 20 watches took 6 ms and 0 ms. The full measurements were recorded in
 to-do 5060 (retired 2026-11-10; its last version is in Git history).
 

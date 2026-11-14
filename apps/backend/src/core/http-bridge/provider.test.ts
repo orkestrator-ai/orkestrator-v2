@@ -2495,7 +2495,7 @@ describe("HTTP bridge provider", () => {
     ).toBeUndefined();
   });
 
-  test("carries a read-only turn's missing command sandbox, bounded (todo 0190)", async () => {
+  test("carries a read-only turn's missing command sandbox, bounded (todo 0190 (retired))", async () => {
     const observe = async (readOnlyCommandSandbox: unknown, status = "idle") => {
       const { provider } = httpProvider(() => Response.json({ status, readOnlyCommandSandbox }));
       return provider.observeSession!("session-1");

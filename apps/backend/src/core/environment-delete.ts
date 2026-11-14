@@ -361,7 +361,7 @@ export async function deleteEnvironment(
         });
       }
       // Its environment-scoped permission rules and their application record
-      // go with it; project rules stay (todo 0723).
+      // go with it; project rules stay (todo 0723 (retired)).
       try {
         if (typeof storage.permissionRuleStore === "function") {
           storage.permissionRuleStore().environmentDeleted(environmentId);

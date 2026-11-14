@@ -264,6 +264,7 @@ and no site logs a stderr tail.
 | --- | --- | --- | --- |
 | `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused; Settings → Schedules says so ([scheduled jobs](scheduled-jobs.md#exactly-once)). A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
 | `docker` | `writer-lease.regained` | `info` | A backend took the lease over from a holder that stopped refreshing it (crashed, killed or stalled), with `staleForMs` since that holder's last refresh. A lease a clean shutdown released is acquired silently. |
+| `docker` | `writer-lease.acquired-late` | `info` | A backend that started without the lease (`writer-lease.not-acquired`, `busy`) won it later, after its holder stopped refreshing it: usually a crash just before this backend started. It keeps trying every heartbeat until then. |
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
 | `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
@@ -386,9 +387,9 @@ is not named. An
 attempt's span includes its awaits, so a named job ran around the stall rather
 than necessarily causing it; a kind that keeps coming back is the lead. A stall
 with no `storageMs` was not SQLite holding the loop for 250 ms at a time; its
-`storageCallMs` says whether many shorter calls did (to-do 7562 found stalls
+`storageCallMs` says whether many shorter calls did (to-do 7562, retired, found stalls
 that were mostly the thread waiting on disk with no single call reaching
-250 ms).
+250 ms; [storage](storage.md#busy-soak-disk-waits-by-filesystem)).
 
 The backend and the desktop also pass the monitor a CPU reader
 (`process.cpuUsage()`, one `getrusage` per tick), so both stall lines carry
@@ -526,6 +527,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `docker` | `writer-lease.lost` | `reason` | This backend lost the registry writer lease. |
 | `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |
 | `docker` | `writer-lease.not-acquired` | `reason` | This backend started without it. |
+| `docker` | `writer-lease.acquired-late` | none | This backend won it later, from a holder that stopped refreshing it. |
 | `bridge.pi` | `session.resume-fell-back` | error | A saved conversation could not be reopened, so a new one started. |
 | `bridge.cursor` | `session.resume-fell-back` | error | The same. |
 | `storage` | `migration.failed` | `fromVersion`, `toVersion`, `step`, error | The database did not reach this build's schema. |

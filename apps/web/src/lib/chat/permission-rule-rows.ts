@@ -29,7 +29,7 @@ function permissionRuleRow(
 
 /**
  * The transcript with an "Approved by rule" note for each request an
- * Orkestrator permission rule answered (todo 0723), each placed after the last
+ * Orkestrator permission rule answered (todo 0723 (retired)), each placed after the last
  * row that started before it, like the user's `!` command cards.
  */
 export function withPermissionRuleRows(

@@ -546,6 +546,10 @@ run = "bun test --cwd apps/backend ./tests/codex-mcp-parity-live.test.ts --paral
 description = "Prove a managed-network approval saves no rule, and where an accepted amendment is stored, on the pinned Codex (disposable container, no credentials)"
 run = "bash scripts/verify-codex-network-approval.sh"
 
+[tasks."verify:codex:network-card"]
+description = "Prove the managed-network approval card offers no amendment and approving saves no Codex rule, through the real bridge and backend mapping (disposable container, no credentials)"
+run = "bash scripts/verify-codex-network-card.sh"
+
 [tasks."verify:grok:mcp-live"]
 description = "Prove the MCP editor's Grok trust, source and precedence rules match the pinned binary (real binary, no credentials)"
 env = { RUN_LIVE_GROK_MCP = "1" }

@@ -66,7 +66,7 @@ export interface NativeAgentSessionOperationsHost {
   /** Stop takes the session mutation intent and the turn-interrupt fences here. */
   promptQueues: NativeAgentPromptQueueDispatcher;
   interactions: NativeAgentInteractionTracker;
-  /** Orkestrator's permission rules (todo 0723); absent with a narrow storage double. */
+  /** Orkestrator's permission rules (todo 0723 (retired)); absent with a narrow storage double. */
   permissionRules?: PermissionRuleEnforcer;
   now(): number;
   assertProjectionInput(input: NativeAgentProjectionInput): void;
@@ -806,7 +806,7 @@ export class NativeAgentSessionOperations {
   }
 
   /**
-   * The card's "Approve and remember" (todo 0723): answers the request
+   * The card's "Approve and remember" (todo 0723 (retired)): answers the request
    * allow-once and saves the Orkestrator rule the user chose. Only reachable
    * from a person's click in the renderer; no agent, CLI or MCP surface
    * creates a rule.

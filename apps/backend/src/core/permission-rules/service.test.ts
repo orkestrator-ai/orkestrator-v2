@@ -15,7 +15,7 @@ import {
 
 /**
  * Rules apply from the backend's own activity sweep: no tab has to be mounted,
- * and a request a rule answers never becomes a waiting edge (todo 0723).
+ * and a request a rule answers never becomes a waiting edge (todo 0723 (retired)).
  */
 
 function approval(id: string): AgentInteractionRequest {
@@ -143,7 +143,7 @@ describe("permission rules in the activity sweep", () => {
 });
 
 /**
- * Task 5 of todo 0723 without the app: a rule answers an environment nobody is
+ * Task 5 of todo 0723 (retired) without the app: a rule answers an environment nobody is
  * looking at while another one is on screen. "On screen" has no backend state;
  * what matters is that the sweep, not a mounted tab, answers, that each
  * environment keeps its own rules, and that the tab mounted on return reads no

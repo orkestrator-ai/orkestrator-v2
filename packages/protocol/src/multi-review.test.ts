@@ -430,7 +430,7 @@ describe("multi review protocol", () => {
         stepRuntimes: { fix: { startedAt: timestamp, tokenCount: 1.5 } },
       }),
     ).toBe(false);
-    // Consolidation's read-only turn ran without the command sandbox (todo 0190).
+    // Consolidation's read-only turn ran without the command sandbox (todo 0190 (retired)).
     const consolidate = (commandSandboxOff: unknown) => ({
       ...workflow,
       stepRuntimes: { consolidate: { startedAt: timestamp, commandSandboxOff } },

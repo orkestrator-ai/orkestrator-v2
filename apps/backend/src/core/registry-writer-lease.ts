@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -30,8 +30,30 @@ export interface RegistryWriterLeaseOptions {
    * polling (the schedules settings) can read the new state.
    */
   onLost?: () => void;
+  /**
+   * Writer-only startup work for a backend that found the lease busy at
+   * startup and wins it later, because its holder stopped refreshing it (a
+   * crash, say). It runs with the won lease, which it may use to write, while
+   * the writer handle still reports not held: schedules and container
+   * mutations are admitted only once it settles, as on the startup path. A
+   * rejection is logged; the lease is still exposed afterwards.
+   */
+  recoverLate?: (lease: RegistryWriter) => Promise<void>;
+  /**
+   * Called once, after `recoverLate` settled and the writer handle reports
+   * the late-won lease held, so the schedules settings can reread.
+   */
+  onAcquired?: () => void;
+  /** How often a backend without the lease tries again; defaults to the heartbeat. */
+  retryMs?: number;
   /** Test seam. */
   now?: () => number;
+  /**
+   * Test seam: this process's monotonic clock (`performance.now`), which a
+   * backend without the lease uses to count how long it has itself watched
+   * the holder stay silent (`ReclaimingRegistryWriter`).
+   */
+  monotonicNow?: () => number;
 }
 
 interface LeaseDocument {
@@ -356,9 +378,175 @@ export type RegistryWriter = Pick<
 >;
 
 /**
+ * A backend that found the lease busy at startup. It keeps trying, because a
+ * holder that crashed stops refreshing its lease and the lease goes stale
+ * after `staleMs`; once it wins, it is that lease. Without this, a backend
+ * restarted within `staleMs` of a crash read "another backend" and refused
+ * every container change for its whole life (to-do 5160, seen 2026-11-14).
+ *
+ * A live holder is never displaced, sleep included. The lease file's age is
+ * wall-clock time, which keeps running while the host sleeps and the
+ * holder's heartbeat cannot fire, so on wake the lease reads stale although
+ * its holder is alive. A retry therefore takes over only once this process
+ * has itself watched the same lease (token and modification time) go
+ * unrefreshed for `staleMs` of its own running time. That time is summed per
+ * retry, each retry counting at most `staleMs / 3` (the default heartbeat)
+ * on the monotonic clock, so a host sleep or a stall of this process counts
+ * as one short step whatever the clock does across it: a holder that wakes
+ * and refreshes within a heartbeat resets the count and keeps its lease. A
+ * lease file that is gone (a clean release) is taken at once.
+ *
+ * A won lease is exposed only after `recoverLate` settles, so nothing else
+ * writes while the crashed holder's operations are being reconciled.
+ * `release` stops the retries; a lease won during shutdown is released too.
+ */
+export class ReclaimingRegistryWriter implements RegistryWriter {
+  private lease: RegistryWriterLease | undefined;
+  private attempt: Promise<void> | undefined;
+  private released = false;
+  private readonly timer: ReturnType<typeof setInterval>;
+  private readonly leasePath: string;
+  private readonly staleMs: number;
+  /** Most one retry may add to the observed silence. */
+  private readonly stepCapMs: number;
+  private readonly monotonicNow: () => number;
+  /** The lease as this process last saw it, and how long it has watched it unchanged. */
+  private observed: { key: string; at: number; silentMs: number } | undefined;
+
+  constructor(
+    private readonly blocked: BlockedRegistryWriter,
+    private readonly dataDir: string,
+    private readonly options: RegistryWriterLeaseOptions = {},
+  ) {
+    this.staleMs = options.staleMs ?? 30_000;
+    const heartbeatMs = Math.max(1, Math.floor(this.staleMs / 3));
+    const retryMs = options.retryMs ?? options.heartbeatMs ?? Math.max(1_000, heartbeatMs);
+    this.stepCapMs = Math.min(retryMs, heartbeatMs);
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
+    this.leasePath = path.join(dataDir, REGISTRY_WRITER_LEASE_FILE);
+    // The busy lease startup just saw: silence counts from here.
+    const key = this.readLeaseKeySync();
+    if (key) this.observed = { key, at: this.monotonicNow(), silentMs: 0 };
+    this.timer = setInterval(() => void this.tryAcquire(), retryMs);
+    this.timer.unref?.();
+  }
+
+  private readLeaseKeySync(): string | null {
+    try {
+      const stat = statSync(this.leasePath);
+      let token: string | null = null;
+      try {
+        const parsed = JSON.parse(readFileSync(this.leasePath, "utf8")) as Partial<LeaseDocument>;
+        token = typeof parsed.token === "string" ? parsed.token : null;
+      } catch {
+        // An unreadable document is still a lease someone holds.
+      }
+      return `${token ?? ""}:${stat.mtimeMs}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Whether this process has watched the holder stay silent long enough to
+   * try a takeover. True when the lease file is gone.
+   */
+  private async holderSilentLongEnough(): Promise<boolean> {
+    const stat = await fs.stat(this.leasePath).catch(() => null);
+    if (!stat) {
+      this.observed = undefined;
+      return true;
+    }
+    const key = `${(await readToken(this.leasePath)) ?? ""}:${stat.mtimeMs}`;
+    const at = this.monotonicNow();
+    if (this.observed?.key !== key) {
+      // New, or refreshed since the last look: the holder is alive.
+      this.observed = { key, at, silentMs: 0 };
+      return false;
+    }
+    this.observed.silentMs += Math.min(Math.max(0, at - this.observed.at), this.stepCapMs);
+    this.observed.at = at;
+    return this.observed.silentMs >= this.staleMs;
+  }
+
+  /**
+   * One attempt, shared by concurrent callers; true once the lease is held
+   * and its late recovery has settled. Agrees with `isHeld()` throughout,
+   * after a release or a loss included.
+   */
+  async tryAcquire(): Promise<boolean> {
+    if (this.lease || this.released) return this.isHeld();
+    this.attempt ??= this.acquireOnce().finally(() => {
+      this.attempt = undefined;
+    });
+    await this.attempt;
+    return this.isHeld();
+  }
+
+  private async acquireOnce(): Promise<void> {
+    try {
+      // A newer backend may have written the directory meanwhile.
+      if (!(await checkRegistrySchemaMarker(this.dataDir)).compatible) return;
+      if (!(await this.holderSilentLongEnough())) return;
+      const lease = await RegistryWriterLease.acquire(this.dataDir, this.options);
+      if (this.released) {
+        await lease.release();
+        return;
+      }
+      clearInterval(this.timer);
+      log.info("writer-lease.acquired-late");
+      // Not exposed yet: until recovery settles, `isHeld` stays false, so no
+      // schedule fires and no container mutation is admitted against
+      // operations the crashed holder left unresolved.
+      if (this.options.recoverLate) {
+        await this.options.recoverLate(lease).catch((error: unknown) => {
+          log.warn("writer-lease.listener-failed", { error: formatLogError(error) });
+        });
+      }
+      if (this.released) {
+        await lease.release();
+        return;
+      }
+      this.lease = lease;
+      try {
+        this.options.onAcquired?.();
+      } catch (error) {
+        log.warn("writer-lease.listener-failed", { error: formatLogError(error) });
+      }
+    } catch (error) {
+      // Still busy is the expected answer while the holder lives.
+      if (!(error instanceof RegistryWriterLeaseBusyError)) {
+        log.warn("writer-lease.retry-failed", { error: formatLogError(error) });
+      }
+    }
+  }
+
+  isHeld(): boolean {
+    return this.lease?.isHeld() ?? false;
+  }
+
+  state(): RegistryWriterState {
+    return this.lease?.state() ?? this.blocked.state();
+  }
+
+  assertHeld(): void {
+    if (this.lease) this.lease.assertHeld();
+    else this.blocked.assertHeld();
+  }
+
+  async release(): Promise<void> {
+    this.released = true;
+    clearInterval(this.timer);
+    await this.attempt;
+    await this.lease?.release();
+  }
+}
+
+/**
  * Checks the schema marker, then acquires the writer lease. Never throws for
  * an incompatible or busy registry: the returned writer refuses mutations and
- * the backend keeps serving reads.
+ * the backend keeps serving reads. A busy one keeps trying and takes the lease
+ * over once its holder lets it go stale (`ReclaimingRegistryWriter`).
  */
 export async function openRegistryWriter(
   dataDir: string,
@@ -374,7 +562,11 @@ export async function openRegistryWriter(
   } catch (error) {
     if (error instanceof RegistryWriterLeaseBusyError) {
       log.info("writer-lease.not-acquired", { reason: "busy" });
-      return new BlockedRegistryWriter(error, "busy");
+      return new ReclaimingRegistryWriter(
+        new BlockedRegistryWriter(error, "busy"),
+        dataDir,
+        options,
+      );
     }
     throw error;
   }

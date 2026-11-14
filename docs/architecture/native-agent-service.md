@@ -23,6 +23,8 @@ collaborators that own it privately, and the service wires them together.
 | `NativeAgentHandoffs` | `native-agent-handoffs.ts` | No state. "Continue in…": the full source-transcript read `create_agent_handoff` builds from, and the pending handoff a dispatch carries. |
 | `NativeAgentSignInResends` | `native-agent-sign-in-resend.ts` | A bounded in-memory copy of each session's last accepted plain Claude prompt. The durable hold is on the session record; see [agent-accounts.md](agent-accounts.md). |
 | `NativeAgentSessionOperations` | `native-agent-session-operations.ts` | No state. The session controls that are not a dispatch: Stop and its abort ladder (taking the dispatcher's mutation intent and turn-interrupt fences), background-task stop, suggested prompts, the resume list, resume and closing the session it replaced, fork, session and MCP actions, sign-in, composer controls and interaction answers. |
+| `NativeAgentPromptDispatch` | `native-agent-prompt-dispatch.ts` | No state. Prompt dispatch: the intent path and its one bounded recovery retry, the at-most-once prompt path (`dispatchAdmittedPrompt`, which holds the storage lease across provider I/O), command planning, the parked-dispatch and parked-steer settles, retry and discard, prompt readiness, and steer (the persisted-steer dispatch it shares with the prompt queue). It is the one place the dispatch fence and lease order is written down; see [Dispatch fence order](#dispatch-fence-order). |
+| `NativeAgentMailInjection` | `native-agent-mail-injection.ts` | No state. Agent mail delivered into a session: the presence gate, idle-turn injection, Deliver now's steer into a running turn, and the two reconciliations. It reaches dispatch only through `NativeAgentPromptDispatch`'s entry points, so it takes no fence or lease itself. |
 
 `native-agent-queue-message.ts` holds the pure `queue*` readers for one
 persisted prompt-queue message, and `native-agent-projection-helpers.ts` the
@@ -31,12 +33,9 @@ folding, discovery keys).
 
 What stays on the service is the work that is not a cluster of state: trusted
 session input (coordinator authority), `ensureSession` / `adoptSession` /
-`inspectSession`, bridge start and peek, the dispatch path
-(`dispatchAdmittedPrompt` holds the storage lease across provider I/O), steer
-(the persisted-steer dispatch it shares with the prompt queue; a direct steer
-that misses its turn is handed to `native-agent-missed-steer.ts`, which sends it
-as a new turn or queues it), mail injection
-and turn outcomes, provider teardown and moves. Its own state is the stop flag, the
+`inspectSession`, bridge start and peek, turn outcomes, provider teardown and
+moves. A direct steer that misses its turn is handed by the prompt dispatch to
+`native-agent-missed-steer.ts`, which sends it as a new turn or queues it. Its own state is the stop flag, the
 initialization promise, the scan-task set every collaborator's background work
 is tracked in (kept on the service, not the launch reconciler, because the
 projection, interaction monitor, queue drains and launch scan all feed it and
@@ -82,13 +81,43 @@ dispatching the startup prompt, the dispatcher settling a parked dispatch, the
 projection scheduling that settle) is a callback rather than an abstract
 method. The service constructs, in order: catalogues, the observation broker,
 the provider registry, turn recovery, the projection, the prompt-queue
-dispatcher, the launch reconciler, the interaction tracker and the session
-operations. A callback that
-names a later collaborator only runs after construction.
+dispatcher, the launch reconciler, the goal service, the interaction tracker,
+the session operations, the handoffs, the sign-in resends, then the prompt
+dispatch and mail injection. A callback that names a later collaborator only
+runs after construction. The prompt dispatch is built on first use through a
+getter rather than assigned in the constructor, so a service assembled from
+the prototype alone (`native-agent-bridge-replacement.test.ts`) still reaches
+the real dispatch admission; the constructor builds it when it wires mail
+injection.
+
+## Dispatch fence order
+
+Every fence and lease a prompt or steer takes is taken in
+`NativeAgentPromptDispatch`, in this order:
+
+1. the bridge reservation (`beginBridgeWork`, refused while a wider-policy
+   bridge replacement runs);
+2. the environment agent-work fence (`environmentFence.beginAgentWork`);
+3. the session mutation intent (`dispatchIntent`) or mutation fence
+   (`dispatchPrompt` and the internal path) on
+   `NativeAgentPromptQueueDispatcher`;
+4. the storage lease, `dispatchNativeAgentPromptOnce`, held across provider
+   I/O;
+5. inside it, the observation dispatch fence (`observations.beginDispatch`).
+
+A steer takes the mutation fence around `dispatchNativeAgentSteerOnce`. Stop
+(`NativeAgentSessionOperations`) takes the same dispatcher fences
+(`withSessionMutationIntent`, `fenceTurnInterrupt`) in the same order. The
+fence *state* lives on the dispatcher, so dispatch and Stop share it without
+sharing a class: putting both in one "turn lifecycle" class would have made
+one class of about 2,600 lines. Mail injection runs its admission check as the
+dispatch's `prepare`, under the same lease as a typed prompt.
+`native-agent-prompt-dispatch.test.ts` pins this order.
 
 Public service methods whose work moved (`getTranscriptUpdate`,
 `reconcileAgentActivity`, `notifyPromptQueueChanged`, `withSessionWorkFence`,
-`stopProjectionSession` and the rest) are one-line delegates, so callers and the command registry see the
+`stopProjectionSession`, `dispatchIntent`, `dispatchMailInject` and the rest)
+are one-line delegates, so callers and the command registry see the
 same surface as before.
 
 ## Lifecycle
@@ -143,7 +172,8 @@ reads its state through the collaborator's `forTesting()` accessor
 `queueInternals` are shorthands). Tests never read collaborator state through
 fields on the service; the service-level `internals()` casts left in the suites
 reach only the service's own seams (`provider`, `bridgeConnection`,
-`createProviderSession`). `forTesting()` is visible to production code, but
+`createProviderSession`, `tabMailFor`, and `dispatchPromptInternal`, a private
+delegate the recovery, resend and launch collaborators also call). `forTesting()` is visible to production code, but
 only tests may call it. New collaborator state gets an entry in that
 collaborator's `forTesting()`, not a field on the service.
 

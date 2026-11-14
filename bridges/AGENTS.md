@@ -52,7 +52,7 @@ calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
   only while the session's journal is complete — created by this bridge, every
   claim written to disk before its handover, loaded cleanly, nothing evicted,
   trimmed or skipped since — and the id has no record of any state. The
-  backend then re-sends a recovered request under the same id (0223), so a
+  backend then re-sends a recovered request under the same id (to-do 0223, retired), so a
   wrong `absent` runs a turn twice: when unsure, answer `unknown`. An adopted
   or resumed session is never complete. Like `/activity`, it must never touch
   liveness, hydrate or re-attach. A bridge that reports restart interruptions

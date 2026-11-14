@@ -4,12 +4,12 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); the `opencode` move is open.
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13, see "Assumptions and decisions"); the other ten (`features` to `native-agent`) are open, one domain per change.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13) and the `features` move is done (2026-11-14), one change each (see "Assumptions and decisions"); the other nine (`coordinator` to `native-agent`) are open, one domain per change.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open).
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it.
 
 **Decisions.**
 
@@ -270,6 +270,17 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   because `cache.ts` is documented as a leaf that keeps the reader's
   credential modules out of the bridge provider's graph. See "Assumptions and
   decisions".
+- Done (task 2's `features` slice, 2026-11-14, against `main` at
+  `dc90609bf`): the five `feature-*` source files and their four tests are in
+  `core/features/` without the prefix (`features/planning.ts`,
+  `features/planning-scheduling.ts`, `features/build.ts`,
+  `features/build-tasks.ts`, `features/plan-build.ts`), with an `index.ts`
+  and both lint patterns. `index.ts` re-exports the four symbols the six
+  production importers outside the folder use (`createFeatureBuild`,
+  `FeatureBuildTasks`, `startFeaturePlanBuild` and `FeaturePlanningService`),
+  and all six import it. No named exceptions were needed: routing them
+  through `index.ts` closes no runtime cycle. See "Assumptions and
+  decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -292,8 +303,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   2026-10-15 count; after the `http-bridge` slice on 2026-11-06 it holds 827
   and 842, after the `web-annotations` slice on 2026-11-11 it holds 883
   and 925, after OpenCode 1.x's retirement and the `control-mcp` slice
-  on 2026-11-11 it holds 803 and 852, and after the `plan-usage` slice on
-  2026-11-13 it holds 806 and 856).
+  on 2026-11-11 it holds 803 and 852, after the `plan-usage` slice on
+  2026-11-13 it holds 806 and 856, and after the `features` slice on
+  2026-11-14 it holds 807 and 867, down from 812 and 871 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -304,7 +316,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | control-mcp | `control-mcp-*` | done (40 / 29 moved, 2026-11-11) | |
   | keyed-records | `keyed-record-*` | done (1 / 0 placed in the kernel, 2026-11-13) | |
   | plan-usage | `plan-usage*` | done (2 / 3 moved, 2026-11-13) | |
-  | features | `feature-*` | 3 | 3 |
+  | features | `feature-*` | done (5 / 4 moved, 2026-11-14) | |
   | coordinator | `coordinator-*` | 7 | 5 |
   | agent-accounts | `agent-accounts*` | 7 | 7 |
   | worktrees | `worktree-*` | 6 | 4 |
@@ -361,9 +373,9 @@ before the busy ones move.
    (Done: an `index.ts` and both lint patterns for `mcp-management/` and
    `public-api/`; the `http-bridge`, `web-annotations` and `control-mcp`
    moves; `keyed-record-format.ts` placed in the shared kernel.)
-2. **Wave 2 (mid-tier):** `features`, `coordinator`,
+2. **Wave 2 (mid-tier):** `coordinator`,
    `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`,
-   `build-pipeline`, `native-agent`. (Done: `plan-usage`.)
+   `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
    `environments`, `storage`. Many files import these, and `containers` and
    `previews` are also imported from outside `core/`, so these slices touch the
@@ -432,8 +444,64 @@ Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
 task 1's `web-annotations` slice with the codemod fix from todo 7490
 (2026-11-11), to-do 7800 and task 1's `control-mcp` slice (2026-11-11), and task 1's
 `keyed-record-format.ts` placement with task 2's `plan-usage` slice
-(2026-11-13). The other moves in waves 1 to 4 (tasks 1 to 4) were
+(2026-11-13), and task 2's `features` slice (2026-11-14). The other moves in waves 1 to 4 (tasks 1 to 4) were
 left open on purpose: they move many files that other work in flight touches.
+
+### Task 2: `features` as the second wave 2 slice
+
+- Chosen: one domain, `features`, moved with the codemod
+  (`--prefix feature- --into features`) against `main` at `dc90609bf`. It is
+  the next wave 2 domain in the plan's order and the smallest left, neither
+  open pull request touched it, and the ticket excluded the domains other
+  builds in the same wave edit (`opencode`, `native-agent`, `coordinator`,
+  `build-pipeline`, `review`). The ticket also offered `agent-accounts` and
+  `worktrees`; `agent-accounts` has many more importers and is reached by
+  `opencode2/`'s named exception, so it is a larger slice than this one.
+- File names: `--prefix` works here (every file starts with `feature-`), so
+  no map file: `feature-planning.ts` → `planning.ts`,
+  `feature-planning-scheduling.ts` → `planning-scheduling.ts`,
+  `feature-build.ts` → `build.ts`, `feature-build-tasks.ts` →
+  `build-tasks.ts`, `feature-plan-build.ts` → `plan-build.ts`, and their four
+  tests to match. The folder is `features/` (the plan's domain name), not
+  `feature/`.
+- Measured before the move: 6 production importers outside the folder
+  (`backend-runtime.ts`, `commands-context.ts`, `commands-registry-build.ts`,
+  `commands-validation.ts`, `index.ts` and
+  `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols
+  from four modules; two tests outside the folder
+  (`build-pipeline-delivery.test.ts` and `apps/backend/tests/recurring-baseline.test.ts`);
+  and path strings in three flake records. No `mock.module()` or `spyOn`
+  targeted the files, no worker or bundle entry point names them, and no
+  `<revision>:<path>` string named a moved file. The codemod moved 9 files
+  and rewrote 20.
+- `index.ts` holds exactly the four production symbols. All six production
+  importers use it (`commands-context.ts` and `commands-validation.ts`
+  type-only), and `commands-registry-build.ts`'s two imports became one. The
+  two tests outside the folder use only those symbols, so they import
+  `index.js` too rather than keeping the codemod's deep paths.
+  `recurring-baseline-workflows.ts` sits outside `apps/backend/src/**`, so no
+  lint pattern covers it; it imports `index.js` anyway.
+- No named exception: `mise run lint` (`import/no-cycle`) stays clean with
+  every importer on `index.ts`, and no moved file documents itself as a leaf
+  kept off a larger graph.
+- Hand fixes after the codemod: the bare names in
+  `docs/architecture/agent-engines.md`, `backend-runtime.md`,
+  `build-pipeline-view.md`, `recurring-work.md` and
+  `version-compatibility.md`, to-dos 0031 and 0048, the comment in
+  `apps/web/src/lib/feature-plan-build-compat.ts`, and the folder list in
+  `docs/development/linting.md`. The three flake records (0189, 0213, 1254)
+  keep the codemod's path rewrite, as in the earlier slices. The done plan
+  records `plans/unified/7008` and `7009` keep the old names: they describe
+  work at that time. `@orkestrator/protocol/feature-planning` and
+  `@orkestrator/protocol/feature-build` are other modules with the same names
+  and are untouched; the `feature-planning` recurring-work domain and tick
+  names are identifiers, not paths, and are unchanged.
+- Lint patterns: `**/features/*` with `!**/features/index.js` under
+  `apps/backend/src/**`, and the `**/backend/src/core/features/*` form under
+  `tests/unit/**`. No backend or protocol module path ends in `features/<x>`,
+  so neither pattern catches anything else. Checked with probe files
+  (deleted): a deep import of `features/planning.js` is reported under both
+  overrides, and `features/index.js` is not.
 
 ### Task 2: `plan-usage` as the first wave 2 slice
 

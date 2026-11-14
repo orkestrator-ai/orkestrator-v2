@@ -41,6 +41,15 @@ describe("before-and-after runs from another checkout", () => {
     expect(older).not.toContain("--no-headless");
   });
 
+  test("passes --no-host-seed unless --host-seed asks for the host's seed", () => {
+    const isolated = profileArguments("p", parseOptions([]));
+    expect(isolated).toContain("--no-host-seed");
+    expect(isolated).toContain("--no-agent-credentials");
+    const seeded = profileArguments("p", parseOptions(["--host-seed"]));
+    expect(seeded).not.toContain("--no-host-seed");
+    expect(seeded).not.toContain("--host-seed");
+  });
+
   test("trusts the other checkout's mise config for its own processes only", () => {
     const base = { PATH: "/bin" };
     expect(checkoutEnv(undefined, base)).toBe(base);

@@ -154,6 +154,8 @@ import {
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { withAccountSwitchRows } from "@/lib/chat/account-switch-rows";
+import { usePendingAccountSwitchRows } from "./usePendingAccountSwitchRows";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import {
@@ -827,12 +829,24 @@ export function SharedNativeAgentController({
   // workflow-owned ID. Keep their backend structured result out of view too.
   const withholdStructuredOutput =
     hideStructuredOutput === true || tabId.startsWith("multi-review-review:");
+  // An account switch waits in the coordinator's mailbox for a turn other mail
+  // starts; its one-line row is drawn from there until that carrier arrives.
+  const accountSwitchRows = usePendingAccountSwitchRows(
+    data.environmentId,
+    tabId,
+    Boolean(coordinatorProjectId),
+  );
+  const earlierHistoryUnloaded = projection?.messageWindow?.canLoadEarlier === true;
   const presentedProviderMessages = useMemo(
     () =>
-      withholdStructuredOutput
-        ? hideMachineOutputText(normalizedMessages, { stripTrailingPayload: true })
-        : normalizedMessages,
-    [normalizedMessages, withholdStructuredOutput],
+      withAccountSwitchRows(
+        withholdStructuredOutput
+          ? hideMachineOutputText(normalizedMessages, { stripTrailingPayload: true })
+          : normalizedMessages,
+        accountSwitchRows,
+        { earlierHistoryUnloaded },
+      ),
+    [accountSwitchRows, earlierHistoryUnloaded, normalizedMessages, withholdStructuredOutput],
   );
   const handoff = useAgentHandoff(
     agentHandoffId,
@@ -1072,7 +1086,7 @@ export function SharedNativeAgentController({
     data.environmentId,
     tabId,
   );
-  // Requests an Orkestrator permission rule answered in this session (todo 0723).
+  // Requests an Orkestrator permission rule answered in this session (todo 0723 (retired)).
   const ruleSession = usePermissionRuleSession(data.environmentId, platform, sessionKey);
   /*
    * A shell command the agent ran here that waits on the user (a sign-in link,

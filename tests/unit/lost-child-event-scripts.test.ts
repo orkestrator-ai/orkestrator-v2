@@ -12,7 +12,14 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openFds, stdioFdsSince, type ScheduleEntry } from "../../scripts/lost-child-event/probe";
+import {
+  describeEpoll,
+  epollState,
+  openFds,
+  parseEpollRegistrations,
+  stdioFdsSince,
+  type ScheduleEntry,
+} from "../../scripts/lost-child-event/probe";
 import {
   IncompleteScheduleError,
   incompleteWrites,
@@ -198,4 +205,60 @@ describe("lost-child-event probe descriptors", () => {
       await closed;
     }
   }, 10_000);
+});
+
+// An epoll descriptor's fdinfo as Linux 7.2 prints it (Bun 1.4.4, one child on pipes).
+const FDINFO = [
+  "pos:\t0",
+  "flags:\t02000002",
+  "mnt_id:\t19",
+  "ino:\t109",
+  "tfd:        7 events: 40000019 data:  80005769ffa1850  pos:0 ino:3cdfead sdev:a",
+  "tfd:       11 events:       19 data:  80005769ffa1828  pos:0 ino:3aa2532 sdev:6",
+  "tfd:        6 events: 40000000 data:  80005769ffa1800  pos:0 ino:3cdfeac sdev:a",
+  "tfd:        4 events: 80000019 data:      5769f6e0740  pos:0 ino:6d sdev:11",
+  "",
+].join("\n");
+
+describe("lost-child-event probe epoll state", () => {
+  test("parses every registration in an epoll descriptor's fdinfo", () => {
+    expect(parseEpollRegistrations(FDINFO)).toEqual([
+      { tfd: 7, events: "40000019", data: "80005769ffa1850" },
+      { tfd: 11, events: "19", data: "80005769ffa1828" },
+      { tfd: 6, events: "40000000", data: "80005769ffa1800" },
+      { tfd: 4, events: "80000019", data: "5769f6e0740" },
+    ]);
+  });
+
+  test("reports a disarmed one-shot, an unwatched end and a shared data word", () => {
+    const registrations = [
+      ...parseEpollRegistrations(FDINFO).map((r) => ({ ...r, epfd: 3 })),
+      // A second descriptor registered with the same poll object as fd 6.
+      { tfd: 20, events: "40000019", data: "80005769ffa1800", epfd: 3 },
+    ];
+    expect(describeEpoll([6, 9], registrations)).toEqual({
+      entries: ["3:6:40000000", "9:unregistered"],
+      sameData: ["3:20:40000019"],
+    });
+  });
+
+  test.if(process.platform === "linux")(
+    "reads this process's own epoll registrations for a child's ends",
+    async () => {
+      const before = openFds();
+      const child = spawn("sleep", ["0.3"], { stdio: "pipe" });
+      const fds = stdioFdsSince(before);
+      child.stdout.on("data", () => undefined);
+      const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+      try {
+        await Bun.sleep(50);
+        const { entries } = epollState(fds);
+        expect(entries).toHaveLength(fds.length);
+        for (const entry of entries) expect(entry).toMatch(/^\d+:(\d+:[0-9a-f]+|unregistered)$/);
+      } finally {
+        await closed;
+      }
+    },
+    10_000,
+  );
 });

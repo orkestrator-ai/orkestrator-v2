@@ -21,12 +21,19 @@ Updated 2026-11-13 after review: `reduction.ts replay` refuses a schedule with
 a write it cannot make, and the probe attributes to a child only the pipes
 and sockets opened across its spawn (see the two review subsections under
 "Assumptions and decisions"). Task statuses are unchanged.
+Updated 2026-11-14 against `main` at `dc90609bf`: task 3 done on beelink2.
+The trigger is a nested event-loop tick: an awaited `expect(promise).resolves`
+or `.rejects` in `bun test` drops the completion of another child finishing
+at the same moment. `scripts/lost-child-event/nested-tick.ts` reproduces it
+with nothing from this repository. Task 4 added: run that on macOS, where the
+same drop should lose an `exit`.
 
 ### Tasks
 
 1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: done (Linux 2026-11-11: 47 lost `close` events in 100 runs; macOS 2026-11-13: 4 lost `exit` and 3 lost `close` events in 100 runs).
-2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: done (2026-11-13). Faithful replays of test 1's 98 commands lost nothing: 0 in 98,000 children standalone and 0 in 9,800 inside `bun test` next to the harness. The smallest losing case is test 1 cut after its clone, with the watch host stubbed: `scripts/lost-child-event/in-process.ts`, which `scratch.ts` runs on the old pipe capture: 4 children lost in 3 of 350 runs, every one the 67th or 68th. No standalone form reproduces.
-3. **Find the in-process trigger**: find what test 1's service calls do around its 66th to 68th child that a replay of the same commands lacks, then rebuild that ingredient standalone. Status: open (start from the `mock.module` contrast in task 2).
+2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: done (2026-11-13). Faithful replays of test 1's 98 commands lost nothing: 0 in 98,000 children standalone and 0 in 9,800 inside `bun test` next to the harness. The smallest losing case is test 1 cut after its clone, with the watch host stubbed: `scripts/lost-child-event/in-process.ts`, which `scratch.ts` runs on the old pipe capture: 4 children lost in 3 of 350 runs, every one the 67th or 68th. No standalone form reproduced then; task 3 found one.
+3. **Find the in-process trigger**: find what test 1's service calls do around its 66th to 68th child that a replay of the same commands lacks, then rebuild that ingredient standalone. Status: done (2026-11-14, Linux). The ingredient is the test's `await expect(...).rejects` right after its clone: Bun settles it with a nested event-loop tick, which skips the rest of the outer tick's ready polls. With that one `expect` replaced, the reduction lost 0 children in 100 runs, against 42 in 37 of 100; `nested-tick.ts` loses 91 of 3,000 children standalone, and 0 without `expect`.
+4. **Run the standalone reproduction on macOS**: run `nested-tick.ts` on a macOS host, in its four modes and with no other child, and record whether the dropped event is an `exit` there, as Bun's source predicts. Status: open (needs a macOS host such as arktech-mini; agent work).
 
 ### 1. Reproduce on the old pipe capture
 
@@ -195,25 +202,99 @@ The committed reduction is two files. `in-process.ts` is test 1 copied verbatim 
 
 ### 3. Find the in-process trigger
 
-**Problem.** The committed reduction still needs this repository's backend, so it cannot go into an upstream report as it is, and the replay that would have been reportable loses nothing.
+**Problem.** The committed reduction still needed this repository's backend, so it could not go into an upstream report as it was, and the replay that would have been reportable lost nothing.
 
-**Context.** Task 2's table: the same commands replayed faithfully lose nothing; test 1 cut after its clone loses a child in about 1 run in 100 on macOS, nearly always the 67th or 68th; and a rewrite of that cut lost nothing in 400 runs when `runCommand` was swapped through `mock.module` rather than spliced. Linux has not run `in-process.ts`; there the real test lost about one child in two runs (task 1).
+**Context.** Task 2's table: the same commands replayed faithfully lose nothing; test 1 cut after its clone loses a child in about 1 run in 100 on macOS, nearly always the 67th or 68th; and a rewrite of that cut lost nothing in 400 runs when `runCommand` was swapped through `mock.module` rather than spliced. On Linux the real test lost about one child in two runs (task 1).
 
-**Investigation.** Not started. Next, run `scratch.ts` on beelink2 to see whether Linux loses the same children more often. Then, on the splice form, change one difference from the `mock.module` form at a time (the module swap, dynamic imports, the dropped reads), with enough runs to tell zero from the baseline. Then record what the service does in process between the 60th and 70th spawn (timers, `fs.promises` calls, SQLite statements, stream reads) and add those to `reduction.ts replay` one kind at a time. Running `scratch.ts` on beelink2 first would make each step cheaper, if Linux shows the same position.
+**Investigation.** Done 2026-11-14 on beelink2 (x86_64, 16 cores, Linux 7.2.15, Bun 1.4.4, git 2.56.0), natively, with no Docker. Host load average was about 5 at the start and 41 to 48 from the other worktrees' suites later; no CPU hogs were added. Every row used the scratch pipe capture and the strict probe. Rows counted in runs ran one `bun test` process per run, through `scratch.ts` or a scratch driver of the same shape; "4 at a time" ran four such processes at once with the probe's hold after the last test cut from 30 s to 7 s (a loss is recorded 5 s after it, so none is missed, but a late event is no longer seen). Rows counted in iterations ran in one process.
+
+The probe now also records, at a lost `close` on Linux, how the process's epoll instances hold the child's ends (`epollState`, read from `/proc/self/fdinfo`) and the JS state of its output streams (`streamState`). Every lost `close` below read the same: the child's group gone; its unread output ends polling `IN|HUP`; their registrations present and disarmed (`events: 40000000`, `EPOLLONESHOT` with no interest left); no other descriptor registered with the same poll object; and the JS stream flowing, empty, not ended, not destroyed, with its `data` listener. So Bun took the one-shot readiness from the kernel and never acted on it or re-armed it.
+
+| Step | Children | Lost | Runs with a loss |
+| --- | --- | --- | --- |
+| `in-process.ts` through `scratch.ts`, one run at a time (the baseline) | 1,527 | **3** `close`, the 69th to 71st | 3 of 20 |
+| The same, 4 at a time | 3,072 + 4,602 | **3 + 6** `close`, the 65th to 71st | 9 of 100 |
+| Test 1's schedule recorded on beelink2, replayed standalone (`reduction.ts replay`, 500 iterations) | 38,500 | 0; 0 mismatches | — |
+| The replay inside `bun test` through the scratch `runCommand`, one iteration per process, 4 at a time | 7,700 | 0 | 0 of 100 |
+| The same, with the public API harness created first | 7,700 | 0 | 0 of 100 |
+| The replay standalone with an `fs.promises` `stat`, `lstat` or `access` every 0 to 2 ms (`replay --fs=2`, 300 iterations) | 23,100 | 0; 0 mismatches | — |
+| `in-process.ts` with a tracing preload (every `fs` and `fs.promises` call, SQLite statement and timer logged by name and time), 4 at a time | 4,543 | **20** `close` | 18 of 60 |
+| A scratch standalone script: a `git clone` with three chains of quick Git commands running across it, then a `cat-file`, as the trace showed (400 iterations) | 6,302 | 0, with 300 children counted spanning a clone's exit in the traced 100 | — |
+| `in-process.ts` with only its `await expect(...).rejects` replaced by an awaited catch and an `expect` on the result, 4 at a time | 7,700 | **0** | **0 of 100** |
+| `in-process.ts` unchanged, beside it | 7,565 | **31** `close` | 30 of 100 |
+| The committed driver: `scratch.ts 100 --jobs=4 --hold=7000` | 7,501 | **42** `close`, the 64th to 70th | 37 of 100 |
+| The committed driver: `scratch.ts 100 --jobs=4 --hold=7000 --no-expect` | 7,700 | **0** | 0 of 100 |
+
+The trace located the loss. Across the 60 traced runs, all 20 lost children were spawned while the test's `git clone` ran and exited after it: 20 of the 104 children that spanned the clone's exit were lost, and 0 of the other 4,379. Each lost child's `exit` was reported just after the test spawned its `cat-file`, which it awaits through `expect(...).rejects`. The standalone clone script made the same overlap 300 times without a loss, so the overlap alone is not enough.
+
+Bun's own source names the mechanism. Above `PROCESS_POLL_ONE_SHOT` in `src/spawn/process.rs` (Bun 1.4.4), Bun explains why it watches a Linux pidfd level-triggered: if a poll callback re-enters the event loop (its example is `expect(p).resolves` reaching `waitForPromise` and `autoTick`), the inner tick overwrites the loop's shared `ready_polls`, `num_ready_polls` and `current_ready_poll`, and the outer dispatch silently skips its remaining events; a skipped one-shot event is never seen again. A child's stdout and stderr readers are still one-shot polls (every epoll listing here shows them registered with `EPOLLONESHOT`), so on Linux the skipped event is a pipe's EOF and the child loses `close`, never `exit`, as every Linux record here and in task 1 shows. macOS watches the process itself with `EV_ONESHOT`, which would make a skipped event a lost `exit`, matching the zombies of task 1; that is task 4's to confirm.
+
+`scripts/lost-child-event/nested-tick.ts` rebuilds it with nothing from this repository: a `bun test` file that spawns two `true` children on pipes, waits for the first to close, then waits on a promise. 1,000 iterations each, host load 45 to 48:
+
+| `LOST_CHILD_NESTED_MODE` | Children | Lost |
+| --- | --- | --- |
+| `rejects`: `await expect(run(["false"])).rejects.toThrow()` | 3,000 | **91** `close` |
+| `resolves`: `await expect(run(["true"])).resolves.toBeUndefined()` | 3,000 | **98** `close` |
+| `sleep`: `await expect(Bun.sleep(1)).resolves.toBeUndefined()`, which spawns nothing | 2,000 | **116** `close` |
+| `plain`: `await run(["false"]).catch(...)`, the same wait without `expect` | 3,000 | 0 |
+| `rejects` with no second child (`LOST_CHILD_NESTED_OTHERS=0`) | 2,000 | 0 |
+
+Every lost child was the second one, never the child that was awaited, and each read as above: group gone, ends at EOF, registrations disarmed. A prototype that consumed the output with `resume()` instead of a `data` listener lost 21 of 900. So the ingredient is any `expect(promise).resolves` or `.rejects` awaited while another child is finishing; nothing about Git, the scans, SQLite, the thread pool or the watch host is needed.
+
+What this rules out, beside task 2's list: the commands, their order, overlap and timing (the replay, standalone and in process, with and without the harness); `fs.promises` calls between them; the clone overlap on its own; and the `runCommand` options the services pass (logged for test 1's children: no abort signal and no stdin, only timeouts and output limits). Task 2's `mock.module` contrast is not explained by this record: that rewrite was not committed, so whether it still awaited `expect(...).rejects` is not known, and at its rate the 0 in 400 runs was already only suggestive.
 
 **Decisions.**
 
-- **Where to run it?**
-  - **Linux on beelink2 (recommended).**
+- **Where to run it?** (2026-11-13; done)
+  - **Linux on beelink2 (recommended, done).**
     - Pros: a higher rate than macOS (task 1), so fewer runs a step.
-    - Cons: `in-process.ts` has not been run there, and the macOS lost `exit` is checked only at the end.
+    - Cons: `in-process.ts` had not been run there, and the macOS lost `exit` is checked only at the end (task 4).
   - **macOS on arktech-mini.**
     - Pros: the reduction is measured there.
     - Cons: about 1 run in 100 loses an event, so telling zero from the baseline needs about 500 runs (about 25 minutes) a step.
+- **How to find the ingredient?** (2026-11-14)
+  - **Trace what the process does around the losses, then test the strongest correlate (done).**
+    - Pros: one traced batch located the loss at the clone and the `expect` after it; three runs of 100 then confirmed it.
+    - Cons: the trace's own overhead raised the rate (18 of 60 runs), so the traced runs are not a baseline.
+  - **Delete the test's service calls one at a time, as task 2 planned.**
+    - Pros: each step a direct comparison.
+    - Cons: the scans drive the lost children, so most deletions need a stand-in, and the clone-overlap script showed that rebuilding the services' command shape is not enough.
+- **What does the committed reduction carry?**
+  - **A `LOST_CHILD_NO_EXPECT` switch in `in-process.ts` and `--no-expect`, `--jobs` and `--hold` in `scratch.ts`, plus `nested-tick.ts` (recommended, done).**
+    - Pros: the contrast and the standalone case are both one command; four jobs at a time cut 100 runs to about three minutes.
+    - Cons: running four at a time and the shorter hold change the conditions from tasks 1 and 2, so their rates are compared within this task only.
+  - **Only `nested-tick.ts`.**
+    - Pros: smaller.
+    - Cons: nothing would show that the same ingredient is what the real test hits.
+- **Change this repository's tests?**
+  - **No change here (recommended).**
+    - Pros: `runCommand` no longer reads pipes (file capture) and the macOS reaper removes a zombie Bun never reports, so the product does not wait on a dropped event; `expect(...).resolves`/`.rejects` appears 7,364 times in 1,026 test files, so a rewrite is churn for a defect Bun can fix once.
+    - Cons: a test that awaits `expect(promise)` while other children finish can still see a late event on macOS, as case 1537 did; that stays a flake-registry matter until Bun is fixed.
+  - **Replace awaited `expect(promise)` matchers in tests that spawn children.**
+    - Pros: removes the trigger from this repository's suites.
+    - Cons: thousands of call sites, and other paths into `waitForPromise` would remain.
+
+### 4. Run the standalone reproduction on macOS
+
+**Problem.** Task 3 found the trigger and the standalone case on Linux only. The upstream report claims both platforms, and on macOS the expected symptom differs: Bun watches the process with `EV_ONESHOT`, so a skipped event should be a lost `exit` (a zombie never reaped), the symptom task 1 saw there.
+
+**Context.** `scripts/lost-child-event/nested-tick.ts` needs only Bun and the probe, which already has a macOS path (`waitid` from `libSystem`, `/dev/fd`). On Linux it lost 91 of 3,000 children with `rejects` and none with `plain` (task 3).
+
+**Investigation.** Not started. Run, from a checkout on a macOS host (arktech-mini): `LOST_CHILD_PROBE_OUT=<abs path> LOST_CHILD_NESTED_MODE=<mode> LOST_CHILD_NESTED_ITERATIONS=1000 bun test ./scripts/lost-child-event/nested-tick.ts` for `rejects`, `resolves`, `sleep` and `plain`, and `rejects` with `LOST_CHILD_NESTED_OTHERS=0`. Record each mode's `SUMMARY` (children, `lostExit`, `lostClose`) and whether the lost children were zombies (`LOST_EXIT`). No real data directory, credentials or Docker are needed.
+
+**Decisions.**
+
+- **What if macOS loses nothing?**
+  - **Record it and report the Linux case alone, citing task 1's macOS zombies as unexplained (recommended).**
+    - Pros: honest; the Linux reproduction is already complete.
+    - Cons: a weaker macOS claim.
+  - **Raise the iteration count or load until it does.**
+    - Pros: macOS rates were lower throughout.
+    - Cons: open-ended, and CPU hogs on the user's command node need asking first.
 
 ## Current state
 
-Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is done: the faithful replay of test 1's commands loses nothing, and the smallest losing case, test 1 cut after its clone, is committed as `scripts/lost-child-event/in-process.ts` with `scratch.ts` to run it. Task 3, finding the in-process ingredient, is open. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
+Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is done: the faithful replay of test 1's commands loses nothing, and the smallest losing case, test 1 cut after its clone, is committed as `scripts/lost-child-event/in-process.ts` with `scratch.ts` to run it. Task 3 is done (2026-11-14): the trigger is an awaited `expect(promise).resolves` or `.rejects`, whose nested event-loop tick drops the rest of the outer tick's ready one-shot polls, and `scripts/lost-child-event/nested-tick.ts` reproduces it standalone on Linux. Task 4, the same run on macOS, is open. Filing the upstream report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md). To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
 
 ## Constraints and rationale
 
@@ -293,6 +374,26 @@ Review found that a write recorded without its content (over 64 KiB) was counted
 
 Review found that `track()` took every descriptor that appeared across the spawn as the child's stdio. On macOS, `openFds()`'s own listing holds a directory descriptor that appears in what it reads and is closed when it returns (checked: `/dev/fd` lists it, `fstat` then fails), so a spawn that reused that number hid one of the child's ends from the diff, and a later listing's own descriptor could pass for one; on Linux a pidfd would count too. Bun's `node:child_process` exposes no descriptor on the child's streams (`_handle` and `fd` are absent, checked on Bun 1.4.4), so reading them from the handles, the review's first suggestion, is not possible. Instead `openFds()` keeps only descriptors still open after the listing, `stdioFdsSince()` keeps only pipes and sockets, and a `LOST_CLOSE` record carries `fdsAttributed`, false when the count is not the child's number of piped streams. The `sleep 7` control still reads as before, with three attributed ends (`stdin` already closed polls `NVAL`, the output ends `none`). The macOS and Linux loss records above were taken with the old diff: an end recorded there as polling `IN|HUP` was an open, readable descriptor at EOF, but that it was the child's stdout end, rather than another descriptor opened at the same moment, is not proven for those records.
 
+### Task 3: runs four at a time with a 7 s hold (2026-11-14)
+
+At one run at a time with the 30 s hold, a run with a loss takes over 30 s, so 100 runs took most of an hour. Four processes at a time with the hold cut to 7 s (`scratch.ts --jobs=4 --hold=7000`) still record every loss, since the probe records one 5 s after it happens, and took about three minutes per 100 runs. They no longer show whether a late event ever came, which task 1 already settled. The rate rose from 3 of 20 runs one at a time to between 9 and 37 of 100 at four, with host load: comparisons are made only between rows run the same way, beside each other.
+
+### Task 3: the probe reads epoll state and stream state at a lost `close` (2026-11-14)
+
+The poll result says the kernel reports EOF, but not whether Bun's registration is armed or whether the JS side is waiting. `epollState` reads `/proc/self/fdinfo/<epoll fd>`, which starts no process and changes nothing, and `streamState` reads the streams' public fields without touching them. Both run only when a loss is recorded, never per child, so they cannot change the rate being measured. The fdinfo parsing is a pure function, `parseEpollRegistrations`, pinned in `tests/unit/lost-child-event-scripts.test.ts` with a listing taken on beelink2.
+
+### Task 3: the trace was a scratch preload, not committed (2026-11-14)
+
+The tracing preload wrapped every `fs` and `fs.promises` function, `Database.prototype` statements and `setTimeout` to log names and times only, never arguments or contents. It raised the rate about threefold, so it is a locating tool, not a measurement, and the finding it pointed to is now pinned by the committed `--no-expect` contrast and `nested-tick.ts`, which need no trace. It was kept out of the repository with the scratch clone-overlap script for the same reason.
+
+### Task 3: Bun's source was read, not run (2026-11-14)
+
+The mechanism is quoted from Bun 1.4.4's `src/spawn/process.rs`, `src/io/PipeReader.rs` and `src/runtime/webcore/FileReader.rs`, fetched read-only from the `bun-v1.4.4` tag into this build's git-ignored `output/` and removed afterwards. Nothing from them was built or executed. The claim rests on the measurements; the source explains them and predicts the macOS symptom, which task 4 checks.
+
+### Task 3: task 4 added rather than retiring the to-do (2026-11-14)
+
+Task 3 is complete for Linux. The macOS run is agent work on another host with a concrete command, and its answer changes the upstream report's macOS claim, so it is a task here rather than a manual item. Filing the report stays the manual-test checklist's item, now pointing at `nested-tick.ts`.
+
 ### Task 2: the reduction started on Linux before the macOS half of task 1 (2026-11-11)
 
 Task 2 depended on task 1 for a reproduction to reduce from. The Linux half gives one, so the first two reduction steps were taken there rather than waiting for a macOS host.
@@ -301,7 +402,8 @@ Task 2 depended on task 1 for a reproduction to reduce from. The Linux half give
 
 - To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and filing the report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
-- `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reductions (`reduction.ts`: `pattern`, `replay`, `--block`); the in-process reduction (`in-process.ts`) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`)
+- `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reproduction (`nested-tick.ts`, task 3); the standalone reductions that do not reproduce (`reduction.ts`: `pattern`, `replay`, `--block`, `--fs`); the in-process reduction (`in-process.ts`, with its `LOST_CHILD_NO_EXPECT` contrast) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`)
+- Bun 1.4.4's own account of the re-entry: the comment above `PROCESS_POLL_ONE_SHOT` in `src/spawn/process.rs` at the `bun-v1.4.4` tag of <https://github.com/oven-sh/bun>
 
 ## Replaces
 

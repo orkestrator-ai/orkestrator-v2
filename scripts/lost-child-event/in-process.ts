@@ -12,12 +12,20 @@
  * Each run spawns 77 Git children. On macOS (arktech-mini, Bun 1.4.4) about
  * 1 run in 100 loses one (3 of 350 on 2026-11-13), always the 67th or 68th: the `merge-base` or
  * `config` of the diff scan the service starts in the background as the test
- * resets its override and clones. Replaying the same 77 commands with the
- * same file writes, identity and timing (`reduction.ts replay`), standalone or
- * inside `bun test` next to the harness, loses nothing. A shorter rewrite of
- * this test lost 1 child in 300 runs, too few to tell apart, and lost none
- * in 400 with `runCommand` swapped through `mock.module` instead of spliced
- * in, so the test is kept as written. See to-do 6900 for the counts.
+ * resets its override and clones. On Linux (beelink2) 10 to 30 runs in 100
+ * lose one, the 65th to 71st. Replaying the same 77 commands with the same
+ * file writes, identity and timing (`reduction.ts replay`), standalone or
+ * inside `bun test` next to the harness, loses nothing.
+ *
+ * The trigger (task 3, 2026-11-14) is the `await expect(...).rejects` on the
+ * `cat-file` after the clone: Bun settles it by running the event loop from
+ * inside the current callback, and that nested tick drops the rest of the
+ * outer tick's ready polls, among them the EOF of a scan child that exited
+ * as the clone finished. Every lost child was spawned while the clone ran and
+ * exited after it. With `LOST_CHILD_NO_EXPECT=1` (`scratch.ts --no-expect`)
+ * the same wait runs without `expect` and the file loses nothing (0 in 100
+ * runs against 31 lost in 30 of 100). `nested-tick.ts` is the standalone
+ * form. See to-do 6900 for the counts.
  *
  * Nothing imports this file, and it is not named `.test.ts`, so no suite runs it.
  */
@@ -223,9 +231,16 @@ test("saved/reset overrides retarget real scans and reverts; replacement drops a
       containerId: null,
       status: "running",
     });
-    await expect(
-      step("git cat-file", () => freshGit(["cat-file", "-e", unpushed])),
-    ).rejects.toThrow();
+    const catFile = step("git cat-file", () => freshGit(["cat-file", "-e", unpushed]));
+    if (process.env.LOST_CHILD_NO_EXPECT) {
+      // The contrast (to-do 6900, task 3): the same wait without
+      // `expect(...).rejects`, whose nested event-loop tick is the trigger.
+      let failed = false;
+      await catFile.catch(() => {
+        failed = true;
+      });
+      expect(failed).toBe(true);
+    } else await expect(catFile).rejects.toThrow();
     // Cut here (to-do 6900): let the scans the service started in the
     // background finish.
     await step("settle", () => Bun.sleep(1_000));

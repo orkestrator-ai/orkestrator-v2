@@ -3,6 +3,7 @@
  * capture, without that capture ever reaching a branch:
  *
  *   bun scripts/lost-child-event/scratch.ts [runs=100] [--keep] [--in-tree]
+ *     [--jobs=N] [--hold=MS] [--no-expect]
  *
  * 1. `git worktree add --detach` of HEAD under this checkout's git-ignored
  *    `output/agent-testing/lost-child-event-scratch-<time>/`, then
@@ -20,21 +21,43 @@
  * 4. Runs `in-process.ts` once per process, `runs` times, from the worktree's
  *    `apps/backend` with the strict probe, appending its records to
  *    `output/agent-testing/lost-child-event-scratch-<time>.jsonl`, and prints
- *    the totals.
+ *    the totals. `--jobs=N` runs N processes at a time (default 1); each run
+ *    writes its own file, appended after its `RUN` line when it ends, so a
+ *    record still belongs to the run that made it. `--hold=MS` shortens the
+ *    probe's 30 s wait after the test (`LOST_CHILD_PROBE_HOLD_MS`): 7000
+ *    still records every loss, since a loss is recorded 5 s after it, but no
+ *    longer shows whether a late event came. `--no-expect` sets
+ *    `LOST_CHILD_NO_EXPECT=1`, so `in-process.ts` waits on its `cat-file`
+ *    without `expect(...).rejects` (to-do 6900, task 3).
  * 5. Removes the worktree (`--keep` leaves it for a look).
  *
  * The records hold command labels and timings only (`probe.ts`). macOS and
  * Linux.
  */
-import { spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 const args = process.argv.slice(2);
 const runs = Number(args.find((arg) => !arg.startsWith("--")) ?? 100);
 const keep = args.includes("--keep");
 const inTree = args.includes("--in-tree");
+const noExpect = args.includes("--no-expect");
+const option = (name: string): string | undefined =>
+  args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+const jobs = Number(option("jobs") ?? 1);
+const hold = option("hold");
 if (!Number.isSafeInteger(runs) || runs <= 0) throw new Error("runs must be a positive integer");
+if (!Number.isSafeInteger(jobs) || jobs <= 0) throw new Error("--jobs must be a positive integer");
+if (hold !== undefined && !(Number(hold) >= 0)) throw new Error("--hold must be a number of ms");
 
 const here = import.meta.dir;
 const repo = path.resolve(here, "../..");
@@ -106,29 +129,50 @@ try {
       source.replaceAll("../../apps/backend/src/core/", "./"),
     );
   }
-  const env = { ...process.env, LOST_CHILD_PROBE_OUT: out };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (hold !== undefined) env.LOST_CHILD_PROBE_HOLD_MS = hold;
+  if (noExpect) env.LOST_CHILD_NO_EXPECT = "1";
   let passed = 0;
-  for (let run = 1; run <= runs; run++) {
-    appendFileSync(out, `${JSON.stringify({ kind: "RUN", run })}\n`);
-    const status = sh(
-      process.execPath,
-      [
-        "test",
-        "--preload",
-        "../../tests/setup-node.ts",
-        "--preload",
-        "../../scripts/lost-child-event/preload.ts",
-        testFile,
-      ],
-      backend,
-      env,
-    );
-    if (status === 0) passed++;
-  }
+  let next = 1;
+  const once = (run: number) =>
+    new Promise<number>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "test",
+          "--preload",
+          "../../tests/setup-node.ts",
+          "--preload",
+          "../../scripts/lost-child-event/preload.ts",
+          testFile,
+        ],
+        {
+          cwd: backend,
+          env: { ...env, LOST_CHILD_PROBE_OUT: `${out}.${run}` },
+          stdio: ["ignore", "ignore", jobs === 1 ? "inherit" : "ignore"],
+        },
+      );
+      child.once("error", reject);
+      child.once("close", (code) => resolve(code ?? 1));
+    });
+  const worker = async () => {
+    while (next <= runs) {
+      const run = next++;
+      const status = await once(run);
+      if (status === 0) passed++;
+      const records = `${out}.${run}`;
+      appendFileSync(out, `${JSON.stringify({ kind: "RUN", run, status })}\n`);
+      if (existsSync(records)) {
+        appendFileSync(out, readFileSync(records));
+        rmSync(records);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(jobs, runs) }, worker));
   const rows = readFileSync(out, "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { kind: string; tracked?: number });
+    .map((line) => JSON.parse(line) as { kind: string; tracked?: number; seq?: number });
   const count = (kind: string) => rows.filter((row) => row.kind === kind).length;
   const lostRuns = new Set<number>();
   let current = 0;
@@ -140,11 +184,18 @@ try {
     JSON.stringify({
       kind: "SCRATCH",
       runs,
+      jobs,
+      noExpect,
       passed,
       children: rows.reduce((sum, row) => sum + (row.kind === "SUMMARY" ? row.tracked! : 0), 0),
       lostExit: count("LOST_EXIT"),
       lostClose: count("LOST_CLOSE"),
       runsWithLoss: lostRuns.size,
+      // Each lost child's position among its run's children.
+      positions: rows
+        .filter((row) => row.kind === "LOST_EXIT" || row.kind === "LOST_CLOSE")
+        .map((row) => row.seq)
+        .sort((a, b) => a! - b!),
       records: out,
     }),
   );

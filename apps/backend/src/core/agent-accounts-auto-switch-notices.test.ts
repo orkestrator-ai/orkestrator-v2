@@ -58,6 +58,23 @@ describe("the notice of an automatic switch", () => {
     expect(JSON.stringify(send.mock.calls)).not.toContain("side-tab");
   });
 
+  test("carries the two accounts as facts and rides along instead of waking the coordinator", async () => {
+    const send = mock(async () => ({}));
+    await mailAutoSwitchNotice(storageWith(send), NOTICE, "mini");
+    const [, , options] = send.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { notice: unknown; rideAlong: boolean },
+    ];
+    expect(options.rideAlong).toBe(true);
+    expect(options.notice).toEqual({
+      resource: { kind: "account-switch", id: "codex", label: "mini" },
+      accountSwitch: { provider: "Codex", from: "a@example.com", to: "b@example.com" },
+      state: "account-switched",
+      tone: "info",
+    });
+  });
+
   test("one coordinator refusing mail does not stop the others hearing", async () => {
     const send = mock(async (_sender: unknown, message: unknown) => {
       if ((message as { toTabId: string }).toTabId === "main-tab") throw new Error("mail is off");

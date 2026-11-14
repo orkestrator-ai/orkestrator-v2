@@ -512,7 +512,13 @@ export function registerCoordinatorWorkerMailCommands(
         own,
       };
       if (destination.projectHome !== true) {
-        await assertCoordinatorMayActOnEnvironment(context, sender, destination.id);
+        await assertCoordinatorMayActOnEnvironment(
+          context,
+          sender,
+          destination.id,
+          undefined,
+          mail.replyToMessageId ? "mail-reply" : "mail",
+        );
         return sendCoordinatorWorkerMail(context, invokerFor(context), sender, destination, mail);
       }
       const reason =

@@ -5,6 +5,11 @@ import {
   COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL,
 } from "@orkestrator/protocol/coordinator";
 import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
+import {
+  isMultiReviewWorkflow,
+  MULTI_REVIEW_WORKFLOW_VERSION,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 import { seedStore, readStoredValue } from "./storage-test-support.js";
@@ -33,6 +38,7 @@ import { rpc } from "./control-mcp/server-test-support.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp/tools.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { graphRunFixture } from "./graph-run-test-support.js";
+import { coordinatorEnvironmentRefusals } from "./coordinator-environment-refusals.js";
 
 // Real MCP dispatch and commands over real stores. Only the node link is
 // simulated. The world starts with the project's setting at its default, off.
@@ -630,6 +636,123 @@ test("mail and tools to an environment on another node are refused the same way"
   );
   expect(routed).not.toContain("deliver_node_mail");
   expect(routed).not.toContain("dispatch_native_agent_intent");
+});
+
+test("each refusal is counted by surface, node and tool, and no id is kept (6080 task 6)", async () => {
+  coordinatorEnvironmentRefusals.reset();
+  refused(await tool("send_message", message(handMade)));
+  // A reply to the hand-made environment's own mail is refused too, and counted apart.
+  const parent = await world.send(handMadeActor, "coordinator", "A question");
+  refused(await tool("send_message", message(handMade, { replyToMessageId: parent.id })));
+  refused(await tool("send_message", message(leafWorkerId, { nodeId: LEAF })));
+  refused(
+    await tool("send_prompt_to_tab", {
+      requestId: "prompt",
+      environmentId: leafWorkerId,
+      tabId: "startup-agent",
+      prompt: "Run this",
+      nodeId: LEAF,
+    }),
+  );
+  refused(await tool("launch_job", { ...actions(handMade).launch_job }));
+  // A passing check counts nothing.
+  await launched(handMade);
+  expect((await tool("start_environment", { environmentId: handMade })).text).not.toBe(
+    COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL,
+  );
+  const snapshot = coordinatorEnvironmentRefusals.snapshot();
+  expect(snapshot).toEqual({
+    total: 5,
+    bySurface: {
+      "mail:local": 1,
+      "mail-reply:local": 1,
+      "node-mail:remote": 1,
+      "tool:remote": 1,
+      "tool:local": 1,
+    },
+    byTool: { send_prompt_to_tab: 1, launch_job: 1 },
+  });
+  const serialized = JSON.stringify(snapshot);
+  for (const id of [handMade, leafWorkerId, world.projectId, scope.coordinatorId, parent.id]) {
+    expect(serialized).not.toContain(id);
+  }
+});
+
+test("node replies, review addressing and workflow controls are each counted under their own surface (6080 task 6)", async () => {
+  coordinatorEnvironmentRefusals.reset();
+  // A reply to another node's environment: send_coordinator_node_mail with a parent.
+  refused(
+    await tool("send_message", message(leafWorkerId, { nodeId: LEAF, replyToMessageId: "parent" })),
+  );
+  expect(routed).not.toContain("deliver_node_mail");
+  // Addressing a review starts a turn in its environment, here and on another node.
+  const review = (id: string, projectId: string, environmentId: string): MultiReviewWorkflow => ({
+    version: MULTI_REVIEW_WORKFLOW_VERSION,
+    controller: "backend",
+    id,
+    environmentId,
+    projectId,
+    targetBranch: "main",
+    phase: "reviewing",
+    reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+    fixModel: { agent: "codex", model: "gpt-6" },
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    backendRevision: 1,
+  });
+  const local = review("local-review", world.projectId, handMade);
+  expect(isMultiReviewWorkflow(local)).toBe(true);
+  await world.storage.saveMultiReviewWorkflow(local.id, handMade, 1, local);
+  refused(await tool("address_multi_review", { workflowId: local.id }));
+  const leafProjectId = (await leaf.getEnvironment(leafWorkerId))!.projectId;
+  const remoteReview = review("leaf-review", leafProjectId, leafWorkerId);
+  await leaf.saveMultiReviewWorkflow(remoteReview.id, leafWorkerId, 1, remoteReview);
+  refused(await tool("address_multi_review", { workflowId: "leaf-review", nodeId: LEAF }));
+  // A pipeline control before its environment exists, through the tool's origin check.
+  await world.storage.saveBuildPipeline("unowned-provisioning", world.projectId, "", 1, {
+    id: "unowned-provisioning",
+    projectId: world.projectId,
+    environmentId: "",
+    phase: "preparing",
+  } as never);
+  refused(await tool("pause_build_pipeline", { pipelineId: "unowned-provisioning" }));
+  // A graph cancellation with no environment, checked by its command: no tool attribution.
+  const run = graphRunFixture({ projectId: world.projectId, status: "provisioning" });
+  delete run.environmentId;
+  const cancel = mock(async () => ({ ...run, status: "cancelled" as const }));
+  rootContext.graphRuns = {
+    get: async () => run,
+    cancel,
+  } as unknown as CommandContext["graphRuns"];
+  const graph = await tool("cancel_graph_run", { runId: run.id });
+  expect(graph.isError).toBe(true);
+  expect(graph.text).toContain(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+  expect(cancel).not.toHaveBeenCalled();
+
+  const snapshot = coordinatorEnvironmentRefusals.snapshot();
+  expect(snapshot).toEqual({
+    total: 5,
+    bySurface: {
+      "node-mail-reply:remote": 1,
+      "review-address:local": 1,
+      "review-address:remote": 1,
+      "workflow-control:local": 2,
+    },
+    byTool: { pause_build_pipeline: 1 },
+  });
+  const serialized = JSON.stringify(snapshot);
+  for (const id of [
+    handMade,
+    leafWorkerId,
+    world.projectId,
+    scope.coordinatorId,
+    run.id,
+    "local-review",
+    "leaf-review",
+    "unowned-provisioning",
+  ]) {
+    expect(serialized).not.toContain(id);
+  }
 });
 
 test("with the setting on, each action succeeds and reaches its effect", async () => {

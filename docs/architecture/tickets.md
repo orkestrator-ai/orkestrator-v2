@@ -437,8 +437,10 @@ before `updatedAt` existed reads as updated when it was created
 (`ticketUpdatedAt`); nothing is written back until it next changes. The
 ticket view's header shows "Created …" and, when it differs by a minute or
 more, "Updated …" beside the Notes line, each with its exact local time as a
-tooltip (`ticket-view/ticket-times.ts`); board cards show a muted
-"Updated …" in the space their Open button already keeps.
+tooltip (`ticket-view/ticket-times.ts`). A change within that first minute
+is folded into "Created", whose tooltip then also gives the exact update
+time. Board cards show a muted "Updated …" from the exact `updatedAt` in the
+space their Open button already keeps.
 
 `TicketSectionsGrid` renders the sections as tiles in render order for the
 pipeline Ticket node inspector. It sizes to its container: one column, two
@@ -557,8 +559,10 @@ coordinator or the launcher send with it.
 
 **Updated times.** Snapshots and creations carry `updatedAt`, so a leaf's
 copy shows the command node's created and updated times. A leaf adopts the
-board's time unless a change of its own is still queued (then the later of
-the two). A change to only the board's own build or pull request links bumps
+board's time unless a change of its own, of any kind, is still queued (then
+the later of the two). When a leaf creates a ticket and edits it before the
+next sync, the command node applies both in one batch and the edit refreshes
+the time the creation brought. A change to only the board's own build or pull request links bumps
 the ticket's `seq` without a field revision, so the copy's time follows. A
 peer that predates `updatedAt` sends none: a creation then uses `createdAt`,
 and a leaf refreshes its copy's time only when the snapshot changed it.

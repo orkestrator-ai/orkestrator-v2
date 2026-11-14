@@ -286,13 +286,7 @@ export class KanbanSyncRepository {
           before: normalizeKanbanTask(row),
           after: normalizeKanbanTask(updated),
           incoming: item.updatedAt,
-          pendingLocal:
-            pending.created ||
-            pending.fields.size > 0 ||
-            pending.addedComments.size > 0 ||
-            pending.removedComments.size > 0 ||
-            pending.addedImages.size > 0 ||
-            pending.removedImages.size > 0,
+          pendingLocal: pending.queued,
           now,
         });
         next = next.map((task) => (task.id === row.id ? updated : task));
@@ -460,6 +454,9 @@ export class KanbanSyncRepository {
           : { outboxEpoch: input.epoch, appliedSeq: 0, projects: existing?.projects ?? {} };
       const now = nowIso();
       const changes = new Map<string, { before: KanbanTask | null; stored: KanbanTask | null }>();
+      // A ticket this batch creates, as its creation brought it: a later op in
+      // the same batch that edits it is an update (`touchTicket`).
+      const createdAs = new Map<string, KanbanTask>();
       const attributed = new Map<string, Set<TicketSyncField>>();
       const workChanged = new Set<string>();
       const conflicts: TicketSyncConflict[] = [];
@@ -557,6 +554,7 @@ export class KanbanSyncRepository {
           };
           tasks = [...tasks, created];
           changes.set(created.id, { before: null, stored: created });
+          createdAs.set(created.id, normalizeKanbanTask(structuredClone(created)));
           for (const field of ["title", "content", "status"] as const) attribute(created.id, field);
           continue;
         }
@@ -693,7 +691,8 @@ export class KanbanSyncRepository {
       for (const change of changes.values()) {
         const seqBefore = change.stored?.sync?.seq;
         touchTicket({
-          before: change.before,
+          // A creation keeps the leaf's time unless this batch also edited it.
+          before: change.before ?? (change.stored ? createdAs.get(change.stored.id) : null) ?? null,
           after: change.stored ? normalizeKanbanTask(change.stored) : null,
           stored: change.stored,
           now: stamp,

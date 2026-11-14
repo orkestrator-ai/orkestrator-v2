@@ -110,6 +110,7 @@ describe("ticket updatedAt across machines", () => {
     const created = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Older leaf", "");
     // As a leaf that predates `updatedAt` queues it.
     const outbox = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
+    if (!outbox.epoch) throw new Error("The leaf queued nothing for its command node.");
     const items = outbox.items.map((queued) => {
       if (queued.op.kind !== "create") return queued;
       const { updatedAt: _none, ...ticket } = queued.op.ticket;
@@ -121,6 +122,76 @@ describe("ticket updatedAt across machines", () => {
       items,
     });
     expect((await f.commandTicket(created.id))?.updatedAt).toBe(created.createdAt);
+  });
+
+  test("a leaf's edit batched with its creation refreshes the board's time", async () => {
+    const f = await fleet();
+    await f.sync.sync(LEAF_ID);
+    const created = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Draft", "");
+    await f.leaf.kanban.updateKanbanTask(created.id, { title: "Renamed", status: "review" });
+    // Created long ago, as far as the board can tell: only the edit can move it.
+    const outbox = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
+    if (!outbox.epoch) throw new Error("The leaf queued nothing for its command node.");
+    expect(outbox.items.map((queued) => queued.op.kind)).toEqual([
+      "create",
+      "set-title",
+      "set-status",
+    ]);
+    const items = outbox.items.map((queued) =>
+      queued.op.kind === "create"
+        ? { ...queued, op: { ...queued.op, ticket: { ...queued.op.ticket, updatedAt: OLD } } }
+        : queued,
+    );
+    await f.command.ticketSync.applyTicketSyncOps({ nodeId: LEAF_ID, epoch: outbox.epoch, items });
+    const board = (await f.commandTicket(created.id))!;
+    expect(board).toMatchObject({ title: "Renamed", status: "review" });
+    expect(Date.parse(board.updatedAt!)).toBeGreaterThan(Date.parse(OLD));
+
+    // Acknowledged, the copy adopts the board's time.
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(created.id))?.updatedAt).toBe(board.updatedAt!);
+  });
+
+  test("a leaf change still queued keeps the copy's newer time, of any kind", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Checks", "");
+    await f.command.kanban.updateKanbanTask(ticket.id, {
+      sections: { acceptanceCriteria: [{ id: "ac-1", text: "Works" }] },
+    });
+    const linked = await f.command.kanban.addKanbanTask(f.commandProject.id, "Work", "");
+    await f.sync.sync(LEAF_ID);
+    const seen = await snapshotOf(f, ticket.id);
+    const seenLinked = await snapshotOf(f, linked.id);
+    await applyToLeaf(f, seen.epoch, [
+      { ...seen.item, updatedAt: OLD },
+      { ...seenLinked.item, updatedAt: OLD },
+    ]);
+
+    // A criterion result and a build link: neither moves a field revision.
+    const criterion = (await f.leafTicket(ticket.id))?.sections?.acceptanceCriteria?.[0];
+    expect(criterion?.text).toBe("Works");
+    const checked = await f.leaf.kanban.recordKanbanCriteriaChecks(ticket.id, [
+      {
+        id: criterion!.id,
+        text: "Works",
+        check: { status: "passed", evidence: "ok", source: "verify", checkedAt: OLD },
+      },
+    ]);
+    const built = await f.leaf.kanban.updateKanbanTask(linked.id, {
+      buildPipelineId: "pipeline-1",
+    });
+    const outbox = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
+    expect(outbox.items.map((queued) => queued.op.kind).sort()).toEqual(["checks", "work"]);
+    expect(Date.parse(checked!.updatedAt!)).toBeGreaterThan(Date.parse(OLD));
+    expect(Date.parse(built.updatedAt!)).toBeGreaterThan(Date.parse(OLD));
+
+    // A board snapshot with an older time arrives before the leaf's changes go up.
+    await applyToLeaf(f, seen.epoch, [
+      { ...seen.item, seq: seen.item.seq + 1, updatedAt: OLD },
+      { ...seenLinked.item, seq: seenLinked.item.seq + 1, updatedAt: OLD },
+    ]);
+    expect((await f.leafTicket(ticket.id))?.updatedAt).toBe(checked!.updatedAt!);
+    expect((await f.leafTicket(linked.id))?.updatedAt).toBe(built.updatedAt!);
   });
 
   test("an older command node's snapshot without updatedAt is tolerated", async () => {

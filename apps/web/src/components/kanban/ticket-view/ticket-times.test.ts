@@ -30,10 +30,26 @@ describe("ticketTimes", () => {
   test("leaves Updated out when it equals Created", () => {
     const createdAt = ago(3 * 3600);
     expect(ticketTimes({ createdAt, updatedAt: createdAt }, NOW, exact).updated).toBeNull();
-    // Images the create dialog attaches a moment later are part of the creation.
-    expect(
-      ticketTimes({ createdAt, updatedAt: ago(3 * 3600 - 30) }, NOW, exact).updated,
-    ).toBeNull();
+    expect(ticketTimes({ createdAt, updatedAt: createdAt }, NOW, exact).created?.title).toBe(
+      `Created exact(${createdAt})`,
+    );
+  });
+
+  test("a change within a minute of creation joins Created, keeping its exact time", () => {
+    // Images the create dialog attaches a moment later read as the creation.
+    const createdAt = ago(3 * 3600);
+    const updatedAt = ago(3 * 3600 - 30);
+    const times = ticketTimes({ createdAt, updatedAt }, NOW, exact);
+    expect(times.updated).toBeNull();
+    expect(times.created).toEqual({
+      text: "Created 3h ago",
+      title: `Created exact(${createdAt})\nUpdated exact(${updatedAt})`,
+      dateTime: createdAt,
+    });
+  });
+
+  test("an update a minute or more after creation is shown", () => {
+    const createdAt = ago(3 * 3600);
     expect(
       ticketTimes({ createdAt, updatedAt: ago(3 * 3600 - 60) }, NOW, exact).updated?.text,
     ).toBe("Updated 2h ago");
@@ -93,6 +109,16 @@ describe("ticketCardTime", () => {
       dateTime: createdAt,
     });
     expect(ticketCardTime({ createdAt }, NOW, exact)?.text).toBe("Updated 2h ago");
+  });
+
+  test("a change within a minute of creation still shows its own exact time", () => {
+    const createdAt = "2026-11-14T09:00:00.000Z";
+    const updatedAt = "2026-11-14T09:00:30.000Z";
+    expect(ticketCardTime({ createdAt, updatedAt }, NOW, exact)).toEqual({
+      text: "Updated 2h ago",
+      title: `Updated exact(${updatedAt})\nCreated exact(${createdAt})`,
+      dateTime: updatedAt,
+    });
   });
 
   test("nothing when no time can be read", () => {

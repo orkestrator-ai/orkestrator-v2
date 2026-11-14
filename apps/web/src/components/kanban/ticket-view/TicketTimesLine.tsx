@@ -14,7 +14,7 @@ function TimeText({ time, testId }: { time: TicketTime; testId: string }) {
 /**
  * "Created 3h ago · Updated 5m ago" in the ticket view's header, each with
  * its exact local time as a tooltip. "Updated" is left out while it says the
- * same as "Created".
+ * same as "Created"; a change in the first minute is in Created's tooltip.
  */
 export function TicketTimesLine({
   task,

@@ -23,14 +23,19 @@ export interface TicketTime {
 export interface TicketTimes {
   /** Null only for a ticket whose creation time cannot be read. */
   created: TicketTime | null;
-  /** Null when it says the same as `created`: a ticket never changed since. */
+  /**
+   * Null when it would say the same as `created`: a ticket never changed
+   * since, or changed within a minute of its creation. In that second case
+   * `created`'s tooltip also gives the exact update time.
+   */
   updated: TicketTime | null;
 }
 
 /**
- * An update within this long of the creation is the creation: the dialog that
- * creates a ticket attaches its images just after, and "Created 3h ago ·
- * Updated 3h ago" would only repeat itself.
+ * The header shows an update within this long of the creation as part of the
+ * creation: the dialog that creates a ticket attaches its images just after,
+ * and "Created 3h ago · Updated 3h ago" would only repeat itself. The exact
+ * update time stays in the tooltip, and the board card always uses it.
  */
 const SAME_TIME_MS = 60_000;
 
@@ -59,41 +64,60 @@ function ticketTime(
   };
 }
 
-/** The ticket view header's times; "Updated" only when it differs from "Created". */
+/**
+ * Both readable times, `updated` null only when the ticket has not changed
+ * since its creation (the same instant) or its time cannot be read.
+ */
+function readTicketTimes(
+  task: Pick<KanbanTask, "createdAt" | "updatedAt">,
+  now: Date,
+  formatExact: FormatExactTime,
+): { created: TicketTime | null; updated: TicketTime | null; gapMs: number | null } {
+  const created = readTime(task.createdAt);
+  const updated = readTime(ticketUpdatedAt(task));
+  const changed = updated !== null && (created === null || updated.getTime() !== created.getTime());
+  return {
+    created: created ? ticketTime("Created", created, now, formatExact) : null,
+    updated: changed && updated ? ticketTime("Updated", updated, now, formatExact) : null,
+    gapMs: created && updated ? Math.abs(updated.getTime() - created.getTime()) : null,
+  };
+}
+
+/**
+ * The ticket view header's times. "Updated" appears when it is a minute or
+ * more after "Created"; an earlier change is folded into "Created", whose
+ * tooltip then gives both exact times.
+ */
 export function ticketTimes(
   task: Pick<KanbanTask, "createdAt" | "updatedAt">,
   now: Date = new Date(),
   formatExact: FormatExactTime = formatExactLocalTime,
 ): TicketTimes {
-  const created = readTime(task.createdAt);
-  const updated = readTime(ticketUpdatedAt(task));
-  const changed =
-    updated !== null &&
-    (created === null || Math.abs(updated.getTime() - created.getTime()) >= SAME_TIME_MS);
-  return {
-    created: created ? ticketTime("Created", created, now, formatExact) : null,
-    updated: changed && updated ? ticketTime("Updated", updated, now, formatExact) : null,
-  };
+  const { created, updated, gapMs } = readTicketTimes(task, now, formatExact);
+  if (created && updated && gapMs !== null && gapMs < SAME_TIME_MS) {
+    return { created: { ...created, title: `${created.title}\n${updated.title}` }, updated: null };
+  }
+  return { created, updated };
 }
 
 /**
  * A board card's one compact time: when the ticket last changed (its creation,
- * if never since). The tooltip gives both exact times. Null only when neither
- * can be read.
+ * if never since), always the exact `updatedAt`. The tooltip gives both exact
+ * times. Null only when neither can be read.
  */
 export function ticketCardTime(
   task: Pick<KanbanTask, "createdAt" | "updatedAt">,
   now: Date = new Date(),
   formatExact: FormatExactTime = formatExactLocalTime,
 ): TicketTime | null {
-  const times = ticketTimes(task, now, formatExact);
-  const latest = times.updated ?? times.created;
+  const { created, updated } = readTicketTimes(task, now, formatExact);
+  const latest = updated ?? created;
   if (!latest) return null;
   const text = `Updated ${formatRelativeTime(latest.dateTime, now)}`;
-  const title = !times.updated
+  const title = !updated
     ? `${latest.title}, not changed since`
-    : times.created
-      ? `${times.updated.title}\n${times.created.title}`
-      : times.updated.title;
+    : created
+      ? `${updated.title}\n${created.title}`
+      : updated.title;
   return { text, title, dateTime: latest.dateTime };
 }

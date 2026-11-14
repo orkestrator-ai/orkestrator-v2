@@ -405,7 +405,12 @@ export function journalTicketOp(
   outbox.nextSeq += 1;
 }
 
-/** Fields of a ticket with a change queued for its command node, which a snapshot must not overwrite. */
+/**
+ * Fields of a ticket with a change queued for its command node, which a
+ * snapshot must not overwrite. `queued` is any change at all, criteria results
+ * and work links included: the copy's `updatedAt` is then newer than the
+ * board's until the command node has it (`replicaUpdatedAt`).
+ */
 export function pendingTicketFields(
   store: KanbanSyncStore,
   controllerId: string,
@@ -418,6 +423,7 @@ export function pendingTicketFields(
   removedImages: Set<string>;
   deleted: boolean;
   created: boolean;
+  queued: boolean;
 } {
   const fields = new Set<TicketSyncField>();
   const addedComments = new Set<string>();
@@ -426,8 +432,10 @@ export function pendingTicketFields(
   const removedImages = new Set<string>();
   let deleted = false;
   let created = false;
+  let queued = false;
   for (const item of store.outbox[controllerId]?.items ?? []) {
     if (item.ticketId !== ticketId) continue;
+    queued = true;
     const op = item.op;
     if (op.kind === "set-title") fields.add("title");
     else if (op.kind === "set-content") fields.add("content");
@@ -442,7 +450,16 @@ export function pendingTicketFields(
       for (const image of op.ticket.images ?? []) addedImages.add(image.id);
     }
   }
-  return { fields, addedComments, removedComments, addedImages, removedImages, deleted, created };
+  return {
+    fields,
+    addedComments,
+    removedComments,
+    addedImages,
+    removedImages,
+    deleted,
+    created,
+    queued,
+  };
 }
 
 /*

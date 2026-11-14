@@ -14,6 +14,10 @@ import type {
   CreateFeatureBuildInput,
   CreateFeatureBuildResult,
 } from "@orkestrator/protocol/feature-build";
+import type {
+  CreateDebugBuildInput,
+  CreateDebugBuildResult,
+} from "@orkestrator/protocol/debug-build";
 import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import type {
   BuildPipeline as BackendBuildPipeline,
@@ -80,6 +84,16 @@ export function createBuildPipelinesApi(client: BackendClient) {
     input: CreateFeatureBuildInput,
   ): Promise<CreateFeatureBuildResult> {
     return domain().create_feature_build({ ...input });
+  }
+
+  /**
+   * The debug button: the backend writes the ticket from the user's text and
+   * the source environment's details, transcript and screenshot, and launches
+   * its one pipeline environment. `requestId` makes a retry return the same
+   * ticket and pipeline.
+   */
+  async function createDebugBuild(input: CreateDebugBuildInput): Promise<CreateDebugBuildResult> {
+    return domain().create_debug_build({ ...input });
   }
 
   async function pauseBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
@@ -449,6 +463,7 @@ export function createBuildPipelinesApi(client: BackendClient) {
     ) => pipelines(client).save_auto_pipeline_edits({ draftId, edits }),
     startBuildPipeline,
     createFeatureBuild,
+    createDebugBuild,
     pauseBuildPipeline,
     resumeBuildPipeline,
     cancelBuildPipeline,
@@ -491,6 +506,7 @@ export const {
   saveAutoPipelineEdits,
   startBuildPipeline,
   createFeatureBuild,
+  createDebugBuild,
   pauseBuildPipeline,
   resumeBuildPipeline,
   cancelBuildPipeline,

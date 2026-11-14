@@ -162,6 +162,22 @@ function scheduleFeatureTitleRefinement(
   );
 }
 
+/**
+ * Refines a provisional ticket title in the background, when this backend can
+ * name things (the same Codex naming a blank feature title gets). The title is
+ * replaced only while it still reads as `provisionalTitle`.
+ */
+export function refineProvisionalTicketTitle(
+  storage: StorageService,
+  taskId: string,
+  description: string,
+  provisionalTitle: string,
+  context: FeatureBuildContext,
+): void {
+  if (!canRefineFeatureTitle(context)) return;
+  scheduleFeatureTitleRefinement(storage, taskId, description, provisionalTitle, context);
+}
+
 export async function createFeatureBuild(
   input: unknown,
   context: FeatureBuildContext,
@@ -268,7 +284,7 @@ function withVerifyFromAddressFindings(steps: BuildStepConfigs): BuildStepConfig
   return { ...steps, verify: selection };
 }
 
-async function normalizeFeatureImages(
+export async function normalizeFeatureImages(
   images: Array<{ filename: string; data: string }>,
 ): Promise<Array<{ filename: string; data: string }>> {
   const normalized = [];

@@ -20,7 +20,7 @@ web counterpart of `orkestrator --fix AGENT`
 | Sheet | [`BugReportSheet.tsx`](../../apps/web/src/components/bug-report/BugReportSheet.tsx), hosted once per window by `AppShell` (`BugReportSheetHost`) |
 | Machine routing | [`open-bug-report.ts`](../../apps/web/src/lib/bug-report/open-bug-report.ts) |
 | App context and renderer errors | [`client-context.ts`](../../apps/web/src/lib/bug-report/client-context.ts), [`renderer-errors.ts`](../../apps/web/src/lib/bug-report/renderer-errors.ts) |
-| Window capture | `orkestrator:bug-report:capture-window` in [`ipc.ts`](../../apps/desktop/electron/ipc.ts) |
+| Window capture | `orkestrator:bug-report:capture-window` in [`ipc.ts`](../../apps/desktop/electron/ipc.ts), read in the renderer through `windowCapture()` (`apps/web/src/lib/native/window.ts`), which the [debug button](debug-build.md) shares |
 
 The shared prompt section sends the agent to the
 [essential event log](logging.md#the-essential-event-log) first, because it is written

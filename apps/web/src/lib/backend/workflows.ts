@@ -1044,6 +1044,7 @@ export const {
 export {
   startBuildPipeline,
   createFeatureBuild,
+  createDebugBuild,
   pauseBuildPipeline,
   resumeBuildPipeline,
   cancelBuildPipeline,

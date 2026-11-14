@@ -179,6 +179,7 @@
     "./disk-usage": "./src/disk-usage.ts",
     "./node/bridge-diagnostics": "./src/node/bridge-diagnostics.ts",
     "./debug-logging": "./src/debug-logging.ts",
+    "./debug-build": "./src/debug-build.ts",
     "./log-policy": "./src/log-policy.ts",
     "./renderer-errors": "./src/renderer-errors.ts",
     "./docker-availability": "./src/docker-availability.ts",

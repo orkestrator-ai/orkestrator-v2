@@ -493,3 +493,29 @@ test("a startup sweep failure is logged once without blocking environment sync",
     resetLogger();
   }
 });
+
+test("an environment whose deletion has begun is never a ready PR target", () => {
+  const local = {
+    ...createEnvironment("project", { name: "feature" }),
+    environmentType: "local" as const,
+    worktreePath: "/unused/worktree",
+    prUrl: "https://github.com/o/r/pull/1",
+    prState: "open" as const,
+  };
+  const container = {
+    ...createEnvironment("project", { name: "boxed" }),
+    environmentType: "containerized" as const,
+    status: "running" as const,
+    containerId: "c1",
+  };
+  expect(environmentToPrMonitorTarget(local).ready).toBe(true);
+  expect(environmentToPrMonitorTarget(container).ready).toBe(true);
+  for (const environment of [local, container]) {
+    const tombstoned = { ...environment, deletionRequestedAt: "2026-11-14T00:00:00.000Z" };
+    const deleting = { ...environment, lifecycleOperation: "deleting" as const };
+    expect(environmentToPrMonitorTarget(tombstoned).ready).toBe(false);
+    expect(environmentToPrMonitorTarget(deleting).ready).toBe(false);
+    // The stored PR stays visible; only polling stops.
+    expect(environmentToPrMonitorTarget(tombstoned).prUrl).toBe(environment.prUrl);
+  }
+});

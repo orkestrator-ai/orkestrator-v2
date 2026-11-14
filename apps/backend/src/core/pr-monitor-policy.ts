@@ -4,6 +4,7 @@ import {
   type PrMonitorMode,
 } from "@orkestrator/protocol/pr-monitor";
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
 /**
  * Lifecycle observation policy for the backend PR monitor.
@@ -78,6 +79,15 @@ export interface PrMonitorPolicyConfig {
    * monitor from re-reading it. Past this, it counts as a failed check.
    */
   rateLimitGraceMs: number;
+  /**
+   * Hold on the background checks of a network scope after one of its checks
+   * could not reach GitHub (a network failure or a timeout). It doubles for
+   * each further such failure in the scope before a check there succeeds, up
+   * to {@link networkHoldMaxMs}. Without it every entry found the outage on its
+   * own and each attempt counted as a failed detection.
+   */
+  networkHoldMs: number;
+  networkHoldMaxMs: number;
   /** Upper bound applied to any retry timing reported by the boundary. */
   maxRetryAfterMs: number;
   /** Per-entry bound on remembered task-reconciliation progress keys. */
@@ -102,6 +112,8 @@ export const DEFAULT_PR_MONITOR_POLICY: Readonly<PrMonitorPolicyConfig> = {
   rateLimitCooldownMaxMs: 30 * 60_000,
   rateLimitResumeJitterMs: 30_000,
   rateLimitGraceMs: 15 * 60_000,
+  networkHoldMs: 30_000,
+  networkHoldMaxMs: 5 * 60_000,
   maxRetryAfterMs: 60 * 60_000,
   maxReconciliationKeys: 8,
   maxCooldownScopes: 64,
@@ -120,6 +132,7 @@ export function resolvePrMonitorPolicy(
     Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
   const defaults = DEFAULT_PR_MONITOR_POLICY;
   const rateLimitCooldownMs = nonNegative(merged.rateLimitCooldownMs, defaults.rateLimitCooldownMs);
+  const networkHoldMs = nonNegative(merged.networkHoldMs, defaults.networkHoldMs);
   return {
     terminalDiscoveryIntervalMs: Math.max(
       PR_MONITOR_INTERVALS_MS.normal,
@@ -142,6 +155,11 @@ export function resolvePrMonitorPolicy(
       defaults.rateLimitResumeJitterMs,
     ),
     rateLimitGraceMs: nonNegative(merged.rateLimitGraceMs, defaults.rateLimitGraceMs),
+    networkHoldMs,
+    networkHoldMaxMs: Math.max(
+      networkHoldMs,
+      nonNegative(merged.networkHoldMaxMs, defaults.networkHoldMaxMs),
+    ),
     maxRetryAfterMs: nonNegative(merged.maxRetryAfterMs, defaults.maxRetryAfterMs),
     maxReconciliationKeys: positiveInteger(
       merged.maxReconciliationKeys,
@@ -260,6 +278,12 @@ export function rateLimitCooldown(
   return Math.min(config.rateLimitCooldownMs * 2 ** doublings, config.rateLimitCooldownMaxMs);
 }
 
+/** Length of a network hold: doubles per failure in a row (`strikes`, at least 1), capped. */
+export function networkHold(strikes: number, config: PrMonitorPolicyConfig): number {
+  const doublings = Math.min(Math.max(strikes, 1) - 1, 16);
+  return Math.min(config.networkHoldMs * 2 ** doublings, config.networkHoldMaxMs);
+}
+
 export type PrDetectionFailure =
   { kind: "rate-limited"; retryAfterMs: number | null } | { kind: "timeout" } | { kind: "failed" };
 
@@ -292,6 +316,19 @@ export function classifyPrDetectionFailure(error: unknown): PrDetectionFailure {
     return { kind: "rate-limited", retryAfterMs: retryAfter };
   }
   return { kind: "failed" };
+}
+
+/**
+ * Whether a failed detection says GitHub could not be reached from where the
+ * check ran, rather than that GitHub refused or the command was wrong: a
+ * timeout, or output naming a network failure. A network hold is the only
+ * thing this decides, so a misread costs at most a delayed background check.
+ * Never treats a rate limit as a network failure: that has its own cooldown.
+ */
+export function isPrNetworkFailure(error: unknown, failure: PrDetectionFailure): boolean {
+  if (failure.kind === "timeout") return true;
+  if (failure.kind !== "failed") return false;
+  return classifyCommandFailure(error, { tools: ["docker", "gh"] }).reason === "network-failed";
 }
 
 /**
@@ -345,6 +382,22 @@ export class PrCooldownScopes {
   /** A check in the scope succeeded: the next rate limit starts afresh. */
   clearStrikes(scope: string): void {
     this.strikes.delete(scope);
+  }
+
+  /**
+   * A check in the scope succeeded: ends its hold and its strikes, unless the
+   * check was already in flight when the latest strike was counted. Such a
+   * check says nothing about whether the scope has recovered since. Returns
+   * whether a hold that had not yet run out ended, so the caller can resume
+   * the checks it postponed.
+   */
+  release(scope: string, detectionSequence: number, nowMs: number): boolean {
+    const strike = this.strikes.get(scope);
+    if (strike && detectionSequence <= strike.through) return false;
+    const until = this.until.get(scope);
+    this.until.delete(scope);
+    this.strikes.delete(scope);
+    return until !== undefined && until > nowMs;
   }
 
   /** Remaining cooldown in milliseconds, 0 when the scope may run. */

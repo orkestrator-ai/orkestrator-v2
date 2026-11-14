@@ -48,7 +48,12 @@ refreshing it, writes `writer-lease.acquired-late`, runs the writer-only
 startup work with the won lease (`runWriterStartupWork` in
 `apps/backend/src/core/index.ts`) and only then reports the lease held and
 announces the scheduler change, so no schedule or container mutation runs
-beside that recovery (review round 1, 2026-11-14). Screenshots:
+beside that recovery (review round 1, 2026-11-14). It takes over only once
+it has itself watched the same lease go unrefreshed for 30 s of its own
+running time, each retry counting at most one heartbeat, so a live holder
+whose heartbeat could not fire across a host sleep keeps its lease when it
+wakes (review round 2, 2026-11-14). The live takeover timings above predate
+that rule, which can add up to one retry (10 s). Screenshots:
 `output/visual-previews/5160-schedules-*.png` (not committed).
 
 **Decisions.** See [Assumptions and decisions](#assumptions-and-decisions).
@@ -229,6 +234,22 @@ is unsafe across PID reuse and containers, and leaving it makes every crash
 followed by a fast restart a read-only backend. The retry reuses the
 existing takeover rule, so a live holder that keeps refreshing is never
 displaced.
+
+### Task 3: a retry counts the holder's silence on its own clock
+
+Review round 2 found that the stale rule alone is wall-clock time: across a
+host sleep the lease file ages past 30 s while neither backend runs, so the
+retrying backend could take over from a live holder on wake, and that holder
+would stay lost until restarted. Options: require the retrying backend to
+have watched the same lease (token and modification time) go unrefreshed
+for 30 s itself, each retry counting at most one heartbeat on the monotonic
+clock (chosen); take over only when the recorded holder's PID is dead; let
+a lost holder take the lease back. The chosen rule holds whatever the clock
+does across a sleep and costs at most one extra retry after a crash. A PID
+check is unsafe across PID reuse and containers, and a holder taking the
+lease back would undo a takeover the other backend has already recovered
+from. A holder whose own event loop stalls for longer than 30 s while the
+other backend runs is still displaced, as a holder that died would be.
 
 ### Task 4: the container prompt that reads working is recorded, not fixed
 

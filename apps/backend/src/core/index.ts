@@ -109,6 +109,7 @@ import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter, type RegistryWriter } from "./registry-writer-lease.js";
+import { registryWriterStartup } from "./registry-writer-startup.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
@@ -2106,11 +2107,10 @@ export class OrkestratorBackend {
    * left unresolved are settled by exact Docker identity (an unreachable
    * daemon leaves them for the next attempt), and leftovers are swept.
    * `writer` is the lease to write with: a lease won late is not exposed on
-   * the context until this settles (`ReclaimingRegistryWriter`).
+   * the context until this settles (`ReclaimingRegistryWriter`). Runs once
+   * per start (`registryWriterStartup`).
    */
-  private async runWriterStartupWork(
-    writer: RegistryWriter | undefined = this.context.registryWriterLease,
-  ): Promise<void> {
+  private async runWriterStartupWork(writer: RegistryWriter): Promise<void> {
     const recoveryContext = {
       storage: this.context.storage,
       emit: this.context.emit,
@@ -2218,18 +2218,18 @@ export class OrkestratorBackend {
     // Exclusive container mutation for this data directory. A second backend,
     // or one older than the directory's schema marker, keeps serving reads
     // while every container mutation is refused.
+    // Schedules stop with the lease; Settings → Schedules reads why. A lease
+    // won late, from a holder that stopped refreshing it (a crash just before
+    // this start), runs the writer-only startup work then instead of never,
+    // with the won lease, and only once it settles do schedules fire and
+    // container mutations get admitted. Either way the work runs once.
+    const writerStartup = registryWriterStartup({
+      runWriterStartupWork: (writer) => this.runWriterStartupWork(writer),
+      announceSchedulerStatus: () => this.context.storage.announceSchedulerStatus(),
+    });
     this.context.registryWriterLease ??= await openRegistryWriter(
       this.context.storage.getDataDir(),
-      {
-        // Schedules stop with the lease; Settings → Schedules reads why.
-        onLost: () => this.context.storage.announceSchedulerStatus(),
-        // Won late, from a holder that stopped refreshing it (a crash just
-        // before this start): the writer-only startup work below runs now
-        // instead of never, with the won lease, and only once it settles do
-        // schedules fire and container mutations get admitted.
-        recoverLate: (lease) => this.runWriterStartupWork(lease),
-        onAcquired: () => this.context.storage.announceSchedulerStatus(),
-      },
+      writerStartup.leaseOptions,
     );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,
@@ -2239,7 +2239,7 @@ export class OrkestratorBackend {
     // Before background launch or cleanup can act on their resources:
     // operations a previous process left unresolved are settled by exact
     // Docker identity. An unreachable daemon leaves them for the next attempt.
-    if (this.context.registryWriterLease.isHeld()) await this.runWriterStartupWork();
+    await writerStartup.runIfHeld(this.context.registryWriterLease);
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
     this.runtime.containerOom.start(dockerOwnerNamespace(this.context.storage.getDataDir()));

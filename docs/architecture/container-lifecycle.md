@@ -39,8 +39,9 @@ a safe projection with no container ids.
   (`container-lifecycle.writer.lease`, heartbeat file) excludes other backends
   pointed at the same data directory. A backend that starts while the lease
   is held keeps trying and takes it once the holder lets it go stale (30 s
-  without a heartbeat, as after a crash), then runs the writer-only recovery
-  below. Lock order: lifecycle queue, then
+  without a heartbeat, as after a crash, counted by the backend that is
+  trying on its own clock so a host sleep does not count), then runs the
+  writer-only recovery below. Lock order: lifecycle queue, then
   lifecycle record; the service never enqueues on the queue itself.
 - **Dedup, never redispatch.** A request carrying an `operationId` (UUIDv7)
   that already finished returns its stored outcome. One older than the

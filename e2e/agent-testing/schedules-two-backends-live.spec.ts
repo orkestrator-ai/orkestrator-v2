@@ -302,8 +302,9 @@ test.describe("the Schedules notice with two backends on one data directory", ()
       writeRecord();
 
       // 4. Nothing refreshes the written lease, so it goes stale (30 s) and
-      // the second backend, which kept trying, wins it: its open view drops
-      // the notice with no reload, and the first stays lost.
+      // the second backend, which kept trying and has itself watched it stay
+      // unrefreshed for 30 s (up to one retry more), wins it: its open view
+      // drops the notice with no reload, and the first stays lost.
       await expect(secondPage.getByTestId("scheduler-paused")).toHaveCount(0, {
         timeout: 120_000,
       });

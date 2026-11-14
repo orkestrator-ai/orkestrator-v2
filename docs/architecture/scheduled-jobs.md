@@ -165,6 +165,9 @@ after now.
   started without the lease (`another-backend`) keeps trying every heartbeat
   and takes it once its holder stops refreshing it for 30 s, which is what a
   backend restarted just after a crash needs (`ReclaimingRegistryWriter`).
+  It counts those 30 s on its own clock, from what it has itself watched,
+  each retry adding at most one heartbeat, so a holder whose heartbeat could
+  not fire while the host slept keeps its lease on wake.
   A lease won that way first settles the container operations the crashed
   holder left, writing with the won lease while the backend still reads as
   not holding it, so no schedule fires and no container mutation is admitted

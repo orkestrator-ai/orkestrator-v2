@@ -249,6 +249,17 @@ describe("registry writer state", () => {
   });
 });
 
+/** A monotonic clock the test moves, as `monotonicNow`. */
+function fakeMonotonic() {
+  let at = 1_000;
+  return { now: () => at, advance: (ms: number) => (at += ms) };
+}
+
+async function backdateLease(ms: number): Promise<void> {
+  const time = new Date(Date.now() - ms);
+  await fs.utimes(path.join(directory, REGISTRY_WRITER_LEASE_FILE), time, time);
+}
+
 describe("a backend that started without the lease", () => {
   const blockedBehind = async (options: Parameters<typeof openRegistryWriter>[1] = {}) => {
     const first = await open({ staleMs: 30_000 });
@@ -274,17 +285,24 @@ describe("a backend that started without the lease", () => {
 
   test("takes over a lease a crashed holder left to go stale, once", async () => {
     let acquired = 0;
+    const clock = fakeMonotonic();
     // The crashed holder's lease: never refreshed again.
     await replaceLease("crashed-backend");
     const second = await openRegistryWriter(directory, {
       staleMs: 30_000,
+      monotonicNow: clock.now,
       onAcquired: () => acquired++,
     });
     writers.push(second);
     expect(second.state()).toBe("busy");
-    const lastRefresh = new Date(Date.now() - 60_000);
-    await fs.utimes(path.join(directory, REGISTRY_WRITER_LEASE_FILE), lastRefresh, lastRefresh);
+    await backdateLease(60_000);
     const reclaiming = second as ReclaimingRegistryWriter;
+    // Stale by its file's age, but this process has not yet watched it stay
+    // silent: first the new modification time, then 10 s, 20 s.
+    for (let step = 0; step < 3; step += 1) {
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      clock.advance(10_000);
+    }
     await Promise.all([reclaiming.tryAcquire(), reclaiming.tryAcquire()]);
     expect(await reclaiming.tryAcquire()).toBe(true);
     expect(second.state()).toBe("held");
@@ -295,6 +313,78 @@ describe("a backend that started without the lease", () => {
       "writer-lease.regained",
       "writer-lease.acquired-late",
     ]);
+  });
+
+  describe("a live holder across host sleep or a stall", () => {
+    // A host sleep moves the wall clock on while neither process runs: the
+    // lease file keeps its modification time but its age passes staleMs. The
+    // holder's heartbeat is long so the test decides when it refreshes.
+    const sleepingHolder = async () => {
+      const clock = fakeMonotonic();
+      let wallOffsetMs = 0;
+      const wallNow = () => Date.now() + wallOffsetMs;
+      const holder = await open({ staleMs: 30_000, heartbeatMs: 3_600_000 });
+      const reclaiming = (await openRegistryWriter(directory, {
+        staleMs: 30_000,
+        now: wallNow,
+        monotonicNow: clock.now,
+      })) as ReclaimingRegistryWriter;
+      writers.push(reclaiming);
+      expect(reclaiming).toBeInstanceOf(ReclaimingRegistryWriter);
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      wallOffsetMs += 60_000;
+      const holderRefreshes = async () => {
+        const time = new Date(wallNow());
+        await fs.utimes(path.join(directory, REGISTRY_WRITER_LEASE_FILE), time, time);
+      };
+      return { clock, holder, reclaiming, holderRefreshes };
+    };
+
+    test("the reclaimer retries first after wake and does not win", async () => {
+      const { clock, holder, reclaiming, holderRefreshes } = await sleepingHolder();
+      clock.advance(10_000);
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      await holderRefreshes();
+      clock.advance(10_000);
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      clock.advance(10_000);
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      expect(holder.isHeld()).toBe(true);
+      expect(reclaiming.state()).toBe("busy");
+    });
+
+    test("the holder refreshes first after wake and keeps its lease", async () => {
+      const { clock, holder, reclaiming, holderRefreshes } = await sleepingHolder();
+      await holderRefreshes();
+      for (let step = 0; step < 3; step += 1) {
+        clock.advance(10_000);
+        expect(await reclaiming.tryAcquire()).toBe(false);
+      }
+      expect(holder.isHeld()).toBe(true);
+      expect(reclaiming.state()).toBe("busy");
+    });
+
+    test("a monotonic clock that counted the sleep still counts it as one step", async () => {
+      const { clock, holder, reclaiming, holderRefreshes } = await sleepingHolder();
+      clock.advance(3_600_000);
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      await holderRefreshes();
+      clock.advance(10_000);
+      expect(await reclaiming.tryAcquire()).toBe(false);
+      expect(holder.isHeld()).toBe(true);
+    });
+
+    test("a holder that never refreshes again is taken over once watched for staleMs", async () => {
+      const { clock, holder, reclaiming } = await sleepingHolder();
+      for (let step = 0; step < 2; step += 1) {
+        clock.advance(10_000);
+        expect(await reclaiming.tryAcquire()).toBe(false);
+      }
+      clock.advance(10_000);
+      expect(await reclaiming.tryAcquire()).toBe(true);
+      expect(holder.isHeld()).toBe(false);
+      expect(holder.state()).toBe("lost");
+    });
   });
 
   test("takes it when the holder releases it on a clean shutdown", async () => {

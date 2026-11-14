@@ -659,9 +659,11 @@ describe("registry writer lease", () => {
     const events: string[] = [];
     // Mirrors the backend's wiring: recovery writes with the won lease while
     // the context's writer (what schedules and commands read) is not held.
+    let monotonicMs = 0;
     const writer = await openRegistryWriter(dir, {
       staleMs: 30_000,
       retryMs: 60_000,
+      monotonicNow: () => monotonicMs,
       recoverLate: async (lease) => {
         events.push("recovery-started");
         await reconcileContainerOperations({ ...context, registryWriterLease: lease });
@@ -673,6 +675,12 @@ describe("registry writer lease", () => {
     expect(writer).toBeInstanceOf(ReclaimingRegistryWriter);
     const old = new Date(Date.now() - 60_000);
     await fs.utimes(leasePath, old, old);
+    // A takeover needs this backend to have watched the lease stay silent for
+    // staleMs itself: the first look, then 10 s steps.
+    for (let step = 0; step < 3; step += 1) {
+      expect(await (writer as ReclaimingRegistryWriter).tryAcquire()).toBe(false);
+      monotonicMs += 10_000;
+    }
 
     const gate = path.join(await dataDir(), "release-probe");
     try {

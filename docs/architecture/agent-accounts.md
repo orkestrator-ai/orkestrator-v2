@@ -627,7 +627,36 @@ reading is served instead with `stale: true`, its original `fetchedAt` and the
 failure as `message`. Any window whose reset time has passed is shown empty.
 Removing an account deletes its entry. A reading also says whether the account can
 spend past its plan, when the provider says so (`paidOverage`; see
-[Paid overage](#paid-overage)).
+[Paid overage](#paid-overage)), and which limit resets it holds unused
+(`resets`; see [Limit resets](#limit-resets)).
+
+### Limit resets
+
+Both providers give accounts resets that clear a limit on demand, and a reading
+carries what an account still holds as `PlanUsageSnapshot.resets`
+(`{ available, items: [{ count, label?, scope?, expiresAt? }] }`). Absent means
+none held or not reported, never `available: 0`. Settings shows them under the
+bars (`UsageResets` in `UsageReading.tsx`), so every card that shows usage shows
+them. Display only: nothing here redeems a reset, and a reset is used in the
+provider's own app.
+
+- **Claude** reads `cedar_ember` from `/api/oauth/usage?cedar_ember=1`, the
+  query Claude Code's own `/limit-reset` check sends; without it the payload
+  has no resets. Each grant holds `resets_left` resets, says what it clears
+  (`type`: `session`, `weekly`, `full`) and when it ends (`ends_at`). Paused,
+  ended and empty grants and an account with `eligible: false` hold nothing. A
+  400/404/422 on the query falls back to the plain endpoint so the windows
+  still show. The payload is undocumented: the shape comes from the pinned
+  Claude Code binary, so recheck `plan-usage/resets.ts` on a Claude Code bump.
+- **Codex** reads `rate_limit_reset_credits.available_count` from the usage
+  payload, which is authoritative (the credit list can be capped). When it is
+  above zero, `GET /backend-api/wham/rate-limit-reset-credits` adds each
+  credit's expiry and title; a failed detail read costs only those, never the
+  count. The same fields are `rateLimitResetCredits` in the app-server's
+  `account/rateLimits/read`.
+- A grant whose expiry passes after the reading is dropped and the count
+  reduced when the reading is shown (`activePlanUsageResets`), including a last
+  known or shared reading. Resets travel in shared readings like the windows.
 
 Each signed-in account's row in Settings has a refresh button that reads that
 account alone with `force: true`, bypassing the two-minute cache; the section's
@@ -697,7 +726,7 @@ handed to every machine with the same login.
   organisations is two logins. A login without an email is never shared.
 - **What travels.** Usage only: the windows (percentages, token counts, spend,
   credits, reset times, lengths), the plan name, whether paid overage is on,
-  `fetchedAt`, and the machine that took it (`nodeId`, `nodeName`). Every
+  the limit resets held (count, kind, expiry), `fetchedAt`, and the machine that took it (`nodeId`, `nodeName`). Every
   reading is rebuilt field by field on the way in and out
   (`parseSharedUsageReading`), so a message, a token or a cookie never leaves a
   machine, whatever a snapshot or a peer carries.

@@ -5,7 +5,12 @@ import {
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
 
-import { formatReadingTime, UsageReadingAge, UsageReadingBars } from "./UsageReading";
+import {
+  describePlanUsageReset,
+  formatReadingTime,
+  UsageReadingAge,
+  UsageReadingBars,
+} from "./UsageReading";
 
 const NOW = Date.parse("2026-11-09T14:03:00.000Z");
 
@@ -91,5 +96,54 @@ describe("usage reading age", () => {
     expect(screen.getByText("No metered plan limits reported.")).toBeTruthy();
     expect(screen.queryByTestId("usage-reading-bars") === null).toBe(true);
     expect(screen.getByTestId("usage-reading-age")).toBeTruthy();
+  });
+});
+
+describe("limit resets", () => {
+  test("a reading with resets lists the count and each grant", () => {
+    render(
+      <UsageReadingBars
+        snapshot={reading(60_000, {
+          resets: {
+            available: 3,
+            items: [
+              { count: 2, scope: "weekly", expiresAt: "2026-12-03T00:00:00.000Z" },
+              { count: 1, label: "Fable reset" },
+            ],
+          },
+        })}
+        now={NOW}
+      />,
+    );
+    expect(screen.getByTestId("usage-resets").textContent).toContain("3 limit resets available");
+    const rows = screen.getAllByTestId("usage-reset-item").map((row) => row.textContent);
+    expect(rows[0]).toStartWith("Weekly limit reset ×2 · use by ");
+    expect(rows[1]).toBe("Fable reset");
+  });
+
+  test("a reading with none, or only lapsed ones, shows nothing", () => {
+    render(<UsageReadingBars snapshot={reading(60_000)} now={NOW} />);
+    expect(screen.queryByTestId("usage-resets") === null).toBe(true);
+    cleanup();
+    render(
+      <UsageReadingBars
+        snapshot={reading(60_000, {
+          resets: { available: 1, items: [{ count: 1, expiresAt: "2026-11-01T00:00:00.000Z" }] },
+        })}
+        now={NOW}
+      />,
+    );
+    expect(screen.queryByTestId("usage-resets") === null).toBe(true);
+  });
+
+  test("a single reset is singular and an unnamed one is just a reset", () => {
+    expect(describePlanUsageReset({ count: 1 })).toBe("Reset");
+    render(
+      <UsageReadingBars
+        snapshot={reading(0, { resets: { available: 1, items: [{ count: 1 }] } })}
+        now={NOW}
+      />,
+    );
+    expect(screen.getByTestId("usage-resets").textContent).toContain("1 limit reset available");
   });
 });

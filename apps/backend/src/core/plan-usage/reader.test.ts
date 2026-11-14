@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../commands-context.js";
+import { claudePlanResets, codexResetItems } from "./resets.js";
 import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./cache.js";
 import { AgentAccountsRuntime } from "../agent-accounts-runtime.js";
 import {
@@ -16,6 +17,7 @@ import {
   CODEX_USAGE_URL,
   CURSOR_API_BASE,
   claudePlanWindows,
+  CODEX_RESET_CREDITS_URL,
   codexPlanWindows,
   createPlanUsageReader,
   normalizeAccountWindows,
@@ -711,7 +713,7 @@ describe("createPlanUsageReader", () => {
     const snapshot = await reader(contextWithGlobal(), "claude");
     expect(snapshot.status).toBe("ok");
     expect(snapshot.windows[0]?.label).toBe("5-hour limit");
-    expect(seen[0]?.url).toBe(CLAUDE_USAGE_URL);
+    expect(seen[0]?.url).toBe(`${CLAUDE_USAGE_URL}?cedar_ember=1`);
     expect(seen[0]?.headers.Authorization).toBe("Bearer oauth-token");
     expect(seen[0]?.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
   });
@@ -1397,5 +1399,170 @@ describe("the backend's plan-usage cache integration", () => {
     expect(snapshot.windows).toEqual([
       { window: "five_hour", label: "5-hour limit", usedPercent: 33, windowMinutes: 300 },
     ]);
+  });
+});
+
+describe("limit resets", () => {
+  const NOW = Date.parse("2026-11-14T12:00:00.000Z");
+  const grant = (over: Record<string, unknown> = {}) => ({
+    id: "g1",
+    label: "Weekly reset",
+    resets_total: 2,
+    resets_left: 2,
+    ends_at: "2026-12-03T00:00:00.000Z",
+    paused: false,
+    type: "weekly",
+    ...over,
+  });
+
+  test("Claude: counts each usable grant's resets and keeps what it clears and when it ends", () => {
+    const resets = claudePlanResets(
+      {
+        cedar_ember: {
+          eligible: true,
+          grants: [
+            grant(),
+            grant({ id: "g2", label: "Fable reset", resets_left: 1, type: "full", ends_at: null }),
+            grant({ id: "g3", paused: true }),
+            grant({ id: "g4", resets_left: 0 }),
+            grant({ id: "g5", ends_at: "2026-11-01T00:00:00.000Z" }),
+          ],
+        },
+      },
+      NOW,
+    );
+    expect(resets).toEqual({
+      available: 3,
+      items: [
+        { count: 2, label: "Weekly reset", scope: "weekly", expiresAt: "2026-12-03T00:00:00.000Z" },
+        { count: 1, label: "Fable reset", scope: "full" },
+      ],
+    });
+  });
+
+  test("Claude: an ineligible account, an unrecognised block or no block shows nothing", () => {
+    expect(claudePlanResets({ cedar_ember: { eligible: false, grants: [grant()] } }, NOW)).toBe(
+      undefined,
+    );
+    expect(claudePlanResets({ cedar_ember: { grants: [grant()] } }, NOW)).toBeUndefined();
+    expect(claudePlanResets({ cedar_ember: "x" }, NOW)).toBeUndefined();
+    expect(claudePlanResets({ five_hour: { utilization: 1 } }, NOW)).toBeUndefined();
+  });
+
+  test("Codex: keeps only available credits that have not lapsed, one reset each", () => {
+    const items = codexResetItems(
+      {
+        credits: [
+          { id: "a", status: "available", title: "Full reset", expires_at: "2026-12-01T00:00:00Z" },
+          { id: "b", status: "redeemed", expires_at: "2026-12-01T00:00:00Z" },
+          { id: "c", status: "available", expires_at: "2026-11-01T00:00:00Z" },
+          { id: "d", status: "available", expires_at: 1_796_000_000 },
+        ],
+      },
+      NOW,
+    );
+    expect(items).toEqual([
+      { count: 1, label: "Full reset", expiresAt: "2026-12-01T00:00:00.000Z" },
+      { count: 1, expiresAt: "2026-11-30T00:53:20.000Z" },
+    ]);
+  });
+
+  const codexAuth = JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } });
+  const codexUsage = {
+    rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18_000 } },
+    rate_limit_reset_credits: { available_count: 2 },
+  };
+
+  test("Codex: the usage payload's count is the answer and the credits endpoint adds expiry", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return String(input) === CODEX_RESET_CREDITS_URL
+        ? jsonResponse({
+            available_count: 2,
+            credits: [{ status: "available", expires_at: "2026-12-01T00:00:00Z", title: "Reset" }],
+          })
+        : jsonResponse(codexUsage);
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => NOW,
+      credentials: { codex: async () => codexAuth },
+    });
+    const snapshot = await reader(contextWithGlobal(), "codex");
+    expect(urls).toEqual([CODEX_USAGE_URL, CODEX_RESET_CREDITS_URL]);
+    // The backend may list fewer credits than the count; the count stands.
+    expect(snapshot.resets).toEqual({
+      available: 2,
+      items: [{ count: 1, label: "Reset", expiresAt: "2026-12-01T00:00:00.000Z" }],
+    });
+  });
+
+  test("Codex: a failed credits read costs the expiry dates, not the count", async () => {
+    const fetchImpl = (async (input: string | URL | Request) =>
+      String(input) === CODEX_RESET_CREDITS_URL
+        ? new Response("<html>blocked</html>", { status: 403 })
+        : jsonResponse(codexUsage)) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => NOW,
+      credentials: { codex: async () => codexAuth },
+    });
+    expect((await reader(contextWithGlobal(), "codex")).resets).toEqual({
+      available: 2,
+      items: [],
+    });
+  });
+
+  test("Codex: no credits endpoint call and no resets when the account holds none", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return jsonResponse({
+        ...codexUsage,
+        rate_limit_reset_credits: { available_count: 0 },
+      });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => NOW,
+      credentials: { codex: async () => codexAuth },
+    });
+    const snapshot = await reader(contextWithGlobal(), "codex");
+    expect(urls).toEqual([CODEX_USAGE_URL]);
+    expect(snapshot.resets).toBeUndefined();
+  });
+
+  test("Claude: the read asks for resets, and falls back to the plain endpoint if refused", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return String(input).includes("cedar_ember")
+        ? new Response(null, { status: 400 })
+        : jsonResponse({ five_hour: { utilization: 5 } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => NOW,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    const snapshot = await reader(contextWithGlobal(), "claude");
+    expect(urls).toEqual([`${CLAUDE_USAGE_URL}?cedar_ember=1`, CLAUDE_USAGE_URL]);
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.resets).toBeUndefined();
+  });
+
+  test("Claude: a reading carries the account's resets", async () => {
+    const reader = createPlanUsageReader({
+      fetchImpl: (async () =>
+        jsonResponse({
+          five_hour: { utilization: 5 },
+          cedar_ember: { eligible: true, grants: [grant()] },
+        })) as unknown as typeof fetch,
+      now: () => NOW,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    const snapshot = await reader(contextWithGlobal(), "claude");
+    expect(snapshot.resets?.available).toBe(2);
   });
 });

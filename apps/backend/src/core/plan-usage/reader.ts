@@ -29,9 +29,17 @@ import {
   stalePlanUsageSnapshot,
   type PlanUsagePaidOverage,
   type PlanUsagePlatform,
+  type PlanUsageResets,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
 import type { CommandContext } from "../commands-context.js";
+import {
+  claudePlanResets,
+  codexInlineResetCredits,
+  codexPlanResets,
+  codexResetCount,
+  codexResetItems,
+} from "./resets.js";
 import { getClaudeOAuthAccessToken, resolveContainerClaudeCredentials } from "../commands-files.js";
 import {
   CACHE_TTL_MS,
@@ -62,6 +70,16 @@ export type { PlanUsagePlatform };
 export const OPENCODE_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/codex/usage";
+/** Lists the banked reset credits (with expiry) behind the usage payload's count. */
+export const CODEX_RESET_CREDITS_URL =
+  "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+/**
+ * Asks the OAuth usage read to include Claude's free resets (`cedar_ember`),
+ * the query Claude Code's own reset check sends. Without it the payload has
+ * no resets.
+ */
+const CLAUDE_RESETS_QUERY = "?cedar_ember=1";
+const RESET_DETAIL_TIMEOUT_MS = 5_000;
 
 /**
  * Where `platform`'s usage is read from: the provider's endpoint, or the same
@@ -73,7 +91,10 @@ export function planUsageUrl(
   platform: "claude" | "codex",
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const real = platform === "claude" ? CLAUDE_USAGE_URL : CODEX_USAGE_URL;
+  return usageEndpointUrl(context, platform === "claude" ? CLAUDE_USAGE_URL : CODEX_USAGE_URL, env);
+}
+
+function usageEndpointUrl(context: CommandContext, real: string, env: NodeJS.ProcessEnv): string {
   const origin = agentTestUsageOrigin({
     runtimeFlavor: context.runtimeFlavor,
     dataDir: () => context.storage.getDataDir(),
@@ -767,17 +788,25 @@ async function readClaudePlanUsage(
       nowIso,
     );
   }
-  const response = await requestJson(
-    runtime.fetchImpl,
-    planUsageUrl(context, "claude", runtime.env),
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "anthropic-beta": CLAUDE_OAUTH_BETA,
-        Accept: "application/json",
-      },
+  const claudeInit = {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "anthropic-beta": CLAUDE_OAUTH_BETA,
+      Accept: "application/json",
     },
+  };
+  const claudeUrl = planUsageUrl(context, "claude", runtime.env);
+  let response = await requestJson(
+    runtime.fetchImpl,
+    `${claudeUrl}${CLAUDE_RESETS_QUERY}`,
+    claudeInit,
   );
+  // The resets query is the one part of this read that is not the plain
+  // endpoint. If the provider refuses it as a bad request, the windows are
+  // still worth having without resets.
+  if ([400, 404, 422].includes(response.status)) {
+    response = await requestJson(runtime.fetchImpl, claudeUrl, claudeInit);
+  }
   const { status, body } = response;
   if (status === 401 || status === 403) {
     return unavailableSnapshot(
@@ -791,9 +820,55 @@ async function readClaudePlanUsage(
   const readIso = new Date(runtime.now()).toISOString();
   // A payload this read cannot recognise is not evidence of an unmetered plan.
   const paidOverage = claudePaidOverage(body);
+  const resets = claudePlanResets(body, runtime.now());
   return windows.length > 0
-    ? { ...okSnapshot("claude", windows, readIso), ...(paidOverage ? { paidOverage } : {}) }
+    ? {
+        ...okSnapshot("claude", windows, readIso),
+        ...(paidOverage ? { paidOverage } : {}),
+        ...(resets ? { resets } : {}),
+      }
     : unavailableSnapshot("claude", "Claude did not report plan usage for this account.", readIso);
+}
+
+/**
+ * Codex's banked reset credits: the usage payload's count, plus each credit's
+ * expiry from the reset-credits endpoint when the payload does not list them.
+ * The count is the answer; a detail read that fails or is refused only costs
+ * the expiry dates, never the count.
+ */
+async function readCodexResets(
+  context: CommandContext,
+  runtime: ReaderRuntime,
+  usageBody: unknown,
+  accessToken: string,
+  accountId: string | undefined,
+): Promise<PlanUsageResets | undefined> {
+  const available = codexResetCount(usageBody);
+  if (!available) return undefined;
+  const now = runtime.now();
+  let items = codexResetItems(codexInlineResetCredits(usageBody), now);
+  if (items.length === 0) {
+    try {
+      const details = await requestJson(
+        runtime.fetchImpl,
+        usageEndpointUrl(context, CODEX_RESET_CREDITS_URL, runtime.env),
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+            ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+          },
+        },
+        RESET_DETAIL_TIMEOUT_MS,
+      );
+      if (details.status >= 200 && details.status < 300) {
+        items = codexResetItems(details.body, now);
+      }
+    } catch {
+      // Count only: the expiry dates are a convenience, not the reading.
+    }
+  }
+  return codexPlanResets(available, items);
 }
 
 /**
@@ -845,8 +920,13 @@ async function readCodexPlanUsage(
   const readIso = new Date(runtime.now()).toISOString();
   const { windows, plan } = codexPlanWindows(body, runtime.now());
   const paidOverage = codexPaidOverage(body);
+  const resets = await readCodexResets(context, runtime, body, accessToken, accountId);
   return windows.length > 0
-    ? { ...okSnapshot("codex", windows, readIso, plan), ...(paidOverage ? { paidOverage } : {}) }
+    ? {
+        ...okSnapshot("codex", windows, readIso, plan),
+        ...(paidOverage ? { paidOverage } : {}),
+        ...(resets ? { resets } : {}),
+      }
     : unavailableSnapshot("codex", "Codex did not report plan limits for this account.", readIso);
 }
 

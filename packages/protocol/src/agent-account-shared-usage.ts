@@ -9,8 +9,8 @@
  * docs/architecture/agent-accounts.md ("Shared readings").
  *
  * A shared reading carries usage only: windows (percentages, token counts,
- * spend, credits, reset times), the plan name, whether paid overage is on, when
- * it was taken, and which machine took it. Every field is rebuilt one by one
+ * spend, credits, reset times), the plan name, whether paid overage is on, the
+ * limit resets the login holds (count, kind, expiry), when it was taken, and which machine took it. Every field is rebuilt one by one
  * from what arrived ({@link parseSharedUsageReading}), so nothing else a peer
  * sends (a token, a cookie, a message) is kept or passed on.
  *
@@ -19,8 +19,12 @@
 import { isAgentAccountPlatform, type AgentAccountPlatform } from "./agent-accounts.js";
 import type { NativeAgentAccountUsageWindow } from "./native-agent.js";
 import {
+  activePlanUsageResets,
   restartPassedPlanWindows,
   type PlanUsagePaidOverage,
+  type PlanUsageReset,
+  type PlanUsageResets,
+  type PlanUsageResetScope,
   type PlanUsageReadingSource,
   type PlanUsageSnapshot,
 } from "./plan-usage.js";
@@ -41,6 +45,8 @@ export const SHARED_USAGE_LIMITS = {
   maxReadings: 256,
   /** Windows per reading. */
   maxWindows: 16,
+  /** Reset grants per reading. */
+  maxResetItems: 16,
   maxStringLength: 320,
 } as const;
 
@@ -60,6 +66,7 @@ export interface SharedUsageReading {
   windows: NativeAgentAccountUsageWindow[];
   plan?: string;
   paidOverage?: PlanUsagePaidOverage;
+  resets?: PlanUsageResets;
   fetchedAt: string;
   /** The machine that took the reading. */
   source: PlanUsageReadingSource;
@@ -151,6 +158,33 @@ function parsePaidOverage(value: unknown): PlanUsagePaidOverage | undefined {
   };
 }
 
+const RESET_SCOPES: readonly PlanUsageResetScope[] = ["session", "weekly", "full"];
+
+function parseResets(value: unknown): PlanUsageResets | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const available = finite(record.available);
+  if (available === undefined || !Number.isInteger(available) || available <= 0) return undefined;
+  const items: PlanUsageReset[] = [];
+  const entries = Array.isArray(record.items) ? record.items : [];
+  for (const entry of entries.slice(0, SHARED_USAGE_LIMITS.maxResetItems)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const raw = entry as Record<string, unknown>;
+    const count = finite(raw.count);
+    if (count === undefined || !Number.isInteger(count) || count <= 0) continue;
+    const label = boundedString(raw.label, 120);
+    const expiresAt = boundedString(raw.expiresAt, 64);
+    const scope = RESET_SCOPES.find((candidate) => candidate === raw.scope);
+    items.push({
+      count,
+      ...(label ? { label } : {}),
+      ...(scope ? { scope } : {}),
+      ...(expiresAt && Number.isFinite(Date.parse(expiresAt)) ? { expiresAt } : {}),
+    });
+  }
+  return { available, items };
+}
+
 function parseSource(value: unknown): PlanUsageReadingSource | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -181,11 +215,13 @@ export function parseSharedUsageReading(value: unknown, now: number): SharedUsag
     .filter((window): window is NativeAgentAccountUsageWindow => window !== undefined);
   const plan = boundedString(record.plan, 64);
   const paidOverage = parsePaidOverage(record.paidOverage);
+  const resets = parseResets(record.resets);
   return {
     identity,
     windows,
     ...(plan ? { plan } : {}),
     ...(paidOverage ? { paidOverage } : {}),
+    ...(resets ? { resets } : {}),
     fetchedAt: new Date(Math.min(fetchedAt, now)).toISOString(),
     source,
   };
@@ -258,6 +294,7 @@ export function sharedUsageReadingFromSnapshot(
       windows: snapshot.windows,
       plan: snapshot.plan,
       paidOverage: snapshot.paidOverage,
+      resets: snapshot.resets,
       fetchedAt: snapshot.fetchedAt,
       source,
     },
@@ -275,12 +312,14 @@ export function planUsageSnapshotFromSharedReading(
   selfNodeId: string,
   now: number,
 ): PlanUsageSnapshot {
+  const resets = activePlanUsageResets(reading.resets, now);
   return {
     platform: reading.identity.platform,
     status: "ok",
     windows: restartPassedPlanWindows(reading.windows, now),
     ...(reading.plan ? { plan: reading.plan } : {}),
     ...(reading.paidOverage ? { paidOverage: reading.paidOverage } : {}),
+    ...(resets ? { resets } : {}),
     fetchedAt: reading.fetchedAt,
     ...(reading.source.nodeId !== selfNodeId ? { readOn: reading.source } : {}),
   };

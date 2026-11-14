@@ -249,6 +249,9 @@ describe("plan usage reads in an agent-test profile", () => {
       { fetchImpl, env: isolatedEnv() },
     );
     expect(snapshot.status).toBe("ok");
-    expect(seen).toEqual([`${ORIGIN}/api/oauth/usage`, `${ORIGIN}/api/oauth/usage`]);
+    expect(seen).toEqual([
+      `${ORIGIN}/api/oauth/usage?cedar_ember=1`,
+      `${ORIGIN}/api/oauth/usage?cedar_ember=1`,
+    ]);
   });
 });

@@ -3,13 +3,15 @@
 ## Task analysis
 
 Analysed 2026-11-04 against `main` at `96ee1eb3e`, on the branch that built the
-feature (`forward-pasted-images-b87833dd9152-r1`).
+feature (`forward-pasted-images-b87833dd9152-r1`). Task 3's Pi and Codex
+app-server parts were qualified on fake models on 2026-11-14 against `main` at
+`dc90609bf` (see Assumptions and decisions).
 
 ### Tasks
 
 1. **Live two-node run**: a coordinator on a real command node sends a pasted image to a worker on a leaf, and a leaf's coordinator sends one back up. Status: done (two real backends that share no files; a slow or dropped link is not covered).
 2. **Live container run**: a containerized worker opens a mailed image inside a real container. Status: done (real container, read as the agent's user; no agent turn).
-3. **Reading it on every coordinator provider**: a recipient agent opens a mailed image with its own read tool. That means a worker in its worktree or container on any provider, and a coordinator on Claude, Codex, Cursor, Pi and Grok from its own attachment directory. Status: open (Claude and Codex done offline for a worktree and a conversation directory; left here: Pi against a loopback model, the Codex bridge's app-server, and an agent inside a container. Cursor and Grok need signed-in turns and moved to the manual-test checklist).
+3. **Reading it on every coordinator provider**: a recipient agent opens a mailed image with its own read tool. That means a worker in its worktree or container on any provider, and a coordinator on Claude, Codex, Cursor, Pi and Grok from its own attachment directory. Status: open (done offline for a worktree and a conversation directory: Claude and Codex CLIs, and since 2026-11-14 a Pi recipient on a loopback model and the Codex bridge's app-server. Left here: an agent reading inside a container. Cursor and Grok need signed-in turns and are on the manual-test checklist).
 4. **Clearing images from the project home**: mailed images used to stay in the user's own checkout until someone removed them. Status: done (they now live in the data directory and go with the project home or after mail retention).
 
 ### 1. Live two-node run
@@ -58,6 +60,11 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 **Context.** `ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT` names the directory. Codex's permission profile grants it read (`codex-config.ts`). Claude's read-only turn allows `Read` as a tool, whose reach outside the checkout is the CLI's own rule. The Cursor, Pi and Grok bridges use the root to confine prompt attachments (`prompt-attachments.ts`); their read tools were not traced.
 
 **Investigation.** `apps/backend/src/core/coordinator-mail-attachments-read-live.test.ts` (slow tier, 4 passing) needs no billed turn. It sends through the real commands and injection drain, then gives the exact delivered prompt to the pinned Claude CLI (2.1.314) and Codex CLI (0.166.0), each pointed at a scripted loopback model. The model takes the path from the prompt the CLI sent it and calls `Read` or `view_image`; both CLIs returned the same bytes as image content, for a worker in its Git worktree and for a side agent in its own attachment directory. Claude reads the attachment directory, which is outside its working directory, only because `Read` is approved up front, as the bridge does for every session (`session-manager-prompt-query.ts`); without that the CLI refused the read pending a grant. The Codex case uses `codex exec`, not the bridge's app-server. Cursor, Pi and Grok have no scripted model fixture in this repository and were not run; neither was an agent reading inside a container. If a provider cannot read it, the image cannot reach that coordinator's model by path, though the mail and the tile still arrive. Left here (2026-11-10): Pi, which can run against the loopback model the Auto-pipeline Pi check uses (`auto-pipeline-fake-model.ts`), the Codex bridge's app-server, and an agent reading inside a container. Cursor's model is hosted and Grok needs a login, so their signed-in runs are on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+
+**Qualified 2026-11-14 on fake models** (no login, no provider request):
+
+- **Pi:** `bridges/pi-bridge/src/mailed-image-read.test.ts` (default suite, about half a second) runs the real Pi bridge, its approval gate and Pi 1.5.0's own `read` against a loopback model speaking the OpenAI completions protocol. The model takes the path from the mail carrier the bridge sent it (`renderAgentMailCarrier`, what the mail drain delivers) and asks for `read`; the next request carried the same PNG bytes back, for a worker whose copy is in its worktree and for a coordinator whose copy is in its attachment directory under the protected data directory. In the coordinator case a `read` of `control-mcp.json` beside it was refused with `PI_READ_BOUNDARY_REFUSAL` and its content never reached the model, so the pass is the boundary's carve-out working, not a missing boundary. Found on the way: with a model declared text-only (`input: ["text"]`) Pi's `read` returns no image at all, so a Pi coordinator on such a model gets the mail and the path but cannot see the picture.
+- **Codex app-server:** `bridges/codex-bridge/src/app-server/live-mailed-image-read.test.ts` (gated by `RUN_LIVE_CODEX_APP_SERVER=1`; about 3 seconds) runs the bridge's own `AppServerEngine` and process configuration on the pinned Codex 0.167.0 (downloaded into the worktree with `mise run download:codex` and named with `CODEX_PROTOCOL_BINARY`) against a scripted Responses WebSocket. `view_image` returned the PNG as an `input_image` for a worker (copy in its worktree) and for a coordinator under its permission profile (copy in `ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT`, outside the checkout). A `view_image` of a file beside the attachment directory was refused by the profile ("Operation not permitted" on macOS), so the grant covers that directory alone. Run on macOS only; on Linux the profile is enforced by bubblewrap and the refusal text differs, which the test allows for.
 
 **Decisions.**
 
@@ -123,11 +130,33 @@ conversation copies and upward outbox retry.
 
 ### Task 3: remaining live evidence (review repair)
 
-Still open: Cursor, Pi, Grok, Codex bridge app-server and an agent opening the
-image inside a real container. Existing scripted qualification covers only
-Claude and Codex CLI tools; it must not be presented as app-server or other
-provider evidence. This repair does not spend provider turns, as prohibited by
-the ticket, or claim that a filesystem/hash check qualifies an agent tool.
+Still open: Cursor, Grok and an agent opening the image inside a real
+container. (Pi and the Codex bridge app-server were qualified on fake models on
+2026-11-14, below.) The earlier scripted qualification covered only the Claude
+and Codex CLI tools and was not presented as app-server or other provider
+evidence. This repair spent no provider turns and did not claim that a
+filesystem or hash check qualifies an agent tool.
+
+### Task 3: Pi and the Codex app-server on fake models, in their bridge packages (2026-11-14)
+
+Wrote each check in its own bridge package rather than extending
+`coordinator-mail-attachments-read-live.test.ts` in the backend. Pros: the Pi
+check runs the real bridge in process with the SDK its package pins, needs no
+installed binary and so runs in the default suite; the Codex check reuses the
+app-server engine and the coordinator permission-profile configuration exactly
+as the other `live-*` contract tests do. Cons: the prompt is built with
+`renderAgentMailCarrier` rather than taken from a real mail drain, so the claim
+that the backend names the placed copy in that carrier rests on the backend
+test, which still proves it for Claude and Codex.
+
+Each coordinator case adds a refused read beside the granted one, as a
+control. Without it a pass could have meant the read boundary (Pi) or the
+permission profile (Codex) was not applied at all.
+
+The Codex check is gated like the other app-server contract tests and resolves
+its binary through `CODEX_PROTOCOL_BINARY`, so it never runs an installed
+toolchain. The container recipient was not attempted here: it needs a built
+image and a fake model inside it, and stays task 3's only agent part.
 
 ## Related
 

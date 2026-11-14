@@ -8,15 +8,15 @@ set -e
 # ORKESTRATOR_CAPABILITY boot-status=1
 # ORKESTRATOR_CAPABILITY bridge-credential=1
 #
-# Readiness belongs to this boot only. Markers from an earlier start of the
-# same container are removed before anything else runs, and every status
+# Readiness belongs to this boot only. The record from an earlier start of
+# the same container is removed before anything else runs, and every status
 # record names this boot's id and PID 1's start time, which changes on every
 # container start. The backend accepts a record only when that start time
 # matches the one it reads itself, so a record left by a previous boot can
 # never release setup or agent launch.
 BOOT_STATUS_DIR=/run/orkestrator
 BOOT_STATUS_FILE="$BOOT_STATUS_DIR/boot-status.json"
-rm -f /tmp/.environment-ready /tmp/.entrypoint-complete "$BOOT_STATUS_FILE"
+rm -f "$BOOT_STATUS_FILE"
 # Container terminal shell records (CONTAINER_TERMINAL_PID_RECORD_COMMAND in
 # apps/backend/src/core/container-scripts.ts) name processes of an earlier
 # boot; none of them is alive now. Each shell start also sweeps its own uid's.
@@ -1716,10 +1716,6 @@ echo "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
 echo ""
 
 write_boot_status inputs-ready
-
-# Legacy markers for older backends. Current readers use the boot status.
-touch /tmp/.environment-ready
-touch /tmp/.entrypoint-complete
 
 log_progress "=== Container Ready ==="
 log_progress "Waiting for terminal connection..."

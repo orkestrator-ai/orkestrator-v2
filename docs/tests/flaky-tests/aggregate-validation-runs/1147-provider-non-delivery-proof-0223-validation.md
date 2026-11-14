@@ -104,4 +104,4 @@ skip was changed for them. Format, lint and typechecking passed through
 `mise run check`; the new cancellation, legacy-upgrade, round-trip and
 saved-result regressions passed in their focused suites. Signed-in restart
 qualification for Claude, Codex and Pi and the remaining Cursor/Grok limits are
-recorded in [0223](../../../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md).
+recorded in to-do 0223 (retired 2026-11-14; `git show dc90609bf:docs/todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md`).

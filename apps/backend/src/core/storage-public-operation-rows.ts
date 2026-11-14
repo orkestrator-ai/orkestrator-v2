@@ -10,7 +10,7 @@ import type { StorageMigration, StoreLayout } from "./storage-database.js";
  * parsed, re-validated and rewrote whole: a namespace takes admissions for
  * seven days, so the cost of each update grew with every operation in that
  * window. On a busy run that was 16 to 20 MiB of WAL a minute, each write a
- * FULL-synced commit on the event-loop thread (to-do 7562). A row layout makes
+ * FULL-synced commit on the event-loop thread (to-do 7562 (retired)). A row layout makes
  * an update cost the same at the 5,000th record as at the first.
  */
 export const PUBLIC_OPERATION_NAMESPACE_STORE = /^public-operations\/ns-[0-9]{13}-[a-f0-9]{8}$/;

@@ -1,5 +1,9 @@
 import { COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
+import {
+  coordinatorEnvironmentRefusals,
+  type CoordinatorRefusalSurface,
+} from "./coordinator-environment-refusals.js";
 import { reconcilePipelineCreation } from "./coordinator-pipeline-origin.js";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 
@@ -155,20 +159,28 @@ export async function coordinatorCreatedEnvironment(
   return false;
 }
 
+/** Count the refusal (content-free; see `coordinator-environment-refusals.ts`), then make it. */
+function refuse(surface: CoordinatorRefusalSurface, node?: CoordinatorEnvironmentNode): never {
+  coordinatorEnvironmentRefusals.record(surface, node ? "remote" : "local");
+  throw new Error(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+}
+
 /**
  * Refuses unless this coordinator created the environment or the project allows
  * others. Call it before anything happens: the refusal is the whole answer.
+ * `surface` says what was refused, for the refusal counter only.
  */
 export async function assertCoordinatorMayActOnEnvironment(
   context: CommandContext,
   scope: CoordinatorScope,
   environmentId: string,
   node?: CoordinatorEnvironmentNode,
+  surface: CoordinatorRefusalSurface = "tool",
 ): Promise<void> {
   const config = await context.storage.loadConfig();
   if (config.repositories[scope.projectId]?.coordinatorOtherEnvironments === true) return;
   if (await coordinatorCreatedEnvironment(context, scope, environmentId, node)) return;
-  throw new Error(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+  refuse(surface, node);
 }
 
 /**
@@ -186,9 +198,16 @@ export async function assertCoordinatorMayControlWorkflow(
     environmentId?: string;
   },
   node?: CoordinatorEnvironmentNode,
+  surface: CoordinatorRefusalSurface = "tool",
 ): Promise<void> {
   if (workflow.environmentId) {
-    await assertCoordinatorMayActOnEnvironment(context, scope, workflow.environmentId, node);
+    await assertCoordinatorMayActOnEnvironment(
+      context,
+      scope,
+      workflow.environmentId,
+      node,
+      surface,
+    );
     return;
   }
   const records = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
@@ -206,5 +225,5 @@ export async function assertCoordinatorMayControlWorkflow(
     )
   )
     return;
-  throw new Error(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+  refuse("workflow-control", node);
 }

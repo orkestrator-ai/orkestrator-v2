@@ -1858,7 +1858,7 @@ export class StorageDatabase {
     const waitStartedAt = Date.now();
     const deadline = waitStartedAt + acquireTimeoutMs;
     // Lease statements are counted under the lease's family, apart from the
-    // store it guards (to-do 7562: each claim and release is its own commit).
+    // store it guards (to-do 7562 (retired): each claim and release is its own commit).
     const caller = `lease:${leaseFamily(name)}`;
     const claim = this.db.query(
       `INSERT INTO leases (name, owner, heartbeat_at) VALUES (?1, ?2, ?3)
@@ -1929,7 +1929,7 @@ export class StorageDatabase {
    * commit is still atomic and ordered, and the next FULL commit's sync covers
    * its frames, so the stores the lease guards keep full durability. Each
    * claim and release used to be its own FULL-synced commit: two of the three
-   * WAL syncs of every leased store write (to-do 7562). Inside a transaction
+   * WAL syncs of every leased store write (to-do 7562 (retired)). Inside a transaction
    * the setting cannot apply to one statement, so it is left alone.
    */
   private leaseCommit<T>(commit: () => T): T {

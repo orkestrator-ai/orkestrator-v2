@@ -412,6 +412,10 @@
               {
                 "group": ["**/plan-usage/*", "!**/plan-usage/index.js", "!**/plan-usage/cache.js"],
                 "message": "Import the plan-usage domain through plan-usage/index.js."
+              },
+              {
+                "group": ["**/features/*", "!**/features/index.js"],
+                "message": "Import the features domain through features/index.js."
               }
             ]
           }
@@ -535,6 +539,13 @@
                   "!**/backend/src/core/plan-usage/index.js"
                 ],
                 "message": "Import the plan-usage domain through plan-usage/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/features/*",
+                  "!**/backend/src/core/features/index.js"
+                ],
+                "message": "Import the features domain through features/index.js."
               }
             ]
           }

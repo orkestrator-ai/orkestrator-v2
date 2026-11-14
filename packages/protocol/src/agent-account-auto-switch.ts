@@ -767,6 +767,6 @@ export function autoSwitchNoticeText(input: {
   }[input.reason];
   return {
     subject: `${input.platformLabel} moved to ${input.to} on ${input.machineName}`.slice(0, 200),
-    body: `Automatic account switching moved ${input.platformLabel} on ${input.machineName} from ${input.from} to ${input.to}, because ${why}. Nothing needs doing: work a 5-hour or weekly limit stopped resends itself, and any other stopped work stays stopped. To see or change this, use list_provider_accounts and set_account_auto_switch.`,
+    body: `Automatic account switching moved ${input.platformLabel} on ${input.machineName} from ${input.from} to ${input.to}, because ${why}. Nothing needs doing and no reply is expected, so do not acknowledge it: work a 5-hour or weekly limit stopped resends itself, and any other stopped work stays stopped. To see or change this, use list_provider_accounts and set_account_auto_switch.`,
   };
 }

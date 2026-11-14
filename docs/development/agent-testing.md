@@ -475,9 +475,18 @@ checklist item ([7568](../todo/manual-test/7568-manual-test-checklist.md),
 
 Results:
 
-- 2026-11-14, beelink: a default run (no switch set) on a disposable rootless
-  daemon listed both real cells as skipped while the fake cells passed (see
-  the run record in to-do 0001's task 8 section). No signed-in run yet.
+- 2026-11-14, beelink (Linux x86_64), commit `d96a65078`, no switch set: a
+  disposable rootless daemon (`mise run docker:disposable -- start
+  --host-loopback`, Engine 29.9.2) with the image built inside it
+  (`orkestrator-v2:dev-4b41bc748c56`), and a profile started with `--fixture
+  --fixture-environments local,container --no-agent-credentials
+  --no-host-seed --agent-platforms cursor,pi --headless`.
+  `mise run test:agent:docker -- container-fake-engines.spec.ts
+  container-real-engines-live.spec.ts --workers=1`: 4 passed (the four fake
+  cells), 2 skipped (both real cells), 0 failed, in 127 s. With
+  `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_PI_MODEL=haiku` the Pi cell failed
+  on its `provider/modelId` check before opening a session. No signed-in run
+  yet.
 
 A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and

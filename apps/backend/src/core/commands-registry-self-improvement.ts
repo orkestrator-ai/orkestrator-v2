@@ -31,11 +31,13 @@ export function kanbanBoard(context: CommandContext, projectId: string): Board {
     title: string;
     status: string;
     prUrl?: string | null;
+    labels?: string[];
   }): BoardTicket => ({
     id: task.id,
     title: task.title,
     status: task.status,
     prUrl: task.prUrl ?? null,
+    labels: task.labels ?? [],
   });
   return {
     projectId,

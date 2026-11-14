@@ -74,5 +74,5 @@ export function insightTicketFor(
   ]
     .filter(Boolean)
     .join("\n");
-  return { title: `[insight] ${theme.title}`.slice(0, 140), description, criteria };
+  return { title: theme.title.slice(0, 140), description, criteria };
 }

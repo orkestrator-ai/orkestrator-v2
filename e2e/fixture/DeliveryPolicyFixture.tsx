@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { BuildLaunchDialog } from "../../apps/web/src/components/build/BuildLaunchDialog";
+import type { BuildLaunchMachine } from "../../apps/web/src/components/build/build-machines";
 import { TicketSectionsGrid } from "../../apps/web/src/components/tickets/TicketSectionsGrid";
 import type { AgentModelCatalog } from "../../apps/web/src/lib/agent-launch";
 
@@ -18,6 +19,44 @@ const catalog: AgentModelCatalog = {
   grok: [],
   pi: [],
 };
+
+/**
+ * `?machines`: the launcher's Machine choice, as a project present on a second
+ * machine gives it. `&remote-only` makes the other machines' projects
+ * remote-only (no checkout there).
+ */
+const MACHINES: BuildLaunchMachine[] = [
+  {
+    key: "node:own",
+    name: "Studio Mac",
+    machine: undefined,
+    nodeId: "own",
+    projectId: "project-own",
+    current: true,
+    available: true,
+    hasCheckout: true,
+  },
+  {
+    key: "node:builder",
+    name: "Builder",
+    machine: "builder",
+    nodeId: "builder",
+    projectId: "project-builder",
+    current: false,
+    available: true,
+    hasCheckout: true,
+  },
+  {
+    key: "node:laptop",
+    name: "Laptop",
+    machine: "laptop",
+    nodeId: "laptop",
+    projectId: "project-laptop",
+    current: false,
+    available: false,
+    hasCheckout: true,
+  },
+];
 
 function policyParam(params: URLSearchParams): DeliveryPolicy | undefined {
   const value = params.get("policy");
@@ -47,6 +86,7 @@ export function DeliveryPolicyFixture() {
     }),
   );
   const [confirmed, setConfirmed] = useState<DeliveryPolicy | null>(null);
+  const [confirmedMachine, setConfirmedMachine] = useState<string | null>(null);
   const run: Pick<BuildPipeline, "phase" | "delivery" | "error"> = {
     phase: params.has("complete") ? "complete" : "creating-pr",
     ...(decided ? { delivery: { policy: decided, decidedAt: "2026-11-02T00:00:00.000Z" } } : {}),
@@ -78,6 +118,7 @@ export function DeliveryPolicyFixture() {
       ) : params.has("launch") ? (
         <>
           <output data-testid="confirmed-policy">{confirmed ?? "none"}</output>
+          <output data-testid="confirmed-machine">{confirmedMachine ?? "this machine"}</output>
           <BuildLaunchDialog
             open
             onOpenChange={() => undefined}
@@ -85,7 +126,19 @@ export function DeliveryPolicyFixture() {
             defaultAgent="claude"
             defaultEnvironmentType="local"
             deliveryPolicy={policy}
-            onConfirm={(selection) => setConfirmed(selection.deliveryPolicy)}
+            machines={
+              params.has("machines")
+                ? params.has("remote-only")
+                  ? MACHINES.map((entry) =>
+                      entry.current ? entry : { ...entry, hasCheckout: false },
+                    )
+                  : MACHINES
+                : undefined
+            }
+            onConfirm={(selection) => {
+              setConfirmed(selection.deliveryPolicy);
+              setConfirmedMachine(selection.machine?.name ?? null);
+            }}
           />
         </>
       ) : (

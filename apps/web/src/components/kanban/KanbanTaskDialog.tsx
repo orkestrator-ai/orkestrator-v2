@@ -73,6 +73,7 @@ import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { kanbanBuildStartOptions } from "./kanban-build-start";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
+import { useBuildLaunchMachines } from "@/components/build/build-machines";
 import { readImage } from "@/lib/native/clipboard";
 import {
   openPullRequestUrl,
@@ -277,6 +278,7 @@ export function KanbanTaskDialog({
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(buildProjectId);
+  const buildMachines = useBuildLaunchMachines(buildProjectId);
   const { catalog: launchCatalog, defaults: launchDefaults } = useBuildLaunchOptions(
     buildProjectId,
     open,
@@ -1069,6 +1071,7 @@ export function KanbanTaskDialog({
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
           busy={isBuildStarting}
+          machines={buildMachines}
           localEnvironmentAvailable={localEnvironmentAvailable}
           returnFocusRef={buildLaunchTriggerRef}
           deliveryPolicy={sectionsFromTicketText(editDescription, editAC).delivery?.policy}
@@ -1413,6 +1416,7 @@ export function KanbanTaskDialog({
         onOpenChange={setBuildDialogOpen}
         catalog={launchCatalog}
         busy={isBuildStarting}
+        machines={buildMachines}
         localEnvironmentAvailable={localEnvironmentAvailable}
         returnFocusRef={buildLaunchTriggerRef}
         deliveryPolicy={content?.sections.delivery?.policy}

@@ -531,6 +531,7 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
         ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
         ORKESTRATOR_RECURRING_METRICS: "1",
+        ORKESTRATOR_LOG_LEVEL: "build-pipeline=debug",
         ORKESTRATOR_PREVIEW_TRANSPORT: "1",
         ORKESTRATOR_PREVIEW_RELAY: "0",
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
@@ -564,6 +565,8 @@ describe("Electron backend process supervisor", () => {
     // qualify the rollback drivers.
     expect(isolated.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK).toBe("all");
     expect(isolated.ORKESTRATOR_RECURRING_METRICS).toBe("1");
+    // Log levels too, so a qualification run can read an area's debug lines.
+    expect(isolated.ORKESTRATOR_LOG_LEVEL).toBe("build-pipeline=debug");
     // So do the service-preview transport overrides, so a profile can
     // qualify the desktop tunnel and relay.
     expect(isolated.ORKESTRATOR_PREVIEW_TRANSPORT).toBe("1");

@@ -375,7 +375,7 @@ raw_args = true
 run = "bun apps/desktop/scripts/test-agent-goals-live.ts"
 
 [tasks."test:agent:auto-pipeline"]
-description = "Auto-pipeline launch flow end to end on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
+description = "Auto-pipeline launch flow end to end on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed); --reviewers <1-4> sets the review panel and its per-pass prompt reads are counted"
 run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
 
 [tasks."test:agent:coordinator:routing-fake"]

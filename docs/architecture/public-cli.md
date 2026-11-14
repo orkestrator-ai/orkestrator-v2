@@ -1035,7 +1035,7 @@ command runs on Claude only, by decision: other providers run the refusal,
 `--literal`, `--attach` and `--enqueue` stages. After
 `dispatch_native_agent_intent` the CLI path is provider-neutral, and each
 provider's executor is proved live through the composer
-([0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md)),
+([native-agent-commands.md](native-agent-commands.md#provider-support)),
 so a planted command per provider would add fixtures and live tokens without
 proving another path. The cost is that the CLI's name-to-ID resolution and
 `bindingRevision` echo are proved live on one catalogue shape; unit tests

@@ -8,6 +8,7 @@ day). Everything that investigation found removable under the support window
 of [version-compatibility.md](../../architecture/version-compatibility.md)
 was removed in the same branch; this file holds what the window still
 protects, with the date each becomes removable.
+Updated 2026-11-14 for the user's legacy-retirement decision.
 
 The floor is v2.21.0 until 2026-12-15, then v2.21.1 (12-15), v2.22.3
 (12-16), v2.23.0 (12-18) and v2.36.0 (2027-01-02, 60 days after the
@@ -18,15 +19,21 @@ no Stable release carries anything first shipped after v2.36.1.
 On 2026-11-11 the floor was still v2.21.0, so no path in tasks 2 to 7 was
 removable; every one of them serves a release the window still covers.
 
+On 2026-11-14 the user decided that legacy support retires now across the
+repository, in one sweep, with all machines and clients updated together
+(see Assumptions and decisions). The dates above no longer gate tasks 2 to 7:
+every path in them is removable now. They are kept as the record of what each
+path served.
+
 ### Tasks
 
 1. **Register the unregistered paths**: add a Register row (and a usage counter where the backend can see the path) for every path in tasks 2 to 7 that has none. Status: done (2026-11-11).
-2. **Backend paths, removable 2027-01-02**: older bridges and nodes served by v2.21.0 to v2.35.x. Status: open (blocked until 2027-01-02; the real-install counter reads wait on 7568: 7570 task 2).
-3. **Bridge paths, removable 2027-01-02**: Claude pid-only owner records and Codex per-login state adoption. Status: open (blocked until 2027-01-02).
-4. **Protocol and CLI paths, removable 2027-01-02**: the no-hello backend path and the CLI capability gates; `extendedDeny` was decided not to be a compatibility path. Status: open (blocked until 2027-01-02).
-5. **Renderer paths, removable 2027-01-02**: fallbacks for backends from v2.21.0 to v2.35.x. Status: open (blocked until 2027-01-02).
-6. **Paths with no Stable release yet**: removable 60 days after the first Stable release that contains each command or field, now including `legacyAutoSwitchEvent`. Status: open (blocked until that release is 60 days old).
-7. **The legacy Claude state file written by the image**: stop writing `/tmp/.claude-state` once the floor is v2.22.3. Status: open (blocked until 2026-12-16).
+2. **Backend paths, removable 2027-01-02**: older bridges and nodes served by v2.21.0 to v2.35.x. Status: open (2026-11-14: no longer waits on 2027-01-02 or the real-install counter reads; see Assumptions and decisions).
+3. **Bridge paths, removable 2027-01-02**: Claude pid-only owner records and Codex per-login state adoption. Status: open (2026-11-14: no longer waits on 2027-01-02).
+4. **Protocol and CLI paths, removable 2027-01-02**: the no-hello backend path and the CLI capability gates; `extendedDeny` was decided not to be a compatibility path. Status: open (2026-11-14: no longer waits on 2027-01-02).
+5. **Renderer paths, removable 2027-01-02**: fallbacks for backends from v2.21.0 to v2.35.x. Status: open (2026-11-14: no longer waits on 2027-01-02).
+6. **Paths with no Stable release yet**: removable 60 days after the first Stable release that contains each command or field, now including `legacyAutoSwitchEvent`. Status: open (2026-11-14: no longer waits on the next Stable release or 60 days after it).
+7. **The legacy Claude state file written by the image**: stop writing `/tmp/.claude-state`. Status: open (2026-11-14: no longer waits on the floor reaching v2.22.3 on 2026-12-16; the fallback read stays, see the task).
 
 ### 1. Register the unregistered paths
 
@@ -96,10 +103,16 @@ the user's peers; the reads on the user's real installs are a human-only
 item on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 ("7570 task 2 (user part)"). Record those results here.
 
+Since 2026-11-14 neither the floor nor the counter reads gate the removal:
+under the user's legacy-retirement decision every machine and client is
+updated together, so no older peer is left for a counter to find, and the
+7568 item goes. The recheck against v2.36.0 is no longer needed either;
+confirm only that HEAD's newer path covers each case.
+
 **Decisions.**
 
 - **One change or several?**
-  - **One change for the whole list on or after 2027-01-02 (recommended).**
+  - **One change for the whole list, now (recommended; "on or after 2027-01-02" until the 2026-11-14 decision).**
     - Pros: one validation run; the paths share the same retire date.
     - Cons: a larger diff.
   - **One change per path.**
@@ -132,7 +145,10 @@ bridge's own files.
 
 **Investigation.** Session records expire after 7 days of no access, so after
 2027-01-02 any remaining per-login record is leftover user state rather than
-skew. Titles, change evidence and journals do not expire.
+skew. Titles, change evidence and journals do not expire. Since the
+2026-11-14 decision no bridge older than #1295 stays in use, so the per-login
+records left on disk are leftover user state now, and the decision below
+applies to them as it stands.
 
 **Decisions.**
 
@@ -207,9 +223,9 @@ apps/backend/src`.
 
 **Decisions.**
 
-- **Remove all at once on 2027-01-02 (recommended)**, in the same change as
-  task 2 if both are ready: one validation run. The alternative, per-path
-  changes, costs a full run each.
+- **Remove all at once (recommended; "on 2027-01-02" until the 2026-11-14
+  decision)**, in the same change as task 2 if both are ready: one
+  validation run. The alternative, per-path changes, costs a full run each.
 
 ### 6. Paths with no Stable release yet
 
@@ -233,7 +249,11 @@ which contains none of these. When the next Stable release is published, its
 date plus 60 days is the removal date for every row here. Write that date
 into this task then.
 
-**Decisions.** None until that release exists.
+**Decisions.** None until that release exists. Since 2026-11-14 none is
+needed: under the user's legacy-retirement decision these rows are removable
+now, without a Stable release or a 60-day wait, and can go in the same change
+as tasks 2 to 5. The CLI's Linux refusal itself stays (it is permanent); only
+its Register row and the `--url` workaround text go.
 
 ### 7. The legacy Claude state file written by the image
 
@@ -257,11 +277,14 @@ v2.21.0 or v2.21.1. The legacy write therefore serves only v2.21.0 and
 v2.21.1 backends, and becomes removable when the floor reaches v2.22.3 on
 2026-12-16. The task does not close as "HEAD reads it", because HEAD reads
 the file only as the old-container fallback. It has a Register row.
+Since 2026-11-14 the write is removable now (the user's legacy-retirement
+decision): no v2.21.x backend stays in use. The fallback read stays, because
+it serves containers built before #1041, which is unmigrated user state.
 
 **Decisions.**
 
 - **What does HEAD's fallback read mean for the write?**
-  - **Remove the write once the floor is v2.22.3, keep the fallback read (recommended).**
+  - **Remove the write, keep the fallback read (recommended; "once the floor is v2.22.3" until the 2026-11-14 decision).**
     - Pros: matches what each backend actually reads; new images stop writing
       a file no supported backend needs.
     - Cons: two removals with different owners (the read goes with old
@@ -275,21 +298,28 @@ the file only as the old-container fallback. It has a Register row.
 Every path in this file has a Register row in
 [version-compatibility.md](../../architecture/version-compatibility.md#register)
 whose owner is this file, and the eight backend-visible paths count their
-use. Nothing here is removable on 2026-11-11. The rollback switches the
+use. Nothing here was removable on 2026-11-11; since the user's
+legacy-retirement decision of 2026-11-14 every path in tasks 2 to 7 is
+removable now. The rollback switches the
 investigation found are tracked where they already were: the remaining
 `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` drivers in
 [0048](../transcripts-and-observation/0048-recurring-work-qualification.md)
 task 13 (`ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waited on 0049
 until it was retired on 2026-11-11, was removed on 2026-11-13), and
 `ORKESTRATOR_EGRESS_FILTER=off` in 6101. The retired-command Register rows
-(195 to 200 at the time of writing) wait on the next Stable release and
-their counters.
+(195 to 200 at the time of writing) waited on the next Stable release and
+their counters; since 2026-11-14 they are removable now with task 2.
 
 ## Outstanding work
 
-- 2026-12-16: task 7 (stop writing `/tmp/.claude-state`).
-- 2027-01-02: tasks 2 to 5, ideally in one change.
-- The next Stable release: write task 6's removal date.
+- Tasks 2 to 7, removable now under the user's 2026-11-14
+  legacy-retirement decision, ideally in one change: the backend, bridge,
+  protocol and CLI, and renderer paths, task 6's rows and task 7's write.
+  Each removed path's Register row in
+  [version-compatibility.md](../../architecture/version-compatibility.md#register)
+  moves or goes with it. The dates this list carried before (2026-12-16 for
+  task 7, 2027-01-02 for tasks 2 to 5, the next Stable release for task 6) no
+  longer apply.
 
 ## Constraints and rationale
 
@@ -299,6 +329,9 @@ their counters.
 - Before removing a counted path, read its counter on the machines you can
   reach.
 - Do not raise the floor to remove a path sooner; the floor moves by itself.
+  The user's one-time legacy-retirement decision of 2026-11-14 is what lets
+  tasks 2 to 7 go now; it records that sweep only and does not change this
+  rule for later paths.
 
 ## Assumptions and decisions
 
@@ -359,8 +392,65 @@ The to-do's recommended decision assumed HEAD either reads the file or does
 not. HEAD reads it only as a fallback for containers older than #1041, so the
 task now records the date the write can go (2026-12-16) instead of closing.
 
+### Task 2: the floor and the counter reads no longer gate the removal (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the floor reaching v2.36.0 (2027-01-02) no longer blocks task 2. The
+real-install counter reads (7568: "7570 task 2 (user part)") existed only to
+show whether a peer still needed a path before the window let it go; with
+every peer updated together they cannot change the answer, so they are no
+longer needed and the 7568 item goes. The removal can happen now; no
+older-version adapter is kept. `normalizeKanbanTask` still becomes a one-time
+upgrade in `storage-record-upgrades.ts`, because old rows on disk are stored
+data. The counters of removed paths go with them.
+
+### Task 3: the bridge paths no longer wait on the floor (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the floor reaching v2.36.0 (2027-01-02) no longer blocks task 3. The Claude
+pid-only readers can go now. The Codex per-login titles, change evidence and
+journals left on disk are user state, so the task's recommended one-time
+upgrade at bridge start still applies to them.
+
+### Task 4: the protocol and CLI paths no longer wait on the floor (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the floor reaching v2.36.0 (2027-01-02) no longer blocks task 4. The
+no-hello backend path, the desktop's `legacy-backend` route and the CLI's
+`nodeRouting` and `transcriptKnownToken` gates can go now. `extendedDeny`
+stays: it is not a compatibility path (task 4's decision).
+
+### Task 5: the renderer paths no longer wait on the floor (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the floor reaching v2.36.0 (2027-01-02) no longer blocks task 5. Every
+renderer fallback in the table can go now, with the backend's
+`update_global_config` and `arrange_projects` once no current caller is left.
+
+### Task 6: no Stable release or 60-day wait (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the next Stable release, and 60 days after it, no longer blocks task 6. Its
+rows are removable now, `legacyAutoSwitchEvent` included; there is no date to
+write.
+
+### Task 7: the legacy state-file write no longer waits on v2.22.3 (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the floor reaching v2.22.3 (2026-12-16) no longer blocks task 7. The image
+can stop writing `/tmp/.claude-state` now. The fallback read in
+`claudeStateReadCommand` stays, because it serves containers built before
+#1041, which is unmigrated user state rather than version skew.
+
 ## Related
 
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [7571](7571-removal-candidates-needing-a-decision.md): removals that need a decision rather than a date.
+- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
 - [Cross-cutting index](0000-index.md)

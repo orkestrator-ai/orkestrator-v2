@@ -11,12 +11,13 @@ Analysed 2026-11-11 against `main` at `498b68766` (task 4 built, run and
 closed; task 1 re-read, unchanged). Previously analysed 2026-11-10 against
 `main` at `c98b20e6f` (task 3 built, run and closed) and 2026-11-06 against
 `main` at `c1724ab7` (task 5 run and closed).
+Updated 2026-11-14 for the user's legacy-retirement decision.
 
 ### Tasks
 
 Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joined `sync-v1` paging half moved to [0232](0232-direct-history-cursor-minting.md), which owns its retirement and register row; it is not repeated here.
 
-1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window, which the floor reaches for v2.36.0 on 2027-01-02; waits on 7568: 0050 task 1 counter reading). Reading the fallback counter on the maintainer's machines moved to 7568 on 2026-11-10.
+1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: open (2026-11-14: no longer waits on the support window or on the 7568 counter reading, under the user's legacy-retirement decision; see Assumptions and decisions). Reading the fallback counter on the maintainer's machines moved to 7568 on 2026-11-10 and is no longer needed.
 3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: done (2026-11-10; a test-only dispatch hold in the backend's bridge client, and `dispatch-hold-live.spec.ts` passed four times on a Pi loopback model; no product defect, two harness defects fixed; see the results section).
 4. **Electron and Docker paging harness**: make the transcript paths runnable in the Electron window and in a container environment (an Electron paging step, and a container target for `transcript-paging-live.spec.ts`); iOS only where the wrapper changes. Status: done (2026-11-11; `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` and `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`, each passed on the Codex loopback model; the Electron run found one renderer defect, fixed; see the results section). The runs with real providers are on 7568 (0050 task 4, Electron and container items). iOS: no wrapper change, so nothing to run.
 5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
@@ -28,7 +29,7 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 **Context.** Item 3, checked on 2026-10-26. The Claude summary route now materialises a persisted session first, so its 404 means the session is missing. The register row (`docs/architecture/version-compatibility.md:113`) sets the condition: the floor at or above the first Stable release with that change.
 
-**Investigation.** The fallback is at `apps/backend/src/core/http-bridge/progressive.ts:92` and counts `bridge-transcript.messages-fallback` only when `/messages` served the session (`:117`; id at `compatibility-path-usage.ts:29`). The Claude change landed in #1296 (`c9f4043b`), covered by `bridges/claude-bridge/src/services/session-manager-transcript-v2.test.ts:383`. Of the local tags, only `v2.33.0-beta` contains it, and no Stable release does yet. The floor is still v2.21.0 (`version-compatibility.md:18`), so retirement is at least 60 days after the first Stable release with #1296. `/messages` itself stays: bounded `messages({ limit })` reads and the `sync-v1` refresh use it.
+**Investigation.** The fallback is at `apps/backend/src/core/http-bridge/progressive.ts:92` and counts `bridge-transcript.messages-fallback` only when `/messages` served the session (`:117`; id at `compatibility-path-usage.ts:29`). The Claude change landed in #1296 (`c9f4043b`), covered by `bridges/claude-bridge/src/services/session-manager-transcript-v2.test.ts:383`. Of the local tags, only `v2.33.0-beta` contains it, and no Stable release does yet. The floor is still v2.21.0 (`version-compatibility.md:18`), so retirement is at least 60 days after the first Stable release with #1296. `/messages` itself stays: bounded `messages({ limit })` reads and the `sync-v1` refresh use it. Since 2026-11-14 the floor no longer gates the removal: under the user's legacy-retirement decision every bridge, container images included, is updated together, so the fallback can go now.
 
 **Decisions.**
 
@@ -39,8 +40,8 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
   - **Keep it here as the last item (recommended).**
     - Pros: one place for item 3's history; 0232 already waits on this task by number.
     - Cons: this file cannot finish until the floor moves.
-- **What evidence is needed before removal, besides the floor?**
-  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).** Reading it is a maintainer check, moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
+- **What evidence is needed before removal, besides the floor?** (Superseded on 2026-11-14: neither, under the user's legacy-retirement decision; see Assumptions and decisions.)
+  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended until 2026-11-14).** Reading it is a maintainer check, moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
     - Pros: catches a bridge that is somehow older than the floor suggests (a container image built before #1296).
     - Cons: needs the counter read from several machines.
   - **The floor alone.**
@@ -159,7 +160,8 @@ pre-acceptance pipeline dispatch window ran on 2026-11-10 through a test-only
 dispatch hold and found no product defect. On 2026-11-11 the paging spec
 learned to run in the Electron window and in a container environment, and
 passed in both on a loopback model; the Electron run found one more defect,
-fixed. What remains for agents is task 1, which waits on the support window;
+fixed. What remains for agents is task 1, which waited on the support window
+until the user's legacy-retirement decision of 2026-11-14 and can be done now;
 the real-provider Electron, container and Cursor runs are on the manual-test
 checklist.
 
@@ -342,8 +344,10 @@ checklist.
 
    Left in this item: removing the `/messages` fallback once the floor passes
    the first Stable release with the Claude change, after checking its counter
-   on the machines you can reach. `/messages` itself stays: bounded
-   `messages({ limit })` reads and the `sync-v1` refresh use it.
+   on the machines you can reach. Since 2026-11-14 neither the floor nor the
+   counter reading gates it (the user's legacy-retirement decision; task 1).
+   `/messages` itself stays: bounded `messages({ limit })` reads and the
+   `sync-v1` refresh use it.
 4. **Done (2026-10-24): Codex has a per-response row boundary.** app-server
    sends `thread/tokenUsage/updated` once per Responses API completion,
    tool-only responses included. A probe of the pinned 0.164.0 showed one
@@ -1576,6 +1580,22 @@ Made on 2026-11-11 while doing task 4.
     - Cons: its result is no longer schema-checked in development, like the
       four progressive reads already.
 
+### Task 1: the floor and the counter reading no longer gate the removal (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the support-window floor reaching v2.36.0 (2027-01-02) no longer blocks
+task 1. The 7568 counter reading (`bridge-transcript.messages-fallback` on the
+maintainer's machines for a Stable cycle) existed only to catch a bridge older
+than the floor suggested, such as a container image built before #1296. With
+every bridge and image updated together there is no such bridge to find, so
+the reading is no longer needed and its 7568 item goes. The removal can happen
+now: delete `readHttpBridgeTranscriptSnapshot`'s `/messages` fallback, its
+counter and its Register row; no older-version adapter is kept. A 404 from
+`/transcript` then means the session is missing. `/messages` itself stays for
+bounded reads and the `sync-v1` refresh. 0232 task 4 names this task as one
+of its prerequisites.
+
 ## Constraints and rationale
 
 - Provider histories stay authoritative. Display tails, summary indexes and
@@ -1678,7 +1698,10 @@ All three checked on 2026-10-24.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the
   human-only parts of this to-do (task 2, the counter reading of task 1, and
   the real-provider Electron and container runs of task 4) moved there on
-  2026-11-10.
+  2026-11-10. The counter reading of task 1 is no longer needed since the
+  user's legacy-retirement decision of 2026-11-14.
+- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the 2026-11-14
+  legacy-retirement sweep.
 - [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
   the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).
 - `../architecture/storage.md` (display tails, pipeline transcripts),

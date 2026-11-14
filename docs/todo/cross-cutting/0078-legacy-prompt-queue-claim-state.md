@@ -5,10 +5,11 @@
 Analysed 2026-10-28 against `main` at `79f3bc97`. Rechecked 2026-10-31 against
 `main` at `931e5541`: the schema is now version 5, which changes task 2's answer
 and gives task 1 a decision to take (see each).
+Updated 2026-11-14 for the user's legacy-retirement decision.
 
 ### Tasks
 
-1. **Retire the live-claim read**: once no supported backend can write a claim into a shared database, restore every stored claim to the head and drop the `outstandingClaim` guards. Status: open (blocked on the support window: no Stable release without the claim commands exists yet; see the 2026-10-31 decision below on whether schema 5 lifts that).
+1. **Retire the live-claim read**: once no supported backend can write a claim into a shared database, restore every stored claim to the head and drop the `outstandingClaim` guards. Status: open (2026-11-14: no longer waits on the support window or on a Stable release carrying schema 5; see Assumptions and decisions).
 2. **Correct which backends can still write a claim**: the register row said "through v2.28.0-beta", but the commands shipped through v2.29.0-beta, and the schema now shuts out every one of those releases. Status: done (2026-10-31).
 
 The 2026-10-27 work (per-load normalization, retiring the standalone recovery
@@ -69,7 +70,7 @@ work across the window"), so the shape upgrade itself never goes away.
 
 **Decisions.**
 
-- **Does schema 5 lift the block before the window would? (2026-10-31, not taken: this batch was told to leave task 1.)**
+- **Does schema 5 lift the block before the window would? (2026-10-31, not taken: this batch was told to leave task 1. Superseded on 2026-11-14: under the user's legacy-retirement decision neither the next Stable release nor the floor gates task 1; see Assumptions and decisions.)**
   - **Yes: treat the register's "can no longer share the database" as met once version 5 has shipped, and do task 1 after the next Stable release carries it (recommended).**
     - Pros: the register row's condition is about sharing a database, and the schema now decides that; removes every `outstandingClaim` reader without waiting 60 days from that Stable release; the downgrade rule already accepts an older release refusing newer data.
     - Cons: a claim held by an old backend still running across the migration would go back to the head while its holder may yet submit it, so it could run twice; that is a single-host, single-restart race but it touches at-most-once dispatch, and it departs from the window's floor rule.
@@ -177,7 +178,8 @@ task 1 is unchanged, because the floor rule follows Stable releases.
 
 ### Code
 
-1. Retire the live-claim read (task 1), once the window allows it.
+1. Retire the live-claim read (task 1). Since the user's legacy-retirement
+   decision of 2026-11-14 this no longer waits on the window.
 
 ## Constraints and rationale
 
@@ -196,6 +198,22 @@ task 1 is unchanged, because the floor rule follows Stable releases.
   message to the head for the ordinary dispatch path.
 
 ## Assumptions and decisions
+
+### Task 1: the window and schema 5's Stable release no longer gate it (user decision, 2026-11-14)
+
+The user decided on 2026-11-14 that legacy support retires now across the
+repository (one sweep; all machines and clients update together), so the wait
+on the support-window floor, or on the next Stable release carrying schema 5,
+no longer blocks task 1. No claim-writing backend stays in use, and the
+schema-5 race the recommended option named (a backend that opened the
+database before version 5 still running across the upgrade) needs such an
+older backend, so it is gone with them. The retirement can happen now: delete
+the live-lease branch and every `outstandingClaim` reader, and keep
+`restoreLegacyPromptQueueClaims` as the load pass that returns any stored
+claim to the head (task 1's recommended "What does retirement remove?"
+option), because a claim already on disk is stored data and "record upgrades
+are permanent". No older-version adapter is kept, and no counter or reading
+is needed first.
 
 ### What the register row says (2026-10-31, task 2)
 
@@ -245,6 +263,7 @@ moved into Current state.
 
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [storage.md](../../architecture/storage.md#migrations)
+- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
 
 ## Replaces
 

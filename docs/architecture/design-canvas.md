@@ -673,8 +673,18 @@ the 2026-11-13 runs that closed it are in
 Still to do by a person, in the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md):
 the native menu key equivalents on macOS, a screen-reader pass, a slower
-laptop, the M5 Max retention run, and the decisions on library thumbnails
-and a cross-environment transfer UI.
+laptop and the M5 Max retention run.
+
+Decided by the user on 2026-11-14 (to-do 0036, retired, tasks 9 and 11):
+
+- **No library thumbnails** until users ask for them; the saved-designs
+  library keeps listing facts. Recorded in
+  [8010](../todo/design-canvas/8010-design-canvas-deferred-optimisations.md)
+  task 1.
+- **No cross-environment transfer UI.** To copy a canvas to another
+  environment, download it and import it there; that is the supported path.
+  Recovery copies stay per environment, and no "Copy to environment…" action
+  or cross-environment lock order is planned.
 
 ### Evidence of 2026-11-13
 

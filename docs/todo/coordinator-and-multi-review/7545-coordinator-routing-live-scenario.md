@@ -10,13 +10,13 @@ live Pi review pass, with other provider findings still open.
 
 Analysed 2026-11-08 against `main` at `02f55ea9b`. Task 1 was built on
 2026-11-08 against `main` at `30bce6895`. Task 4 was built on 2026-11-10
-against `main` at `04639b12b`.
+against `main` at `04639b12b`. The user decided task 3 on 2026-11-14.
 
 ### Tasks
 
 1. **Add a `routing` scenario to the live coordinator suite**: four plain requests, each checked for the workflow the coordinator chose. Status: done.
 2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: done (all five main platforms exercised and recorded below; Cursor qualified; the remaining provider reruns moved to 7568).
-3. **Apply the decision on what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. The decision is the user's and moved to 7568; once taken, either add the recommended sentence to `COORDINATOR_ENVIRONMENT_CHOICE_RULE` or relax the `review` case's assertion. Status: blocked (waits on 7568: 7545 task 3).
+3. **Apply the decision on what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. The user chose on 2026-11-14 to leave the rule as it is (the coordinator chooses by size), so this task relaxes the `review` case to accept the coordinator's own review. Status: open.
 4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: done (the cancel notice and refusals now say it is the user's decision, the routing scenario checks the wake, and a loopback fake-model run passed; the backend test failures the full suite tied to it were repaired); the billed Codex rerun that shows whether a real model obeys moved to 7568.
 
 ### 1. Add a `routing` scenario to the live coordinator suite
@@ -132,10 +132,12 @@ review model.
 
 ### 3. Decide what "review this branch" should start
 
-**Split 2026-11-10.** The decision below is the user's and is on the
-manual-test checklist (7568, 7545 task 3). What stays here is applying it:
-the rule sentence, or a `review` case that accepts the coordinator's own
-review.
+**Split 2026-11-10.** The decision below was the user's (7568, 7545 task
+3). **Decided 2026-11-14: leave the rule; the coordinator chooses by size**
+(see Assumptions and decisions). What stays here is applying it: change the
+routing scenario's `review` case so a coordinator's own review (for example
+`get_worker_changes` and a written answer) passes, and a Multi Review still
+passes too. `COORDINATOR_ENVIRONMENT_CHOICE_RULE` is not changed.
 
 **Problem.** Asked to "review the work on the branch … and tell me what needs
 attention", both Claude and Codex read the change themselves
@@ -469,6 +471,17 @@ pass. A WebKit failure was environmental (the host lacks WebKit's libraries)
 and is not repaired. A direct `bun test` from a shell that inherits
 `NODE_ENV=production` fails the local-bridge tests with "bridge directory not
 found"; `mise run test` strips that variable, so those are not real failures.
+
+### Task 3: leave the rule; the `review` case accepts the coordinator's own review (user decision, 2026-11-14)
+
+- **Chose:** option 2. The user (maintainer) decided on 2026-11-14 to leave
+  `COORDINATOR_ENVIRONMENT_CHOICE_RULE` as it is and let the coordinator
+  choose by the size of the change.
+- **What follows:** the routing scenario's `review` case accepts either a
+  Multi Review or the coordinator's own review of the change, and still fails
+  when the coordinator neither reviews nor launches one. The case's
+  assertion is reworded to say what it now proves. A loopback fake-model run
+  of the case is enough to close the task; no billed rerun is needed.
 
 ## Needs verification
 

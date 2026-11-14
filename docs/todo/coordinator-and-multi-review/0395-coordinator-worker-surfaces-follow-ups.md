@@ -12,6 +12,9 @@ left.
 
 ## Task analysis
 
+Updated 2026-11-14: the user made task 2's scope call (a leaf patch command),
+so task 2 is agent work.
+
 Analysed 2026-11-11 against `main` at `498b68766`: tasks 1 and 3 are on
 `main`, task 2 still waits on the user's scope call, and tasks 4 and 5 are done
 on branch `launch-override-marker-043a84998c41-r1` (task 4's billed Claude run
@@ -40,7 +43,7 @@ association kind.
 ### Tasks
 
 1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: done.
-2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`: build whichever option the scope call picks (a patch sent to a leaf controller command, or a clear refusal across nodes). Status: blocked (waits on 7568: 0395 task 2 scope call).
+2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`: the user chose on 2026-11-14 a new leaf command that applies a patch the command node builds after approval, with a patch size bound over the node link and the node named in the approval dialog. Status: open.
 3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: done.
 4. **Live `surfaces` scenario**: add a scenario to `mise run test:agent:coordinator` that calls each tool once on a real stack. The billed run of it is on the manual-test checklist (7568). Status: done (the scenario; its billed run is 7568's).
 5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: done (yes, as recommended; proved by test).
@@ -137,10 +140,10 @@ for.
     - Pros: no new code; a pushed branch already reaches a remote worker.
     - Cons: the user loses the feature exactly where workers usually run.
 
-**Waiting on the scope call.** The choice between the first and third
-options is the user's; it moved to the
-[manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
-2026-11-10. What each option would take:
+**Scope call, decided 2026-11-14.** The choice between the first and third
+options was the user's (on the manual-test checklist from 2026-11-10). The
+user chose the first: a new leaf command (see Assumptions and decisions).
+What each option would take:
 
 - *A new leaf command that applies a patch sent over the node link.* The user
   keeps the feature for remote workers, and the approval dialog and read-only
@@ -336,7 +339,7 @@ now prove it through the `adopt_coordinator_workflow` command the tool calls.
 
 1. **Root changes on other nodes.** `request_root_changes` across nodes needs
    the patch to travel from this node's checkout to a leaf worker, or a clear
-   refusal. Waiting on the scope call on the manual-test checklist; see task 2.
+   refusal. The user chose the leaf patch command on 2026-11-14; see task 2.
 
 ### Qualification
 
@@ -477,6 +480,23 @@ kinds. I took the recommended options. Choices it left to me:
 The brief made both of them scope calls for the user. Each subsection ends
 with **Open for the user**, setting out the trade-off. Neither has any code
 on this branch.
+
+### Task 2: a leaf command applies a patch the command node builds (user decision, 2026-11-14)
+
+- **Chose:** option A, the recommended option. The user (maintainer) decided
+  on 2026-11-14 that `request_root_changes` with a `nodeId` naming another
+  node builds the patch on the command node after the user's approval and
+  sends it to a new leaf command that applies it in the worker
+  (`git apply --check`, then `git apply`, whole or not at all).
+- **What the agent builds:** the leaf command, callable only by a command
+  node; a size bound on the patch over the node link (the 64 MiB answer limit
+  and 4 MiB file chunks above: either a cap with a clear refusal or chunked
+  transfer); the approval dialog naming the worker's node; and tests on a
+  simulated node link like `coordinator-surfaces-remote.test.ts`. Under the
+  user's 2026-11-14 legacy-retirement decision every machine updates
+  together, so no older-leaf adapter is needed; a leaf without the command
+  should still fail with a clear "update that node" error rather than a
+  generic one.
 
 ### Tasks 4 and 5: not started (2026-10-30)
 

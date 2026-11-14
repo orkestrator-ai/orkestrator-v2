@@ -18,8 +18,8 @@ freshly built image
 
 ### Tasks
 
-1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
-2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: blocked (waits on a recurrence: a `copy-in.snapshot-busy` log line, or the busy refusal on any host). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. The bind delivery below waits for a host that fails again. Whether the firewall's GitHub fetch gets a token is a decision in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the agent work assumes the recommended answer (no token).
+1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby is drafted in [`docs/upstream-issues/moby-rootless-docker-cp-readonly-bind.md`](../../upstream-issues/moby-rootless-docker-cp-readonly-bind.md), and the user files it.
+2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open (2026-11-14: the user decided to keep the firewall's GitHub fetch anonymous and fix seed delivery so the fetch stays the exception, which makes the bind delivery agent work now rather than waiting on a recurrence). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. The bind delivery below is the open work. The firewall's GitHub fetch gets no token (the user, 2026-11-14).
 3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries; raised to ten on 2026-11-13 by 7750 (retired)).
 4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: done 2026-11-11 (on a rootless daemon the backend chooses automatic host ports itself; qualified on a disposable rootless daemon).
 
@@ -227,11 +227,8 @@ Steps:
     - Cons: it fails every time for the environment image; only the
       one-layer probe ever succeeded on a retry.
 - **Should the firewall's GitHub fetch stop depending on the anonymous allowance?**
-  This is the user's call (a credential near containers); it moved to the
-  [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
-  2026-11-13 as "7549 task 2: decide whether the firewall's GitHub fetch gets
-  a token". Until it is recorded, the agent work here assumes the
-  recommended option.
+  This was the user's call (a credential near containers). The user chose
+  the recommended option on 2026-11-14 (see Assumptions and decisions).
   - **No; fix the seed delivery above so the fetch is the exception again (recommended).**
     - Pros: the seed exists so that boots do not fetch; no token goes near a
       container.
@@ -410,10 +407,13 @@ pause instead of recreating the container.
 
 ## Outstanding work
 
-- Task 2 (blocked on a recurrence): when a host refuses copies as busy
-  again (`copy-in.snapshot-busy` in the backend log, or the typed error),
-  record the daemon's full mount options and whether `index=off` is among
-  them, then build the recommended bind delivery and its live case.
+- Task 2 (open): build the recommended bind delivery for the GitHub ranges
+  seed, project seed files and configured project files, with its live case
+  on a rootless daemon, so a restricted boot fetches `api.github.com/meta`
+  only when the backend's seed is missing or over a day old. When a host
+  refuses copies as busy again (`copy-in.snapshot-busy` in the backend log, or
+  the typed error), also record the daemon's full mount options and whether
+  `index=off` is among them.
 
 ## Assumptions and decisions
 
@@ -441,6 +441,26 @@ calling the whole boot an unsupported topology would misstate it, and
 Chose: log `refusal=read-only-bind-remount` and carry on. Why: the
 firewall's own fetch still covers it; failing the runtime or gateway would
 turn a slower boot into no boot.
+
+### Task 2: keep the GitHub fetch anonymous and fix seed delivery (user decision, 2026-11-14)
+
+- **Chose:** option A. The user (maintainer) decided on 2026-11-14 that the
+  firewall's `api.github.com/meta` fetch stays anonymous (no GitHub token goes
+  near a restricted container's root phase), and that seed delivery is fixed
+  so the fetch stays the exception.
+- **What follows:** the recommended bind delivery in task 2 is agent work now.
+  It was waiting for a host to refuse busy copies again so the fix could be
+  shown to cure them; it is now built for its own sake, because a refused or
+  late seed copy is what sends a boot to the anonymous fetch. Its proof is a
+  live case on a rootless daemon in which a restricted boot reads the bound
+  seed and does not fetch.
+
+### Task 1: the Moby report lives in `docs/upstream-issues/` (2026-11-14)
+
+The user decided on 2026-11-14 that upstream reports are not to-dos. The
+draft above is now kept, ready to paste, in
+[`docs/upstream-issues/moby-rootless-docker-cp-readonly-bind.md`](../../upstream-issues/moby-rootless-docker-cp-readonly-bind.md);
+the user files it, and its URL is recorded there.
 
 ### Three retries (task 3)
 
@@ -543,4 +563,4 @@ path for the reason in the decision above.
   (the launcher used, which has no storage-driver option).
 - [Container lifecycle](../../architecture/container-lifecycle.md)
   ("Portable inputs").
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: approving and filing the upstream Moby report) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): filing the upstream Moby report is its "File the upstream reports" item ([the report](../../upstream-issues/moby-rootless-docker-cp-readonly-bind.md)).

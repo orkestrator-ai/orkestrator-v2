@@ -1,17 +1,18 @@
 # Decide what happens to a removed project's Kanban, notes and plans
 
-From efficiency batch E3 (Retention and deletion), part `0840`, tasks 1 and 2. **Waiting on the maintainer's decision:** task 1 deletes user content that survives today, so the choice is the maintainer's; that decision is in [7568](../manual-test/7568-manual-test-checklist.md) (moved 2026-11-10), and both tasks here wait on it. Nothing here has been built, and project removal behaves as it did.
+From efficiency batch E3 (Retention and deletion), part `0840`, tasks 1 and 2. **Decided by the user on 2026-11-14:** removing a project deletes its Kanban tasks, images, notes and plans, and the confirmation text says so (see Assumptions and decisions). Both tasks are agent work. Nothing here has been built yet, and project removal behaves as it did.
 
 The batch file was deleted when E3 was built. It is in Git history at the commit named in [Related](#related).
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `0e8958f57`.
+Analysed 2026-11-05 against `main` at `0e8958f57`. Updated 2026-11-14 for the
+user's decision on task 1.
 
 ### Tasks
 
-1. **Project removal**: implement the maintainer's choice, so Kanban tasks and images, project notes and feature plans either go with the project or are knowingly kept. Status: blocked (waits on 7568: 5820 task 1 decision).
-2. **Completion comment records**: give them a delete path. Status: blocked (depends on 1).
+1. **Project removal**: implement the maintainer's choice, so Kanban tasks and images, project notes and feature plans either go with the project or are knowingly kept. Status: open (the user chose option (a) on 2026-11-14: delete with the project).
+2. **Completion comment records**: give them a delete path. Status: open (depends on 1; build it in the same change or after it).
 
 ### 1. Project removal
 
@@ -23,7 +24,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 **Decisions.**
 
-- **Delete with the project?** The maintainer decides, through [7568](../manual-test/7568-manual-test-checklist.md); implement the option chosen there.
+- **Delete with the project?** The maintainer's call; decided 2026-11-14: yes, the first option below (see Assumptions and decisions).
   - **Yes, in `removeProject`, matching its other stores, with the confirmation text saying so (recommended).**
     - Pros: consistent; the data is unreachable anyway once the project goes; removes user content the user asked to remove.
     - Cons: not recoverable beyond hourly snapshots, and a user re-adding the same repository may have expected their board back.
@@ -52,6 +53,21 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
     - Pros: bounded regardless of project; independent of removal.
     - Cons: a very late retry could post a second comment.
 
+## Assumptions and decisions
+
+### Task 1: delete with the project (user decision, 2026-11-14)
+
+- **Chose:** option (a). The user (maintainer) decided that `removeProject`
+  deletes the project's Kanban tasks, their images, project notes and feature
+  plans with its other stores, and that the removal confirmation text says so.
+- **What follows:** task 1 is agent work: add the deletes (scrubbing, see
+  Constraints), change the confirmation text in the renderer, and trace what
+  the Linear and GitHub sync in `storage-kanban-sync.ts` propagates on a
+  delete (a delete must not reach the user's Linear or GitHub issues unless
+  that is already what a ticket delete does). Task 2 follows the recommended
+  option, deleting a project's completion comment records by way of its
+  pipelines.
+
 ## Constraints and rationale
 
 - A delete of user content must scrub: `updateStore` writes never touch the archive, so a delete made that way scrubs explicitly ([storage](../../architecture/storage.md#durability-and-deletion)).
@@ -63,7 +79,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: the maintainer's decision) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the user part of task 1 (the maintainer's decision) was there from 2026-11-10 until the user answered it on 2026-11-14.
 - Batch file E3, part 0840 (deleted): its outcome is the closing check of E3 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which names the commit that holds the file's last version.
 - Logging and database report, D4 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 - [Change tracking](../../architecture/change-tracking.md#deleting-an-environment), which covers the ledger half of D4

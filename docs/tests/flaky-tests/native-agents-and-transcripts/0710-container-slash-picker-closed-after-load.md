@@ -41,7 +41,7 @@
   30 s budget given to the stale-draft refusal in the same change answers a
   different, diagnosed timing (the dispatch's revalidation took 5.7 s under
   load).
-- **Owner:** [0015-slash-command-qualification.md](../../../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
+- **Owner:** to-do 0015 (retired 2026-11-14; `git show 066992035:docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md`); its task 2 left this flake to the registry and the owning spec, `e2e/agent-testing/slash-command-inactive.spec.ts`. Behaviour: [native-agent-commands.md](../../../architecture/native-agent-commands.md#provider-support).
 
 ## After the review fix (2026-10-23)
 

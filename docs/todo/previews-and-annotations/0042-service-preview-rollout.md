@@ -28,7 +28,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 6. **Performance thresholds and missing metrics**: set thresholds from the
    two-machine baseline under the pass rule the maintainer approves; add HMR,
    reconnect and desktop-ingress measurements. Status: blocked (waits on
-   7568: 0042 task 1, the baseline, and 0042 task 6, the pass rule); metric
+   7568: 0042 task 1, the baseline; the pass rule, D8, was approved by the
+   user on 2026-11-14, D29); metric
    additions done (2026-11-03:
    desktop reconnect counts and ingress connect and first-byte series; HMR
    delivery stays with the latency script).
@@ -37,15 +38,16 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    default on, on the maintainer's sign-off with no observation window (D19).
    The evidence the flip went ahead of is task 6 and the two-machine run
    (7568: 0042 task 1).
-8. **Retire the legacy route and compatibility mode**: code item 6, once the
-   maintainer has made the fallback and legacy-tab annotation calls and the
-   floor has reached the first Stable release with the default. Status:
-   blocked (waits on 7568: 0042 task 8, then on that release). Stored tabs
-   that match one service now migrate (D21).
+8. **Retire the legacy route and compatibility mode**: code item 6. Status:
+   done here (2026-11-14): the user decided to remove `ServiceBrowserTab`
+   compatibility mode and the legacy loopback route now, with annotations on
+   legacy URL tabs, and no support-window wait (D30). The removal is
+   [8108](../cross-cutting/8108-legacy-retirement-sweep.md) task 3. Stored
+   tabs that match one service already migrate (D21).
 9. **Shared legacy partition retention**: the remaining half of code item 4.
-   Status: blocked (on task 8, and waits on 7568: 0042 task 12, the
-   long-lived profile reading the window is set from): the shared partitions
-   serve legacy URL tabs until that route is retired.
+   Status: blocked (waits on 8108 task 3, the route's removal, and on 7568:
+   0042 task 12, the long-lived profile reading the window is set from): the
+   shared partitions serve legacy URL tabs until that route is retired.
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
     a window (item 11). Status: done (2026-11-06): two Electron spec cases
@@ -141,10 +143,10 @@ windows report `desktop.connect_ms`, `desktop.first_byte_ms`,
 `desktop.reconnect{category}` and `desktop.reconnect_failed{category}` to
 their backend, where they appear in `get_preview_diagnostics`. HMR delivery
 is measured by `scripts/preview-latency-baseline.ts`, not the product.
-Thresholds remain blocked on the two-machine baseline (7568: 0042 task 1)
-and on the maintainer's approval of the pass rule (7568: 0042 task 6; D8
-proposes p95 first byte and connect within 1.5x the direct route over the
-same link, no unbounded queue growth and zero cross-service reach). Adding the
+Thresholds remain blocked on the two-machine baseline (7568: 0042 task 1).
+The pass rule was approved by the user on 2026-11-14 (D29): p95 first byte
+and connect within 1.5x the direct route over the same link, no unbounded
+queue growth and zero cross-service reach. Adding the
 counters exposed a reattach race, filed as
 3270 and fixed on 2026-11-03.
 
@@ -223,11 +225,11 @@ service** (`legacyUrlServiceMatch`,
 `apps/web/src/lib/preview-service-entry.ts:116`) decides every conversion. Since
 2026-11-04 a desktop with the tunnel available converts a matching tab when it
 becomes active (D21), so only the `localhost` tabs have no migration, and the
-register's condition now turns on them and the support window. Whether
-compatibility mode stays as a labelled fallback after the flip and whether
-annotations on legacy URL tabs retire with the route are the maintainer's
-calls (D8 records the recommendation); they moved to the manual-test
-checklist (7568).
+register's condition now turned on them and the support window. The
+maintainer's calls on the fallback and on legacy-tab annotations were made on
+2026-11-14 (D30): both go now, with no support-window wait, under the user's
+legacy-retirement decision; the removal is
+[8108](../cross-cutting/8108-legacy-retirement-sweep.md) task 3.
 
 **Decisions.**
 
@@ -2225,6 +2227,28 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   logic, and a real multi-node setup needs the hardware task 1 waits on.
   Cons: the 30-minute registry read path is not seen end to end; task 1's
   session can still pick it up.
+
+### D29. Task 6: the pass rule is approved (user decision, 2026-11-14)
+
+The user (maintainer) approved D8's proposed pass rule on 2026-11-14,
+unchanged: p95 first byte and connect time within 1.5x the direct route over
+the same link, no unbounded queue growth, and zero cross-service reach. An
+agent sets the thresholds from the task 1 baseline under this rule once the
+two-machine run (7568: 0042 task 1) is recorded; the rule itself no longer
+waits on anyone.
+
+### D30. Task 8: retire compatibility mode, the legacy route and legacy-tab annotations now (user decision, 2026-11-14)
+
+The user (maintainer) decided on 2026-11-14 to remove `ServiceBrowserTab`
+compatibility mode and the legacy loopback route now, with no labelled
+fallback release and no support-window wait, and to retire annotations on
+legacy URL tabs with the route. This follows the user's repo-wide decision
+of the same day that all legacy support retires in one sweep (every machine
+and client updates together). D8's recommendation of one Stable release of
+fallback is superseded. The removal, its register Retired row, and the
+plain-URL-tabs-open-externally behaviour move to
+[8108](../cross-cutting/8108-legacy-retirement-sweep.md) task 3; task 9 (the
+shared legacy partitions) follows it.
 
 ### D28. Task 10: keep each save's exact revision as the assertion baseline
 

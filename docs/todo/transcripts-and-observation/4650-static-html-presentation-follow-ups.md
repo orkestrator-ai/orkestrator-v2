@@ -6,7 +6,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 ### Tasks
 
-1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews, by emitting the frame document in the hosted build with its own header rule. Status: blocked (waits on 7568: 4650 task 1, approval of the hosted policy change and the check on a real Vercel deployment).
+1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews, by emitting the frame document in the hosted build with its own header rule. Status: open (the user approved the hosted policy change on 2026-11-14, so the build change is agent work; the check on a real Vercel deployment stays on the manual-test checklist, 7568: 4650 task 1).
 2. **Include document text in Find**: text inside a static frame is not indexed. Status: done (2026-11-05); see Assumptions and decisions. What it left went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`).
 3. **Share one sanitizer with the design runtime**: remove the pinned copy. Status: open (do with the next intentional design-runtime change).
 4. **Consider a thin visual publishing tool**: only if real provider sessions show the lifecycle is cumbersome. Status: blocked (waits on 7568: 4650 task 4, evidence from real provider sessions).
@@ -17,7 +17,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 **Context.** `apps/web-public/vercel.json` sets `script-src 'self'` and `frame-ancestors 'none'` on `/(.*)`, and its Vite build does not use `rendererSecurityPlugin`, so there is no emitted frame document. A `srcdoc` frame inherits the parent policy, so the bootstrap cannot run. The build declares `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`.
 
-**Investigation.** Not attempted live. Whether a more specific Vercel header rule replaces the `/(.*)` policy for one path, and approval to relax the hosted policy for that path, are on the manual-test checklist (7568); the build change here waits on both.
+**Investigation.** Not attempted live. Approval to relax the hosted policy for that path was given by the user on 2026-11-14 (see Assumptions and decisions). Whether a more specific Vercel header rule replaces the `/(.*)` policy for one path is still the manual-test checklist's Vercel check (7568); build the change so that check can run against it.
 
 **Decisions.**
 
@@ -84,6 +84,17 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
     - Cons: must keep the inspect-and-repair step and honest pending states, or it reports visuals as finished before they are.
 
 ## Assumptions and decisions
+
+### Task 1: the hosted frame is approved (user decision, 2026-11-14)
+
+- **Chose:** the recommended option. The user (maintainer) approved on
+  2026-11-14 that `apps/web-public` may emit `static-html-frame.html` with its
+  own header rule, `sandbox allow-scripts; frame-ancestors 'self'`, excluded
+  from the stricter `/(.*)` rule, so hosted readers get selectable reports.
+- **What follows:** the agent part of task 1 (the hosted build emits the frame
+  document, `vercel.json` gains the path rule, tests cover both) is
+  unblocked. Whether Vercel's path rule replaces or merges with the general
+  rule is still checked by the user on a real preview deployment (7568).
 
 ### Task 2: how the text crosses the channel
 

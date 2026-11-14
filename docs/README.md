@@ -18,6 +18,7 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 | [`debugging/`](#debugging) | Runbooks for diagnosing failures on a running install: crashes, killed processes, blank windows. |
 | [`tests/`](#tests) | The flaky-test registry, grouped into folders by area. [`tests/flaky-tests/0000-index.md`](tests/flaky-tests/0000-index.md) points to each folder's index, which tracks its cases. |
 | [`number-claims/`](number-claims/README.md) | One file per to-do or flake number, so two branches that take the same number conflict in Git. |
+| [`upstream-issues/`](#upstream-issues) | Ready-to-paste reports Orkestrator wants filed with another project (a bug or feature request to Bun, Moby, Claude Code, Pi, xAI and so on), one file per report. [`upstream-issues/0000-index.md`](upstream-issues/0000-index.md) lists them with their status. Only the user files them. |
 | [`todo/`](#todo) | All outstanding work in numbered files, grouped into folders by area. [`todo/0000-index.md`](todo/0000-index.md) points to each folder's index, which ranks its files by criticality. Pick work from here. |
 | `reports/` | [unified-federation.md](reports/unified-federation.md), the design report behind `plans/unified/`, and its [measurements](reports/unified-federation-measurements.md). A completed plan: what it built is described in the living docs (node scopes in [federation.md](architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree)). It stays only while open plan items still use it as their reference (7013, retiring the version-0 adapters, waits for its date), and is deleted by the rule below when they close. |
 
@@ -26,7 +27,8 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 
 There are no other plan, review or dated-note folders (`reports/` is the one
 temporary exception above), and nothing else belongs at the top of `docs/`. Durable content goes into `architecture/`,
-`development/` or `debugging/`; anything still to do goes into `todo/`. Completed plans are
+`development/` or `debugging/`; anything still to do goes into `todo/`, except
+a report for another project to act on, which goes into `upstream-issues/`. Completed plans are
 deleted once their behaviour is in a living doc; git history keeps them. The
 2026-10-15 consolidation removed everything under `docs/improvements/`,
 `docs/imrovements/`, `docs/plans/`, `docs/2026-10-14/`, `docs/2026-10-15/` and
@@ -144,6 +146,34 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | --- | --- |
 | [0000-index.md](tests/flaky-tests/0000-index.md) | The flake registry's top-level index. It lists the ten group folders and what each covers; each group's own `0000-index.md` table tracks its cases. Search the group indexes; open a case file only when the row matches. |
 
+## Upstream issues
+
+[`upstream-issues/`](upstream-issues/0000-index.md) holds the reports
+Orkestrator wants filed with other projects, decided by the user on
+2026-11-14. They are not to-dos: a to-do holds work this repository can do,
+and an upstream report is a request for someone else's. The to-do that found
+the problem keeps the work on our side (a workaround, a canary, adopting the
+fix) and links to the report from the task.
+
+- **One file per report**, named `<project>-<kebab-case-summary>.md` (for
+  example `bun-fsevents-rebuild-loses-events.md`). No number and no number
+  claim. The folder's [`0000-index.md`](upstream-issues/0000-index.md) lists
+  every file with its tracker, status and source to-do.
+- **Each file holds** the ready-to-paste issue text (title, body,
+  reproduction, versions), where to file it, notes on searching for an
+  existing report, a **Status**, and a short "Before filing" checklist of what
+  is still to verify (a re-run on the current pin, a canary build).
+- **Status** is `draft` (a Before-filing check other than the duplicate
+  search is still open), `ready to file`, or `filed` with the issue URL and
+  date.
+- **Filing is a user action.** Agents draft and update the files, and may run
+  the Before-filing checks; they never post them. The manual-test checklist
+  has one item for them, "file the upstream reports marked ready". Once a
+  report is filed, record its URL and date in the file and link it from the
+  source to-do task. When the upstream fix ships, the source to-do acts on it,
+  and the report file may then be deleted (cite it with `git show`, as for a
+  retired to-do).
+
 ## Todo
 
 Each file covers one piece of work: its purpose, the current state with code
@@ -239,6 +269,10 @@ Windows host", "needs a host where the user may use the rootful daemon",
 status line says. A task that only waits for a release or a CI run to happen,
 with agent work to do afterwards, is `blocked`.
 
+An upstream report is the one outward action with its own home: its text is
+a file in [`upstream-issues/`](#upstream-issues), and the checklist carries a
+single item for filing every report marked ready, not one item per report.
+
 Human-only work never goes into an area to-do. It is a `- [ ]` item in the
 [manual-test checklist](todo/manual-test/7568-manual-test-checklist.md),
 under its area, in the "Manual tests and live checks" section or, for
@@ -332,6 +366,9 @@ can act), just as its rating is, and keep the counts in
   `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`).
 - After any row removal, insertion, or move, renumber that folder's ranks to
   `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
+- An upstream report never becomes a to-do or a task of one. Draft it as a
+  file in [`upstream-issues/`](#upstream-issues), add its row to that folder's
+  index, and link it from the source to-do's task.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans
   every Markdown file.
 - `tests/unit/todo-index.test.ts` fails when two files share a number or a

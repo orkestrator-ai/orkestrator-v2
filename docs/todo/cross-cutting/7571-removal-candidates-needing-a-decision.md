@@ -17,26 +17,30 @@ candidate or part of one that needs a person (tasks 4, 5, 6, 7, 11, 13 and
 15, the two remaining task 9 items and task 1's live check) moved to the
 [manual-test checklist](../manual-test/7568-manual-test-checklist.md),
 which carries each one's context, options and the agent work that follows
-the answer. Task 3 was done on 2026-11-14. What is left here is agent work
-only: task 10.
+the answer. Task 3 was done on 2026-11-14. The user answered every moved
+decision on 2026-11-14 (see Assumptions and decisions): the removals went to
+[8109](8109-decided-removal-candidates.md), the `envFilePatterns` copy to
+[8106](../containers-and-environments/8106-env-file-patterns-copy.md), the
+legacy readiness path to [8108](8108-legacy-retirement-sweep.md), and the
+Linear integration stays. What is left here is agent work only: task 10.
 
 ### Tasks
 
 1. **Bridge full-payload SSE mode**: removed from the Claude and Codex bridges, with the replay ring only it kept. Status: done.
 2. **Claude bridge delete-tombstone machinery**: writer and reader removed; no tombstone was ever stored. Status: done.
 3. **Image readiness markers**: the image no longer writes or reads `/tmp/.environment-ready` and `/tmp/.entrypoint-complete`; it and its smoke and live checks use boot status, validated with an image build and the final-image smoke on a disposable daemon. Status: done.
-4. `envFilePatterns` setting (Settings offers it, but the backend never reads it): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
-5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
-6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
-7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
+4. `envFilePatterns` setting (Settings offers it, but the backend never reads it): the user chose on 2026-11-14 to implement the copy, with a security review; the build is [8106](../containers-and-environments/8106-env-file-patterns-copy.md). Status: done here (moved to 8106).
+5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): the user chose on 2026-11-14 to remove the observe-only monitor, its adoption and both switches; the removal is [8109](8109-decided-removal-candidates.md) task 1. Status: done here (moved to 8109).
+6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): the user chose on 2026-11-14 to remove them and their gate checks; the removal is [8109](8109-decided-removal-candidates.md) task 2. Status: done here (moved to 8109).
+7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): the user chose on 2026-11-14 to delete all three, with no older-version adapter; the removal is [8109](8109-decided-removal-candidates.md) task 3. Status: done here (moved to 8109).
 8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command is task 15, on the manual-test checklist).
-9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment). Status: done (the `bypassPermissionsModeAccepted` live check and the `kind: "legacy"` readiness decision moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)).
+9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment). Status: done (the `bypassPermissionsModeAccepted` live check is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the user chose on 2026-11-14 to remove the `kind: "legacy"` readiness path, which is [8108](8108-legacy-retirement-sweep.md) task 2).
 10. **Remaining retired to-do numbers in source comments**: about 39 numbers on about 80 comment lines. Status: open.
-11. Root `conductor.json`: moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
+11. Root `conductor.json`: nobody uses Conductor (the user, 2026-11-14); the deletion is [8109](8109-decided-removal-candidates.md) task 4. Status: done here (moved to 8109).
 12. **Commands kept only for tests**: `merge_pr_local` and `refresh_environment_diff_stats` removed, their tests ported. Status: done.
-13. Linear connection commands (`connect_linear`, `disconnect_linear`): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
+13. Linear integration (`connect_linear`, `disconnect_linear`, `post_linear_completion_comment`): in use, no change. The 2026-11-13 premise that these had no caller was wrong: `connect_linear` is called by `LinearConnectDialog.tsx`, `disconnect_linear` by `LinearTicketsView.tsx`, and `post_linear_completion_comment` by `build-pipeline-service-recovery.ts`, and the user actively uses Linear (2026-11-14). Status: done (kept).
 14. **Uncalled renderer API factories**: `createCommandNodesApi` and `createSelfImprovementApi` removed. Status: done.
-15. `import_legacy_build_pipelines` (the backend half of task 8, still used by e2e seeding): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
+15. `import_legacy_build_pipelines` (the backend half of task 8, still used by e2e seeding): the user chose on 2026-11-14 to port its callers to a test-only seed and remove the command, its schema and its tests, with no older-version adapter; the build is [8109](8109-decided-removal-candidates.md) task 5. Status: done here (moved to 8109).
 
 ### 1. Bridge full-payload SSE mode
 
@@ -148,7 +152,7 @@ the manual-test checklist.
 - Cursor's `streamed.total` usage fallback (`bridges/cursor-bridge/src/prompt.ts`): **kept**. `@cursor/sdk` 1.3.1 declares `RunResult.usage` optional, and a turn failed without a result has only what streamed. The comment now says so.
 - Pi's no-runtime `forkSession` fallback: **removed**; its two tests run on a fake runtime, and a new test forks through the real SDK runtime with a scripted model.
 - `bypassPermissionsModeAccepted` in `docker/entrypoint.sh` (about lines 1271-1343): **moved to the manual-test checklist**. The pinned Claude CLI may ignore it; confirming that needs one live container start with a Claude login.
-- The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, `parseBootProbe` and `observeContainerBoot`): **moved to the manual-test checklist**. It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides.
+- The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, `parseBootProbe` and `observeContainerBoot`): **moved to the manual-test checklist**. It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides. Decided 2026-11-14 by the user: remove it with its tests and add a Retired row; the removal is [8108](8108-legacy-retirement-sweep.md) task 2.
 
 **Investigation.** The checklist items for the two moved items say what an
 agent does once they are answered.
@@ -306,8 +310,58 @@ answer as a reply to the coordinator rather than in this file, which is
 retired once task 10 is done. The numbering is kept so the
 checklist's "7571 task N" references stay correct.
 
+### Tasks 4, 5, 6, 7, 9, 11, 13 and 15: the user's decisions (2026-11-14)
+
+Answered by the user (maintainer) on 2026-11-14, from the manual-test
+checklist's decisions section. Each item left the checklist in the same
+change.
+
+- **Task 4 (`envFilePatterns`)**: implement the copy, so files matching the
+  patterns are copied into containers, with a security review of copying
+  arbitrary patterns. Built under
+  [8106](../containers-and-environments/8106-env-file-patterns-copy.md).
+- **Task 5 (interaction observer)**: remove the background observe-only
+  interaction monitor, its adoption, and
+  `ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and
+  `ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH`, including their entries
+  in the `apps/desktop/electron/backend-process.ts` allowlist. Keep the core
+  `NativeAgentInteractionTracker` pending-interaction handling.
+  [8109](8109-decided-removal-candidates.md) task 1.
+- **Task 6 (artifact rollout flags)**: remove `ORKESTRATOR_RICH_MARKDOWN`,
+  `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE`
+  and `ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION` and their gate checks.
+  [8109](8109-decided-removal-candidates.md) task 2.
+- **Task 7 (unmounted and uncalled surfaces)**: delete
+  `NetworkWhitelistDialog.tsx` and its test, `set_workflow_result_tools_rollout`
+  and `graph_capability_ceiling_set`, with no older-version adapter (the
+  2026-11-14 legacy-retirement policy, [8108](8108-legacy-retirement-sweep.md)).
+  [8109](8109-decided-removal-candidates.md) task 3.
+- **Task 9 (`kind: "legacy"` readiness)**: remove the path with its tests and
+  add a Retired row in
+  [version-compatibility.md](../../architecture/version-compatibility.md).
+  Part of the legacy-retirement sweep, [8108](8108-legacy-retirement-sweep.md)
+  task 2.
+- **Task 11 (`conductor.json`)**: delete it; nobody uses Conductor.
+  [8109](8109-decided-removal-candidates.md) task 4.
+- **Task 13 (Linear)**: keep it. The user actively uses Linear, and the
+  premise of the 2026-11-13 item was wrong: `connect_linear` is called by
+  `LinearConnectDialog.tsx`, `disconnect_linear` by `LinearTicketsView.tsx`,
+  and `post_linear_completion_comment` by
+  `build-pipeline-service-recovery.ts`. Closed as "in use, no change"; task 13's
+  row above is corrected.
+- **Task 15 (`import_legacy_build_pipelines`)**: port its callers
+  (`e2e/agent-testing/container-app-wiring.spec.ts`,
+  `e2e/agent-testing/pipeline-delete.spec.ts`, and
+  `scripts/mixed-version/scenarios/pipelines.ts` unless the mixed-version
+  sweep in [8108](8108-legacy-retirement-sweep.md) retires it first) to a
+  test-only seed, then remove the command, its schema and its tests, with no
+  older-version adapter. [8109](8109-decided-removal-candidates.md) task 5.
+
 ## Related
 
 - [7570](7570-compatibility-paths-waiting-on-the-floor.md): window-dated removals.
+- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep, including task 9's readiness path.
+- [8109](8109-decided-removal-candidates.md): the removals the user decided on 2026-11-14 (tasks 5, 6, 7, 11 and 15).
+- [8106](../containers-and-environments/8106-env-file-patterns-copy.md): the `envFilePatterns` copy (task 4).
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [Cross-cutting index](0000-index.md)

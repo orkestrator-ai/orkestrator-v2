@@ -695,7 +695,7 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md).
     Recheck on a bump whether `claim()` takes `resume` or inline MCP servers.
     `getSubagentMessages()` and message rewind are tracked in
-    [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
+    0006 (retired 2026-11-14; [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
 - Codex (`bridges/codex-bridge`):
   - `config/*` writes (only `config/mcpServer/reload` is used), `command/exec`,
     `fs/*`, `feedback/upload`, `gitDiffToRemote`.
@@ -729,7 +729,7 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     Orkestrator's loopback MCP tools blocked.
   - `SendOptions.local.force` and `SDKAgentInfo.archived` are tracked in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) and
-    [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
+    0006 (retired 2026-11-14; [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
 - ACP (`bridges/acp-bridge`):
   - A second ACP agent (Gemini CLI, Claude-over-ACP). The launcher now builds
     an `AcpProviderConfig` record (`acp-provider-config.ts`; the Grok record is
@@ -819,7 +819,7 @@ The billed Grok `costUsdTicks` run moved to the
 
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md),
   [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md),
-  [0006-session-titles-and-history.md](0006-session-titles-and-history.md),
+  0006 (retired 2026-11-14; [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)),
   [agent-accounts.md](../../architecture/agent-accounts.md) (to-do 0003, retired 2026-11-13),
   [0004-composer-model-parameters.md](0004-composer-model-parameters.md),
   0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).

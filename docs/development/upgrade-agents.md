@@ -380,6 +380,30 @@ The live verifier downloads large artifacts and requires network access. The
 ordinary unit tests validate manifest structure and downloader behavior without
 trusting the network.
 
+## Re-qualify live features after a bump
+
+Decided by the user on 2026-11-14 (to-do
+[0031](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)
+task 6 and to-do
+[0014](../todo/cli-and-slash-commands/0014-cli-qualification.md) task 7).
+There is no blanket re-run of every qualified live spec on a bump:
+
+1. Re-run only the **bumped engine's** opt-in live specs. Other engines'
+   specs are not re-run because one provider's pin moved.
+2. Re-qualify a feature only when the new version's changelog touches that
+   feature's surface (its SDK or CLI calls, events, flags or routes). Record
+   the re-run, or why the changelog does not touch it, beside the feature's
+   qualification record.
+3. **Slash commands are the one mandatory re-qualification** for every
+   provider whose pin moved, including the CLI `live-session` scenario for
+   that provider
+   (`mise run test:cli:scenarios -- --scenario live-session --provider <name>`;
+   see [cli-testing.md](cli-testing.md)). The slash-command steps are at the
+   end of this runbook.
+
+A run that needs a real login or billed turns is a manual-test checklist item
+naming the bump, never a step an agent skips silently.
+
 ## Re-trace preserved provider state
 
 A preserving container rebuild keeps `/workspace` and only the provider paths
@@ -2178,7 +2202,8 @@ finishes, and confirm that messages, status, questions/approvals, and controls
 rehydrate from authoritative backend state.
 
 Re-qualify slash commands for every provider whose pin moved, before the
-upgrade merges: the qualified rows in
+upgrade merges (mandatory, per
+[Re-qualify live features after a bump](#re-qualify-live-features-after-a-bump)): the qualified rows in
 [`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support)
 name the versions they were proved on, and a pin they no longer match is an
 unproven claim. The scripted probes in `scripts/slash-probes/` need no

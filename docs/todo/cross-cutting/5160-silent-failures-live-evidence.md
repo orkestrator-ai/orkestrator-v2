@@ -251,6 +251,16 @@ lease back would undo a takeover the other backend has already recovered
 from. A holder whose own event loop stalls for longer than 30 s while the
 other backend runs is still displaced, as a holder that died would be.
 
+### Task 3: the CLI's `schedule list` reports the scheduler status (user decision, 2026-11-14)
+
+The user (maintainer) decided on 2026-11-14 to add the scheduler status to
+the public `schedule.list` result and print it in `orkestrator schedule
+list`, so a CLI user on a paused backend is told their schedules will not
+fire. Under the user's legacy-retirement decision of the same day it gets no
+older-version adapter. Task 3 here stays done (its live evidence is
+recorded); the build is a new to-do,
+[8105](../cli-and-slash-commands/8105-schedule-list-scheduler-status.md).
+
 ### Task 4: the container prompt that reads working is recorded, not fixed
 
 The gap is the CLI's (no hook for a locally refused prompt), and each fix
@@ -259,7 +269,7 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 
 ## Open questions
 
-- Whether `orkestrator schedule list` should print the scheduler status too is a decision for the user, in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (5160 task 3). The public action does not carry it; the report asked only for the Settings notice.
+- `orkestrator schedule list` and the scheduler status: decided by the user on 2026-11-14 (add it to the `schedule.list` result and print it in the CLI, with no older-version adapter); built under [8105](../cli-and-slash-commands/8105-schedule-list-scheduler-status.md). See Assumptions and decisions.
 
 ## Related
 
@@ -269,4 +279,4 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 - [8093](../containers-and-environments/8093-reaper-skips-orphans-under-a-subreaper.md): found by task 4's OpenCode restart case, which left an `opencode2 serve` running after the profile was reset.
 - [Application logging](../../architecture/logging.md#failures-that-would-otherwise-leave-no-trace)
 - [Scheduled jobs](../../architecture/scheduled-jobs.md#exactly-once)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 2, task 5, task 3's `schedule list` decision, and the successful-turn checks and Cursor's and Grok's refused logins of task 4).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 2, task 5, and the successful-turn checks and Cursor's and Grok's refused logins of task 4).

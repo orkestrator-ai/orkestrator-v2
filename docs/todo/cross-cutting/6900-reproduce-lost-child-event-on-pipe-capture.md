@@ -396,7 +396,7 @@ The mechanism is quoted from Bun 1.4.4's `src/spawn/process.rs`, `src/io/PipeRea
 
 ### Task 3: task 4 added rather than retiring the to-do (2026-11-14)
 
-Task 3 is complete for Linux. The macOS run is agent work on another host with a concrete command, and its answer changes the upstream report's macOS claim, so it is a task here rather than a manual item. Filing the report stays the manual-test checklist's item, now pointing at `nested-tick.ts`.
+Task 3 is complete for Linux. The macOS run is agent work on another host with a concrete command, and its answer changes the upstream report's macOS claim, so it is a task here rather than a manual item. Filing the report stays the manual-test checklist's item, now pointing at `nested-tick.ts`; since 2026-11-14 the report itself is [`docs/upstream-issues/bun-nested-tick-loses-child-process-events.md`](../../upstream-issues/bun-nested-tick-loses-child-process-events.md).
 
 ### Task 4: the macOS run is agent work, not a checklist item (2026-11-14, review)
 
@@ -440,7 +440,7 @@ Task 2 depended on task 1 for a reproduction to reduce from. The Linux half give
 
 ## Related
 
-- To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and filing the report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
+- To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and the ready-to-paste report is [`docs/upstream-issues/bun-nested-tick-loses-child-process-events.md`](../../upstream-issues/bun-nested-tick-loses-child-process-events.md) (since 2026-11-14), which the user files through the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)'s "File the upstream reports" item. Record the canary version, its result and the issue URL in that file and here
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
 - `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reproduction (`nested-tick.ts`, task 3); the standalone reductions that do not reproduce (`reduction.ts`: `pattern`, `replay`, `--block`, `--fs`); the in-process reduction (`in-process.ts`, with its `LOST_CHILD_NO_EXPECT` contrast) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`, whose run pool is `pool.ts`)
 - Bun 1.4.4's own account of the re-entry: the comment above `PROCESS_POLL_ONE_SHOT` in `src/spawn/process.rs` at the `bun-v1.4.4` tag of <https://github.com/oven-sh/bun>

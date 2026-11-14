@@ -36,7 +36,7 @@ only the canary flip, which waits on an upstream fix, is left.
 
 ### Tasks
 
-1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (depends on 7568: 0039 task 1, the report filing, and an upstream Claude Code fix). The repro is done (2026-11-11: `claude-mcp-replace-linger.live-probe.ts`, run beside the canary; at 2.1.319 a server loaded at launch lingers when replaced, one added through `setMcpServers` does not); only the canary flip is left.
+1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (depends on the user filing the report, now in [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), and an upstream Claude Code fix). The repro is done (2026-11-11: `claude-mcp-replace-linger.live-probe.ts`, run beside the canary; at 2.1.319 a server loaded at launch lingers when replaced, one added through `setMcpServers` does not); only the canary flip is left.
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed: that real-login rerun is a 7568 item, 0039 task 5).
@@ -144,7 +144,7 @@ once an upstream release stops the old process, changing the canary to
   real-data-directory variables unset, `mise run verify:claude:mcp-live`
   (44.5 s) and `verify:claude:plugin-mcp-live` (13.5 s) pass on the SDK's
   bundled CLI.
-- Left: filing the report (7568) and, after an upstream fix, the canary flip.
+- Left: filing the report ([`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md); the user files it) and, after an upstream fix, the canary flip.
 
 ### 2. Re-derive Grok rules at 1.0.70
 
@@ -950,7 +950,8 @@ collects the live evidence the shipped behaviour has never had.
    asserts that, so it fails when the CLI starts stopping the old process;
    then expect one `alpha` and close this item. Not yet reported to
    Anthropic: filing moved to the manual-test checklist (7568) on
-   2026-11-10; the standalone repro is written (task 1, 2026-11-11). Draft:
+   2026-11-10; the standalone repro is written (task 1, 2026-11-11). Since
+   2026-11-14 the ready-to-paste report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md). Draft:
    "Claude Code 2.1.319, Agent SDK 0.3.319 `Query.setMcpServers`: replacing
    a stdio server's configuration under the same name connects a new process
    but never stops the old one when the old one was loaded at launch (the
@@ -1212,7 +1213,7 @@ in the worktree that ran it (git-ignored). One sample. The spec deleted its
 environment, restored the profile's `opencode.json` and allowlist, and the
 profile was stopped and reset afterwards. Its `dev:stop` left a 1 GB
 Electron core file in the worktree, the known
-[7554](../cross-cutting/7554-headless-dev-electron-core-dumps-in-checkout.md);
+7554 (retired; `git show 57b944e3e^:docs/todo/cross-cutting/7554-headless-dev-electron-core-dumps-in-checkout.md`);
 it was deleted and not committed.
 
 ## Qualification record: inactive environment (2026-10-18)
@@ -2189,7 +2190,7 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1's upstream report filing, task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10, and the container session half of retired 0121 task 1.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10; task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).

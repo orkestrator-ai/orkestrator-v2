@@ -12,7 +12,7 @@ to-do 4730 task 3 (retired 2026-11-10; the launcher is in [container qualificati
 ### Tasks
 
 1. **Rootless restart with `live-restore` on**: what happens to running gateway runtimes when a rootless daemon restarts with `live-restore` enabled. Status: done (2026-11-11).
-2. **Rootless restart on the other RootlessKit network drivers**: gvisor-tap-vsock now (built into the launcher's RootlessKit), then pasta and VPNKit once a host has their binaries. Status: gvisor-tap-vsock done (2026-11-11); pasta and VPNKit open (depends on 7568: 7390 task 2, their binaries on a host).
+2. **Rootless restart on the other RootlessKit network drivers**: gvisor-tap-vsock now (built into the launcher's RootlessKit), then pasta and VPNKit once a host has their binaries. Status: gvisor-tap-vsock done (2026-11-11); pasta and VPNKit blocked (waits on 7568: 7390 task 2, the user installing `passt` and a `vpnkit` binary on beelink; decided 2026-11-14).
 
 ### 1. Rootless restart with `live-restore` on
 
@@ -103,7 +103,7 @@ address (`10.0.2.2`) did not answer on VPNKit on 2026-11-04.
 **Context.** The launcher takes `--net vpnkit`, `--net pasta` and
 `--net gvisor-tap-vsock`. Its pinned tools include RootlessKit (which has
 gvisor-tap-vsock built in) and slirp4netns; neither `vpnkit` nor `pasta`
-binaries are pinned, so those runs need them on `PATH`. Installing them on a host is a host change for the user and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (7390 task 2); the gvisor-tap-vsock run needs nothing installed.
+binaries are pinned, so those runs need them on `PATH`. Installing them on a host is a host change for the user; on 2026-11-14 the user chose beelink and installs them there (packages only), a [manual-test checklist](../manual-test/7568-manual-test-checklist.md) item (7390 task 2). The gvisor-tap-vsock run needed nothing installed.
 
 **Investigation.** The default `dockerd-rootless.sh` picks slirp4netns,
 then pasta, then VPNKit, then gvisor-tap-vsock, so a user without
@@ -141,10 +141,18 @@ the evidence above.
 
 ## Outstanding work
 
-- Task 2: the pasta and VPNKit runs, once 7568's item puts their binaries
-  on a host.
+- Task 2: the pasta and VPNKit runs on beelink, once the user has installed
+  `passt` and `vpnkit` there (7568).
 
 ## Assumptions and decisions
+
+### Task 2: the binaries go on beelink (user decision, 2026-11-14)
+
+The user (maintainer) decided on 2026-11-14 that `passt` (for `pasta`) and a
+`vpnkit` binary are installed on beelink, packages only, with no firewall or
+network change, and that the user installs them. That stays a manual-test
+checklist item, shared with 6101 task 4. The pasta and VPNKit restart runs
+are agent work that waits on it.
 
 ### `live-restore` set in the instance's `daemon.json`, not through the launcher (task 1)
 

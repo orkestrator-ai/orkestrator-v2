@@ -2,11 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `cbe0f9a5b`.
+Analysed 2026-11-05 against `main` at `cbe0f9a5b`. Updated 2026-11-14: the user
+chose to drop the SDK's binary (task 1), so task 2 is agent work.
 
 ### Tasks
 
-2. **Build and qualify the chosen option**: change `docker/Dockerfile`, its tests and the image checks, then prove the bridge still works in a container. Status: blocked (waits on 7568: 6780 task 1).
+2. **Build and qualify the chosen option**: change `docker/Dockerfile`, its tests and the image checks, then prove the bridge still works in a container. Status: open (the user chose to drop the SDK's platform binary in the builder, 2026-11-14; needs a node with Docker for the image build and suite).
 
 ### 2. Build and qualify the chosen option
 
@@ -14,7 +15,7 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`.
 
 **Context.** The image checks are `docker/tests/final-image-smoke.sh` (bridge health for all five bridges) and `mise run test:agent:docker:isolated`; layer re-pull was measured for DK-7 in 1202 task 14 by comparing `RootFS.Layers` digests.
 
-**Investigation.** Not started; it waits on the maintainer's choice (7568: 6780 task 1). Nothing in the Dockerfile was changed by the 2026-11-05 check.
+**Investigation.** Not started. The maintainer's choice was made on 2026-11-14: drop the SDK's platform binary in the builder (see Assumptions and decisions). Nothing in the Dockerfile was changed by the 2026-11-05 check.
 
 **Decisions.**
 
@@ -28,7 +29,7 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`.
 
 ## Evidence for the maintainer's choice
 
-The choice itself (drop the SDK copy, link it, or keep both) moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the evidence and the options it rests on stay here.
+The choice itself (drop the SDK copy, link it, or keep both) was on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) from 2026-11-10; the user answered it on 2026-11-14 (drop the copy). The evidence and the options it rests on stay here.
 
 **Problem.** Every image carries two copies of the same 298 MB Claude Code native binary: the global CLI's and the one the Claude Agent SDK vendors into the Claude bridge.
 
@@ -67,6 +68,21 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 
   The recommendation is to drop the copy. It is the only option that keeps the saving after the pins diverge, which `upgrade-agents.md` expects them to, and the verified facts above show the copy is not what the container bridge runs. The symlink option was recommended before it was known that the bridge never runs the SDK's binary in a container.
 
+## Assumptions and decisions
+
+### Task 1: drop the SDK's platform binary (user decision, 2026-11-14)
+
+- **Chose:** the recommended option. The user (maintainer) decided on
+  2026-11-14 to drop the Claude Agent SDK's platform binary
+  (`dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*`) in the
+  builder, as the musl variant already is, keeping the main
+  `claude-agent-sdk` package.
+- **What follows:** task 2 builds it (the `rm -rf`, the widened layer check,
+  the Dockerfile comment and `tests/unit/version-drift.test.ts`) and
+  qualifies it with the recommended proof: final-image smoke, the isolated
+  Docker suite, `docker history` before and after, and one credential-free
+  bridge request that spawns the CLI.
+
 ## Constraints and rationale
 
 - The bridge deliberately follows the SDK's release train, separate from the CLI's (`docker/Dockerfile:205-206`, `upgrade-agents.md`). None of the options changes either pin.
@@ -83,4 +99,4 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 - To-do 0022, container resource budgets (retired 2026-11-11): [Built-in default](../../architecture/container-lifecycle.md#built-in-default) and [Optimisations measured and not taken](../../development/container-qualification.md#optimisations-measured-and-not-taken)
 - Efficiency, logging and database outcome (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), closing note for 0693
 - [`upgrade-agents.md`](../../development/upgrade-agents.md)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the maintainer's choice for the second binary) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): task 1, the maintainer's choice for the second binary, was there from 2026-11-10 until the user answered it on 2026-11-14.

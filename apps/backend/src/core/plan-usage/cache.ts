@@ -132,6 +132,10 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
         cached?.snapshot.plan,
       );
       snapshot.paidOverage = cached?.snapshot.paidOverage ?? lastOk.get(platform)?.paidOverage;
+      // A session reports windows only; the resets a provider read found are
+      // still the account's until the next read says otherwise.
+      const resets = cached?.snapshot.resets ?? lastOk.get(platform)?.resets;
+      if (resets) snapshot.resets = resets;
       entries.set(platform, { expiresAt: at + CACHE_TTL_MS, snapshot });
       lastOk.set(platform, snapshot);
     },

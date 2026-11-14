@@ -12,6 +12,7 @@ import {
   type SharedUsageReading,
 } from "./agent-account-shared-usage.js";
 import {
+  activePlanUsageResets,
   isPlanUsageReadingStale,
   PLAN_USAGE_DISPLAY_STALE_MS,
   type PlanUsageSnapshot,
@@ -196,5 +197,62 @@ describe("display freshness", () => {
     expect(isPlanUsageReadingStale(at(PLAN_USAGE_DISPLAY_STALE_MS + 1), NOW)).toBe(true);
     expect(isPlanUsageReadingStale({ ...at(0), stale: true }, NOW)).toBe(true);
     expect(isPlanUsageReadingStale({ fetchedAt: "never" }, NOW)).toBe(true);
+  });
+});
+
+describe("limit resets in shared readings", () => {
+  const resets = {
+    available: 3,
+    items: [
+      {
+        count: 2,
+        label: "Weekly reset",
+        scope: "weekly" as const,
+        expiresAt: "2026-12-03T00:00:00.000Z",
+      },
+      { count: 1, expiresAt: "2026-11-09T11:00:00.000Z" },
+    ],
+  };
+
+  test("travel with a fresh reading and are rebuilt field by field", () => {
+    const snapshot: PlanUsageSnapshot = {
+      platform: "claude",
+      status: "ok",
+      windows: [{ window: "five_hour", usedPercent: 1 }],
+      resets,
+      fetchedAt: new Date(NOW - 60_000).toISOString(),
+    };
+    const shared = sharedUsageReadingFromSnapshot(identity, snapshot, source, NOW)!;
+    expect(shared.resets).toEqual(resets);
+    const hostile = parseSharedUsageReading(
+      {
+        ...shared,
+        resets: {
+          available: 2,
+          token: "secret",
+          items: [{ count: 1, scope: "bogus", token: "secret" }, { count: 0 }, "x"],
+        },
+      },
+      NOW,
+    )!;
+    expect(hostile.resets).toEqual({ available: 2, items: [{ count: 1 }] });
+    expect(JSON.stringify(hostile)).not.toContain("secret");
+    expect(
+      parseSharedUsageReading({ ...shared, resets: { available: 0, items: [] } }, NOW)!.resets,
+    ).toBeUndefined();
+  });
+
+  test("a grant that lapsed since the reading is no longer counted", () => {
+    expect(activePlanUsageResets(resets, NOW)).toEqual({
+      available: 2,
+      items: [resets.items[0]],
+    });
+    expect(activePlanUsageResets({ available: 1, items: [resets.items[1]!] }, NOW)).toBeUndefined();
+    const shown = planUsageSnapshotFromSharedReading(
+      { identity, windows: [], resets, fetchedAt: new Date(NOW).toISOString(), source },
+      "node-beelink",
+      NOW,
+    );
+    expect(shown.resets?.available).toBe(2);
   });
 });

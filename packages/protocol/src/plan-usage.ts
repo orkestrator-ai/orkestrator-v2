@@ -42,6 +42,12 @@ export interface PlanUsageSnapshot {
    */
   paidOverage?: PlanUsagePaidOverage;
   /**
+   * Limit resets the account holds and has not used: Claude's free resets and
+   * Codex's banked reset credits. Absent when the account holds none, or the
+   * provider did not say; never `available: 0`.
+   */
+  resets?: PlanUsageResets;
+  /**
    * The windows are the last successful reading, served because a fresh one
    * could not be made. `fetchedAt` is when that reading was taken.
    */
@@ -112,6 +118,52 @@ export interface PlanUsagePaidOverage {
   inUse?: boolean;
 }
 
+/** What a reset gives back. Absent when the provider does not say. */
+export type PlanUsageResetScope = "session" | "weekly" | "full";
+
+/** One grant of unused resets, as the provider lists it. */
+export interface PlanUsageReset {
+  /** The provider's own name for it, e.g. "Weekly reset". */
+  label?: string;
+  scope?: PlanUsageResetScope;
+  /** How many resets this grant still holds: Claude's grants hold several, a Codex credit one. */
+  count: number;
+  /** When it lapses unused (ISO timestamp). Absent when it does not expire or is unknown. */
+  expiresAt?: string;
+}
+
+/**
+ * The unused resets an account holds. `available` is the provider's own count
+ * and is authoritative; `items` are its detail rows, which can be fewer (a
+ * provider may cap the list, or the detail read may have failed).
+ */
+export interface PlanUsageResets {
+  available: number;
+  items: PlanUsageReset[];
+}
+
+/**
+ * Resets still usable at `now`: a grant whose expiry has passed is dropped and
+ * the count reduced by what it held. `undefined` when none are left, so a
+ * reading kept past a reset's expiry stops advertising it. A count the detail
+ * rows cannot account for (an item cap) is kept as is.
+ */
+export function activePlanUsageResets(
+  resets: PlanUsageResets | undefined,
+  now: number,
+): PlanUsageResets | undefined {
+  if (!resets) return undefined;
+  let lapsed = 0;
+  const items = resets.items.filter((item) => {
+    const expiresAt = item.expiresAt ? Date.parse(item.expiresAt) : Number.NaN;
+    if (!Number.isFinite(expiresAt) || expiresAt > now) return true;
+    lapsed += item.count;
+    return false;
+  });
+  const available = Math.max(0, resets.available - lapsed);
+  return available > 0 ? { available, items } : undefined;
+}
+
 export function isPlanUsageSnapshot(value: unknown): value is PlanUsageSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
@@ -142,12 +194,14 @@ export function stalePlanUsageSnapshot(
   message?: string,
 ): PlanUsageSnapshot {
   const windows = restartPassedPlanWindows(snapshot.windows, now);
+  const resets = activePlanUsageResets(snapshot.resets, now);
   return {
     platform: snapshot.platform,
     status: "ok",
     windows,
     ...(snapshot.plan ? { plan: snapshot.plan } : {}),
     ...(snapshot.paidOverage ? { paidOverage: snapshot.paidOverage } : {}),
+    ...(resets ? { resets } : {}),
     ...(message ? { message } : {}),
     stale: true,
     fetchedAt: snapshot.fetchedAt,

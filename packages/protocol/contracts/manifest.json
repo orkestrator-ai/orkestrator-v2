@@ -2659,7 +2659,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:76b2b15e73423f850337ba3a7ead7064c60c696935e740a555835452579ae396",
-      "resultDigest": "sha256:a3121ab504566d26e24c6218829ec0bbbbd04913a725022fba1cbd8707a6444a"
+      "resultDigest": "sha256:193635c3a9cdb0233ed11ada58220f00ca25656365a00e0d2efbd02aed7e70bc"
     },
     "get_agent_handoff": {
       "domain": "native-sessions",
@@ -4090,7 +4090,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:ce20f0f98e65aea6c6a43e46981d566bfe153cfbda52ba88a5ff22c02fc234f8",
-      "resultDigest": "sha256:a3121ab504566d26e24c6218829ec0bbbbd04913a725022fba1cbd8707a6444a"
+      "resultDigest": "sha256:193635c3a9cdb0233ed11ada58220f00ca25656365a00e0d2efbd02aed7e70bc"
     },
     "get_portal_layout": {
       "domain": "nodes",

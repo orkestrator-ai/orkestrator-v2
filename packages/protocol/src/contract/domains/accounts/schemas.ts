@@ -181,6 +181,20 @@ export const PlanUsageSnapshotSchema = modelRecord<PlanUsageSnapshot>()({
   plan: optionalString,
   message: optionalString,
   paidOverage: Schema.optional(openRecord({ enabled: Schema.Boolean, inUse: optionalBoolean })),
+  // Unused limit resets (Claude's free resets, Codex's banked reset credits).
+  resets: Schema.optional(
+    openRecord({
+      available: Schema.Finite,
+      items: Schema.Array(
+        openRecord({
+          label: optionalString,
+          scope: optionalString,
+          count: Schema.Finite,
+          expiresAt: optionalString,
+        }),
+      ),
+    }),
+  ),
   stale: optionalBoolean,
   fetchedAt: Schema.String,
   // The machine that took a shared reading; absent for one taken here.

@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00014 · Audit controls that remove the outline without a hairline</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00014</p>
+      <h1>00014 · Audit controls that remove the outline without a hairline</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Focus</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        Eighteen files contain <code>outline-none</code> or
+        <code>focus-visible:outline-none</code> and no <code>focus-hairline</code>. Some are
+        intentional (a borderless text area inside a framed composer), others are buttons and rows
+        with no visible keyboard focus.
+      </p>
+      <div class="rule">
+        <div>
+          Do use the 1px focus hairline (<code>focus-hairline</code>, with
+          <code>focus-hairline-outset</code> on solid fills) for every focusable control.
+        </div>
+        <div class="src">DESIGN.md, Do’s</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rlE --include=*.tsx "outline-none" apps/web/src | grep -v "\.test\." | xargs grep -LE "focus-hairline"</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/agent-mail/AgentMailPanel.tsx:263</code></td>
+            <td>row button</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/projects/GitHubRepositoryPicker.tsx:122</code></td>
+            <td>list row</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/AgentChatFind.tsx:342</code></td>
+            <td>find input in a framed bar</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/build-pipeline/PipelineMessageComposer.tsx:390</code>
+            </td>
+            <td>input inside a framed composer</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/kanban/FeaturesView.tsx:1004</code></td>
+            <td>input inside a framed composer</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/settings/FullscreenSettingsLayout.tsx:200</code></td>
+            <td>mobile search input</td>
+          </tr>
+          <tr>
+            <td><code>…and the other files from the grep</code></td>
+            <td>
+              browser/annotations/AnnotationThread, chat/MentionableInput,
+              chat/rich/StaticHtmlArtifactView, chat/TranscriptPromptNavigator,
+              design/DesignCanvasTab, html/HtmlFileTab, layout/KeyboardShortcutsDialog,
+              layout/MobileAppShellLayout, markdown/TiptapMarkdownEditor,
+              projects/CoordinatorActionSearch, sidebar/ProjectSearchBar, terminal/ComposeBar
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Tab through each surface and record in Notes whether a focus indicator is visible:
+          <b>ok</b> (the frame shows focus), <b>missing</b> or <b>n/a</b>.
+        </li>
+        <li>
+          Fix <b>missing</b> controls with <code>focus-hairline</code> (and
+          <code>focus-hairline-outset</code> on solid fills).
+        </li>
+        <li>
+          For inputs inside a framed container, show the hairline on the container with
+          <code>has-[:focus-visible]</code>, not on the inner input.
+        </li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00014/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-mail-panel-row-focus-desktop">
+        <h3>Agent mail panel row focused by keyboard <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open the mail panel and Tab onto a row.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00014/before-mail-panel-row-focus-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/before-mail-panel-row-focus-desktop.png"
+                alt="Before: Agent mail panel row focused by keyboard (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00014/after-mail-panel-row-focus-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/after-mail-panel-row-focus-desktop.png"
+                alt="After: Agent mail panel row focused by keyboard (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-repository-picker-focus-desktop">
+        <h3>GitHub repository picker row focused <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open the add-project repository picker.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00014/before-repository-picker-focus-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/before-repository-picker-focus-desktop.png"
+                alt="Before: GitHub repository picker row focused (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00014/after-repository-picker-focus-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/after-repository-picker-focus-desktop.png"
+                alt="After: GitHub repository picker row focused (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-find-bar-focus-desktop">
+        <h3>Chat find bar focused <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open find in a transcript.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00014/before-find-bar-focus-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/before-find-bar-focus-desktop.png"
+                alt="Before: Chat find bar focused (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00014/after-find-bar-focus-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/after-find-bar-focus-desktop.png"
+                alt="After: Chat find bar focused (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-settings-search-focus-narrow">
+        <h3>Mobile settings search focused <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open settings at 390px width.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00014/before-settings-search-focus-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/before-settings-search-focus-narrow.png"
+                alt="Before: Mobile settings search focused (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00014/after-settings-search-focus-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00014/after-settings-search-focus-narrow.png"
+                alt="After: Mobile settings search focused (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Terminal canvases and rich-text editors that manage their own caret.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name focus-audit -- bun --cwd=apps/web test src/components/agent-mail src/components/projects --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00014</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00014/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: Add a short rule to DESIGN.md if “inputs
+            inside a frame show focus on the frame” is the settled pattern.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00009 · Raise state and label text to 11px in agent info, environments and lists</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00009</p>
+      <h1>00009 · Raise state and label text to 11px in agent info, environments and lists</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Typography</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 10 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>AgentInfoButton.panels.tsx</code> has 17 uses of <code>text-[10px]</code> and
+        <code>AgentInfoButton.tsx</code> has 9. The create-environment mobile tab labels
+        (<code>CreateEnvironmentDialog.tsx:173</code>), the changed-file status letter
+        (<code>ChangeFileRowItem.tsx:111</code>) and several settings lists
+        (<code>SkillsSettings</code>, <code>AgentPluginsBrowser</code>,
+        <code>MachineAgentAccountsSection</code>, <code>GraphLibraryList</code>) do the same.
+      </p>
+      <div class="rule">
+        <div>
+          Label (500, 11px): counts, durations, state tags and turn status. 11px in
+          <code>muted-foreground</code> (6.1:1) is the floor for text a user reads to understand
+          state.
+        </div>
+        <div class="src">DESIGN.md, Typography → Hierarchy and Named Rules</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "text-\[10px\]" apps/web/src | grep -v "\.test\." | grep -v "components/design\|annotations"</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/layout/AgentInfoButton.panels.tsx</code></td>
+            <td>17 uses</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/layout/AgentInfoButton.tsx</code></td>
+            <td>9 uses</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/environments/CreateEnvironmentDialog.tsx:173</code>
+            </td>
+            <td>mobile tab labels (10px)</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/files-panel/ChangeFileRowItem.tsx:111</code></td>
+            <td>status letter</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/graph-designer/GraphLibraryList.tsx</code></td>
+            <td>6 uses</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/settings/SkillsSettings.tsx</code></td>
+            <td>6 uses</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx</code>
+            </td>
+            <td>4 uses</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/agent-mail/AgentMailPanel.tsx</code></td>
+            <td>5 uses</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/sidebar/ProjectSearchBar.tsx</code></td>
+            <td>3 uses</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Classify every use in these files in Notes (<b>metadata</b>,
+          <b>count in a filled pill</b>, <b>state or label</b>).
+        </li>
+        <li>
+          Raise <b>state or label</b> uses to 11px; where a row would then overflow, shorten the
+          label or let it truncate with a title rather than shrinking the type.
+        </li>
+        <li>
+          Check the narrow viewport for wrapping in the agent info popover and the
+          create-environment tabs.
+        </li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00009/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-agent-info-popover-desktop">
+        <h3>Agent info popover, all panels <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open the agent info button and capture each panel.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00009/before-agent-info-popover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/before-agent-info-popover-desktop.png"
+                alt="Before: Agent info popover, all panels (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00009/after-agent-info-popover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/after-agent-info-popover-desktop.png"
+                alt="After: Agent info popover, all panels (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-agent-info-popover-narrow">
+        <h3>Agent info popover, all panels <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open the agent info button and capture each panel.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00009/before-agent-info-popover-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/before-agent-info-popover-narrow.png"
+                alt="Before: Agent info popover, all panels (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00009/after-agent-info-popover-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/after-agent-info-popover-narrow.png"
+                alt="After: Agent info popover, all panels (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-create-environment-mobile-tabs-narrow">
+        <h3>Create environment dialog mobile tabs <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open the dialog from a fixture project at a narrow width.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00009/before-create-environment-mobile-tabs-narrow.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/before-create-environment-mobile-tabs-narrow.png"
+                alt="Before: Create environment dialog mobile tabs (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file"
+                >images/00009/after-create-environment-mobile-tabs-narrow.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/after-create-environment-mobile-tabs-narrow.png"
+                alt="After: Create environment dialog mobile tabs (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-changed-files-row-desktop">
+        <h3>Files panel with changed-file rows <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Modify a few files in a fixture environment.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00009/before-changed-files-row-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/before-changed-files-row-desktop.png"
+                alt="Before: Files panel with changed-file rows (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00009/after-changed-files-row-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/after-changed-files-row-desktop.png"
+                alt="After: Files panel with changed-file rows (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-skills-settings-desktop">
+        <h3>Skills settings list <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open Settings → Skills.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00009/before-skills-settings-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/before-skills-settings-desktop.png"
+                alt="Before: Skills settings list (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00009/after-skills-settings-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00009/after-skills-settings-desktop.png"
+                alt="After: Skills settings list (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Design inspector and annotations (task 00008).</li>
+        <li>9px badges (task 00010).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name layout-env -- bun --cwd=apps/web test src/components/layout src/components/environments --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00009</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00009/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “10 /
+            10”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

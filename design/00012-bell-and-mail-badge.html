@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00012 · Make bells and the unread-mail count match the spec</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00012</p>
+      <h1>00012 · Make bells and the unread-mail count match the spec</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Components</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>UnreadBellIcon</code> is <code>fill-amber-400/20 text-amber-400</code>.
+        <code>ProjectHomeActivity.tsx:61</code> draws an unfilled bell and relies on the button’s
+        <code>text-amber-400</code>. The sidebar’s waiting counter
+        (<code>ActivityEnvironmentList.tsx:213-220</code>) goes <code>text-zinc-600</code> at zero.
+        <code>AgentMailButton.tsx:55</code> draws the unread-mail count as an amber pill, while
+        DESIGN.md lists the unread-mail count under App Signal Blue.
+      </p>
+      <div class="rule">
+        <div>
+          Do draw every bell (unread activity, waiting environments, project-home activity) in
+          <code>amber-400</code>, never in Signal Blue. … App Signal Blue (<code>primary</code>) …
+          the unread-mail count.
+        </div>
+        <div class="src">DESIGN.md, Do’s and Colors → Primary / Tertiary</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "&lt;Bell|UnreadBellIcon|AgentMailButton" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/environments/UnreadBellIcon.tsx:6</code></td>
+            <td>the shared bell</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/sidebar/ProjectHomeActivity.tsx:61</code></td>
+            <td>unfilled bell</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/sidebar/ActivityEnvironmentList.tsx:213-220</code>
+            </td>
+            <td>waiting counter, zero state</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/agent-mail/AgentMailButton.tsx:55</code></td>
+            <td>unread-mail count</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Make <code>ProjectHomeActivity</code> use <code>UnreadBellIcon</code> so all bells share
+          one fill and color.
+        </li>
+        <li>Choose the zero state of the waiting counter (below).</li>
+        <li>Resolve the unread-mail count conflict (below) and make code and DESIGN.md agree.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>Unread-mail count color</h3>
+        <div class="opt rec">
+          <span class="name">Follow DESIGN.md: primary-fill pill with white text</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Matches the written spec. Keeps amber for “waiting on you” only.</div>
+          <div class="cons">
+            A blue count beside amber bells; needs a visual check on the toolbar.
+          </div>
+        </div>
+        <div class="opt">
+          <span class="name">Keep amber and edit DESIGN.md</span>
+          <div class="pros">No visual change; mail often does need an answer.</div>
+          <div class="cons">Weakens the rule that amber means the row that changed.</div>
+        </div>
+      </div>
+
+      <div class="decision">
+        <h3>Waiting counter at zero</h3>
+        <div class="opt rec">
+          <span class="name">muted-foreground</span><span class="tag">recommended</span>
+          <div class="pros">On palette; readable.</div>
+          <div class="cons">Slightly brighter than today.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Keep zinc-600</span>
+          <div class="pros">Quietest at rest.</div>
+          <div class="cons">A raw ramp step; fails the readable floor for state.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00012/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-sidebar-bells-desktop">
+        <h3>
+          Sidebar with a waiting environment, project home activity and the counter
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Seed one environment waiting for an answer and one project-home update.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00012/before-sidebar-bells-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/before-sidebar-bells-desktop.png"
+                alt="Before: Sidebar with a waiting environment, project home activity and the counter (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00012/after-sidebar-bells-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/after-sidebar-bells-desktop.png"
+                alt="After: Sidebar with a waiting environment, project home activity and the counter (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-sidebar-bells-narrow">
+        <h3>
+          Sidebar with a waiting environment, project home activity and the counter
+          <span class="pill">narrow 390×844</span>
+        </h3>
+        <p class="how">Seed one environment waiting for an answer and one project-home update.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00012/before-sidebar-bells-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/before-sidebar-bells-narrow.png"
+                alt="Before: Sidebar with a waiting environment, project home activity and the counter (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00012/after-sidebar-bells-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/after-sidebar-bells-narrow.png"
+                alt="After: Sidebar with a waiting environment, project home activity and the counter (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-waiting-counter-zero-desktop">
+        <h3>Sidebar waiting counter at zero <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Clear all waiting environments.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00012/before-waiting-counter-zero-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/before-waiting-counter-zero-desktop.png"
+                alt="Before: Sidebar waiting counter at zero (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00012/after-waiting-counter-zero-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/after-waiting-counter-zero-desktop.png"
+                alt="After: Sidebar waiting counter at zero (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-mail-button-desktop">
+        <h3>Agent mail button with unread count <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Deliver one agent mail to a session.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00012/before-mail-button-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/before-mail-button-desktop.png"
+                alt="Before: Agent mail button with unread count (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00012/after-mail-button-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00012/after-mail-button-desktop.png"
+                alt="After: Agent mail button with unread count (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>The needs-answer shimmer.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name sidebar-mail -- bun --cwd=apps/web test src/components/sidebar src/components/agent-mail --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00012</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00012/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: Update DESIGN.md if the amber mail count is
+            kept.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

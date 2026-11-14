@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00000 · Design tasks</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs">Orkestrator · design tasks</p>
+      <h1>Design tasks: bring the UI in line with DESIGN.md and PRODUCT.md</h1>
+      <p>
+        Each task fixes one kind of inconsistency found in a review of <code>apps/web</code> against
+        <a href="../DESIGN.md">DESIGN.md</a> and <a href="../PRODUCT.md">PRODUCT.md</a>. Work
+        through them in order, one at a time. A task is not done until every <b>before</b> and
+        <b>after</b> image on its page exists, so every change can be compared.
+      </p>
+      <div class="meta">
+        <span class="pill">21 tasks</span>
+        <span class="pill sev-high">6 high</span>
+        <span class="pill">162 images required in total</span>
+        <span class="pill">Voice: American English</span>
+      </div>
+
+      <h2>Tasks</h2>
+      <p class="note">
+        Suggested order is the numeric order: color tokens first (they touch the most files), then
+        typography, focus, elevation, interaction and copy. Update the Status column here
+        <i>and</i> on the task page.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Task</th>
+            <th>Severity</th>
+            <th>Area</th>
+            <th class="num">Images</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <a href="00001-failure-text-token.html"><code>00001</code></a>
+            </td>
+            <td>
+              <a href="00001-failure-text-token.html"
+                >Use the failure token for error text, not destructive</a
+              >
+              <div class="note">
+                About 305 uses of text-destructive set error text in Destructive Coral, which is
+                tuned for fills.
+              </div>
+            </td>
+            <td><span class="pill sev-high">High</span></td>
+            <td>Color tokens</td>
+            <td class="num">10</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00002-failure-red-hardcoded.html"><code>00002</code></a>
+            </td>
+            <td>
+              <a href="00002-failure-red-hardcoded.html"
+                >Replace hard-coded red and rose classes with the failure token</a
+              >
+              <div class="note">
+                About 110 raw text-red-* and text-rose-* uses give failure several different reds.
+              </div>
+            </td>
+            <td><span class="pill sev-high">High</span></td>
+            <td>Color tokens</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00003-success-green-hardcoded.html"><code>00003</code></a>
+            </td>
+            <td>
+              <a href="00003-success-green-hardcoded.html"
+                >Replace hard-coded green and emerald classes with the success token</a
+              >
+              <div class="note">
+                About 120 raw green and emerald text uses give success several different greens.
+              </div>
+            </td>
+            <td><span class="pill sev-high">High</span></td>
+            <td>Color tokens</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00004-status-dots.html"><code>00004</code></a>
+            </td>
+            <td>
+              <a href="00004-status-dots.html">Drive status dots from the status tokens</a>
+              <div class="note">
+                Only the label text uses status-running or status-error; the dots use raw Tailwind
+                hues and Stopping has no token.
+              </div>
+            </td>
+            <td><span class="pill sev-high">High</span></td>
+            <td>Color tokens</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00005-fill-rule-controls.html"><code>00005</code></a>
+            </td>
+            <td>
+              <a href="00005-fill-rule-controls.html">Put white text only on primary-fill</a>
+              <div class="note">
+                Checkboxes, question option indicators, step badges and the PR comment button put
+                white on bg-primary at 3.7:1.
+              </div>
+            </td>
+            <td><span class="pill sev-high">High</span></td>
+            <td>Color tokens</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00006-annotation-layer-colors.html"><code>00006</code></a>
+            </td>
+            <td>
+              <a href="00006-annotation-layer-colors.html"
+                >Bring the transcript annotation layer onto tokens</a
+              >
+              <div class="note">
+                The annotation pill and pins use raw blue-500/600 with white text and a white
+                border.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Color tokens</td>
+            <td class="num">4</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00007-compose-bar-frames.html"><code>00007</code></a>
+            </td>
+            <td>
+              <a href="00007-compose-bar-frames.html">Unify the compose bar frame across tabs</a>
+              <div class="note">
+                Only the native tab matches the spec; three other composers use rounded-2xl on the
+                translucent input surface.
+              </div>
+            </td>
+            <td><span class="pill sev-high">High</span></td>
+            <td>Components</td>
+            <td class="num">18</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00008-small-text-errors-design-annotations.html"><code>00008</code></a>
+            </td>
+            <td>
+              <a href="00008-small-text-errors-design-annotations.html"
+                >Raise error and state text to 11px in the design inspector and annotations</a
+              >
+              <div class="note">
+                Inline errors and state lines are set at 10px in the design inspector, annotation
+                panels and result review.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Typography</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00009-small-text-agent-info-and-labels.html"><code>00009</code></a>
+            </td>
+            <td>
+              <a href="00009-small-text-agent-info-and-labels.html"
+                >Raise state and label text to 11px in agent info, environments and lists</a
+              >
+              <div class="note">
+                AgentInfoButton panels, settings lists and create-environment tabs set state labels
+                at 10px.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Typography</td>
+            <td class="num">10</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00010-nine-pixel-badges.html"><code>00010</code></a>
+            </td>
+            <td>
+              <a href="00010-nine-pixel-badges.html">Replace 9px badges and counts</a>
+              <div class="note">
+                Twelve badges are set at 9px, below even the 10px metadata exception.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Typography</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00011-faded-text.html"><code>00011</code></a>
+            </td>
+            <td>
+              <a href="00011-faded-text.html">Remove alpha fades from status text</a>
+              <div class="note">
+                Twenty-one uses of text-muted-foreground at 60% or less; status text must not be
+                fainter than muted.
+              </div>
+            </td>
+            <td><span class="pill sev-low">Low</span></td>
+            <td>Typography</td>
+            <td class="num">4</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00012-bell-and-mail-badge.html"><code>00012</code></a>
+            </td>
+            <td>
+              <a href="00012-bell-and-mail-badge.html"
+                >Make bells and the unread-mail count match the spec</a
+              >
+              <div class="note">
+                Bells differ in fill and rest color, and the unread-mail count is amber where the
+                spec says blue.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Components</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00013-focus-url-bars.html"><code>00013</code></a>
+            </td>
+            <td>
+              <a href="00013-focus-url-bars.html">Use the focus hairline on the browser URL bars</a>
+              <div class="note">
+                The two browser URL fields swap the border color on focus instead of showing the
+                hairline.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Focus</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00014-focus-hairline-audit.html"><code>00014</code></a>
+            </td>
+            <td>
+              <a href="00014-focus-hairline-audit.html"
+                >Audit controls that remove the outline without a hairline</a
+              >
+              <div class="note">
+                Eighteen files use outline-none and never mention focus-hairline.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Focus</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00015-resting-shadows.html"><code>00015</code></a>
+            </td>
+            <td>
+              <a href="00015-resting-shadows.html"
+                >Remove resting and hover shadows from cards in the work</a
+              >
+              <div class="note">
+                Kanban, Linear and GitHub cards and some panels cast shadows; only things that float
+                should.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Elevation</td>
+            <td class="num">10</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00016-callout-side-bars.html"><code>00016</code></a>
+            </td>
+            <td>
+              <a href="00016-callout-side-bars.html"
+                >Replace thick coloured callout bars with the 1px callout frame</a
+              >
+              <div class="note">
+                Five cards and blockquotes use a 2px coloured left bar; callouts are meant to use a
+                1px frame.
+              </div>
+            </td>
+            <td><span class="pill sev-low">Low</span></td>
+            <td>Components</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00017-hover-washes.html"><code>00017</code></a>
+            </td>
+            <td>
+              <a href="00017-hover-washes.html">Use the blue hover tokens beside blue selections</a>
+              <div class="note">
+                Many rows hover to a grey wash while the app’s selection is blue.
+              </div>
+            </td>
+            <td><span class="pill sev-low">Low</span></td>
+            <td>Interaction</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00018-tab-styles.html"><code>00018</code></a>
+            </td>
+            <td>
+              <a href="00018-tab-styles.html">Reduce tab-like controls to the documented styles</a>
+              <div class="note">
+                The shared Tabs component is a grey track; the spec names an underline, a filled
+                pill and a segmented fill.
+              </div>
+            </td>
+            <td><span class="pill sev-low">Low</span></td>
+            <td>Interaction</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00019-american-english.html"><code>00019</code></a>
+            </td>
+            <td>
+              <a href="00019-american-english.html">Switch the product voice to American English</a>
+              <div class="note">
+                PRODUCT.md and DESIGN.md specify or use British spelling; the UI is mostly American
+                already, with a few “cancelled” strings.
+              </div>
+            </td>
+            <td><span class="pill sev-medium">Medium</span></td>
+            <td>Copy</td>
+            <td class="num">8</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00020-label-casing.html"><code>00020</code></a>
+            </td>
+            <td>
+              <a href="00020-label-casing.html"
+                >Settle label casing: sentence case for buttons, menus and headings</a
+              >
+              <div class="note">
+                Labels mix Title Case (“Use Global Defaults”) and sentence case (“New terminal”);
+                neither document says which.
+              </div>
+            </td>
+            <td><span class="pill sev-low">Low</span></td>
+            <td>Copy</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+          <tr>
+            <td>
+              <a href="00021-term-casing.html"><code>00021</code></a>
+            </td>
+            <td>
+              <a href="00021-term-casing.html">Use one casing for the named product terms</a>
+              <div class="note">
+                “Build Pipeline” vs “Build pipeline”, “Project Home” vs “Project home”; terminology
+                the docs ask to keep.
+              </div>
+            </td>
+            <td><span class="pill sev-low">Low</span></td>
+            <td>Copy</td>
+            <td class="num">6</td>
+            <td><span class="status" data-status="todo">To do</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>How each task works</h2>
+      <ol>
+        <li>
+          <b>Capture before.</b> Before editing, capture every <i>before</i> slot on the task page
+          from unmodified code.
+        </li>
+        <li>
+          <b>Fix.</b> Follow the task’s approach and record decisions in its Notes. Keep to the
+          task’s scope.
+        </li>
+        <li>
+          <b>Capture after.</b> Re-capture each slot with the same profile, data, theme, viewport
+          and file name pattern.
+        </li>
+        <li>
+          <b>Compare.</b> Open the task page. Each slot shows before and after side by side, and the
+          Evidence badge counts how many of the images exist. Write what changed in Notes.
+        </li>
+        <li>
+          <b>Verify and close.</b> Run the verification commands, tick the checklist, set the status
+          to Done here and on the page.
+        </li>
+      </ol>
+
+      <h2 id="capture">How to capture before and after images</h2>
+      <p>
+        Use the real renderer against an isolated backend, never a production Orkestrator instance
+        and never this checkout as the project. On Linux, run the launcher without the desktop’s
+        display variables so no window opens on the host desktop.
+      </p>
+      <pre><code># 1. Start an isolated profile (long-lived; run it in the background or another terminal)
+env -u DISPLAY -u WAYLAND_DISPLAY mise run dev:test --profile design-00001 --fixture --headless
+
+# 2. Discover the browser URL and sign in (never print or save the gateway token)
+mise run dev:status --profile design-00001 --json     # use browserUrl
+mise run dev:login  --profile design-00001            # open the single-use loginUrl
+
+# 3. Capture with Playwright at the viewports named on the task page
+#    desktop 1440x900, narrow 390x844, deviceScaleFactor 1
+# 4. Stop and reset when finished
+mise run dev:stop  --profile design-00001
+mise run dev:reset --profile design-00001</code></pre>
+      <pre><code>// capture.ts, run from the repo root with bun (keep it outside the repo or delete it afterwards)
+import { chromium } from "@playwright/test";
+
+const [url, out, width = "1440", height = "900"] = process.argv.slice(2);
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: Number(width), height: Number(height) } });
+await page.goto(url);                 // a page that is already signed in; see dev:login
+// ...navigate to the state described on the task page...
+await page.screenshot({ path: out }); // or page.locator(...).screenshot({ path: out })
+await browser.close();</code></pre>
+      <ul>
+        <li>
+          <b>File names.</b>
+          <code>design/images/NNNNN/before-&lt;slug&gt;-&lt;desktop|narrow&gt;.png</code> and
+          <code>after-…</code>, exactly as printed under each slot.
+        </li>
+        <li>
+          <b>Same conditions.</b> Same profile and fixture data, same theme and zoom, same viewport,
+          same state. Capture the whole surface, or the element if it is small.
+        </li>
+        <li>
+          <b>Hard-to-reach states.</b> Force errors with Playwright (block a request) or a throwaway
+          profile. If a state truly cannot be reached, say so in Notes and capture the nearest
+          reachable state; do not fake it.
+        </li>
+        <li>
+          <b>Safety.</b> No gateway tokens, credentials, prompts, terminal contents or file contents
+          in screenshots. Keep each PNG well under 1 MB where possible.
+        </li>
+        <li>
+          <b>Fresh profile dialogs.</b> A new profile shows a Claude sign-in dialog and a Docker
+          reachability notice; dismiss them before capturing.
+        </li>
+      </ul>
+
+      <h2>Adding a task</h2>
+      <p>
+        Copy <a href="_template.html"><code>_template.html</code></a> to the next free number
+        (<code>00022-short-name.html</code>), fill it in, and add a row above. Keep task numbers
+        unique and never reuse one.
+      </p>
+
+      <h2>Conventions</h2>
+      <ul>
+        <li>
+          Statuses: <span class="status" data-status="todo">To do</span>
+          <span class="status" data-status="in-progress">In progress</span>
+          <span class="status" data-status="blocked">Blocked</span>
+          <span class="status" data-status="done">Done</span>.
+        </li>
+        <li>
+          Group related tasks into as few pull requests as is practical; each task still keeps its
+          own images and checklist.
+        </li>
+        <li>
+          Do not change the documented palette values here. The site-versus-app token drift in
+          DESIGN.md is a separate, known migration.
+        </li>
+        <li>
+          Spelling and copy follow American English (task 00019 brings the documents in line).
+        </li>
+      </ul>
+
+      <footer>
+        Folder: <code>design/</code> · Shared styles and script: <code>assets/</code> · Images:
+        <code>images/NNNNN/</code>
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

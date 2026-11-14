@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00004 · Drive status dots from the status tokens</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00004</p>
+      <h1>00004 · Drive status dots from the status tokens</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-high">High</span>
+        <span class="pill">Color tokens</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>index.css</code> defines <code>--color-status-running</code>,
+        <code>status-stopped</code>, <code>status-error</code> and <code>status-creating</code>.
+        Only <code>StatusIndicator.tsx:69-71</code> uses them, and only for label text. Its dots use
+        <code>bg-green-500</code>, <code>bg-red-500</code> and <code>bg-blue-500</code>, plus
+        <code>bg-orange-500</code> for Stopping, which has no token. Other surfaces re-implement
+        “running” as <code>emerald-500</code>.
+      </p>
+      <div class="rule">
+        <div>
+          App All-Clear Green (<code>success</code>): the app's one success colour. Diff additions,
+          successful tool calls, running status (<code>--color-status-running</code>) and the
+          merge-ready shimmer.
+        </div>
+        <div class="src">DESIGN.md, Colors → Secondary</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "(running|ready|finished|done)[^\n]{0,60}bg-(green|emerald)-[0-9]{3}" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>apps/web/src/components/environments/StatusIndicator.tsx:11-37,69-71</code>
+            </td>
+            <td>the dot and ring map</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/index.css:252-259</code></td>
+            <td>status token definitions; add a stopping token if the decision below keeps one</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.tsx:1291</code></td>
+            <td>running dot, emerald-500</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/federation/NodeSnapshotPreview.tsx:13</code></td>
+            <td>running dot, emerald-500</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/PreviewServicePicker.tsx:21</code></td>
+            <td>ready dot, emerald-500</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/SuborkGroup.tsx:21</code></td>
+            <td>finished dot, emerald-500</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/kanban/KanbanBoard.tsx:47</code></td>
+            <td>Done column dot, green-500 (column identity or status?)</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/graph-designer/GraphPromptEditor.tsx:336</code></td>
+            <td>budget bar: emerald-400/80 beside bg-failure</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Make <code>StatusIndicator</code> read dot and ring colors from the status tokens (for
+          example <code>bg-status-running</code>), so label and dot cannot disagree.
+        </li>
+        <li>Point the other running, ready and finished dots at the same tokens.</li>
+        <li>Decide the Stopping color (below) and the Kanban column dots, then apply.</li>
+        <li>
+          Confirm the working ring and the marker shapes (circle for worktree, square for container)
+          are unchanged.
+        </li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>Stopping color</h3>
+        <div class="opt rec">
+          <span class="name">Reuse status-stopped (muted grey) with the spinner</span
+          ><span class="tag">recommended</span>
+          <div class="pros">No new token. Stopping reads as an in-between state of Stopped.</div>
+          <div class="cons">Loses the amber hint that it is changing.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Add a status-stopping token (amber)</span>
+          <div class="pros">Distinct from Stopped.</div>
+          <div class="cons">Amber already means “waiting on you”, which would blur the signal.</div>
+        </div>
+      </div>
+
+      <div class="decision">
+        <h3>Kanban column dots</h3>
+        <div class="opt rec">
+          <span class="name">Keep as column identity, document as an exception</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Columns are categories, not outcomes.</div>
+          <div class="cons">Done in green still reads as success; needs a DESIGN.md note.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Map to tokens (Done to success, In Progress to primary)</span>
+          <div class="pros">Strictly consistent.</div>
+          <div class="cons">
+            Backlog and Review have no matching token, so the set becomes uneven.
+          </div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00004/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-sidebar-statuses-desktop">
+        <h3>
+          Sidebar with environments in running, stopped, creating and error
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Seed a profile so one row of each state is visible; crop the sidebar.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00004/before-sidebar-statuses-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/before-sidebar-statuses-desktop.png"
+                alt="Before: Sidebar with environments in running, stopped, creating and error (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00004/after-sidebar-statuses-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/after-sidebar-statuses-desktop.png"
+                alt="After: Sidebar with environments in running, stopped, creating and error (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-status-tooltip-desktop">
+        <h3>StatusIndicator with label shown <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Hover the dot or open a surface that passes showLabel.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00004/before-status-tooltip-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/before-status-tooltip-desktop.png"
+                alt="Before: StatusIndicator with label shown (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00004/after-status-tooltip-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/after-status-tooltip-desktop.png"
+                alt="After: StatusIndicator with label shown (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-kanban-columns-desktop">
+        <h3>Kanban board column headers <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a project Kanban board.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00004/before-kanban-columns-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/before-kanban-columns-desktop.png"
+                alt="Before: Kanban board column headers (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00004/after-kanban-columns-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/after-kanban-columns-desktop.png"
+                alt="After: Kanban board column headers (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-kanban-columns-narrow">
+        <h3>Kanban board column headers <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open a project Kanban board.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00004/before-kanban-columns-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/before-kanban-columns-narrow.png"
+                alt="Before: Kanban board column headers (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00004/after-kanban-columns-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00004/after-kanban-columns-narrow.png"
+                alt="After: Kanban board column headers (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Shimmers and the working ring animation.</li>
+        <li>Replacing the status tokens’ hex values (the documented token drift).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name env-status -- bun --cwd=apps/web test src/components/environments --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00004</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00004/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: If a Kanban exception is kept, add one line
+            to DESIGN.md Colors.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

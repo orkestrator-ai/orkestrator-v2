@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NNNNN · Task title</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / NNNNN</p>
+      <h1>NNNNN · Task title</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Area</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 0 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>What is inconsistent, where, and how many instances.</p>
+      <div class="rule">
+        <div>Quote the DESIGN.md or PRODUCT.md rule being broken.</div>
+        <div class="src">File, section</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "pattern" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path/to/file.tsx:123</code></td>
+            <td>what to change</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>Step.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <div class="decision">
+        <h3>Question</h3>
+        <div class="opt rec">
+          <span class="name">Option</span><span class="tag">recommended</span>
+          <div class="pros">Pros</div>
+          <div class="cons">Cons</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Capture the before image first, before editing code. Save under
+        <code>design/images/NNNNN/</code> with these exact names.
+      </p>
+      <section class="capture" id="cap-example-desktop">
+        <h3>Surface name <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">How to reach this state.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/NNNNN/before-example-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/NNNNN/before-example-desktop.png"
+                alt="Before: surface name (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/NNNNN/after-example-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/NNNNN/after-example-desktop.png"
+                alt="After: surface name (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>What this task does not touch.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name owning-tests -- bun --cwd=apps/web test src/path --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on unmodified code and committed.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured with the same conditions and committed.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every slot shows a picture (evidence badge complete).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Verification commands pass; status updated here and in the index.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">Classification of hits, decisions chosen, what changed per image pair.</p>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

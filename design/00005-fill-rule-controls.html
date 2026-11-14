@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00005 · Put white text only on primary-fill</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00005</p>
+      <h1>00005 · Put white text only on primary-fill</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-high">High</span>
+        <span class="pill">Color tokens</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>bg-primary text-primary-foreground</code> puts white on #3b82f6 (3.7:1). The shared
+        checkbox does it when checked, so every checkbox in the app is affected. So do the
+        chosen-option indicators on question cards, the completed-step number badge in the auto
+        pipeline tab and the hover “add comment” button in the PR diff.
+      </p>
+      <div class="rule">
+        <div>
+          The Fill Rule. White text sits only on <code>primary-fill</code>, never on
+          <code>primary</code>. <code>primary</code> is for lines, text and marks on the dark
+          ground.
+        </div>
+        <div class="src">DESIGN.md, Colors → Named Rules; white on primary is 3.7:1, below AA</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx 'bg-primary( |"|$)' apps/web/src | grep -v '\.test\.' | grep -E 'text-(white|primary-foreground)'</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/ui/checkbox.tsx:12</code></td>
+            <td>checked and indeterminate fill</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/ui/input.tsx:13</code></td>
+            <td>selection:bg-primary selection:text-primary-foreground</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/native-agent/NativeAgentQuestionCard.tsx:359</code>
+            </td>
+            <td>chosen-option indicator (radio or checkbox shape)</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/federation/WorkerQuestionApprovalDialog.tsx:252</code>
+            </td>
+            <td>chosen-option indicator</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/pull-requests/PullRequestDiff.tsx:176</code></td>
+            <td>“add comment” plus button shown on line hover</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/review/AutoPipelineTab.tsx:344</code></td>
+            <td>completed-step number badge</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx:1576</code></td>
+            <td>bg-emerald-700 button; use the default Button</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Swap <code>bg-primary</code> for <code>bg-primary-fill</code> wherever white text or a
+          white glyph sits on it; keep <code>border-primary</code>.
+        </li>
+        <li>
+          For the checkbox, keep the focus hairline outset on the filled state (already present).
+        </li>
+        <li>
+          Replace the emerald-700 button with <code>&lt;Button&gt;</code> so it takes the primary
+          fill, focus hairline and hover behavior.
+        </li>
+        <li>Check the text selection color is still readable in inputs.</li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00005/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-checkbox-states-desktop">
+        <h3>
+          Checkbox unchecked, checked, indeterminate <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Settings page with several checkboxes, or a PR diff file list.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00005/before-checkbox-states-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/before-checkbox-states-desktop.png"
+                alt="Before: Checkbox unchecked, checked, indeterminate (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00005/after-checkbox-states-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/after-checkbox-states-desktop.png"
+                alt="After: Checkbox unchecked, checked, indeterminate (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-question-card-chosen-desktop">
+        <h3>Question card with a chosen option <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Trigger a native agent question in a fixture session.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00005/before-question-card-chosen-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/before-question-card-chosen-desktop.png"
+                alt="Before: Question card with a chosen option (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00005/after-question-card-chosen-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/after-question-card-chosen-desktop.png"
+                alt="After: Question card with a chosen option (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-auto-pipeline-steps-desktop">
+        <h3>
+          Auto pipeline tab step list with completed steps
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Open the auto pipeline tab on a run with at least one completed step.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00005/before-auto-pipeline-steps-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/before-auto-pipeline-steps-desktop.png"
+                alt="Before: Auto pipeline tab step list with completed steps (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00005/after-auto-pipeline-steps-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/after-auto-pipeline-steps-desktop.png"
+                alt="After: Auto pipeline tab step list with completed steps (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-pr-diff-comment-button-desktop">
+        <h3>
+          PR diff line with the add-comment button visible
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Open a pull request diff and hover a line.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00005/before-pr-diff-comment-button-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/before-pr-diff-comment-button-desktop.png"
+                alt="Before: PR diff line with the add-comment button visible (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00005/after-pr-diff-comment-button-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00005/after-pr-diff-comment-button-desktop.png"
+                alt="After: PR diff line with the add-comment button visible (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Annotation pins (task 00006).</li>
+        <li>Changing the primary or primary-fill hex values.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name ui -- bun --cwd=apps/web test src/components/ui --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00005</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00005/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

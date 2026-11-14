@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00002 · Replace hard-coded red and rose classes with the failure token</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00002</p>
+      <h1>00002 · Replace hard-coded red and rose classes with the failure token</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-high">High</span>
+        <span class="pill">Color tokens</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 6 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        Failure text appears as <code>text-red-300</code> (47), <code>red-400</code> (37),
+        <code>red-500</code> (17), <code>red-100/200/600/700</code> and <code>rose-400</code>.
+        Together with the <code>destructive</code> and <code>failure</code> tokens that is six or
+        seven reds for one meaning.
+      </p>
+      <div class="rule">
+        <div>
+          The One Pair Rule. Success and failure have exactly one colour each, everywhere: diff
+          counts, tool outcomes, run status. Never pick a different green or red step for the same
+          meaning.
+        </div>
+        <div class="src">DESIGN.md, Colors → Named Rules</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "(text|bg|border)-(red|rose)-[0-9]{2,3}" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/terminal/TerminalDisconnectedBanner.tsx:28</code></td>
+            <td>red-500 border over a red-950 fill; convert to a failure tint</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/ComposerIconPicker.tsx:54</code></td>
+            <td><b>Keep.</b> Bypass is the documented red-500 risk marker</td>
+          </tr>
+          <tr>
+            <td><code>every other hit of the grep above</code></td>
+            <td>classify, then replace</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Run the grep and classify each hit in Notes: <b>failure</b> (an outcome or error),
+          <b>risk</b> (Bypass or another documented risk marker), <b>identity</b> (a category color)
+          or <b>destructive action</b>.
+        </li>
+        <li>
+          Map <b>failure</b> text to <code>text-failure</code>, borders to
+          <code>border-failure/NN</code> and tints to <code>bg-failure/NN</code>. Map destructive
+          fills to <code>bg-destructive</code>.
+        </li>
+        <li>Leave <b>risk</b> hits alone. They are the Bypass exception.</li>
+        <li>
+          Replace the red-950 banner background with a failure tint so it matches the other error
+          banners.
+        </li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00002/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-terminal-disconnected-desktop">
+        <h3>Terminal disconnected banner <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Open a terminal tab and drop the connection (stop the backend terminal or block its
+          stream).
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00002/before-terminal-disconnected-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00002/before-terminal-disconnected-desktop.png"
+                alt="Before: Terminal disconnected banner (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00002/after-terminal-disconnected-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00002/after-terminal-disconnected-desktop.png"
+                alt="After: Terminal disconnected banner (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-failed-tool-result-desktop">
+        <h3>Transcript with a failed tool call <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Use a fixture session with a failing command so the result row reads failure.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00002/before-failed-tool-result-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00002/before-failed-tool-result-desktop.png"
+                alt="Before: Transcript with a failed tool call (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00002/after-failed-tool-result-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00002/after-failed-tool-result-desktop.png"
+                alt="After: Transcript with a failed tool call (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-env-error-status-desktop">
+        <h3>Sidebar row for an environment in error <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Force an environment into the error state in a throwaway profile.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00002/before-env-error-status-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00002/before-env-error-status-desktop.png"
+                alt="Before: Sidebar row for an environment in error (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00002/after-env-error-status-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00002/after-env-error-status-desktop.png"
+                alt="After: Sidebar row for an environment in error (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li><code>text-destructive</code> (task 00001).</li>
+        <li>The Bypass mode icon.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name terminal-banner -- bun --cwd=apps/web test src/components/terminal --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00002</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00002/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

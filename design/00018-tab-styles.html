@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00018 · Reduce tab-like controls to the documented styles</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00018</p>
+      <h1>00018 · Reduce tab-like controls to the documented styles</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-low">Low</span>
+        <span class="pill">Interaction</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 6 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>ui/tabs.tsx</code> renders a <code>bg-muted</code> track with a
+        <code>bg-background</code> active tab, which matches none of the three documented patterns.
+        <code>KanbanTaskDialog.tsx:215</code> hand-rolls an underline tab, and
+        <code>CreateEnvironmentDialog.tsx:173</code> styles its mobile tabs with a
+        <code>border-primary/40</code> outlined active tab and 10px labels.
+      </p>
+      <div class="rule">
+        <div>
+          Workspace tabs: 12–14px labels with an icon; the active tab gets a 2px Signal Blue
+          underline. The top section tabs mark the active one with a filled blue pill. Segmented
+          selector: … the selected segment is a filled blue with bold text.
+        </div>
+        <div class="src">DESIGN.md, Components → Navigation</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rln --include=*.tsx "TabsList\|TabsTrigger" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/ui/tabs.tsx:21,34</code></td>
+            <td>the shared Tabs</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/ui/segmented-selector.tsx</code></td>
+            <td>the documented segmented control</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/kanban/KanbanTaskDialog.tsx:215</code></td>
+            <td>hand-rolled underline tabs</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/environments/CreateEnvironmentDialog.tsx:173</code>
+            </td>
+            <td>mobile tab triggers with an outlined active tab</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          List every use of <code>Tabs</code> in Notes and note which documented pattern each should
+          be (underline, pill or segmented).
+        </li>
+        <li>
+          Give <code>ui/tabs.tsx</code> variants for the documented patterns and migrate callers;
+          retire the grey track if nothing needs it.
+        </li>
+        <li>Move the hand-rolled tabs onto the shared variant.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>Shape of the change</h3>
+        <div class="opt rec">
+          <span class="name"
+            >Add variants to ui/tabs.tsx and migrate callers one area at a time</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Incremental; each caller can be captured separately.</div>
+          <div class="cons">Needs a call-site list first.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Replace the grey default in one go</span>
+          <div class="pros">Immediate consistency.</div>
+          <div class="cons">Large visual change across settings and dialogs at once.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00018/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-kanban-task-tabs-desktop">
+        <h3>Kanban task dialog tabs <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a Kanban task.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00018/before-kanban-task-tabs-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00018/before-kanban-task-tabs-desktop.png"
+                alt="Before: Kanban task dialog tabs (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00018/after-kanban-task-tabs-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00018/after-kanban-task-tabs-desktop.png"
+                alt="After: Kanban task dialog tabs (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-create-environment-mobile-tabs-narrow">
+        <h3>Create environment dialog mobile tabs <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open the dialog at a narrow width.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00018/before-create-environment-mobile-tabs-narrow.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00018/before-create-environment-mobile-tabs-narrow.png"
+                alt="Before: Create environment dialog mobile tabs (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file"
+                >images/00018/after-create-environment-mobile-tabs-narrow.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00018/after-create-environment-mobile-tabs-narrow.png"
+                alt="After: Create environment dialog mobile tabs (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-shared-tabs-sample-desktop">
+        <h3>One screen using the shared Tabs <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Pick one from the call-site list.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00018/before-shared-tabs-sample-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00018/before-shared-tabs-sample-desktop.png"
+                alt="Before: One screen using the shared Tabs (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00018/after-shared-tabs-sample-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00018/after-shared-tabs-sample-desktop.png"
+                alt="After: One screen using the shared Tabs (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Workspace tab row and top section tabs, which already follow the spec.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name tabs -- bun --cwd=apps/web test src/components/ui --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00018</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00018/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: Name the final tab variants in Components →
+            Navigation.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

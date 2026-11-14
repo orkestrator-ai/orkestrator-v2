@@ -130,6 +130,68 @@ describe("createPlanUsageCache", () => {
       { window: "seven_day", label: "Weekly limit", usedPercent: 60 },
     ]);
   });
+
+  describe("resets across a session merge", () => {
+    const RESETS = {
+      available: 2,
+      items: [{ count: 2, label: "Weekly reset", expiresAt: "2026-12-03T00:00:00.000Z" }],
+    };
+    const providerReading = (over: Partial<ReturnType<typeof okSnapshot>> = {}) => ({
+      ...okSnapshot(
+        "claude",
+        [{ window: "five_hour", usedPercent: 10 }],
+        new Date(0).toISOString(),
+      ),
+      ...over,
+    });
+
+    test("keeps the cached reading's resets and refreshes the entry's lifetime", () => {
+      let clock = 1_700_000_000_000;
+      const cache = createPlanUsageCache(() => clock);
+      cache.store("claude", providerReading({ resets: RESETS }), CACHE_TTL_MS);
+      clock += CACHE_TTL_MS - 1_000;
+      cache.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 30 }]);
+      const merged = cache.peek("claude");
+      expect(merged?.windows).toEqual([{ window: "five_hour", usedPercent: 30 }]);
+      expect(merged?.resets).toEqual(RESETS);
+      expect(cache.lastOk("claude")?.resets).toEqual(RESETS);
+      // The session report pushed expiry a full window past the merge.
+      clock += CACHE_TTL_MS - 1;
+      expect(cache.peek("claude")?.resets).toEqual(RESETS);
+      clock += 2;
+      expect(cache.peek("claude")).toBeUndefined();
+    });
+
+    test("falls back to the last good reading's resets when the cached entry is a failure", () => {
+      const cache = createPlanUsageCache(() => 1_700_000_000_000);
+      cache.store("claude", providerReading({ resets: RESETS }), CACHE_TTL_MS);
+      cache.store(
+        "claude",
+        {
+          platform: "claude",
+          status: "error",
+          windows: [],
+          message: "network",
+          fetchedAt: new Date(0).toISOString(),
+        },
+        CACHE_TTL_MS,
+      );
+      cache.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 30 }]);
+      expect(cache.peek("claude")?.status).toBe("ok");
+      expect(cache.peek("claude")?.resets).toEqual(RESETS);
+    });
+
+    test("a newer provider reading without resets wins over an older one that had them", () => {
+      const cache = createPlanUsageCache(() => 1_700_000_000_000);
+      cache.store("claude", providerReading({ resets: RESETS }), CACHE_TTL_MS);
+      cache.store("claude", providerReading(), CACHE_TTL_MS);
+      cache.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 30 }]);
+      const merged = cache.peek("claude");
+      expect(merged?.windows).toEqual([{ window: "five_hour", usedPercent: 30 }]);
+      expect(merged && "resets" in merged).toBe(false);
+      expect(cache.lastOk("claude")?.resets).toBeUndefined();
+    });
+  });
 });
 
 describe("contextUsageWithPlanUsage", () => {

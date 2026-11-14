@@ -1565,4 +1565,135 @@ describe("limit resets", () => {
     const snapshot = await reader(contextWithGlobal(), "claude");
     expect(snapshot.resets?.available).toBe(2);
   });
+
+  test("Codex: credits already listed in the usage payload skip the credits endpoint", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return jsonResponse({
+        ...codexUsage,
+        rate_limit_reset_credits: {
+          available_count: 2,
+          credits: [
+            { status: "available", title: "Inline", expires_at: "2026-12-01T00:00:00Z" },
+            { status: "available", expires_at: "2026-12-02T00:00:00Z" },
+          ],
+        },
+      });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => NOW,
+      credentials: { codex: async () => codexAuth },
+    });
+    const snapshot = await reader(contextWithGlobal(), "codex");
+    expect(urls).toEqual([CODEX_USAGE_URL]);
+    expect(snapshot.resets).toEqual({
+      available: 2,
+      items: [
+        { count: 1, label: "Inline", expiresAt: "2026-12-01T00:00:00.000Z" },
+        { count: 1, expiresAt: "2026-12-02T00:00:00.000Z" },
+      ],
+    });
+  });
+
+  test.each([
+    ["a thrown fetch error", () => Promise.reject(new TypeError("fetch failed"))],
+    [
+      "a timeout",
+      () => Promise.reject(new DOMException("The operation timed out.", "TimeoutError")),
+    ],
+    [
+      "invalid JSON on a 2xx",
+      () =>
+        Promise.resolve(
+          new Response("not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    ],
+  ])("Codex: %s on the credits read keeps the count and the reading", async (_name, detail) => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) !== CODEX_RESET_CREDITS_URL) return jsonResponse(codexUsage);
+      signals.push(init?.signal);
+      return detail();
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => NOW,
+      credentials: { codex: async () => codexAuth },
+    });
+    const snapshot = await reader(contextWithGlobal(), "codex");
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.stale).toBeUndefined();
+    expect(snapshot.windows.length).toBeGreaterThan(0);
+    expect(snapshot.resets).toEqual({ available: 2, items: [] });
+    // The detail read is bounded by its own timeout, not left to hang the reading.
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  test("a stale last-known reading stops advertising resets that lapsed since", async () => {
+    let clock = NOW;
+    let refuse = false;
+    const fetchImpl = (async () =>
+      refuse
+        ? new Response(null, { status: 429, headers: { "retry-after": "120" } })
+        : jsonResponse({
+            five_hour: { utilization: 5 },
+            cedar_ember: {
+              eligible: true,
+              grants: [
+                grant({ ends_at: "2026-11-14T12:30:00.000Z" }),
+                grant({ id: "g2", label: "Full reset", resets_left: 1, type: "full" }),
+              ],
+            },
+          })) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => clock,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    const context = contextWithGlobal();
+    expect((await reader(context, "claude")).resets?.available).toBe(3);
+    refuse = true;
+    clock += 60 * 60 * 1_000;
+    const stale = await reader(context, "claude", { force: true });
+    expect(stale.stale).toBe(true);
+    expect(stale.resets).toEqual({
+      available: 1,
+      items: [
+        { count: 1, label: "Full reset", scope: "full", expiresAt: "2026-12-03T00:00:00.000Z" },
+      ],
+    });
+  });
+
+  test("a stale last-known reading omits resets once all of them lapsed", async () => {
+    let clock = NOW;
+    let refuse = false;
+    const fetchImpl = (async () =>
+      refuse
+        ? new Response(null, { status: 429, headers: { "retry-after": "120" } })
+        : jsonResponse({
+            five_hour: { utilization: 5 },
+            cedar_ember: {
+              eligible: true,
+              grants: [grant({ ends_at: "2026-11-14T12:30:00.000Z" })],
+            },
+          })) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => clock,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    const context = contextWithGlobal();
+    expect((await reader(context, "claude")).resets?.available).toBe(2);
+    refuse = true;
+    clock += 60 * 60 * 1_000;
+    const stale = await reader(context, "claude", { force: true });
+    expect(stale.stale).toBe(true);
+    expect(stale.resets).toBeUndefined();
+  });
 });

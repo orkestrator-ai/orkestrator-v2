@@ -95,4 +95,47 @@ describe("stalePlanUsageSnapshot", () => {
       fetchedAt: "2026-10-18T09:00:00.000Z",
     });
   });
+
+  test("drops reset grants that lapsed while the reading was kept", () => {
+    const now = Date.parse("2026-10-18T12:00:00.000Z");
+    const stale = stalePlanUsageSnapshot(
+      {
+        platform: "claude",
+        status: "ok",
+        windows: [],
+        resets: {
+          available: 3,
+          items: [
+            { count: 2, label: "Weekly reset", expiresAt: "2026-10-18T10:00:00.000Z" },
+            { count: 1, label: "Full reset", expiresAt: "2026-10-25T00:00:00.000Z" },
+          ],
+        },
+        fetchedAt: "2026-10-18T09:00:00.000Z",
+      },
+      now,
+    );
+    expect(stale.resets).toEqual({
+      available: 1,
+      items: [{ count: 1, label: "Full reset", expiresAt: "2026-10-25T00:00:00.000Z" }],
+    });
+  });
+
+  test("omits resets once every grant has lapsed", () => {
+    const now = Date.parse("2026-10-18T12:00:00.000Z");
+    const stale = stalePlanUsageSnapshot(
+      {
+        platform: "codex",
+        status: "ok",
+        windows: [],
+        resets: {
+          available: 1,
+          items: [{ count: 1, expiresAt: "2026-10-18T11:59:59.000Z" }],
+        },
+        fetchedAt: "2026-10-18T09:00:00.000Z",
+      },
+      now,
+    );
+    expect(stale.stale).toBe(true);
+    expect("resets" in stale).toBe(false);
+  });
 });

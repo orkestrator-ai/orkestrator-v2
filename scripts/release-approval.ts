@@ -1,9 +1,11 @@
 /**
  * Spot the browser approvals a release waits on and tell the person at once.
  *
- * A release can stop on two links someone has to open in a browser: npm's web
- * sign-in for `bun publish` (it expires after about five minutes) and
- * Tailscale SSH's check when reaching the Linux builder. Printed only into a
+ * A release can stop on links someone has to open in a browser: npm's web
+ * sign-in for a local `bun publish` (it expires after about five minutes),
+ * Tailscale SSH's check when reaching the Linux builder, and GitHub's review
+ * of the `npm-publish` deployment (printed by `release-desktop.ts`, which
+ * knows the run's address; it is not scanned for in output). Printed only into a
  * terminal or an agent's transcript, they were missed until they expired.
  * The release scripts pass their child's output through `ApprovalWatcher`,
  * which raises a desktop notification, rings the terminal bell, prints a
@@ -13,7 +15,7 @@
  * `=1` to open it on Linux too. Notification failures never fail a release.
  */
 
-export type ApprovalKind = "npm" | "tailscale";
+export type ApprovalKind = "npm" | "tailscale" | "github";
 
 export type ApprovalLink = { kind: ApprovalKind; url: string };
 
@@ -48,6 +50,10 @@ const DESCRIPTIONS: Record<ApprovalKind, { title: string; message: string }> = {
   tailscale: {
     title: "Tailscale is waiting for you",
     message: "Approve the SSH check to the Linux release builder in your browser.",
+  },
+  github: {
+    title: "npm publish is waiting for your approval",
+    message: "Approve the npm-publish deployment on GitHub so the package can be published.",
   },
 };
 

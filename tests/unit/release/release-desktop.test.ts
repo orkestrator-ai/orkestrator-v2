@@ -6,6 +6,7 @@ import {
   DEFAULT_NOTARY_KEYCHAIN_PROFILE,
   assertTaggedCheckout,
   ensureReleaseTag,
+  npmWorkflowRunName,
   releaseChannel,
   runDesktopRelease,
   type ReleaseRuntime,
@@ -54,15 +55,61 @@ function listing(
     .join("\n");
 }
 
+/** One run of the publish workflow, as `gh run list --json` prints it. */
+type FakeNpmRun = {
+  databaseId: number;
+  displayTitle: string;
+  status: string;
+  conclusion: string | null;
+  url: string;
+};
+
+const isNpmRunList = (command: string[]) => command[1] === "run" && command[2] === "list";
+const isNpmDispatch = (command: string[]) => command[1] === "workflow" && command[2] === "run";
+
+/** The statuses a dispatched run passes through, one per wait, ending in success. */
+const SUCCEEDING_RUN: Array<[string, string | null]> = [
+  ["in_progress", null],
+  ["completed", "success"],
+];
+
+function npmRun(
+  releaseTag: string,
+  id: number,
+  status: string,
+  conclusion: string | null = null,
+): FakeNpmRun {
+  return {
+    databaseId: id,
+    displayTitle: npmWorkflowRunName(releaseTag),
+    status,
+    conclusion,
+    url: `https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/${id}`,
+  };
+}
+
 function harness(
   overrides: Partial<ReleaseRuntime> = {},
   releases: FakeRelease[] = [{ id: 100, draft: true, assets: [...assets] }],
   /** Every public release, as the listing of published releases prints them. */
   published: Array<{ id: number; tag: string }> = [],
+  /** Runs of the publish workflow that exist before the release is published. */
+  npmRuns: FakeNpmRun[] = [],
+  /** What a run dispatched by the release goes through, one step per wait. */
+  dispatchedRun: Array<[string, string | null]> = SUCCEEDING_RUN,
 ) {
   let nextId = Math.max(100, ...releases.map((release) => release.id)) + 1;
   const releaseTag = overrides.releaseTag?.() ?? tag;
+  /** The index into `dispatchedRun` the newest dispatched run has reached; -1 before it exists. */
+  let dispatchedStep = -1;
+  let dispatched: FakeNpmRun | undefined;
   const run = mock((command: string[], _env?: NodeJS.ProcessEnv) => {
+    if (command[0] === "gh" && isNpmDispatch(command)) {
+      dispatched = npmRun(releaseTag, 900 + npmRuns.length, "queued");
+      npmRuns.unshift(dispatched);
+      dispatchedStep = -1;
+      return;
+    }
     if (command[1] === "api" && command.includes("DELETE")) {
       const id = Number(command.at(-1)?.split("/").at(-1));
       releases.splice(
@@ -76,6 +123,7 @@ function harness(
     if (command[0] === "gh" && isReleaseList(command)) {
       return listing(releases, releaseTag, published);
     }
+    if (command[0] === "gh" && isNpmRunList(command)) return JSON.stringify(npmRuns);
     if (command[0] === "gh" && command.includes("POST")) {
       const id = nextId++;
       releases.push({ id, draft: true, assets: [] });
@@ -99,10 +147,17 @@ function harness(
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
     writeToolchainPins: () => "release/toolchain-pins.json",
     npmHasVersion: () => false,
-    sleep: mock((_ms: number) => {}),
+    alertApproval: mock((_link: unknown) => {}),
+    // Waiting is what moves a dispatched run along.
+    sleep: mock((_ms: number) => {
+      if (!dispatched || dispatchedStep >= dispatchedRun.length - 1) return;
+      const [status, conclusion] = dispatchedRun[++dispatchedStep]!;
+      dispatched.status = status;
+      dispatched.conclusion = conclusion;
+    }),
     ...overrides,
   };
-  return { runtime, run, capture, releases };
+  return { runtime, run, capture, releases, npmRuns };
 }
 
 const directories: string[] = [];
@@ -231,7 +286,7 @@ describe("release tagging", () => {
       });
       runDesktopRelease(["build"], runtime);
       expect(git.capture(["git", "rev-parse", `refs/tags/${tag}`])).toBe(object);
-      runDesktopRelease(["publish"], runtime);
+      runDesktopRelease(["publish", "--npm-local"], runtime);
       expect(run).toHaveBeenCalledWith(["mise", "run", "publish:cli"]);
     },
   );
@@ -398,9 +453,7 @@ describe("release channels", () => {
       { id: 100, draft: true, assets: assetsFor("beta") },
     ]);
     runDesktopRelease(["publish"], runtime);
-    expect(
-      run.mock.calls.map(([command]) => (command[0] === "mise" ? command.join(" ") : command[2])),
-    ).toEqual(["mise run publish:cli", "edit"]);
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow", "edit"]);
   });
 });
 
@@ -577,24 +630,26 @@ describe("desktop release commands", () => {
       },
     ]);
     runDesktopRelease(["publish"], runtime);
-    // publish:cli, then the release edit.
+    // The npm workflow dispatch, then the release edit.
     expect(run).toHaveBeenCalledTimes(2);
   });
 
   test("publishes the npm package before making the release public, once", () => {
     const { runtime, run } = harness();
     runDesktopRelease(["publish"], runtime);
-    expect(
-      run.mock.calls.map(([command]) => (command[0] === "mise" ? command.join(" ") : command[2])),
-    ).toEqual(["mise run publish:cli", "edit"]);
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow", "edit"]);
+
+    const local = harness();
+    runDesktopRelease(["publish", "--npm-local"], local.runtime);
+    expect(publishSteps(local.run)).toEqual(["mise run publish:cli", "edit"]);
 
     const already = harness({ npmHasVersion: () => true });
     runDesktopRelease(["publish"], already.runtime);
-    expect(already.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+    expect(publishSteps(already.run)).toEqual(["edit"]);
 
     const skipped = harness();
     runDesktopRelease(["publish", "--skip-npm"], skipped.runtime);
-    expect(skipped.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+    expect(publishSteps(skipped.run)).toEqual(["edit"]);
   });
 
   test("refuses an already-public release", () => {
@@ -855,7 +910,7 @@ describe("empty release listings", () => {
 });
 
 test.each(["dirty", "wrong-head"])(
-  "npm publication refuses %s checkout before building",
+  "a local npm publication refuses %s checkout before building",
   (mode) => {
     const { runtime, run, capture } = harness();
     const original = capture.getMockImplementation()!;
@@ -864,9 +919,153 @@ test.each(["dirty", "wrong-head"])(
       if (mode === "wrong-head" && command[2] === `${tag}^{commit}`) return other;
       return original(command);
     });
-    expect(() => runDesktopRelease(["publish"], runtime)).toThrow(
+    expect(() => runDesktopRelease(["publish", "--npm-local"], runtime)).toThrow(
       mode === "dirty" ? "uncommitted changes" : "does not point at HEAD",
     );
     expect(run).not.toHaveBeenCalled();
   },
 );
+
+/** The commands `publish` ran, named for what they do. */
+function publishSteps(run: { mock: { calls: Array<[string[], ...unknown[]]> } }): string[] {
+  return run.mock.calls.map(([command]) => {
+    if (command[0] === "mise") return command.join(" ");
+    if (isNpmDispatch(command)) return "dispatch npm workflow";
+    return command[2]!;
+  });
+}
+
+describe("npm publication through GitHub", () => {
+  const url = (id: number) => `https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/${id}`;
+
+  test("dispatches the workflow for the tag on main and waits for it before the release goes public", () => {
+    const { runtime, run } = harness();
+    runDesktopRelease(["publish"], runtime);
+    expect(run.mock.calls[0]?.[0]).toEqual([
+      "gh",
+      "workflow",
+      "run",
+      "publish-npm.yml",
+      "--repo",
+      "orkestrator-ai/orkestrator-v2",
+      "--ref",
+      "main",
+      "-f",
+      `tag=${tag}`,
+    ]);
+    // The run was still in flight when it was first listed, so the release
+    // could only be made public after waiting for it to complete.
+    expect(runtime.sleep).toHaveBeenCalled();
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow", "edit"]);
+  });
+
+  test("a run that fails leaves the release a draft", () => {
+    const { runtime, run } = harness(
+      {},
+      undefined,
+      undefined,
+      [],
+      [
+        ["in_progress", null],
+        ["completed", "failure"],
+      ],
+    );
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow(
+      "the npm publish workflow ended failure",
+    );
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow"]);
+  });
+
+  test("a cancelled or rejected deployment is not a publish either", () => {
+    const { runtime, run } = harness({}, undefined, undefined, [], [["completed", "cancelled"]]);
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("ended cancelled");
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow"]);
+  });
+
+  test("tells the person once when the run waits for the deployment review", () => {
+    const { runtime } = harness(
+      {},
+      undefined,
+      undefined,
+      [],
+      [
+        ["waiting", null],
+        ["waiting", null],
+        ["in_progress", null],
+        ["completed", "success"],
+      ],
+    );
+    runDesktopRelease(["publish"], runtime);
+    expect(runtime.alertApproval).toHaveBeenCalledTimes(1);
+    expect(runtime.alertApproval).toHaveBeenCalledWith({ kind: "github", url: url(900) });
+  });
+
+  test("joins a run already in flight instead of dispatching another", () => {
+    const { runtime, run, npmRuns } = harness({}, undefined, undefined, [
+      npmRun(tag, 777, "in_progress"),
+    ]);
+    // It finishes while the release waits.
+    (runtime.sleep as ReturnType<typeof mock>).mockImplementation(() => {
+      npmRuns[0]!.status = "completed";
+      npmRuns[0]!.conclusion = "success";
+    });
+    runDesktopRelease(["publish"], runtime);
+    expect(publishSteps(run)).toEqual(["edit"]);
+  });
+
+  test("a run that already succeeded counts as published, however slow the registry is", () => {
+    const { runtime, run } = harness({}, undefined, undefined, [
+      npmRun(tag, 777, "completed", "success"),
+    ]);
+    runDesktopRelease(["publish"], runtime);
+    expect(publishSteps(run)).toEqual(["edit"]);
+  });
+
+  test("dispatches again after a run that failed or belonged to another tag", () => {
+    const { runtime, run } = harness({}, undefined, undefined, [
+      npmRun(tag, 777, "completed", "failure"),
+      npmRun("v2.0.1", 778, "in_progress"),
+      npmRun("v2.0.1", 779, "completed", "success"),
+    ]);
+    runDesktopRelease(["publish"], runtime);
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow", "edit"]);
+  });
+
+  test("refuses when the tag is not on origin, before dispatching anything", () => {
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => (command[1] === "ls-remote" ? "" : original(command)));
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("is not on origin");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("fails when GitHub never lists the dispatched run", () => {
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => (isNpmRunList(command) ? "[]" : original(command)));
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("did not list");
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow"]);
+  });
+
+  test("gives up on a run that stays pending, and leaves it running", () => {
+    const { runtime, run } = harness({}, undefined, undefined, [], [["waiting", null]]);
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("is still waiting after 120");
+    expect(publishSteps(run)).toEqual(["dispatch npm workflow"]);
+  });
+
+  test("a registry that has not listed the version yet does not stop the release", () => {
+    const { runtime, run } = harness({ npmHasVersion: () => false });
+    runDesktopRelease(["publish"], runtime);
+    expect(publishSteps(run).at(-1)).toBe("edit");
+  });
+
+  test.each([
+    [["publish", "--skip-npm", "--npm-local"]],
+    [["publish", "--npm"]],
+    [["publish", "--npm-local", "--skip-npm"]],
+  ])("%j is not a publish command", (args) => {
+    const { runtime, run } = harness();
+    expect(() => runDesktopRelease(args, runtime)).toThrow("usage:");
+    expect(run).not.toHaveBeenCalled();
+  });
+});

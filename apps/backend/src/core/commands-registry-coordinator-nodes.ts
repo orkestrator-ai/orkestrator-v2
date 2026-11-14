@@ -810,7 +810,13 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       asNonBlankString(args.nodeId, "nodeId"),
     );
     await checkedTarget.environment(toEnvironmentId);
-    await assertCoordinatorMayActOnEnvironment(context, caller, toEnvironmentId, checkedTarget);
+    await assertCoordinatorMayActOnEnvironment(
+      context,
+      caller,
+      toEnvironmentId,
+      checkedTarget,
+      typeof args.replyToMessageId === "string" ? "node-mail-reply" : "node-mail",
+    );
     // Outside the admission lock: a copy takes as long as the link takes.
     const pushed = images.length
       ? await pushImages(checkedTarget, { environmentId: toEnvironmentId })
@@ -1379,6 +1385,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         caller,
         saved.snapshot.environmentId,
         target,
+        "review-address",
       );
     }
     // Addressing adopts the review so its fix outcome reaches this conversation.

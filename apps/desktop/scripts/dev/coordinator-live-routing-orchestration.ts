@@ -38,6 +38,12 @@ import {
   type RoutingReviewTarget,
   type RoutingTicket,
 } from "./coordinator-live-routing.js";
+import {
+  evaluateLaunchDefaultsOmitted,
+  evaluateListAgentsNotPolled,
+  evaluateRequestIdsFresh,
+  requestIdUsage,
+} from "./coordinator-live-wording.js";
 import { noticesAbout, STATUS_REVIEWEE_FILE } from "./coordinator-live-status.js";
 
 type Watch = ReturnType<typeof createDelegationWatch>;
@@ -474,6 +480,17 @@ export async function runRoutingScenario(input: {
   const log = input.log ?? ((line: string) => console.log(line));
   const progress = (text: string) => log(`[coordinator-live] ${platform}: routing ${text}`);
   let stopped: string | undefined;
+  // Every case's rows, by id: the request-id check spans the whole conversation.
+  const scenarioRows = new Map<string, ReturnType<typeof caseRows>[number]>();
+  const judgeWording = (name: RoutingCase) => {
+    const rows = caseRows();
+    for (const row of rows) if (row.id) scenarioRows.set(row.id, row);
+    const calls = routingToolCalls(rows);
+    checks.push(
+      evaluateLaunchDefaultsOmitted(name, calls),
+      evaluateListAgentsNotPolled(name, calls),
+    );
+  };
   for (const name of cases) {
     if (stopped) {
       checks.push({ name: `${name}-finished`, passed: false, detail: `not run: ${stopped}` });
@@ -497,8 +514,18 @@ export async function runRoutingScenario(input: {
         stopped = `the coordinator did not settle after the ${name} case: ${message(settleError)}`;
       }
     }
+    try {
+      judgeWording(name);
+    } catch (error) {
+      checks.push({ name: `${name}-wording-judged`, passed: false, detail: message(error) });
+    }
   }
 
+  const scenarioCalls = routingToolCalls([...scenarioRows.values()]);
+  if (scenarioRows.size > 0) checks.push(evaluateRequestIdsFresh(scenarioCalls));
+  for (const [key, count] of Object.entries(requestIdUsage(scenarioCalls))) {
+    observed[`request-ids:${key}`] = count;
+  }
   checks.push(
     ...evaluateRoutingInteractions({
       escapedInteractions: watch.escaped(),

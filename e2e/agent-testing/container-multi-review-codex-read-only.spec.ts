@@ -9,7 +9,7 @@ import { DEFAULT_CODEX_MODEL_ID } from "@orkestrator/protocol/codex-model-catalo
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**
- * The Codex read-only container canary (to-do 7872, task 1): a
+ * The Codex read-only container canary (to-do 7872 (retired), task 1): a
  * Multi Review with Codex reviewers, consolidation and preparation in a
  * container environment, on the image's real `codex` and a scripted fake
  * Responses API on the container's loopback. No login and no billed turn.
@@ -70,7 +70,7 @@ const SETTLED = new Set(["ready", "interactive", "completed", "failed", "cancell
  * The fake scripts code mode's `exec` cells only, and Codex offers `exec` only
  * for a model its catalogue marks `code_mode_only`. Codex's own default is
  * one; `gpt-5.5`, which this spec used first, is not, so its preparation turn
- * answered "unsupported custom tool call: exec" (2026-11-14, to-do 7872).
+ * answered "unsupported custom tool call: exec" (2026-11-14, to-do 7872 (retired)).
  */
 const MODEL = DEFAULT_CODEX_MODEL_ID;
 

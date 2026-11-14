@@ -90,7 +90,7 @@ is in Git history at `17d28238c`.
 run passed; both are in Git history at `17d28238c`.
 5600 and 6300 were retired on 2026-11-13, once their agent work was
 done; both are in Git history at `17d28238c`.
-0190 and 7872 were retired on 2026-11-14, once their container Multi Review
+0190 (retired) and 7872 (retired) left the board on 2026-11-14, once their container Multi Review
 specs passed on a disposable rootless daemon; both are in Git history at
 `dc90609bf`, and the runs are recorded in
 [coordinator.md](../../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox)

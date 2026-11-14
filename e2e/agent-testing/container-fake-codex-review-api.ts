@@ -1,7 +1,7 @@
 /**
  * QA stand-in for OpenAI's Responses WebSocket that takes a Multi Review
  * through the real `codex` CLI, with no login and no billed request (to-do
- * 7872 task 1). It runs on its own: inside an environment container
+ * 7872 (retired) task 1). It runs on its own: inside an environment container
  * on its loopback, copied in by `container-multi-review-codex-read-only.spec.ts`,
  * or on the host for `live-read-only-reviewer-turn.test.ts` in the Codex
  * bridge.
@@ -469,7 +469,7 @@ const NO_CODE_MODE_TEXT =
  * it only for a model its catalogue marks `tool_mode = "code_mode_only"`; the
  * pinned 0.167.0 catalogue marks every listed model so except `gpt-5.5`,
  * whose turns get the direct `exec_command` and `apply_patch` tools instead
- * (seen on 2026-11-14, to-do 7872). A request that lists no tools is taken
+ * (seen on 2026-11-14, to-do 7872 (retired)). A request that lists no tools is taken
  * at its word, as the unit tests' frames are.
  */
 export function offersCodeMode(frame: ResponsesFrame): boolean {

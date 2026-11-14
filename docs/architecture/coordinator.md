@@ -1444,7 +1444,7 @@ pinned by `AgentInfoButton.reviewers.test.tsx`. Stock Ubuntu with AppArmor's
 (`conformance-apparmor-live.test.ts`, 2026-11-11). Windows is a live check in
 the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 The decisions behind this behaviour (A1 to A22) and every run are in to-do
-0190 (retired 2026-11-14:
+0190 (retired), on 2026-11-14 (
 `git show dc90609bf:docs/todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md`).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
@@ -1597,7 +1597,7 @@ uses Codex's default model (`DEFAULT_CODEX_MODEL_ID`): in 0.167.0's bundled
 catalogue every listed model is `code_mode_only` except `gpt-5.5`, whose
 turns get the direct `exec_command` tool, and the spec's first run on
 `gpt-5.5` failed at preparation for that reason. The canary's decisions are
-in to-do 7872 (retired 2026-11-14:
+in to-do 7872 (retired), on 2026-11-14 (
 `git show dc90609bf:docs/todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md`).
 
 ### Changing qualification

@@ -96,7 +96,7 @@ test("cancelling package preparation stops its fix-model session before settling
   );
 });
 
-test("read-only reviewers and consolidation record a missing command sandbox (todo 0190)", async () => {
+test("read-only reviewers and consolidation record a missing command sandbox (todo 0190 (retired))", async () => {
   const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
   const provider = new Provider();
   provider.commandSandboxOff = reason;

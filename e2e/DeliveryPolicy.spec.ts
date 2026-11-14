@@ -18,6 +18,30 @@ test.describe("When verified", () => {
     await expect(page.getByTestId("confirmed-policy")).toHaveText("push-no-pr");
   });
 
+  test("the launcher offers the machines holding the project and submits the pick", async ({
+    page,
+  }) => {
+    await page.goto("/delivery-policy?launch&machines");
+    const machines = page.getByRole("radiogroup", { name: "Machine" });
+    await expect(machines.getByRole("radio", { name: /Studio Mac/ })).toBeChecked();
+    await expect(machines.getByRole("radio", { name: /Laptop/ })).toBeDisabled();
+    await mkdir(path.join(process.cwd(), "output/visual-previews"), { recursive: true });
+    await page.screenshot({
+      path: path.join(process.cwd(), "output/visual-previews/build-machine-choice.png"),
+    });
+
+    // The radio is visually hidden; the user picks through its card.
+    await machines.getByText("Builder").click();
+    await expect(machines.getByRole("radio", { name: /Builder/ })).toBeChecked();
+    await page.getByRole("button", { name: "Start build" }).click();
+    await expect(page.getByTestId("confirmed-machine")).toHaveText("Builder");
+  });
+
+  test("the launcher has no machine choice for a single machine", async ({ page }) => {
+    await page.goto("/delivery-policy?launch");
+    await expect(page.getByRole("radiogroup", { name: "Machine" })).toHaveCount(0);
+  });
+
   test("a commit-only ticket keeps its selection in the launcher", async ({ page }) => {
     await page.goto("/delivery-policy?launch&policy=commit-only");
     const select = page

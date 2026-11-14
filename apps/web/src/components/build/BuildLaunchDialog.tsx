@@ -16,6 +16,7 @@ import {
   Hammer,
   ListChecks,
   MessageSquare,
+  Monitor,
   Package,
   ScanSearch,
   Shield,
@@ -64,6 +65,12 @@ import {
 } from "./BuildStepInstructionsField";
 import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
 import {
+  machineChoiceFor,
+  type BuildLaunchMachine,
+  type BuildLaunchMachineChoice,
+} from "./build-machines";
+import { useMachineDockerAvailability } from "./useMachineDockerAvailability";
+import {
   ReviewLensField,
   launchedReviewLens,
   reviewLensDraftError,
@@ -82,6 +89,11 @@ export interface BuildLaunchStepSelection {
 }
 
 export interface BuildLaunchSelection {
+  /**
+   * The machine the pipeline environment is created on. Absent for the tab's
+   * own machine, which is also what every launch without a choice means.
+   */
+  machine?: BuildLaunchMachineChoice;
   /** Environment type is a property of the workspace, so it is chosen once. */
   environmentType: EnvironmentType;
   /**
@@ -330,6 +342,12 @@ interface BuildLaunchDialogProps {
   deliveryPolicy?: DeliveryPolicy;
   /** Disables the submit button while a start request is in flight. */
   busy?: boolean;
+  /**
+   * The machines this build can run on: this tab's own (marked `current`) and
+   * every other one holding a project for the same repository. The choice is
+   * shown only when there is more than one.
+   */
+  machines?: BuildLaunchMachine[];
   /** Whether this project has a host checkout that can own local worktrees. */
   localEnvironmentAvailable?: boolean;
   /**
@@ -789,7 +807,8 @@ export function BuildLaunchDialog({
   commentContext,
   deliveryPolicy,
   busy = false,
-  localEnvironmentAvailable = true,
+  machines,
+  localEnvironmentAvailable: ownLocalEnvironmentAvailable = true,
   rootSetupSteps = null,
   aptPackages = null,
   returnFocusRef,
@@ -797,7 +816,7 @@ export function BuildLaunchDialog({
 }: BuildLaunchDialogProps) {
   const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
     useAgentModelFavorites();
-  const dockerAvailable = useDockerAvailability();
+  const ownDockerAvailable = useDockerAvailability();
   const models = useMemo(() => flatCatalog(catalog, enabledPlatforms), [catalog, enabledPlatforms]);
   const pickerFavorites = useMemo(
     () => favorites.filter((favorite) => enabledPlatforms.includes(favorite.platform)),
@@ -814,6 +833,19 @@ export function BuildLaunchDialog({
     },
     [favorites, pickerFavorites, reorderFavorites],
   );
+  const currentMachineKey = machines?.find((entry) => entry.current)?.key ?? null;
+  const [pickedMachineKey, setPickedMachineKey] = useState<string | null>(null);
+  // A pick that left the offered machines (it lost its project, say) falls
+  // back to this tab's own machine rather than launching somewhere unlisted.
+  const machineKey = machines?.some((entry) => entry.key === pickedMachineKey)
+    ? pickedMachineKey
+    : currentMachineKey;
+  const machineChoice = machineChoiceFor(machines, machineKey);
+  // Docker and the local checkout belong to the machine the build runs on.
+  const remoteDocker = useMachineDockerAvailability(machineChoice?.machine, Boolean(machineChoice));
+  const dockerAvailable = machineChoice ? remoteDocker !== false : ownDockerAvailable;
+  // The other machine's project is a checkout there by construction.
+  const localEnvironmentAvailable = machineChoice ? true : ownLocalEnvironmentAvailable;
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   // Pipelines have always created restricted containers; the launcher now
   // shows that choice instead of making it silently.
@@ -862,6 +894,7 @@ export function BuildLaunchDialog({
   const environmentGroupId = useId();
   const networkGroupId = useId();
   const commentContextId = useId();
+  const machineGroupId = useId();
 
   const resetLaunchState = useCallback(() => {
     setSteps(
@@ -910,6 +943,7 @@ export function BuildLaunchDialog({
     wasOpenRef.current = open;
     if (justOpened) {
       touchedRef.current.clear();
+      setPickedMachineKey(null);
       setEnvironmentType(() => {
         if (defaultEnvironmentType === "containerized" && !dockerAvailable) {
           return localEnvironmentAvailable ? "local" : "containerized";
@@ -1121,6 +1155,7 @@ export function BuildLaunchDialog({
                 : undefined;
             onConfirm({
               environmentType,
+              ...(machineChoice ? { machine: machineChoice } : {}),
               ...(environmentType === "containerized" ? { networkAccessMode } : {}),
               ...(commentContext ? { includeComments } : {}),
               deliveryPolicy: deliveryChoice,
@@ -1136,6 +1171,59 @@ export function BuildLaunchDialog({
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
             <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
+              {machines && machines.length > 1 && (
+                <div className="mb-5" data-build-machines>
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold text-zinc-200">Machine</h3>
+                    <p className="text-xs text-zinc-500">
+                      The pipeline environment is created and runs on this machine, in its own copy
+                      of the project.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Machine">
+                    {machines.map((option) => {
+                      const selected = machineKey === option.key;
+                      const disabled = !option.available;
+                      const id = `${machineGroupId}-${option.key}`;
+                      return (
+                        <div key={option.key} className="relative min-w-0">
+                          <input
+                            id={id}
+                            type="radio"
+                            name={`${machineGroupId}-machine`}
+                            checked={selected}
+                            disabled={disabled}
+                            onChange={() => setPickedMachineKey(option.key)}
+                            className="peer sr-only"
+                          />
+                          <label
+                            htmlFor={id}
+                            className={cn(
+                              "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors focus-hairline-peer",
+                              disabled && "cursor-not-allowed opacity-50",
+                              selected
+                                ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"
+                                : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700",
+                            )}
+                          >
+                            <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                              <Monitor className="size-4 shrink-0" />
+                              <span className="truncate">{option.name}</span>
+                            </span>
+                            <span className="mt-1 text-[11px] leading-snug text-zinc-500">
+                              {disabled
+                                ? "Not connected"
+                                : option.current
+                                  ? "This machine"
+                                  : "Runs there; follow it from that machine"}
+                            </span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="mb-3">
                 <h3 className="text-sm font-semibold text-zinc-200">Where it runs</h3>
                 <p className="text-xs text-zinc-500">
@@ -1184,7 +1272,9 @@ export function BuildLaunchDialog({
                             ? option.value === "containerized"
                               ? "Containers unavailable while Docker stopped"
                               : "Unavailable without a local project checkout"
-                            : option.description}
+                            : option.value === "local" && machineChoice
+                              ? `Git worktree on ${machineChoice.name}, full network`
+                              : option.description}
                         </span>
                       </label>
                     </div>

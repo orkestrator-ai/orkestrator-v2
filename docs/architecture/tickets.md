@@ -330,6 +330,18 @@ merge and close events reach the board the same way. A command node's ticket
 built elsewhere links no pull request itself; the leaf reports it as the
 ticket's work location (`sync.work`), which the startup sweep reads too.
 
+The Kanban ticket's Build dialog starts the same kind of build: when another
+machine holds a project for the ticket's repository (matched by
+`repositoryHint`), its **Machine** choice offers it beside this one. The
+launch goes to that machine's own project through `launch_build_pipeline`
+(`useBuildPipeline`, `machine` option), with the ticket's id and Kanban
+source so the leaf links its synced copy. The pipeline is the other machine's,
+so it is not added to this window's pipeline store; the confirmation names the
+machine and offers to open it there. Container availability is read from that
+machine's Docker, not this one's. A ticket created in the same step may not
+have reached the other machine yet, in which case the build runs from the
+snapshot and does not move the ticket.
+
 **Why tickets stuck (2026-11).** Three causes, fixed together:
 
 - Ship or conflict resolution that found the pull request again after it

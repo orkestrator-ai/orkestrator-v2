@@ -29,4 +29,10 @@ describe("kanbanBuildStartOptions", () => {
       kanbanBuildStartOptions(selection({ environmentType: "local" })).networkAccessMode,
     ).toBeUndefined();
   });
+
+  test("carries the machine the launcher chose, and nothing for this machine", () => {
+    const machine = { machine: "builder", nodeId: "builder", projectId: "p-2", name: "Builder" };
+    expect(kanbanBuildStartOptions(selection({ machine })).machine).toEqual(machine);
+    expect(kanbanBuildStartOptions(selection()).machine).toBeUndefined();
+  });
 });

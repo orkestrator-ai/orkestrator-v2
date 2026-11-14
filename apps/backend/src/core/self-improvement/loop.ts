@@ -29,6 +29,7 @@ import {
   type SelfImprovementRunSummary,
   type SelfImprovementStep,
 } from "@orkestrator/protocol/self-improvement";
+import { ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
 import type { BundleData } from "./bundle.js";
 import { type InsightRun, runInsights } from "./insights/analyze.js";
 import type { ModelRunner } from "./insights/model.js";
@@ -68,6 +69,8 @@ export interface BoardTicket {
   title: string;
   status: string;
   prUrl?: string | null;
+  /** The names of the labels on the ticket, when the board reports them. */
+  labels?: readonly string[];
 }
 
 /** One project's board. The service implements it over Kanban storage. */
@@ -436,10 +439,13 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
     persist();
   }
 
-  const openTitles = new Map<string, string>();
+  // Titles carry no prefix, so a diagnostics ticket and an insight ticket can share one.
+  // An open ticket is the same work only when it is not filed under the other source's label.
+  const openTitles = new Map<string, BoardTicket[]>();
   if (chosen.length > 0) {
     for (const ticket of await board.list()) {
-      if (ticket.status !== "done") openTitles.set(ticket.title, ticket.id);
+      if (ticket.status === "done") continue;
+      openTitles.set(ticket.title, [...(openTitles.get(ticket.title) ?? []), ticket]);
     }
     await board.ensureLabels(LABELS);
   }
@@ -447,7 +453,12 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   const filedOn = { projectId: board.projectId };
   for (const signal of chosen) {
     const text = textFor(signal);
-    const existing = openTitles.get(text.title);
+    const label = isInsight(signal) ? INSIGHT_LABEL : IMPROVEMENT_LABEL;
+    const otherLabel = isInsight(signal) ? IMPROVEMENT_LABEL : INSIGHT_LABEL;
+    const existing = openTitles.get(text.title)?.find((ticket) => {
+      const names = ticket.labels?.map(ticketLabelKey) ?? [];
+      return names.includes(ticketLabelKey(label)) || !names.includes(ticketLabelKey(otherLabel));
+    })?.id;
     if (existing) {
       applyLedgerChange(
         ledger,
@@ -462,7 +473,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
     }
     const ticket = await board.create({
       ...text,
-      label: isInsight(signal) ? INSIGHT_LABEL : IMPROVEMENT_LABEL,
+      label,
       requestId: `self-improvement-${digest.id}-${shortHash(signal.signature)}`,
     });
     // Recorded at once, so a later failure in this run cannot file it again.

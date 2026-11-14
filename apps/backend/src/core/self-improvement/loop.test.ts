@@ -193,6 +193,39 @@ describe("a self-improvement run", () => {
     expect((await loop(bundle, NOW + DAY + HOUR)).created).toHaveLength(MAX_NEW_TICKETS);
   });
 
+  test("an open ticket of the other source with the same title is not linked to", async () => {
+    const { board, loop } = setup();
+    const title = "local-server bridge.exited (codex): SIGKILL";
+    board.tickets.set("7", {
+      id: "7",
+      title,
+      status: "backlog",
+      comments: [],
+      description: "",
+      criteria: "",
+      labels: ["insight"],
+    });
+    const summary = await loop(BEFORE, NOW - 6 * DAY);
+    expect(summary.linked).toEqual([]);
+    expect(summary.created.map((item) => item.signature)).toContain(KILLS);
+    expect(board.ticketFor(KILLS).id).not.toBe("7");
+  });
+
+  test("an open ticket carrying this source's label is linked to, whatever else it has", async () => {
+    const { board, loop } = setup();
+    board.tickets.set("8", {
+      id: "8",
+      title: "storage snapshot.failed: ENOSPC",
+      status: "backlog",
+      comments: [],
+      description: "",
+      criteria: "",
+      labels: ["improvement", "insight"],
+    });
+    const summary = await loop(BEFORE, NOW - 6 * DAY);
+    expect(summary.linked).toEqual([{ ticket: "8", signature: DISK }]);
+  });
+
   test("a dry run reports what it would file but changes nothing", async () => {
     const { board, loop, stateDir } = setup();
     const summary = await loop(BEFORE, NOW - 6 * DAY, true);

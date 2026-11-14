@@ -336,6 +336,18 @@ describe("KanbanCard", () => {
     expect(screen.queryByTestId("kanban-card-drop-placeholder") === null).toBe(true);
   });
 
+  test("the drag placeholder keeps the same wrapping label row as the card", () => {
+    const labels = ["x".repeat(50), "y".repeat(50), "z".repeat(50), "extra"];
+    draggableState.isDragging = true;
+    renderCard(makeTask({ labels }));
+    const placeholder = screen.getByTestId("kanban-card-drop-placeholder");
+    const row = within(placeholder).getByTestId("kanban-card-labels");
+    expect(row.className).toContain("flex-wrap");
+    expect(within(row).getAllByTestId("kanban-card-label")).toHaveLength(3);
+    expect(within(row).getByText("+1")).toBeTruthy();
+    expect(placeholder.querySelector(".invisible")?.contains(row)).toBe(true);
+  });
+
   test("the drag overlay copy carries no interactive controls", () => {
     renderCard(makeTask({ environmentId: "env-1" }), {
       isDragOverlay: true,

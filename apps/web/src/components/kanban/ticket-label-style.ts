@@ -13,12 +13,16 @@ const LABEL_STYLES = [
 ] as const;
 
 /** The two labels self-improvement files under keep the colours it gives them in the catalogue. */
-const FIXED_STYLES: Record<string, number> = { improvement: 0, insight: 1 };
+// A Map, not an object: a label may be named `constructor` or `__proto__`.
+const FIXED_STYLES: ReadonlyMap<string, number> = new Map([
+  ["improvement", 0],
+  ["insight", 1],
+]);
 
 /** The same name always gets the same chip, whatever its case. */
 export function ticketLabelClassName(name: string): string {
   const key = ticketLabelKey(name);
-  const fixed = FIXED_STYLES[key];
+  const fixed = FIXED_STYLES.get(key);
   if (fixed !== undefined) return LABEL_STYLES[fixed]!;
   let hash = 0;
   for (let index = 0; index < key.length; index += 1) {

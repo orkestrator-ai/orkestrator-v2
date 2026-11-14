@@ -886,7 +886,7 @@ no approval card for either; an asking escape writes only once accepted),
 `conformance-coordinator-sandbox-live.test.ts` 18 of 18 with the Linux-only
 `read-only-required-refused` skipped, and the read-boundary live test 6 of
 6. The first run of the coordinator file lost two cases to the fixture's
-15 s turn deadline at a load of about 14 on 18 cores and the next three runs
+15 s turn deadline at a load of about 14 on 18 cores and the next four runs
 passed (flake [1125](../tests/flaky-tests/agent-bridges/1125-claude-offline-cli-qualification-deadlines.md)).
 The 2.1.319 binary writes an `initialize_not_first` result only when the host
 sets `CLAUDE_CODE_STARTUP_FAILURE_RESULTS` (only `org_config_required_unavailable`,

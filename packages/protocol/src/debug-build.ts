@@ -277,7 +277,7 @@ export function debugBuildTicket(options: {
   const context = [
     "## Context",
     "",
-    `Raised from environment **${collapse(options.source.name)}** with the debug button. Its details, the screenshot and its agent transcript are the evidence for this ticket; reproduce or inspect from them before changing code.`,
+    `Raised from environment **${collapse(options.source.name)}** with the debug button. The details below, and the screenshot and agent transcripts where attached, are the evidence for this ticket; reproduce or inspect from them before changing code.`,
     "",
     ...sourceLines(options.source, options.screenshotAttached),
   ].join("\n");

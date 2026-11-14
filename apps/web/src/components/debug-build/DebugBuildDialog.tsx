@@ -107,7 +107,7 @@ export function DebugBuildDialog({
       const result = await api.createDebugBuild(request);
       close();
       toast.success("Pipeline environment started", {
-        description: "The ticket was added with the transcript and details, and its build began.",
+        description: "The ticket was added and its pipeline environment is being created.",
         action: {
           label: "Open",
           onClick: () => activateFeatureBuildEnvironment(result.projectId, result, scope),

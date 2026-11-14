@@ -19,6 +19,7 @@ export type Status = {
   browserUrl?: string;
   testProject?: string;
   dataDir?: string;
+  logDir?: string;
 };
 export type Project = { id: string; name: string; localPath: string | null };
 export type Environment = {

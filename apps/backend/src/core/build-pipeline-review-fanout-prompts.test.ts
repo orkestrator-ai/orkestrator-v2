@@ -1,4 +1,6 @@
 import { describe, expect, spyOn, test, mock } from "bun:test";
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   advanceUntil,
   fourReviewers,
@@ -53,6 +55,51 @@ describe("build pipeline reviewer prompts", () => {
       for (const prompt of prompts) expect(prompt.startsWith(prefix)).toBe(true);
     });
   });
+});
+
+/**
+ * The live count (to-do 7566 (retired); `test:agent:auto-pipeline --reviewers
+ * 4`, docs/development/agent-testing.md) reads the `review.prompt-reads` debug
+ * line, so the line has to report what the pass did: every prompt it built,
+ * and one read of each input for the whole panel.
+ */
+test("a dispatching pass logs its prompt count and one read of each input", async () => {
+  const logs = captureLogs();
+  configureLogger({ areaLevels: { "build-pipeline": "debug" } });
+  try {
+    await withPipeline(async ({ service, read, provider }) => {
+      const started = await service.start(startInput(fourReviewers()));
+      await advanceUntil(service, read, started.id, "reviewing");
+      const dispatched: number[] = [];
+      for (let pass = 0; pass < 6; pass += 1) {
+        const sentBefore = provider.sent.length;
+        await service.advanceNow(started.id);
+        dispatched.push(
+          provider.sent.slice(sentBefore).filter((entry) => /review-\d/.test(entry.sessionId))
+            .length,
+        );
+      }
+      const lines = logs
+        .records()
+        .filter(
+          (record) => record.area === "build-pipeline" && record.event === "review.prompt-reads",
+        )
+        .map((record) => record.fields);
+      // One line per pass that built prompts, none for the passes that did not.
+      expect(lines.length).toBe(dispatched.filter((count) => count > 0).length);
+      expect(lines.reduce((sum, fields) => sum + Number(fields?.prompts), 0)).toBe(4);
+      expect(Math.max(...lines.map((fields) => Number(fields?.prompts)))).toBeGreaterThan(1);
+      for (const fields of lines) {
+        expect(fields).toEqual({
+          prompts: expect.any(Number),
+          instructionReads: 1,
+          notesReads: 1,
+        });
+      }
+    });
+  } finally {
+    logs.restore();
+  }
 });
 
 // Exercise one host directly: constructing another host would start a new pass

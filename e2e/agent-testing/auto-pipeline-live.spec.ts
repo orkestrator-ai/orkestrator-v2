@@ -27,10 +27,19 @@
  *
  * Screenshots (desktop and 390 px) go to `output/visual-previews/`. Prompts,
  * transcripts and the result capability never reach test output.
+ *
+ * `ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE_REVIEWERS` (1-4, default 1; the
+ * runner's `--reviewers`) sizes the review panel. When the backend logs the
+ * `build-pipeline` area at debug, as the runner arranges, the spec also counts
+ * every review pass's prompt-context reads from the profile's log (BG-11's
+ * live count, to-do 7566 (retired)): one `review.prompt-reads` line per
+ * review fan-out pass that built reviewer prompts. Only a panel of two or
+ * more uses the fan-out. Counts only, written to `prompt-reads.json` beside
+ * the suite's results.
  */
 import { expect, test, type Page } from "./browser-test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -65,6 +74,17 @@ const ADDED_CRITERION = "The pipeline keeps its commits in the environment.";
 const TURN_TIMEOUT_MS = 3 * 60_000;
 const PIPELINE_TIMEOUT_MS = 8 * 60_000;
 const PREVIEWS = path.join(repositoryRoot, "output", "visual-previews");
+const REVIEWERS = Number(process.env.ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE_REVIEWERS ?? "1");
+const COUNT_PROMPT_READS = /(^|,)build-pipeline=(debug|trace)(,|$)/.test(
+  process.env.ORKESTRATOR_LOG_LEVEL ?? "",
+);
+const RUN_OUTPUT = path.join(
+  repositoryRoot,
+  "output",
+  "agent-testing",
+  process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile,
+  "auto-pipeline",
+);
 
 type Calls = {
   completions: number;
@@ -174,6 +194,35 @@ function pointPiAt(status: Status, baseUrl: string): () => void {
   return restore;
 }
 
+type PromptReads = { prompts: number; instructionReads: number; notesReads: number };
+
+const PROMPT_READS_LINE =
+  /review\.prompt-reads\b.*?prompts\W{1,3}(\d+).*?instructionReads\W{1,3}(\d+).*?notesReads\W{1,3}(\d+)/;
+
+/**
+ * Every `review.prompt-reads` line in the profile's logs, one per review pass
+ * that built prompts. The relay copies a backend record into more than one
+ * file, so the file holding the most lines is the one counted.
+ */
+function promptReadsFromLogs(logDir: string): { file: string | null; passes: PromptReads[] } {
+  let best: { file: string | null; passes: PromptReads[] } = { file: null, passes: [] };
+  for (const name of readdirSync(logDir)) {
+    if (!name.endsWith(".log")) continue;
+    const passes: PromptReads[] = [];
+    for (const line of readFileSync(path.join(logDir, name), "utf8").split("\n")) {
+      const match = PROMPT_READS_LINE.exec(line);
+      if (match)
+        passes.push({
+          prompts: Number(match[1]),
+          instructionReads: Number(match[2]),
+          notesReads: Number(match[3]),
+        });
+    }
+    if (passes.length > best.passes.length) best = { file: name, passes };
+  }
+  return best;
+}
+
 async function startEnvironment(invoke: Invoke, projectId: string, name: string) {
   const created = await invoke<Environment>("create_environment", {
     projectId,
@@ -210,9 +259,19 @@ test.describe("Auto-pipeline on a fake model", () => {
 
   test("promotes an idle prompt tab and finishes the pipeline unwatched", async ({ page }) => {
     page.setDefaultTimeout(30_000);
+    // On a host whose user cannot reach Docker (or has no GitHub CLI) a modal
+    // startup notice can open after any reload, at any point of a later step,
+    // and hide the sidebar. Dismiss it whenever it appears.
+    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+      await page.addLocatorHandler(
+        page.getByRole("button", { name: label, exact: true }),
+        (button) => button.click(),
+      );
+    }
     const status = profileStatus(profile);
     expect(status.status, `profile "${profile}" is not running`).toBe("ready");
     expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
+    expect(Number.isInteger(REVIEWERS) && REVIEWERS >= 1 && REVIEWERS <= 4).toBe(true);
     const invoke = await authenticatedInvoke(page, status, profile);
     const fixture = (await invoke<Project[]>("get_projects")).find(
       (project) => project.localPath === status.testProject,
@@ -226,14 +285,14 @@ test.describe("Auto-pipeline on a fake model", () => {
       // The fake is named before any Pi bridge starts, so the first one reads it.
       restores.push(pointPiAt(status, `${model.origin}/v1`));
       // The saved Build defaults drive drafting and every later stage: Pi on
-      // the fake model, one reviewer.
+      // the fake model, `REVIEWERS` reviewers (one by default).
       await invoke("patch_repository_settings", {
         projectId,
         updates: {
           agentSettings: {
             defaultAgent: "pi",
             platforms: { pi: { mode: "native", model: MODEL_REF } },
-            multiReview: { reviewerCount: 1 },
+            multiReview: { reviewerCount: REVIEWERS },
           },
         },
       });
@@ -305,7 +364,11 @@ test.describe("Auto-pipeline on a fake model", () => {
 
       // --- 2. Draft and confirm in the browser -------------------------------
       await page.goto(status.browserUrl!);
-      const open = sidebarNavigator(page, fixture!.name);
+      const navigate = sidebarNavigator(page, fixture!.name);
+      // A startup notice the handler above dismissed mid-navigation can leave
+      // the narrow layout's drawer closed, so a navigation is retried whole.
+      const open = (name: string) =>
+        expect(() => navigate(name)).toPass({ timeout: 120_000, intervals: [1_000] });
       await open(source.name);
       const toPipeline = page.getByRole("button", { name: "To pipeline", exact: true });
       await expect(toPipeline).toBeEnabled({ timeout: 60_000 });
@@ -403,6 +466,33 @@ test.describe("Auto-pipeline on a fake model", () => {
       expect(finished.delivery?.policy).toBe("commit-only");
       expect(finished.sessions.some((session) => session.phase === "pr")).toBe(false);
       expect(git(worktree, ["status", "--porcelain"])).toBe("");
+      // Read before the UI checks below, so a UI failure cannot lose the count
+      // (the runner resets the profile, logs included, when the spec ends).
+      if (COUNT_PROMPT_READS) {
+        expect(status.logDir, "dev:status reported no log directory").toBeTruthy();
+        const reads = promptReadsFromLogs(status.logDir!);
+        const record = {
+          reviewers: REVIEWERS,
+          logFile: reads.file,
+          passes: reads.passes,
+          prompts: reads.passes.reduce((sum, pass) => sum + pass.prompts, 0),
+          notesReads: reads.passes.reduce((sum, pass) => sum + pass.notesReads, 0),
+        };
+        mkdirSync(RUN_OUTPUT, { recursive: true });
+        writeFileSync(
+          path.join(RUN_OUTPUT, "prompt-reads.json"),
+          `${JSON.stringify(record, null, 2)}\n`,
+        );
+        note("review-prompt-reads", record);
+        // One reviewer runs as a single stage session, not the fan-out, so
+        // only a panel is counted. Every reviewer's prompt was built in some
+        // pass, and each pass that built prompts read the project notes once
+        // for all of them (BG-11).
+        if (REVIEWERS > 1) expect(record.prompts).toBeGreaterThanOrEqual(REVIEWERS);
+        for (const pass of reads.passes) {
+          expect(pass).toMatchObject({ instructionReads: 1, notesReads: 1 });
+        }
+      }
 
       // --- 5. Back, and after a reload, from backend state --------------------
       // Completion opens the run's Notes tab; the graph is one click away.
@@ -440,7 +530,7 @@ test.describe("Auto-pipeline on a fake model", () => {
       expect(final.submissions).toMatchObject({
         convert_to_pipeline: 1,
         submit_validation_plan: 1,
-        submit_review_report: 1,
+        submit_review_report: REVIEWERS,
         [VERIFY_TOOL]: 1,
       });
       note("fake-model-calls", { completions: final.completions, submissions: final.submissions });

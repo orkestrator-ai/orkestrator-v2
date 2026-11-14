@@ -8,6 +8,8 @@ export const BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
       "sidebar.update-failed": "The sidebar could not be updated for one pipeline.",
       "result.consume-deferred":
         "Consuming a stage's workflow result failed; it stays staged and is retried.",
+      "review.prompt-reads":
+        "A review fan-out pass built reviewer prompts; how many, and how often they read the review instruction and project notes. Counts only.",
       "consolidation.consume-deferred":
         "Consuming a review consolidation result failed; it stays pending and is retried.",
       "dispatch.prepare-failed":

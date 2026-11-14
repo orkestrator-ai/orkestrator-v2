@@ -158,6 +158,29 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("build-pipeline");
 
+/**
+ * What one supervisor pass's reviewer prompts read, counts only: the prompts
+ * it built, and how often building them read the review instruction and the
+ * project notes (`reviewContext`). BG-11 made the reads once per pass rather
+ * than once per prompt; the debug line below is how a live run counts them
+ * (to-do 7566 (retired); `test:agent:auto-pipeline --reviewers 4`).
+ */
+interface ReviewPromptReads {
+  prompts: number;
+  instructionReads: number;
+  notesReads: number;
+}
+
+function emptyReviewPromptReads(): ReviewPromptReads {
+  return { prompts: 0, instructionReads: 0, notesReads: 0 };
+}
+
+/** One debug line for a pass that built reviewer prompts; nothing otherwise. */
+function logReviewPromptReads(reads: ReviewPromptReads): void {
+  if (reads.prompts === 0) return;
+  log.debug("review.prompt-reads", () => ({ ...reads }));
+}
+
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
 /** The panel's result kinds and the consolidation turn, from the stage table. */
@@ -342,9 +365,15 @@ export class BuildPipelineReviewFanout {
     const targetBranch = await this.deps.targetBranch(pipeline);
 
     if (!state.consolidation) {
-      const runner = new ReviewFanoutRunner(this.reviewHost(pipeline, targetBranch));
+      const reads = emptyReviewPromptReads();
+      const runner = new ReviewFanoutRunner(this.reviewHost(pipeline, targetBranch, reads));
       const completedBefore = completedReviewerCount(state.reviewers);
-      const outcome = await runner.advanceReviewers(state.reviewers);
+      let outcome: Awaited<ReturnType<ReviewFanoutRunner["advanceReviewers"]>>;
+      try {
+        outcome = await runner.advanceReviewers(state.reviewers);
+      } finally {
+        logReviewPromptReads(reads);
+      }
       // Settled *after* the pass, not inside it: a reviewer's last transcript
       // mirror happens while its provider status is still being read, so the
       // status it ends on — completed, failed, stopped — is only known here.
@@ -678,11 +707,16 @@ export class BuildPipelineReviewFanout {
     );
   }
 
-  private reviewHost(pipeline: BuildPipeline, targetBranch: string): ReviewFanoutHost {
+  private reviewHost(
+    pipeline: BuildPipeline,
+    targetBranch: string,
+    reads: ReviewPromptReads = emptyReviewPromptReads(),
+  ): ReviewFanoutHost {
     // The package prompt is the same for every reviewer the pass dispatches,
     // and building it reads the review instruction and the project notes, so
     // it is built once per pass for the package it describes. A failed build
-    // is dropped, so the next reviewer reads again as it did before.
+    // is dropped, so the next reviewer reads again as it did before. `reads`
+    // counts both for the pass (BG-11's live count, to-do 7566 (retired)).
     let sharedPrompt: { reviewPackage: object; prompt: Promise<string> } | undefined;
     const sharedReviewerPrompt = (
       reviewPackage: NonNullable<BuildPipeline["reviewPackage"]>,
@@ -690,12 +724,13 @@ export class BuildPipelineReviewFanout {
       if (sharedPrompt?.reviewPackage === reviewPackage) return sharedPrompt.prompt;
       const entry = {
         reviewPackage,
-        prompt: (async () =>
-          createDiscoveryPrompt({
-            reviewPackage,
-            reviewInstruction: await this.deps.reviewInstruction(),
-            context: await this.deps.reviewContext(pipeline),
-          }))(),
+        prompt: (async () => {
+          reads.instructionReads += 1;
+          const reviewInstruction = await this.deps.reviewInstruction();
+          reads.notesReads += 1;
+          const context = await this.deps.reviewContext(pipeline);
+          return createDiscoveryPrompt({ reviewPackage, reviewInstruction, context });
+        })(),
       };
       sharedPrompt = entry;
       entry.prompt.catch(() => {
@@ -808,6 +843,7 @@ export class BuildPipelineReviewFanout {
         });
       },
       reviewerPrompt: async (index, count, reviewer) => {
+        reads.prompts += 1;
         const reviewPackage = pipeline.reviewPackage;
         if (!reviewPackage) {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);

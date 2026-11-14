@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import {
   OPENCODE2_FLAGS,
   buildOpenCode2CredentialPluginSource,
@@ -155,16 +156,24 @@ describe("buildOpenCode2CredentialPluginSource", () => {
    * Run a plugin source's `setup` against a stand-in context and process. The
    * module's own `process` is shadowed, so the test process is never changed.
    */
-  async function runSetup(source: string, platform: string) {
+  async function runSetup(
+    source: string,
+    platform: string,
+    extra: { env?: Record<string, string>; kill?: (pid: number, signal: unknown) => void } = {},
+  ) {
     const dir = await mkdtemp(path.join(tmpdir(), "ork-opencode2-plugin-"));
     dirs.push(dir);
     const fakeProcess = {
       platform,
-      env: { OPENCODE_PASSWORD: "pw", OPENCODE_SERVER_PASSWORD: "pw", KEEP: "1" } as Record<
-        string,
-        string | undefined
-      >,
+      env: {
+        OPENCODE_PASSWORD: "pw",
+        OPENCODE_SERVER_PASSWORD: "pw",
+        KEEP: "1",
+        ...extra.env,
+      } as Record<string, string | undefined>,
+      pid: fakePid(1),
       stderr: { write: () => true },
+      kill: extra.kill ?? (() => true),
     };
     const key = `__orkPluginProcess${Math.random().toString(36).slice(2)}`;
     (globalThis as Record<string, unknown>)[key] = fakeProcess;
@@ -203,6 +212,55 @@ describe("buildOpenCode2CredentialPluginSource", () => {
     for (const callback of hooks["shell:create.before"] ?? []) await callback(shell);
     expect(shell.env).toEqual({ PATH: "/bin" });
     expect(hooks["tool:execute.before"]).toBeUndefined();
+  });
+
+  test("the host form stops its own server once the backend that started it is gone", async () => {
+    const signals: Array<[number, unknown]> = [];
+    let parentAlive = true;
+    const kill = (pid: number, signal: unknown) => {
+      signals.push([pid, signal]);
+      if (signal === 0 && !parentAlive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+    };
+    try {
+      await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
+        env: { ORKESTRATOR_PARENT_PID: String(fakePid(2)) },
+        kill,
+      });
+      // A second location loading the plugin arms no second watch.
+      await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
+        env: { ORKESTRATOR_PARENT_PID: String(fakePid(2)) },
+        kill,
+      });
+      await Bun.sleep(1_200);
+      expect(signals.filter(([, signal]) => signal === "SIGTERM")).toEqual([]);
+      expect(signals.length).toBeGreaterThan(0);
+      parentAlive = false;
+      await Bun.sleep(1_200);
+      expect(signals.filter(([, signal]) => signal === "SIGTERM")).toEqual([
+        [fakePid(1), "SIGTERM"],
+      ]);
+      const probes = signals.length;
+      await Bun.sleep(1_200);
+      // The watch stopped once it had acted.
+      expect(signals.length).toBe(probes);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__orkestratorParentWatch;
+    }
+  });
+
+  test("the host form watches nothing without a parent to watch", async () => {
+    const signals: unknown[] = [];
+    for (const parent of [undefined, "1", "not-a-pid"]) {
+      await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
+        ...(parent ? { env: { ORKESTRATOR_PARENT_PID: parent } } : {}),
+        kill: (_pid, signal) => signals.push(signal),
+      });
+    }
+    expect((globalThis as Record<string, unknown>).__orkestratorParentWatch).toBeUndefined();
+    await Bun.sleep(1_100);
+    expect(signals).toEqual([]);
   });
 
   test("the container form refuses every tool on a Linux server it cannot harden", async () => {

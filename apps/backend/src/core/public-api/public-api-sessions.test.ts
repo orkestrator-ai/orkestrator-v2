@@ -844,12 +844,18 @@ describe("controls and interactions", () => {
     expect(stub.resolutions).toHaveLength(1);
   });
 
+  // Grok is the provider that cannot steer (ACP v1 has no mid-turn input);
+  // OpenCode's steer is qualified through the CLI since to-do 7905 task 4.
   test("steering is refused where the provider cannot steer", async () => {
-    const { harness } = await setup("opencode");
+    const { harness } = await setup("grok");
+    await harness.storage.updateGlobalConfig({
+      ...(await harness.storage.loadConfig()).global,
+      enabledAgentPlatforms: ["claude", "codex", "opencode", "grok"],
+    });
     const started = await harness.call<{ sessionId: string }>(
       "session.start",
-      { environmentId: "env-1", agent: "opencode", prompt: "task" },
-      { requestId: "steer-oc" },
+      { environmentId: "env-1", agent: "grok", prompt: "task" },
+      { requestId: "steer-grok" },
     );
     if (!started.ok) throw new Error(`start failed: ${started.error.message}`);
     const steer = await harness.call(

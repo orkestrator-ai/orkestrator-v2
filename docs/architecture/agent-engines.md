@@ -874,10 +874,18 @@ the commands):
 
 All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
 2026-11-13, behind an egress gateway); the per-case figures are in
-[agent-testing.md](../development/agent-testing.md). The paths not yet run
-(a runtime without an egress gateway, concurrent sessions, a steer racing a
-card, steer through the public CLI) are to-do
-[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). The
+[agent-testing.md](../development/agent-testing.md). Concurrent sessions on
+one server, a steer racing a permission or question card and steer through
+the public CLI passed on scripted models on 2026-11-14
+(`opencode2-concurrency.live.test.ts`, `opencode2-steer-cards.live.test.ts`,
+the `opencode-steer` CLI scenario); a runtime without an egress gateway is
+still to run, in to-do
+[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). A run whose
+server is stopped under it (a backend restart reaps the server, a crash)
+is never resumed by plain `opencode serve`; the provider reports it as a
+restart interruption (`opencode2/restart-cut.ts`,
+`opencode2-restart.live.test.ts`), and the backend's host plugin stops a
+server whose backend is gone. The
 mitigations OpenCode 2 runs under (an exact pin, auto-update and file
 watchers off, an isolated database, model, agent and permission switches
 under the dispatch lock, the backend-held steer guard and its bounded

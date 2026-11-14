@@ -47,6 +47,8 @@ export interface FakeOpenCode2Session {
   archived?: boolean;
   parentID?: string;
   revert?: { messageID: string };
+  /** `time.busy`/`time.idle` as 2.2.6 keeps them: when the newest run started and settled. */
+  busy?: { busy?: number; idle?: number };
 }
 
 /** A `Model.Info` row as `/api/model` lists it, settings (and their key) included. */
@@ -202,7 +204,26 @@ export class FakeOpenCode2Server {
     session.rows.push({ id: this.id("msg"), type: "idle", outcome, time: { created: 1 } });
     session.running = false;
     session.info.outcome = outcome;
+    session.busy = { ...session.busy, idle: Date.now() };
     this.emit(sessionId, "session.execution.succeeded");
+  }
+
+  /**
+   * The server stops under the running run, as a backend restart's reaper or
+   * a crash leaves it on 2.2.6 (`restart-cut.ts`): the run is no longer
+   * active, its response ends `aborted`, no `idle` row is written, and the
+   * session keeps a `time.busy` newer than its `time.idle`.
+   */
+  stopMidRun(sessionId: string): void {
+    const session = this.sessions.get(sessionId)!;
+    session.rows.push({
+      id: this.id("msg"),
+      type: "assistant",
+      content: [],
+      error: { type: "aborted", message: "Step interrupted" },
+      time: { created: 1, completed: 1 },
+    });
+    session.running = false;
   }
 
   /** Append a history row as the server would (a tool-call response, a shell row, …). */
@@ -436,7 +457,8 @@ export class FakeOpenCode2Server {
         type: "user",
         text: (item.payload as { text: string }).text,
         metadata: (item.payload as { metadata?: unknown }).metadata,
-        time: { created: 1 },
+        // When the input entered the history: what tells a cut run from a resumed one.
+        time: { created: Date.now() },
       });
     }
   }
@@ -601,6 +623,7 @@ export class FakeOpenCode2Server {
       if (session.running) session.inbox.push(item);
       else {
         session.running = true;
+        session.busy = { ...session.busy, busy: Date.now() };
         this.drainOne(session, item);
       }
       return new Response(null, { status: 204 });
@@ -688,6 +711,7 @@ export class FakeOpenCode2Server {
       } else {
         // Both deliveries wake an idle session (2.2.6).
         session.running = true;
+        session.busy = { ...session.busy, busy: Date.now() };
         this.drainOne(session, item);
         this.emit(session.id, "session.execution.started");
         this.onRunStarted?.(session.id, String((item.payload as { text?: unknown }).text ?? ""));
@@ -809,6 +833,7 @@ export class FakeOpenCode2Server {
       time: {
         created: 1_700_000_000_000,
         updated: 1_700_000_001_000,
+        ...session.busy,
         ...(session.archived ? { archived: 1 } : {}),
       },
       location: { directory: "/work" },
@@ -855,7 +880,8 @@ export class FakeOpenCode2Server {
       type: "user",
       text: (item.payload as { text: string }).text,
       metadata: (item.payload as { metadata?: unknown }).metadata,
-      time: { created: 1 },
+      // When the input entered the history: what tells a cut run from a resumed one.
+      time: { created: Date.now() },
     });
   }
 }

@@ -125,7 +125,23 @@ export interface OpenCodeEnvironmentDependencies {
    * bridge provider uses its connection's.
    */
   defaults?: { model?: string; effort?: string };
+  /** Test seam for the unsettled-run grace (`turnTerminalError`). */
+  now?: () => number;
 }
+
+/**
+ * How long a request's run may read unsettled on an idle server before it is
+ * taken as cut short. An idle server holds no run, so a run with no boundary
+ * row after this long belonged to a server that died (killed, or stopped with
+ * its backend): the replacement never writes one. The wait covers the early
+ * idle read the boundary row may trail by (to-do 5160, seen 2026-11-14).
+ */
+export const OPENCODE2_UNSETTLED_RUN_GRACE_MS = 60_000;
+/** Bounds the requests remembered as unsettled (AGENTS.md invariant 11). */
+const MAX_UNSETTLED_RUNS = 256;
+/** The failure a run cut short by its server's death is recorded with. */
+export const OPENCODE2_RUN_CUT_SHORT_MESSAGE =
+  "OpenCode stopped before this turn finished, so its work stopped partway. Send a message to continue.";
 
 export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   readonly agent = "opencode" as const;
@@ -134,6 +150,8 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   private readonly liveSessions = new Set<string>();
   private current: { generation: string; gateKey: string; provider: OpenCode2Provider } | undefined;
   private disposed = false;
+  /** When each request's run was first read unsettled on an idle server. */
+  private readonly unsettledSince = new Map<string, number>();
 
   readonly interactions: AgentInteractionProviderCapability;
 
@@ -208,12 +226,36 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   }
 
   async turnTerminalError(sessionId: string, requestId: string): Promise<string | null> {
-    const rows = (await (
-      await this.required()
-    ).messages(sessionId, {
+    const provider = await this.required();
+    const rows = (await provider.messages(sessionId, {
       limit: OPENCODE2_EVIDENCE_SCAN_LIMIT,
     })) as OpenCode2Message[];
-    return openCode2TurnTerminalError(rows, requestId);
+    const key = `${sessionId}\0${requestId}`;
+    try {
+      const terminal = openCode2TurnTerminalError(rows, requestId);
+      this.unsettledSince.delete(key);
+      return terminal;
+    } catch (error) {
+      if (!(error instanceof ProviderUnavailableError)) throw error;
+      // A server still running the turn has not settled it yet.
+      if ((await provider.activity(sessionId)) !== "idle") {
+        this.unsettledSince.delete(key);
+        throw error;
+      }
+      const now = (this.deps.now ?? Date.now)();
+      const since = this.unsettledSince.get(key);
+      if (since === undefined) {
+        if (this.unsettledSince.size >= MAX_UNSETTLED_RUNS) {
+          const oldest = this.unsettledSince.keys().next().value;
+          if (oldest !== undefined) this.unsettledSince.delete(oldest);
+        }
+        this.unsettledSince.set(key, now);
+        throw error;
+      }
+      if (now - since < OPENCODE2_UNSETTLED_RUN_GRACE_MS) throw error;
+      this.unsettledSince.delete(key);
+      return OPENCODE2_RUN_CUT_SHORT_MESSAGE;
+    }
   }
 
   // ── lifecycle reads ────────────────────────────────────────────────────────

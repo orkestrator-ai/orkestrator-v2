@@ -6,6 +6,7 @@ import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-
 import {
   REGISTRY_SCHEMA_MARKER_FILE,
   REGISTRY_WRITER_LEASE_FILE,
+  ReclaimingRegistryWriter,
   RegistryWriterLease,
   openRegistryWriter,
   type RegistryWriter,
@@ -245,5 +246,105 @@ describe("registry writer state", () => {
     await lease.release();
     await Bun.sleep(10);
     expect(lost).toBe(0);
+  });
+});
+
+describe("a backend that started without the lease", () => {
+  const blockedBehind = async (options: Parameters<typeof openRegistryWriter>[1] = {}) => {
+    const first = await open({ staleMs: 30_000 });
+    const second = await openRegistryWriter(directory, options);
+    writers.push(second);
+    expect(second).toBeInstanceOf(ReclaimingRegistryWriter);
+    return { first, second: second as ReclaimingRegistryWriter };
+  };
+
+  test("never wins while the holder keeps its lease fresh", async () => {
+    let acquired = 0;
+    const { first, second } = await blockedBehind({ onAcquired: () => acquired++ });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(await second.tryAcquire()).toBe(false);
+    }
+    expect(second.state()).toBe("busy");
+    expect(() => second.assertHeld()).toThrow("Another Orkestrator backend");
+    expect(first.isHeld()).toBe(true);
+    expect(acquired).toBe(0);
+    // Retrying while busy is the expected answer and stays quiet.
+    expect(leaseRecords()).toMatchObject([{ event: "writer-lease.not-acquired" }]);
+  });
+
+  test("takes over a lease a crashed holder left to go stale, once", async () => {
+    let acquired = 0;
+    // The crashed holder's lease: never refreshed again.
+    await replaceLease("crashed-backend");
+    const second = await openRegistryWriter(directory, {
+      staleMs: 30_000,
+      onAcquired: () => acquired++,
+    });
+    writers.push(second);
+    expect(second.state()).toBe("busy");
+    const lastRefresh = new Date(Date.now() - 60_000);
+    await fs.utimes(path.join(directory, REGISTRY_WRITER_LEASE_FILE), lastRefresh, lastRefresh);
+    const reclaiming = second as ReclaimingRegistryWriter;
+    await Promise.all([reclaiming.tryAcquire(), reclaiming.tryAcquire()]);
+    expect(await reclaiming.tryAcquire()).toBe(true);
+    expect(second.state()).toBe("held");
+    expect(() => second.assertHeld()).not.toThrow();
+    expect(acquired).toBe(1);
+    expect(leaseRecords().map((record) => record.event)).toEqual([
+      "writer-lease.not-acquired",
+      "writer-lease.regained",
+      "writer-lease.acquired-late",
+    ]);
+  });
+
+  test("takes it when the holder releases it on a clean shutdown", async () => {
+    const { first, second } = await blockedBehind();
+    await first.release();
+    expect(await second.tryAcquire()).toBe(true);
+    expect(second.isHeld()).toBe(true);
+    await second.release();
+    // Its own release removes the lease it won.
+    await expect(fs.stat(path.join(directory, REGISTRY_WRITER_LEASE_FILE))).rejects.toThrow();
+  });
+
+  test("a throwing acquisition callback is logged and the lease is still held", async () => {
+    const { first, second } = await blockedBehind({
+      onAcquired: () => {
+        throw new Error("listener boom");
+      },
+    });
+    await first.release();
+    expect(await second.tryAcquire()).toBe(true);
+    expect(second.isHeld()).toBe(true);
+    expect(leaseRecords()).toContainEqual(
+      expect.objectContaining({ event: "writer-lease.listener-failed" }),
+    );
+  });
+
+  test("retries on its own timer, and a release stops it", async () => {
+    const { first, second } = await blockedBehind({ retryMs: 20 });
+    await first.release();
+    for (let wait = 0; wait < 100 && !second.isHeld(); wait += 1) await Bun.sleep(10);
+    expect(second.isHeld()).toBe(true);
+
+    const third = await openRegistryWriter(directory, { retryMs: 20 });
+    writers.push(third);
+    await third.release();
+    await second.release();
+    // The lease is free now, and a released writer still never takes it.
+    expect(await (third as ReclaimingRegistryWriter).tryAcquire()).toBe(false);
+    expect(third.isHeld()).toBe(false);
+    await expect(fs.stat(path.join(directory, REGISTRY_WRITER_LEASE_FILE))).rejects.toThrow();
+  });
+
+  test("does not take a directory a newer backend wrote meanwhile", async () => {
+    const { first, second } = await blockedBehind();
+    await fs.writeFile(
+      path.join(directory, REGISTRY_SCHEMA_MARKER_FILE),
+      JSON.stringify({ schemaVersion: 99, minimumWriterVersion: 99, updatedAt: "" }),
+    );
+    await first.release();
+    expect(await second.tryAcquire()).toBe(false);
+    expect(second.state()).toBe("busy");
   });
 });

@@ -419,6 +419,14 @@ policy:
 
 A wakeup only makes a stably idle group due; the sweep's no-touch read stays
 the source of truth, and a group without a live wakeup is read on every sweep.
+OpenCode keeps a turn's failure on its answer rather than on the session, so
+on the idle edge the backend reads the request's run boundary
+(`turnTerminalError`); while the run has none the read is retried. A run that
+stays without one for `OPENCODE2_UNSETTLED_RUN_GRACE_MS` (60 s) while the
+server reads idle belonged to a server that died (killed, or replaced by the
+backend), and is recorded as cut short, so the bell rings "Agent stopped with
+an error" instead of the tab reading working for good (to-do 5160, measured
+live at 80 s from the kill).
 Client backoff also needs a backend that advertises stamped announcements. The
 announcements and the client side are in
 [event-snapshot-recovery.md](event-snapshot-recovery.md#native-observation-invalidations);

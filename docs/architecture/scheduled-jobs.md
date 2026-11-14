@@ -161,7 +161,12 @@ after now.
   `another-backend` or `newer-data-directory`), and Settings → Schedules
   shows a notice from `schedulerPausedMessage` when it does not and there are
   schedules. A lost lease is final until a restart; losing it announces a
-  `scheduled-job` change, so an open Settings view rereads. The field is
+  `scheduled-job` change, so an open Settings view rereads. A backend that
+  started without the lease (`another-backend`) keeps trying every heartbeat
+  and takes it once its holder stops refreshing it for 30 s, which is what a
+  backend restarted just after a crash needs (`ReclaimingRegistryWriter`);
+  winning it announces the same change. A live holder keeps its lease fresh,
+  so a second backend beside it never wins. The field is
   additive: a renderer that predates it ignores it, and a backend that
   predates it sends none, which reads as no known pause.
 - **One fire per schedule at a time.** A running fire or pending busy retry blocks the next slot

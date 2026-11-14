@@ -2101,6 +2101,28 @@ export class OrkestratorBackend {
     );
   }
 
+  /**
+   * Startup work only the lease holder may do: operations a previous process
+   * left unresolved are settled by exact Docker identity (an unreachable
+   * daemon leaves them for the next attempt), and leftovers are swept.
+   */
+  private async runWriterStartupWork(): Promise<void> {
+    await reconcileContainerOperations(this.context).catch((error: unknown) => {
+      log.warn("startup.step-failed", {
+        step: "container-operations",
+        error: formatLogError(error),
+      });
+    });
+    // Probe containers are never started; one left by an interrupted
+    // manifest read is removed in the background.
+    void cleanupStaleManifestProbes(this.context).catch(() => undefined);
+    // Egress gateways whose runtime is gone (removed by hand, or by an
+    // interrupted removal) are removed in the background too.
+    void sweepOrphanEgressGateways(dockerOwnerNamespace(this.context.storage.getDataDir())).catch(
+      () => undefined,
+    );
+  }
+
   async init(): Promise<void> {
     await this.context.storage.init();
     // After `init`, which applies the upgrade from the single logging switch.
@@ -2188,8 +2210,17 @@ export class OrkestratorBackend {
     // while every container mutation is refused.
     this.context.registryWriterLease ??= await openRegistryWriter(
       this.context.storage.getDataDir(),
-      // Schedules stop with the lease; Settings → Schedules reads why.
-      { onLost: () => this.context.storage.announceSchedulerStatus() },
+      {
+        // Schedules stop with the lease; Settings → Schedules reads why.
+        onLost: () => this.context.storage.announceSchedulerStatus(),
+        // Won late, from a holder that stopped refreshing it (a crash just
+        // before this start): schedules fire again, and the writer-only
+        // startup work below runs now instead of never.
+        onAcquired: () => {
+          this.context.storage.announceSchedulerStatus();
+          void this.runWriterStartupWork();
+        },
+      },
     );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,
@@ -2199,22 +2230,7 @@ export class OrkestratorBackend {
     // Before background launch or cleanup can act on their resources:
     // operations a previous process left unresolved are settled by exact
     // Docker identity. An unreachable daemon leaves them for the next attempt.
-    if (this.context.registryWriterLease.isHeld()) {
-      await reconcileContainerOperations(this.context).catch((error: unknown) => {
-        log.warn("startup.step-failed", {
-          step: "container-operations",
-          error: formatLogError(error),
-        });
-      });
-      // Probe containers are never started; one left by an interrupted
-      // manifest read is removed in the background.
-      void cleanupStaleManifestProbes(this.context).catch(() => undefined);
-      // Egress gateways whose runtime is gone (removed by hand, or by an
-      // interrupted removal) are removed in the background too.
-      void sweepOrphanEgressGateways(dockerOwnerNamespace(this.context.storage.getDataDir())).catch(
-        () => undefined,
-      );
-    }
+    if (this.context.registryWriterLease.isHeld()) await this.runWriterStartupWork();
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
     this.runtime.containerOom.start(dockerOwnerNamespace(this.context.storage.getDataDir()));

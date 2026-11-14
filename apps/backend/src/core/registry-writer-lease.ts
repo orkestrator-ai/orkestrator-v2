@@ -30,6 +30,14 @@ export interface RegistryWriterLeaseOptions {
    * polling (the schedules settings) can read the new state.
    */
   onLost?: () => void;
+  /**
+   * Called once when a backend that found the lease busy at startup wins it
+   * later, because its holder stopped refreshing it (a crash, say), so the
+   * schedules settings can reread and writer-only startup work can run.
+   */
+  onAcquired?: () => void;
+  /** How often a backend without the lease tries again; defaults to the heartbeat. */
+  retryMs?: number;
   /** Test seam. */
   now?: () => number;
 }
@@ -356,9 +364,93 @@ export type RegistryWriter = Pick<
 >;
 
 /**
+ * A backend that found the lease busy at startup. It keeps trying, because a
+ * holder that crashed stops refreshing its lease and the lease goes stale
+ * after `staleMs`; once it wins, it is that lease. Without this, a backend
+ * restarted within `staleMs` of a crash read "another backend" and refused
+ * every container change for its whole life (to-do 5160, seen 2026-11-14).
+ * A live holder keeps refreshing, so a second backend never wins against it.
+ * `release` stops the retries; a lease won during shutdown is released too.
+ */
+export class ReclaimingRegistryWriter implements RegistryWriter {
+  private lease: RegistryWriterLease | undefined;
+  private attempt: Promise<void> | undefined;
+  private released = false;
+  private readonly timer: ReturnType<typeof setInterval>;
+
+  constructor(
+    private readonly blocked: BlockedRegistryWriter,
+    private readonly dataDir: string,
+    private readonly options: RegistryWriterLeaseOptions = {},
+  ) {
+    const staleMs = options.staleMs ?? 30_000;
+    const retryMs =
+      options.retryMs ?? options.heartbeatMs ?? Math.max(1_000, Math.floor(staleMs / 3));
+    this.timer = setInterval(() => void this.tryAcquire(), retryMs);
+    this.timer.unref?.();
+  }
+
+  /** One attempt, shared by concurrent callers; true once the lease is held. */
+  async tryAcquire(): Promise<boolean> {
+    if (this.lease || this.released) return this.lease !== undefined;
+    this.attempt ??= this.acquireOnce().finally(() => {
+      this.attempt = undefined;
+    });
+    await this.attempt;
+    return this.lease !== undefined;
+  }
+
+  private async acquireOnce(): Promise<void> {
+    try {
+      // A newer backend may have written the directory meanwhile.
+      if (!(await checkRegistrySchemaMarker(this.dataDir)).compatible) return;
+      const lease = await RegistryWriterLease.acquire(this.dataDir, this.options);
+      if (this.released) {
+        await lease.release();
+        return;
+      }
+      this.lease = lease;
+      clearInterval(this.timer);
+      log.info("writer-lease.acquired-late");
+      try {
+        this.options.onAcquired?.();
+      } catch (error) {
+        log.warn("writer-lease.listener-failed", { error: formatLogError(error) });
+      }
+    } catch (error) {
+      // Still busy is the expected answer while the holder lives.
+      if (!(error instanceof RegistryWriterLeaseBusyError)) {
+        log.warn("writer-lease.retry-failed", { error: formatLogError(error) });
+      }
+    }
+  }
+
+  isHeld(): boolean {
+    return this.lease?.isHeld() ?? false;
+  }
+
+  state(): RegistryWriterState {
+    return this.lease?.state() ?? this.blocked.state();
+  }
+
+  assertHeld(): void {
+    if (this.lease) this.lease.assertHeld();
+    else this.blocked.assertHeld();
+  }
+
+  async release(): Promise<void> {
+    this.released = true;
+    clearInterval(this.timer);
+    await this.attempt;
+    await this.lease?.release();
+  }
+}
+
+/**
  * Checks the schema marker, then acquires the writer lease. Never throws for
  * an incompatible or busy registry: the returned writer refuses mutations and
- * the backend keeps serving reads.
+ * the backend keeps serving reads. A busy one keeps trying and takes the lease
+ * over once its holder lets it go stale (`ReclaimingRegistryWriter`).
  */
 export async function openRegistryWriter(
   dataDir: string,
@@ -374,7 +466,11 @@ export async function openRegistryWriter(
   } catch (error) {
     if (error instanceof RegistryWriterLeaseBusyError) {
       log.info("writer-lease.not-acquired", { reason: "busy" });
-      return new BlockedRegistryWriter(error, "busy");
+      return new ReclaimingRegistryWriter(
+        new BlockedRegistryWriter(error, "busy"),
+        dataDir,
+        options,
+      );
     }
     throw error;
   }

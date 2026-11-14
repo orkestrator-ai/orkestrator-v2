@@ -12,7 +12,10 @@
  * exposes no descriptor on a child's streams, so those ends are the
  * descriptors that appeared across the synchronous `spawn` and are still open
  * pipes or sockets (`stdioFdsSince`); the record says when their count is not
- * the child's number of piped streams (`fdsAttributed: false`).
+ * the child's number of piped streams (`fdsAttributed: false`). On Linux a
+ * lost `close` also records how the epoll instances hold those ends
+ * (`epollState`) and the JS state of the child's output streams
+ * (`streamState`).
  *
  * Records are JSON lines, to `LOST_CHILD_PROBE_OUT` or stdout. They hold the
  * command and its subcommand only (`git rev-parse`), never paths, arguments,
@@ -31,7 +34,7 @@
  */
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import type { ChildProcess } from "node:child_process";
-import { appendFileSync, fstatSync, readdirSync } from "node:fs";
+import { appendFileSync, fstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const mac = process.platform === "darwin";
@@ -127,6 +130,66 @@ export function commandLabel(argv: readonly string[]): string {
   return command;
 }
 
+/** One registration in an epoll instance, as `/proc/<pid>/fdinfo/<epoll fd>` lists it. */
+export type EpollRegistration = { tfd: number; events: string; data: string };
+
+/** The registrations in the text of an epoll descriptor's `fdinfo`. */
+export function parseEpollRegistrations(info: string): EpollRegistration[] {
+  return [...info.matchAll(/^tfd:\s*(\d+)\s+events:\s*([0-9a-f]+)\s+data:\s*([0-9a-f]+)/gm)].map(
+    (match) => ({ tfd: Number(match[1]), events: match[2]!, data: match[3]! }),
+  );
+}
+
+/**
+ * How `registrations` (each with its epoll descriptor) hold `fds`. Each entry
+ * is `<epoll fd>:<tfd>:<events hex>`; `events` with `40000000`
+ * (`EPOLLONESHOT`) and no `1` (`EPOLLIN`) is a one-shot registration that
+ * fired and was never re-armed. A descriptor no instance watches is
+ * `<tfd>:unregistered`. `sameData` lists other descriptors registered with the
+ * same `data` word as one of `fds` (one poll object watching two descriptors).
+ */
+export function describeEpoll(
+  fds: readonly number[],
+  registrations: readonly (EpollRegistration & { epfd: number })[],
+): { entries: string[]; sameData: string[] } {
+  const wanted = new Set(fds);
+  const entries: string[] = [];
+  const seen = new Set<number>();
+  const data = new Set<string>();
+  for (const r of registrations) {
+    if (!wanted.has(r.tfd)) continue;
+    entries.push(`${r.epfd}:${r.tfd}:${r.events}`);
+    seen.add(r.tfd);
+    data.add(r.data);
+  }
+  for (const fd of fds) if (!seen.has(fd)) entries.push(`${fd}:unregistered`);
+  const sameData = registrations
+    .filter((r) => !wanted.has(r.tfd) && data.has(r.data))
+    .map((r) => `${r.epfd}:${r.tfd}:${r.events}`);
+  return { entries, sameData };
+}
+
+/**
+ * Linux only: how this process's epoll instances hold `fds` (`describeEpoll`),
+ * read from `/proc/self/fdinfo/<epoll fd>`. It starts no process and changes
+ * nothing. Empty on macOS, which has no such listing.
+ */
+export function epollState(fds: readonly number[]): { entries: string[]; sameData: string[] } {
+  if (mac || fds.length === 0) return { entries: [], sameData: [] };
+  const registrations: (EpollRegistration & { epfd: number })[] = [];
+  for (const name of readdirSync("/proc/self/fd")) {
+    try {
+      if (readlinkSync(`/proc/self/fd/${name}`) !== "anon_inode:[eventpoll]") continue;
+      const info = readFileSync(`/proc/self/fdinfo/${name}`, "utf8");
+      for (const r of parseEpollRegistrations(info))
+        registrations.push({ ...r, epfd: Number(name) });
+    } catch {
+      // Closed while listing.
+    }
+  }
+  return describeEpoll(fds, registrations);
+}
+
 function groupAlive(pid: number): boolean {
   try {
     process.kill(-pid, 0);
@@ -154,7 +217,37 @@ type Tracked = {
   marks: string[];
   lostExit: boolean;
   lostClose: boolean;
+  child: ChildProcess;
 };
+
+/** The JS-side state of a child's output streams, read without touching them. */
+export function streamState(child: ChildProcess): Record<string, unknown> {
+  const state: Record<string, unknown> = {};
+  for (const name of ["stdout", "stderr"] as const) {
+    const stream = child[name] as
+      | (NodeJS.ReadableStream & {
+          readableFlowing?: boolean | null;
+          readableLength?: number;
+          readableEnded?: boolean;
+          destroyed?: boolean;
+          readable?: boolean;
+          closed?: boolean;
+          listenerCount?: (event: string) => number;
+        })
+      | null;
+    if (!stream) continue;
+    state[name] = {
+      flowing: stream.readableFlowing ?? null,
+      length: stream.readableLength ?? null,
+      ended: stream.readableEnded ?? null,
+      destroyed: stream.destroyed ?? null,
+      closed: stream.closed ?? null,
+      readable: stream.readable ?? null,
+      data: stream.listenerCount?.("data") ?? null,
+    };
+  }
+  return state;
+}
 
 const LOSS_MS = 5_000;
 const tracked: Tracked[] = [];
@@ -273,6 +366,7 @@ export function track(
     marks: [],
     lostExit: false,
     lostClose: false,
+    child,
   };
   tracked.push(t);
   let entry: ScheduleCommand | undefined;
@@ -342,6 +436,8 @@ function scan(): void {
         exitAfterSpawnMs: t.exitAt - t.spawnAt,
         groupAlive: groupAlive(t.pid),
         poll: pollNow(t.fds),
+        epoll: epollState(t.fds),
+        streams: streamState(t.child),
         fdsAttributed: t.fdsAttributed,
         marks: t.marks,
       });

@@ -44,5 +44,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-  await holdUntilClosed(30_000);
+  // `LOST_CHILD_PROBE_HOLD_MS` shortens the hold for counting runs: a loss is
+  // recorded 5 s after it happens, so 7 s still sees it, but not a late event.
+  await holdUntilClosed(Number(process.env.LOST_CHILD_PROBE_HOLD_MS ?? 30_000));
 }, 40_000);

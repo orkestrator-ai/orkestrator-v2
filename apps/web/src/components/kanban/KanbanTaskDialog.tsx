@@ -47,6 +47,7 @@ import { TicketKindBadge, ticketSectionEntries } from "@/components/tickets/Tick
 import { TicketActionBar } from "./ticket-view/TicketActionBar";
 import { TicketDocument, type TicketDocumentSection } from "./ticket-view/TicketDocument";
 import { TicketNotesTab } from "./ticket-view/TicketNotesTab";
+import { TicketTimesLine } from "./ticket-view/TicketTimesLine";
 import {
   TicketComments,
   TicketLinkedWork,
@@ -1294,6 +1295,10 @@ export function KanbanTaskDialog({
                     {notes.reason}
                   </span>
                 ) : null}
+                <TicketTimesLine
+                  task={task}
+                  className="ml-auto pb-2 text-xs whitespace-nowrap text-muted-foreground"
+                />
               </div>
             </DialogHeader>
 

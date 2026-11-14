@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { isTicketSections, normalizeTicketContent } from "@orkestrator/protocol/ticket-sections";
-import { parseTicketSyncItem } from "@orkestrator/protocol/ticket-sync";
+import { parseTicketSyncItem, ticketUpdatedAt } from "@orkestrator/protocol/ticket-sync";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
@@ -13,6 +13,7 @@ import {
   parseKanbanSyncStore,
   stampTicketChange,
   ticketSnapshot,
+  touchTicket,
   type KanbanSyncStore,
 } from "./storage-kanban-sync.js";
 import { fs, nowIso, type KanbanTask } from "./storage-shared.js";
@@ -24,7 +25,8 @@ const log = createLogger("storage");
  * derived on read; nothing is written back until the ticket is next changed,
  * so this is the migration and it never loses or rewrites text. Results a
  * hand-ticked legacy box records are dated with the ticket's creation, so
- * repeated reads return the same row.
+ * repeated reads return the same row. A row without `updatedAt` (written
+ * before it existed) reads as last updated when it was created.
  */
 export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
   // Rows from before v2.34.2-beta (or synced from such a node) carry no
@@ -32,7 +34,7 @@ export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
   // the `sectionsBasis` check below stays (to-do 7570 task 2).
   if (!isTicketSections(task.sections)) compatibilityPathUsage.record("kanban.legacy-row-derived");
   const content = normalizeTicketContent(task, { now: task.createdAt });
-  return { ...task, ...content };
+  return { ...task, ...content, updatedAt: ticketUpdatedAt(task) };
 }
 
 /**
@@ -84,6 +86,8 @@ export class KanbanBoardStore {
    * in one commit with the sync store. Call inside the Kanban lease. Each
    * change names a ticket's row before (null when created) and the row being
    * saved (null when deleted). A leaf's outbox that is full refuses the write.
+   * A change to the ticket's content or state also refreshes its `updatedAt`
+   * (`touchTicket`); a move within its column does not.
    */
   async commit(
     tasks: KanbanTask[],
@@ -95,6 +99,12 @@ export class KanbanBoardStore {
     const now = nowIso();
     let queued = false;
     for (const change of changes) {
+      touchTicket({
+        before: change.before,
+        after: change.stored ? normalizeKanbanTask(change.stored) : null,
+        stored: change.stored,
+        now,
+      });
       const controllers = stampTicketChange(store, {
         before: change.before,
         after: change.stored ? normalizeKanbanTask(change.stored) : null,

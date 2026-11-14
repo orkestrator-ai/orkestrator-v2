@@ -60,6 +60,13 @@ export interface KanbanTask {
   comments: KanbanComment[];
   images: KanbanImage[];
   createdAt: string;
+  /**
+   * When the ticket's content or state last changed; equal to `createdAt` on a
+   * new ticket. Absent from backends that predate it: read it through
+   * `ticketUpdatedAt` (`@orkestrator/protocol/ticket-sync`), which falls back
+   * to `createdAt`.
+   */
+  updatedAt?: string;
   order: number;
   /** Linked pipeline environment ID */
   environmentId?: string;

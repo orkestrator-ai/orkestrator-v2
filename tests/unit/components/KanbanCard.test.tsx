@@ -129,6 +129,18 @@ describe("KanbanCard ticket sections", () => {
     renderCard(makeTask({ acceptanceCriteria: "- A\n- B" }));
     expect(screen.queryByTestId("kanban-card-criteria") === null).toBe(true);
   });
+
+  test("shows when the ticket was last updated, with the exact times as its tooltip", () => {
+    // Past the whole minute, as the card's clock reads time to the minute.
+    const updatedAt = new Date(Date.now() - 3 * 3600 * 1000 - 120_000).toISOString();
+    renderCard(makeTask({ updatedAt }));
+    const time = screen.getByTestId("kanban-card-updated-at");
+    expect(time.textContent).toBe("Updated 3h ago");
+    expect(time.getAttribute("datetime")).toBe(updatedAt);
+    expect(time.getAttribute("title")).toContain("Updated ");
+    expect(time.getAttribute("title")).toContain("Created ");
+    expect(time.getAttribute("title")).not.toContain("Invalid");
+  });
 });
 
 describe("KanbanCard", () => {

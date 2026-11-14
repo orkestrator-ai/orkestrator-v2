@@ -90,6 +90,8 @@ export const KanbanTaskSchema = openRecord({
   comments: Schema.optional(mutableArray(KanbanCommentSchema)),
   images: Schema.optional(mutableArray(KanbanImageSchema)),
   createdAt: Schema.optional(Schema.String),
+  // When the ticket's content or state last changed; absent from backends that predate it.
+  updatedAt: optionalString,
   order: optionalNumber,
   environmentId: optionalString,
   buildPipelineId: optionalString,

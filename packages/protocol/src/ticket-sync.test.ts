@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { parseTicketSyncItem, parseTicketSyncOp, TICKET_SYNC_LIMITS } from "./ticket-sync.js";
+import {
+  parseTicketSyncItem,
+  parseTicketSyncOp,
+  TICKET_SYNC_LIMITS,
+  ticketUpdatedAt,
+} from "./ticket-sync.js";
 
 const prMergeDoneUrl = "https://github.com/acme/repo/pull/1";
 const ticket = {
@@ -107,6 +112,36 @@ describe("image references (#2027)", () => {
     }));
     expect(() => parseTicketSyncItem({ ...snapshot, images: many })).toThrow(
       "Invalid ticket images",
+    );
+  });
+});
+
+describe("last-updated time", () => {
+  const updatedAt = "2026-11-08T09:30:00.000Z";
+
+  test("travels on snapshots and creations", () => {
+    expect(parseTicketSyncItem({ ...snapshot, updatedAt })).toMatchObject({ updatedAt });
+    expect(parseTicketSyncOp({ kind: "create", ticket: { ...ticket, updatedAt } })).toMatchObject({
+      ticket: { updatedAt },
+    });
+  });
+
+  test("is absent from an older peer's snapshot, and an unreadable one is dropped", () => {
+    expect(parseTicketSyncItem(snapshot)).not.toHaveProperty("updatedAt");
+    expect(parseTicketSyncOp({ kind: "create", ticket })).not.toHaveProperty("ticket.updatedAt");
+    for (const bad of ["not a date", "", 42, "9".repeat(65)]) {
+      expect(parseTicketSyncItem({ ...snapshot, updatedAt: bad })).not.toHaveProperty("updatedAt");
+    }
+  });
+
+  test("falls back to the creation time when missing or unreadable", () => {
+    expect(ticketUpdatedAt({ createdAt: ticket.createdAt, updatedAt })).toBe(updatedAt);
+    expect(ticketUpdatedAt({ createdAt: ticket.createdAt })).toBe(ticket.createdAt);
+    expect(ticketUpdatedAt({ createdAt: ticket.createdAt, updatedAt: "garbage" })).toBe(
+      ticket.createdAt,
+    );
+    expect(ticketUpdatedAt({ createdAt: ticket.createdAt, updatedAt: null })).toBe(
+      ticket.createdAt,
     );
   });
 });

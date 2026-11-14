@@ -432,6 +432,53 @@ that an `ask` policy parks the call until its card is approved. Cleanup
 restores the real entry and stops the bridge. The profile needs Cursor and Pi
 in `--agent-platforms`; otherwise the cases skip.
 
+The steps the cells share (the single-tab layout, the composer send, the
+policy check, the approval card) are in
+`e2e/agent-testing/container-engine-cells-support.ts`.
+
+#### Real-provider variants (opt-in, billed)
+
+`e2e/agent-testing/container-real-engines-live.spec.ts` holds the same two
+cells on the image's own bridge, unchanged, over the real Cursor SDK and a real
+Pi provider (from to-do 7040 (retired)). Its tests are also named "Docker
+fixture", so `mise run test:agent:docker` and the isolated Docker shards list
+them, but they skip unless explicitly opted in, and nothing in the default or
+isolated runs sets their switches:
+
+| Cell | Opt-in | What it checks |
+| --- | --- | --- |
+| Cursor | `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_CURSOR=1`, optional `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_CURSOR_MODEL`; profile with `--credential-source cursor` | The model runs `curl` through its Shell tool. The tool card shows `https://example.com/` refused (`http=000`, non-zero exit) and `https://api.github.com/zen` answering; the session reports the container policy. |
+| Pi | `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_PI_MODEL=<provider/modelId>` on a provider the profile is signed in to (`--credential-source pi`) | The same two `curl` calls through Pi's `bash` tool under `auto-approve`; then, under `ask`, a call parks a card, does not run until the card is approved, and runs after. |
+
+`ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_TURN_TIMEOUT_MS` (default 300000)
+bounds each real turn. The backend stages the platform's credential into the
+container on every bridge start; the spec reads none. A Pi provider's own
+host must be on the container's allowlist: if it is not, the first turn fails
+with the provider's error, which the spec reports. Each assertion records a
+content-free annotation (tool name, HTTP status, curl exit code) in
+`results.json`. For example, for Cursor:
+
+```bash
+mise run dev:test --profile cursor-container-qa --fixture --fixture-environments local,container \
+  --credential-source cursor --agent-platforms cursor --headless
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=cursor-container-qa ORKESTRATOR_AGENT_TEST_RUN_ID=cursor-container-qa \
+  ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_CURSOR=1 \
+  mise run test:logged -- --name cursor-container-live -- mise run test:agent:docker -- container-real-engines-live.spec.ts --workers=1
+mise run dev:stop --profile cursor-container-qa
+mise run dev:reset --profile cursor-container-qa
+```
+
+Running them takes a real login and billed turns, so it is a manual-test
+checklist item ([7568](../todo/manual-test/7568-manual-test-checklist.md),
+7040 (retired) tasks 1 and 2). Record each run's results below.
+
+Results:
+
+- 2026-11-14, beelink: a default run (no switch set) on a disposable rootless
+  daemon listed both real cells as skipped while the fake cells passed (see
+  the run record in to-do 0001's task 8 section). No signed-in run yet.
+
 A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and
 `fixture-container` environments (starting any that are stopped) and creates

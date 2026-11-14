@@ -39,4 +39,4 @@ The review fix keeps the refusal annotation and rethrows the original assertion 
 ## Related
 
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md) task 8 (the cells and the validation record).
-- [7040-container-cells-on-real-cursor-and-pi.md](7040-container-cells-on-real-cursor-and-pi.md).
+- 7040 (retired): the opt-in real-provider variants of the cells, `e2e/agent-testing/container-real-engines-live.spec.ts`, which share the composer send with the fake cells (`e2e/agent-testing/container-engine-cells-support.ts`).

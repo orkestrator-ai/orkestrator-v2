@@ -62,6 +62,13 @@ export type LaunchRowCheck = {
   summaryLength: number;
 };
 
+/** The content-free launching-row evidence the live spec writes as one annotation. */
+export type LaunchRowEvidence = {
+  shapes: LaunchRowShape[];
+  droppedShapes: number;
+  check: LaunchRowCheck | null;
+};
+
 type LaunchRowTrack = {
   ordinal: number;
   detailRefs: Map<string, number | null>;
@@ -239,6 +246,33 @@ export class TokenReader {
       containsOutput || containsSummary,
       "Conditional launching tool row lacks the final background output",
     );
+  }
+
+  /**
+   * Check the launching row's final output and hand `record` the row's
+   * content-free evidence whether or not the check passes (5040), so a failed
+   * comparison still leaves its shape history behind.
+   */
+  async expectTaskOutputRecorded(
+    task: BackgroundTask,
+    toolName: string,
+    output: string,
+    record: (evidence: LaunchRowEvidence) => void,
+  ) {
+    try {
+      await this.expectTaskOutput(task, toolName, output);
+    } finally {
+      record(this.launchRowEvidence(task));
+    }
+  }
+
+  /** One task's launching-row evidence: its shape history and the last check. */
+  launchRowEvidence(task: BackgroundTask): LaunchRowEvidence {
+    return {
+      shapes: this.launchRowHistory(task),
+      droppedShapes: this.droppedLaunchRowShapes,
+      check: this.lastLaunchRowCheck ?? null,
+    };
   }
 
   /** The recorded shapes of one task's launching row, oldest first. */

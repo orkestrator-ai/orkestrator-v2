@@ -397,6 +397,41 @@ describe("content-free launching row shape (5040)", () => {
     }
   });
 
+  test("the recorded check hands over its evidence once when it passes and when it fails", async () => {
+    const reads = () => [
+      { rows: [launch("placeholder-ref", "success")], tasks: [running] },
+      { rows: [launch("final-ref", "success"), answer], tasks: [completed] },
+    ];
+    const details = { "placeholder-ref": "task launched", "final-ref": `output ${SECRET_OUTPUT}` };
+
+    const passing = shapeFixture(reads(), details).reader;
+    await passing.read();
+    await passing.read();
+    const passed: unknown[] = [];
+    await passing.expectTaskOutputRecorded(completed, "Bash", SECRET_OUTPUT, (evidence) =>
+      passed.push(evidence),
+    );
+    expect(passed).toEqual([passing.launchRowEvidence(completed)]);
+    expect(passed[0]).toMatchObject({ droppedShapes: 0, check: { containsOutput: true } });
+
+    const failing = shapeFixture(reads(), { "placeholder-ref": "task launched" }).reader;
+    await failing.read();
+    await failing.read();
+    const failed: Array<ReturnType<TokenReader["launchRowEvidence"]>> = [];
+    await expect(
+      failing.expectTaskOutputRecorded(completed, "Bash", SECRET_OUTPUT, (evidence) =>
+        failed.push(evidence),
+      ),
+    ).rejects.toThrow("lacks the final background output");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.shapes.map((shape) => shape.task)).toEqual([1, 1]);
+    expect(failed[0]!.check).toMatchObject({ containsOutput: false, containsSummary: false });
+    const written = JSON.stringify(failed[0]);
+    for (const secret of ["task-secret-id", "call", "final-ref", SECRET_OUTPUT, SECRET_SUMMARY]) {
+      expect(written).not.toContain(secret);
+    }
+  });
+
   test("an absent row, an inline output and an unreadable reference are shapes too", async () => {
     const inline: Row = {
       id: "launch",

@@ -417,15 +417,9 @@ async function expectLaunchRowOutput(
   output: string,
   label: string,
 ) {
-  try {
-    await reader.expectTaskOutput(task, toolName, output);
-  } finally {
-    note(`${label}-launch-row`, {
-      shapes: reader.launchRowHistory(task),
-      droppedShapes: reader.droppedLaunchRowShapes,
-      check: reader.lastLaunchRowCheck ?? null,
-    });
-  }
+  await reader.expectTaskOutputRecorded(task, toolName, output, (evidence) =>
+    note(`${label}-launch-row`, evidence),
+  );
 }
 
 /** The page sent nothing for the session from `from` on. */

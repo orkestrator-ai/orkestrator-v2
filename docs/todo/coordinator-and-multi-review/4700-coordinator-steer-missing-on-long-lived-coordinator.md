@@ -103,13 +103,18 @@ A queued row with no note and no Steer means the renderer did not see the turn a
 [native-agent] queue.turn-not-running agent=claude environmentId=env-1 phase=idle queued=2
 ```
 
-| What the log shows around the time of the row | Reads as |
-| --- | --- |
-| A line for the environment with `phase=recovering`, `cancelling`, `error` or `blocked` | The backend did not see the turn as running either: the bridge was reconnecting or unreachable, or the turn was stopping, failed or blocked. A backend or bridge cause. |
-| A line with `phase=idle` | The backend saw the turn finished with prompts still queued. If it repeats at every turn's end, that is a queue draining normally; one that the row outlived means the queue did not drain. |
-| No line for the environment in the window (with **Log Detail** set) | The backend saw the turn as `running` while it held the queue, or held no queued item yet. Either way the renderer's view differed from the backend's: a renderer cause. |
+The line is written once per change of phase, not once per read. A phase that stays the same writes nothing more however long it lasts, and a turn that goes back to `running`, or a queue that empties, re-arms it without writing anything. So the lines near the row do not show the backend's phase at that moment. Read back from the row to the time **Log Detail** was set, and take the most recent line for the environment:
 
-The line carries the agent, the environment id, the phase and the number of queued items only. It never carries a prompt, a queued item, a provider session id or the tab's session key, so two tabs in one environment are not told apart. It is written once per change: a phase that stays the same writes nothing more, and a turn that goes back to `running`, or a queue that empties, re-arms it. The backend remembers the last phase of at most 256 sessions, so a session pushed out of that set may write its current phase again.
+| The most recent line for the environment, at or before the row | Reads as |
+| --- | --- |
+| `phase=recovering`, `cancelling`, `error` or `blocked` | Either the backend still held that phase when the row was seen, or it returned to `running` (or the queue emptied) silently after the line. The line alone cannot tell which. A backend or bridge cause is likely when the line is recent and no later turn ran in the environment; when a later turn did run, treat it as inconclusive. |
+| `phase=idle` | The backend saw the turn finished with prompts still queued. If it repeats at every turn's end, that is a queue draining normally; one that the row outlived means the queue did not drain. The same silent re-arm applies: a later turn may have run since. |
+| None since **Log Detail** was set | At every read since then, the backend saw the turn as `running` or held no queued item, so it never held the queue in a non-running phase. The renderer's view differed from the backend's: a renderer cause. Check that the setting was in force before the row appeared, because a phase already in force is written only at the next read after the setting is raised. |
+| A line, but only well before the window | Not evidence either way. It describes the phase when it was written, not when the row was seen. |
+
+An empty window is therefore never enough on its own: a backend that entered `recovering` an hour before the row and stayed there writes nothing in the window. Only the absence of any line since **Log Detail** was set points at the renderer.
+
+The line carries the agent, the environment id, the phase and the number of queued items only. It never carries a prompt, a queued item, a provider session id or the tab's session key, so two tabs in one environment are not told apart: a line may belong to a different tab from the one showing the bare row. The backend remembers the last phase of at most 256 sessions, so a session pushed out of that set may write its current phase again.
 
 **Limits of the reading:**
 
@@ -135,6 +140,10 @@ Evidence is from fake bridges only: no real occurrence has been read yet.
 ### Task 1: the renderer's own view
 
 A turn the renderer does not see as running cannot be logged cheaply. `isRunning` exists only in the renderer, and renderer logger lines stay in the browser console rather than reaching the saved log (`docs/architecture/logging.md`, "What stays out of the persistent log"). Carried to 6640 (retired 2026-11-14; `git show dc90609bf:docs/todo/coordinator-and-multi-review/6640-queued-row-turn-not-running-evidence.md`), which added the backend's side on 2026-11-14 ([A bare row](#a-bare-row)).
+
+### Task 1: reading the bare-row line from its last change (2026-11-14)
+
+The [A bare row](#a-bare-row) table reads the most recent `queue.turn-not-running` line since **Log Detail** was set, not the lines near the row. The line is written once per change of phase, so a backend that stayed `recovering` writes nothing near a row seen later, and reading an empty window as a renderer cause would blame the renderer for a backend fault. Only the absence of any line since the setting points at the renderer; an old non-running line is reported as likely or inconclusive, because a return to `running` re-arms silently. Logging a heartbeat while a phase lasts would make the window readable, but it adds a line per read for every waiting session and the ticket asked for a line per change; the reading was fixed instead.
 
 ### Task 1: diagnostic limits
 

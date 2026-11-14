@@ -3,7 +3,7 @@
  * Build the desktop app on this machine and attach it to a GitHub release.
  *
  *   bun scripts/release-desktop.ts build [--no-publish]
- *   bun scripts/release-desktop.ts publish
+ *   bun scripts/release-desktop.ts publish [--skip-npm | --npm-local]
  *
  * The version in package.json decides everything: its tag (`v<version>`) and
  * its update channel, from the suffix. `2.23.0` ships to Stable,
@@ -24,8 +24,12 @@
  * this release carries), which a running Orkestrator reads to show what an
  * update would change. `publish` publishes the `orkestrator` npm package at
  * the same version, under its channel's dist-tag, before making the release
- * public, so standalone backends and desktop apps update to the same release;
- * `--skip-npm` leaves it out. A prerelease stays off GitHub's "Latest", so the
+ * public, so standalone backends and desktop apps update to the same release.
+ * The package is published by the "Publish npm package" GitHub workflow (npm
+ * trusted publishing, with provenance): `publish` dispatches it, waits for it,
+ * and then makes the release public. `--npm-local` publishes from this machine
+ * instead (`mise run publish:cli`); `--skip-npm` leaves npm out. A prerelease
+ * stays off GitHub's "Latest", so the
  * website's download links keep serving the stable release. Publishing an
  * alpha turns older published alphas back into drafts (see `hideOlderAlphas`).
  */
@@ -41,6 +45,7 @@ import {
 } from "../packages/protocol/src/host-maintenance.js";
 import { PINNED_TOOL_VERSIONS } from "../packages/toolchain/src/manifest.js";
 import { assertMacUpdateFeed, prepareMacUpdateFeeds } from "./mac-update-feed.js";
+import { alertApproval, type ApprovalLink } from "./release-approval.js";
 
 const root = path.resolve(import.meta.dir, "..");
 const REPOSITORY = "orkestrator-ai/orkestrator-v2";
@@ -230,6 +235,8 @@ export type ReleaseRuntime = {
   writeToolchainPins(version: string): string;
   /** Whether `orkestrator@version` is already on npm. */
   npmHasVersion(version: string): boolean;
+  /** Tells the person a link is waiting for them (a notification, the terminal bell, a banner). */
+  alertApproval(link: ApprovalLink): void;
   /** Blocks for `ms`; used to back off from a failed GitHub listing. */
   sleep(ms: number): void;
 };
@@ -265,6 +272,7 @@ const defaultRuntime: ReleaseRuntime = {
   prepareMacUpdateFeeds: () => prepareMacUpdateFeeds(path.join(root, "release")),
   writeToolchainPins,
   npmHasVersion,
+  alertApproval: (link) => alertApproval(link),
   sleep: Bun.sleepSync,
 };
 
@@ -470,7 +478,157 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   );
 }
 
-function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
+/** The workflow that publishes the npm package (`.github/workflows/publish-npm.yml`). */
+export const NPM_WORKFLOW = "publish-npm.yml";
+
+/** The name the workflow's `run-name` gives a run for `tag`; `publish` finds its run by it. */
+export function npmWorkflowRunName(tag: string): string {
+  return `Publish orkestrator@${tag} to npm`;
+}
+
+/** How often the run is read, in milliseconds. */
+const NPM_RUN_POLL_MS = 15_000;
+/** How long GitHub gets to list a run after it was dispatched. */
+const NPM_RUN_START_TIMEOUT_MS = 3 * 60_000;
+/**
+ * How long `publish` waits for the run, which includes the reviewer's
+ * approval. Giving up leaves the run alone, and the next `publish` attaches to
+ * it instead of starting another.
+ */
+const NPM_RUN_TIMEOUT_MS = 2 * 60 * 60_000;
+/** Reads of the registry after the run succeeded, to say whether the version is visible yet. */
+const NPM_VISIBLE_ATTEMPTS = 6;
+const NPM_VISIBLE_POLL_MS = 10_000;
+
+type NpmWorkflowRun = { id: number; status: string; conclusion: string | null; url: string };
+
+/** Runs of the publish workflow for `tag`, newest first, dispatched on `main`. */
+function npmWorkflowRuns(tag: string, runtime: Pick<ReleaseRuntime, "capture">): NpmWorkflowRun[] {
+  const output = runtime.capture([
+    "gh",
+    "run",
+    "list",
+    "--repo",
+    REPOSITORY,
+    "--workflow",
+    NPM_WORKFLOW,
+    "--event",
+    "workflow_dispatch",
+    "--branch",
+    "main",
+    "--limit",
+    "50",
+    "--json",
+    "databaseId,displayTitle,status,conclusion,url",
+  ]);
+  const rows = JSON.parse(output || "[]") as Array<{
+    databaseId: number;
+    displayTitle: string;
+    status: string;
+    conclusion: string | null;
+    url: string;
+  }>;
+  return rows
+    .filter((row) => row.displayTitle === npmWorkflowRunName(tag))
+    .map((row) => ({
+      id: row.databaseId,
+      status: row.status,
+      conclusion: row.conclusion || null,
+      url: row.url,
+    }));
+}
+
+/**
+ * Publishes the npm package through the "Publish npm package" workflow and
+ * waits for it. A run already in flight for the tag is joined rather than
+ * duplicated, and one that already succeeded counts as published, so running
+ * `publish` again after a dropped session or a slow registry never publishes
+ * twice. A failed or cancelled run is dispatched again.
+ */
+function publishNpmFromGitHub(tag: string, runtime: ReleaseRuntime): void {
+  const before = npmWorkflowRuns(tag, runtime);
+  let current = before.find((run) => run.status !== "completed");
+  if (current) {
+    console.log(`\nThe npm publish workflow is already running: ${current.url}`);
+  } else if (before.some((run) => run.status === "completed" && run.conclusion === "success")) {
+    console.log(`\nThe npm publish workflow already published ${tag}.`);
+    return;
+  } else {
+    if (!remoteTagCommit(tag, runtime.capture)) {
+      fail(`tag ${tag} is not on origin, so the workflow has nothing to publish.`);
+    }
+    runtime.run([
+      "gh",
+      "workflow",
+      "run",
+      NPM_WORKFLOW,
+      "--repo",
+      REPOSITORY,
+      "--ref",
+      "main",
+      "-f",
+      `tag=${tag}`,
+    ]);
+    const known = new Set(before.map((run) => run.id));
+    for (let waited = 0; !current; waited += 5_000) {
+      if (waited >= NPM_RUN_START_TIMEOUT_MS) {
+        fail(
+          `GitHub did not list a "${npmWorkflowRunName(tag)}" run after dispatching it. ` +
+            `Check the ${NPM_WORKFLOW} runs on GitHub, then run publish again.`,
+        );
+      }
+      runtime.sleep(5_000);
+      current = npmWorkflowRuns(tag, runtime).find((run) => !known.has(run.id));
+    }
+  }
+
+  let lastStatus = "";
+  let alerted = false;
+  for (let waited = 0; ; waited += NPM_RUN_POLL_MS) {
+    const latest = npmWorkflowRuns(tag, runtime).find((run) => run.id === current.id) ?? current;
+    if (latest.status !== lastStatus) {
+      lastStatus = latest.status;
+      console.log(`npm publish workflow: ${latest.status} (${latest.url})`);
+    }
+    // A required reviewer has to approve the deployment before the job starts.
+    if (latest.status === "waiting" && !alerted) {
+      alerted = true;
+      runtime.alertApproval({ kind: "github", url: latest.url });
+    }
+    if (latest.status === "completed") {
+      if (latest.conclusion === "success") return;
+      fail(
+        `the npm publish workflow ended ${latest.conclusion ?? "without a result"}: ${latest.url}. ` +
+          "Nothing was made public; fix the cause and run publish again, which starts a new run.",
+      );
+    }
+    if (waited >= NPM_RUN_TIMEOUT_MS) {
+      fail(
+        `the npm publish workflow is still ${latest.status} after ${NPM_RUN_TIMEOUT_MS / 60_000} minutes: ${latest.url}. ` +
+          "It was left running; run publish again to wait for it.",
+      );
+    }
+    runtime.sleep(NPM_RUN_POLL_MS);
+  }
+}
+
+/** Says whether the registry lists `version` yet; it has taken minutes after a successful publish. */
+function reportNpmVisibility(version: string, runtime: ReleaseRuntime): void {
+  for (let attempt = 0; attempt < NPM_VISIBLE_ATTEMPTS; attempt++) {
+    if (runtime.npmHasVersion(version)) {
+      console.log(`orkestrator@${version} is on npm.`);
+      return;
+    }
+    runtime.sleep(NPM_VISIBLE_POLL_MS);
+  }
+  console.log(
+    `npm accepted orkestrator@${version}, but the registry does not list it yet; that can take several minutes.`,
+  );
+}
+
+export type NpmPublishMode = "ci" | "local" | "skip";
+
+function publish(runtime: ReleaseRuntime, options: { npm: NpmPublishMode }): void {
   const { releaseTag, capture, run } = runtime;
   const tag = releaseTag();
   const channel = releaseChannel(tag);
@@ -512,15 +670,18 @@ function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
 
   const prerelease = channel !== "stable";
   // npm first: if it fails the release stays a draft, so the desktop and npm
-  // channels never disagree about the newest version. `publish:cli` publishes
+  // channels never disagree about the newest version. Either path publishes
   // under the channel's dist-tag, never a prerelease under `latest`.
   const version = tag.replace(/^v/, "");
-  if (options.npm) {
+  if (options.npm !== "skip") {
     if (runtime.npmHasVersion(version)) {
       console.log(`\norkestrator@${version} is already on npm.`);
-    } else {
+    } else if (options.npm === "local") {
       assertTaggedCheckout(tag, runtime.capture);
       run(["mise", "run", "publish:cli"]);
+    } else {
+      publishNpmFromGitHub(tag, runtime);
+      reportNpmVisibility(version, runtime);
     }
   }
   run([
@@ -594,10 +755,19 @@ export function runDesktopRelease(args: string[], runtime: ReleaseRuntime = defa
   const [command, ...flags] = args;
   if (command === "build" && flags.every((flag) => flag === "--no-publish")) {
     build(!flags.includes("--no-publish"), runtime);
-  } else if (command === "publish" && flags.every((flag) => flag === "--skip-npm")) {
-    publish(runtime, { npm: !flags.includes("--skip-npm") });
+  } else if (
+    command === "publish" &&
+    flags.every((flag) => flag === "--skip-npm" || flag === "--npm-local") &&
+    !(flags.includes("--skip-npm") && flags.includes("--npm-local"))
+  ) {
+    const npm: NpmPublishMode = flags.includes("--skip-npm")
+      ? "skip"
+      : flags.includes("--npm-local")
+        ? "local"
+        : "ci";
+    publish(runtime, { npm });
   } else {
-    fail("usage: release-desktop.ts build [--no-publish] | publish [--skip-npm]");
+    fail("usage: release-desktop.ts build [--no-publish] | publish [--skip-npm | --npm-local]");
   }
 }
 

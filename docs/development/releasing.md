@@ -133,9 +133,12 @@ Updates → Channel**, then updates as usual.
    mise run release:publish
    ```
 
-   With an npm token stored (see [npm authentication](#npm-authentication))
-   this needs no one at the keyboard. Without one it needs a single browser
-   approval, and a desktop notification says when.
+   It dispatches the "Publish npm package" workflow and waits for it (see
+   [Publishing the npm package from GitHub](#publishing-the-npm-package-from-github)).
+   The workflow's deployment needs one approval on GitHub, and a desktop
+   notification says when. `mise run release:publish -- --npm-local`
+   publishes from this machine instead (see
+   [npm authentication](#npm-authentication-from-this-machine)).
 
 5. After a **Stable** release only, pin the installer to it and merge the change
    through a pull request:
@@ -179,11 +182,11 @@ before making the draft public.
 Every build also uploads `toolchain-pins.json`, with the agent CLI and `gh`
 pins of the release. A running Orkestrator reads it after a check to show what
 an update would change. Before it makes a release public, `release:publish`
-runs `mise run publish:cli`. That publishes the `orkestrator` npm package at
-the same version under the channel's dist-tag, so standalone services and
-desktop apps update to the same release. The step is skipped when the version
-is already on npm. Pass `mise run release:publish -- --skip-npm` to leave npm
-alone.
+publishes the `orkestrator` npm package at the same version under the
+channel's dist-tag, so standalone services and desktop apps update to the same
+release, by running the "Publish npm package" workflow on GitHub. The step is
+skipped when the version is already on npm. Pass
+`mise run release:publish -- --skip-npm` to leave npm alone.
 
 The package carries the lockfile standalone services install its dependencies
 from (`packages/cli/release-runtime/`, copied to
@@ -194,34 +197,92 @@ with `bun packages/cli/scripts/lock-bridge-runtimes.ts` after changing a
 dependency of `packages/cli`, or to take a transitive security fix;
 `packages/cli/tests/cli.test.ts` fails when it no longer matches the package.
 
-### npm authentication
+### Publishing the npm package from GitHub
 
-`publish:cli` (`scripts/publish-cli.ts`) authenticates in one of two ways.
+The desktop builds stay on the maintainer's machines. Only the npm package is
+published by GitHub Actions, through
+[`.github/workflows/publish-npm.yml`](../../.github/workflows/publish-npm.yml),
+with npm trusted publishing (the job's OIDC identity) and provenance. No npm
+token exists on a workstation or in GitHub, and npm's page for each version
+names the commit and workflow it was built by.
 
-**A stored token (no browser step).** Create a granular access token on
-npmjs.com with read and write access to the `orkestrator` package only and
-"Bypass two-factor authentication" ticked, then store it on the machine that
-runs `release:publish`:
+`release:publish`, once it has checked that both desktop builds are on the
+draft, does the following before making the release public:
 
-```bash
-mkdir -p ~/.config/orkestrator-release
-# Paste the token, then Ctrl-D. Nothing else may be in the file.
-cat > ~/.config/orkestrator-release/npm-token
-chmod 600 ~/.config/orkestrator-release/npm-token
-```
+1. If the version is already on npm, it skips this step.
+2. It looks for a run of the workflow for this tag. A run in flight is joined,
+   not duplicated, and a run that already succeeded counts as published, so
+   running `release:publish` again after a dropped session or a slow registry
+   never publishes twice. Otherwise it dispatches the workflow on `main` with
+   the tag.
+3. The workflow's `npm-publish` environment holds the job until a required
+   reviewer approves it on GitHub. `release:publish` prints the run's address
+   and raises a desktop notification the moment the run is waiting. It waits up
+   to two hours; the run stays pending and the next `release:publish` attaches
+   to it.
+4. The job checks out the tag, checks that it is a merged release of this
+   version, installs dependencies with the lockfile, then runs
+   `bun scripts/publish-cli.ts --ci`: it packs the package once (`prepack`
+   builds it, with the build commit), smoke-tests that exact tarball
+   (`smoke-packed.ts --tarball`), and publishes it with
+   `npm publish --provenance --tag <channel's dist-tag>`.
+5. When the run succeeds, `release:publish` makes the draft public. A failed or
+   cancelled run leaves the draft alone: fix the cause and run
+   `release:publish` again, which starts a new run. The registry can take
+   several minutes to list a version npm has accepted.
 
-The script passes it to `bun publish` as `NPM_CONFIG_TOKEN` and prints only the
-file's path. It refuses a file that other users can read. An exported
-`NPM_CONFIG_TOKEN` (or `BUN_CONFIG_TOKEN`) takes precedence, and
-`ORKESTRATOR_NPM_TOKEN_FILE` moves the file. npm caps a write token's lifetime,
-so renew it when it expires. When npm rejects the stored token (a 401, or a 403
-naming the token, two-factor authentication or a missing permission), the
-script says so and publishes once more without it, through the browser approval
-below; any other failure, such as republishing an existing version, is not
-retried. An exported token npm rejects is only reported. A stored token is a long-lived publish credential on a
-workstation, the risk to-do
-[5021](../todo/cross-cutting/5021-publish-npm-from-ci-with-provenance.md)
-proposes removing by publishing from CI; keep it scoped to this one package.
+The workflow is never triggered by a tag push, because the tag exists before
+the desktop builds do and npm must not get a version the release could still
+lose. Anyone who can push a branch can dispatch the workflow from it; the
+workflow runs only from `main`, and the `npm-publish` environment may deploy
+only from `main`, which is what stops another branch's copy publishing.
+
+**One-time setup, which only a maintainer can do** (it is a checklist item in
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)):
+
+- **GitHub:** create the `npm-publish` environment (Settings → Environments)
+  before the first run, because GitHub otherwise creates a missing environment
+  on first use with no reviewer and the job would publish unreviewed. Add
+  yourself as a required reviewer, leave "Prevent self-review" off (the
+  maintainer who runs `release:publish` is the one who approves), and limit
+  deployment to the `main` branch.
+- **npm:** on the `orkestrator` package's Settings → Trusted publisher, add
+  GitHub Actions with organization `orkestrator-ai`, repository
+  `orkestrator-v2`, workflow filename `publish-npm.yml`, environment name
+  `npm-publish`, and the permission to publish. The same from a terminal,
+  logged in with `npm login` (npm 11.15 or newer; a token that bypasses
+  two-factor authentication does not work for this):
+  `npm trust github orkestrator --file publish-npm.yml --repo orkestrator-ai/orkestrator-v2 --env npm-publish --allow-publish`,
+  then `npm trust list orkestrator` to check it. npm allows one trusted
+  publisher per package; `npm trust revoke` removes one. Once a release has
+  published this way, also set the package's
+  publishing access to require two-factor authentication and disallow tokens,
+  so only the workflow can publish.
+
+If the project moves to another GitHub repository, update the trusted
+publisher entry and the `repository` field of `packages/cli/package.json`
+together: npm checks the repository, workflow file name and environment of every
+publish against them, and provenance records the repository.
+
+The job needs npm 11.5.1 or newer, which Node 24 provides; `publish-cli.ts`
+refuses an older one before publishing anything. Trusted publishing works only
+from GitHub-hosted runners.
+
+### npm authentication from this machine
+
+`mise run release:publish -- --npm-local` (or `mise run publish:cli`) publishes
+with `bun publish` from the machine that runs it, as the fallback for a day
+when GitHub Actions is unavailable. It carries no provenance. The script keeps
+no npm token on disk (a token file is no longer read). It authenticates in one
+of two ways.
+
+**An exported token.** `NPM_CONFIG_TOKEN` (or `BUN_CONFIG_TOKEN`) is passed to
+`bun publish`, which uses it without a browser step. Create a granular access
+token on npmjs.com with read and write access to the `orkestrator` package
+only and "Bypass two-factor authentication" ticked, export it for this one
+command, and revoke it afterwards. An exported token npm rejects is reported,
+not replaced by a browser sign-in. Once the package disallows tokens, this
+route no longer works.
 
 **Browser approval (no token).** `bun publish` then asks for npm web
 authentication on every publish, even when `npm whoami` succeeds. It prints an
@@ -242,17 +303,26 @@ new notification, up to `ORKESTRATOR_NPM_AUTH_ATTEMPTS` attempts (default 3).
 An expired sign-in publishes nothing, so a retry cannot publish twice. Any
 other failure is not retried.
 
-An agent running `release:publish` without a token should:
+### Running `release:publish` as an agent
 
-- start `mise run release:publish 2>&1; echo "EXIT=$?"` as a background task;
-- wait for the auth URL with a bounded poll of the output, for example
-  `for i in $(seq 1 80); do grep -qE 'npmjs.com/auth|EXIT=' "$F" && break; sleep 3; done`;
-- give the URL to the user straight away (the desktop notification has already
-  fired on the publishing machine), and wait for `EXIT=` with another bounded
-  poll or by ending the turn. A worker under an Orkestrator coordinator sends
-  the URL to the coordinator and ends its turn at once, because mail sent
-  mid-turn is held until the turn ends. A retried attempt prints a new URL;
-  pass that on too.
+An agent running `mise run release:publish` should:
+
+- start `mise run release:publish 2>&1; echo "EXIT=$?"` as a background task
+  (the `EXIT=` line is the status: a background task reports success even when
+  the publish failed);
+- wait for the line `npm publish workflow: waiting`, which carries the run's
+  address and means the deployment needs a reviewer, with a bounded poll of
+  the output, for example
+  `for i in $(seq 1 80); do grep -qE 'workflow: waiting|EXIT=' "$F" && break; sleep 3; done`;
+- give the address to the user straight away (the desktop notification has
+  already fired on the publishing machine), and wait for `EXIT=` with another
+  bounded poll or by ending the turn. A worker under an Orkestrator
+  coordinator sends the address to the coordinator and ends its turn at once,
+  because mail sent mid-turn is held until the turn ends.
+
+With `--npm-local` and no token the wait is for npm's sign-in link instead:
+poll for `npmjs.com/auth|EXIT=`, give the user the URL, and pass on the fresh
+URL a retried attempt prints.
 
 Do not pipe input into the command (such as `sleep 900 | mise run
 release:publish`). The pipeline outlives the publish, so `EXIT=` is not written
@@ -319,7 +389,8 @@ What each build path reports:
 | `build`, `build:desktop`, `build:electron`, `build:backend`, `build:cli`, `build:all` | The commit |
 | `package:mac`, `package:linux`, `package:linux:unpacked`, `package:release` (through `build:all`) | The commit |
 | `release:desktop` (`scripts/release-desktop.ts`, through `build:all`) | The commit |
-| `publish:cli` and `release:publish` (`bun publish` rebuilds in `prepack`; `scripts/publish-cli.ts` sets the variable) | The commit |
+| `publish:cli` and `release:publish --npm-local` (`bun publish` rebuilds in `prepack`; `scripts/publish-cli.ts` sets the variable) | The commit |
+| The "Publish npm package" workflow (`publish-cli.ts --ci`; its `bun pm pack` rebuilds in `prepack` with the variable set, and the tarball it packs is the one published) | The tagged commit |
 | `pack:cli` | The commit |
 | `.github/workflows/validate-bun-runtime.yml` (`build:all`) | The checked-out commit; on a pull request, its merge commit |
 | Any path above from a modified tree, or with no Git repository | `null` |

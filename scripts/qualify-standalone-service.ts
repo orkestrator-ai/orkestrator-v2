@@ -54,7 +54,7 @@
  *   must hold the `package.json` and `bun.lock` their package publishes in
  *   `resources/release-runtime/`, byte for byte, with every installed package
  *   at its locked version and none the lockfile does not list (to-do 5022
- *   task 2), and `sharp` must load from the release and encode a PNG. The
+ *   task 2, retired 2026-11-14), and `sharp` must load from the release and encode a PNG. The
  *   report also lists the locked entries a fresh resolution would move today.
  * - rollback: the unit's environment points Bun at a registry served by this
  *   script. It proxies npm and adds <broken>: the <to> tarball with its version

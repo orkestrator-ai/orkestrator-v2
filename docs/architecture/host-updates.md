@@ -495,6 +495,27 @@ The macOS `gh` archive was inspected, not run: `gh_2.104.0_macOS_arm64.zip`
 is listed in `gh_2.104.0_checksums.txt` with the SHA-256 it has, and holds
 `gh_2.104.0_macOS_arm64/bin/gh`, the path the code extracts.
 
+**The lockfile install, 2026-11-14** (beelink, the same container, systemd
+257, disposable rootless daemon; to-do 5022 task 2, retired that day:
+`git show $(git log -1 --diff-filter=D --format=%h -- docs/todo/cross-cutting/5022-release-chain-live-evidence.md)^:docs/todo/cross-cutting/5022-release-chain-live-evidence.md`).
+`qualify-host-upgrades-container.ts --phases service`, 02:13 to 02:18 UTC,
+passed all 24 checks (22 of the service part, now with the lockfile checks,
+and 2 of its own). 2.38.0-beta's `service install` and its updater both ran
+`installRelease`, so each release directory came from that release's own
+code and the published lockfile:
+
+| Release | Published `package.json` and `bun.lock` | Packages | `sharp` |
+| --- | --- | --- | --- |
+| 2.38.0-beta, from `service install` | byte for byte; lockfile SHA-256 `c2ba90dd3048…3f9d` | of 145 lockfile entries, 112 installed, each at its locked version; 30 for another os, cpu or libc; 3 optional and absent (`@emnapi/runtime`, `@img/sharp-wasm32`, `tslib`); none mismatched or unlisted | 0.35.5 with libvips 8.18.7 loads and encodes a PNG |
+| 2.38.1-beta, from the 2.38.0-beta backend's `apply --when-idle --wait` | the same (both releases publish the same lockfile) | the same | the same |
+
+A fresh resolution of the same manifest that day would have moved seven
+entries (`@anthropic-ai/sdk` 1.6.0 → 1.8.0, `@babel/runtime`,
+`@hono/node-server`, `encodeurl`, `express-rate-limit`, `hono` and `jose` by
+a patch each); both releases had the locked, older versions installed.
+Nothing failed. The macOS half is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+
 **What the runs found.**
 
 - `host update apply --wait` over a data-directory connection never saw its

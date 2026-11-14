@@ -155,6 +155,12 @@ export class KanbanRepository {
       requestId?: string;
       featureBuildRequestHash?: string;
       labels?: readonly string[];
+      /**
+       * Comments written in the same commit as the ticket, each under its own
+       * request key (the ids `addKanbanComment` would give them), so a ticket
+       * never exists without them. Needs `requestId`.
+       */
+      comments?: ReadonlyArray<{ requestId: string; text: string }>;
     } & KanbanTaskContentInput = {},
   ): Promise<KanbanTask> {
     const status = initial.status ?? "backlog";
@@ -176,6 +182,9 @@ export class KanbanRepository {
       { now: createdAt },
     );
     if (initial.labels !== undefined) normalizeTicketLabels(initial.labels);
+    if (initial.comments?.length && !initial.requestId) {
+      throw new Error("Kanban task initial comments need a requestId");
+    }
     return this.board.enqueue(async () => {
       const tasks = await this.board.loadTasks();
       const labels =
@@ -211,7 +220,11 @@ export class KanbanRepository {
         ...content,
         ...(labels.length ? { labels } : {}),
         status,
-        comments: [],
+        comments: (initial.comments ?? []).map((comment) => ({
+          id: stableKanbanId(`comment:${id}`, comment.requestId),
+          text: comment.text,
+          createdAt,
+        })),
         images: [],
         createdAt,
         updatedAt: createdAt,

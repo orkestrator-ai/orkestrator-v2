@@ -4,7 +4,9 @@ import {
   debugBuildRequestIdentity,
   debugBuildTicket,
   debugBuildTitle,
-  debugTranscriptComment,
+  allocateDebugTranscriptBudgets,
+  debugTranscriptComments,
+  debugTranscriptSize,
   isCreateDebugBuildInput,
   MAX_DEBUG_BUILD_CRITERIA,
   MAX_DEBUG_BUILD_PROBLEM_LENGTH,
@@ -65,6 +67,19 @@ describe("debugBuildRequestIdentity", () => {
     expect(debugBuildRequestIdentity(base)).not.toBe(
       debugBuildRequestIdentity({ ...base, screenshot: "AAAA" }),
     );
+  });
+
+  test("two screenshots of equal length with the same ends are different requests", () => {
+    const base = { environmentId: "env-1", problem: "Broken", requestId: "r-1" };
+    const ends = "A".repeat(200);
+    const first = `${ends}${"B".repeat(1_000)}${ends}`;
+    const second = `${ends}${"B".repeat(499)}C${"B".repeat(500)}${ends}`;
+    expect(first.length).toBe(second.length);
+    expect(debugBuildRequestIdentity({ ...base, screenshot: first })).not.toBe(
+      debugBuildRequestIdentity({ ...base, screenshot: second }),
+    );
+    // The identity stays small however large the capture is.
+    expect(debugBuildRequestIdentity({ ...base, screenshot: first }).length).toBeLessThan(200);
   });
 });
 
@@ -142,7 +157,7 @@ describe("debugBuildTicket", () => {
   });
 });
 
-describe("debugTranscriptComment", () => {
+describe("debugTranscriptComments", () => {
   const message = (index: number, text = `message ${index}`): DebugTranscriptMessage => ({
     role: index % 2 === 0 ? "user" : "assistant",
     createdAt: null,
@@ -153,9 +168,10 @@ describe("debugTranscriptComment", () => {
   const tab = { tabId: "tab-1", agent: "claude", title: "Main" };
 
   test("renders every message with tool calls by name, status and title only", () => {
-    const text = debugTranscriptComment({
+    const comments = debugTranscriptComments({
       tab,
       environmentId: "env-1",
+      sessionId: "session-1",
       complete: true,
       maxChars: 10_000,
       messages: [
@@ -166,6 +182,8 @@ describe("debugTranscriptComment", () => {
         },
       ],
     });
+    expect(comments).toHaveLength(1);
+    const text = comments[0]!;
     expect(text).toContain(
       '### Source transcript: "Main" (claude, environment `env-1`, tab `tab-1`)',
     );
@@ -173,21 +191,71 @@ describe("debugTranscriptComment", () => {
     expect(text).toContain("Fix it");
     expect(text).toContain("- `Bash` (completed): bun test");
     expect(text).not.toContain("omitted");
+    // A whole conversation needs no pointer to the rest of it.
+    expect(text).not.toContain("orkestrator session transcript");
   });
 
-  test("keeps the first message and the newest that fit, and says what was left out", () => {
-    const messages = Array.from({ length: 200 }, (_, index) => message(index, "x".repeat(200)));
-    const text = debugTranscriptComment({
+  test("a whole conversation longer than one comment spans several, losing nothing", () => {
+    const messages = Array.from({ length: 60 }, (_, index) =>
+      message(index, `${index}:${"x".repeat(990)}`),
+    );
+    const comments = debugTranscriptComments({
       tab,
       environmentId: "env-1",
+      complete: true,
+      maxChars: debugTranscriptSize(messages),
+      commentMaxChars: 10_000,
+      messages,
+    });
+    expect(comments.length).toBeGreaterThan(5);
+    for (const comment of comments) expect(comment.length).toBeLessThanOrEqual(10_000);
+    expect(comments[0]).toContain(`(part 1 of ${comments.length})`);
+    const joined = comments.join("\n");
+    for (let index = 0; index < 60; index++) {
+      expect(joined).toContain(`#### ${index + 1}. `);
+      expect(joined).toContain(`${index}:${"x".repeat(990)}`);
+    }
+    expect(joined).not.toContain("omitted");
+  });
+
+  test("keeps the first message and the newest that fit, says what was left out and where the rest is", () => {
+    const messages = Array.from({ length: 200 }, (_, index) => message(index, "x".repeat(200)));
+    const comments = debugTranscriptComments({
+      tab,
+      environmentId: "env-1",
+      sessionId: "session-1",
       complete: false,
       maxChars: 5_000,
       messages,
     });
-    expect(text.length).toBeLessThanOrEqual(5_000);
+    const text = comments.join("\n");
+    expect(text.length).toBeLessThanOrEqual(6_500);
     expect(text).toContain("#### 1. user");
     expect(text).toContain("#### 200. assistant");
     expect(text).toMatch(/_\[\d+ messages omitted for length\]_/);
     expect(text).toContain("starts part-way");
+    expect(text).toContain("`orkestrator session transcript session-1`");
+  });
+});
+
+describe("allocateDebugTranscriptBudgets", () => {
+  test("every tab that fits an equal share is kept whole; the longest share the rest", () => {
+    expect(allocateDebugTranscriptBudgets([10, 500, 20], 1_000)).toEqual([10, 500, 20]);
+    expect(allocateDebugTranscriptBudgets([10, 5_000, 20, 4_000], 1_000)).toEqual([
+      10, 485, 20, 485,
+    ]);
+  });
+
+  test("a long first tab does not leave the later tabs out", () => {
+    const budgets = allocateDebugTranscriptBudgets([1_000_000, 3_000, 2_000], 240_000);
+    expect(budgets[1]).toBe(3_000);
+    expect(budgets[2]).toBe(2_000);
+    expect(budgets[0]).toBe(235_000);
+    expect(budgets.reduce((sum, budget) => sum + budget, 0)).toBeLessThanOrEqual(240_000);
+  });
+
+  test("empty tabs take nothing", () => {
+    expect(allocateDebugTranscriptBudgets([0, 0], 100)).toEqual([0, 0]);
+    expect(allocateDebugTranscriptBudgets([], 100)).toEqual([]);
   });
 });

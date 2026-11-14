@@ -8,27 +8,31 @@
  * leave a ticket without its build:
  *
  * 1. The ticket is written from the user's text and the source environment's
- *    details (`debugBuildTicket`), created once per `requestId`.
- * 2. Each agent tab's transcript is attached as a ticket comment (the tab in
- *    front first, bounded in total), and the screenshot as a ticket image.
- *    Every stage of the pipeline quotes the ticket's comments and receives its
- *    images, which is what "pre-loaded" means here.
+ *    details (`debugBuildTicket`), created once per `requestId`, together
+ *    with each agent tab's transcript as ticket comments in the same commit
+ *    (the tab in front first; tabs share one bound fairly). A ticket therefore
+ *    never exists with only some of its transcripts.
+ * 2. The screenshot is attached as a ticket image. Every stage of the
+ *    pipeline quotes the ticket's comments and receives its images, which is
+ *    what "pre-loaded" means here.
  * 3. One build pipeline is launched on the saved Build defaults, which
  *    creates the pipeline environment. Nothing else is started.
  *
- * A retry with the same key and request finds the same ticket, skips the
- * attachments it already has, and gets the same pipeline back from the
- * supervisor's admission key. The same key with a different request is
- * refused.
+ * A retry with the same key and request finds the same ticket, finishes the
+ * screenshot if an earlier attempt stopped before it, and returns the
+ * pipeline already linked to the ticket (whatever its phase) instead of
+ * launching another. Overlapping attempts of one request share one run; the
+ * same key with a different request is refused, overlapping or not.
  */
 import { createHash } from "node:crypto";
 import {
   DEBUG_BUILD_SCREENSHOT_FILENAME,
-  DEBUG_BUILD_TAB_TRANSCRIPT_MAX_CHARS,
   DEBUG_BUILD_TRANSCRIPT_MAX_CHARS,
+  allocateDebugTranscriptBudgets,
   debugBuildRequestIdentity,
   debugBuildTicket,
-  debugTranscriptComment,
+  debugTranscriptComments,
+  debugTranscriptSize,
   isCreateDebugBuildInput,
   type CreateDebugBuildInput,
   type CreateDebugBuildResult,
@@ -38,6 +42,7 @@ import { kanbanTaskBuildTicket } from "@orkestrator/protocol/build-pipeline-tick
 import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { launchBuildPipeline } from "../build-pipeline-launch.js";
 import { assertValidPromptImages } from "../prompt-attachments.js";
 import type { Environment } from "../models.js";
@@ -48,7 +53,6 @@ import {
   type FeatureBuildContext,
 } from "./build.js";
 import type { DebugSourceTab, DebugTabTranscript } from "./debug-build-transcript.js";
-import { KeyedSingleFlight } from "../keyed-single-flight.js";
 
 const log = createLogger("feature");
 
@@ -73,8 +77,14 @@ function requestHash(input: CreateDebugBuildInput): string {
     .digest("hex");
 }
 
+const REUSED_KEY = "Debug build requestId was already used with different arguments";
+
 function isConflict(error: unknown): boolean {
   return errorCode(error) === "kanban-request-id-conflict";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** The type the pipeline environment is created as: the project's last choice, else the source's. */
@@ -97,53 +107,79 @@ interface TranscriptComment {
 }
 
 /**
- * Ticket resolution per `projectId:requestId`, so overlapping retries of one
- * request share one ticket and one transcript read. Process-local: a restart
- * ends any in flight, and the stored ticket's `requestId` is what a later
- * retry finds.
+ * Attempts in flight per `projectId:requestId`, with the request hash each
+ * stands for. An overlapping attempt of the same request joins the first; one
+ * with a different request is refused before it writes anything. Process
+ * local: a restart ends any in flight, and the stored ticket's `requestId`
+ * (and the pipeline linked to it) is what a later retry finds.
  */
-const ticketResolutions = new KeyedSingleFlight<{
-  task: KanbanTask;
-  comments: TranscriptComment[];
-}>();
+const inFlight = new Map<string, { hash: string; result: Promise<CreateDebugBuildResult> }>();
 
-/** Each tab's state for the ticket's Context, and the comments that carry its transcript. */
-async function collectTranscripts(
+/** Below this a tab's share cannot hold a useful excerpt, so it is left out (and said so). */
+const MIN_TAB_TRANSCRIPT_CHARS = 1_000;
+
+function publicSessionId(environmentId: string, tabId: string): string | undefined {
+  try {
+    return encodePublicSessionId(environmentId, tabId);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Each tab's state for the ticket's Context, and the comments that carry its
+ * transcript. Every tab is read first, then the total bound is shared fairly
+ * (`allocateDebugTranscriptBudgets`): a tab that fits its share is attached
+ * whole, and only the longest are cut.
+ */
+export async function collectDebugTranscripts(
   ports: DebugBuildPorts,
   environmentId: string,
 ): Promise<{ tabs: DebugBuildSourceTab[]; comments: TranscriptComment[] }> {
   const sourceTabs = await ports.sourceTabs(environmentId).catch(() => []);
+  const reads: DebugTabTranscript[] = [];
+  for (const tab of sourceTabs) {
+    reads.push(
+      await ports
+        .readTranscript(environmentId, tab.tabId, DEBUG_BUILD_TRANSCRIPT_MAX_CHARS)
+        .catch((): DebugTabTranscript => ({ status: "unavailable" })),
+    );
+  }
+  const sizes = reads.map((read) =>
+    read.status === "read" && read.messages.length > 0 ? debugTranscriptSize(read.messages) : 0,
+  );
+  const budgets = allocateDebugTranscriptBudgets(sizes, DEBUG_BUILD_TRANSCRIPT_MAX_CHARS);
   const tabs: DebugBuildSourceTab[] = [];
   const comments: TranscriptComment[] = [];
-  let remaining = DEBUG_BUILD_TRANSCRIPT_MAX_CHARS;
-  for (const tab of sourceTabs) {
-    const budget = Math.min(remaining, DEBUG_BUILD_TAB_TRANSCRIPT_MAX_CHARS);
-    if (budget < 2_000) {
-      tabs.push({ ...tab, transcript: "omitted" });
-      continue;
-    }
-    const read = await ports
-      .readTranscript(environmentId, tab.tabId, budget * 2)
-      .catch((): DebugTabTranscript => ({ status: "unavailable" }));
+  sourceTabs.forEach((tab, index) => {
+    const read = reads[index]!;
     if (read.status !== "read") {
       tabs.push({ ...tab, transcript: read.status === "empty" ? "empty" : "unavailable" });
-      continue;
+      return;
     }
     if (read.messages.length === 0) {
       tabs.push({ ...tab, transcript: "empty" });
-      continue;
+      return;
     }
-    const text = debugTranscriptComment({
+    const budget = budgets[index]!;
+    if (budget < Math.min(MIN_TAB_TRANSCRIPT_CHARS, sizes[index]!)) {
+      tabs.push({ ...tab, transcript: "omitted" });
+      return;
+    }
+    const sessionId = publicSessionId(environmentId, tab.tabId);
+    const texts = debugTranscriptComments({
       tab,
       environmentId,
+      ...(sessionId ? { sessionId } : {}),
       messages: read.messages,
       complete: read.complete,
       maxChars: budget,
     });
-    remaining -= text.length;
     tabs.push({ ...tab, transcript: "attached" });
-    comments.push({ key: `debug-build:transcript:${tab.tabId}`, text });
-  }
+    texts.forEach((text, part) => {
+      comments.push({ key: `debug-build:transcript:${tab.tabId}:${part + 1}`, text });
+    });
+  });
   return { tabs, comments };
 }
 
@@ -155,24 +191,18 @@ async function resolveDebugTicket(
   environment: Environment,
   projectName: string | undefined,
   hash: string,
-): Promise<{ task: KanbanTask; comments: TranscriptComment[] }> {
+): Promise<{ task: KanbanTask; transcripts: number }> {
   const { storage } = context;
   const projectId = environment.projectId;
   const requestId = input.requestId.trim();
   const existing = await storage.kanban.findKanbanTaskByRequestId(projectId, requestId);
   if (existing) {
-    if (existing.featureBuildRequestHash !== hash) {
-      throw new Error("Debug build requestId was already used with different arguments");
-    }
-    // A retry. Once the first attempt got its transcripts onto the ticket the
-    // ticket is left as it is, so a retry never adds what the conversation
-    // said later; only a ticket that has none yet has them read again.
-    if (existing.comments.length > 0) return { task: existing, comments: [] };
-    const transcripts = await collectTranscripts(ports, environment.id);
-    return { task: existing, comments: transcripts.comments };
+    if (existing.featureBuildRequestHash !== hash) throw new Error(REUSED_KEY);
+    // Its transcripts were written with it, in one commit.
+    return { task: existing, transcripts: 0 };
   }
 
-  const transcripts = await collectTranscripts(ports, environment.id);
+  const transcripts = await collectDebugTranscripts(ports, environment.id);
   const capturedAt = (ports.now?.() ?? new Date()).toISOString();
   const ticket = debugBuildTicket({
     problem: input.problem,
@@ -201,32 +231,65 @@ async function resolveDebugTicket(
       status: "in-progress",
       requestId,
       featureBuildRequestHash: hash,
+      comments: transcripts.comments.map((comment) => ({
+        requestId: comment.key,
+        text: comment.text,
+      })),
     });
   } catch (error) {
     if (!isConflict(error)) throw error;
-    // An overlapping attempt created it first (its capture time differs).
+    // Another process's attempt created it first (its capture time differs),
+    // with its own transcripts in the same commit.
     const winner = await storage.kanban.findKanbanTaskByRequestId(projectId, requestId);
-    if (!winner || winner.featureBuildRequestHash !== hash) throw error;
-    return { task: winner, comments: transcripts.comments };
+    if (!winner) throw error;
+    if (winner.featureBuildRequestHash !== hash) throw new Error(REUSED_KEY);
+    return { task: winner, transcripts: 0 };
   }
   refineProvisionalTicketTitle(storage, task.id, input.problem, task.title, context);
-  return { task, comments: transcripts.comments };
+  return { task, transcripts: transcripts.comments.length };
 }
 
-export async function createDebugBuild(
-  args: unknown,
+/**
+ * The pipeline an earlier attempt launched for this ticket, in any phase.
+ * The ticket exists only for this request, so the oldest pipeline linked to
+ * it is the one the request started; a later build the user started on the
+ * ticket from the board is theirs and is not returned.
+ */
+async function launchedDebugPipeline(
   context: DebugBuildContext,
+  projectId: string,
+  taskId: string,
+): Promise<{ id: string; environmentId: string } | null> {
+  const linked = (await context.storage.listBuildPipelines(projectId))
+    .map((record) => {
+      const snapshot = isRecord(record.snapshot) ? record.snapshot : {};
+      const source = isRecord(snapshot.source) ? snapshot.source : {};
+      const createdAt = typeof snapshot.createdAt === "string" ? snapshot.createdAt : "";
+      const environmentId =
+        record.environmentId ||
+        (typeof snapshot.environmentId === "string" ? snapshot.environmentId : "");
+      const forTask =
+        (source.type === "kanban" && source.taskId === taskId) ||
+        (source.type === undefined && snapshot.taskId === taskId);
+      return forTask ? { id: record.id, environmentId, createdAt } : null;
+    })
+    .filter((entry): entry is { id: string; environmentId: string; createdAt: string } =>
+      Boolean(entry),
+    )
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const first = linked[0];
+  return first ? { id: first.id, environmentId: first.environmentId } : null;
+}
+
+async function runDebugBuild(
+  args: CreateDebugBuildInput,
+  context: DebugBuildContext & { buildPipelines: NonNullable<DebugBuildContext["buildPipelines"]> },
   ports: DebugBuildPorts,
+  environment: Environment,
+  project: { name?: string; localPath?: string | null },
+  hash: string,
 ): Promise<CreateDebugBuildResult> {
-  if (!isCreateDebugBuildInput(args)) throw new Error("Invalid debug build request");
   const { storage } = context;
-  if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
-
-  const environment = await storage.getEnvironment(args.environmentId.trim());
-  if (!environment) throw new Error(`Environment not found: ${args.environmentId}`);
-  const project = await storage.getProject(environment.projectId);
-  if (!project) throw new Error(`Project not found: ${environment.projectId}`);
-
   // Checked and normalised before anything is written, so a bad image fails
   // the request instead of leaving a ticket behind.
   const screenshots = args.screenshot
@@ -237,26 +300,18 @@ export async function createDebugBuild(
       )
     : [];
 
-  const hash = requestHash(args);
-  const requestId = args.requestId.trim();
-  const resolved = await ticketResolutions.run(`${environment.projectId}:${requestId}`, () =>
-    resolveDebugTicket(context, ports, args, environment, project.name, hash),
-  );
+  const resolved = await resolveDebugTicket(context, ports, args, environment, project.name, hash);
   let task: KanbanTask = resolved.task;
-  const comments = resolved.comments;
 
-  for (const comment of comments) {
-    try {
-      task = await storage.kanban.addKanbanComment(
-        task.id,
-        comment.text,
-        environment.projectId,
-        comment.key,
-      );
-    } catch (error) {
-      // Already added by an earlier attempt, with the transcript as it was then.
-      if (!isConflict(error)) throw error;
-    }
+  const launched = await launchedDebugPipeline(context, environment.projectId, task.id);
+  if (launched) {
+    // A replay of a request whose pipeline already exists, running or not.
+    return {
+      taskId: task.id,
+      pipelineId: launched.id,
+      projectId: environment.projectId,
+      ...(launched.environmentId ? { environmentId: launched.environmentId } : {}),
+    };
   }
 
   const snapshotImages: TaskSnapshotImage[] = [];
@@ -290,7 +345,7 @@ export async function createDebugBuild(
   );
   log.info("debug-build.launched", {
     pipelineId: pipeline.id,
-    transcripts: comments.length,
+    transcripts: resolved.transcripts,
     screenshot: snapshotImages.length > 0,
   });
   return {
@@ -299,4 +354,40 @@ export async function createDebugBuild(
     projectId: environment.projectId,
     ...(pipeline.environmentId ? { environmentId: pipeline.environmentId } : {}),
   };
+}
+
+export async function createDebugBuild(
+  args: unknown,
+  context: DebugBuildContext,
+  ports: DebugBuildPorts,
+): Promise<CreateDebugBuildResult> {
+  if (!isCreateDebugBuildInput(args)) throw new Error("Invalid debug build request");
+  const { storage, buildPipelines } = context;
+  if (!buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+
+  const environment = await storage.getEnvironment(args.environmentId.trim());
+  if (!environment) throw new Error(`Environment not found: ${args.environmentId}`);
+  const project = await storage.getProject(environment.projectId);
+  if (!project) throw new Error(`Project not found: ${environment.projectId}`);
+
+  const hash = requestHash(args);
+  const key = `${environment.projectId}:${args.requestId.trim()}`;
+  const running = inFlight.get(key);
+  if (running) {
+    // Joining is only for the same request; any other is refused before it writes.
+    if (running.hash !== hash) throw new Error(REUSED_KEY);
+    return running.result;
+  }
+  const result: Promise<CreateDebugBuildResult> = runDebugBuild(
+    args,
+    { ...context, buildPipelines },
+    ports,
+    environment,
+    project,
+    hash,
+  ).finally(() => {
+    if (inFlight.get(key)?.result === result) inFlight.delete(key);
+  });
+  inFlight.set(key, { hash, result });
+  return result;
 }

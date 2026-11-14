@@ -93,14 +93,17 @@ export function DebugBuildDialog({
       ...(includeScreenshot && screenshot ? { screenshot } : {}),
       requestId,
     });
-    let request = build(attempt.current.requestId);
-    const identity = debugBuildRequestIdentity(request);
-    // A key an earlier attempt spent may only be reused for the same request.
+    // The identity leaves the key out, so it is the same for the request sent
+    // under the old key or a new one. A key an earlier attempt spent may only
+    // be reused for the same request: an edit mints a new key, and the
+    // identity stored is the one that key now stands for, so an unchanged
+    // retry after the edit reuses it.
+    const identity = debugBuildRequestIdentity(build(attempt.current.requestId));
     if (attempt.current.identity !== null && attempt.current.identity !== identity) {
       attempt.current.requestId = createUuid();
-      request = build(attempt.current.requestId);
     }
     attempt.current.identity = identity;
+    const request = build(attempt.current.requestId);
     setSubmitting(true);
     try {
       const api = backendApiForScope(scope, createBuildPipelinesApi, { createDebugBuild });

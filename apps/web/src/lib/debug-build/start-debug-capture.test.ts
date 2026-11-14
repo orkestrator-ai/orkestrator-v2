@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { useDebugBuildStore } from "@/stores/debugBuildStore";
-import { DEBUG_CAPTURE_UNAVAILABLE, startDebugCapture } from "./start-debug-capture";
+import {
+  DEBUG_CAPTURE_TIMED_OUT,
+  DEBUG_CAPTURE_UNAVAILABLE,
+  startDebugCapture,
+} from "./start-debug-capture";
 
 const target = { nodeId: null, projectId: "project-1", environmentId: "env-1" };
 
@@ -46,4 +50,23 @@ test("a press while the dialog is open does nothing", async () => {
   expect(captured).toBe(false);
   expect(useDebugBuildStore.getState().target?.environmentId).toBe("env-1");
   expect(useDebugBuildStore.getState().screenshot).toBe("AAAA");
+});
+
+test("a capture that never settles opens the dialog without a screenshot after the timeout", async () => {
+  // The capture never answers; a 20 ms budget stands in for the real 10 s one.
+  await startDebugCapture(target, () => new Promise<string>(() => undefined), 20);
+  const state = useDebugBuildStore.getState();
+  expect(state.capturing).toBe(false);
+  expect(state.open).toBe(true);
+  expect(state.screenshot).toBeNull();
+  expect(state.captureError).toBe(DEBUG_CAPTURE_TIMED_OUT);
+});
+
+test("a capture that answers after the timeout is ignored", async () => {
+  let answer: (value: string) => void = () => undefined;
+  await startDebugCapture(target, () => new Promise<string>((resolve) => (answer = resolve)), 20);
+  answer("LATE");
+  await Promise.resolve();
+  expect(useDebugBuildStore.getState().screenshot).toBeNull();
+  expect(useDebugBuildStore.getState().captureError).toBe(DEBUG_CAPTURE_TIMED_OUT);
 });

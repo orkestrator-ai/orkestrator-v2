@@ -138,3 +138,27 @@ test("an edited request after a failure gets a new key", async () => {
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.requestId).not.toBe(sent[0]!.requestId);
 });
+
+test("after an edit, an unchanged retry reuses the edited request's key", async () => {
+  stubCreate([new Error("offline"), new Error("offline"), "ok"]);
+  openDialog({ screenshot: null, captureError: null });
+  renderInAppCommandScope(<DebugBuildDialogHost />);
+  const problem = screen.getByLabelText(/Problem \/ objective/);
+  const submit = screen.getByRole("button", { name: "Create pipeline environment" });
+  const send = async (count: number, fails = true) => {
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+    await waitFor(() => expect(sent).toHaveLength(count));
+    if (fails) await waitFor(() => expect(submit.hasAttribute("disabled")).toBe(false));
+  };
+  fireEvent.change(problem, { target: { value: "First wording" } });
+  await send(1);
+  fireEvent.change(problem, { target: { value: "Second wording" } });
+  await send(2);
+  // The answer to the edited request was lost; the same edited request retries.
+  await send(3, false);
+  expect(sent[1]!.requestId).not.toBe(sent[0]!.requestId);
+  expect(sent[2]!.requestId).toBe(sent[1]!.requestId);
+  expect(sent[2]!.problem).toBe("Second wording");
+});

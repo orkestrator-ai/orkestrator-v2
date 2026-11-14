@@ -17,16 +17,23 @@
  * This module is shared with the browser; it must stay free of Node APIs.
  */
 
+import { sha256Hex } from "./graphs/sha256.js";
+
 export const MAX_DEBUG_BUILD_PROBLEM_LENGTH = 20_000;
 export const MAX_DEBUG_BUILD_EXPECTED_LENGTH = 20_000;
 /** A base64 PNG of the window; the backend still checks the decoded size. */
 export const MAX_DEBUG_BUILD_SCREENSHOT_LENGTH = 12 * 1024 * 1024;
 /** The filename the screenshot is attached to the ticket under. */
 export const DEBUG_BUILD_SCREENSHOT_FILENAME = "debug-screenshot.webp";
-/** How much of the source transcript the ticket carries, across all its tabs. */
-export const DEBUG_BUILD_TRANSCRIPT_MAX_CHARS = 80_000;
-/** The most any one tab's transcript may take of that budget. */
-export const DEBUG_BUILD_TAB_TRANSCRIPT_MAX_CHARS = 60_000;
+/**
+ * How much of the source transcript the ticket carries, across all its tabs.
+ * Every stage prompt quotes the ticket's comments, so this is a hard bound,
+ * not a preview size; tabs share it fairly (`allocateDebugTranscriptBudgets`)
+ * so a long tab cannot crowd the others out.
+ */
+export const DEBUG_BUILD_TRANSCRIPT_MAX_CHARS = 240_000;
+/** One ticket comment's size at most; a longer transcript spans several. */
+export const DEBUG_BUILD_TRANSCRIPT_COMMENT_MAX_CHARS = 40_000;
 /** Criteria generated from the Expected result; the rest stay in its text. */
 export const MAX_DEBUG_BUILD_CRITERIA = 20;
 
@@ -96,13 +103,11 @@ export function isCreateDebugBuildInput(value: unknown): value is CreateDebugBui
 
 /**
  * What a debug-build idempotency key stands for: the request minus the key.
- * The screenshot is represented by its length and ends, so the identity stays
- * small while a different capture is still a different request.
+ * The screenshot is represented by the SHA-256 of its whole content, so the
+ * identity stays small while any different capture is a different request.
  */
 export function debugBuildRequestIdentity(request: CreateDebugBuildInput): string {
-  const screenshot = request.screenshot
-    ? `${request.screenshot.length}:${request.screenshot.slice(0, 64)}:${request.screenshot.slice(-64)}`
-    : null;
+  const screenshot = request.screenshot ? `sha256:${sha256Hex(request.screenshot)}` : null;
   return JSON.stringify([
     request.environmentId.trim(),
     request.problem.trim(),
@@ -320,31 +325,95 @@ function renderMessage(message: DebugTranscriptMessage, index: number): string {
   return lines.join("\n");
 }
 
+/** The rendered size of a whole transcript, before any message is left out. */
+export function debugTranscriptSize(messages: readonly DebugTranscriptMessage[]): number {
+  return messages.reduce(
+    (total, message, index) => total + renderMessage(message, index).length + 2,
+    0,
+  );
+}
+
 /**
- * One tab's transcript as a ticket comment, within `maxChars`.
+ * Each tab's share of `total`: max-min fair, so every tab that fits in an
+ * equal share is kept whole and the rest split what is left evenly. No tab is
+ * left out because the ones before it were long.
+ */
+export function allocateDebugTranscriptBudgets(sizes: readonly number[], total: number): number[] {
+  const order = sizes
+    .map((size, index) => ({ size: Math.max(0, size), index }))
+    .sort((left, right) => left.size - right.size || left.index - right.index);
+  const budgets = Array.from({ length: sizes.length }, () => 0);
+  let remaining = Math.max(0, total);
+  order.forEach((entry, position) => {
+    const share = Math.floor(remaining / (order.length - position));
+    const budget = Math.min(entry.size, share);
+    budgets[entry.index] = budget;
+    remaining -= budget;
+  });
+  return budgets;
+}
+
+function packBlocks(blocks: readonly string[], capacity: number): string[] {
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let used = 0;
+  const flush = () => {
+    if (current.length > 0) chunks.push(current.join("\n\n"));
+    current = [];
+    used = 0;
+  };
+  for (const block of blocks) {
+    // A single block larger than a comment is cut at the comment size.
+    const pieces: string[] = [];
+    for (let offset = 0; offset < block.length; offset += capacity) {
+      pieces.push(block.slice(offset, offset + capacity));
+    }
+    for (const piece of pieces.length > 0 ? pieces : [block]) {
+      const size = piece.length + (current.length > 0 ? 2 : 0);
+      if (used + size > capacity) flush();
+      current.push(piece);
+      used += piece.length + (current.length > 1 ? 2 : 0);
+    }
+  }
+  flush();
+  return chunks;
+}
+
+/**
+ * One tab's transcript as ticket comments: `maxChars` of messages at most,
+ * split into comments of at most `commentMaxChars` each, on message
+ * boundaries where a message fits.
  *
- * The first message (the task as first given) is kept, then the newest that
- * fit, in order; what was left out is said, never silently dropped. Tool
+ * When the whole conversation fits it is kept whole. Otherwise the first
+ * message (the task as first given) is kept, then the newest that fit, in
+ * order; what was left out is said, never silently dropped, and the comment
+ * names the public session ID that reads the complete conversation. Tool
  * inputs and outputs are not included, only each call's name, status and
  * title.
  */
-export function debugTranscriptComment(options: {
+export function debugTranscriptComments(options: {
   tab: Pick<DebugBuildSourceTab, "tabId" | "agent" | "title">;
   environmentId: string;
+  /** The public CLI session ID of the tab, when it has one. */
+  sessionId?: string;
   messages: readonly DebugTranscriptMessage[];
   /** The transcript reached its first message; false when older history was not read. */
   complete: boolean;
   maxChars: number;
-}): string {
+  commentMaxChars?: number;
+}): string[] {
   const label = options.tab.title ? `"${collapse(options.tab.title)}"` : "untitled tab";
   const header = `### Source transcript: ${label} (${options.tab.agent}, environment \`${options.environmentId}\`, tab \`${options.tab.tabId}\`)`;
+  const commentMax = Math.max(
+    header.length + 1_000,
+    options.commentMaxChars ?? DEBUG_BUILD_TRANSCRIPT_COMMENT_MAX_CHARS,
+  );
   const rendered = options.messages.map(renderMessage);
-  const budget = Math.max(0, options.maxChars - header.length - 400);
   const keep = new Set<number>();
   let used = 0;
   const take = (index: number): boolean => {
     const size = rendered[index]!.length + 2;
-    if (used + size > budget) return false;
+    if (used + size > options.maxChars) return false;
     keep.add(index);
     used += size;
     return true;
@@ -353,27 +422,40 @@ export function debugTranscriptComment(options: {
   for (let index = rendered.length - 1; index > 0; index--) {
     if (!take(index)) break;
   }
-  const parts: string[] = [header];
+  const blocks: string[] = [];
   if (!options.complete) {
-    parts.push(
+    blocks.push(
       "_Older history than the first message below was not available to read; the transcript starts part-way._",
     );
   }
   let omittedRun = 0;
+  let omitted = 0;
+  const omission = () => {
+    blocks.push(`_[${omittedRun} message${omittedRun === 1 ? "" : "s"} omitted for length]_`);
+    omitted += omittedRun;
+    omittedRun = 0;
+  };
   for (let index = 0; index < rendered.length; index++) {
     if (keep.has(index)) {
-      if (omittedRun > 0) {
-        parts.push(`_[${omittedRun} message${omittedRun === 1 ? "" : "s"} omitted for length]_`);
-        omittedRun = 0;
-      }
-      parts.push(rendered[index]!);
+      if (omittedRun > 0) omission();
+      blocks.push(rendered[index]!);
     } else {
       omittedRun++;
     }
   }
-  if (omittedRun > 0) {
-    parts.push(`_[${omittedRun} message${omittedRun === 1 ? "" : "s"} omitted for length]_`);
+  if (omittedRun > 0) omission();
+  if (rendered.length === 0) blocks.push("_No messages._");
+  if ((omitted > 0 || !options.complete) && options.sessionId) {
+    blocks.push(
+      `_The complete conversation stays in the source tab. Where the Orkestrator CLI can reach this machine, \`orkestrator session transcript ${options.sessionId}\` reads it page by page._`,
+    );
   }
-  if (rendered.length === 0) parts.push("_No messages._");
-  return parts.join("\n\n").slice(0, Math.max(options.maxChars, header.length));
+  // Room for the header and a " (part 10 of 12)" suffix.
+  const capacity = commentMax - header.length - 40;
+  const chunks = packBlocks(blocks, capacity);
+  return chunks.map((chunk, index) =>
+    chunks.length > 1
+      ? `${header} (part ${index + 1} of ${chunks.length})\n\n${chunk}`
+      : `${header}\n\n${chunk}`,
+  );
 }

@@ -92,7 +92,10 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "plugins.read-failed": "Listing plugins failed; the route answered 500.",
       "prompt.accepted": "The route accepted a prompt and answered 202.",
       "prompt.failed": "A prompt turn failed; the session reports the error.",
-      "prompt.processing-failed": "A prompt accepted by the route failed while processing.",
+      "prompt.processing-failed":
+        "A prompt accepted by the route failed while processing, before the turn could report it.",
+      "prompt.processing-reported":
+        "A prompt accepted by the route failed; the turn already logged prompt.failed.",
       "prompt.processing-usage-limited":
         "A prompt accepted by the route ended on a usage limit; the turn already logged prompt.usage-limited.",
       "prompt.received": "A prompt reached the bridge; only its length is logged.",

@@ -10,7 +10,7 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `github-cli-login.ts`, `opencode-provider-login-slot.ts`,
 `container-usage-sampler.ts`, `container-oom-events.ts`,
 `container-log-service.ts`,
-`docker-cleanup-grants.ts`, `integration-locks.ts`, `feature-build-tasks.ts`,
+`docker-cleanup-grants.ts`, `integration-locks.ts`, `features/build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`,
 `coordinator-request-flights.ts`,
 `github-cli-binary.ts`, `host-catalog-seeds.ts`.
@@ -221,7 +221,13 @@ late `ECHILD` from Bun afterwards is ignored. At most 256 children are
 watched, timers are unref'd, and `child.reaped`, `child.reap-abandoned` and
 `child.reap-unavailable` record the outcome ([logging](logging.md)).
 
-The defect is Bun's (1.4.4) and is not reported upstream yet. Never raise a
+The defect is Bun's (1.4.4) and is not reported upstream yet. Its known
+trigger is a nested event-loop tick, such as an awaited
+`expect(promise).resolves` or `.rejects` in `bun test`, which drops the rest of
+the outer tick's ready one-shot polls
+([to-do 6900](../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md),
+task 3); whether the backend reaches such a tick outside tests is not
+established. Never raise a
 test deadline, skip or retry to hide it, and never settle a command as
 successful when its output may be missing.
 

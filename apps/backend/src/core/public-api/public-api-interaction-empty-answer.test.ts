@@ -3,7 +3,7 @@ import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-intera
 import { cleanupSessionHarnesses, setup } from "./test-provider.js";
 
 /**
- * `session.interaction.resolve` with `action: "answer"` and no answers (7202
+ * `session.interaction.resolve` with `action: "answer"` and no answers (7202 (retired)
  * task 1). The CLI sends exactly this to approve a command approval, so the
  * backend is the one place that decides whether an empty answer is valid: it
  * approves an interaction with no questions and refuses one with a required

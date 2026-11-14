@@ -95,10 +95,20 @@ no peer left. So the kernel has reported the end of the stream, and no other
 process is holding the write end. Across 141 Linux stalls the exit event always
 arrived; the macOS stalls also lose `exit`.
 
-Why Bun drops the event is **not established**. The standalone scripts below
-never reproduced it, so there is no reduced case. It is not specific to
+Why Bun drops the event was not established here: the standalone scripts below
+never reproduced it. It is not specific to
 `node:child_process`, which calls `Bun.spawn` with `lazy: true`: `runCommand`
 rewritten on an eager `Bun.spawn` pipe stalled more often, not less.
+
+**Trigger found later (2026-11-14, to-do
+[6900](../../../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md)
+task 3).** This test's `await expect(...).rejects`: Bun settles it by running
+the event loop from inside the current callback, and that nested tick drops
+the rest of the outer tick's ready one-shot polls, among them the EOF of a scan
+child exiting at the same moment. Replacing that one `expect` in the reduced
+test stopped the loss (0 in 100 runs against 42 lost in 37 of 100), and
+`scripts/lost-child-event/nested-tick.ts` reproduces it with nothing from this
+repository.
 
 **`DiffStatsService` made the new target wait for that child.** All 18 stuck
 children traced at a 10 s timeout on Linux were in a scan of the previous target

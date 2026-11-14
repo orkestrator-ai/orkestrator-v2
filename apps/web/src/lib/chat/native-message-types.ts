@@ -364,7 +364,7 @@ export interface NativeUserCommandPart extends NativeBasePart {
 }
 
 /**
- * An approval an Orkestrator permission rule answered (todo 0723),
+ * An approval an Orkestrator permission rule answered (todo 0723 (retired)),
  * backend-owned (`list_permission_rules`). Synthesized by the tab: the
  * provider only saw a one-time approval.
  */

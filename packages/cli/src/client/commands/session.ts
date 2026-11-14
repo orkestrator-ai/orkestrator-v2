@@ -1036,7 +1036,7 @@ export const sessionCommands: CommandSpec[] = [
       );
       const answers = parseAnswers(options);
       // An `answer` with no answers is how an approval with no questions is
-      // approved (7202). Whether an empty answer suits this interaction is the
+      // approved (7202 (retired)). Whether an empty answer suits this interaction is the
       // backend's call: it knows the questions and refuses a required one.
       if (action !== "answer" && answers.length > 0) {
         throw new CliError("invalid-input", "--choose/--text only apply to --action answer");

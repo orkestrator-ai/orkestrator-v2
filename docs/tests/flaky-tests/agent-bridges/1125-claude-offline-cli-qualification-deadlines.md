@@ -51,3 +51,25 @@ idle host. No test, deadline or implementation was changed.
 The deadline race reproduces on `origin/main` with the same symptom, and the
 set of failing cases changes between runs. No test, deadline or
 implementation was changed.
+
+## Recurrence: macOS sandbox test at the 2026-11-06 pins (2026-11-14)
+
+- **Branch:** `20261114-021211-2416d34e2ca0`, base commit `dc90609bf`
+  (`git merge-base HEAD origin/main`). `mise run flaky:recurrence -- 1125
+  --base dc90609bfd46ee0302d3c1a2841e0faa99482c64 --registry-ref origin/main` answered "open. Record the
+  failure as a recurrence". The branch changes only documentation; the
+  pinned CLI is 2.1.319 (Agent SDK 0.3.319), unchanged since 2026-11-06.
+- **Host:** arktech-mini, macOS 27.2 arm64, 18 logical cores, Bun 1.4.4,
+  other worktrees active. Load averages were about 14 / 12 / 9 straight
+  after the failing run.
+
+| Command | Result |
+| --- | --- |
+| `mise run test:logged -- --name coordinator-sandbox-conformance -- bun test --cwd bridges/claude-bridge ./src/conformance-coordinator-sandbox-live.test.ts --preload ../../tests/setup-node.ts --parallel=1` (file alone, one worker), run straight after `verify:claude:sandbox-live` | 16 pass, 1 skip, 2 fail in 119.3 s: `default-sandbox-writes` (15.3 s) and `unavailable-hook-refuses-abbreviation` (15.9 s), each at `expect(controller.signal.aborted).toBe(false)` (`test-fixtures/coordinator-sandbox-qualification.ts:361`), so the 15 s turn deadline fired. |
+| The same `bun test` command, rerun at once without `test:logged` | 18 pass, 1 skip, 0 fail in 74.9 s. |
+| The same command three more times in a row (load 15.9 / 15.8 / 15.7) | 18 pass, 1 skip, 0 fail each time, in 56.0 s, 42.1 s and 28.8 s. |
+
+Same symptom as before: the failing cases differ from earlier runs, each
+fails only by running past its deadline, and the same cases pass on the next
+run. The skip is `read-only-required-refused`, which is pinned on Linux
+only. No test, deadline or implementation was changed.

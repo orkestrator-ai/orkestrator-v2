@@ -236,6 +236,7 @@ import {
 } from "./native-agent-deferred-display.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { runWithTimeout } from "./abortable-timing.js";
+import { QueuedTurnPhaseLog } from "./native-agent-queued-turn-log.js";
 
 const log = createLogger("native-agent");
 
@@ -403,7 +404,7 @@ export interface NativeAgentTranscriptProjectionHost {
     provider: NativeAgentRuntimeProvider,
   ): void;
   /**
-   * Orkestrator's permission rules (todo 0723): answers the pending requests a
+   * Orkestrator's permission rules (todo 0723 (retired)): answers the pending requests a
    * rule covers before any card is built, and offers "Approve and remember"
    * on the rest. Absent in tests that do not wire it.
    */
@@ -461,6 +462,8 @@ export class NativeAgentTranscriptProjection {
 
   /** Bounded, reconstructible view cache; providers remain authoritative. */
   private readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
+  /** Content-free debug line for a queue held while the turn is not running. */
+  private readonly queuedTurnLog = new QueuedTurnPhaseLog();
   /** Bounded wire revisions for conditional/delta projection reads. */
   private readonly projectionSync = new Map<string, NativeAgentSyncState>();
   /**
@@ -869,6 +872,7 @@ export class NativeAgentTranscriptProjection {
     this.projectionRefreshes.clear();
     this.projectionRefreshDescriptors.clear();
     this.projectionEpochs.clear();
+    this.queuedTurnLog.clear();
   }
 
   /**
@@ -3884,6 +3888,13 @@ export class NativeAgentTranscriptProjection {
         this.recordProgressiveMetric("state", startedAt, "provider", "missing", phases.phases());
         return { viewVersion: 1, status: "missing" };
       }
+      this.queuedTurnLog.observe({
+        agent: input.agent,
+        environmentId: input.environmentId,
+        sessionKey,
+        phase: value.turn.phase,
+        queued: value.queue?.items.length ?? 0,
+      });
       const token = phases.normalize(() =>
         createHash("sha256").update(JSON.stringify(value)).digest("base64url").slice(0, 43),
       );
@@ -6238,6 +6249,17 @@ export class NativeAgentTranscriptProjection {
         }
       );
     }
+    this.queuedTurnLog.observe({
+      agent: input.agent,
+      environmentId: input.environmentId,
+      sessionKey: nativeAgentSessionStorageKey(
+        input.environmentId,
+        input.agent,
+        input.logicalSessionKey,
+      ),
+      phase: candidate.turn.phase,
+      queued: candidate.queue?.items.length ?? 0,
+    });
     const previous = this.projectionCache.get(key);
     // Compared only for equality, so a digest stands in for the whole JSON:
     // rows come through the per-object memo (projected values are immutable

@@ -341,7 +341,7 @@ replay shows it as the card, never as a message the user typed. See
   allows reads only. `approvals.ts` drops the amendments from the descriptor
   and the backend ignores `amendments` from an older bridge. The exec-policy
   prefix alone is forwarded as `proposedCommandPrefix`, a preselection hint
-  for an Orkestrator rule (todo 0723) that no answer carries back.
+  for an Orkestrator rule (todo 0723 (retired)) that no answer carries back.
 - Mark `ruleEligible` only on the v2 command method with app-server's own
   `command` and `kind` `command` (never `writeStdin`, a `commandActions`
   fallback or a legacy argv join), a managed-network host, or a file change
@@ -351,7 +351,9 @@ replay shows it as the card, never as a message the user typed. See
 - A managed-network approval has `networkApprovalContext` and no `command`
   (0.166.0), so the host alone is what a person approves. Codex raises it only
   when `/etc/codex/requirements.toml` enables its proxy, so
-  `mise run verify:codex:network-approval` proves it in a disposable container.
+  `mise run verify:codex:network-approval` proves it in a disposable container,
+  and `mise run verify:codex:network-card` proves the card the app shows for it
+  (only under Codex's own sandbox; the host default skips the proxy, 8085).
 - Every turn runs in Codex's Default collaboration mode, which refuses
   `request_user_input`. Threads of a watched session (any policy but
   `pipeline`) carry `features.default_mode_request_user_input = true`

@@ -159,7 +159,7 @@ export interface AgentInteractionProviderCapability {
   ): Promise<AgentInteractionApplyOutcome>;
   /**
    * What an Orkestrator permission rule may match for one pending request
-   * (todo 0723), read from the provider's own payload when the request was last
+   * (todo 0723 (retired)), read from the provider's own payload when the request was last
    * listed. `null` when the request is not one a rule may answer: the bridge
    * did not mark it exact, a detail was truncated, or no allow-once answer
    * exists. Absent on adapters with nothing a rule could answer.
@@ -412,7 +412,7 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * refused with `requestIdRetired`). Neither is "never sent". `absent` is the
  * only negative and an assertion too: the provider can prove the id never
  * reached it and that a send under it now would be its first delivery, so a
- * recovered `dispatching` request may be re-sent under the same id (0223). A
+ * recovered `dispatching` request may be re-sent under the same id (to-do 0223, retired). A
  * provider answers it only while its journal is complete for the session.
  * Everything else — no record, an unreadable or incomplete journal, a provider
  * that predates `lost` or `absent` — is `unknown`, so a lost record can never

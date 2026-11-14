@@ -26,7 +26,17 @@ import {
 import { collaborators } from "./native-agent-service-test-collaborators.js";
 import { deferred } from "./recurring-test-support.js";
 import type { BridgeConnection, NativeAgentRuntimeProvider } from "./native-agent-provider.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import {
+  ACTIVITY_RETRY_CEILING_MS,
+  nativeAgentSessionStorageKey,
+} from "./native-agent-service-shared.js";
+import {
+  OPENCODE2_RUN_CUT_SHORT_MESSAGE,
+  OPENCODE2_UNSETTLED_RUN_GRACE_MS,
+  OpenCodeEnvironmentProvider,
+} from "./opencode2/environment-provider.js";
+import type { OpenCode2Provider } from "./opencode2/provider.js";
+import type { OpenCode2Message } from "./opencode2/types.js";
 import {
   captureWarnings,
   createProviderStub,
@@ -348,5 +358,98 @@ describe("completion outcome reconciliation", () => {
         failed = true;
       }),
     ).toBe("agent_failed");
+  });
+});
+
+describe("an OpenCode run its killed server never settled", () => {
+  // The replacement server reads idle and never writes the run's boundary
+  // row. The real provider's grace decides; only its server is a stub.
+  test("the bell retries through the grace, then rings agent_failed and the outcome records it", async () => {
+    let now = 1_000_000;
+    let activity: "working" | "idle" = "working";
+    const rows: OpenCode2Message[] = [
+      {
+        id: "user-1",
+        type: "user",
+        text: "x",
+        time: { created: 1 },
+        metadata: { orkestrator: { requestId: "req-1" } },
+      } as OpenCode2Message,
+    ];
+    const server = {
+      messages: async () => rows,
+      activity: async () => activity,
+      registerSession: () => {},
+      dispose: async () => {},
+    } as unknown as OpenCode2Provider;
+    const openCode = new OpenCodeEnvironmentProvider({
+      connection: async () => ({
+        baseUrl: "http://127.0.0.1:1",
+        password: "pw",
+        directory: "/work",
+        generation: "g1",
+      }),
+      createProvider: () => server,
+      now: () => now,
+    });
+    const { provider } = createProviderStub("opencode", {
+      activity: async () => activity,
+      status: async () => (activity === "working" ? "running" : "idle"),
+    });
+    provider.turnTerminalError = (sessionId, requestId) =>
+      openCode.turnTerminalError(sessionId, requestId);
+    try {
+      await captureWarnings(() =>
+        withService(
+          { prefix: "ork-opencode-cut-short-", provider: async () => provider, now: () => now },
+          async ({ storage, service }) => {
+            await storage.adoptNativeAgentSession({
+              key: key("opencode"),
+              environmentId: "env-1",
+              agent: "opencode",
+              logicalSessionKey: "tab-1",
+              providerSessionId: "provider-1",
+            });
+            await storage.dispatchNativeAgentPromptOnce(key("opencode"), "req-1", async () => {});
+            await service.reconcileAgentActivity();
+            const completions = spyOn(storage, "recordEnvironmentSessionCompletion");
+            const retryAt = collaborators(service).launches.forTesting().activityRetryAt;
+            activity = "idle";
+            const idleAt = now;
+            await service.reconcileAgentActivity();
+            for (let pass = 0; pass < 20 && completions.mock.calls.length === 0; pass += 1) {
+              // Unsettled within the grace: still working, never a finished bell.
+              expect(now - idleAt).toBeLessThan(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+              expect(service.sessionActivitySnapshot("env-1", "opencode", "tab-1")).toBe("working");
+              now = Math.max(now + 1, retryAt.get("env-1\0opencode") ?? now + 1);
+              await service.reconcileAgentActivity();
+            }
+            expect(completions.mock.calls.map((call) => call[2])).toEqual(["agent_failed"]);
+            expect(now - idleAt).toBeGreaterThanOrEqual(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+            expect(now - idleAt).toBeLessThan(
+              OPENCODE2_UNSETTLED_RUN_GRACE_MS + ACTIVITY_RETRY_CEILING_MS,
+            );
+            expect((await storage.getEnvironment("env-1"))?.unreadReason).toBe("agent_failed");
+
+            // A turn-outcome reader (the CLI, a pipeline) gets the same verdict
+            // at once, without a second grace, and it is recorded durably.
+            expect(
+              await service.sessionTurnOutcome({
+                environmentId: "env-1",
+                agent: "opencode",
+                logicalSessionKey: "tab-1",
+                requestId: "req-1",
+              }),
+            ).toMatchObject({ outcome: "failed", error: OPENCODE2_RUN_CUT_SHORT_MESSAGE });
+            const stored = await storage.getNativeAgentSession(key("opencode"));
+            expect(
+              stored?.turnOutcomes?.find((entry) => entry.requestId === "req-1"),
+            ).toMatchObject({ outcome: "failed", error: OPENCODE2_RUN_CUT_SHORT_MESSAGE });
+          },
+        ),
+      );
+    } finally {
+      await openCode.dispose();
+    }
   });
 });

@@ -8,7 +8,7 @@ import {
 } from "./support/client-harness.js";
 
 /**
- * `session interactions resolve` (7202 task 1): `--action answer` with no
+ * `session interactions resolve` (7202 (retired) task 1): `--action answer` with no
  * `--choose` or `--text` approves an approval that has no questions. The CLI
  * leaves the "does an empty answer fit?" check to the backend, which knows the
  * interaction's questions, and relays its refusal unchanged.

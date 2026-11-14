@@ -170,7 +170,7 @@ run reported it as a leaked `stream:open 1→2`). Tests:
 `tests/unit/recurring-live-ab-soak-sessions.test.ts`.
 
 Live on 2026-11-11, beelink2 (Linux 7.2.15, 16 cores, a busy shared host:
-load average 7 to 53 during the first run, with a 7562 busy run and other
+load average 7 to 53 during the first run, with a 7562 (retired) busy run and other
 builds beside it), headless `dev:test` profiles with one local fixture
 environment, only the Pi toolchain, no credentials, the reachability check
 off and every model call on the driver's loopback fake model:

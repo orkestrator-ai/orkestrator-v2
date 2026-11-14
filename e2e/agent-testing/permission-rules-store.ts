@@ -1,5 +1,5 @@
 /**
- * Stages or reads Orkestrator permission rules (todo 0723) behind a running
+ * Stages or reads Orkestrator permission rules (todo 0723 (retired)) behind a running
  * agent-test backend, like `backend-store.ts` does for whole stores. Run with
  * Bun (specs run under Node, which has no `bun:sqlite`):
  *

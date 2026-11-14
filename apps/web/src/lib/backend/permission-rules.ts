@@ -16,7 +16,7 @@ import {
 } from "./client";
 
 /**
- * Orkestrator's own permission rules (todo 0723). The backend owns and applies
+ * Orkestrator's own permission rules (todo 0723 (retired)). The backend owns and applies
  * them; the UI lists them, removes them, and creates one only from a person's
  * click on an approval card. Rules are per machine: `machine` picks the node
  * Settings is looking at (see `machineInvoke`); a card's own command reaches

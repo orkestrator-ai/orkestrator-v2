@@ -66,7 +66,7 @@ import {
   pairBudgetEpoch,
   pairMessagesInLastHour,
 } from "./storage-agent-mail-budgets.js";
-import { coalescingWindow } from "./storage-agent-mail-injects.js";
+import { coalescingWindow, expireStaleRiders } from "./storage-agent-mail-injects.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-mail");
@@ -541,6 +541,12 @@ export class AgentMailRepository {
        */
       keepWithoutWake?: string;
       /**
+       * Deliver this notice with the next batch some other message starts, and
+       * never as a wake of its own, so awareness costs no turn. Honoured only
+       * for a system sender; it lapses after `RIDE_ALONG_MAX_AGE_MS`.
+       */
+      rideAlong?: boolean;
+      /**
        * A notice a leaf sent up the coordinator hierarchy, not a message between
        * two agents: it wakes without counting against the node's pair budget, so
        * an exhausted budget cannot hold it. Honoured only for a node sender.
@@ -876,6 +882,7 @@ export class AgentMailRepository {
         !heldForLoopBudget &&
         overHourlyLimit &&
         canInject;
+      const rideAlong = options.rideAlong === true && sender.kind === "system";
       const message: AgentMailMessage = {
         version: 1,
         id,
@@ -911,6 +918,9 @@ export class AgentMailRepository {
         ...(notice ? { notice } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(statusBudgetKey ? { statusBudgetKey } : {}),
+        // On the message, not the queue entry, so promotion from stored mail,
+        // retries and verification all keep it.
+        ...(rideAlong ? { rideAlong: true as const } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
           : heldForDelegation || heldForLoopBudget || heldForHourlyLimit
@@ -974,11 +984,12 @@ export class AgentMailRepository {
           mailboxId: destinationId,
           messageId: id,
         };
+        if (rideAlong) expireStaleRiders(store, destinationId);
         if (shouldScheduleInject) {
           store.pendingInject.push({
             mailboxId: destinationId,
             messageId: id,
-            ...(options.coalesceMs && options.coalesceMs > 0
+            ...(options.coalesceMs && options.coalesceMs > 0 && !rideAlong
               ? {
                   retryAt: coalescingWindow(store, destinationId, options.coalesceMs),
                   coalescing: true as const,

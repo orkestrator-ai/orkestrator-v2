@@ -68,7 +68,7 @@ Cancel. Because the state is the backend's, a hidden tab, a reloaded window or
 another client shows the same cards.
 
 **Telling the agent.** At the start of the tab's next ordinary prompt,
-`NativeAgentService.dispatchAdmittedPrompt` prepends an
+`NativeAgentPromptDispatch.dispatchAdmittedPrompt` (`native-agent-prompt-dispatch.ts`) prepends an
 `<orkestrator-user-commands>` block. For each command it gives the command, the
 working directory, how it ended, and bounded output: 8 KiB per command, 24 KiB
 in total, keeping the end. Details:

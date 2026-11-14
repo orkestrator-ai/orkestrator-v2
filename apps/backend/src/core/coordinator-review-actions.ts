@@ -566,7 +566,13 @@ export function registerCoordinatorReviewActions(
     // Addressing starts an agent even when we already follow this workflow.
     // Workflow membership must not keep opt-in authority after revocation.
     if (surface === "address" && saved.snapshot.environmentId) {
-      await assertCoordinatorMayActOnEnvironment(context, caller, saved.snapshot.environmentId);
+      await assertCoordinatorMayActOnEnvironment(
+        context,
+        caller,
+        saved.snapshot.environmentId,
+        undefined,
+        "review-address",
+      );
     }
     const review = { snapshot: saved.snapshot, revision: saved.revision };
     if (reviewer) return runMultiReviewSurface(context, review, surface, undefined, reviewer);

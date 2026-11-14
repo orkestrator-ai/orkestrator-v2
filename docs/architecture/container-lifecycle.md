@@ -37,7 +37,11 @@ a safe projection with no container ids.
 - **One writer.** The per-environment lifecycle queue serializes operations in
   a process; the registry writer lease
   (`container-lifecycle.writer.lease`, heartbeat file) excludes other backends
-  pointed at the same data directory. Lock order: lifecycle queue, then
+  pointed at the same data directory. A backend that starts while the lease
+  is held keeps trying and takes it once the holder lets it go stale (30 s
+  without a heartbeat, as after a crash, counted by the backend that is
+  trying on its own clock so a host sleep does not count), then runs the
+  writer-only recovery below. Lock order: lifecycle queue, then
   lifecycle record; the service never enqueues on the queue itself.
 - **Dedup, never redispatch.** A request carrying an `operationId` (UUIDv7)
   that already finished returns its stored outcome. One older than the
@@ -86,8 +90,11 @@ replacement never depends on the old name being free.
 
 ## Recovery
 
-At startup (after the writer lease is acquired and before background launch or
-cleanup) and whenever a new operation finds a stale one, the service reconciles
+At startup (after the writer lease is acquired, or when a backend that started
+without it wins it later, and before background launch or cleanup; a lease won
+later reads as not held until this pass settles, so no schedule or container
+mutation runs beside it) and whenever
+a new operation finds a stale one, the service reconciles
 by exact identity:
 
 | Observed state | Action |
@@ -209,10 +216,12 @@ An image with the `boot-status` capability writes
 `/run/orkestrator/boot-status.json` atomically at each phase
 (`initializing`, `network-ready`, `inputs-ready`, `ready`, or `failed` with a
 fixed code such as `firewall-failed`, `firewall-missing`, `entrypoint-failed`).
-The entrypoint removes the legacy markers and the previous record before doing
-anything else. A record counts only when its `pid1Start` equals the start time
-of the container's current PID 1 (`/proc/1/stat`), which changes on every
-start, so a record or marker from an earlier boot can never release work.
+The entrypoint removes the previous record before doing anything else; the
+record is the image's only readiness signal (the `/tmp/.environment-ready`
+and `/tmp/.entrypoint-complete` markers were retired on 2026-11-14). A record
+counts only when its `pid1Start` equals the start time of the container's
+current PID 1 (`/proc/1/stat`), which changes on every start, so a record from
+an earlier boot can never release work.
 
 - A start of a capable runtime waits for `ready` (default 120 s, separate from
   clone/setup/bridge deadlines) before setup or agents run; a failed boot, an

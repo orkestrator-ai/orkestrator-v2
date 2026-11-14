@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { CommandFailedError } from "./shell.js";
 
 /**
- * The reviewed diff as a sealed file beside the review package (to-do 0190).
+ * The reviewed diff as a sealed file beside the review package (to-do 0190 (retired)).
  *
  * A package names its range and the `diffCommand` that reproduces it, and a
  * reviewer normally runs that command. A read-only review turn without the

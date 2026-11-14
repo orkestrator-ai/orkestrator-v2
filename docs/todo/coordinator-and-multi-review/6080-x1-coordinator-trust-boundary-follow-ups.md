@@ -1,6 +1,6 @@
 ## Task analysis
 
-Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at `af2e566e5`, again 2026-11-06 at `c1724ab74`), from what the X1 batch (Coordinator trust boundary) could not prove or close. X1's outcome is the table ending `docs/reports/security/0090-x1-coordinator-trust-boundary.md`, in the parent of the commit that deleted it. Tasks 2 to 4 were worked on a Linux host on 2026-11-06, and task 5's code on 2026-11-09 (its live check is still open); see Assumptions and decisions.
+Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at `af2e566e5`, again 2026-11-06 at `c1724ab74`), from what the X1 batch (Coordinator trust boundary) could not prove or close. X1's outcome is the table ending `docs/reports/security/0090-x1-coordinator-trust-boundary.md`, in the parent of the commit that deleted it. Tasks 2 to 4 were worked on a Linux host on 2026-11-06, task 5's code on 2026-11-09 (its live check is still open) and task 6's counter on 2026-11-14 against `main` at `dc90609bf`; see Assumptions and decisions.
 
 ### Tasks
 
@@ -8,8 +8,8 @@ Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at 
 3. **Close the data directory on the other providers**: OpenCode, Cursor, Pi and Grok coordinators can still read it. Status: done for Pi and OpenCode (a link defect fixed on OpenCode); Cursor in to-do 7400 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#provider-qualification)), Grok in [7401](7401-grok-coordinator-data-dir-reads.md), OpenCode under a user `OPENCODE_CONFIG_DIR` in 7402 (done 2026-11-10 and retired; see `docs/architecture/coordinator.md`).
 4. **Decide what a read-only review turn may read**: a worker bridge's read-only turns have no read boundary. Status: done (decided: leave as is).
 5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. The note is on every path and tested (2026-11-09); the billed live run showing a real worker reads it moved to the manual-test checklist. Left here: reword the note if that run shows a model ignores it. Status: blocked (waits on 7568: 6080 task 5 live run).
-6. **Measure the default**: how often coordinators need environments they did not create. Status: open (depends on usage).
-7. **Retire the two compatibility paths**: the carrier's `selfReminder` spelling and the leaf capability. Status: open (depends on the floor).
+6. **Measure the default**: how often coordinators need environments they did not create. The content-free counter is built (2026-11-14). Left: an exception for replies, built only if the user's reading of the counter calls for one. Status: blocked (waits on 7568: 6080 task 6 decision).
+7. **Retire the two compatibility paths**: the carrier's `selfReminder` spelling and the leaf capability. Status: blocked (waits on the version floor: until 2026-12-15 it is v2.21.0, older than both paths).
 
 ### 2. Prove the read boundary under bubblewrap
 
@@ -125,7 +125,11 @@ Found on 2026-11-09:
 
 **Context.** The refusal names the setting, and the report recorded this as something only usage shows.
 
-**Investigation.** No count exists. The refusal is an ordinary tool error and is not recorded anywhere a person can read it in aggregate.
+**Investigation.** No count existed: the refusal is an ordinary tool error and was not recorded anywhere a person could read it in aggregate.
+
+The refusal is decided in two functions of `coordinator-environment-scope.ts`, `assertCoordinatorMayActOnEnvironment` and `assertCoordinatorMayControlWorkflow`. Their callers (found 2026-11-14): the Control MCP origin check (`assert_coordinator_environment_scope`, called by `control-mcp/tools.ts` before every tool in `COORDINATOR_ENVIRONMENT_ACTIONS`), mail to a worker on this node (`coordinator-worker-mail.ts`) and on another node (`send_coordinator_node_mail`), Multi Review addressing (`coordinator-review-actions.ts`, and the node path), and graph and pipeline-step controls. Mail and node mail know whether the message is a reply (`replyToMessageId`); the registry command does not know which tool called it.
+
+**Outcome (2026-11-14).** Built as recommended, the counting half: `CoordinatorEnvironmentRefusals` (`apps/backend/src/core/coordinator-environment-refusals.ts`) counts each refusal where it is decided, by surface (`tool`, `mail`, `mail-reply`, `node-mail`, `node-mail-reply`, `review-address`, `workflow-control`) and node (`local` or `remote`), and the Control MCP guard adds the tool's name when the refusal it gets back is the origin refusal. Labels come from fixed sets; a tool name outside the checked set counts as `other`, and the tool table is capped at 64 rows. No project, coordinator, environment, workflow or message id and no input is kept. The counts are in memory and are read from `/__orkestrator/metrics` (`coordinatorEnvironmentRefusals`) and the diagnostics bundle's `metrics.json`, through `backendMetricsSnapshot`. Tests: `coordinator-environment-refusals.test.ts` (labels, the `other` bucket, the cap) and `coordinator-environment-scope.test.ts` ("each refusal is counted by surface, node and tool, and no id is kept", over real MCP dispatch, mail, a reply to the environment's own mail and a node link). Reading the counts on real use and choosing whether replies get an exception is the 7568 item "6080 task 6"; an agent builds the exception only if that is the choice.
 
 **Decisions.**
 
@@ -184,6 +188,14 @@ The related provider-secrets decision lives in the storage architecture guide
 after report retirement. Link to that retained section so task 3's data-directory
 work can still reach the accepted-risk decision.
 
+### Task 6: count where the refusal is decided, in memory, with the tool added at the MCP layer
+
+Counted inside `coordinator-environment-scope.ts`, where both refusals are thrown, so every caller is covered by one change, rather than in each caller. The callers pass what was refused as an optional `surface` argument (default `tool`), which tells mail from replies, the question the recommended option turns on. The tool name is added in `control-mcp/tools.ts` when the origin refusal comes back from the check, because passing it into `assert_coordinator_environment_scope` would have changed a contract command for a diagnostic. A refusal from that path is therefore counted once in `bySurface` (as `tool`) and once in `byTool`.
+
+Kept in memory and exposed in the existing `/__orkestrator/metrics` snapshot, rather than persisted like `compatibilityPathUsage`. Pros: no store, no migration, nothing on disk; the metrics endpoint and the diagnostics bundle already carry content-free counters. Cons: the counts start from zero at each backend start, so the reader has to look before a restart; the 7568 item says so. A durable count would be the next step if one session's counts turn out too few to decide on.
+
+Did not build the reply exception. The recommended option keeps today's strict rule until the count shows replies dominate, and an exception in a security check with no evidence is what its alternative was rejected for.
+
 ## Constraints and rationale
 
 - The data directory is denied as a whole, with an allowance, rather than file by file. A list goes stale silently when a store adds a secret. The allowance is the part to extend: see `coordinatorReadBoundary`.
@@ -200,4 +212,4 @@ work can still reach the accepted-risk decision.
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on)
 - [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
 - [Provider secrets at rest](../../architecture/storage.md#provider-secrets-at-rest)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live run of task 5, and the real Pi and OpenCode coordinator turns from Needs verification) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live run of task 5, and the real Pi and OpenCode coordinator turns from Needs verification) moved there on 2026-11-10, and the reading of task 6's counter and the reply decision on 2026-11-14.

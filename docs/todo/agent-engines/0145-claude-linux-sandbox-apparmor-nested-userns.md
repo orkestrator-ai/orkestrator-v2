@@ -94,7 +94,7 @@ run 2026-11-10 against `main` at `c98b20e6f`; tasks 1, 3 and 5 re-analysed
 
 **Context.** Docker is a different case from the others. The image installs no `bubblewrap` or `socat` (no match in `docker/Dockerfile`), so a container probe answers `missing-programs`, and the bridge refuses provider-sandbox turns with that reason (the probe runs inside the container, D3).
 
-**Investigation.** The container behaviour is fully determined by the code and the missing programs. It overlaps 0190, whose container read-only turns fail for the same reason. Debian enables AppArmor by default but does not ship Ubuntu's `bwrap-userns-restrict`; Fedora uses SELinux, which the probe does not name. Both are expected to answer `available` unless local policy differs.
+**Investigation.** The container behaviour is fully determined by the code and the missing programs. It overlaps 0190 (retired), whose container read-only turns fail for the same reason. Debian enables AppArmor by default but does not ship Ubuntu's `bwrap-userns-restrict`; Fedora uses SELinux, which the probe does not name. Both are expected to answer `available` unless local policy differs.
 
 Container run, 2026-11-10 on `beelink2` (Arch/Omarchy, kernel 7.2.15, x86_64). The image was built from this checkout (`docker/Dockerfile` at `c98b20e6f`, Debian 13 base, pinned CLI 2.1.319) inside a disposable rootless daemon (`mise run docker:disposable`, Docker Engine 29.9.2, builtin seccomp profile), because the host daemon was not open to this run and must not be changed. A throwaway `dev:test` profile (`--fixture --fixture-environments local,container --no-agent-credentials`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the `docker-qualification-bin` shim on `PATH`) let the backend create the fixture's container environment itself: a restricted runtime joined to its egress gateway, user `node`, `--init`, `CAP_NET_RAW` dropped, no capability added, not privileged. Then, with `docker exec -u node` in that runtime:
 
@@ -111,12 +111,12 @@ So adding the packages to the image would not give containers a working Claude s
 **Decisions.**
 
 - **How are the containers verified?**
-  - **One `docker exec` probe in a real environment, recorded here and reused by 0190 (recommended; done 2026-11-10).**
+  - **One `docker exec` probe in a real environment, recorded here and reused by 0190 (retired) (recommended; done 2026-11-10).**
     - Pros: cheap; settles both files' container question at once.
     - Cons: needs a running container environment.
   - **Accept the code reading.**
     - Pros: no run.
-    - Cons: 0190 explicitly asks for a real container, so it would stay open anyway.
+    - Cons: 0190 (retired) explicitly asks for a real container, so it would stay open anyway.
 - **Do Debian and Fedora stay in scope?**
   - **Keep them as optional, best-effort entries in 0031 and do not let them gate this file (recommended).**
     - Pros: neither ships the profile that caused this; they are secondary platforms.
@@ -272,10 +272,10 @@ failed every Bash call.
    the turn up front with the same reason (decision D3). Evidence:
    `claude-execution-sandbox.test.ts` (provider and coordinator policies,
    including a malformed launcher value; read-only review turns in an
-   ordinary bridge never refused, see 0190; only Linux probed; no probe for a
+   ordinary bridge never refused, see 0190 (retired); only Linux probed; no probe for a
    turn that does not need one), `routes/session.test.ts` ("a turn that
    requires a sandbox this host cannot run commands in": 422 with the reason,
-   nothing claimed or sent; an unsandboxed session unaffected, and since 0190
+   nothing claimed or sent; an unsandboxed session unaffected, and since 0190 (retired)
    a read-only review turn accepted to run on the hook alone),
    `session-manager-sandbox-refusal.test.ts` (the query plan fails without
    starting a CLI) and `http-bridge-commands.test.ts` (the backend surfaces
@@ -412,8 +412,8 @@ a graphical desktop inspection remains in the checklist above.
 - **Chosen:** (c), for provider-sandbox sessions and coordinators launched as
   `required` (any launcher value but `unavailable`); Linux only. Read-only
   review turns in an ordinary bridge (no launcher value) are left as they
-  were and moved to
-  [0190](0190-claude-read-only-turns-without-working-sandbox.md).
+  were and moved to 0190 (retired), on 2026-11-14 (the behaviour is
+  [Read-only review turns without a working sandbox](../../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox)).
 - **Why.** The bridge runs where the CLI runs, which for a container
   environment is inside the container, where the backend's host probe says
   nothing. (d) would silently drop a boundary the user asked for. Read-only
@@ -426,7 +426,7 @@ a graphical desktop inspection remains in the checklist above.
   and container sessions; nothing is journaled for a refused prompt.
 - **Cons.** The whole turn is refused, including tools that would not have
   needed the sandbox (Read, Grep). Read-only review turns on such a host
-  failed each Bash call until 0190 (done 2026-10-28: they now run with the
+  failed each Bash call until 0190 (retired) was done on 2026-10-28 (they now run with the
   sandbox off and the hook as the boundary, and say so). Windows is not probed: its sandbox is
   behind a vendor flag and its behaviour is unverified, so it keeps today's
   behaviour. A refused session needs its policy changed to run.
@@ -466,7 +466,7 @@ a graphical desktop inspection remains in the checklist above.
   rootless daemon, plus two throwaway containers with the packages installed.
 - **Why.** (b) is the container a user's environment really is (the
   backend's own create arguments, egress gateway, user and capabilities),
-  which (a) only imitates; (c) leaves 0190's request for a real container
+  which (a) only imitates; (c) leaves 0190 (retired)'s request for a real container
   unmet. The host's Docker daemon was not available to this run and must not
   be changed, so the image was built in the disposable daemon. The extra
   containers answer the follow-up a reader would ask (would shipping
@@ -555,9 +555,9 @@ Two review findings on phase `stock`.
   where this was found, the CI probe runs and the workflow change.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   where the stock-host run is batched.
-- [0190-claude-read-only-turns-without-working-sandbox.md](0190-claude-read-only-turns-without-working-sandbox.md):
-  read-only review turns on such hosts, split out of item 3. Its container
-  question can reuse task 4's run.
+- 0190 (retired), on 2026-11-14: read-only review turns on such hosts, split out
+  of item 3; the behaviour and its qualification are in
+  [coordinator.md](../../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox).
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
   task 9: the provider sandbox on a real CLI, Linux half run on a host where
   this probe answers `available`.

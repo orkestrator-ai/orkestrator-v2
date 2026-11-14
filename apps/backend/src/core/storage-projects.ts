@@ -503,7 +503,7 @@ export class ProjectsRepository {
       });
     });
     await this.repos.drafts.deleteComposeDraftsByProject(projectId);
-    // A project's permission rules have nothing left to answer for (todo 0723).
+    // A project's permission rules have nothing left to answer for (todo 0723 (retired)).
     try {
       this.repos.permissionRules.store().deleteForProject(projectId);
     } catch (error) {

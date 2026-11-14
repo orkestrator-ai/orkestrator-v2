@@ -13,7 +13,7 @@ const EMPTY_APPLICATIONS: PermissionRuleApplication[] = [];
 const EMPTY_RULES: NativeAgentPermissionRule[] = [];
 
 /**
- * The Orkestrator permission rules (todo 0723) and the approvals they answered
+ * The Orkestrator permission rules (todo 0723 (retired)) and the approvals they answered
  * in one session, read from the backend that owns them. Re-read on every
  * `permission-rule` hint (a rule saved, removed or used) and on any resync, so
  * a hidden or remounted tab shows the same notes. Out-of-order reads are

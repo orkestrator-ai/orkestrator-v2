@@ -57,7 +57,11 @@ export interface SelfImprovementSettingsProps {
     typeof backend,
     "getSelfImprovementStatus" | "runSelfImprovement" | "getProjects" | "patchGlobalConfig"
   >;
+  /** How often the status is re-read, while running and otherwise; tests shorten it. */
+  pollMs?: { running: number; idle: number };
 }
+
+const POLL_MS = { running: RUNNING_POLL_MS, idle: IDLE_POLL_MS };
 
 /**
  * Settings → Self-improvement (experimental): which project gets tickets,
@@ -65,7 +69,10 @@ export interface SelfImprovementSettingsProps {
  * what runs have found. The backend owns every run; this page only reads its
  * status, so a run carries on while the page is closed.
  */
-export function SelfImprovementSettings({ api = backend }: SelfImprovementSettingsProps) {
+export function SelfImprovementSettings({
+  api = backend,
+  pollMs = POLL_MS,
+}: SelfImprovementSettingsProps) {
   const { machine } = useAccountMachine();
   const setConfig = useConfigStore((state) => state.setConfig);
   const [status, setStatus] = useState<SelfImprovementStatus | null>(null);
@@ -124,9 +131,9 @@ export function SelfImprovementSettings({ api = backend }: SelfImprovementSettin
   const now = useNow(running);
   useEffect(() => {
     if (!windowMachine) return;
-    const timer = setInterval(() => void refresh(), running ? RUNNING_POLL_MS : IDLE_POLL_MS);
+    const timer = setInterval(() => void refresh(), running ? pollMs.running : pollMs.idle);
     return () => clearInterval(timer);
-  }, [refresh, running, windowMachine]);
+  }, [refresh, running, windowMachine, pollMs.running, pollMs.idle]);
 
   const save = async (change: Partial<Settings>) => {
     if (!status) return;
@@ -181,7 +188,6 @@ export function SelfImprovementSettings({ api = backend }: SelfImprovementSettin
           running: status.running,
           progress,
           models: status.models,
-          reviewOn: status.settings.conversationReview,
           modelName,
           clock: { now, receivedAt },
         }

@@ -9,6 +9,7 @@
 import {
   SELF_IMPROVEMENT_STEPS,
   type SelfImprovementProgress,
+  type SelfImprovementSkipReason,
   type SelfImprovementStage,
   type SelfImprovementStep,
 } from "@orkestrator/protocol/self-improvement";
@@ -44,12 +45,19 @@ export class RunProgress implements InsightProgress {
     private readonly plan: RunPlan,
     private readonly now: () => Date,
   ) {
-    const reviewSkipped = (step: SelfImprovementStep) =>
-      !plan.conversations && (step === "reading-conversations" || step === "grouping-themes");
-    this.stages = SELF_IMPROVEMENT_STEPS.map((step) => ({
-      step,
-      state: reviewSkipped(step) || (plan.dryRun && step === "filing") ? "skipped" : "pending",
-    }));
+    // Decided from the plan, so a setting changed while the run works cannot
+    // change why one of its stages was skipped.
+    const skippedBecause = (step: SelfImprovementStep): SelfImprovementSkipReason | null => {
+      if (!plan.conversations && (step === "reading-conversations" || step === "grouping-themes")) {
+        return "review-off";
+      }
+      if (plan.dryRun && step === "filing") return "preview";
+      return null;
+    };
+    this.stages = SELF_IMPROVEMENT_STEPS.map((step) => {
+      const skipReason = skippedBecause(step);
+      return skipReason ? { step, state: "skipped", skipReason } : { step, state: "pending" };
+    });
     this.lastActivityAt = this.stamp();
     this.begin("exporting");
   }
@@ -77,6 +85,7 @@ export class RunProgress implements InsightProgress {
           stage.finishedAt = at;
         } else if (stage.state === "pending") {
           stage.state = "skipped";
+          stage.skipReason = stage.step === "grouping-themes" ? "no-notes" : "not-needed";
         }
       } else if (position === index && stage.state === "pending") {
         stage.state = "running";

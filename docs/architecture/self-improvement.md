@@ -126,12 +126,19 @@ that it is "running". `status.running.progress` (`SelfImprovementProgress`,
   `skipped`, with start and finish times. A stage the run does not do is
   skipped: reading and grouping when the review is off, filing in a preview,
   and grouping when no saved notes needed it (marked when the run passes it).
+  Each skipped stage carries its `skipReason` (`review-off`, `preview`,
+  `no-notes` or `not-needed`), set by the run. The page shows that reason and
+  never works one out from the current settings: the review switch can change
+  while a run that started with the other value is still working.
 - **Heartbeat.** `lastActivityAt` moves when a step begins, a history file is
   checked, a part is read or fails, or a model call starts or ends. The
   history scan reports a file at a time, because on a busy machine it checks
   thousands of files before the first model call.
 - **Conversation figures.** History files checked of total, parts to read,
-  read, failed, notes found, and parts waiting for the next run.
+  read, failed, notes found, and parts waiting for the next run. A preview
+  lists the parts it would read but calls no model, so its progress keeps
+  `read` at 0 and the page says "a preview reads none"; the run summary's
+  `conversations.read` counts the parts a real run would have read.
 - **Model calls.** How many are in flight and when the oldest started. A call
   is given up after `MODEL_TIMEOUT_MS` (10 minutes), so a quiet run waiting on
   one is waiting, not stuck. The page calls a run **stuck** only when nothing

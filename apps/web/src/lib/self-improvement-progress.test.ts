@@ -28,7 +28,6 @@ function progress(overrides: Partial<SelfImprovementProgress> = {}): SelfImprove
 
 const context: StageContext = {
   dryRun: false,
-  reviewOn: true,
   models: { notes: "claude-sonnet-5-5", themes: "claude-opus-5-5" },
   modelName: (id) => (id === "claude-opus-5-5" ? "Opus 5.5" : id),
 };
@@ -36,7 +35,8 @@ const context: StageContext = {
 const stage = (
   step: SelfImprovementStage["step"],
   state: SelfImprovementStage["state"],
-): SelfImprovementStage => ({ step, state });
+  skipReason?: SelfImprovementStage["skipReason"],
+): SelfImprovementStage => ({ step, state, ...(skipReason ? { skipReason } : {}) });
 
 describe("formatDuration", () => {
   test("reads at a glance from seconds to hours", () => {
@@ -124,17 +124,32 @@ describe("stageSummary and stageFigures", () => {
     );
   });
 
-  test("gives the reason a stage is skipped", () => {
+  test("gives the reason the run recorded for a skipped stage", () => {
     const p = progress();
-    expect(stageSummary(stage("filing", "skipped"), p, { ...context, dryRun: true })).toBe(
+    expect(stageSummary(stage("filing", "skipped", "preview"), p, context)).toBe(
       "A preview files nothing.",
     );
-    expect(
-      stageSummary(stage("grouping-themes", "skipped"), p, { ...context, reviewOn: false }),
-    ).toBe("The conversation review is off.");
-    expect(stageSummary(stage("grouping-themes", "skipped"), p, context)).toBe(
+    expect(stageSummary(stage("grouping-themes", "skipped", "review-off"), p, context)).toBe(
+      "The conversation review is off.",
+    );
+    expect(stageSummary(stage("grouping-themes", "skipped", "no-notes"), p, context)).toBe(
       "No saved notes needed grouping.",
     );
+    expect(stageSummary(stage("board", "skipped", "not-needed"), p, context)).toBe("Not needed.");
+    expect(stageSummary(stage("board", "skipped"), p, context)).toBe("Not needed.");
+  });
+
+  test("a preview lists the parts it would read without claiming to have read them", () => {
+    const preview = { ...context, dryRun: true };
+    const p = progress({
+      conversations: { ...review, files: 4, filesChecked: 4, parts: 3, read: 0, waiting: 2 },
+    });
+    expect(stageSummary(reading("done"), p, preview)).toBe("3 parts to read; a preview reads none");
+    expect(stageFigures(reading("done"), p, { dryRun: true })).toEqual([
+      "4 history files checked of 4",
+      "A preview calls no model, so no notes are taken",
+      "2 more parts would wait for the next run",
+    ]);
   });
 
   test("names the model grouping the notes, and says nothing for a pending stage", () => {

@@ -56,3 +56,28 @@ test("a backend with no progress still shows the status line", async ({ page }) 
   await expect(page.getByRole("status").first()).toContainText("Reading conversations");
   await expect(page.getByRole("list", { name: "Run stages" })).toHaveCount(0);
 });
+
+test("a stage skipped because the review was off says so after the switch is turned on", async ({
+  page,
+}) => {
+  await page.goto("/self-improvement-settings?review-off");
+  await expect(page.getByRole("switch", { name: "Review conversations" })).toBeChecked();
+  const rows = page.getByRole("list", { name: "Run stages" }).getByRole("listitem");
+  await expect(rows.nth(2)).toContainText("The conversation review is off.");
+  await expect(rows.nth(3)).toContainText("The conversation review is off.");
+});
+
+test("a preview lists the parts it would read without claiming to have read them", async ({
+  page,
+}) => {
+  await page.goto("/self-improvement-settings?preview");
+  const stages = page.getByRole("list", { name: "Run stages" });
+  await expect(stages.getByRole("listitem").nth(2)).toContainText(
+    "30 parts to read; a preview reads none",
+  );
+  await expect(stages.getByRole("listitem").nth(5)).toContainText("A preview files nothing.");
+  await stages.getByRole("button", { name: /Reading conversations/ }).click();
+  const dialog = page.getByRole("dialog", { name: /Preview in progress/ });
+  await expect(dialog.getByText("A preview calls no model, so no notes are taken")).toBeVisible();
+  await expect(dialog.getByText(/notes found so far/)).toHaveCount(0);
+});

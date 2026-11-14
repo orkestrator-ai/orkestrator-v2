@@ -13,6 +13,14 @@ function tracker(plan: { conversations?: boolean; dryRun?: boolean } = {}) {
   return { progress, clock };
 }
 
+const reasons = (progress: RunProgress) =>
+  Object.fromEntries(
+    progress
+      .snapshot()
+      .stages.filter((stage) => stage.skipReason)
+      .map((stage) => [stage.step, stage.skipReason]),
+  );
+
 const states = (progress: RunProgress) =>
   Object.fromEntries(progress.snapshot().stages.map((stage) => [stage.step, stage.state]));
 
@@ -63,12 +71,31 @@ describe("RunProgress stages", () => {
       "reading-conversations": "skipped",
       "grouping-themes": "skipped",
     });
+    expect(reasons(progress)).toEqual({
+      "reading-conversations": "review-off",
+      "grouping-themes": "review-off",
+    });
+    // The reason stays the plan's as the run moves through them.
+    progress.begin("board");
+    progress.begin("digesting");
+    expect(reasons(progress)).toEqual({
+      "reading-conversations": "review-off",
+      "grouping-themes": "review-off",
+    });
     expect(progress.snapshot().conversations).toBeUndefined();
   });
 
   test("a preview never files", () => {
     const { progress } = tracker({ dryRun: true });
     expect(states(progress).filing).toBe("skipped");
+    expect(reasons(progress)).toEqual({ filing: "preview" });
+  });
+
+  test("a stage the run passes says why: grouping had no notes, anything else was not needed", () => {
+    const { progress } = tracker();
+    progress.begin("reading-conversations");
+    progress.begin("digesting");
+    expect(reasons(progress)).toEqual({ board: "not-needed", "grouping-themes": "no-notes" });
   });
 });
 

@@ -74,7 +74,6 @@ export interface RunProgressViewProps {
   running: Running;
   progress: SelfImprovementProgress;
   models: SelfImprovementStatus["models"];
-  reviewOn: boolean;
   modelName(id: string): string;
   clock: ProgressClock;
 }
@@ -82,7 +81,6 @@ export interface RunProgressViewProps {
 function contextOf(props: RunProgressViewProps): StageContext {
   return {
     dryRun: props.running.trigger === "dry-run",
-    reviewOn: props.reviewOn,
     models: props.models,
     modelName: props.modelName,
   };
@@ -194,7 +192,7 @@ export function RunProgressDialog({
         <ol aria-label="Stage details" className="space-y-2">
           {progress.stages.map((stage) => {
             const summary = stageSummary(stage, progress, context);
-            const figures = stageFigures(stage, progress);
+            const figures = stageFigures(stage, progress, { dryRun: context.dryRun });
             const duration = took(stage);
             return (
               <li

@@ -443,7 +443,11 @@ describe("a run with the conversation review", () => {
     expect(ticket.comments.at(-1)).toContain("the fix is verified");
   });
 
-  test("tells the run's progress as files are checked and parts are read", async () => {
+  /** Two conversations with one new part each, run through the loop with a progress tracker. */
+  async function progressRun(
+    runner: (base: ModelRunner) => ModelRunner,
+    options: { dryRun?: boolean; texts?: readonly string[] } = {},
+  ) {
     const { dir, remove } = temporaryDirectory("improvement-insight-progress-");
     cleanups.push(remove);
     const claudeDir = path.join(dir, "claude", "projects", "-p");
@@ -452,11 +456,10 @@ describe("a run with the conversation review", () => {
       codexSessionDirs: [],
     };
     const start = NOW - 10 * DAY;
-    for (const [id, offset, text] of [
-      ["a", 1, "Use mise, not npm."],
-      ["b", 2, "npm again?"],
-    ] as const) {
-      const at = start + offset * DAY;
+    const texts = options.texts ?? ["Use mise, not npm.", "npm again?"];
+    texts.forEach((text, index) => {
+      const id = String.fromCharCode(97 + index);
+      const at = start + DAY + index * HOUR;
       writeTranscript(
         path.join(claudeDir, `${id}.jsonl`),
         claudeJsonl(id, CWD, [
@@ -465,9 +468,9 @@ describe("a run with the conversation review", () => {
         ]),
         at + 2000,
       );
-    }
+    });
     const progress = new RunProgress(
-      { conversations: true, dryRun: false, modelTimeoutMs: 600_000 },
+      { conversations: true, dryRun: options.dryRun ?? false, modelTimeoutMs: 600_000 },
       () => new Date(NOW),
     );
     const seen: Array<string> = [];
@@ -476,8 +479,8 @@ describe("a run with the conversation review", () => {
       seen.push(`${checked}/${total}`);
       original(checked, total);
     };
-
-    await runLoop({
+    const calls: ModelCall[] = [];
+    const summary = await runLoop({
       stateDir: path.join(dir, "state"),
       data: bundleData({
         createdAt: start + 5 * DAY,
@@ -486,13 +489,29 @@ describe("a run with the conversation review", () => {
       }),
       board: new FakeBoard(),
       now: () => new Date(start + 5 * DAY),
+      ...(options.dryRun ? { dryRun: true } : {}),
       onStep: (step) => progress.begin(step),
       insightProgress: progress,
-      insights: { runner: progress.track(fakeModel([])), sources, excludeDirs: [] },
+      insights: { runner: progress.track(runner(fakeModel(calls))), sources, excludeDirs: [] },
     });
+    const snapshot = progress.snapshot();
+    const stage = (step: string) => snapshot.stages.find((item) => item.step === step);
+    return { snapshot, stage, seen, calls, summary };
+  }
 
+  /** The runner, failing every notes call with `message`. */
+  const failingNotes =
+    (message: string) =>
+    (base: ModelRunner): ModelRunner =>
+      (async (call: ModelCall) => {
+        if (call.model === NOTES_MODEL) throw new Error(message);
+        return base(call);
+      }) as ModelRunner;
+
+  test("tells the run's progress as files are checked and parts are read", async () => {
+    const { snapshot, stage, seen } = await progressRun((base) => base);
     expect(seen).toEqual(["1/2", "2/2"]);
-    expect(progress.snapshot().conversations).toEqual({
+    expect(snapshot.conversations).toEqual({
       filesChecked: 2,
       files: 2,
       parts: 2,
@@ -501,7 +520,74 @@ describe("a run with the conversation review", () => {
       notesAdded: 2,
       waiting: 0,
     });
-    expect(progress.snapshot().modelCalls.inFlight).toBe(0);
+    expect(snapshot.modelCalls.inFlight).toBe(0);
+    expect(stage("grouping-themes")?.state).toBe("done");
+  });
+
+  test("counts parts whose notes call failed, and settles every model call", async () => {
+    const { snapshot, stage, summary } = await progressRun(failingNotes("call timed out"));
+    expect(snapshot.conversations).toMatchObject({ parts: 2, read: 0, failed: 2, notesAdded: 0 });
+    expect(snapshot.modelCalls).toMatchObject({ inFlight: 0, oldestStartedAt: null });
+    expect(summary.conversations.errors).toEqual([
+      "call timed out (2 parts; they are read again next run)",
+    ]);
+    // No notes were saved, so grouping had nothing to do and the run carried on.
+    expect(stage("reading-conversations")?.state).toBe("done");
+    expect(stage("grouping-themes")).toMatchObject({ state: "skipped", skipReason: "no-notes" });
+    expect(stage("filing")?.state).toBe("running");
+  });
+
+  test("a failure that clears the queue counts only the calls that were made", async () => {
+    // More parts than the notes calls that run at once, so some are still queued.
+    const texts = ["one", "two", "three", "four", "five", "six"];
+    const { snapshot, summary } = await progressRun(failingNotes("Claude Code is not installed"), {
+      texts,
+    });
+    expect(snapshot.conversations?.parts).toBe(6);
+    // The first wave of concurrent calls fails; the queue is then emptied.
+    expect(snapshot.conversations?.failed).toBe(3);
+    expect(snapshot.conversations?.read).toBe(0);
+    expect(snapshot.modelCalls.inFlight).toBe(0);
+    expect(summary.conversations.errors).toEqual([
+      "Claude Code is not installed (3 parts; they are read again next run)",
+    ]);
+  });
+
+  test("a failed theme grouping still finishes its stage and moves on", async () => {
+    const { snapshot, stage, summary } = await progressRun(
+      (base) =>
+        (async (call: ModelCall) => {
+          if (call.model === THEMES_MODEL) throw new Error("grouping refused");
+          return base(call);
+        }) as ModelRunner,
+    );
+    expect(snapshot.conversations).toMatchObject({ read: 2, failed: 0, notesAdded: 2 });
+    expect(snapshot.modelCalls.inFlight).toBe(0);
+    expect(summary.conversations.errors).toContain(
+      "themes: grouping refused (grouped again next run)",
+    );
+    expect(stage("grouping-themes")?.state).toBe("done");
+    expect(stage("digesting")?.state).toBe("done");
+    expect(stage("filing")?.state).toBe("running");
+  });
+
+  test("a preview lists the parts it would read, reads none and calls no model", async () => {
+    const { snapshot, stage, calls, summary } = await progressRun((base) => base, {
+      dryRun: true,
+    });
+    expect(calls).toEqual([]);
+    expect(snapshot.conversations).toEqual({
+      filesChecked: 2,
+      files: 2,
+      parts: 2,
+      read: 0,
+      failed: 0,
+      notesAdded: 0,
+      waiting: 0,
+    });
+    // The summary counts the parts a real run would read; the progress does not claim them.
+    expect(summary.conversations.read).toBe(2);
+    expect(stage("filing")).toMatchObject({ state: "skipped", skipReason: "preview" });
   });
 });
 

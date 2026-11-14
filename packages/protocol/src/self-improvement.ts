@@ -72,9 +72,19 @@ export const SELF_IMPROVEMENT_STEPS: readonly SelfImprovementStep[] = [
  */
 export type SelfImprovementStageState = "pending" | "running" | "done" | "skipped";
 
+/**
+ * Why a stage was skipped, decided by the run itself: `review-off` and
+ * `preview` from the plan fixed when the run started (a setting changed
+ * mid-run does not alter them), `no-notes` when grouping had no saved notes to
+ * group, `not-needed` for any other stage the run passed without doing.
+ */
+export type SelfImprovementSkipReason = "review-off" | "preview" | "no-notes" | "not-needed";
+
 export interface SelfImprovementStage {
   step: SelfImprovementStep;
   state: SelfImprovementStageState;
+  /** Set whenever `state` is `skipped`. */
+  skipReason?: SelfImprovementSkipReason;
   startedAt?: string;
   finishedAt?: string;
 }

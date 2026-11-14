@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   SelfImprovementProgress,
+  SelfImprovementRunSummary,
   SelfImprovementStatus,
 } from "@orkestrator/protocol/self-improvement";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
@@ -63,7 +64,6 @@ const view = (overrides: Partial<SelfImprovementProgress> = {}) => ({
   running: { ...RUNNING },
   progress: { ...progress(), ...overrides },
   models: MODELS,
-  reviewOn: true,
   modelName: (id: string) => (id === "claude-sonnet-5-5" ? "Sonnet 5.5" : "Opus 5.5"),
   clock: { now: 1000, receivedAt: 1000 },
 });
@@ -179,15 +179,19 @@ describe("Settings → Self-improvement while a run is in progress", () => {
     };
   }
 
-  function page(status: SelfImprovementStatus) {
+  function page(status: SelfImprovementStatus | (() => SelfImprovementStatus), pollMs?: number) {
+    const read = typeof status === "function" ? status : () => status;
     const api = {
-      getSelfImprovementStatus: mock(async () => status),
-      runSelfImprovement: mock(async () => ({ started: false, status })),
+      getSelfImprovementStatus: mock(async () => read()),
+      runSelfImprovement: mock(async () => ({ started: false, status: read() })),
       getProjects: mock(async () => [{ id: "p1", name: "orkestrator-v2" }]),
       patchGlobalConfig: mock(async () => ({}) as unknown as AppConfig),
     };
     return renderInAppCommandScope(
-      <SelfImprovementSettings api={api as unknown as SelfImprovementSettingsProps["api"]} />,
+      <SelfImprovementSettings
+        api={api as unknown as SelfImprovementSettingsProps["api"]}
+        {...(pollMs ? { pollMs: { running: pollMs, idle: pollMs } } : {})}
+      />,
     );
   }
 
@@ -212,4 +216,119 @@ describe("Settings → Self-improvement while a run is in progress", () => {
     expect((await screen.findByRole("status")).textContent).toContain("Reading conversations");
     expect(screen.queryByRole("list", { name: "Run stages" }) === null).toBe(true);
   });
+
+  test("a skipped stage keeps the reason its run had, whatever the switch says now", async () => {
+    // The run started with the review off; the switch was turned on while it works.
+    const reviewOff = progress();
+    reviewOff.stages = reviewOff.stages.map((stage) =>
+      stage.step === "reading-conversations" || stage.step === "grouping-themes"
+        ? { step: stage.step, state: "skipped", skipReason: "review-off" }
+        : stage,
+    );
+    delete reviewOff.conversations;
+    const status = runningStatus(false);
+    status.running = { ...RUNNING, step: "board", progress: reviewOff };
+    expect(status.settings.conversationReview).toBe(true);
+    page(status);
+    const rows = within(await screen.findByRole("list", { name: "Run stages" })).getAllByRole(
+      "listitem",
+    );
+    expect(rows[2]!.textContent).toContain("The conversation review is off.");
+    expect(rows[3]!.textContent).toContain("The conversation review is off.");
+    expect(rows[3]!.textContent).not.toContain("No saved notes needed grouping.");
+  });
+
+  const finished = (outcome: SelfImprovementRunSummary["outcome"]): SelfImprovementRunSummary => ({
+    digestId: "20261114T101200Z-abc",
+    trigger: "manual",
+    startedAt: RUNNING.startedAt,
+    finishedAt: iso(OBSERVED + 60_000),
+    outcome,
+    ...(outcome === "failed" ? { error: "export-failed" } : {}),
+    created: [],
+    linked: [],
+    verified: [],
+    fixFailed: [],
+    partly: [],
+    markedFixed: [],
+    reopenedFromBoard: [],
+    ignoredDeleted: [],
+    wouldCreate: [],
+    heldForTomorrow: 0,
+    belowBar: 0,
+    conversations: {
+      enabled: true,
+      read: 30,
+      waiting: 0,
+      notesAdded: 12,
+      themes: 2,
+      costUsd: 0,
+      heldForTomorrow: 0,
+      errors: [],
+    },
+  });
+
+  for (const outcome of ["succeeded", "failed"] as const) {
+    test(`follows a run that ${outcome} through polling, then a later run does not reopen the window`, async () => {
+      const advanced = progress();
+      advanced.conversations = { ...advanced.conversations!, read: 11, notesAdded: 15 };
+      const laterRun = progress();
+      const sequence: SelfImprovementStatus[] = [
+        runningStatus(true),
+        { ...runningStatus(true), running: { ...RUNNING, progress: advanced } },
+        { ...runningStatus(false), running: null, lastRun: finished(outcome) },
+        {
+          ...runningStatus(false),
+          running: { ...RUNNING, startedAt: iso(OBSERVED + 120_000), progress: laterRun },
+          lastRun: finished(outcome),
+        },
+      ];
+      let index = 0;
+      let hold = true;
+      // The first read is the page's load; each later poll moves on only when released.
+      const next = () => {
+        const value = sequence[index]!;
+        if (!hold && index < sequence.length - 1) {
+          index += 1;
+          hold = true;
+        }
+        return value;
+      };
+      const advance = async (expected: number) => {
+        hold = false;
+        await waitFor(() => expect(index).toBe(expected));
+      };
+      page(next, 20);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Reading conversations/ }));
+      const dialog = await screen.findByRole("dialog", { name: /Run in progress/ });
+      expect(dialog.textContent).toContain("7 notes found so far in 4 parts");
+
+      await advance(1);
+      await waitFor(() =>
+        expect(screen.getByRole("dialog").textContent).toContain(
+          "15 notes found so far in 11 parts",
+        ),
+      );
+
+      await advance(2);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await screen.findByText(new RegExp(`Run ${outcome === "failed" ? "stopped" : "finished"}`));
+      expect(screen.queryByRole("list", { name: "Run stages" })).toBeNull();
+      // The modal let go of the page: nothing left blocking the pointer or hidden from readers.
+      await waitFor(() => expect(document.body.style.pointerEvents).not.toBe("none"));
+      expect(document.querySelector("[data-slot='dialog-overlay']")).toBeNull();
+      expect(
+        document.querySelector("[aria-hidden='true'] [aria-label='Review conversations']"),
+      ).toBeNull();
+      const toggle = screen.getByRole("switch", { name: "Review conversations" });
+      expect(toggle.closest("[aria-hidden='true']")).toBeNull();
+
+      await advance(3);
+      await screen.findByRole("list", { name: "Run stages" });
+      // A new run (a different start time) shows its stages but leaves the window closed.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  }
 });

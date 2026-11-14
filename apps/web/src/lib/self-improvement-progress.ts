@@ -1,5 +1,6 @@
 import type {
   SelfImprovementProgress,
+  SelfImprovementSkipReason,
   SelfImprovementStage,
   SelfImprovementStageState,
   SelfImprovementStatus,
@@ -103,9 +104,16 @@ export function liveness(progress: SelfImprovementProgress, clock: ProgressClock
   };
 }
 
+/** Why a stage was skipped, as the run recorded it when it skipped it. */
+export const SKIP_TEXT: Record<SelfImprovementSkipReason, string> = {
+  "review-off": "The conversation review is off.",
+  preview: "A preview files nothing.",
+  "no-notes": "No saved notes needed grouping.",
+  "not-needed": "Not needed.",
+};
+
 export interface StageContext {
   dryRun: boolean;
-  reviewOn: boolean;
   models: SelfImprovementStatus["models"];
   modelName(id: string): string;
 }
@@ -119,12 +127,9 @@ export function stageSummary(
   progress: SelfImprovementProgress,
   context: StageContext,
 ): string | null {
-  if (stage.state === "skipped") {
-    if (stage.step === "filing") return "A preview files nothing.";
-    if (!context.reviewOn) return "The conversation review is off.";
-    if (stage.step === "grouping-themes") return "No saved notes needed grouping.";
-    return "Not needed.";
-  }
+  // The run's own reason, never today's settings: the review switch can change
+  // while a run that started with the other value is still working.
+  if (stage.state === "skipped") return SKIP_TEXT[stage.skipReason ?? "not-needed"];
   if (stage.state === "pending") return null;
   if (stage.step === "reading-conversations") {
     const review = progress.conversations;
@@ -134,6 +139,8 @@ export function stageSummary(
         ? "Looking for conversation history…"
         : `Checking history files: ${count(review.filesChecked)} of ${count(review.files)}`;
     }
+    // A preview lists the parts it would read but calls no model, so none is read.
+    if (context.dryRun) return `${plural(review.parts, "part")} to read; a preview reads none`;
     const read = `Read ${count(review.read)} of ${plural(review.parts, "part")}`;
     return review.failed > 0 ? `${read}, ${count(review.failed)} failed` : read;
   }
@@ -147,6 +154,7 @@ export function stageSummary(
 export function stageFigures(
   stage: SelfImprovementStage,
   progress: SelfImprovementProgress,
+  options: { dryRun?: boolean } = {},
 ): string[] {
   const review = progress.conversations;
   if (stage.step !== "reading-conversations" || !review || stage.state === "pending") return [];
@@ -154,7 +162,12 @@ export function stageFigures(
   if (review.files !== null) {
     lines.push(`${plural(review.filesChecked, "history file")} checked of ${count(review.files)}`);
   }
-  if (review.parts !== null) {
+  if (review.parts !== null && options.dryRun) {
+    lines.push("A preview calls no model, so no notes are taken");
+    if (review.waiting > 0) {
+      lines.push(`${plural(review.waiting, "more part")} would wait for the next run`);
+    }
+  } else if (review.parts !== null) {
     lines.push(
       `${plural(review.notesAdded, "note")} found so far${review.read === 0 ? "" : ` in ${plural(review.read, "part")}`}`,
     );

@@ -27,7 +27,12 @@ import {
 } from "@orkestrator/protocol/self-improvement";
 import { type BundleData, readBundleArchive } from "./bundle.js";
 import { insightsDir, loadThemes } from "./insights/analyze.js";
-import { claudeCodeRunner, MODEL_TIMEOUT_MS } from "./insights/model.js";
+import {
+  type ClaudeCodeLaunch,
+  claudeCodeRunner,
+  MODEL_TIMEOUT_MS,
+  type ModelRunner,
+} from "./insights/model.js";
 import { defaultSources, type TranscriptSources } from "./insights/transcripts.js";
 import { loadLedger, writeAtomic } from "./ledger.js";
 import { type Board, runLoop } from "./loop.js";
@@ -70,6 +75,11 @@ export interface SelfImprovementDeps {
   /** The Claude Code to run the conversation review with, on the active account. */
   claudeLaunch(): Promise<{ executable: string; env: NodeJS.ProcessEnv }>;
   transcriptSources?: () => TranscriptSources;
+  /**
+   * Builds the model runner from the Claude Code launch; tests replace it so no
+   * CLI runs. The service still counts its calls for the run's progress.
+   */
+  modelRunner?: (launch: ClaudeCodeLaunch) => ModelRunner;
   now?: () => Date;
   /** Replaces the timer (tests). */
   setTimer?: (callback: () => void, ms: number) => { cancel(): void };
@@ -301,7 +311,7 @@ export class SelfImprovementService {
         const launch = await this.deps.claudeLaunch();
         insights = {
           runner: running.progress.track(
-            claudeCodeRunner({
+            (this.deps.modelRunner ?? claudeCodeRunner)({
               cwd: this.ensureStateDir(),
               ...launch,
               signal: this.abort.signal,

@@ -5,7 +5,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 
 // The safety hints an MCP server declares for one of its tools (to-do 1031
-// task 12), for the approval card of a Claude `mcp__*` call.
+// (retired) task 12), for the approval card of a Claude `mcp__*` call.
 //
 // `canUseTool` carries no annotations; only the CLI's MCP status read does.
 // Observed against the pinned CLI 2.1.319 with a loopback model and a local

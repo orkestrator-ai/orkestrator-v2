@@ -124,7 +124,7 @@ describe("a coordinator's waiting account switch", () => {
     const first = renderInAppCommandScope(<Transcript transcript={[]} />);
     await waitFor(() => expect(switchRows(first.container)).toHaveLength(1));
     expect(first.container.textContent).toContain("a@example.comb@example.com");
-    expect(first.container.querySelector("[data-mail-tile]")).toBeNull();
+    expect(first.container.querySelector("[data-mail-tile]") === null).toBe(true);
     first.unmount();
     // A reload starts from an empty store and reads the backend's mailbox again.
     appCommandStore(agentMailStore).getState().clear();

@@ -44,7 +44,7 @@ import {
   resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
 import { claudeReadOnlyCommandSandbox } from "./claude-execution-sandbox.js";
-import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
+import { isCoordinatorReadOnlyPolicy, readOnlyRefusalRole } from "./read-only-policy.js";
 import {
   claudeRuntimeOwnsLiveWork,
   type ClaudeRuntimeTasks,
@@ -173,6 +173,9 @@ export function claudeLaunchProfile(
         ? {
             agentMcp: options?.agentMcp !== undefined,
             commandSandbox: sandbox!.commandSandbox,
+            // The role decides whether Git without the sandbox is hardened or
+            // refused (`ReadOnlyGitWithoutSandbox`), so it is boundary too.
+            role: readOnlyRefusalRole(session.executionPolicy, options?.readOnly === true),
           }
         : {}),
     }),

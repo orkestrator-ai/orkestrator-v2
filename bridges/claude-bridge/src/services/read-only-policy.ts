@@ -275,6 +275,36 @@ const GIT_SUBCOMMAND_MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>
 ]);
 
 /**
+ * Arguments a hardened Git command (`gitWithoutSandbox: "harden"`) gets
+ * inserted after its subcommand.
+ *
+ * Without the command sandbox, the helpers a repository's attributes select by
+ * driver name (`diff.<driver>.command`, `diff.<driver>.textconv`) and
+ * `diff.external` cannot be turned off through configuration, because the
+ * driver names are the checkout's to choose. These flags turn them off for the
+ * commands that render diffs, which is where Git runs them. `git diff` honours
+ * `diff.external` by default, and `log`, `show` and `blame` textconv by default.
+ * The remaining configured programs (`core.fsmonitor`, hooks, GPG, lazy
+ * fetches) are outranked by the turn's environment (`withReadOnlyGitConfig`).
+ */
+const HARDENED_GIT_ARGUMENTS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["blame", ["--no-textconv"]],
+  ["diff", ["--no-ext-diff", "--no-textconv"]],
+  ["log", ["--no-ext-diff", "--no-textconv"]],
+  ["show", ["--no-ext-diff", "--no-textconv"]],
+  ["whatchanged", ["--no-ext-diff", "--no-textconv"]],
+]);
+
+/**
+ * Forms of admitted subcommands a hardened Git command still refuses, because
+ * they render a diff no inserted flag reaches: `git status -v` prints the
+ * staged diff through the same machinery as `git diff`.
+ */
+const HARDENED_GIT_REFUSED_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["status", new Set(["-v", "--verbose"])],
+]);
+
+/**
  * Git subcommands that only inspect, whatever arguments they are given.
  *
  * `difftool` is deliberately absent even though it reads: its whole purpose is
@@ -377,8 +407,11 @@ function hasFlag(args: readonly string[], flags: ReadonlySet<string>): boolean {
       // `--output=x` is the same flag as `--output x`, so match the prefix too.
       flags.has(arg) ||
       flags.has(arg.split("=", 1)[0] ?? arg) ||
-      // GNU and Git parsers accept unambiguous long-option abbreviations.
+      // GNU and Git parsers accept unambiguous long-option abbreviations. A
+      // bare `--` ends the options rather than abbreviating every one of them:
+      // reading it as a prefix refused `git diff a..b -- path` as a write.
       (arg.startsWith("--") &&
+        arg.split("=", 1)[0]!.length > 2 &&
         [...flags].some(
           (flag) => flag.startsWith("--") && flag.startsWith(arg.split("=", 1)[0]!),
         )) ||
@@ -458,10 +491,15 @@ const NETWORK_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(["fetch", "ls-remot
  * whitespace split reduces `ls\nrm -rf .` to the harmless-looking `ls`.
  * Refusing the whole command is deliberate — a coordinator does not need shell
  * composition, and partial parsing here is how a bypass gets in.
+ *
+ * A plain pipe is the one exception (`isReadOnlyShellCommand`): with every
+ * other metacharacter refused, `|` can only separate pipeline stages, and each
+ * stage is checked as a command of its own, so `git diff a..b | head` runs
+ * exactly the two commands checked. `||` and `|&` stay refused.
  */
 // Quotes, escapes and globs transform arguments before execution. This hook
 // deliberately accepts only literal words, rather than approximating a shell parser.
-const COMPOSITION_PATTERN = /[;&|><`$(){}\n\r'"\\*?[\]]|\bsudo\b|\bexec\b/;
+const COMPOSITION_PATTERN = /[;&><`$(){}\n\r'"\\*?[\]]|\bsudo\b|\bexec\b/;
 
 export function isCoordinatorReadOnlyPolicy(
   policy: NativeAgentExecutionPolicy | undefined,
@@ -611,6 +649,13 @@ export function claudeReadOnlySandbox(
 interface CommandVerdict {
   allowed: boolean;
   reason?: string;
+  /**
+   * The command to run instead, when an admitted command needs arguments the
+   * model did not write (a hardened Git command). Absent when it runs as written.
+   */
+  command?: string;
+  /** An admitted command's pipeline stages, each judged as a command of its own. */
+  stages?: string[];
 }
 
 /**
@@ -639,7 +684,7 @@ export function readOnlyRefusalRole(
 const REFUSALS = {
   coordinator: {
     composition:
-      "Coordinator shells cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
+      "Coordinator shells cannot use quotes, escapes, globs, redirection, substitution or command chaining (`;`, `&&`, `||`), because the command that runs would not be the one checked. A plain pipe between reading commands is allowed.",
     byPath: (program: string) =>
       `Coordinator shells run reading programs by name only, so \`${program}\` is not available here. Use the program name, or delegate it to a worker environment.`,
     gitSandbox:
@@ -668,7 +713,7 @@ const REFUSALS = {
   },
   "read-only": {
     composition:
-      "Shell commands in this session cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
+      "Shell commands in this session cannot use quotes, escapes, globs, redirection, substitution or command chaining (`;`, `&&`, `||`), because the command that runs would not be the one checked. A plain pipe between reading commands is allowed.",
     byPath: (program: string) =>
       `This session runs reading programs by name only, so \`${program}\` is not available here. Use the program name.`,
     gitSandbox:
@@ -696,26 +741,75 @@ const REFUSALS = {
   },
 } as const satisfies Record<ReadOnlyRefusalRole, unknown>;
 
+/**
+ * What a turn without the command sandbox does with an admitted Git read.
+ *
+ * `refuse` (the default, and every coordinator's) keeps Git behind the
+ * sandbox. `harden` admits it with the flags in `HARDENED_GIT_ARGUMENTS`
+ * inserted, for a `readOnly` turn outside a coordinator process (a Multi
+ * Review reviewer, a build pipeline review, a graph reviewer): such a turn
+ * reads an environment's own worktree, whose Git configuration only that
+ * environment's writers can have changed, and checking the reviewed commit is
+ * its whole job. `withReadOnlyGitConfig` outranks the configured programs no
+ * flag reaches. A filter driver the checkout's own config names
+ * (`filter.<driver>.clean`) can still run when a command reads worktree files;
+ * nothing short of the sandbox stops that.
+ */
+export type ReadOnlyGitWithoutSandbox = "refuse" | "harden";
+
 interface ReadOnlyCommandOptions {
   commandSandbox?: CoordinatorCommandSandbox;
   /** Whose refusals these are; default `coordinator`. */
   role?: ReadOnlyRefusalRole;
   /** Tests name one; a bridge reads the launcher's from its environment. */
   readBoundary?: ReadBoundary | null;
+  /** Git where the sandbox is not `required`; default `refuse`. */
+  gitWithoutSandbox?: ReadOnlyGitWithoutSandbox;
 }
 
-/** Whether one shell command only reads. Exported for its own tests. */
+/**
+ * Whether one shell command only reads. Exported for its own tests.
+ *
+ * A pipeline is admitted when every stage is: each is split out and judged
+ * exactly as a command of its own, so `git show a:b | grep -n x | wc -l` runs
+ * only programs this file admits, with arguments it checked.
+ */
 export function isReadOnlyShellCommand(
   command: string,
   options: ReadOnlyCommandOptions = {},
 ): CommandVerdict {
   const refusals = REFUSALS[options.role ?? "coordinator"];
   const trimmed = command.trim();
-  if (!trimmed) return { allowed: true };
-  if (COMPOSITION_PATTERN.test(trimmed) || /(?:^|\s)~/.test(trimmed)) {
+  if (!trimmed) return { allowed: true, stages: [] };
+  if (COMPOSITION_PATTERN.test(trimmed)) {
     return { allowed: false, reason: refusals.composition };
   }
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const stages = trimmed.split("|").map((stage) => stage.trim());
+  // An empty stage is `||`, or a pipe with nothing on one side of it.
+  if (stages.length > 1 && stages.some((stage) => !stage)) {
+    return { allowed: false, reason: refusals.composition };
+  }
+  const runs: string[] = [];
+  for (const stage of stages) {
+    const verdict = isReadOnlyCommandStage(stage, options);
+    if (!verdict.allowed) return verdict;
+    runs.push(verdict.command ?? stage);
+  }
+  const rewritten = runs.some((run, index) => run !== stages[index]);
+  return {
+    allowed: true,
+    stages: runs,
+    ...(rewritten ? { command: runs.join(" | ") } : {}),
+  };
+}
+
+/** One pipeline stage: a single command with no shell composition left in it. */
+function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions): CommandVerdict {
+  const refusals = REFUSALS[options.role ?? "coordinator"];
+  if (/(?:^|\s)~/.test(command)) {
+    return { allowed: false, reason: refusals.composition };
+  }
+  const tokens = command.split(/\s+/).filter(Boolean);
   const first = tokens[0] ?? "";
   if (!first) return { allowed: true };
   // `bin/cat` is whatever the checkout put at that path, not `cat`.
@@ -726,8 +820,10 @@ export function isReadOnlyShellCommand(
   if (NETWORK_COMMANDS.has(program)) return { allowed: false, reason: refusals.network(program) };
   if (program === "git") {
     // Even inspection can invoke repository/ambient helpers (diff.external,
-    // textconv, fsmonitor, pagers). Only admit Git behind an OS sandbox.
-    if (options.commandSandbox !== "required") {
+    // textconv, fsmonitor, pagers). Admit Git behind an OS sandbox, or
+    // hardened where the turn opted into that (`ReadOnlyGitWithoutSandbox`).
+    const sandboxed = options.commandSandbox === "required";
+    if (!sandboxed && options.gitWithoutSandbox !== "harden") {
       return { allowed: false, reason: refusals.gitSandbox };
     }
     const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
@@ -757,7 +853,18 @@ export function isReadOnlyShellCommand(
     ) {
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
-    return { allowed: true };
+    if (sandboxed) return { allowed: true };
+    if (hasFlag(args, HARDENED_GIT_REFUSED_ARGUMENTS.get(subcommand) ?? new Set())) {
+      return { allowed: false, reason: refusals.gitArgument(described) };
+    }
+    const hardening = HARDENED_GIT_ARGUMENTS.get(subcommand);
+    if (!hardening) return { allowed: true };
+    // Straight after the subcommand, so a `--` among the arguments cannot turn
+    // the flags into pathspecs.
+    return {
+      allowed: true,
+      command: [...tokens.slice(0, subcommandIndex + 1), ...hardening, ...args].join(" "),
+    };
   }
   if (READ_ONLY_COMMANDS.has(program)) {
     const args = tokens.slice(1);
@@ -894,13 +1001,29 @@ export function createCoordinatorReadOnlyHook(
       const verdict = isReadOnlyShellCommand(command, options);
       if (!verdict.allowed) return deny(verdict.reason!);
       const boundary = readBoundary(input.cwd);
+      // Per stage: the boundary reads each stage's own program and arguments.
       if (
         boundary &&
-        shellCommandRefused(boundary, command, input.cwd, {
-          traversal: options.commandSandbox === "unavailable",
-        })
+        (verdict.stages ?? [command]).some((stage) =>
+          shellCommandRefused(boundary, stage, input.cwd, {
+            traversal: options.commandSandbox === "unavailable",
+          }),
+        )
       ) {
         return deny(refusals.dataDirectory);
+      }
+      if (verdict.command !== undefined) {
+        // No decision: the rewritten command still goes through the turn's
+        // allowlist and deny policy, exactly as the original would have.
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            updatedInput: {
+              ...(input.tool_input as Record<string, unknown>),
+              command: verdict.command,
+            },
+          },
+        };
       }
       return {};
     }

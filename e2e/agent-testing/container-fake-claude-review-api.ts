@@ -17,8 +17,9 @@
  *   2. `list`: `Bash` `ls`, a read-only command with no Git in it. A read-only
  *      turn without the CLI's command sandbox must still run it.
  *   3. `git`: `Bash` with the package's `diffCommand` (or `git rev-parse
- *      HEAD`). Without the sandbox the read-only hook refuses every Git
- *      command, so this is expected to fail in a container.
+ *      HEAD`). Without the sandbox the read-only hook runs a reviewer's Git
+ *      hardened rather than refusing it, so this is expected to succeed in a
+ *      container; a coordinator's Git would still be refused.
  *   4. `diff-file`: when Git was refused and the package names a
  *      `diffArtifact`, Read it, as the reviewer instructions say.
  *   5. `write-probe`: `Bash` `touch <probe>`, which the hook must refuse.

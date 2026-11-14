@@ -275,7 +275,10 @@ invariants keep it honest:
 - **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
   refuses anything that can become several commands, and a newline counts: the
   shell treats it exactly as `;` does, while a whitespace split would reduce
-  `ls\nrm -rf .` to a harmless-looking `ls`.
+  `ls\nrm -rf .` to a harmless-looking `ls`. A plain pipe is the one
+  exception: with every other metacharacter refused it can only separate
+  stages, so `isReadOnlyShellCommand` splits on it and judges each stage as a
+  command of its own (`git diff a..b | head`), and `||` stays refused.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout
@@ -299,9 +302,18 @@ invariants keep it honest:
   whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
   `git ls-remote` are refused rather than left to the sandbox. Git inspection
-  also needs an explicit `required` sandbox decision: repository and ambient
-  configuration can launch helpers even for `git diff` or `git status`, so
-  hook-only turns use reading tools or delegate Git to a worker.
+  needs an explicit `required` sandbox decision for a coordinator: repository
+  and ambient configuration can launch helpers even for `git diff` or
+  `git status`, so a hook-only coordinator uses reading tools or delegates Git
+  to a worker. A reviewer's `readOnly` turn outside a coordinator process
+  (`gitWithoutSandbox: "harden"`) runs admitted Git reads without the sandbox
+  instead, because checking the reviewed commit is its job: the hook inserts
+  `--no-ext-diff --no-textconv` (`HARDENED_GIT_ARGUMENTS`, through the
+  hook's `updatedInput`), refuses `git status -v`, and the turn's environment
+  outranks fsmonitor, hooks, GPG programs and lazy fetches
+  (`withReadOnlyGitConfig`). A filter driver the checkout's own config names
+  can still run when a command reads worktree files; only the environment's
+  own writers can have configured one.
 - **A coordinator reads its own runtime and not the rest of the data
   directory.** `read-only-path-boundary.ts` holds the rule for both layers: the
   sandbox's `denyRead`/`allowRead` for commands, and the hook for `Read`, `Grep`
@@ -315,8 +327,10 @@ invariants keep it honest:
   `--git-dir`, `--work-tree`, `-c` and `-C` choose which repository's config
   Git obeys, and a checkout can commit a bare-repo layout naming
   `core.fsmonitor`. A read-only turn's CLI also runs with
-  `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor and hooks
-  off through `GIT_CONFIG_COUNT`, outranking the checkout's own config.
+  `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor, hooks
+  and the signature programs off through `GIT_CONFIG_COUNT`, outranking the
+  checkout's own config, and sets `GIT_OPTIONAL_LOCKS=0` and
+  `GIT_NO_LAZY_FETCH=1`.
 
 ## Goals stay with the backend
 

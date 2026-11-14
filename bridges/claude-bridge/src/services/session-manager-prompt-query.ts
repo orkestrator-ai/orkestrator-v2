@@ -403,6 +403,7 @@ export function claudeQueryOptions(
     queryEnvironment,
   } = plan;
   const managedSettings = claudeManagedSettings(policy);
+  const readOnlyTurnRole = readOnlyRefusalRole(session.executionPolicy, options?.readOnly === true);
   const latestTurnHook =
     (pick: (target: ClaudeRuntimeTurn) => HookCallback): HookCallback =>
     (...args) =>
@@ -547,10 +548,10 @@ export function claudeQueryOptions(
                         ? { commandSandbox: readOnlyCommandSandbox.commandSandbox }
                         : {}),
                       // A graph reviewer or pipeline review is not a coordinator.
-                      role: readOnlyRefusalRole(
-                        session.executionPolicy,
-                        options?.readOnly === true,
-                      ),
+                      role: readOnlyTurnRole,
+                      // Where the sandbox cannot run, a reviewer still checks the
+                      // reviewed commit with hardened Git; a coordinator does not.
+                      gitWithoutSandbox: readOnlyTurnRole === "read-only" ? "harden" : "refuse",
                     }),
                     session.id,
                   ),

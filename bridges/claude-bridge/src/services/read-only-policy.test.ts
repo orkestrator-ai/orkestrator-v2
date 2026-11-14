@@ -557,7 +557,7 @@ describe("Claude coordinator read-only policy", () => {
       isReadOnlyShellCommand("git push origin HEAD", options).reason,
       isReadOnlyShellCommand("touch file", options).reason,
       isReadOnlyShellCommand("sort -o out in", options).reason,
-      isReadOnlyShellCommand("ls | wc", options).reason,
+      isReadOnlyShellCommand("ls && wc", options).reason,
       isReadOnlyShellCommand("bin/cat x", options).reason,
       isReadOnlyShellCommand("git status", { role: "read-only" }).reason,
     ];

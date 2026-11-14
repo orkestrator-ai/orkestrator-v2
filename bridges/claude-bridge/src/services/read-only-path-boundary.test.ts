@@ -295,6 +295,23 @@ describe("createCoordinatorReadOnlyHook", () => {
     }
   });
 
+  test("every pipeline stage is held to the boundary on its own", async () => {
+    // The boundary reads a command's program from its first word, so a stage
+    // after a pipe has to be judged as a command of its own.
+    const credentials = join(dataDir, "control-mcp.json");
+    for (const command of [`ls . | cat ${credentials}`, "echo x | grep -R fixture ."]) {
+      const answer = await run("Bash", { command }, "unavailable");
+      expect({ command, decision: answer?.permissionDecision }).toEqual({
+        command,
+        decision: "deny",
+      });
+      expect(answer?.permissionDecisionReason).toContain("data directory");
+    }
+    expect(await run("Bash", { command: "ls . | grep -n checkout" }, "unavailable")).toBe(
+      undefined,
+    );
+  });
+
   test("hook-only commands refuse symlink traversal and keep safe searches", async () => {
     for (const command of [
       "grep -R fixture .",

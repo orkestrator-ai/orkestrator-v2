@@ -417,7 +417,9 @@ never that user; it is `node`, which maps to an unprivileged subordinate uid.
   was then stopped with `docker:disposable -- stop`, and the host image tag
   this run built was removed.
 - **Not covered:** the topology line on rootful Linux Engine and Docker
-  Desktop (their passes predate the case), arm64 on rootless, RootlessKit
+  Desktop (their passes predate the case; recording it is a
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  item, 4982 (retired) task 2), arm64 on rootless, RootlessKit
   drivers other than slirp4netns, and `TMPDIR` on a filesystem without
   `nosuid` (not needed: the suite runs no `docker cp` against its
   read-only bind). The real-provider approval and denial turns are a

@@ -447,8 +447,10 @@ disposable VM or a spare macOS account.
   not restart the backend; a `--when-idle --wait` self-update to `--to`, after
   which both release directories must hold the `package.json` and `bun.lock`
   their package publishes in `resources/release-runtime/`, byte for byte, with
-  every installed package at its locked version and none the lockfile does not
-  list, and `sharp` must load from each and encode a PNG
+  every installed package at its locked version, no package at any depth of
+  `node_modules` that the lockfile does not list, no absent entry that a
+  required dependency path reaches or whose platform limit names this host,
+  and `sharp` must load from each and encode a PNG
   (`scripts/qualify-locked-release.ts`); a
   broken `<to>.990` served by a private registry, which the launcher boots
   twice and rolls back; and a second service, installed with Bun 1.4.3,
@@ -506,14 +508,28 @@ code and the published lockfile:
 
 | Release | Published `package.json` and `bun.lock` | Packages | `sharp` |
 | --- | --- | --- | --- |
-| 2.38.0-beta, from `service install` | byte for byte; lockfile SHA-256 `c2ba90dd3048…3f9d` | of 145 lockfile entries, 112 installed, each at its locked version; 30 for another os, cpu or libc; 3 optional and absent (`@emnapi/runtime`, `@img/sharp-wasm32`, `tslib`); none mismatched or unlisted | 0.35.5 with libvips 8.18.7 loads and encodes a PNG |
+| 2.38.0-beta, from `service install` | byte for byte; lockfile SHA-256 `c2ba90dd3048…3f9d` | of 145 lockfile entries, 112 installed, each at its locked version; 30 absent with a platform limit; 3 absent with none (`@emnapi/runtime`, `@img/sharp-wasm32`, `tslib`); none mismatched or unlisted at the top level | 0.35.5 with libvips 8.18.7 loads and encodes a PNG |
 | 2.38.1-beta, from the 2.38.0-beta backend's `apply --when-idle --wait` | the same (both releases publish the same lockfile) | the same | the same |
 
 A fresh resolution of the same manifest that day would have moved seven
 entries (`@anthropic-ai/sdk` 1.6.0 → 1.8.0, `@babel/runtime`,
 `@hono/node-server`, `encodeurl`, `express-rate-limit`, `hono` and `jose` by
 a patch each); both releases had the locked, older versions installed.
-Nothing failed. The macOS half is in the
+Nothing failed.
+
+That run's checker compared only top-level packages and did not judge the
+absent entries. The stricter checker that replaced it the same day (nested
+packages walked; absent entries judged against the host and against the
+required dependency paths) was run on a frozen
+`--production --linker=hoisted --ignore-scripts` install of the same lockfile
+(`packages/cli/release-runtime/bun.lock`, the same SHA-256) on the same linux
+x64 glibc host, not in the container: the same 112, 30 and 3, with all 30
+excluded by their os, cpu or libc, the 3 reached only through `sharp`'s
+optional `@img/sharp-wasm32`. Nothing that a required path reaches or that
+is limited to this host was absent, and nothing the lockfile does not list was
+installed at any depth. Removing `playwright-core`,
+`detect-libc` or `@img/sharp-linux-x64`, or adding a nested
+`sharp/node_modules/semver`, failed it. The macOS half is in the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 **What the runs found.**

@@ -16,7 +16,7 @@
  * dependency, runs a separate Bun process in the release's package root.
  */
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   RELEASE_RUNTIME_PATH,
@@ -38,11 +38,31 @@ export interface LockedReleaseEvidence {
   installedAtLockedVersion: number;
   /** Installed packages whose version is not the one the lockfile names. */
   mismatched: { name: string; locked: string; installed: string }[];
-  /** Installed packages the lockfile does not list (the release package excepted). */
+  /**
+   * Installed packages, at any depth, whose `node_modules` path the lockfile
+   * does not list (the release package itself excepted). A nested copy shadows
+   * the hoisted one for the package above it, so it counts like a top-level one.
+   */
   extraneous: string[];
-  /** Lockfile entries not installed that are limited to another os, cpu or libc. */
+  /** The host the absent entries were judged against. */
+  host: ReleaseHost;
+  /**
+   * Absent lockfile entries that only a required dependency path reaches, with
+   * no platform limit that excludes this host. A frozen install leaves none.
+   */
+  missingRequired: string[];
+  /**
+   * Absent lockfile entries whose os, cpu and libc limits all name this host.
+   * Bun installs such an entry, required or optional, so a frozen install
+   * leaves none.
+   */
+  missingForHost: string[];
+  /** Absent lockfile entries whose os, cpu or libc limit excludes this host. */
   otherPlatform: number;
-  /** Lockfile entries not installed with no platform limit (optional dependencies). */
+  /**
+   * Absent lockfile entries with no platform limit that only optional
+   * dependency edges reach (an optional dependency, or a dependency of one).
+   */
   notInstalled: string[];
   /** The locked versions of the packages the release runtime depends on directly. */
   direct: Record<string, string>;
@@ -57,6 +77,125 @@ export interface LoadEvidence {
   error?: string;
 }
 
+/** The platform a lockfile entry's `os`, `cpu` and `libc` limits are judged against. */
+export interface ReleaseHost {
+  os: string;
+  cpu: string;
+  /** `glibc` or `musl` on Linux; `null` elsewhere, where no entry is libc-limited. */
+  libc: string | null;
+}
+
+/** The host this process runs on, which is the host the release was installed for. */
+export function currentHost(): ReleaseHost {
+  let libc: string | null = null;
+  if (process.platform === "linux") {
+    const report = process.report?.getReport?.() as
+      { header?: { glibcVersionRuntime?: unknown } } | undefined;
+    libc = typeof report?.header?.glibcVersionRuntime === "string" ? "glibc" : "musl";
+  }
+  return { os: process.platform, cpu: process.arch, libc };
+}
+
+/**
+ * Whether one `os`/`cpu`/`libc` value admits `actual`, with npm's rules: a
+ * string or a list, where `!name` excludes and a list of only exclusions
+ * admits everything else. A limit on a host value that is unknown (`libc`
+ * off Linux) does not admit it.
+ */
+function limitAdmits(limit: unknown, actual: string | null): boolean {
+  if (limit === undefined) return true;
+  const values = (Array.isArray(limit) ? limit : [limit]).filter(
+    (value): value is string => typeof value === "string",
+  );
+  if (values.length === 0) return true;
+  if (actual === null) return false;
+  const excluded = values.filter((value) => value.startsWith("!")).map((value) => value.slice(1));
+  const included = values.filter((value) => !value.startsWith("!"));
+  if (excluded.includes(actual)) return false;
+  return included.length === 0 || included.includes(actual);
+}
+
+interface EntryMeta {
+  os?: unknown;
+  cpu?: unknown;
+  libc?: unknown;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  optionalPeers?: string[];
+}
+
+function entryMeta(entry: unknown[] | undefined): EntryMeta {
+  const meta = entry?.[2];
+  return meta !== null && typeof meta === "object" ? (meta as EntryMeta) : {};
+}
+
+function platformLimited(meta: EntryMeta): boolean {
+  return meta.os !== undefined || meta.cpu !== undefined || meta.libc !== undefined;
+}
+
+function admitsHost(meta: EntryMeta, host: ReleaseHost): boolean {
+  return (
+    limitAdmits(meta.os, host.os) &&
+    limitAdmits(meta.cpu, host.cpu) &&
+    limitAdmits(meta.libc, host.libc)
+  );
+}
+
+/**
+ * The lockfile key `name` resolves to when required from the package at
+ * `fromKey` (`""` for the release root): Node's walk up the `node_modules`
+ * chain, as a hoisted lockfile records it.
+ */
+function resolveLockKey(
+  packages: Record<string, unknown[]>,
+  fromKey: string,
+  name: string,
+): string | null {
+  const segments = fromKey === "" ? [] : lockKeySegments(fromKey);
+  for (let depth = segments.length; depth >= 0; depth--) {
+    const key = [...segments.slice(0, depth), name].join("/");
+    if (packages[key] !== undefined) return key;
+  }
+  return null;
+}
+
+/**
+ * Lockfile keys reached from the root through required edges only
+ * (`dependencies`, and peers not marked optional), plus required names that
+ * resolve to no entry at all.
+ */
+function requiredClosure(
+  packages: Record<string, unknown[]>,
+  rootDependencies: Record<string, string>,
+): { required: Set<string>; unresolved: string[] } {
+  const required = new Set<string>();
+  const unresolved: string[] = [];
+  const queue: { from: string; name: string; peer: boolean }[] = Object.keys(rootDependencies).map(
+    (name) => ({ from: "", name, peer: false }),
+  );
+  while (queue.length > 0) {
+    const { from, name, peer } = queue.shift()!;
+    const key = resolveLockKey(packages, from, name);
+    if (key === null) {
+      // A peer may be satisfied by whatever the host provides; a dependency may not.
+      if (!peer) unresolved.push(`${name} (required by ${from || "the release root"})`);
+      continue;
+    }
+    if (required.has(key)) continue;
+    required.add(key);
+    const meta = entryMeta(packages[key]);
+    for (const dependency of Object.keys(meta.dependencies ?? {})) {
+      queue.push({ from: key, name: dependency, peer: false });
+    }
+    const optionalPeers = new Set(meta.optionalPeers ?? []);
+    for (const dependency of Object.keys(meta.peerDependencies ?? {})) {
+      if (!optionalPeers.has(dependency)) queue.push({ from: key, name: dependency, peer: true });
+    }
+  }
+  return { required, unresolved };
+}
+
 /** True when the evidence shows a frozen install of the published lockfile. */
 export function installedFromLockfile(evidence: LockedReleaseEvidence): boolean {
   return (
@@ -67,6 +206,8 @@ export function installedFromLockfile(evidence: LockedReleaseEvidence): boolean 
     evidence.installedAtLockedVersion > 0 &&
     evidence.mismatched.length === 0 &&
     evidence.extraneous.length === 0 &&
+    evidence.missingRequired.length === 0 &&
+    evidence.missingForHost.length === 0 &&
     Object.keys(evidence.direct).length > 0
   );
 }
@@ -95,7 +236,7 @@ export function lockKeySegments(key: string): string[] {
   return segments;
 }
 
-/** Top-level package names under a `node_modules` directory, scopes expanded. */
+/** Package names directly under a `node_modules` directory, scopes expanded. */
 function installedNames(nodeModules: string): string[] {
   if (!existsSync(nodeModules)) return [];
   const names: string[] = [];
@@ -110,6 +251,28 @@ function installedNames(nodeModules: string): string[] {
   return names;
 }
 
+/**
+ * Every installed package's lockfile key (`a`, `a/b`, `@s/a/@t/b`), walking
+ * each package's own `node_modules` as well as the release's. Symbolic links
+ * are listed but not followed.
+ */
+function installedKeys(nodeModules: string, parentKey = ""): string[] {
+  const keys: string[] = [];
+  for (const name of installedNames(nodeModules)) {
+    const key = parentKey === "" ? name : `${parentKey}/${name}`;
+    keys.push(key);
+    const nested = path.join(nodeModules, name, "node_modules");
+    let directory = false;
+    try {
+      directory = lstatSync(nested).isDirectory();
+    } catch {
+      directory = false;
+    }
+    if (directory) keys.push(...installedKeys(nested, key));
+  }
+  return keys;
+}
+
 function installedVersion(directory: string): string | null {
   const manifest = readOptional(path.join(directory, "package.json"));
   if (!manifest) return null;
@@ -121,7 +284,10 @@ function installedVersion(directory: string): string | null {
   }
 }
 
-export function inspectLockedRelease(releaseDir: string): LockedReleaseEvidence {
+export function inspectLockedRelease(
+  releaseDir: string,
+  host: ReleaseHost = currentHost(),
+): LockedReleaseEvidence {
   const evidence: LockedReleaseEvidence = {
     publishedRuntime: false,
     lockMatchesPublished: false,
@@ -131,6 +297,9 @@ export function inspectLockedRelease(releaseDir: string): LockedReleaseEvidence 
     installedAtLockedVersion: 0,
     mismatched: [],
     extraneous: [],
+    host,
+    missingRequired: [],
+    missingForHost: [],
     otherPlatform: 0,
     notInstalled: [],
     direct: {},
@@ -161,15 +330,16 @@ export function inspectLockedRelease(releaseDir: string): LockedReleaseEvidence 
     return evidence;
   }
   const packages = parsed.packages ?? {};
+  const rootDependencies = parsed.workspaces?.[""]?.dependencies ?? {};
+  const { required, unresolved } = requiredClosure(packages, rootDependencies);
+  evidence.missingRequired.push(...unresolved);
   const nodeModules = path.join(releaseDir, "node_modules");
-  const locked = new Set<string>();
   for (const [key, entry] of Object.entries(packages)) {
     evidence.lockEntries++;
     const spec = typeof entry[0] === "string" ? entry[0] : "";
     const at = spec.lastIndexOf("@");
     const version = at > 0 ? spec.slice(at + 1) : "";
     const segments = lockKeySegments(key);
-    if (segments.length === 1) locked.add(segments[0]!);
     const directory = path.join(
       nodeModules,
       ...segments.flatMap((segment, index) =>
@@ -178,18 +348,19 @@ export function inspectLockedRelease(releaseDir: string): LockedReleaseEvidence 
     );
     const installed = installedVersion(directory);
     if (installed === null) {
-      const meta = (entry[2] ?? {}) as { os?: unknown; cpu?: unknown; libc?: unknown };
-      if (meta.os !== undefined || meta.cpu !== undefined || meta.libc !== undefined)
-        evidence.otherPlatform++;
+      const meta = entryMeta(entry);
+      if (!admitsHost(meta, host)) evidence.otherPlatform++;
+      else if (platformLimited(meta)) evidence.missingForHost.push(key);
+      else if (required.has(key)) evidence.missingRequired.push(key);
       else evidence.notInstalled.push(key);
     } else if (installed === version) evidence.installedAtLockedVersion++;
     else evidence.mismatched.push({ name: key, locked: version, installed });
   }
-  for (const name of installedNames(nodeModules)) {
-    if (name !== STANDALONE_PACKAGE && !locked.has(name)) evidence.extraneous.push(name);
+  for (const key of installedKeys(nodeModules)) {
+    if (packages[key] !== undefined || key === STANDALONE_PACKAGE) continue;
+    evidence.extraneous.push(key);
   }
-  const dependencies = parsed.workspaces?.[""]?.dependencies ?? {};
-  for (const name of Object.keys(dependencies)) {
+  for (const name of Object.keys(rootDependencies)) {
     const spec = packages[name]?.[0];
     if (typeof spec === "string") evidence.direct[name] = spec.slice(spec.lastIndexOf("@") + 1);
   }
@@ -205,14 +376,24 @@ console.log(JSON.stringify({ sharp: sharp.versions?.sharp, libvips: sharp.versio
 `;
 
 /** Loads `sharp` the way the release resolves it, from its package root. */
-export async function sharpLoads(bun: string, releaseDir: string): Promise<LoadEvidence> {
-  const child = Bun.spawn([bun, "-e", SHARP_PROBE], {
-    cwd: releasePackageRoot(releaseDir),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+export async function sharpLoads(
+  bun: string,
+  releaseDir: string,
+  timeoutMs = 60_000,
+): Promise<LoadEvidence> {
+  let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  try {
+    child = Bun.spawn([bun, "-e", SHARP_PROBE], {
+      cwd: releasePackageRoot(releaseDir),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    // A release with no package root, or no bun, cannot load sharp.
+    return { ok: false, error: `could not run ${bun}: ${String(error)}` };
+  }
+  const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -239,32 +420,60 @@ export async function freshResolveDifferences(
   releaseDir: string,
   scratch: string,
 ): Promise<{ name: string; locked: string; fresh: string }[] | { error: string }> {
-  mkdirSync(scratch, { recursive: true });
-  copyFileSync(path.join(releaseDir, "package.json"), path.join(scratch, "package.json"));
+  const read = (file: string): { packages: Record<string, unknown> } | { error: string } => {
+    try {
+      const parsed = Bun.JSONC.parse(readFileSync(file, "utf8")) as {
+        packages?: Record<string, unknown>;
+      } | null;
+      return { packages: parsed?.packages ?? {} };
+    } catch (error) {
+      return { error: `${path.basename(path.dirname(file))}/bun.lock: ${String(error)}` };
+    }
+  };
+  const lockedRead = read(path.join(releaseDir, "bun.lock"));
+  if ("error" in lockedRead) return lockedRead;
+  const locked = lockedRead.packages;
+  try {
+    mkdirSync(scratch, { recursive: true });
+    copyFileSync(path.join(releaseDir, "package.json"), path.join(scratch, "package.json"));
+  } catch (error) {
+    return { error: `could not prepare the fresh resolution: ${String(error)}` };
+  }
   const cache = path.join(scratch, ".cache");
-  const child = Bun.spawn(
-    [bun, "install", "--lockfile-only", "--ignore-scripts", "--no-progress", "--cache-dir", cache],
-    {
-      cwd: scratch,
-      env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "pipe",
-    },
-  );
+  let child: Bun.Subprocess<"ignore", "ignore", "pipe">;
+  try {
+    child = Bun.spawn(
+      [
+        bun,
+        "install",
+        "--lockfile-only",
+        "--ignore-scripts",
+        "--no-progress",
+        "--cache-dir",
+        cache,
+      ],
+      {
+        cwd: scratch,
+        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    );
+  } catch (error) {
+    return { error: `could not run ${bun}: ${String(error)}` };
+  }
   const timer = setTimeout(() => child.kill("SIGKILL"), 5 * 60_000);
   const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   clearTimeout(timer);
   if (code !== 0) return { error: stderr.trim().slice(-600) || `exit ${code}` };
+  const freshRead = read(path.join(scratch, "bun.lock"));
+  if ("error" in freshRead) return freshRead;
+  const fresh = freshRead.packages;
   const version = (entry: unknown) => {
     const spec = Array.isArray(entry) && typeof entry[0] === "string" ? entry[0] : "";
     return spec.slice(spec.lastIndexOf("@") + 1);
   };
-  const read = (file: string) =>
-    ((Bun.JSONC.parse(readFileSync(file, "utf8")) as { packages?: Record<string, unknown> })
-      .packages ?? {}) as Record<string, unknown>;
-  const locked = read(path.join(releaseDir, "bun.lock"));
-  const fresh = read(path.join(scratch, "bun.lock"));
   return Object.keys(locked)
     .filter((name) => fresh[name] !== undefined && version(fresh[name]) !== version(locked[name]))
     .map((name) => ({ name, locked: version(locked[name]), fresh: version(fresh[name]) }));

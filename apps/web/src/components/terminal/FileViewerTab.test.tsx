@@ -321,6 +321,55 @@ describe("FileViewerTab component", () => {
     expect((editor as HTMLTextAreaElement).value).toBe("<h1>Report</h1>");
   });
 
+  test("a local HTML page's stylesheet is read from its worktree and inlined", async () => {
+    readLocalFileMock.mockImplementation(async (_worktreePath: string, filePath: string) =>
+      filePath === "docs/report.html"
+        ? { content: '<link rel="stylesheet" href="site.css"><h1>Report</h1>', language: "html" }
+        : { content: "h1{color:#0a0b0c}", language: "css" },
+    );
+    renderInAppCommandScope(
+      <FileViewerTab
+        tabId="html-styled-local"
+        filePath="docs/report.html"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+      />,
+    );
+
+    await waitFor(async () =>
+      expect(
+        (await screen.findByTitle("Rendered view of docs/report.html")).getAttribute("srcdoc"),
+      ).toContain("color:#0a0b0c"),
+    );
+    expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "docs/site.css");
+    expect(readContainerFileMock).not.toHaveBeenCalled();
+  });
+
+  test("a container HTML page's stylesheet is read from its container and inlined", async () => {
+    readContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) =>
+      filePath === "docs/report.html"
+        ? { content: '<link rel="stylesheet" href="site.css"><h1>Report</h1>', language: "html" }
+        : { content: "h1{color:#0c0b0a}", language: "css" },
+    );
+    renderInAppCommandScope(
+      <FileViewerTab
+        tabId="html-styled-container"
+        filePath="docs/report.html"
+        containerId="container-1"
+        isActive
+      />,
+    );
+
+    await waitFor(async () =>
+      expect(
+        (await screen.findByTitle("Rendered view of docs/report.html")).getAttribute("srcdoc"),
+      ).toContain("color:#0c0b0a"),
+    );
+    expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "docs/site.css");
+    expect(readLocalFileMock).not.toHaveBeenCalled();
+  });
+
   test("a changed HTML file opens on its diff and renders from View file", async () => {
     readLocalFileMock.mockImplementationOnce(async () => ({
       content: "<h1>Report</h1>",

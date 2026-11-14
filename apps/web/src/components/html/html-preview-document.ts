@@ -31,6 +31,11 @@ export const HTML_PREVIEW_SANDBOX = "";
 export const HTML_PREVIEW_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:";
 
+/** A link's types: an ASCII case-insensitive, whitespace-separated list. */
+function linkTypes(element: Element): string[] {
+  return element.getAttribute("rel")?.toLowerCase().split(/\s+/) ?? [];
+}
+
 /** Detect resource forms even when CSS or responsive media selects them later. */
 function hasRefusedContent(document: Document): boolean {
   for (const element of Array.from(document.querySelectorAll("*"))) {
@@ -40,11 +45,7 @@ function hasRefusedContent(document: Document): boolean {
       const type = element.getAttribute("type")?.trim().toLowerCase() ?? "";
       if (!type || type === "module" || /(?:java|ecma)script/.test(type)) return true;
     }
-    if (
-      tag === "link" &&
-      element.getAttribute("rel")?.split(/\s+/).includes("stylesheet") &&
-      element.hasAttribute("href")
-    )
+    if (tag === "link" && linkTypes(element).includes("stylesheet") && element.hasAttribute("href"))
       return true;
     for (const attr of [
       "src",
@@ -75,6 +76,13 @@ export interface HtmlPreviewDocument {
 /** Stylesheets inlined per page, and the largest one the app will read for it. */
 export const MAX_SIBLING_STYLESHEETS = 16;
 export const MAX_SIBLING_STYLESHEET_BYTES = 512 * 1024;
+/**
+ * The most stylesheet text, and the most links, inlined into one page in total.
+ * Every link to a sheet gets its own copy, so without these a small page that
+ * repeats one link thousands of times would expand into gigabytes.
+ */
+export const MAX_INLINED_STYLESHEET_BYTES = 2 * 1024 * 1024;
+export const MAX_INLINED_STYLESHEET_LINKS = 64;
 const MAX_SIBLING_PAGE_LINKS = 200;
 
 const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -110,9 +118,18 @@ export function resolveSiblingFilePath(htmlFilePath: string, href: string): stri
   return [...htmlFilePath.split("/").slice(0, -1), ...inside].join("/");
 }
 
+/**
+ * A link whose sheet the browser would apply: alternate and disabled sheets are
+ * not, so they are neither read nor turned into an active style.
+ */
 function isStylesheetLink(element: Element): boolean {
-  const rel = element.getAttribute("rel")?.toLowerCase().split(/\s+/) ?? [];
-  return rel.includes("stylesheet") && !rel.includes("alternate") && element.hasAttribute("href");
+  const rel = linkTypes(element);
+  return (
+    rel.includes("stylesheet") &&
+    !rel.includes("alternate") &&
+    !element.hasAttribute("disabled") &&
+    element.hasAttribute("href")
+  );
 }
 
 /** Workspace paths of the page's stylesheets that live in its folder or below. */
@@ -153,6 +170,16 @@ export interface HtmlPreviewOptions {
   filePath: string;
   /** Text of stylesheets already read, keyed by the workspace path they resolve to. */
   stylesheets: ReadonlyMap<string, string>;
+  /** Total stylesheet text inlined into the page; defaults to `MAX_INLINED_STYLESHEET_BYTES`. */
+  maxInlinedBytes?: number;
+  /** Links replaced with inline styles; defaults to `MAX_INLINED_STYLESHEET_LINKS`. */
+  maxInlinedLinks?: number;
+}
+
+/** What is left of a page's inlining allowance, shared by every parse pass. */
+interface InlineBudget {
+  bytes: number;
+  links: number;
 }
 
 /**
@@ -164,13 +191,24 @@ function escapeStyleText(css: string): string {
   return css.replace(/<\/(style)/gi, "<\\/$1");
 }
 
-/** Replace each readable sibling stylesheet link with the file's text as an inline style. */
-function inlineSiblingStylesheets(parsed: Document, options: HtmlPreviewOptions): void {
+/**
+ * Replace each readable sibling stylesheet link with the file's text as an
+ * inline style, in document order until the budget runs out. A link past the
+ * budget stays a link, which the CSP refuses and the notice reports.
+ */
+function inlineSiblingStylesheets(
+  parsed: Document,
+  options: HtmlPreviewOptions,
+  budget: InlineBudget,
+): void {
   for (const link of Array.from(parsed.querySelectorAll("link"))) {
+    if (budget.links <= 0) return;
     if (!isStylesheetLink(link)) continue;
     const path = resolveSiblingFilePath(options.filePath, link.getAttribute("href") ?? "");
     const css = path ? options.stylesheets.get(path) : undefined;
-    if (css === undefined) continue;
+    if (css === undefined || css.length > budget.bytes) continue;
+    budget.links -= 1;
+    budget.bytes -= css.length;
     const style = parsed.createElement("style");
     const media = link.getAttribute("media");
     if (media) style.setAttribute("media", media);
@@ -191,6 +229,10 @@ export function buildHtmlPreviewDocument(
   // A DOMParser document is inert: nothing in it runs or loads here.
   let candidate = html;
   let refused = false;
+  const budget: InlineBudget = {
+    bytes: options?.maxInlinedBytes ?? MAX_INLINED_STYLESHEET_BYTES,
+    links: options?.maxInlinedLinks ?? MAX_INLINED_STYLESHEET_LINKS,
+  };
   // Require a fixed point under the browser's HTML parser. Namespace mutation
   // can expose nodes only on a subsequent parse, so rewrite every pass and never
   // publish a document that still changes when reparsed.
@@ -198,7 +240,8 @@ export function buildHtmlPreviewDocument(
     const parsed = new DOMParser().parseFromString(candidate, "text/html");
     // Inline first, so the inlined text is checked like any other style: its own
     // @import and url() references are still refused.
-    if (options) inlineSiblingStylesheets(parsed, options);
+    // The budget spans passes, so a link left over in one is not inlined in the next.
+    if (options) inlineSiblingStylesheets(parsed, options, budget);
     refused ||= hasRefusedContent(parsed);
     for (const animation of Array.from(
       parsed.querySelectorAll("animate, set, animateMotion, animateTransform, discard"),

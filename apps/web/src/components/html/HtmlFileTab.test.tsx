@@ -6,6 +6,7 @@ import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
 import { appCommandStore } from "@/test/app-command-store";
+import { MAX_SIBLING_STYLESHEET_BYTES } from "./html-preview-document";
 
 const realMonacoFileEditorSnapshot = { ...realMonacoFileEditor };
 
@@ -190,21 +191,37 @@ describe("HtmlFileTab", () => {
         </TerminalProvider>
       );
     }
-    function renderWithFiles(readSiblingFile?: (path: string) => Promise<string>) {
-      return renderInAppCommandScope(
+    function tabWithFiles(readSiblingFile?: (path: string) => Promise<string>, isActive = true) {
+      return (
         <HtmlFileTab
           tabId={TAB_ID}
           filePath="docs/report.html"
           initialContent={HTML}
           language="html"
-          isActive
+          isActive={isActive}
           isSaving={false}
           onSave={onSave}
           readSiblingFile={readSiblingFile}
-        />,
-        { wrapper: Providers },
+        />
       );
     }
+    function renderWithFiles(readSiblingFile?: (path: string) => Promise<string>, isActive = true) {
+      return renderInAppCommandScope(tabWithFiles(readSiblingFile, isActive), {
+        wrapper: Providers,
+      });
+    }
+    /** A read that settles only when the test says so, one per call, in call order. */
+    function deferredReads() {
+      const pending: { path: string; resolve: (css: string) => void }[] = [];
+      const read = mock(
+        (path: string) =>
+          new Promise<string>((resolve) => {
+            pending.push({ path, resolve });
+          }),
+      );
+      return { read, pending };
+    }
+    const NOTICE = /does not run scripts or load external files/;
     const openFile = mock((_path: string) => {});
 
     beforeEach(() => openFile.mockClear());
@@ -227,8 +244,81 @@ describe("HtmlFileTab", () => {
       renderWithFiles(() => new Promise<string>((resolve) => (release = resolve)));
 
       expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
+      // The link only looks refused until its sheet is in: no notice flashes over the empty pane.
+      expect(screen.queryByText(NOTICE) === null).toBe(true);
       release("h1{color:red}");
       await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("color:red"));
+      expect(screen.queryByText(NOTICE) === null).toBe(true);
+    });
+
+    test("a read for a stylesheet set the page no longer uses is discarded", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      const { read, pending } = deferredReads();
+      renderWithFiles(read);
+      await waitFor(() => expect(pending).toHaveLength(1));
+
+      appCommandStore(fileDirtyStore)
+        .getState()
+        .setContent(TAB_ID, '<link rel="stylesheet" href="assets/other.css"><h1>Styled</h1>');
+      await waitFor(() => expect(pending).toHaveLength(2));
+      expect(pending.map((entry) => entry.path)).toEqual([
+        "docs/assets/site.css",
+        "docs/assets/other.css",
+      ]);
+
+      pending[1]!.resolve("h1{color:#000002}");
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#000002"));
+      // The old set's read settles late and changes nothing.
+      pending[0]!.resolve("h1{color:#000001}");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(frame().getAttribute("srcdoc")).not.toContain("#000001");
+      expect(frame().getAttribute("srcdoc")).toContain("#000002");
+    });
+
+    test("an inactive tab reads nothing and withholds the frame until it is shown", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      const { read, pending } = deferredReads();
+      const view = renderWithFiles(read, false);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(read).not.toHaveBeenCalled();
+      expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
+      expect(screen.queryByText(NOTICE) === null).toBe(true);
+
+      view.rerender(tabWithFiles(read, true));
+      await waitFor(() => expect(pending).toHaveLength(1));
+      pending[0]!.resolve("h1{color:#00000a}");
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#00000a"));
+    });
+
+    test("a read cut off by deactivation is discarded and made again on reactivation", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      const { read, pending } = deferredReads();
+      const view = renderWithFiles(read);
+      await waitFor(() => expect(pending).toHaveLength(1));
+
+      view.rerender(tabWithFiles(read, false));
+      pending[0]!.resolve("h1{color:#0000b1}");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
+
+      view.rerender(tabWithFiles(read, true));
+      await waitFor(() => expect(pending).toHaveLength(2));
+      expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
+      pending[1]!.resolve("h1{color:#0000b2}");
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#0000b2"));
+      expect(frame().getAttribute("srcdoc")).not.toContain("#0000b1");
+    });
+
+    test("a stylesheet over the size cap stays a refused link", async () => {
+      appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, STYLED);
+      const huge = `h1{color:#00000f}${" ".repeat(MAX_SIBLING_STYLESHEET_BYTES)}`;
+      renderWithFiles(async () => huge);
+
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("Styled"));
+      expect(frame().getAttribute("srcdoc")).toContain("<link");
+      expect(frame().getAttribute("srcdoc")).not.toContain("#00000f");
+      expect(screen.getByText(NOTICE)).toBeTruthy();
     });
 
     test("a stylesheet that cannot be read leaves the page showing, with the notice", async () => {

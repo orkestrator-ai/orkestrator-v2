@@ -216,7 +216,9 @@ export function HtmlFileTab({
           ) : null
         }
         notice={
-          preview?.hasRefusedContent ? (
+          // Until the stylesheets are in, their links still look refused; the
+          // pane is empty then, so the notice would only flash and go.
+          preview?.hasRefusedContent && !awaitingStylesheets ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-4 py-2 text-xs text-muted-foreground">
               <Info className="h-3.5 w-3.5 shrink-0" />
               <span>

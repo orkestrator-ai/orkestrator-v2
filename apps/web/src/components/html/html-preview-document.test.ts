@@ -5,6 +5,9 @@ import {
   findSiblingStylesheetPaths,
   HTML_PREVIEW_CSP,
   HTML_PREVIEW_SANDBOX,
+  MAX_INLINED_STYLESHEET_BYTES,
+  MAX_INLINED_STYLESHEET_LINKS,
+  MAX_SIBLING_STYLESHEET_BYTES,
   resolveSiblingFilePath,
 } from "./html-preview-document";
 
@@ -230,6 +233,70 @@ describe("sibling stylesheets", () => {
       });
       expect(hasRefusedContent).toBe(true);
     }
+  });
+
+  test("repeated links to one sheet stay within the page's total budget", () => {
+    const css = `body{color:#123456}${"/*pad*/".repeat(100)}`;
+    const { srcDoc, hasRefusedContent } = buildHtmlPreviewDocument(link.repeat(64), {
+      filePath,
+      stylesheets: new Map([["design/assets/design.css", css]]),
+      maxInlinedBytes: css.length * 3,
+      maxInlinedLinks: 10,
+    });
+    const parsed = parse(srcDoc);
+    // Three copies fit the text budget; the rest stay refused links, across every pass.
+    expect(parsed.querySelectorAll("style")).toHaveLength(3);
+    expect(parsed.querySelectorAll("link")).toHaveLength(61);
+    expect(srcDoc.length).toBeLessThan(css.length * 3 + 64 * link.length + 1024);
+    expect(hasRefusedContent).toBe(true);
+  });
+
+  test("the link budget caps replacements even for tiny sheets", () => {
+    const { srcDoc } = buildHtmlPreviewDocument(link.repeat(2000), {
+      filePath,
+      stylesheets,
+    });
+    const parsed = parse(srcDoc);
+    expect(parsed.querySelectorAll("style")).toHaveLength(MAX_INLINED_STYLESHEET_LINKS);
+    expect(parsed.querySelectorAll("link")).toHaveLength(2000 - MAX_INLINED_STYLESHEET_LINKS);
+  });
+
+  test("the default budget bounds output from many copies of the largest sheet", () => {
+    const css = "a".repeat(MAX_SIBLING_STYLESHEET_BYTES);
+    const { srcDoc } = buildHtmlPreviewDocument(link.repeat(2000), {
+      filePath,
+      stylesheets: new Map([["design/assets/design.css", css]]),
+    });
+    expect(parse(srcDoc).querySelectorAll("style")).toHaveLength(
+      MAX_INLINED_STYLESHEET_BYTES / MAX_SIBLING_STYLESHEET_BYTES,
+    );
+    expect(srcDoc.length).toBeLessThan(MAX_INLINED_STYLESHEET_BYTES + 2000 * link.length + 4096);
+  });
+
+  test("a disabled stylesheet is neither read nor made active", () => {
+    const html = `<link rel="stylesheet" disabled href="assets/off.css">${link}`;
+    expect(findSiblingStylesheetPaths(html, filePath)).toEqual(["design/assets/design.css"]);
+    const { srcDoc } = buildHtmlPreviewDocument(html, {
+      filePath,
+      stylesheets: new Map([...stylesheets, ["design/assets/off.css", "body{display:none}"]]),
+    });
+    const parsed = parse(srcDoc);
+    expect(srcDoc).not.toContain("display:none");
+    expect(parsed.querySelectorAll("style")).toHaveLength(1);
+    expect(parsed.querySelector("link[disabled]")).not.toBeNull();
+  });
+
+  test("link types are matched case-insensitively when inlining and when refusing", () => {
+    const upper = '<link REL="StyleSheet" href="assets/design.css">';
+    expect(findSiblingStylesheetPaths(upper, filePath)).toEqual(["design/assets/design.css"]);
+    const inlined = buildHtmlPreviewDocument(upper, { filePath, stylesheets });
+    expect(parse(inlined.srcDoc).querySelector("style")?.textContent).toBe("body{color:#123456}");
+    expect(inlined.hasRefusedContent).toBe(false);
+
+    const unread = buildHtmlPreviewDocument(upper, { filePath, stylesheets: new Map() });
+    expect(parse(unread.srcDoc).querySelector("link")).not.toBeNull();
+    expect(unread.hasRefusedContent).toBe(true);
+    expect(buildHtmlPreviewDocument(upper).hasRefusedContent).toBe(true);
   });
 
   test("an inlined stylesheet adds no script, so the policy is unchanged", () => {

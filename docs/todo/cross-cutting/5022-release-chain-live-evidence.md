@@ -4,11 +4,11 @@ Carried from security report batch S5, part `0140` tasks 2 and 4 (finding L6). T
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against `main` at `69a3b4ca5`, when tasks 3 and 4 were done.
+Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against `main` at `69a3b4ca5`, when tasks 3 and 4 were done, and 2026-11-14 against `main` at `dc90609bf`, when task 2's Linux run passed.
 
 ### Tasks
 
-2. **Prove a published release installs from its lockfile**: a real update on a standalone Linux host (a disposable systemd container, as in 0033 (retired)). Status: open. Unblocked on 2026-11-13: 2.38.0-beta's updater installs from the lockfile (its `dist/main.js` runs `bun install --frozen-lockfile` on `resources/release-runtime/`) and 2.38.1-beta carries that directory, and `scripts/qualify-host-upgrades-container.ts` already updates a systemd service from 2.38.0-beta to 2.38.1-beta. The macOS half, which needs a spare Mac account, moved to the manual-test checklist (7568: 5022 task 2).
+2. **Prove a published release installs from its lockfile**: a real update on a standalone Linux host (a disposable systemd container, as in 0033 (retired)). Status: done (2026-11-14): a standalone service installed with 2.38.0-beta updated itself to 2.38.1-beta, and both release directories hold the published lockfile with every package at its locked version; `sharp` loads from each. The macOS half, which needs a spare Mac account, is in the manual-test checklist (7568: 5022 task 2).
 3. **Pin the Bun that `install.sh` downloads**: it still fetches Bun's own installer with `curl | bash`. Status: done (2026-11-05): the script downloads Bun's release archive and checks it against stated SHA-256s.
 4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: done (2026-11-05) for releases that publish `resources/release-runtime/`; the current pin, 2.36.1, predates it and still runs through `bun x` until the pin moves (proving that on the live site is 5022 task 1 in the manual-test checklist, 7568).
 
@@ -24,6 +24,31 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against
 - `bun install --frozen-lockfile --os … --cpu …` accepted the lockfile for linux x64, linux arm64, darwin arm64 and darwin x64, and chose each platform's `@img/sharp-*` and Agent SDK packages. Only linux x64 ran the result.
 
 Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/standalone-service.ts:352`; the rest holds. Task 4 gives the first run the same install, so the run in 0033 (retired) can watch both: the first run from `install.sh` and the update after it.
+
+**Outcome (2026-11-14).** The recommended option was taken. `scripts/qualify-standalone-service.ts`'s update phase now inspects both release directories (`scripts/qualify-locked-release.ts`): the root's `package.json` and `bun.lock` must be byte-for-byte the ones the package publishes in `resources/release-runtime/`, every installed package must have the version the lockfile names, and no package the lockfile does not list may be installed. `sharp` must load from the release's package root and encode a PNG. The report also lists the locked entries a fresh resolution of the same manifest would move today, which shows the lockfile, not the registry, chose them. Tests: `tests/unit/qualify-locked-release.test.ts` (a frozen install passes; a newer version, an unlisted package, a missing or different lockfile, a generated manifest and a missing runtime each fail) and two new cases in `tests/unit/qualify-standalone-service.test.ts`.
+
+Run on beelink (Linux x64, Debian 13 container with systemd as PID 1, user `qual` with linger on, disposable rootless Docker daemon `q5022`), 2026-11-14 02:13 to 02:18 UTC:
+
+```bash
+mise run build:cli
+mise run docker:disposable -- start --name q5022
+eval "$(mise run docker:disposable -- env --name q5022)"
+bun scripts/qualify-host-upgrades-container.ts --name q5022 --phases service --report output/qualification-5022/report.json
+mise run docker:disposable -- stop --name q5022
+```
+
+Exit 0; all 24 checks passed (22 in the service part, 2 in the container script). The ones for this task:
+
+| Check | Observed |
+| --- | --- |
+| `service install` of 2.38.0-beta from npm (Bun 1.4.4) | starts and serves; `releases/2.38.0-beta` was installed by 2.38.0-beta's own `installRelease` |
+| 2.38.0-beta installed from its published lockfile | `bun.lock` and `package.json` equal the published ones; lockfile SHA-256 `c2ba90dd3048…3f9d`; 145 entries: 112 installed, each at its locked version, 30 for another os/cpu/libc, 3 optional and not installed (`@emnapi/runtime`, `@img/sharp-wasm32`, `tslib`); none mismatched, none extraneous |
+| `apply --when-idle --wait` to 2.38.1-beta | exits 0; job `succeeded`; `current` 2.38.1-beta, `previous` 2.38.0-beta |
+| 2.38.1-beta installed from its published lockfile (by the 2.38.0-beta backend's updater) | the same as above: published files byte-for-byte, the same lockfile hash (the two releases publish identical lockfiles), 112 at their locked versions, none mismatched or extraneous |
+| `sharp` from each release | sharp 0.35.5, libvips 8.18.7, a PNG encoded and read back |
+| Fresh resolution of the same manifest that day | 7 entries would move: `@anthropic-ai/sdk` 1.6.0 → 1.8.0, `@babel/runtime` 7.29.13 → 7.29.14, `@hono/node-server` 2.1.6 → 2.1.8, `encodeurl` 2.0.1 → 2.0.3, `express-rate-limit` 8.7.3 → 8.7.4, `hono` 4.13.17 → 4.13.18, `jose` 6.2.16 → 6.2.17; each release has the locked (older) version installed |
+
+The cancel, rollback and engines checks passed as on 2026-11-13 (see [host-updates.md](../../architecture/host-updates.md#qualification)). Nothing failed, so nothing needed a fix. The container, its image and the daemon were removed; the run left only `output/qualification-5022/` (git-ignored) in the worktree.
 
 **Decisions.**
 
@@ -81,7 +106,7 @@ Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/stand
 ## Current state
 
 - `install.sh` pins the release (task 2 of the report), the Bun it downloads (task 3) and, for releases that publish one, the dependency lockfile of its first run (task 4). Users who saved an older copy of the script keep running it unchanged: it still runs `bunx orkestrator@<its pin>`, and a host it set up updates through `installRelease` like any other.
-- Task 2 needs two published releases that carry `resources/release-runtime/`; it stays blocked until then. Task 1 (the live-site proof after a deploy and a Stable release) is in the manual-test checklist (7568).
+- Task 2 is done on Linux (2026-11-14): a standalone update between two published releases installs from the release's lockfile. Task 1 (the live-site proof after a deploy and a Stable release) and the macOS half of task 2 are in the manual-test checklist (7568).
 
 ## Constraints and rationale
 
@@ -90,6 +115,18 @@ A committed lockfile is regenerated by hand, so it holds its versions until some
 Releases older than the lockfile still install with a plain `bun install`. The path is in the register in `docs/architecture/version-compatibility.md`.
 
 ## Assumptions and decisions
+
+### Task 2: run only the container's service phase
+
+- **Chosen:** `--phases service` of `qualify-host-upgrades-container.ts`, which runs the whole of `qualify-standalone-service.ts` (cancel, update, rollback, engines), not the linger and host-tasks phases.
+- **Why:** the lockfile is installed and checked in the update phase; linger and the image and `gh` tasks do not touch `installRelease` and passed on 2026-11-13. Skipping host-tasks also avoids pulling the 7 GB release image.
+- **Cons:** this run does not re-prove linger or the host tasks on today's `main`.
+
+### Task 2: what counts as "installed from the lockfile"
+
+- **Chosen:** byte-for-byte equality of the release root's `package.json` and `bun.lock` with the package's `resources/release-runtime/` copies, every installed package at its locked version, and no installed package the lockfile does not list. Lockfile entries limited to another platform, and optional ones with no platform limit, may be absent.
+- **Why:** this is exactly what `installRelease`'s frozen install leaves, and a fresh resolution leaves a generated manifest and no lockfile. The fresh-resolution comparison in the report shows the check is not passing by coincidence: seven versions would have differed.
+- **Cons:** it reads the result rather than watching the `bun install` command line; an install that matched the lockfile by another route would also pass.
 
 ### Task 3: verify Bun's archive against stated hashes, not pass a version to Bun's installer
 

@@ -444,7 +444,12 @@ disposable VM or a spare macOS account.
 
 - **service**: `qualify-standalone-service.ts` as `qual`: `service install`
   of `--from` from npm; an update cancelled during its countdown, which must
-  not restart the backend; a `--when-idle --wait` self-update to `--to`; a
+  not restart the backend; a `--when-idle --wait` self-update to `--to`, after
+  which both release directories must hold the `package.json` and `bun.lock`
+  their package publishes in `resources/release-runtime/`, byte for byte, with
+  every installed package at its locked version and none the lockfile does not
+  list, and `sharp` must load from each and encode a PNG
+  (`scripts/qualify-locked-release.ts`); a
   broken `<to>.990` served by a private registry, which the launcher boots
   twice and rolls back; and a second service, installed with Bun 1.4.3,
   refusing a release whose `engines.bun` is `>=1.4.4` before any restart.

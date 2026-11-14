@@ -33,6 +33,8 @@ function fixture(
     realBackend?: boolean;
     /** Publish what a release before 2.30.0-beta does: no Linux process identity. */
     legacyDescriptor?: boolean;
+    /** The release the update installed resolved afresh instead of from its lockfile. */
+    resolvedAfresh?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(path.join(os.tmpdir(), "qualify-service-test-"));
@@ -76,8 +78,30 @@ function fixture(
       }),
     );
   };
+  const inspected: string[] = [];
   const runtime: QualificationRuntime = {
     hostSignals: async () => [],
+    inspectRelease: async (releaseDir) => {
+      inspected.push(releaseDir);
+      const afresh = options.resolvedAfresh && path.basename(releaseDir) === "to";
+      return {
+        evidence: {
+          publishedRuntime: true,
+          lockMatchesPublished: !afresh,
+          manifestMatchesPublished: !afresh,
+          lockSha256: afresh ? null : "0".repeat(64),
+          lockEntries: 3,
+          installedAtLockedVersion: afresh ? 0 : 3,
+          mismatched: afresh ? [{ name: "hono", locked: "4.13.17", installed: "4.13.18" }] : [],
+          extraneous: [],
+          otherPlatform: 0,
+          notInstalled: [],
+          direct: { sharp: "0.35.5" },
+        },
+        sharp: { ok: true, sharp: "0.35.5", format: "png" },
+        fresh: [{ name: "hono", locked: "4.13.17", fresh: "4.13.18" }],
+      };
+    },
     sleep: async (_ms, signal) => {
       signal.throwIfAborted();
     },
@@ -231,6 +255,7 @@ function fixture(
   };
   return {
     calls,
+    inspected,
     services,
     readReport: () => JSON.parse(readFileSync(report, "utf8")),
     run: (phases: string) =>
@@ -296,6 +321,30 @@ for (const legacy of [false, true]) {
     expect(f.calls.indexOf(added)).toBeGreaterThan(start);
   });
 }
+test("the update phase checks both releases were installed from their lockfiles", async () => {
+  const f = fixture();
+  expect(await f.run("update")).toBe(0);
+  const dataDir = f.services.get("service")!.dataDir;
+  expect(f.inspected).toEqual([
+    path.join(dataDir, "backend", "releases", "from"),
+    path.join(dataDir, "backend", "releases", "to"),
+  ]);
+  const names = f.readReport().checks.map((check: { name: string }) => check.name);
+  expect(names).toContain("from was installed from its published lockfile");
+  expect(names).toContain("to was installed from its published lockfile");
+  expect(names).toContain("sharp loads from to and encodes a PNG");
+});
+
+test("a release that resolved afresh fails the update phase", async () => {
+  const f = fixture({ resolvedAfresh: true });
+  expect(await f.run("update")).toBe(1);
+  const failed = f
+    .readReport()
+    .checks.filter((check: { ok: boolean }) => !check.ok)
+    .map((check: { name: string }) => check.name);
+  expect(failed).toEqual(["to was installed from its published lockfile"]);
+});
+
 for (const phases of ["updat", ",", "", "update,typo"]) {
   test(`invalid phases ${JSON.stringify(phases)} fail setup before installation`, async () => {
     const f = fixture();

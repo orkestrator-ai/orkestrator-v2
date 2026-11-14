@@ -22,6 +22,8 @@
  */
 import { fromJsonSchema, type JsonSchemaType } from "@modelcontextprotocol/server";
 import { Effect, Exit, Schema, SchemaAST, SchemaIssue, SchemaTransformation } from "effect";
+import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
 
 /**
  * The annotation `strictObject` sets: read from an `UnexpectedKey` issue's
@@ -261,9 +263,35 @@ export function withDefault<S extends Schema.Top & { readonly DecodingServices: 
     ) as unknown as Schema.withDecodingDefaultKey<S>;
 }
 
+/** Field issues one refused `jsonSchemaField` value names before summarising the rest. */
+const JSON_SCHEMA_FIELD_MAX_NAMED_ISSUES = 12;
+
+/**
+ * The refusal text of a value the JSON Schema rejected, naming each field at
+ * fault. The SDK's validator says `data must NOT have additional properties`
+ * without saying which property, so a model resent a 20 KB report several
+ * times guessing at it. The workflow contract walker reports the path and,
+ * for an unknown field, the fields allowed there. When it finds nothing (a
+ * keyword it does not implement), the validator's own text stands.
+ */
+function jsonSchemaFieldRefusal(
+  json: Record<string, unknown>,
+  value: unknown,
+  fallback: string,
+): string {
+  const issues = validateWorkflowJsonSchema(json as JsonSchema, value);
+  if (issues.length === 0) return fallback;
+  const named = issues
+    .slice(0, JSON_SCHEMA_FIELD_MAX_NAMED_ISSUES)
+    .map((issue) => `${issue.path}: ${issue.message}`);
+  const omitted = issues.length - named.length;
+  return `${named.join("; ")}${omitted > 0 ? `; and ${omitted} more` : ""}`;
+}
+
 /**
  * A field validated by a JSON Schema (Zod's `z.fromJSONSchema`): published
- * verbatim and checked by the MCP SDK's JSON Schema validator.
+ * verbatim and checked by the MCP SDK's JSON Schema validator. A refusal
+ * names each field at fault by its path from the field (`$.a.b`).
  */
 export function jsonSchemaField<T = unknown>(json: Record<string, unknown>): Schema.Codec<T, T> {
   const standard = fromJsonSchema<T>(json as JsonSchemaType)["~standard"];
@@ -274,7 +302,12 @@ export function jsonSchemaField<T = unknown>(json: Record<string, unknown>): Sch
       (value) => {
         const result = standard.validate(value);
         if (result instanceof Promise) return "Asynchronous validation is not supported";
-        return result.issues ? result.issues.map((issue) => issue.message).join("; ") : true;
+        if (!result.issues) return true;
+        return jsonSchemaFieldRefusal(
+          json,
+          value,
+          result.issues.map((issue) => issue.message).join("; "),
+        );
       },
       { toJsonSchema: () => published },
     ),

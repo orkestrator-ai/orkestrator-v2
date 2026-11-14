@@ -8,6 +8,8 @@ import {
   DEFAULT_WORKFLOW_RESULT_TOOLS_SETTINGS,
   QUALIFIED_WORKFLOW_RESULT_TOOL_PROVIDERS,
   WORKFLOW_RESULT_KINDS,
+  WORKFLOW_RESULT_MAX_REJECTIONS,
+  WORKFLOW_RESULT_TOOL_META,
   isWorkflowResultKind,
   isWorkflowResultSubmissionState,
   normalizeWorkflowResultToolsSettings,
@@ -69,6 +71,31 @@ describe("workflow result contracts", () => {
     expect(instruction).toContain("The backend decides when the workflow advances.");
     expect(instruction.startsWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toBe(true);
     expect(instruction.endsWith(SYSTEM_INSTRUCTIONS_FRAME_CLOSE)).toBe(true);
+  });
+
+  test("one submission call is the default path and validation is optional", () => {
+    const resultKey = "3f1b2c4d-0000-4000-8000-000000000000";
+    const instruction = workflowResultInstruction("consolidated-review", resultKey);
+    expect(instruction).toContain(
+      `call the Orkestrator \`submit_consolidated_review\` tool once with resultKey ${JSON.stringify(resultKey)} and the complete consolidated review in \`result\``,
+    );
+    expect(instruction).toContain("That one call validates and submits");
+    expect(instruction).toContain("the refusal names each field at fault by its path");
+    expect(instruction).toContain(
+      `each distinct rejected payload uses one of ${WORKFLOW_RESULT_MAX_REJECTIONS} correction attempts`,
+    );
+    expect(instruction).toContain("You do not need to call `validate_workflow_result` first.");
+    // The submission call comes before any mention of validation, so the
+    // validate-then-commit sequence no longer reads as the expected path.
+    expect(instruction.indexOf("submit_consolidated_review")).toBeLessThan(
+      instruction.indexOf("validate_workflow_result"),
+    );
+    expect(instruction).not.toContain("If you need to check a completed payload");
+  });
+
+  test("result tools ask Claude Code to load them up front", () => {
+    expect(WORKFLOW_RESULT_TOOL_META).toEqual({ "anthropic/alwaysLoad": true });
+    expect(Object.isFrozen(WORKFLOW_RESULT_TOOL_META)).toBe(true);
   });
 
   test("the instruction carries no credential material", () => {

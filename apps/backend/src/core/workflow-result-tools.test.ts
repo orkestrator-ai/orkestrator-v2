@@ -1022,3 +1022,141 @@ describe("committing a submission by validated digest", () => {
     });
   });
 });
+
+describe("result tools load up front and name the field at fault", () => {
+  const alwaysLoad = { "anthropic/alwaysLoad": true };
+
+  test("every attempt and broker result tool lists anthropic/alwaysLoad", async () => {
+    const metas = new Map<string, unknown>();
+    const server = {
+      registerTool(name: string, config: { _meta?: unknown }) {
+        metas.set(name, config._meta);
+      },
+    };
+    const { registerWorkflowResultTools, registerWorkflowResultBrokerTools } =
+      await import("./workflow-result-tools.js");
+    const scope = { environmentId: "env-1", projectId: "project-1" };
+    const findings = { accepts: () => true, report: async () => ({ ok: true }) };
+    registerWorkflowResultTools(
+      server as never,
+      {} as never,
+      { ...scope, workflowResultKey: crypto.randomUUID(), kind: "review-report" },
+      findings as never,
+    );
+    expect([...metas.keys()].sort()).toEqual([
+      "get_workflow_result_status",
+      "report_finding",
+      "submit_review_report",
+      "validate_workflow_result",
+    ]);
+    metas.clear();
+    registerWorkflowResultTools(server as never, {} as never, {
+      ...scope,
+      workflowResultKey: crypto.randomUUID(),
+      kind: "consolidated-review",
+    });
+    expect(metas.has("submit_consolidated_review")).toBe(true);
+    for (const meta of metas.values()) expect(meta).toEqual(alwaysLoad);
+    metas.clear();
+    registerWorkflowResultBrokerTools(server as never, {} as never, scope, findings as never);
+    expect(metas.size).toBe(WORKFLOW_RESULT_KINDS.length + 3);
+    for (const meta of metas.values()) expect(meta).toEqual(alwaysLoad);
+  });
+
+  test("a refused consolidated report names each field at fault before reaching the service", async () => {
+    const { McpServer } = await import("@modelcontextprotocol/server");
+    const { callToolInProcess } = await import("./mcp-in-process.js");
+    const { CONSOLIDATED_REVIEW_EXAMPLE } = await import("./review-consolidation-example.js");
+    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const resultKey = crypto.randomUUID();
+    let serviceCalls = 0;
+    const workflowResults = {
+      async submit() {
+        serviceCalls += 1;
+        return { ok: true, lifecycle: "accepted" };
+      },
+    };
+    const factory = () => {
+      const server = new McpServer({ name: "result-tools-test", version: "1.0.0" });
+      registerWorkflowResultTools(server, workflowResults as never, {
+        environmentId: "env-1",
+        projectId: "project-1",
+        workflowResultKey: resultKey,
+        kind: "consolidated-review",
+      });
+      return server;
+    };
+    // The misses real consolidation runs made: an extra scope key, a missing
+    // top-level object, and a null where a string belongs.
+    const { testResults: _omitted, ...rest } = structuredClone(CONSOLIDATED_REVIEW_EXAMPLE);
+    const result = {
+      ...rest,
+      reviewScope: { ...rest.reviewScope, reviewers: 3 },
+      issues: [{ ...rest.issues[0]!, symbol: null }],
+    };
+    const refused = await callToolInProcess(factory, "submit_consolidated_review", {
+      resultKey,
+      result,
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain(
+      "$.reviewScope.reviewers: Field is not allowed. Allowed fields here: targetBranch, baseRef,",
+    );
+    expect(refused.text).toContain("$.testResults: Required field is missing");
+    expect(refused.text).toContain("$.issues[0].symbol: Expected string, received null");
+    expect(refused.text).not.toContain("must NOT have additional properties");
+    expect(serviceCalls).toBe(0);
+    const accepted = await callToolInProcess(factory, "submit_consolidated_review", {
+      resultKey,
+      result: CONSOLIDATED_REVIEW_EXAMPLE,
+    });
+    expect(accepted.isError).toBe(false);
+    expect(serviceCalls).toBe(1);
+  });
+
+  test("the alwaysLoad key reaches the client in tools/list", async () => {
+    const { McpServer, createMcpHandler } = await import("@modelcontextprotocol/server");
+    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const handler = createMcpHandler(
+      () => {
+        const server = new McpServer({ name: "result-tools-list-test", version: "1.0.0" });
+        registerWorkflowResultTools(server, {} as never, {
+          environmentId: "env-1",
+          projectId: "project-1",
+          workflowResultKey: crypto.randomUUID(),
+          kind: "consolidated-review",
+        });
+        return server;
+      },
+      { legacy: "stateless" },
+    );
+    try {
+      const response = await handler.fetch(
+        new Request("http://in-process.invalid/mcp", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+        }),
+      );
+      const text = await response.text();
+      const body = text.trimStart().startsWith("{")
+        ? text
+        : text
+            .split(/\r?\n/)
+            .find((line) => line.startsWith("data:"))!
+            .slice(5);
+      const listed = (JSON.parse(body) as { result: { tools: Array<Record<string, unknown>> } })
+        .result.tools;
+      expect(listed.map((tool) => [tool.name, tool._meta])).toEqual([
+        ["validate_workflow_result", alwaysLoad],
+        ["submit_consolidated_review", alwaysLoad],
+        ["get_workflow_result_status", alwaysLoad],
+      ]);
+    } finally {
+      await handler.close();
+    }
+  });
+});

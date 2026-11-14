@@ -7,6 +7,7 @@ import type {
 import {
   REPORT_FINDING_TOOL_NAME,
   WORKFLOW_RESULT_KINDS,
+  WORKFLOW_RESULT_TOOL_META,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
@@ -120,7 +121,7 @@ function submissionDescription(
   authorized: boolean,
   validationTool: string = WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
 ): string {
-  return `Submit the complete and final ${label} for ${authorized ? "the authorized" : "this"} workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${validationTool} instead. Pass exactly one of \`result\` (the complete payload) or \`validatedDigest\` (the digest ${validationTool} returned, which commits that exact validated payload without re-sending it). The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`;
+  return `Submit the complete and final ${label} for ${authorized ? "the authorized" : "this"} workflow attempt. One call validates and submits: an invalid ${label} is not accepted, and the refusal names each field at fault by its path, so correct those fields and call again. Calling ${validationTool} first is optional. Never use this tool for a probe, placeholder, partial draft, or transport test. Pass exactly one of \`result\` (the complete payload) or \`validatedDigest\` (the digest ${validationTool} returned, which commits that exact validated payload without re-sending it). The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`;
 }
 
 /**
@@ -303,6 +304,7 @@ export function registerWorkflowResultSlotTools(
             result: resultSchema,
           }),
         ),
+        _meta: { ...WORKFLOW_RESULT_TOOL_META },
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,
@@ -333,6 +335,7 @@ export function registerWorkflowResultSlotTools(
             validatedDigest: Schema.optionalKey(validatedDigestSchema),
           }),
         ),
+        _meta: { ...WORKFLOW_RESULT_TOOL_META },
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,
@@ -363,6 +366,7 @@ export function registerWorkflowResultSlotTools(
       description:
         "Check whether this workflow result was accepted before retrying. For an open result it also reports which validation and submission calls actually reached the backend.",
       inputSchema: toolInput(strictObject({ resultKey: str({ uuid: true }) })),
+      _meta: { ...WORKFLOW_RESULT_TOOL_META },
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -430,6 +434,7 @@ function registerReportFindingTool(
           finding: jsonSchemaField(provisionalFindingJsonSchema()),
         }),
       ),
+      _meta: { ...WORKFLOW_RESULT_TOOL_META },
       annotations: REPORT_FINDING_ANNOTATIONS,
     },
     async ({ resultKey, finding }) => {
@@ -519,6 +524,7 @@ export function registerWorkflowResultBrokerTools(
             finding: jsonSchemaField(provisionalFindingJsonSchema()),
           }),
         ),
+        _meta: { ...WORKFLOW_RESULT_TOOL_META },
         annotations: REPORT_FINDING_ANNOTATIONS,
       },
       async ({ resultKey, capability, finding }) => {
@@ -555,6 +561,7 @@ export function registerWorkflowResultBrokerTools(
             validatedDigest: Schema.optionalKey(validatedDigestSchema),
           }),
         ),
+        _meta: { ...WORKFLOW_RESULT_TOOL_META },
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,
@@ -598,6 +605,7 @@ export function registerWorkflowResultBrokerTools(
           result: Schema.Record(Schema.String, Schema.Unknown),
         }),
       ),
+      _meta: { ...WORKFLOW_RESULT_TOOL_META },
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -634,6 +642,7 @@ export function registerWorkflowResultBrokerTools(
           capability: str({ min: 32, max: 2_048 }),
         }),
       ),
+      _meta: { ...WORKFLOW_RESULT_TOOL_META },
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

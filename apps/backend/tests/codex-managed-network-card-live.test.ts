@@ -88,6 +88,13 @@ interface Stack {
   /** The card the tab would show: the adapter's snapshot after the enforcer. */
   pendingCard: () => Promise<AgentInteractionRequest | undefined>;
   prompt: () => Promise<void>;
+  /**
+   * Waits until the bridge reports the session idle. A tool output reaching
+   * the model does not end the turn: the model's final answer and the
+   * bridge's turn completion follow it, and a prompt sent before then is
+   * refused as an overlapping turn (409).
+   */
+  idle: () => Promise<void>;
   resolve: (
     card: AgentInteractionRequest,
     action: AgentInteractionResolution["action"],
@@ -245,6 +252,18 @@ async function withStack(
         });
         expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300);
       },
+      idle: async () => {
+        // The no-touch read the backend's activity sweep uses; `idle` is
+        // reported only once the turn's phase has left running, starting,
+        // cancelling and recovering, which is the bridge's admission rule.
+        await poll(
+          async () =>
+            (await call("GET", `/session/${sessionId}/activity`)).json?.activity === "idle"
+              ? true
+              : undefined,
+          "the turn to finish",
+        );
+      },
       resolve: async (card, action) =>
         (
           await adapter.resolveInteraction(sessionId, card.id, {
@@ -309,6 +328,9 @@ describeLive("Codex managed-network approval card on a managed host", () => {
       expect(stack.rulesFiles()).toEqual([]);
 
       // Nothing was remembered: the same request asks again, and Deny blocks it.
+      // The first turn must have finished first, or the bridge refuses the
+      // prompt as overlapping it.
+      await stack.idle();
       await stack.prompt();
       const again = await poll(async () => {
         const pending = await stack.pendingCard();

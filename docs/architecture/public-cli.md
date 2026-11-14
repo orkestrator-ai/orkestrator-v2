@@ -1005,7 +1005,14 @@ after the client's first key lookup and loses the `exec` answer after
 admission; `--wait` must recover by request key and run the command once), `wrong-profile`, `project-cascade` (a started and a
 stopped environment deleted by `project remove --cascade`; checkout and origin
 kept) and `project-init` (local only: no remote, a local environment starts
-from the repository's own `main`). The container matrix adds
+from the repository's own `main`). `opencode-steer` runs only when named
+(`--scenario opencode-steer`), because it installs the pinned OpenCode into its
+data directory: with no credentials, OpenCode's only provider is a scripted
+loopback model (`scripts/opencode2-steer-probe.ts`) that holds the turn's first
+request open while `session steer` redirects it, an exact retry replays the same
+operation, another text under the key is `request-conflict`, and the turn ends
+on the steer's reply once. It is what qualifies OpenCode's `steer: true` here
+(to-do 7905 task 4). The container matrix adds
 `foreign-owner`: a container and two volumes (one mounted, one unmounted)
 carrying every label of the scenario's environment except its owner
 (`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,

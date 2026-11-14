@@ -91,6 +91,12 @@ export class ScriptedModel {
     /** Each offered tool's description, by name. */
     descriptions: Record<string, string>;
   }) => { tool: string; arguments: Json } | { text: string } | undefined;
+  /**
+   * Awaited before a request is answered, so a live test can hold the model's
+   * response open (a turn mid-stream, as a restart may find it). Given every
+   * message's text; resolving lets the request continue as scripted.
+   */
+  hold?: (call: { texts: string[]; lastRole: string }) => Promise<void> | void;
   private server: ReturnType<typeof Bun.serve> | undefined;
 
   start(): string {
@@ -122,6 +128,7 @@ export class ScriptedModel {
           reasoningEffort,
           ...(lastRole === "tool" ? { toolResult: textOf(messages.at(-1)?.content) } : {}),
         });
+        await this.hold?.({ texts: messages.map((m) => textOf(m.content)), lastRole });
         const custom = this.respond?.({
           texts: messages.map((m) => textOf(m.content)),
           lastRole,
@@ -308,9 +315,11 @@ export interface OpenCode2Fixture {
   version: string;
   /**
    * Stop the server and start it again on the same port, password, database
-   * and directories, as a crash or an upgrade restart would.
+   * and directories, as a crash or an upgrade restart would. `SIGTERM` (the
+   * default) is what the backend's reaper sends an orphaned server first;
+   * `SIGKILL` stands in for a server that died with no chance to clean up.
    */
-  restart(): Promise<void>;
+  restart(options?: { signal?: "SIGTERM" | "SIGKILL" }): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -377,9 +386,9 @@ export async function startOpenCode2Fixture(
     });
   let server = spawnServer();
   /** Signal only the process this fixture spawned, and wait for it to exit. */
-  const stopServer = async () => {
+  const stopServer = async (signal: "SIGTERM" | "SIGKILL" = "SIGTERM") => {
     const current = server;
-    current.kill("SIGTERM");
+    current.kill(signal);
     await Promise.race([current.exited, Bun.sleep(5000)]);
     if (current.exitCode === null && current.signalCode === null) {
       current.kill("SIGKILL");
@@ -403,8 +412,8 @@ export async function startOpenCode2Fixture(
       await Bun.sleep(250);
     }
   };
-  const restart = async () => {
-    await stopServer();
+  const restart = async (restartOptions: { signal?: "SIGTERM" | "SIGKILL" } = {}) => {
+    await stopServer(restartOptions.signal);
     server = spawnServer();
     await healthy();
   };

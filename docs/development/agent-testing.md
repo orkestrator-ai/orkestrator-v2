@@ -3564,8 +3564,8 @@ the branch runner, the workspace guard and the mail drain.
   each target turn started and submitted, that a target offered `ask_agents`
   (a Pi subork) tried it and was refused (depth 1), and that the caller was
   woken exactly once.
-- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi, the fake holds
-  the target's requests open, and the backend is `SIGKILL`ed (after checking
+- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi and OpenCode, the
+  fake holds the targets' requests open, and the backend is `SIGKILL`ed (after checking
   its command line and start time) and the profile restarted with
   `devTestRestartArgs`. The kill waits until every target's subork reads
   `running` and checks that again just before the signal. After the restart
@@ -3576,13 +3576,14 @@ the branch runner, the workspace guard and the mail drain.
   turn started, the killed backend's held request was abandoned unread (its
   submit is not counted), and the answer was submitted on a request that was
   read.
-  An OpenCode target is left out of the default until
-  [8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
-  is fixed: its session stays busy in OpenCode's store after the kill, so the
-  subork stays `running` until the 45-minute bound.
-  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces it,
-  and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed run's
-  environment for inspection.
+  The OpenCode target covers 8045 (retired): plain `opencode serve` never
+  resumes a run its predecessor was stopped under, and the OpenCode provider
+  reports that run as a restart interruption
+  (`apps/backend/src/core/opencode2/restart-cut.ts`) so the runner gives it
+  its continuation instead of waiting out the 45-minute bound.
+  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS` narrows the targets (for
+  example `pi`), and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed
+  run's environment for inspection.
 
 Both specs wait for states rather than for changes since an earlier sample
 (`suborks-live-checks.ts`): a call counts as over only once its delivery has

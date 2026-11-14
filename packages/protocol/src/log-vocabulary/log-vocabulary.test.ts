@@ -24,6 +24,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "backend shutdown.finished",
   "backend shutdown.signal-received",
   "backend starting",
+  "bridge.claude query.failed",
   "bridge.cursor session.resume-fell-back",
   "bridge.pi session.resume-fell-back",
   "desktop backend.exited",

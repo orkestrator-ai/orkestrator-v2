@@ -79,12 +79,21 @@ export function isUsageLimitError(error: unknown): boolean {
 export const USAGE_LIMITED_ERROR_PROPERTY = "usageLimited";
 
 /**
+ * The plain property a failed turn's rejection carries when the provider
+ * refused it on the account's or the service's state other than a usage limit
+ * (`providerStateApiError`: a refused login, a failing API). The route reads
+ * it the way it reads {@link USAGE_LIMITED_ERROR_PROPERTY}, for the same
+ * reasons; the error's text alone cannot show it.
+ */
+export const PROVIDER_REFUSED_ERROR_PROPERTY = "providerRefused";
+
+/**
  * The plain property a failed turn's rejection carries once the turn has
- * logged the failure itself (`prompt.failed` or `prompt.usage-limited`). The
- * prompt route logs every rejection again when it settles; without this it
- * reported each failed turn a second time at error level, as
- * `prompt.processing-failed`, so one broken turn counted twice in the
- * diagnostics. A rejection without it never reached the turn's own report
+ * logged the failure itself (`prompt.failed`, `prompt.usage-limited` or
+ * `prompt.provider-refused`). The prompt route logs every rejection again when
+ * it settles; without this it reported each failed turn a second time at
+ * error level, as `prompt.processing-failed`, so one broken turn counted twice
+ * in the diagnostics. A rejection without it never reached the turn's own report
  * (a turn that failed before its query started, or a fault outside the turn)
  * and the route still logs it as an error.
  *
@@ -114,6 +123,11 @@ export function markUsageLimitError(error: unknown): void {
 /** Mark a failed turn's rejection as already logged by the turn (see above). */
 export function markTurnFailureReported(error: unknown): void {
   markErrorProperty(error, TURN_FAILURE_REPORTED_PROPERTY);
+}
+
+/** Mark a failed turn's rejection as a provider-state refusal (see above). */
+export function markProviderRefusalError(error: unknown): void {
+  markErrorProperty(error, PROVIDER_REFUSED_ERROR_PROPERTY);
 }
 
 export function ownsActiveTurn(turn: TurnState): boolean {

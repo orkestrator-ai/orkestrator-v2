@@ -92,19 +92,36 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "plugins.read-failed": "Listing plugins failed; the route answered 500.",
       "prompt.accepted": "The route accepted a prompt and answered 202.",
       "prompt.failed": "A prompt turn failed; the session reports the error.",
+      "prompt.processing-provider-refused":
+        "A prompt accepted by the route ended on a provider refusal; the turn already logged prompt.provider-refused.",
       "prompt.processing-failed":
         "A prompt accepted by the route failed while processing, before the turn could report it.",
       "prompt.processing-reported":
         "A prompt accepted by the route failed; the turn already logged prompt.failed.",
       "prompt.processing-usage-limited":
         "A prompt accepted by the route ended on a usage limit; the turn already logged prompt.usage-limited.",
+      "prompt.provider-refused":
+        "A prompt turn ended because Claude refused it on the account's or the service's state; `reason` is the SDK's API error code and the session reports the error.",
       "prompt.received": "A prompt reached the bridge; only its length is logged.",
       "prompt.send-failed": "A prompt request failed; the route answered with an error.",
       "prompt.usage-limited":
         "A prompt turn ended because the account's plan allowance is used up; the session reports the limit.",
       "query.close-failed":
         "Stopping the Claude query failed while closing a tab; the close stays pending.",
-      "query.failed": "A Claude query ended with an error result.",
+      "query.failed": {
+        description:
+          "A Claude query ended with an error result the bridge does not know to be the account's or the service's state: `subtype` and `isError` from the result, `reason` the SDK's API error code when the turn ended on one, `apiStatus` its HTTP status, `startupFailure` whether the CLI failed to start.",
+        essential: true,
+        fields: {
+          subtype: "label",
+          isError: "boolean",
+          reason: "label",
+          apiStatus: "number",
+          startupFailure: "boolean",
+        },
+      },
+      "query.provider-refused":
+        "Claude refused a query on the account's or the service's state (a refused login, an account on hold, an overloaded or failing API); `reason` is the SDK's API error code and the turn reports the provider's words.",
       "query.usage-limited":
         "Claude refused a query because the account's plan allowance is used up; the turn reports the limit.",
       "question.answer-failed": "The answer-question route failed.",

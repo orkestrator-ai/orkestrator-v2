@@ -15,6 +15,7 @@ import { settlePendingApiRetry } from "./session-manager-prompt-handlers/transcr
 import {
   diagnosticErrorClass,
   isUsageLimitError,
+  markProviderRefusalError,
   markTurnFailureReported,
   markUsageLimitError,
   ownsActiveTurn,
@@ -252,15 +253,24 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
   // bridge failure: it is a warning under its own event, so `prompt.failed`
   // errors stay a signal of something actually broken.
   const usageLimited = !killedBy && (turn.rateLimitRejected || isUsageLimitError(error));
+  // The same holds for the other provider states the result handler named
+  // (a refused login, a failing API); see `claude-api-errors.ts`.
+  const providerState = killedBy ? undefined : turn.providerStateFailure;
   if (usageLimited) {
     log.warn("prompt.usage-limited", { errorClass: diagnosticErrorClass(error) });
     // The route logs the rejection again once it settles; tell it this one
     // was a refusal, which its text alone may not show.
     markUsageLimitError(error);
+  } else if (providerState) {
+    log.warn("prompt.provider-refused", {
+      errorClass: diagnosticErrorClass(error),
+      reason: providerState,
+    });
+    markProviderRefusalError(error);
   } else {
     log.error("prompt.failed", { errorClass: diagnosticErrorClass(error) });
   }
-  // Either way the failure is now on record; the route's own completion log
+  // Whichever it was, the failure is now on record; the route's own completion log
   // must not report it a second time as an error.
   markTurnFailureReported(error);
 

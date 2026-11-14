@@ -151,12 +151,17 @@ describe("PR monitor policy", () => {
     const scopes = new PrCooldownScopes(4);
     scopes.strike("local", 3, 5);
     scopes.set("local", 1_000, 0);
-    scopes.release("local", 5);
+    expect(scopes.release("local", 5, 0)).toBe(false);
     expect(scopes.remaining("local", 0)).toBe(1_000);
-    scopes.release("local", 6);
+    // Reports that a hold still running ended, so its postponed checks resume.
+    expect(scopes.release("local", 6, 0)).toBe(true);
     expect(scopes.remaining("local", 0)).toBe(0);
     // With the strike gone, the next failure starts afresh.
     expect(scopes.strike("local", 7, 7)).toBe(1);
+    // Releasing a scope with no hold, or one already run out, ends nothing.
+    expect(scopes.release("local", 8, 0)).toBe(false);
+    scopes.set("local", 2_000, 1_000);
+    expect(scopes.release("local", 9, 2_000)).toBe(false);
   });
 
   test("invalid policy overrides fall back and the discovery period never undercuts open cadence", () => {

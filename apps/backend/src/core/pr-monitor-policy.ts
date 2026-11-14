@@ -387,13 +387,17 @@ export class PrCooldownScopes {
   /**
    * A check in the scope succeeded: ends its hold and its strikes, unless the
    * check was already in flight when the latest strike was counted. Such a
-   * check says nothing about whether the scope has recovered since.
+   * check says nothing about whether the scope has recovered since. Returns
+   * whether a hold that had not yet run out ended, so the caller can resume
+   * the checks it postponed.
    */
-  release(scope: string, detectionSequence: number): void {
+  release(scope: string, detectionSequence: number, nowMs: number): boolean {
     const strike = this.strikes.get(scope);
-    if (strike && detectionSequence <= strike.through) return;
+    if (strike && detectionSequence <= strike.through) return false;
+    const until = this.until.get(scope);
     this.until.delete(scope);
     this.strikes.delete(scope);
+    return until !== undefined && until > nowMs;
   }
 
   /** Remaining cooldown in milliseconds, 0 when the scope may run. */

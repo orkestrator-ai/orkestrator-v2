@@ -12,6 +12,7 @@ import { createLifecycleHarness } from "./pr-monitor-test-harness";
 
 /** What `gh` prints when it cannot reach GitHub. */
 const UNREACHABLE = "error connecting to api.github.com\ncheck your internet connection";
+const RATE_LIMITED = "GraphQL: API rate limit already exceeded for user ID 1.";
 
 function prUrlFor(id: string): string {
   return `https://github.com/org/repo/pull/${id}`;
@@ -25,6 +26,30 @@ function openDetection(id: string): PrDetection {
     checkSummary: null,
     checkSummaryStatus: "skipped",
   };
+}
+
+/** Time of every detection of an environment, relative to `start`. */
+function detectionTimes(
+  harness: ReturnType<typeof createLifecycleHarness>,
+  id: string,
+  start: number,
+): number[] {
+  return harness.calls.detect
+    .filter((call) => call.environmentId === id)
+    .map((call) => call.at - start);
+}
+
+/** Fails `id`'s check interactively, one strike per call, each after the last. */
+async function failInteractively(
+  harness: ReturnType<typeof createLifecycleHarness>,
+  id: string,
+  times: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < times; attempt += 1) {
+    harness.service.requestCheck(id);
+    await harness.advance(0);
+    await harness.flush();
+  }
 }
 
 function errorsOf(harness: ReturnType<typeof createLifecycleHarness>, id: string) {
@@ -203,6 +228,194 @@ describe("PR monitor while GitHub is unreachable", () => {
     await harness.flush();
     expect(harness.detections("other-box")).toBeGreaterThan(0);
     expect(harness.detections("local")).toBeGreaterThan(0);
+    harness.service.shutdown();
+  });
+
+  test("each failure from a check started after the last one lengthens the hold", async () => {
+    const harness = createLifecycleHarness();
+    const start = harness.time.now();
+    harness.detectors.set("a", async () => {
+      throw new Error(UNREACHABLE);
+    });
+    harness.detectors.set("b", async () => openDetection("b"));
+    harness.service.sync(
+      ["a", "b"].map((id) => harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" })),
+    );
+
+    // Three failures in a row: 30 s, then 60 s, then 120 s from the third.
+    await failInteractively(harness, "a", 3);
+    expect(harness.detections("a")).toBe(3);
+
+    // `b` falls due at 20 s and waits for the 120-second hold, not the first 30.
+    await harness.advance(119_000);
+    await harness.flush();
+    expect(harness.detections("b")).toBe(0);
+    await harness.advance(2_000);
+    await harness.flush();
+    expect(detectionTimes(harness, "b", start)).toEqual([120_000]);
+    harness.service.shutdown();
+  });
+
+  test("ending a long hold resumes the checks it already held, not at its old deadline", async () => {
+    const harness = createLifecycleHarness();
+    const start = harness.time.now();
+    let offline = true;
+    harness.detectors.set("a", async () => {
+      if (offline) throw new Error(UNREACHABLE);
+      return openDetection("a");
+    });
+    harness.detectors.set("b", async () => openDetection("b"));
+    let limited = true;
+    harness.detectors.set("d", async () => {
+      if (limited) throw new Error(RATE_LIMITED);
+      return openDetection("d");
+    });
+    harness.service.sync(
+      ["a", "b", "d"].map((id) =>
+        harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" }),
+      ),
+    );
+
+    // `d` is rate-limited on its own: a two-minute cooldown of its own.
+    harness.service.requestCheck("d");
+    await harness.advance(0);
+    await harness.flush();
+    limited = false;
+    // Five network failures in a row: a five-minute hold.
+    await failInteractively(harness, "a", 5);
+
+    // `b` falls due at 20 s and is held towards the 300-second deadline.
+    await harness.advance(20_000);
+    await harness.flush();
+    expect(harness.detections("b")).toBe(0);
+
+    // At 21 s the user refreshes `a` and GitHub answers: the network is back.
+    await harness.advance(1_000);
+    offline = false;
+    harness.service.requestCheck("a");
+    await harness.advance(0);
+    await harness.flush();
+    expect(errorsOf(harness, "a")).toBe(0);
+
+    // `b` resumes straight away (resume jitter is 0 here), not at 300 s.
+    await harness.flush();
+    expect(detectionTimes(harness, "b", start)).toEqual([21_000]);
+
+    // `d` still waits out its own rate-limit cooldown, then asks again.
+    await harness.advance(98_000);
+    await harness.flush();
+    expect(harness.detections("d")).toBe(1);
+    await harness.advance(2_000);
+    await harness.flush();
+    expect(detectionTimes(harness, "d", start)).toEqual([0, 120_000]);
+    harness.service.shutdown();
+  });
+
+  test("a rate limit during a hold keeps its own cooldown and does not lengthen the hold", async () => {
+    const harness = createLifecycleHarness();
+    const start = harness.time.now();
+    let offline = true;
+    harness.detectors.set("a", async () => {
+      if (offline) throw new Error(UNREACHABLE);
+      return openDetection("a");
+    });
+    harness.detectors.set("b", async () => openDetection("b"));
+    harness.detectors.set("c", async () => {
+      throw new Error(RATE_LIMITED);
+    });
+    harness.service.sync(
+      ["a", "b", "c"].map((id) =>
+        harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" }),
+      ),
+    );
+    await failInteractively(harness, "a", 1);
+    offline = false;
+
+    // Inside the hold `c` is refreshed and rate-limited.
+    await harness.advance(1_000);
+    harness.service.requestCheck("c");
+    await harness.advance(0);
+    await harness.flush();
+    expect(harness.detections("c")).toBe(1);
+
+    // The hold still ends at 30 s: `b`, due at 20 s, resumes then.
+    await harness.advance(28_000);
+    await harness.flush();
+    expect(harness.detections("b")).toBe(0);
+    await harness.advance(2_000);
+    await harness.flush();
+    expect(detectionTimes(harness, "b", start)[0]).toBe(30_000);
+
+    // `c` waits for its two-minute cooldown, which outlasts the hold.
+    await harness.advance(89_000);
+    await harness.flush();
+    expect(harness.detections("c")).toBe(1);
+    await harness.advance(2_000);
+    await harness.flush();
+    expect(detectionTimes(harness, "c", start)).toEqual([1_000, 121_000]);
+    harness.service.shutdown();
+  });
+
+  test("an agent-completion wake during a hold waits it out, then still runs", async () => {
+    const harness = createLifecycleHarness();
+    const start = harness.time.now();
+    harness.detectors.set("a", async () => {
+      throw new Error(UNREACHABLE);
+    });
+    harness.detectors.set("b", async () => openDetection("b"));
+    harness.service.sync(
+      ["a", "b"].map((id) => harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" })),
+    );
+    await failInteractively(harness, "a", 1);
+
+    await harness.advance(5_000);
+    harness.service.wakeForCompletion(harness.targets(["b"])[0]!);
+    await harness.advance(0);
+    await harness.flush();
+    expect(harness.detections("b")).toBe(0);
+
+    await harness.advance(24_000);
+    await harness.flush();
+    expect(harness.detections("b")).toBe(0);
+    await harness.advance(2_000);
+    await harness.flush();
+    expect(detectionTimes(harness, "b", start)).toEqual([30_000]);
+    // It is still the completion check: a fresh read with the rollup.
+    const [first] = harness.calls.detect.filter((call) => call.environmentId === "b");
+    expect(first?.options).toMatchObject({ includeCheckSummary: true, fresh: true });
+    harness.service.shutdown();
+  });
+
+  test("one unreachable GitHub host does not hold, or get released by, another host", async () => {
+    const harness = createLifecycleHarness();
+    const enterprise = (id: string) => `https://ghe.example.com/org/repo/pull/${id}`;
+    harness.detectors.set("ghe-1", async () => {
+      throw new Error(UNREACHABLE);
+    });
+    harness.detectors.set("ghe-2", async () => ({
+      ...openDetection("ghe-2"),
+      url: enterprise("2"),
+    }));
+    harness.detectors.set("dotcom", async () => openDetection("dotcom"));
+    harness.service.sync([
+      harness.addEnvironment("ghe-1", { prUrl: enterprise("1"), prState: "open" }),
+      harness.addEnvironment("ghe-2", { prUrl: enterprise("2"), prState: "open" }),
+      harness.addEnvironment("dotcom", { prUrl: prUrlFor("dotcom"), prState: "open" }),
+    ]);
+    await failInteractively(harness, "ghe-1", 1);
+
+    // github.com is not delayed by the Enterprise host's outage, and its
+    // success does not end the Enterprise hold.
+    await harness.advance(20_000);
+    await harness.flush();
+    expect(harness.detections("dotcom")).toBe(1);
+    expect(harness.detections("ghe-2")).toBe(0);
+    await harness.advance(9_000);
+    await harness.flush();
+    expect(harness.detections("ghe-2")).toBe(0);
+    await harness.advance(2_000);
+    await harness.flush();
+    expect(harness.detections("ghe-2")).toBe(1);
     harness.service.shutdown();
   });
 

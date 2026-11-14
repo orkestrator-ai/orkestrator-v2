@@ -368,6 +368,13 @@ interface PrMonitorEntry {
   deferredRateLimits: number;
   /** Restored by reconciliation: stagger the next background schedule. */
   restoreJitter: boolean;
+  /**
+   * Why the armed timer is later than the entry's own schedule: `due` when a
+   * check that fell due is waiting out a cooldown or network hold, `postponed`
+   * when a background delay was stretched to the end of one. Null otherwise.
+   * Lets a network hold that ends early resume exactly the checks it held.
+   */
+  cooldownHold: "due" | "postponed" | null;
   /** Restored by reconciliation: spread the first terminal discovery over a period. */
   spreadFirstDiscovery: boolean;
   /**
@@ -776,6 +783,7 @@ export class PrMonitorService {
       lastAnsweredAt: null,
       deferredRateLimits: 0,
       restoreJitter: behaviour.restored === true,
+      cooldownHold: null,
       spreadFirstDiscovery: behaviour.restored === true,
       lastActivityAt: now,
       activityKey: null,
@@ -852,6 +860,7 @@ export class PrMonitorService {
   private scheduleNext(entry: PrMonitorEntry, delayMs?: number): void {
     this.options.cancel(entry.timer);
     entry.timer = undefined;
+    entry.cooldownHold = null;
     if (!entry.active || !entry.target.ready) return;
     const delay = delayMs ?? this.backgroundDelayFor(entry);
     entry.timer = this.options.schedule(() => {
@@ -885,6 +894,7 @@ export class PrMonitorService {
       const now = this.options.monotonicNow();
       const remaining = this.cooldownRemaining(entry, now);
       if (remaining > delay) {
+        entry.cooldownHold = "postponed";
         delay = remaining + this.resumeJitter();
         // Wake when a held reading's grace ends, even inside a long cooldown.
         const grace = this.graceRemaining(entry, now);
@@ -911,6 +921,30 @@ export class PrMonitorService {
     const grace = this.graceRemaining(entry, now);
     if (grace !== null) delay = Math.min(delay, Math.max(grace, 1));
     this.scheduleNext(entry, delay);
+    if (entry.timer) entry.cooldownHold = "due";
+  }
+
+  /**
+   * A network hold ended before its deadline (a check in the scope reached
+   * GitHub again). The checks it held would otherwise sleep until the old
+   * deadline, up to `networkHoldMaxMs`: a held check that fell due resumes
+   * with the ordinary resume jitter, a postponed one returns to its background
+   * cadence. Any rate-limit cooldown still running is still waited out.
+   */
+  private resumeNetworkHeldChecks(networkScope: string): void {
+    const now = this.options.monotonicNow();
+    for (const entry of Array.from(this.entries.values())) {
+      const hold = entry.cooldownHold;
+      if (!hold || !entry.timer || !entry.active || entry.checkInProgress) continue;
+      if (networkScopeOf(entry.target) !== networkScope) continue;
+      if (hold === "postponed") {
+        this.scheduleNext(entry);
+        continue;
+      }
+      const remaining = this.cooldownRemaining(entry, now);
+      if (remaining > 0) this.holdThroughCooldown(entry, remaining);
+      else this.scheduleNext(entry, this.resumeJitter());
+    }
   }
 
   /** Time left before a held reading stops counting as confirmed; null when none is held. */
@@ -1183,7 +1217,10 @@ export class PrMonitorService {
         this.clearRateLimitStrikes(entry, detectionTarget);
         // GitHub answered from this scope, so the network is back.
         const networkScope = networkScopeOf(detectionTarget);
-        if (networkScope) this.networkHolds.release(networkScope, detectionSequence);
+        const now = this.options.monotonicNow();
+        if (networkScope && this.networkHolds.release(networkScope, detectionSequence, now)) {
+          this.resumeNetworkHeldChecks(networkScope);
+        }
         entry.lastSuccessfulCheckAt = this.options.now();
         entry.lastSuccessfulCheckStartedAt = checkStartedAt;
         if (detection) transition = await this.applyDetection(entry, detection, generation);
@@ -1936,14 +1973,29 @@ export class PrMonitorService {
 }
 
 /**
- * Where a target's checks reach GitHub from. Local checks share the host's
- * network; a container's go through its own network and firewall, so one
- * container's outage holds only that container. Container ids are opaque
- * Docker ids, not credentials.
+ * Where a target's checks reach GitHub from, and which GitHub host they reach.
+ * Local checks share the host's network; a container's go through its own
+ * network and firewall, so one container's outage holds only that container.
+ * The GitHub host (from the stored PR URL) is part of the scope, because one
+ * host can be unreachable while another answers: a GitHub Enterprise outage
+ * must not hold github.com checks, and a github.com success must not end a
+ * hold on the Enterprise host. A target with no PR URL yet has its own
+ * host-less scope. Container ids are opaque Docker ids, not credentials.
  */
 function networkScopeOf(target: PrMonitorTarget): string | null {
-  if (target.kind === "local") return "local";
-  return target.containerId ? `container:${target.containerId}` : null;
+  const host = gitHubHostOf(target.prUrl);
+  const suffix = host ? `:${host}` : "";
+  if (target.kind === "local") return `local${suffix}`;
+  return target.containerId ? `container:${target.containerId}${suffix}` : null;
+}
+
+function gitHubHostOf(prUrl: string | null): string | null {
+  if (!prUrl) return null;
+  try {
+    return new URL(prUrl).host.toLowerCase() || null;
+  } catch {
+    return null;
+  }
 }
 
 function isTerminalState(state: PrState | null): state is "merged" | "closed" {

@@ -271,6 +271,58 @@ describe("get_build_pipeline detail fingerprint", () => {
     });
   });
 
+  test("a heavy field another process changes reaches a reader whose fingerprint is warm", async () => {
+    await withCommands(async (invoke, storage, dataDir) => {
+      await save(storage, pipeline());
+      // This process reads twice, so its fingerprint for the record is cached.
+      const first = (await invoke("get_build_pipeline", {
+        pipelineId: "p1",
+        knownDetailFingerprint: "",
+      })) as DetailAnswer;
+      const warm = (await invoke("get_build_pipeline", {
+        pipelineId: "p1",
+        knownDetailFingerprint: first.detailFingerprint,
+      })) as DetailAnswer;
+      expect(warm.detailOmitted).toBe(true);
+
+      // Another process rewrites a heavy field (and nothing else).
+      const other = new StorageService(dataDir);
+      await other.init();
+      await other.saveBuildPipeline(
+        "p1",
+        "proj-1",
+        "",
+        1,
+        pipeline({}, { fixResult: { summary: "written elsewhere" } }),
+      );
+
+      const after = (await invoke("get_build_pipeline", {
+        pipelineId: "p1",
+        knownRevision: warm.record.revision,
+        knownDetailFingerprint: first.detailFingerprint,
+      })) as DetailAnswer;
+      expect(after.unchanged).toBe(false);
+      expect(after.detailOmitted).toBeUndefined();
+      expect(after.detailFingerprint).toBeDefined();
+      expect(after.detailFingerprint).not.toBe(first.detailFingerprint);
+      expect(after.record.revision).toBeGreaterThan(warm.record.revision);
+      const sessions = after.record.snapshot.sessions as Array<Record<string, unknown>>;
+      expect(sessions[0]!.fixResult).toEqual({ summary: "written elsewhere" });
+      expect(after.record).toEqual(await fullRecord(storage));
+      // The new fingerprint is the one the writer computed at its save path.
+      expect(after.detailFingerprint).toBe(
+        (await other.getBuildPipelineWithDetailFingerprint("p1"))?.detailFingerprint ?? undefined,
+      );
+
+      // A caller now naming the new fingerprint gets the detail left out again.
+      const settled = (await invoke("get_build_pipeline", {
+        pipelineId: "p1",
+        knownDetailFingerprint: after.detailFingerprint,
+      })) as DetailAnswer;
+      expect(settled.detailOmitted).toBe(true);
+    });
+  });
+
   test("a record whose sessions share a key is never split", async () => {
     await withCommands(async (invoke, storage) => {
       const duplicated = pipeline();

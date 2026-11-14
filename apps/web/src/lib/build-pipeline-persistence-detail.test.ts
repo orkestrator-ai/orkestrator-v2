@@ -195,6 +195,109 @@ describe("build pipeline point reads and the held detail", () => {
     expect(heldBuildPipelineDetailFingerprintForTests(id)).toBe("d1-z");
   });
 
+  test("a whole-record read that still leaves the detail out is refused", async () => {
+    const id = "detail-refetch-fails";
+    const first = pipeline(id);
+    invokeMock.mockResolvedValueOnce(answer(wire(first), id, 1, { fingerprint: "d1-a" }));
+    await hydrateBuildPipeline(id);
+    const next = pipeline(id, { taskTitle: "Not stored" });
+    // The fingerprint is not the one held, and the follow-up naming none is
+    // still answered without the detail: nothing can complete the record.
+    invokeMock
+      .mockResolvedValueOnce(answer(wire(next), id, 2, { fingerprint: "d1-z", omitted: true }))
+      .mockResolvedValueOnce(answer(wire(next), id, 2, { fingerprint: "d1-z", omitted: true }));
+    await expect(hydrateBuildPipeline(id)).rejects.toThrow("Invalid get_build_pipeline response");
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+    expect(lastArgs().knownDetailFingerprint).toBe("");
+    // The store keeps the last complete pipeline rather than a partial one.
+    expect(stored(id)).toEqual({ ...first, backendRevision: 1 });
+    expect(heldBuildPipelineDetailFingerprintForTests(id)).toBe("d1-a");
+  });
+
+  test("a patch that does not fit re-reads the whole record and keeps it complete", async () => {
+    const id = "detail-invalid-patch";
+    const transcripts = { transcripts: true, prioritySessionKey: "build" } as const;
+    const m1 = { id: "m1", role: "assistant", content: "one" };
+    const m2 = { id: "m2", role: "assistant", content: "two" };
+    const atRevision = (revision: number, overrides: Partial<BuildPipeline> = {}) =>
+      pipeline(id, {
+        ...overrides,
+        sessions: [
+          { ...pipeline(id).sessions[0]!, messageRevision: revision },
+          pipeline(id).sessions[1]!,
+        ],
+      });
+    invokeMock.mockResolvedValueOnce({
+      ...answer(wire(atRevision(1)), id, 1, { fingerprint: "d1-a" }),
+      messagePatches: [{ sessionKey: "build", startIndex: 0, revision: 1, messages: [m1] }],
+    });
+    await hydrateBuildPipeline(id, undefined, transcripts);
+    expect(stored(id)?.sessions[0]?.messages).toEqual([m1]);
+    expect(heldBuildPipelineDetailFingerprintForTests(id)).toBe("d1-a");
+
+    // The detail is left out, and the patch names a base this renderer does not hold.
+    invokeMock
+      .mockResolvedValueOnce({
+        ...answer(wire(atRevision(2)), id, 2, { fingerprint: "d1-a", omitted: true }),
+        messagePatches: [
+          {
+            sessionKey: "build",
+            baseRevision: 99,
+            baseCount: 1,
+            startIndex: 1,
+            revision: 2,
+            messages: [m2],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...answer(wire(atRevision(2, { taskTitle: "Changed" })), id, 2, { fingerprint: "d1-b" }),
+        messagePatches: [{ sessionKey: "build", startIndex: 0, revision: 2, messages: [m1, m2] }],
+      });
+    await hydrateBuildPipeline(id, undefined, transcripts);
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+    // The re-read names no bodies and no detail.
+    expect(lastArgs()).toEqual({
+      pipelineId: id,
+      knownSessions: {},
+      prioritySessionKey: "build",
+      knownDetailFingerprint: "",
+    });
+    expect(stored(id)).toMatchObject({
+      ...atRevision(2, { taskTitle: "Changed" }),
+      backendRevision: 2,
+    });
+    expect(stored(id)?.sessions[0]?.messages).toEqual([m1, m2]);
+    expect(stored(id)?.taskSnapshot.description).toHaveLength(500);
+    expect(stored(id)?.sessions[1]?.verificationFeedback).toBe("needs another pass");
+    expect(heldBuildPipelineDetailFingerprintForTests(id)).toBe("d1-b");
+
+    // A re-read that itself leaves the detail out cannot be completed: refused.
+    invokeMock
+      .mockResolvedValueOnce({
+        ...answer(wire(atRevision(3)), id, 3, { fingerprint: "d1-b", omitted: true }),
+        messagePatches: [
+          {
+            sessionKey: "build",
+            baseRevision: 99,
+            baseCount: 2,
+            startIndex: 2,
+            revision: 3,
+            messages: [],
+          },
+        ],
+      })
+      .mockResolvedValueOnce(
+        answer(wire(atRevision(3)), id, 3, { fingerprint: "d1-b", omitted: true }),
+      );
+    await expect(hydrateBuildPipeline(id, undefined, transcripts)).rejects.toThrow(
+      "Invalid get_build_pipeline response",
+    );
+    expect(invokeMock).toHaveBeenCalledTimes(5);
+    expect(stored(id)?.backendRevision).toBe(2);
+    expect(stored(id)?.sessions[0]?.messages).toEqual([m1, m2]);
+  });
+
   test("an older backend that ignores the fingerprint still fills the store", async () => {
     const id = "detail-older-backend";
     const full = pipeline(id);

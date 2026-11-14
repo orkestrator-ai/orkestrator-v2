@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-14 against `main` at `dc90609bf` (first analysed 2026-11-05 at `69a3b4ca5`). Carried from the E13 efficiency batch (`docs/reports/efficiency-logging-database/0720-e13-silent-failures.md`, parts `0720` and `0830`), whose code landed with the change that deleted the report. The report as analysed is in git history at `69a3b4ca5`; the version with its outcome table is the parent of the commit that deleted it. Tasks 1, 2 and 5, and the parts of task 4 that need a real login or a billed turn, are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+Analysed 2026-11-14 against `main` at `dc90609bf` (first analysed 2026-11-05 at `69a3b4ca5`). Carried from the E13 efficiency batch (`docs/reports/efficiency-logging-database/0720-e13-silent-failures.md`, parts `0720` and `0830`), whose code landed with the change that deleted the report. The report as analysed is in git history at `69a3b4ca5`; the version with its outcome table is the parent of the commit that deleted it. Tasks 1, 2 and 5, the parts of task 4 that need a real login or a billed turn, and task 3's open decision on `orkestrator schedule list`, are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### Tasks
 
@@ -238,7 +238,7 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 
 ## Open questions
 
-- Whether `orkestrator schedule list` should print the scheduler status too. The public action does not carry it; the report asked only for the Settings notice.
+- Whether `orkestrator schedule list` should print the scheduler status too is a decision for the user, in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (5160 task 3). The public action does not carry it; the report asked only for the Settings notice.
 
 ## Related
 
@@ -248,4 +248,4 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 - [8093](../containers-and-environments/8093-reaper-skips-orphans-under-a-subreaper.md): found by task 4's OpenCode restart case, which left an `opencode2 serve` running after the profile was reset.
 - [Application logging](../../architecture/logging.md#failures-that-would-otherwise-leave-no-trace)
 - [Scheduled jobs](../../architecture/scheduled-jobs.md#exactly-once)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 2, task 5, the successful-turn checks and Cursor's and Grok's refused logins of task 4).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 2, task 5, task 3's `schedule list` decision, and the successful-turn checks and Cursor's and Grok's refused logins of task 4).

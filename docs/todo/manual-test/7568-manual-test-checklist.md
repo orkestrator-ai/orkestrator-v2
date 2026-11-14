@@ -12,10 +12,10 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (325 items): run each check under
+1. **Manual tests and live checks** (326 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (61 items): make each call
+2. **Decisions, approvals and outward actions** (62 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -132,12 +132,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 27 | 11 |
 | Coordinator and Multi Review | 82 | 7 |
-| Cross-cutting | 83 | 23 |
+| Cross-cutting | 84 | 24 |
 | Design canvas | 5 | 2 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 29 | 3 |
-| **Total** | 325 | 61 |
+| **Total** | 326 | 62 |
 
 ## Outstanding work
 
@@ -800,6 +800,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **[0030](../cross-cutting/0030-test-suite-and-ci-health.md) task 1 (also 7142 task 2, retired): apply the required-check ruleset on `main`.** Read 0030's Outstanding work item 1. Check first: `gh run list --branch main --workflow ci.yml --limit 3` shows three `success` runs and `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` still returns `[]`. Then, from a checkout of `main`, run the `bun -e … | gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input -` command given there, which posts the file's `json` block (required checks `bun fmt and oxlint`, `Typecheck`, `Unit and integration tests`). Verify with `gh api repos/orkestrator-ai/orkestrator-v2/rules/branches/main`. Record: the date, the ruleset id and the verify output, in 0030 item 1 (the two-week clock for 0030 task 6 starts then).
 - [ ] **7370 (retired) task 2: publish the gateway port migration note.** (Background: [releasing.md](../../development/releasing.md#pending-release-note-gateway-port-migration).) Releases containing the gateway port rule have already shipped without it. Decide where it goes (recommended: copy the "Pending release note: gateway port migration" text from releasing.md into the next release's notes) and publish it. Record: the release and where the note appeared; then tell an agent to remove the pending section from releasing.md.
+- [ ] **[5160](../cross-cutting/5160-silent-failures-live-evidence.md) task 3: should `orkestrator schedule list` print the scheduler status too?** Settings → Schedules shows a notice when this backend is not firing schedules (`writer-lease-lost`, `another-backend` or `newer-data-directory`; shown live on 2026-11-14, 5160 task 3), but the public `schedule.list` action (`apps/backend/src/core/public-api/actions-schedules.ts`) does not carry that status, so a CLI user listing schedules on a paused backend is not told they will not fire. The report behind 5160 asked only for the Settings notice. Choose one: leave the CLI as it is (recommended; no contract change, and Settings already shows the notice), or add the status to the `schedule.list` result and print it (the CLI tells the truth too, but it is a public-API contract change with a domain bump, an older-version adapter and a register row, per [version-compatibility.md](../../architecture/version-compatibility.md#domain-contracts)). Record: the choice, as a reply to the coordinator. If you choose to add it, an agent builds it under a new to-do; leaving it needs no change.
 - [ ] **[5021](../cross-cutting/5021-publish-npm-from-ci-with-provenance.md) task 1: approve publishing the npm package from CI with provenance.** Decide between a release workflow with `id-token: write` and npm trusted publishing (recommended; gives provenance and removes the workstation as the point of trust, likely needs `npm publish` instead of `bun publish`) and keeping the local `release:publish` with its web approval. If you approve, add the repository's workflow as a trusted publisher in the `orkestrator` package's npm settings. Record: the decision and the workflow file name you registered, in 5021's task 1 section.
 - [ ] **[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) task 6: the re-qualification rule after agent bumps.** Choose one: (recommended) no blanket re-run; on a bump re-run only the bumped engine's opt-in live specs, re-qualify a feature only when the changelog touches its surface, and keep slash commands as the one mandatory re-qualification; or re-run every qualified live spec for the bumped engine (strongest, costs tokens on every bump); or no rule, per-file decisions. Record: the choice, in 0031's task 6 section, so an agent writes it into `docs/development/upgrade-agents.md`.
 - [ ] **[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) task 8: which platform runs become scheduled CI jobs.** Today `container-live-qualification.yml` runs the Docker live suites weekly on Linux, and `native-application-menu.yml` runs three Electron specs on Linux (under `xvfb-run`), Windows and macOS, but only on pull requests touching its paths and on demand; nothing runs the whole `mise run test:agent:electron` suite, a live provider, Docker Desktop or iOS. Choose one: (recommended) add `mise run test:agent:electron` to a weekly and on-demand Linux job under `xvfb-run`, on the container workflow's schedule (credential-free; catches Electron main, preload and IPC regressions between qualifications; costs Linux runner minutes; Linux Electron is not macOS evidence); or also run it weekly on `macos-15` (macOS evidence, but macOS runners cost more and the Free plan allows five at once, which `validate-bun-runtime.yml` already uses); or keep everything else manual (no cost; Electron regressions stay invisible between qualifications). Live provider suites stay manual either way: they spend tokens and would need provider secrets in CI. Record: the choice (and the runner list) in 0031's task 8 section, so an agent adds the workflow.

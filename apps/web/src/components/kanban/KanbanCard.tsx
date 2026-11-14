@@ -33,6 +33,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useMinuteClock } from "@/hooks/useMinuteClock";
+import { ticketCardTime } from "./ticket-view/ticket-times";
 
 /**
  * Left accent stripe, matching the dot colour of the column the card sits in so
@@ -201,6 +203,8 @@ export function KanbanCard({
   const canShare = Boolean(onShare && shareWith && !task.sync?.replica);
   const hasFooter =
     commentCount > 0 || !!environmentName || showTally || !!remoteWork || !!copyFrom;
+  const now = useMinuteClock();
+  const lastUpdated = ticketCardTime(task, now);
 
   // While the card is being dragged the overlay copy follows the pointer, so
   // the original stays put and renders as a dashed drop target. It deliberately
@@ -369,6 +373,18 @@ export function KanbanCard({
           </div>
         )}
       </div>
+      {lastUpdated && (
+        // In the space the card already keeps for its Open button, so the
+        // time adds no height.
+        <time
+          data-testid="kanban-card-updated-at"
+          dateTime={lastUpdated.dateTime}
+          title={lastUpdated.title}
+          className="absolute bottom-3 left-4 max-w-[60%] truncate text-[11px] leading-4 text-muted-foreground/70"
+        >
+          {lastUpdated.text}
+        </time>
+      )}
       {!isDragOverlay && (
         <Button
           variant="outline"

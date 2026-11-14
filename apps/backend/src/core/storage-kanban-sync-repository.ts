@@ -10,6 +10,7 @@ import {
   type TicketSyncItem,
   type TicketSyncOutboxItem,
   type TicketWorkLocation,
+  ticketUpdatedAt,
 } from "@orkestrator/protocol/ticket-sync";
 
 import type { StorageContext } from "./storage-context.js";
@@ -25,6 +26,7 @@ import {
   recordConflict,
   replicaLinkForProject,
   replicaLinkKey,
+  replicaUpdatedAt,
   shareTicket,
   stampTicketChange,
   storedTicketContent,
@@ -32,6 +34,7 @@ import {
   ticketSnapshot,
   ticketSyncConflictId,
   ticketTombstone,
+  touchTicket,
 } from "./storage-kanban-sync.js";
 import {
   fs,
@@ -227,6 +230,7 @@ export class KanbanSyncRepository {
               comments: item.comments,
               images: mergeSnapshotImages([], item.images, pending, input.controllerId).images,
               createdAt: item.createdAt,
+              updatedAt: ticketUpdatedAt(item),
               order: orderIn(item.status),
               prMergeCommented: false,
               sync: {
@@ -278,6 +282,19 @@ export class KanbanSyncRepository {
         removedImages.push(...merged.removed);
         const { work: _work, ...meta } = row.sync ?? { seq: 0, revs: {} };
         updated.sync = { ...meta, replica, ...(item.work ? { work: item.work } : {}) };
+        updated.updatedAt = replicaUpdatedAt({
+          before: normalizeKanbanTask(row),
+          after: normalizeKanbanTask(updated),
+          incoming: item.updatedAt,
+          pendingLocal:
+            pending.created ||
+            pending.fields.size > 0 ||
+            pending.addedComments.size > 0 ||
+            pending.removedComments.size > 0 ||
+            pending.addedImages.size > 0 ||
+            pending.removedImages.size > 0,
+          now,
+        });
         next = next.map((task) => (task.id === row.id ? updated : task));
         applied += 1;
       }
@@ -534,6 +551,7 @@ export class KanbanSyncRepository {
             comments: op.ticket.comments,
             images: (op.ticket.images ?? []).map((image) => leafImage(image)),
             createdAt: op.ticket.createdAt,
+            updatedAt: ticketUpdatedAt(op.ticket),
             order: orderIn(item.sourceProjectId, op.ticket.status),
             prMergeCommented: false,
           };
@@ -674,6 +692,14 @@ export class KanbanSyncRepository {
       const stamp = nowIso();
       for (const change of changes.values()) {
         const seqBefore = change.stored?.sync?.seq;
+        touchTicket({
+          before: change.before,
+          after: change.stored ? normalizeKanbanTask(change.stored) : null,
+          stored: change.stored,
+          now: stamp,
+        });
+        // Where its build runs is on the ticket too (`TicketWorkLocation`).
+        if (change.stored && workChanged.has(change.stored.id)) change.stored.updatedAt = stamp;
         stampTicketChange(store, {
           before: change.before,
           after: change.stored ? normalizeKanbanTask(change.stored) : null,
@@ -770,6 +796,8 @@ export class KanbanSyncRepository {
       const seq = store.nextSeq;
       store.nextSeq += 1;
       task.sync = { ...(task.sync ?? { revs: {} }), seq, work } as KanbanTask["sync"];
+      // Where its build runs is on the ticket, like its own build links.
+      task.updatedAt = nowIso();
       await this.context.atomically(async () => {
         await this.context.saveJson(this.files.kanbanFile(), tasks);
         await this.context.saveJson(this.files.kanbanSyncFile(), store);

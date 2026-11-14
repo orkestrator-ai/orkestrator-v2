@@ -27,6 +27,10 @@
  * leaf sends image changes only to a command node that declared the `images`
  * feature when it collected, so an older command node never receives an
  * operation it cannot read.
+ *
+ * Snapshots and creations carry the ticket's `updatedAt`, so a copy shows the
+ * same last-updated time as the board's ticket. Nodes that predate it send
+ * none; the receiver then keeps or derives its own (`ticketUpdatedAt`).
  */
 
 import { isTicketLabelList } from "./ticket-labels.js";
@@ -167,6 +171,8 @@ export interface TicketSnapshot extends TicketContentValue {
    */
   images?: TicketSyncImageRef[];
   createdAt: string;
+  /** When the ticket last changed on the board; absent from nodes that predate it. */
+  updatedAt?: string;
   work?: TicketWorkLocation;
 }
 
@@ -195,6 +201,8 @@ export type TicketSyncOp =
         /** The leaf's own images; sent only to a command node with the `images` feature. */
         images?: TicketSyncImageRef[];
         createdAt: string;
+        /** Absent from leaves that predate it: the command node uses `createdAt`. */
+        updatedAt?: string;
       };
     }
   | { kind: "set-title"; value: string; baseRev: number }
@@ -330,6 +338,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
+}
+
+/** An ISO-like timestamp a `Date` can read, bounded like every synced timestamp. */
+function isTimestamp(value: unknown): value is string {
+  return isBoundedString(value, 64) && value !== "" && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * A ticket's last-updated time: its `updatedAt` when that is a readable
+ * timestamp, otherwise its `createdAt`. Tickets stored or synced before
+ * `updatedAt` existed have none, and read as last updated when created.
+ */
+export function ticketUpdatedAt(ticket: { createdAt: string; updatedAt?: unknown }): string {
+  return isTimestamp(ticket.updatedAt) ? ticket.updatedAt : ticket.createdAt;
+}
+
+/** `updatedAt` when the peer sent a readable one; anything else is dropped, never refused. */
+function parseUpdatedAt(value: Record<string, unknown>): { updatedAt?: string } {
+  return isTimestamp(value.updatedAt) ? { updatedAt: value.updatedAt } : {};
 }
 
 function isSeq(value: unknown): value is number {
@@ -486,6 +513,7 @@ export function parseTicketSyncItem(value: unknown): TicketSyncItem {
     comments: value.comments.map(parseComment),
     ...parseImageRefs(value.images),
     createdAt: value.createdAt,
+    ...parseUpdatedAt(value),
     ...parseContent(value),
     ...(value.work !== undefined ? { work: parseWork(value.work) } : {}),
   };
@@ -515,6 +543,7 @@ export function parseTicketSyncOp(value: unknown): TicketSyncOp {
           comments: ticket.comments.map(parseComment),
           ...parseImageRefs(ticket.images),
           createdAt: ticket.createdAt,
+          ...parseUpdatedAt(ticket),
           ...parseContent(ticket),
         },
       };

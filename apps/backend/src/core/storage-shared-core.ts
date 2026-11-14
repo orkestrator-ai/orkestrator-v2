@@ -178,6 +178,14 @@ export type KanbanTask = {
   comments: KanbanComment[];
   images: KanbanImage[];
   createdAt: string;
+  /**
+   * When the ticket's own content or state last changed: title, content,
+   * criteria results, status, labels, comments, images, or its build and pull
+   * request links. Not its position in a column. Equal to `createdAt` on a new
+   * ticket; absent on rows written before it existed, which reads fill with
+   * `createdAt` (`normalizeKanbanTask`).
+   */
+  updatedAt?: string;
   order: number;
   environmentId?: string;
   buildPipelineId?: string;

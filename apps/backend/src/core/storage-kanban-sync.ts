@@ -5,6 +5,7 @@ import {
   TICKET_SYNC_FEATURES,
   TICKET_SYNC_LIMITS,
   parseTicketSyncOp,
+  ticketUpdatedAt,
   parseTicketSyncImageRef,
   ticketSyncConflictPreview,
   type TicketContentValue,
@@ -268,6 +269,53 @@ export function diffTickets(before: KanbanTask, after: KanbanTask): TicketDiff {
   };
 }
 
+/**
+ * Refreshes `updatedAt` on a row about to be saved when its content or state
+ * changed: anything `diffTickets` reports, including build and pull request
+ * links. Its order in a column and local bookkeeping (lifecycle markers,
+ * merge comments posted) are not updates. A new row without one gets its
+ * `createdAt`. `before` and `after` are normalized, `stored` is the row.
+ */
+export function touchTicket(input: {
+  before: KanbanTask | null;
+  after: KanbanTask | null;
+  stored: KanbanTask | null;
+  now: string;
+}): void {
+  const { before, after, stored, now } = input;
+  if (!after || !stored) return;
+  if (!before) {
+    stored.updatedAt = ticketUpdatedAt(stored);
+    return;
+  }
+  const diff = diffTickets(before, after);
+  if (syncedChange(diff) || diff.work) stored.updatedAt = now;
+}
+
+/**
+ * A leaf copy's `updatedAt` after a command node's snapshot. The board's own
+ * time, so the copy shows the same as the original, unless a change made here
+ * is still queued for the command node: then the later of the two. A snapshot
+ * from a command node that predates `updatedAt` refreshes it only when it
+ * changed the copy. `before` and `after` are normalized.
+ */
+export function replicaUpdatedAt(input: {
+  before: KanbanTask;
+  after: KanbanTask;
+  incoming: string | undefined;
+  pendingLocal: boolean;
+  now: string;
+}): string {
+  const { before, after, incoming, pendingLocal, now } = input;
+  const current = ticketUpdatedAt(before);
+  if (incoming === undefined) {
+    const diff = diffTickets(before, after);
+    return syncedChange(diff) || diff.work ? now : current;
+  }
+  if (!pendingLocal) return incoming;
+  return Date.parse(incoming) >= Date.parse(current) ? incoming : current;
+}
+
 function syncedChange(diff: TicketDiff): boolean {
   return (
     diff.title ||
@@ -451,11 +499,16 @@ export function stampTicketChange(
   }
   const diff = diffTickets(before, after);
   const replica = stored.sync?.replica;
-  if (!syncedChange(diff) && !(replica && diff.work)) return [];
+  if (!syncedChange(diff) && !diff.work) return [];
   const meta: TicketSyncMeta = stored.sync
     ? { ...stored.sync, revs: { ...stored.sync.revs } }
     : { seq: 0, revs: {} };
-  if (syncedChange(diff)) {
+  if (!syncedChange(diff) && !replica) {
+    // Only the board's own build or pull request links changed. No field
+    // revision moves, but the snapshot is sent again so its copies show the
+    // same `updatedAt` (`touchTicket`).
+    meta.seq = nextSeq(store);
+  } else if (syncedChange(diff)) {
     const seq = nextSeq(store);
     meta.seq = seq;
     const revBy = { ...meta.revBy };
@@ -540,6 +593,7 @@ export function shareTicket(
         comments: after.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
         ...(images.length ? { images } : {}),
         createdAt: after.createdAt,
+        updatedAt: ticketUpdatedAt(after),
       },
     },
     now,
@@ -605,6 +659,7 @@ export function ticketSnapshot(task: KanbanTask, selfId?: string): TicketSnapsho
     comments: task.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
     ...(selfId ? { images: snapshotImages(task, selfId) } : {}),
     createdAt: task.createdAt,
+    updatedAt: ticketUpdatedAt(task),
     ...ticketContentValue(task),
     ...(task.sync?.work ? { work: task.sync.work } : {}),
   };

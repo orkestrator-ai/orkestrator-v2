@@ -214,6 +214,7 @@ export class KanbanRepository {
         comments: [],
         images: [],
         createdAt,
+        updatedAt: createdAt,
         order:
           Math.max(
             -1,

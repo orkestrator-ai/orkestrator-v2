@@ -426,6 +426,20 @@ side.
 A ticket opened from the Review column with Notes opens on the Notes tab;
 every other ticket opens on Ticket (`defaultTicketViewTab`).
 
+**Created and updated times.** Every ticket records `createdAt` and
+`updatedAt`. `updatedAt` equals `createdAt` on a new ticket and is refreshed
+by every change to the ticket's content or state: title, sections, criteria
+and their results, status, labels, comments, images, and its build, pull
+request and remote-work links (`touchTicket` in `storage-kanban-sync.ts`,
+called from the board's one commit). Moving a ticket within its column, and
+local bookkeeping such as lifecycle markers, are not updates. A row stored
+before `updatedAt` existed reads as updated when it was created
+(`ticketUpdatedAt`); nothing is written back until it next changes. The
+ticket view's header shows "Created …" and, when it differs by a minute or
+more, "Updated …" beside the Notes line, each with its exact local time as a
+tooltip (`ticket-view/ticket-times.ts`); board cards show a muted
+"Updated …" in the space their Open button already keeps.
+
 `TicketSectionsGrid` renders the sections as tiles in render order for the
 pipeline Ticket node inspector. It sizes to its container: one column, two
 from 36rem, three from 56rem; the summary spans the row and the criteria span
@@ -540,6 +554,14 @@ the board says so. Images are bounded per ticket (200 references) and per read
 image sync) stays on the leaf; one the board listed and then dropped is
 removed there too. A build's ticket snapshot still carries the images the
 coordinator or the launcher send with it.
+
+**Updated times.** Snapshots and creations carry `updatedAt`, so a leaf's
+copy shows the command node's created and updated times. A leaf adopts the
+board's time unless a change of its own is still queued (then the later of
+the two). A change to only the board's own build or pull request links bumps
+the ticket's `seq` without a field revision, so the copy's time follows. A
+peer that predates `updatedAt` sends none: a creation then uses `createdAt`,
+and a leaf refreshes its copy's time only when the snapshot changed it.
 
 **Order within a column is per machine.** Status syncs, but the order of
 tickets within a column does not: `order` changes on every drag and status

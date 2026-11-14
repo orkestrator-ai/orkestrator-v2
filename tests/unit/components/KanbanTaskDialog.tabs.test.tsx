@@ -237,6 +237,30 @@ describe("the ticket view's tabs", () => {
     );
   });
 
+  test("the header shows when the ticket was created and last updated", () => {
+    // Past the whole minute, as the header's clock reads time to the minute.
+    const createdAt = new Date(Date.now() - 2 * 86400 * 1000 - 120_000).toISOString();
+    const updatedAt = new Date(Date.now() - 5 * 60_000 - 120_000).toISOString();
+    renderInAppCommandScope(
+      <KanbanTaskDialog task={makeTask({ createdAt, updatedAt })} open onOpenChange={() => {}} />,
+    );
+    const created = screen.getByTestId("ticket-created-at");
+    expect(created.textContent).toBe("Created 2d ago");
+    expect(created.getAttribute("title")).toStartWith("Created ");
+    expect(created.getAttribute("datetime")).toBe(createdAt);
+    const updated = screen.getByTestId("ticket-updated-at");
+    expect(updated.textContent).toMatch(/^Updated [56]m ago$/);
+    expect(updated.getAttribute("datetime")).toBe(updatedAt);
+    cleanup();
+
+    // Never edited, or from a backend without updatedAt: Created alone.
+    renderInAppCommandScope(
+      <KanbanTaskDialog task={makeTask({ createdAt })} open onOpenChange={() => {}} />,
+    );
+    expect(screen.getByTestId("ticket-times").textContent).toBe("Created 2d ago");
+    expect(screen.queryByTestId("ticket-updated-at") === null).toBe(true);
+  });
+
   test("the Ticket tab indexes every section as a link and jumps to it", () => {
     renderInAppCommandScope(
       <KanbanTaskDialog task={makeTask({ prUrl: PR_URL })} open onOpenChange={() => {}} />,

@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (329 items): run each check under
+1. **Manual tests and live checks** (330 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (63 items): make each call
@@ -154,12 +154,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 28 | 11 |
 | Coordinator and Multi Review | 83 | 8 |
-| Cross-cutting | 84 | 24 |
+| Cross-cutting | 85 | 24 |
 | Design canvas | 5 | 2 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 29 | 3 |
-| **Total** | 329 | 63 |
+| **Total** | 330 | 63 |
 
 ## Outstanding work
 
@@ -650,6 +650,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7570](../cross-cutting/7570-compatibility-paths-waiting-on-the-floor.md) task 2 (user part): compatibility-path counters on your real installs.** After the support-window floor reaches v2.36.0 (2027-01-02), and before the task 2 removal change, read these counters on every machine you run Orkestrator on (command nodes and leaves): `bridge-observation.full-stream`, `bridge-human-prompts.missing-route`, `host-agent-sign-ins.older-node`, `worker-changes.diff-scope-older-node`, `auto-switch.older-node`, `kanban.legacy-row-derived`, `retired-command.read-file-at-branch` and `retired-command.coordinator-upstream-auto-merge`. Use the `get_compatibility_path_usage` backend command or the `compatibilityPaths` block of the gateway's `/__orkestrator/metrics`. Record: each machine's app version and, per counter, `count` and `lastSeenAt`, written into 7570 task 2's Investigation. A counter that is absent or quiet everywhere lets its path go; a recent `lastSeenAt` names a peer to update first. `kanban.legacy-row-derived` is the exception: it keeps rising while old tickets stay untouched on that machine, so record it, but a non-zero count does not block its upgrade.
 - [ ] **[7543](../backend-structure/7543-effect-adoption-follow-ups.md) task 2: a coded refusal in a running Electron window.** The renderer strips the `[code …]` prefix from desktop IPC errors (`readableCodedError`), checked only at the renderer client level because the agent fleet host has no display. On a desktop (macOS, or Linux with a display), start a disposable profile with a native window (`mise run dev:test --profile coded-error-qa --fixture --no-agent-credentials --no-headless --fixture-environments local,container`). Trigger a container lifecycle refusal: with Docker stopped, start or rebuild the fixture container environment (`daemon-unavailable`). Trigger an MCP management refusal: in Settings → MCP servers, save a server under a name that already exists, or one with a malformed command. Each error shown must read as plain text, with no `[container-lifecycle …]` or `[mcp-management …]` prefix. Then `mise run dev:stop --profile coded-error-qa` and `mise run dev:reset --profile coded-error-qa`. Record pass or fail per refusal, the OS and the commit in 7543's "Needs verification", or reply to the coordinator.
 - [ ] **4961 (retired) task 1: judge how a capped bulk list reads in the Changes view.** (Background: [Change tracking: retention and backup](../../architecture/change-tracking.md#retention-and-backup); the to-do is in Git history at `14df96544`.) On 2026-11-11 an agent kept one row per file rather than adding one row per bulk directory: the storage a directory row would save stays inside the per-owner bound (about 0.5 MiB per bulk turn for 30 days), and a directory row would be a new row kind for diff bodies, restore and every client. Whether a capped list reads poorly is the part only you can judge. In a disposable `dev:test` profile started with `--fixture --no-agent-credentials`, in a fixture environment, edit two tracked source files and add 2,500 small files under one new directory, then open the Changes view. Record: whether the two source files are easy to find above the bulk directory, whether the "not listed. The totals count them all." notice is clear, and whether you want one row per bulk directory instead. Reply to the coordinator; a "yes" to directory rows becomes a new to-do, starting from the option analysis in 4961.
+- [ ] **[7568](7568-manual-test-checklist.md) ticket "Kanban tickets, show created and last-updated times": check the times by eye.** (Background: [Views](../../architecture/tickets.md#views), "Created and updated times".) In a disposable `dev:test` profile with `--fixture --no-host-seed`, create a ticket and open it: the header shows only "Created just now" beside the Notes line, muted like it, with the exact local time as its tooltip. Edit the title, wait a minute and reopen it: "Updated …" now shows too, and the board card shows "Updated 1m ago" at its bottom left without the card growing, its tooltip giving both exact times; hovering the card still shows the Open button without overlapping it. Check a 390 px wide window too. With a command node and a leaf, edit a synced ticket on either and check both machines show the same Created and Updated times. Record: pass or fail per check, with the date, by replying to the coordinator.
 
 #### Design canvas
 

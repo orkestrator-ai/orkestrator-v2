@@ -2154,6 +2154,17 @@ invoker's refused list. The refusal
 (`COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL`) names the setting, so the coordinator
 can tell the user what to do.
 
+Each refusal is counted, content-free, in `coordinatorEnvironmentRefusals` of
+`/__orkestrator/metrics` (`coordinator-environment-refusals.ts`): by what was
+refused (`tool`, `mail`, `mail-reply`, `node-mail`, `node-mail-reply`,
+`review-address`, `workflow-control`), by node (`local` or `remote`) and, for a
+Control MCP tool, by the tool's name. No id or input is kept, and the counts
+start from zero with each backend. They exist to show whether the default is
+too strict, in particular whether replies to an environment's own mail are
+most of the refusals (to-do
+[6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
+task 6).
+
 The answer comes from `coordinatorCreatedEnvironment`
 (`coordinator-environment-scope.ts`), and it is per coordinator, not per
 conversation: every worker belongs to the main coordinator, so a takeover from a

@@ -816,8 +816,9 @@ after the durable write. Two rules keep a recovered record honest
   sends it again under the same id; a result for the exact request outranks
   that answer, and a late delivery of the first send is the provider's
   duplicate. Anything else parks it, and the idle-poll bound fails it closed.
-  It is never re-sent under a new id
-  ([0223](../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md)).
+  It is never re-sent under a new id (to-do 0223, retired 2026-11-14;
+  `git show dc90609bf:docs/todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md`
+  records each bridge's completeness marker and the live restart checks).
 
 A restart notice names the request it cut short (`interruptedRequestId`, see
 [agent engines](agent-engines.md)), so a continuation the provider has

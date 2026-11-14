@@ -805,7 +805,8 @@ content they hold.
   config or a standalone install that gains nothing.
 - It matches Control MCP's credentials, which stay in plaintext at 0600 so Copy
   setup works at any time
-  ([decision 2](../todo/mcp/0041-control-mcp-voice-surface.md#decisions)).
+  (decision 2 of to-do 0041, retired 2026-11-14;
+  `git show dc90609bf:docs/todo/mcp/0041-control-mcp-voice-surface.md`, "Decisions").
 
 Look at this again if a same-user process stops being able to read those host
 logins (for example, if every local agent runs in a sandbox that denies them), or

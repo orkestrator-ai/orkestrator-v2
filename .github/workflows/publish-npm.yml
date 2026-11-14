@@ -1,0 +1,104 @@
+name: Publish npm package
+
+# Publishes the `orkestrator` npm package for a release tag, with provenance,
+# through npm trusted publishing (OIDC): no npm token exists, here or on a
+# workstation. The desktop builds stay local (`release:desktop` and
+# `release:linux`); only this step runs here.
+#
+# `mise run release:publish` starts it once both desktop builds are on the
+# draft release, then waits for it and makes the release public. It is
+# deliberately not triggered by a tag push: the tag exists before the builds
+# do, and npm must not get a version the desktop release could still lose.
+#
+# Setup that only a maintainer can do (docs/development/releasing.md,
+# "Publishing the npm package from GitHub"):
+#
+# - npm: the `orkestrator` package's trusted publisher is this repository,
+#   this workflow file name and the `npm-publish` environment.
+# - GitHub: the `npm-publish` environment requires a reviewer and may deploy
+#   only from `main`. Anyone who can push a branch can dispatch this workflow
+#   from it; the environment is what stops that branch's copy publishing.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v2.39.0-beta
+        required: true
+        type: string
+
+# `release:publish` finds its run by this name.
+run-name: Publish orkestrator@${{ inputs.tag }} to npm
+
+concurrency:
+  group: publish-npm-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }}
+    # The workflow that runs is the one on the branch it was dispatched from.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check the release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]]; then
+            echo "'${RELEASE_TAG}' is not a release tag: use vX.Y.Z, vX.Y.Z-beta or vX.Y.Z-alpha, optionally numbered." >&2
+            exit 1
+          fi
+
+      # npm needs 11.5.1 for trusted publishing; Node 24 ships a newer one.
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the tag is a merged release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          for manifest in package.json packages/cli/package.json; do
+            actual="$(node -p "require('./${manifest}').version")"
+            if [[ "$actual" != "$version" ]]; then
+              echo "${manifest} is at ${actual}, not ${version}." >&2
+              exit 1
+            fi
+          done
+          # A release is built from merged code.
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "${RELEASE_TAG} is not on main." >&2
+            exit 1
+          fi
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Packs once, smoke-tests that tarball, then publishes it with
+      # `npm publish --provenance`, so what users install is what was tested.
+      - name: Pack, smoke-test and publish
+        run: bun scripts/publish-cli.ts --ci

@@ -233,7 +233,7 @@ description = "Smoke-test the packed CLI"
 run = "bun run --cwd packages/cli smoke:pack"
 
 [tasks."publish:cli"]
-description = "Smoke-test and publish the CLI under its update channel's npm dist-tag"
+description = "Smoke-test and publish the CLI from this machine under its update channel's npm dist-tag (the fallback; release:publish publishes from GitHub)"
 run = ["mise run smoke:cli", "bun scripts/publish-cli.ts"]
 
 [tasks.preview]
@@ -667,7 +667,7 @@ raw_args = true
 run = "bun scripts/release-linux-remote.ts"
 
 [tasks."release:publish"]
-description = "Publish the draft GitHub release once macOS and Linux are both uploaded"
+description = "Publish the npm package through GitHub, then the draft GitHub release, once macOS and Linux are both uploaded"
 run = "bun scripts/release-desktop.ts publish"
 
 [tasks."release:pin-installer"]

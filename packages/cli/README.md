@@ -208,17 +208,22 @@ derives that list from the built artifacts, so adding a dependency the bundles d
 not resolve — or bumping one in `apps/backend` or `bridges/` without mirroring it
 here — fails the suite.
 
-Publish from the repository root:
+Releases publish this package through the "Publish npm package" GitHub
+workflow, which `mise run release:publish` starts (see
+[releasing.md](../../docs/development/releasing.md#publishing-the-npm-package-from-github)).
+From a workstation, as the fallback:
 
 ```bash
 mise run publish:cli
 ```
 
-That runs `smoke:cli` first, which packs the tarball, installs it into a scratch
-project, checks the unbundled dependencies resolve from the installed layout,
-runs client help/version/errors with no backend, starts the backend, drives a
-fixture project/environment lifecycle through the installed client, confirms
-only one backend ran, and stops it. It needs network access, which is why it is
+Either way, a smoke test runs first: `smoke:cli` locally, and in the workflow
+`smoke-packed.ts --tarball` on the tarball it is about to publish. It packs the
+tarball (unless given one), installs it into a scratch project, checks the
+unbundled dependencies resolve from the installed layout, runs client
+help/version/errors with no backend, starts the backend, drives a fixture
+project/environment lifecycle through the installed client, confirms only one
+backend ran, and stops it. It needs network access, which is why it is
 a publish gate rather than part of `mise run test`.
 
 The npm dist-tag follows the version's update channel: `2.23.0` publishes as

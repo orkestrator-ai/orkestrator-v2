@@ -12,6 +12,20 @@ if (typeof manifest.version !== "string") {
   throw new Error("CLI package version is missing");
 }
 
+/**
+ * `--tarball <path>` tests that exact tarball instead of packing one. The npm
+ * publish workflow packs once, tests that file and publishes it, so what users
+ * install is what was tested.
+ */
+function tarballArgument(argv: string[]): string | null {
+  const index = argv.indexOf("--tarball");
+  if (index === -1) return null;
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error("--tarball needs the path of a tarball");
+  return path.resolve(value);
+}
+const suppliedTarball = tarballArgument(process.argv.slice(2));
+
 const READY_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 10_000;
 
@@ -172,15 +186,18 @@ let backend: Bun.Subprocess | undefined;
 let lockedRelease: string | undefined;
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-packed-smoke-"));
 try {
-  await run(
-    [process.execPath, "pm", "pack", "--cwd", packageRoot, "--destination", temporaryRoot],
-    packageRoot,
-  );
+  let tarball = suppliedTarball;
+  if (tarball) {
+    if (!(await Bun.file(tarball).exists())) throw new Error(`Tarball ${tarball} does not exist`);
+  } else {
+    await run(
+      [process.execPath, "pm", "pack", "--cwd", packageRoot, "--destination", temporaryRoot],
+      packageRoot,
+    );
+    tarball = path.join(temporaryRoot, `orkestrator-${manifest.version}.tgz`);
+  }
   await run([process.execPath, "init", "-y"], temporaryRoot);
-  await run(
-    [process.execPath, "add", path.join(temporaryRoot, `orkestrator-${manifest.version}.tgz`)],
-    temporaryRoot,
-  );
+  await run([process.execPath, "add", tarball], temporaryRoot);
 
   // The bridges are spawned lazily by an environment, long after startup, so a
   // dependency the backend never touches would otherwise fail in front of a

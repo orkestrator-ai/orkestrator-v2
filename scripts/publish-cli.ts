@@ -2,7 +2,7 @@
 /**
  * Publish the `orkestrator` npm package under its update channel's dist-tag.
  *
- *   bun scripts/publish-cli.ts
+ *   bun scripts/publish-cli.ts [--ci]
  *
  * The tag comes from the package version's suffix, as for the desktop
  * release: `2.23.0` publishes as `latest`, `2.23.0-beta` as `beta` and
@@ -13,21 +13,28 @@
  * `bun publish` rebuilds the package in its `prepack` step, without Turbo, so
  * this is where the published backend gets its build commit.
  *
- * Authentication (docs/development/releasing.md, "npm authentication"):
+ * `--ci` is the path `release:publish` uses: the "Publish npm package"
+ * workflow (`.github/workflows/publish-npm.yml`) runs it on a GitHub-hosted
+ * runner. It packs the package once (prepack builds it, with the build commit),
+ * smoke-tests that exact tarball and publishes it with `npm publish
+ * --provenance`, authenticated by npm trusted publishing (the job's OIDC
+ * token), so no npm credential exists anywhere. It refuses to run anywhere
+ * else. The rest of this comment describes the local path, kept as the
+ * fallback (`release:publish --npm-local`) until CI publishing has shipped a
+ * release.
  *
- * - With a stored npm token (`NPM_CONFIG_TOKEN`, or the owner-only file
- *   `npmTokenFile` names), `bun publish` uses it. A granular token allowed to
- *   bypass two-factor authentication publishes with no browser step. When
- *   npm rejects the token from the file (expired, revoked, or not allowed to
- *   publish this package), the publish is tried once more without it, which
- *   is the browser approval below.
+ * Authentication of the local path (docs/development/releasing.md, "npm authentication"):
+ *
+ * - With an npm token exported as `NPM_CONFIG_TOKEN` (or `BUN_CONFIG_TOKEN`),
+ *   `bun publish` uses it. No token is kept on this machine, so that is a
+ *   deliberate one-off.
  * - Otherwise npm asks for web sign-in and prints a link that expires after
  *   about five minutes. The link raises a desktop notification
  *   (`release-approval.ts`), and an attempt whose link expired unapproved is
  *   retried with a fresh link, up to `ORKESTRATOR_NPM_AUTH_ATTEMPTS` (3).
  */
-import { readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildCommitEnv } from "../packages/protocol/src/node/build-commit.js";
 import {
@@ -62,78 +69,24 @@ export function cliPublishCommand(version: string): string[] {
   ];
 }
 
-/** Where a maintainer keeps the npm publish token, unless `ORKESTRATOR_NPM_TOKEN_FILE` says otherwise. */
-export function npmTokenFile(env: NodeJS.ProcessEnv, home: string = homedir()): string {
-  if (env.ORKESTRATOR_NPM_TOKEN_FILE) return env.ORKESTRATOR_NPM_TOKEN_FILE;
-  const config = env.XDG_CONFIG_HOME || path.join(home, ".config");
-  return path.join(config, "orkestrator-release", "npm-token");
-}
-
-export type NpmTokenSource =
-  | { kind: "environment"; variable: string }
-  | { kind: "file"; path: string; token: string }
-  | { kind: "none"; path: string };
+export type NpmTokenSource = { kind: "environment"; variable: string } | { kind: "none" };
 
 /**
- * Where this publish's npm credential comes from. An exported token wins, so
- * a CI job or a one-off run can override the file. The file must be readable
- * by its owner only: it is a long-lived publish credential.
+ * Where this publish's npm credential comes from: a token exported for this
+ * run, or none, in which case npm asks for a browser sign-in. A token is never
+ * read from a file: the release no longer keeps a long-lived publish
+ * credential on a workstation (the package is published from GitHub).
  */
-export function resolveNpmToken(
-  env: NodeJS.ProcessEnv,
-  fs: {
-    mode: (file: string) => number | null;
-    read: (file: string) => string;
-  } = defaultTokenFs,
-): NpmTokenSource {
+export function resolveNpmToken(env: NodeJS.ProcessEnv): NpmTokenSource {
   for (const variable of ["NPM_CONFIG_TOKEN", "BUN_CONFIG_TOKEN"]) {
     if (env[variable]?.trim()) return { kind: "environment", variable };
   }
-  const file = npmTokenFile(env);
-  const mode = fs.mode(file);
-  if (mode === null) return { kind: "none", path: file };
-  if ((mode & 0o077) !== 0) {
-    throw new Error(
-      `${file} can be read by other users. Run \`chmod 600 ${file}\` before publishing with it.`,
-    );
-  }
-  const token = fs.read(file).trim();
-  if (!token || /\s/.test(token)) {
-    throw new Error(`${file} must hold exactly one npm token and nothing else.`);
-  }
-  return { kind: "file", path: file, token };
+  return { kind: "none" };
 }
-
-const defaultTokenFs = {
-  mode: (file: string): number | null => {
-    try {
-      return statSync(file).mode;
-    } catch {
-      return null;
-    }
-  },
-  read: (file: string) => readFileSync(file, "utf8"),
-};
 
 /** `bun publish` gave up because nobody approved the web sign-in in time. */
 export function npmWebAuthExpired(output: string): boolean {
   return /404[^\n]*\/-\/v1\/done/.test(output);
-}
-
-/**
- * npm refused the credential itself, as opposed to the publish: a 401, or a
- * 403 that names the token, two-factor authentication or a missing
- * permission. Republishing an existing version is also a 403 but is not a
- * credential problem, and a browser sign-in would not fix it.
- */
-export function npmTokenRejected(output: string): boolean {
-  if (/cannot publish over|previously published/i.test(output)) return false;
-  return (
-    /\b(?:E?401)\b|unauthorized/i.test(output) ||
-    /\b(?:E?403)\b[^\n]*(?:token|two-factor|2fa|one-time password|otp|with these credentials|do not have permission)/i.test(
-      output,
-    )
-  );
 }
 
 export function npmAuthAttempts(env: NodeJS.ProcessEnv): number {
@@ -185,15 +138,8 @@ export type PublishOptions = {
   run?: PublishRunner;
   env?: NodeJS.ProcessEnv;
   onApproval?: (link: ApprovalLink) => void;
-  tokenFs?: Parameters<typeof resolveNpmToken>[1];
   log?: (line: string) => void;
 };
-
-function withoutToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const next = { ...env };
-  delete next.NPM_CONFIG_TOKEN;
-  return next;
-}
 
 /** The runner is injectable so tests can exercise prepack without publishing. */
 export async function publishCli(options: PublishOptions = {}): Promise<number> {
@@ -207,29 +153,22 @@ export async function publishCli(options: PublishOptions = {}): Promise<number> 
     readFileSync(path.join(repositoryRoot, "packages/cli/package.json"), "utf8"),
   ) as { version: string };
   const command = cliPublishCommand(version);
-  const token = resolveNpmToken(env, options.tokenFs);
+  const token = resolveNpmToken(env);
   const childEnv = buildCommitEnv(repositoryRoot, env);
-  if (token.kind === "file") {
-    childEnv.NPM_CONFIG_TOKEN = token.token;
-    log(`Publishing with the npm token in ${token.path}.`);
-  } else if (token.kind === "environment") {
+  if (token.kind === "environment") {
     log(`Publishing with the npm token in ${token.variable}.`);
   } else {
-    log(
-      `No npm token (${token.path} is absent), so npm will ask for browser approval; a notification will say when.`,
-    );
+    log("No npm token, so npm will ask for browser approval; a notification will say when.");
   }
 
   const attempts = npmAuthAttempts(env);
-  const storedTokenPath = token.kind === "file" ? token.path : null;
-  let usingStoredToken = storedTokenPath !== null;
   for (let attempt = 1; ; attempt++) {
     log(`\n$ ${command.join(" ")}`);
     let tail = "";
     const watcher = new ApprovalWatcher(onApproval);
     const result = await run(command, {
       cwd: repositoryRoot,
-      env: storedTokenPath !== null && !usingStoredToken ? withoutToken(childEnv) : childEnv,
+      env: childEnv,
       onOutput: (text) => {
         tail = (tail + text).slice(-OUTPUT_TAIL_BYTES);
         watcher.push(text);
@@ -237,16 +176,6 @@ export async function publishCli(options: PublishOptions = {}): Promise<number> 
     });
     const exitCode = result.exitCode ?? 1;
     const sawSignIn = watcher.links().some((link) => link.kind === "npm");
-    if (exitCode !== 0 && usingStoredToken && !sawSignIn && npmTokenRejected(tail)) {
-      // Nothing was published with a rejected credential, so asking again cannot publish twice.
-      usingStoredToken = false;
-      attempt--;
-      log(
-        `npm rejected the token in ${storedTokenPath} (expired, revoked, or not allowed to publish orkestrator). ` +
-          "Renew it; publishing with browser approval instead, and a notification will say when.",
-      );
-      continue;
-    }
     const expired = exitCode !== 0 && sawSignIn && npmWebAuthExpired(tail);
     if (!expired) return exitCode;
     if (attempt >= attempts) {
@@ -260,9 +189,152 @@ export async function publishCli(options: PublishOptions = {}): Promise<number> 
   }
 }
 
+/** npm 11.5.1 is the first release that can authenticate a publish with trusted publishing. */
+export const TRUSTED_PUBLISHING_MIN_NPM = [11, 5, 1] as const;
+
+export function npmSupportsTrustedPublishing(version: string): boolean {
+  const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim())?.slice(1).map(Number);
+  if (!parts) return false;
+  for (let index = 0; index < 3; index++) {
+    const have = parts[index] ?? 0;
+    const need = TRUSTED_PUBLISHING_MIN_NPM[index] ?? 0;
+    if (have !== need) return have > need;
+  }
+  return true;
+}
+
+/** Packs the CLI into `destination`. `prepack` rebuilds it, so the build commit must be in the environment. */
+export function cliPackCommand(destination: string): string[] {
+  return ["bun", "pm", "pack", "--cwd", "packages/cli", "--destination", destination];
+}
+
+export function cliSmokeCommand(tarball: string): string[] {
+  return ["bun", "packages/cli/scripts/smoke-packed.ts", "--tarball", tarball];
+}
+
+/**
+ * Publishes the tarball that was packed and smoke-tested. `--provenance` makes
+ * a publish that cannot attest where it came from fail instead of going out
+ * unsigned.
+ */
+export function cliNpmPublishCommand(version: string, tarball: string): string[] {
+  const channel = hostUpdateChannelOfVersion(version);
+  if (!channel) {
+    throw new Error(
+      `${version} has a suffix no update channel ships. Use no suffix (Stable), -beta or -alpha (Unstable).`,
+    );
+  }
+  return [
+    "npm",
+    "publish",
+    tarball,
+    "--access",
+    "public",
+    "--tag",
+    HOST_UPDATE_CHANNEL_TAGS[channel],
+    "--provenance",
+  ];
+}
+
+/** Variables npm would use instead of the job's OIDC identity. */
+const NPM_CREDENTIAL_VARIABLES = [
+  "NPM_CONFIG_TOKEN",
+  "BUN_CONFIG_TOKEN",
+  "NODE_AUTH_TOKEN",
+  "NPM_TOKEN",
+] as const;
+
+export type CiPublishOptions = {
+  repositoryRoot?: string;
+  run?: PublishRunner;
+  env?: NodeJS.ProcessEnv;
+  log?: (line: string) => void;
+  /** Where the tarball is packed; a fresh temporary directory by default. */
+  workDirectory?: string;
+  npmVersion?: () => string;
+};
+
+function installedNpmVersion(): string {
+  const result = Bun.spawnSync(["npm", "--version"], { stdout: "pipe", stderr: "pipe" });
+  return result.exitCode === 0 ? result.stdout.toString().trim() : "";
+}
+
+/**
+ * Packs, smoke-tests and publishes the CLI from a GitHub Actions job. Returns
+ * the exit status of the first step that fails, with nothing published unless
+ * the last one ran.
+ */
+export async function publishCliFromCi(options: CiPublishOptions = {}): Promise<number> {
+  const repositoryRoot = options.repositoryRoot ?? root;
+  const run = options.run ?? spawnPublish;
+  const env = options.env ?? process.env;
+  const log = options.log ?? ((line: string) => console.log(line));
+
+  if (env.GITHUB_ACTIONS !== "true" || !env.ACTIONS_ID_TOKEN_REQUEST_URL) {
+    throw new Error(
+      "--ci publishes through npm trusted publishing and only runs in the Publish npm package " +
+        "workflow, with `id-token: write`. Locally, use `mise run publish:cli`.",
+    );
+  }
+  const npmVersion = (options.npmVersion ?? installedNpmVersion)();
+  if (!npmSupportsTrustedPublishing(npmVersion)) {
+    throw new Error(
+      `npm ${npmVersion || "(not found)"} cannot publish with trusted publishing; it needs ${TRUSTED_PUBLISHING_MIN_NPM.join(".")} or newer.`,
+    );
+  }
+
+  const { version } = JSON.parse(
+    readFileSync(path.join(repositoryRoot, "packages/cli/package.json"), "utf8"),
+  ) as { version: string };
+
+  // Trusted publishing is only used when no other credential is present.
+  const childEnv = buildCommitEnv(repositoryRoot, env);
+  for (const variable of NPM_CREDENTIAL_VARIABLES) delete childEnv[variable];
+  if (!childEnv.ORKESTRATOR_BUILD_COMMIT) {
+    throw new Error(
+      "No commit describes this checkout exactly (modified or untracked files, or no repository), so the build commit cannot be embedded.",
+    );
+  }
+
+  const ownsWorkDirectory = options.workDirectory === undefined;
+  const workDirectory =
+    options.workDirectory ?? mkdtempSync(path.join(tmpdir(), "orkestrator-npm-"));
+  const tarball = path.join(workDirectory, `orkestrator-${version}.tgz`);
+  try {
+    const steps = [
+      cliPackCommand(workDirectory),
+      cliSmokeCommand(tarball),
+      cliNpmPublishCommand(version, tarball),
+    ];
+    for (const [index, command] of steps.entries()) {
+      log(`\n$ ${command.join(" ")}`);
+      const result = await run(command, {
+        cwd: repositoryRoot,
+        env: childEnv,
+        onOutput: () => undefined,
+      });
+      const exitCode = result.exitCode ?? 1;
+      if (exitCode !== 0) return exitCode;
+      if (index === 0 && !existsSync(tarball)) {
+        throw new Error(`Packing did not produce ${tarball}.`);
+      }
+    }
+    return 0;
+  } finally {
+    if (ownsWorkDirectory) rmSync(workDirectory, { recursive: true, force: true });
+  }
+}
+
 if (import.meta.main) {
   try {
-    process.exitCode = await publishCli();
+    const args = process.argv.slice(2);
+    if (args.length === 1 && args[0] === "--ci") {
+      process.exitCode = await publishCliFromCi();
+    } else if (args.length === 0) {
+      process.exitCode = await publishCli();
+    } else {
+      throw new Error("usage: publish-cli.ts [--ci]");
+    }
   } catch (error) {
     console.error(`publish-cli: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

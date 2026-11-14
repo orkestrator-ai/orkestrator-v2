@@ -109,9 +109,11 @@ either to the maintainer: `mise run release:desktop` on the Mac, and the Linux
 half from the same Mac with `mise run release:linux -- build`, which reaches
 the Linux builder (`omarchy-hp`) over SSH and fetches from GitHub over HTTPS
 through the builder's `gh`. Run `mise run release:linux -- check` first rather
-than guessing hosts. `release:publish` uses the stored npm token when there is
-one; otherwise the only human step is approving npm's browser sign-in, which
-raises a desktop notification. Pass any approval link to the user at once.
+than guessing hosts. `release:publish` publishes the npm package through the
+"Publish npm package" GitHub workflow (trusted publishing, with provenance);
+the only human step is a reviewer approving its `npm-publish` deployment on
+GitHub, which raises a desktop notification. Pass the run's address to the user
+at once.
 Details: [`docs/development/releasing.md`](docs/development/releasing.md).
 
 ## Background Work and Transport Invariants

@@ -1082,7 +1082,7 @@ export async function generateReviewPackage(
       : limitations;
 
   await verifyValidationArtifacts(environment, runner, validation);
-  // The same bytes for a reviewer whose session refuses Git (to-do 0190).
+  // The same bytes for a reviewer whose session refuses Git (to-do 0190 (retired)).
   const sealedDiff = await sealReviewDiff({
     packageId,
     diff: () => runner("git", reviewDiffArgs(range), 120_000),

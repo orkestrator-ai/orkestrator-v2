@@ -31,7 +31,7 @@ export class PublicApiReconciliations {
    * Runs whose last observation found their turn ended with a later turn in
    * the session, keyed by operation ID, holding the revision of the record
    * that observation saw. Such a run's observation cannot change while its
-   * record and environment stay as they were (to-do 7562, task 4); the
+   * record and environment stay as they were (to-do 7562 (retired), task 4); the
    * periodic reconciler pass skips it. In memory only: a restart observes
    * everything again.
    */

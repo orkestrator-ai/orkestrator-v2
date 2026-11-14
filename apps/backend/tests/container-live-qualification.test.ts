@@ -144,12 +144,20 @@ describe("C09 readiness belongs to the current boot", () => {
       const id = await startQualificationContainer("c09");
       const firstBoot = await waitForContainerBoot(id);
       expect(firstBoot).toMatch(/^[0-9a-f-]{36}$/);
+      // Boot status is the only readiness signal: the retired marker files
+      // are never written.
       expect(
-        await docker(["exec", id, "sh", "-c", "test -f /tmp/.entrypoint-complete && echo yes"]),
-      ).toBe("yes");
+        await docker([
+          "exec",
+          id,
+          "sh",
+          "-c",
+          "test ! -e /tmp/.environment-ready && test ! -e /tmp/.entrypoint-complete && echo absent",
+        ]),
+      ).toBe("absent");
 
-      // The first boot's "ready" record and legacy markers stay in the
-      // container filesystem across a restart; only the current boot counts.
+      // The first boot's "ready" record stays in the container filesystem
+      // across a restart; only the current boot counts.
       await docker(["stop", "-t", "5", id]);
       await docker(["start", id]);
       let sawStale = false;

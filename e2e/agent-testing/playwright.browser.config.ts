@@ -57,6 +57,7 @@ export default defineConfig({
     "container-multi-review-read-only.spec.ts",
     "container-multi-review-codex-read-only.spec.ts",
     "container-fake-engines.spec.ts",
+    "container-real-engines-live.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
     "sidebar-width-consumers.spec.ts",

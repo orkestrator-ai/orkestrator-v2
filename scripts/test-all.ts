@@ -1020,6 +1020,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/container-fake-claude-install.test.ts",
   "./e2e/agent-testing/container-fake-claude-review-api.test.ts",
   "./e2e/agent-testing/container-fake-codex-review-api.test.ts",
+  "./e2e/agent-testing/container-real-engines-live-support.test.ts",
   "./e2e/agent-testing/claude-warm-runtime-support.test.ts",
   "./e2e/agent-testing/opencode-fake-provider.test.ts",
   "./e2e/agent-testing/mcp-probe-server.integration.test.ts",

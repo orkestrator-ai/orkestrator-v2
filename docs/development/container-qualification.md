@@ -51,7 +51,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Claude config allowlist (M8) | same command, `./tests/claude-config-filter-docker.test.ts`; also run by `mise run test:agent:docker:isolated` | A fake host `~/.claude.json` staged from a throwaway HOME reaches `node` only as its allowlist, and interactive Claude starts in `/workspace` on it with no network and fake credentials |
 | All staged mount consumers | same command, `./tests/staged-input-relay-docker.test.ts` | Every declared mount through the full root bootstrap, node entrypoint and workspace setup; rootless raw-mount denial, relayed imports and unchanged owner-only host files. |
 | Project Git mirror | same command, `./tests/project-git-mirror-docker.test.ts` | Clone from the mirror, read-only mount, a foreign owner, fallback, a start with the source gone |
-| Bridge credential (H4) | same command, `./tests/bridge-credential-docker.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `bridge-credential` | All five bridges start from the root-only token with a verifier; `node` finds the token nowhere, including `/proc`; what it can read gets 401 from the approval routes and the backend's token passes; planted `bunfig.toml` and `/opt` writes do nothing; a wider policy is refused live and taken after a restart; an older backend's unprefixed bridge keeps working; no credentials and no provider turns |
+| Bridge credential (H4) | same command, `./tests/bridge-credential-docker.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `bridge-credential`, and `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line | All five bridges start from the root-only token with a verifier; `node` finds the token nowhere, including `/proc`, and its ptrace seize of each bridge is refused; what it can read gets 401 from the approval routes and the backend's token passes; planted `bunfig.toml` and `/opt` writes do nothing; a wider policy is refused live and taken after a restart; an older backend's unprefixed bridge keeps working. The topology line: whether the daemon is rootless, the container's uid map, Yama's scope, root's capabilities and ptrace result, and what the runner's host user reaches of the bridge directory and a bridge's memory. On a rootless daemon the fixture chooses its host ports as the backend does. No credentials and no provider turns |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
@@ -81,8 +81,8 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
 | Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`) | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring, no bypass-consent or auto-mode offer, and nothing of the tab left in the container after close (`container-claude-terminal-signal.spec.ts`). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port; start the profile with `--agent-tools-port` in the range one firewall rule admits, or `--agent-tools-port auto` to take a free one there ([agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port), [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)) |
-| Real stack, Claude read-only Multi Review | A Docker profile started with `--no-agent-credentials --agent-platforms claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:agent:docker -- container-multi-review-read-only.spec.ts`. No login and no billed turn: the image's `claude` answers from a scripted Messages API on the container's loopback (`container-fake-claude-review-api.ts`), staged as Claude managed settings, which reach every turn (the entrypoint rewrites the container's user settings file at start). On a host whose firewall drops container traffic to the profile, run the profile on `mise run docker:disposable -- start --host-loopback` (its `DOCKER_HOST` exported for both the profile and the spec) | A two-reviewer Multi Review with Claude reviewers and a Claude consolidation, every read-only turn without the CLI's command sandbox (the image ships neither bubblewrap nor socat): the review settles `ready`; reviewers and consolidation carry the sandbox-off note in the snapshot and the inspector, worded for a container; `ls` runs, the package's `diffCommand` and a write are refused by the hook, the reviewers read the sealed diff file instead, and that file matches `diffCommand`'s output; while the reviewers are held before submitting (the fake's `--hold`), Reviewer 1's Agent Info says "No sandbox, approvals denied" with the container reason (`container-multi-review-read-only.spec.ts`, to-do [0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)). Passed on beelink on 2026-11-10 in 51 s, before the Agent Info step was added; the run with it is 0190's open task 3 |
-| Real stack, Codex read-only Multi Review | A Docker profile started fresh with `--no-agent-credentials --agent-platforms codex`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1 mise run test:agent:docker -- container-multi-review-codex-read-only.spec.ts` (alone: the other Docker fixture specs start Codex in `fixture-container`, and its app-server must first start after the spec has pointed it at the fake). No login and no billed turn: the spec writes the fake's `openai_base_url` and a made-up API key into the container's own `~/.codex` before the first Codex session and restores both afterwards, and the image's `codex` answers from a scripted Responses WebSocket on the container's loopback (`container-fake-codex-review-api.ts`). The containers must reach the profile's agent tools server, as in the Claude row | A two-reviewer Multi Review with Codex reviewers, consolidation and preparation, every read-only turn `danger-full-access` under `untrusted`: the review settles `ready`; reviewers and consolidation carry Codex's sandbox-off note; `cat` and `ls` run through the bridge's exec-policy rules, the package's `git diff`, a `touch` and an `apply_patch` are declined, the reviewers read the sealed diff file instead and submit through the `orkestrator` MCP server; nothing reaches the checkout and the rules file is in the container's Codex home (`container-multi-review-codex-read-only.spec.ts`, to-do [7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md)). Not run yet: the reviewer turn itself passed on the host against the pinned Codex 0.167.0 (`live-read-only-reviewer-turn.test.ts`, 2026-11-13), and the container run is 7872's open task 1 |
+| Real stack, Claude read-only Multi Review | A Docker profile started with `--no-agent-credentials --agent-platforms claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:agent:docker -- container-multi-review-read-only.spec.ts`. No login and no billed turn: the image's `claude` answers from a scripted Messages API on the container's loopback (`container-fake-claude-review-api.ts`), staged as Claude managed settings, which reach every turn (the entrypoint rewrites the container's user settings file at start). On a host whose firewall drops container traffic to the profile, run the profile on `mise run docker:disposable -- start --host-loopback` (its `DOCKER_HOST` exported for both the profile and the spec) | A two-reviewer Multi Review with Claude reviewers and a Claude consolidation, every read-only turn without the CLI's command sandbox (the image ships neither bubblewrap nor socat): the review settles `ready`; reviewers and consolidation carry the sandbox-off note in the snapshot and the inspector, worded for a container; `ls` runs, the package's `diffCommand` and a write are refused by the hook, the reviewers read the sealed diff file instead, and that file matches `diffCommand`'s output; while the reviewers are held before submitting (the fake's `--hold`), Reviewer 1's Agent Info says "No sandbox, approvals denied" with the container reason (`container-multi-review-read-only.spec.ts`, to-do 0190 (retired); behaviour in [coordinator.md](../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox)). Passed on beelink on 2026-11-10 in 51 s, before the Agent Info step was added, and with it on 2026-11-14 in 29 s (Claude CLI 2.1.319, disposable rootless daemon with `--host-loopback`) |
+| Real stack, Codex read-only Multi Review | A Docker profile started fresh with `--no-agent-credentials --agent-platforms codex`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1 mise run test:agent:docker -- container-multi-review-codex-read-only.spec.ts` (alone: the other Docker fixture specs start Codex in `fixture-container`, and its app-server must first start after the spec has pointed it at the fake). No login and no billed turn: the spec writes the fake's `openai_base_url` and a made-up API key into the container's own `~/.codex` before the first Codex session and restores both afterwards, and the image's `codex` answers from a scripted Responses WebSocket on the container's loopback (`container-fake-codex-review-api.ts`). The containers must reach the profile's agent tools server, as in the Claude row | A two-reviewer Multi Review with Codex reviewers, consolidation and preparation, every read-only turn `danger-full-access` under `untrusted`: the review settles `ready`; reviewers and consolidation carry Codex's sandbox-off note; `cat` and `ls` run through the bridge's exec-policy rules, the package's `git diff`, a `touch` and an `apply_patch` are declined, the reviewers read the sealed diff file instead and submit through the `orkestrator` MCP server; nothing reaches the checkout and the rules file is in the container's Codex home (`container-multi-review-codex-read-only.spec.ts`, to-do 7872 (retired); behaviour in [coordinator.md](../architecture/coordinator.md#codex-read-only-turns-in-a-container)). The scripted reviewer speaks only Codex code mode, so the spec uses Codex's default model, which the pinned catalogue marks `code_mode_only` (`gpt-5.5` is not, and fails at preparation). Passed on beelink on 2026-11-14 in 34 s (Codex 0.167.0, disposable rootless daemon with `--host-loopback`); the reviewer turn alone also passed on the host (`live-read-only-reviewer-turn.test.ts`, 2026-11-13) |
 | Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the design export test (`export-container.test.ts`), the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
 
@@ -313,6 +313,117 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## Bridge credential suite on rootless Docker (2026-11-14)
+
+To-do 4982 (retired on 2026-11-14; in Git history at `git show
+dc90609bf:docs/todo/containers-and-environments/4982-bridge-credential-live-evidence.md`)
+task 2: the real-container bridge credential suite on a rootless daemon,
+which had passed on rootful Linux Engine (beelink, amd64, 2026-11-04) and
+Docker Desktop (arm64, 2026-11-06) only, and whether `/proc`, `ptrace` and
+root's reach into `/run/orkestrator-bridge` differ there. Run in worktree
+`orkestrator-v2-20261114-020754-edaea1903344` (branch
+`docker-credential-bridge-edaea1903344-r1`, from `main` at `dc90609bf`).
+
+- **Host:** beelink (kernel 7.1.8-arch1-3, x86_64, 16 cores, 62 GB), Yama
+  `ptrace_scope` 1, `fs.suid_dumpable` 2, `/tmp` a `nosuid,nodev` tmpfs.
+  Other pipelines were running their own disposable daemons at the same time.
+- **Daemon:** `mise run docker:disposable -- start --name q4982 --image
+  orkestrator-v2:dev-d4b4afafd7e4` (46 s with the image copy): host rootless
+  Engine 29.9.2, containerd v2.4.2, runc 1.5.2, RootlessKit 3.3.0,
+  slirp4netns 1.3.3, builtin port driver, host loopback refused (the default;
+  the suite needs no host port from inside a container), containerd image
+  store, systemd cgroup driver on cgroup v2. Suites ran with its `env`
+  variables, the `docker-qualification-bin` shim first on `PATH`,
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, `TMPDIR` unset (so `/tmp`),
+  `--parallel=1`, a JUnit report per run and
+  `ORKESTRATOR_QUALIFICATION_EVIDENCE` in `output/` of the worktree.
+- **Images:** `orkestrator-v2:dev-d4b4afafd7e4`
+  (`sha256:eb0ebb717f82ed41f600593411a6a7700ca64d992e97c70dec856e3932c8db06`,
+  5.78 GB), built from the worktree by `mise run docker:build:dev --profile
+  cred4982` on the host daemon (35 s, cached layers) and copied in; its
+  capabilities include `bridge-credential=1`, `bridge-launch=1` and
+  `opencode2-launch=1`. The older image, from runs 2 on, was
+  `orkestrator-v2:dev-1e785cae5ca6` (`sha256:811f06a968ba…`, built
+  2026-11-03, no `bridge-credential` or `bridge-launch`), added with
+  `load-image` (41 s).
+
+| Run | Result |
+| --- | --- |
+| 1, no older image | 12 passed, 1 skipped (the older-image case), 39.9 s |
+| 2, older image added | Failed in `beforeAll` after 534 ms: the fixture's bare `docker run` hit `RootlessKit PortManager.AddPort(): … 127.0.0.1:32776: bind: address already in use` (flake [9804](../tests/flaky-tests/environments-and-containers/9804-bridge-credential-fixture-rootless-port-collision.md), fixed below) |
+| 3 to 5, fixture fixed, new ptrace case | 13 passed, 1 failed each: the new case's own wrong assumption that a bridge runs as uid 0 (it runs as `node`, uid 1000, and is non-dumpable); the assertion was replaced by a recorded value |
+| 6 to 11 | **14 passed** each (43.0, 71.1, 81.1, 91.1, 81.3 and 91.4 s), the older-image case included; 187 assertions |
+
+Every case that passed on rootful Linux Engine and Docker Desktop passed
+here unchanged: the agent's uid gets `Permission denied` on each bridge's
+`/proc/<pid>/environ`, `mem` and `fd`, on the token file and on
+`/run/orkestrator-bridge`, and finds neither the token nor the authority
+key anywhere it can read, including every `/proc/*/environ` and `cmdline`;
+the backend's privileged listener-ownership scan recorded every bridge's
+socket; the imposter, login-shell plant, checkout and `/opt` plant, policy
+widening, unprefixed-token, older-image, Claude catalogue and both OpenCode
+2.x cases behaved as on rootful.
+
+What the new case measured, identical in all six passing runs except the
+last row, which a later re-run corrected (below the table):
+
+| Measure | Rootless (this run) | What differs from rootful |
+| --- | --- | --- |
+| Container uid map | `0 1000 1`, `1 100000 65536` | Container root is the daemon's host user (uid 1000) and `node` is host uid 100999; on rootful, container uids are host uids |
+| Bridge processes | uid 1000 (`node`) in the container, non-dumpable | Same |
+| `node`'s ptrace seize of each of the five bridges | Refused, `EPERM` | Same by design: a non-dumpable process needs `CAP_SYS_PTRACE` in its user namespace, and `node`'s effective set is empty |
+| `node`'s seize of its own child (the probe's control) | Granted | Yama is not namespaced, so this is the host's scope 1 |
+| Container root's effective capabilities (`docker exec --user root`) | `00000000a80435fb`: Docker's default set plus `NET_ADMIN`, no `CAP_SYS_PTRACE` | Same set; on rootless every capability holds only inside the daemon's user namespace |
+| Container root's seize of each bridge | Refused, `EPERM` | Same: no `CAP_SYS_PTRACE` |
+| Container root reads `/run/orkestrator-bridge` | Yes, 15 entries | Same |
+| The host user reaches `/run/orkestrator-bridge` through `/proc/<pid>/root` of the container's init | **Yes**, 15 entries (directory listed, no file read) | Real difference: on rootful this needs host root, because the directory belongs to host root there |
+| The host user opens the Claude bridge's `/proc/<pid>/mem` (opened only, nothing read) | **Opened** (re-run; the bun process at host uid 100999, `node` mapped). Runs 6 to 11 recorded `EACCES`, but their probe matched the first process whose command line merely contained the bridge's entry path, which can be the launcher's wrapper shell (lower pid, alive for the log pipeline), so that value is not evidence about the bridge | Not measured on rootful. Expected: the daemon's user owns the container's user namespace, so it holds `CAP_SYS_PTRACE` over the non-dumpable bridge there |
+
+So inside the container nothing differs: the agent's uid has no way to the
+credential on rootless that it lacks on rootful. The one difference is
+outside it, and it is the expected one: on a rootless daemon the user who
+runs the daemon owns the container's root, so any of that user's host
+processes can read the bridge directory, and open a bridge's memory, without
+the Docker socket. That user
+is root-equivalent over the daemon's containers on any topology (through the
+socket, `docker exec --user root` reads the same files), and the agent is
+never that user; it is `node`, which maps to an unprivileged subordinate uid.
+
+- **Fix, harness:** `startFixture` in
+  `apps/backend/tests/bridge-credential-docker.test.ts` published its six
+  ports as Docker automatic mappings, which on a rootless daemon collide
+  with host sockets (to-do 7549 task 4). On a rootless daemon it now gives
+  them host ports from `chooseBackendHostPorts`, the backend's own choice.
+  No assertion or budget changed.
+- **New case:** "the agent's uid cannot ptrace a bridge, and the daemon's
+  topology is recorded" asserts the agent's refused seize of every bridge
+  (and the control, where Yama allows one) and writes the table's values as
+  one JSON line. `PTRACE_SEIZE` sends no stop and ends when the probe exits,
+  so a granted probe never leaves a bridge stopped. The Container live
+  qualification workflow runs this file on rootful amd64 and arm64 runners,
+  but keeps no evidence file, so those runs check the assertions only.
+- **Re-run after review (2026-11-14):** the host-side probe now takes the
+  process whose argv begins exactly `/usr/local/bin/bun --config=/dev/null
+  --no-env-file /opt/claude-bridge/dist/index.js`, as the in-container
+  `pgrep` does, and records that process's host uid (`bridgeHostUid`). Two
+  runs on a fresh disposable daemon (`q4982b`, same host, Engine and image
+  build as above, no older image) passed 13 and skipped the older-image case
+  (63.7 and 62.8 s); both recorded `bridgeMemory: "opened"` with
+  `bridgeHostUid: "100999"`, every other value as in the table. The daemon
+  was stopped and the rebuilt image tag removed afterwards.
+- **Cleanup:** each run's `afterAll` removed its labelled containers; after
+  the last run the daemon held no container, network or volume. The daemon
+  was then stopped with `docker:disposable -- stop`, and the host image tag
+  this run built was removed.
+- **Not covered:** the topology line on rootful Linux Engine and Docker
+  Desktop (their passes predate the case; recording it is a
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  item, 4982 (retired) task 2), arm64 on rootless, RootlessKit
+  drivers other than slirp4netns, and `TMPDIR` on a filesystem without
+  `nosuid` (not needed: the suite runs no `docker cp` against its
+  read-only bind). The real-provider approval and denial turns are a
+  manual-test checklist item (4982 (retired) task 1).
 
 ## `docker cp` busy probe, copy-stream stall and port-collision runs on beelink2 (2026-11-13)
 

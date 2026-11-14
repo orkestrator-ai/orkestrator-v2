@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 
 /**
- * Orkestrator's permission rules (todo 0723) through the public API: list and
+ * Orkestrator's permission rules (todo 0723 (retired)) through the public API: list and
  * remove only. Creating a rule needs a person's click on an approval card
  * (`approve_native_agent_interaction_and_remember`), so no public action, CLI
  * command or MCP tool can create one; removing one only makes requests ask

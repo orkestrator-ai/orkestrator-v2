@@ -9,7 +9,7 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 const MAX_LISTED = 8;
 
 /**
- * Agent information: the Orkestrator permission rules (todo 0723) that
+ * Agent information: the Orkestrator permission rules (todo 0723 (retired)) that
  * answered requests in this session, newest first, and where to manage them.
  * Hidden until a rule has applied here.
  */

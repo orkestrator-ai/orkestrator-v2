@@ -3,8 +3,6 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
-import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   containerName,
   fixtureEnvironment,
@@ -15,8 +13,26 @@ import {
   selectEnvironment,
   type Environment,
 } from "./container-wiring-support";
-import { hasNewCompletedReply, type RetentionMessage } from "./close-retention-replies";
-import { approvalOption } from "./paused-interactions-live-support";
+import {
+  ALLOWED_URL,
+  BLOCKED_URL,
+  PLATFORMS,
+  approveFromCard,
+  ask,
+  curlCommand,
+  entryDirectory,
+  expectContainerPolicy,
+  requireCellPlatform,
+  restoreLayout,
+  restoreRealBridge,
+  saveSingleTabLayout,
+  sendPrompt,
+  tabSession,
+  waitForPendingInteraction,
+  waitForReply,
+  type PaneLayout,
+  type Platform,
+} from "./container-engine-cells-support";
 
 /**
  * Cursor and Pi cells of the Docker fixture (todo 0001, task 8): a native tab
@@ -46,49 +62,16 @@ import { approvalOption } from "./paused-interactions-live-support";
  *
  * Profile: `--fixture-environments local,container` with Cursor and Pi in
  * `--agent-platforms` (`mise run test:agent:docker:isolated` starts one).
+ *
+ * The opt-in variants on a real Cursor SDK and a real Pi provider are
+ * `container-real-engines-live.spec.ts`; the steps both share are in
+ * `container-engine-cells-support.ts`.
  */
 
 // Backend calls carry the disposable profile's token; keep it out of artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
-type Platform = "cursor" | "pi";
-type Projection = {
-  sessionId?: string;
-  turn: { phase: string; error?: string };
-  messages: RetentionMessage[];
-  interactions: AgentInteractionRequest[];
-  policy?: Record<string, unknown>;
-} | null;
-type PaneLayout = { revision?: number; [key: string]: unknown };
-
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const TURN_TIMEOUT_MS = 90_000;
-/** Not on any default allowlist. */
-const BLOCKED_URL = "https://example.com/";
-/** GitHub's published ranges are always allowed. */
-const ALLOWED_URL = "https://api.github.com/zen";
-
-const PLATFORMS: Record<
-  Platform,
-  { label: string; bridge: string; externals: string[]; fakeRoot: string }
-> = {
-  cursor: {
-    label: "Cursor",
-    bridge: "cursor-bridge",
-    externals: ["@cursor/sdk"],
-    fakeRoot: "/tmp/orkestrator-qa-fake-cursor",
-  },
-  pi: {
-    label: "Pi",
-    bridge: "pi-bridge",
-    externals: [
-      "@earendil-works/pi-coding-agent",
-      "@earendil-works/pi-ai",
-      "@earendil-works/pi-agent-core",
-    ],
-    fakeRoot: "/tmp/orkestrator-qa-fake-pi",
-  },
-};
 
 /** Builds the bridge's container fake entry the way the bridge's own build does. */
 function bundleFakeBridge(platform: Platform): string {
@@ -115,10 +98,6 @@ function bundleFakeBridge(platform: Platform): string {
   }
 }
 
-function entryDirectory(platform: Platform) {
-  return `/opt/${PLATFORMS[platform].bridge}/dist`;
-}
-
 /** Puts the fake where the image's entry is; keeps the real one beside it once. */
 function installFakeBridge(containerId: string, platform: Platform, bundle: string) {
   const dist = entryDirectory(platform);
@@ -131,194 +110,6 @@ function installFakeBridge(containerId: string, platform: Platform, bundle: stri
       `chmod 644 ${dist}/index.js`,
     ].join("; "),
     { user: "root", input: bundle },
-  );
-}
-
-function restoreRealBridge(containerId: string, platform: Platform) {
-  const dist = entryDirectory(platform);
-  inContainer(
-    containerId,
-    `if [ -e ${dist}/index.js.qa-real ]; then mv -f ${dist}/index.js.qa-real ${dist}/index.js; fi; ` +
-      `rm -rf ${PLATFORMS[platform].fakeRoot}`,
-    { user: "root" },
-  );
-}
-
-async function enabledPlatforms(): Promise<string[] | undefined> {
-  const config = await invoke<{ global?: { enabledAgentPlatforms?: string[] } }>(
-    "get_config",
-  ).catch(() => null);
-  return config?.global?.enabledAgentPlatforms;
-}
-
-async function saveSingleTabLayout(
-  environment: Environment,
-  containerId: string,
-  platform: Platform,
-  tabId: string,
-) {
-  const current = await invoke<PaneLayout | null>("get_pane_layout", {
-    environmentId: environment.id,
-  });
-  await invoke("save_pane_layout", {
-    environmentId: environment.id,
-    expectedRevision: current?.revision ?? 0,
-    layout: {
-      version: PANE_LAYOUT_VERSION,
-      containerId,
-      activePaneId: "pane-fake-engine",
-      root: {
-        kind: "leaf",
-        id: "pane-fake-engine",
-        activeTabId: tabId,
-        tabs: [
-          {
-            id: tabId,
-            type: "agent-native",
-            displayTitle: `${PLATFORMS[platform].label} container cell`,
-            nativeAgentData: { environmentId: environment.id, platform },
-          },
-        ],
-      },
-    },
-  });
-}
-
-async function restoreLayout(
-  environment: Environment,
-  containerId: string,
-  previous: PaneLayout | null,
-) {
-  const current = await invoke<PaneLayout | null>("get_pane_layout", {
-    environmentId: environment.id,
-  });
-  const { revision: _revision, ...layout } = previous ?? {
-    version: PANE_LAYOUT_VERSION,
-    containerId,
-    activePaneId: "pane-main",
-    root: { kind: "leaf", id: "pane-main", tabs: [], activeTabId: null },
-  };
-  await invoke("save_pane_layout", {
-    environmentId: environment.id,
-    expectedRevision: current?.revision ?? 0,
-    layout,
-  });
-}
-
-function tabSession(environment: Environment, platform: Platform, tabId: string) {
-  const label = PLATFORMS[platform].label;
-  const projection = () =>
-    invoke<Projection>("get_native_agent_projection", {
-      environmentId: environment.id,
-      agent: platform,
-      logicalSessionKey: `env-${environment.id}:${tabId}`,
-    });
-  return { label, projection };
-}
-
-/** The composer of the only native tab on screen, as a user reaches it. */
-async function sendPrompt(
-  page: Page,
-  label: string,
-  projection: () => Promise<Projection>,
-  prompt: string,
-) {
-  const composeBar = page.getByTestId("shared-native-compose-bar");
-  const composer = composeBar.getByRole("textbox", { name: new RegExp(`^Message ${label}`) });
-  const sendButton = composeBar.getByRole("button", { name: "Send", exact: true });
-  await expect(composer).toBeVisible({ timeout: 90_000 });
-  await composer.fill(prompt);
-  await expect(sendButton).toBeEnabled({ timeout: 90_000 });
-  const before = await projection();
-  const previous = new Set((before?.messages ?? []).map((message) => message.id));
-  const reached = async () =>
-    ((await projection())?.messages ?? []).some(
-      (message) =>
-        message.role === "user" && !previous.has(message.id) && String(message.content) === prompt,
-    );
-  // Enter rather than a click: a development toast can cover the button.
-  await composer.press("Enter");
-  const sent = async () => (await composer.textContent())?.trim() === "" || (await reached());
-  await expect
-    .poll(sent, { timeout: 30_000 })
-    .toBe(true)
-    .catch(async (error: unknown) => {
-      // The composer kept the draft and the session holds no such message, so
-      // first send was refused. Keep diagnostics, but fail this qualification
-      // rather than allowing a retry to conceal a dispatch regression.
-      const shown = await page
-        .getByRole("alert")
-        .allTextContents()
-        .catch(() => [] as string[]);
-      const current = await projection();
-      test.info().annotations.push({
-        type: "send-refused",
-        description: JSON.stringify({
-          label,
-          shown: shown.map((text) => text.trim()).filter(Boolean),
-          phase: current?.turn.phase,
-          error: current?.turn.error,
-        }),
-      });
-      throw error;
-    });
-  return previous;
-}
-
-async function waitForReply(
-  label: string,
-  projection: () => Promise<Projection>,
-  previous: ReadonlySet<string>,
-  matches: (reply: string) => boolean,
-): Promise<string> {
-  let reply = "";
-  await expect
-    .poll(
-      async () => {
-        const current = await projection();
-        if (current?.turn.phase === "error") {
-          throw new Error(`${label} turn failed: ${current.turn.error ?? "no error"}`);
-        }
-        if (!hasNewCompletedReply(current, previous, matches)) return false;
-        reply = String(
-          current!.messages.findLast(
-            (message) => message.role === "assistant" && !previous.has(message.id),
-          )?.content ?? "",
-        );
-        return true;
-      },
-      { timeout: TURN_TIMEOUT_MS, message: `${label} never answered` },
-    )
-    .toBe(true);
-  return reply;
-}
-
-async function ask(
-  page: Page,
-  label: string,
-  projection: () => Promise<Projection>,
-  prompt: string,
-  matches: (reply: string) => boolean,
-) {
-  const previous = await sendPrompt(page, label, projection, prompt);
-  return waitForReply(label, projection, previous, matches);
-}
-
-function expectContainerPolicy(policy: Record<string, unknown> | undefined, approvals: string) {
-  expect(policy, "the session reports its execution policy").toMatchObject({
-    id: "interactive-container",
-    sandbox: "container",
-    approvals,
-    networkAccess: "restricted",
-  });
-}
-
-async function requireCellPlatform(platform: Platform): Promise<void> {
-  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
-  const enabled = await enabledPlatforms();
-  test.skip(
-    Array.isArray(enabled) && !enabled.includes(platform),
-    `${PLATFORMS[platform].label} is not enabled in this profile (dev:test --agent-platforms)`,
   );
 }
 
@@ -474,7 +265,7 @@ test("Docker fixture Cursor cell runs the container bridge under the container p
 
 /** One `curl` from Pi's bash tool; the reply carries its status and exit code. */
 function curlPrompt(url: string): string {
-  return `BASH: curl -sS -m 10 -o /dev/null -w 'http=%{http_code}' ${url}; echo " exit=$?"`;
+  return `BASH: ${curlCommand(url)}`;
 }
 
 const toolResult = (reply: string) => reply.startsWith("Tool result:");
@@ -551,35 +342,16 @@ test("Docker fixture Pi cell runs the container bridge under the container polic
         asking.projection,
         `BASH: touch ${marker} && echo approved`,
       );
-      let pending: AgentInteractionRequest | undefined;
-      await expect
-        .poll(
-          async () => {
-            const current = await asking.projection();
-            pending = current?.interactions.find((request) => request.state === "pending");
-            return pending?.kind;
-          },
-          { timeout: TURN_TIMEOUT_MS, message: "Pi never asked to run the command" },
-        )
-        .toBeTruthy();
+      const pending = await waitForPendingInteraction(
+        asking.projection,
+        "Pi never asked to run the command",
+      );
       expectContainerPolicy((await asking.projection())?.policy, "ask");
       // Parked, not run: the gate holds the call inside the container.
       expect(inContainer(containerId, `test -e ${marker} && echo ran || echo held`).trim()).toBe(
         "held",
       );
-      const allow = approvalOption(pending!.presentation.questions[0]);
-      if (allow) {
-        await page
-          .getByRole("button", { name: new RegExp(`^${escapeRegExp(allow.label)}`) })
-          .first()
-          .click();
-      }
-      await page
-        .getByRole("button", {
-          name: pending!.presentation.confirmLabel ?? "Continue",
-          exact: true,
-        })
-        .click();
+      await approveFromCard(page, pending);
       const reply = await waitForReply(asking.label, asking.projection, previous, toolResult);
       expect(reply).toContain("approved");
       expect(inContainer(containerId, `test -e ${marker} && echo ran || echo held`).trim()).toBe(
@@ -591,7 +363,3 @@ test("Docker fixture Pi cell runs the container bridge under the container polic
     await cleanup();
   }
 });
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}

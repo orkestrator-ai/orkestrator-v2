@@ -150,7 +150,7 @@ function probeDetail(stderr: string): string {
 /**
  * Docker always creates `/.dockerenv`, Podman `/run/.containerenv`. A bridge
  * there runs in an environment's container, whose image the user does not
- * install packages into, so its reason must not tell them to (to-do 0190).
+ * install packages into, so its reason must not tell them to (to-do 0190 (retired)).
  */
 function runningInContainer(): boolean {
   return existsSync("/.dockerenv") || existsSync("/run/.containerenv");

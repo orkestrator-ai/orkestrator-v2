@@ -147,7 +147,7 @@ describe("describeApproval", () => {
     expect(approval).not.toHaveProperty("amendments");
     expect(JSON.stringify(approval)).not.toContain("two.example");
     // The command prefix survives only as a hint for an Orkestrator rule
-    // (todo 0723); no answer can send it back as an amendment.
+    // (todo 0723 (retired)); no answer can send it back as an amendment.
     expect(approval.proposedCommandPrefix).toEqual(["allow curl"]);
     expect(approval.actionable).toBe(true);
   });

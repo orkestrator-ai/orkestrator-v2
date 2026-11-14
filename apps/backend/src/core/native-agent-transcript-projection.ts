@@ -403,7 +403,7 @@ export interface NativeAgentTranscriptProjectionHost {
     provider: NativeAgentRuntimeProvider,
   ): void;
   /**
-   * Orkestrator's permission rules (todo 0723): answers the pending requests a
+   * Orkestrator's permission rules (todo 0723 (retired)): answers the pending requests a
    * rule covers before any card is built, and offers "Approve and remember"
    * on the rest. Absent in tests that do not wire it.
    */

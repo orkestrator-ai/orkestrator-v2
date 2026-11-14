@@ -11,7 +11,7 @@ import { PERMISSION_RULE_APPLICATIONS_STORE, PERMISSION_RULES_STORE } from "./la
 
 /**
  * Orkestrator's permission rules and the record of each request a rule
- * answered, as rows of the backend database (todo 0723).
+ * answered, as rows of the backend database (todo 0723 (retired)).
  *
  * Per machine: nothing here syncs to other nodes (decision 3). Every write is
  * one synchronous transaction, so a claim is exactly-once across sweeps,

@@ -30,14 +30,26 @@
  * id), and its bubblewrap is refused all the same. The session's policy also
  * counts on its own (`sandbox: "container"`, or `interactive-container` under
  * an override), for a bridge that cannot see a marker. On a Linux host with
- * neither, Codex's sandbox stays on: a host whose policy refuses bubblewrap's
- * namespace is not probed here yet.
+ * neither, the bridge probes whether the host lets a process create a user
+ * namespace (`codex-user-namespace-probe.ts`): Ubuntu's AppArmor restriction
+ * or a kernel with unprivileged namespaces off fails every Codex command the
+ * same way. Only a refusal the probe saw (a helper's exit naming a failed
+ * namespace operation) turns the sandbox off; a host that allows the
+ * namespace, or one the probe cannot judge (a timeout, a spawn error, any
+ * other failure), keeps Codex's sandbox.
  */
 import { existsSync } from "node:fs";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
+import { codexUserNamespaceRefusal } from "./codex-user-namespace-probe.js";
+
 export const CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER =
   "Codex's command sandbox cannot run commands in this container: its Linux sandbox (bubblewrap) needs an unprivileged user namespace, which the container refuses.";
+
+/** The host counterpart: `detail` is the probe's first line of error output. */
+export function codexReadOnlySandboxOffOnHost(detail: string): string {
+  return `Codex's command sandbox cannot run commands on this host: its Linux sandbox (bubblewrap) needs an unprivileged user namespace, which the host refuses (${detail}). Unprivileged user namespaces are turned off or restricted here, for example by kernel.unprivileged_userns_clone or AppArmor's kernel.apparmor_restrict_unprivileged_userns; Orkestrator does not change that policy itself.`;
+}
 
 /** Shown in the transcript for each approval a sandbox-off read-only turn declines. */
 export const CODEX_READ_ONLY_APPROVAL_REFUSAL =
@@ -65,6 +77,8 @@ export function codexReadOnlyCommandSandboxOff(
     permissionProfile?: string;
     platform?: NodeJS.Platform;
     inContainer?: () => boolean;
+    /** The host's refusal of a user namespace (first error line), if any. */
+    userNamespaceRefusal?: () => string | undefined;
   } = {},
 ): string | undefined {
   if (options.permissionProfile || options.policy?.id === "coordinator-read-only") return undefined;
@@ -73,5 +87,7 @@ export function codexReadOnlyCommandSandboxOff(
     options.policy?.sandbox === "container" ||
     options.policy?.id === "interactive-container" ||
     (options.inContainer ?? runningInContainer)();
-  return container ? CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER : undefined;
+  if (container) return CODEX_READ_ONLY_SANDBOX_OFF_IN_CONTAINER;
+  const refusal = (options.userNamespaceRefusal ?? codexUserNamespaceRefusal)();
+  return refusal === undefined ? undefined : codexReadOnlySandboxOffOnHost(refusal);
 }

@@ -285,6 +285,25 @@ to spend less (`commands-pr-monitor-batch.ts`). When GitHub still refuses:
   once. Auto-merge is unaffected: it already requires a reading started in
   the last 60 s.
 
+### When GitHub cannot be reached
+
+A check that times out, or whose output names a network failure (`gh`'s
+"error connecting to api.github.com", a DNS or TLS failure), holds the
+background checks of its network scope: every local environment (they share
+the host's network), or that one container. The hold is 30 s, doubling for each
+further such failure in a row up to five minutes (`networkHoldMs` in
+`pr-monitor-policy.ts`), and works like the rate-limit cooldown above: queued
+checks wait it out, held checks resume spread over 30 s, and user refreshes and
+pending intents still ask. A check that started after the hold began and that
+GitHub answers ends it at once; one already in flight when the outage was found
+does not. Without the hold, every monitored environment found an outage (a
+laptop waking from sleep, say) on its own, and each attempt counted as a failed
+`pr-detection` job.
+
+An environment stops being monitored as soon as its deletion begins, when the
+tombstone is written, not when its record is removed: the steps in between take
+its worktree and container apart, and a check run against what was left failed.
+
 ### Merge permission
 
 The `gh pr view/list --json` lookup has no viewer permission field, so the

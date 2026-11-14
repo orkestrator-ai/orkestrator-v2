@@ -12,5 +12,6 @@ export function kanbanBuildStartOptions(selection: BuildLaunchSelection) {
     reviewPreparation: selection.reviewPreparation,
     deliveryPolicy: selection.deliveryPolicy,
     networkAccessMode: selection.networkAccessMode,
+    machine: selection.machine,
   };
 }

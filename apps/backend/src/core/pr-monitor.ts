@@ -28,6 +28,8 @@ import {
   backgroundDelay,
   classifyPrDetectionFailure,
   detectionPriority,
+  isPrNetworkFailure,
+  networkHold,
   rateLimitCooldown,
   resolvePrMonitorPolicy,
   type PrDetectionFailure,
@@ -366,6 +368,13 @@ interface PrMonitorEntry {
   deferredRateLimits: number;
   /** Restored by reconciliation: stagger the next background schedule. */
   restoreJitter: boolean;
+  /**
+   * Why the armed timer is later than the entry's own schedule: `due` when a
+   * check that fell due is waiting out a cooldown or network hold, `postponed`
+   * when a background delay was stretched to the end of one. Null otherwise.
+   * Lets a network hold that ends early resume exactly the checks it held.
+   */
+  cooldownHold: "due" | "postponed" | null;
   /** Restored by reconciliation: spread the first terminal discovery over a period. */
   spreadFirstDiscovery: boolean;
   /**
@@ -407,6 +416,8 @@ export class PrMonitorService {
   private readonly policy: PrMonitorPolicyConfig;
   private readonly cooldownScope: (target: PrMonitorTarget) => string | null;
   private readonly cooldowns: PrCooldownScopes;
+  /** Network holds per {@link networkScopeOf} scope; see `networkHoldMs`. */
+  private readonly networkHolds: PrCooldownScopes;
   private detectionSequence = 0;
 
   constructor(options: PrMonitorServiceOptions) {
@@ -415,6 +426,7 @@ export class PrMonitorService {
     this.random = options.random ?? Math.random;
     this.cooldownScope = options.cooldownScope ?? (() => null);
     this.cooldowns = new PrCooldownScopes(this.policy.maxCooldownScopes);
+    this.networkHolds = new PrCooldownScopes(this.policy.maxCooldownScopes);
     this.options = {
       effects: options.effects,
       emit: options.emit,
@@ -718,6 +730,7 @@ export class PrMonitorService {
     }
     this.entries.clear();
     this.cooldowns.clear();
+    this.networkHolds.clear();
     // The snapshot changed without per-entry removal events. Advancing the
     // revision keeps a conditional read from answering `unchanged` to a client
     // still holding the discarded entries; a live client sees a gap instead.
@@ -770,6 +783,7 @@ export class PrMonitorService {
       lastAnsweredAt: null,
       deferredRateLimits: 0,
       restoreJitter: behaviour.restored === true,
+      cooldownHold: null,
       spreadFirstDiscovery: behaviour.restored === true,
       lastActivityAt: now,
       activityKey: null,
@@ -846,6 +860,7 @@ export class PrMonitorService {
   private scheduleNext(entry: PrMonitorEntry, delayMs?: number): void {
     this.options.cancel(entry.timer);
     entry.timer = undefined;
+    entry.cooldownHold = null;
     if (!entry.active || !entry.target.ready) return;
     const delay = delayMs ?? this.backgroundDelayFor(entry);
     entry.timer = this.options.schedule(() => {
@@ -873,11 +888,13 @@ export class PrMonitorService {
       this.policy,
     );
     if (policy === "open" || policy === "provisional" || policy === "terminal-discovery") {
-      // A background detection never runs inside a rate-limit cooldown, and
-      // the entries one held do not all resume in the same instant.
+      // A background detection never runs inside a rate-limit cooldown or a
+      // network hold, and the entries one held do not all resume in the same
+      // instant.
       const now = this.options.monotonicNow();
       const remaining = this.cooldownRemaining(entry, now);
       if (remaining > delay) {
+        entry.cooldownHold = "postponed";
         delay = remaining + this.resumeJitter();
         // Wake when a held reading's grace ends, even inside a long cooldown.
         const grace = this.graceRemaining(entry, now);
@@ -892,9 +909,10 @@ export class PrMonitorService {
   }
 
   /**
-   * Waits out a rate-limit cooldown without asking GitHub. The last reading
-   * stays confirmed for the rate-limit grace; the entry wakes when the grace
-   * ends, so clients stop trusting a reading the monitor cannot refresh.
+   * Waits out a rate-limit cooldown or network hold without asking GitHub.
+   * The last reading stays confirmed for the rate-limit grace; the entry wakes
+   * when the grace ends, so clients stop trusting a reading the monitor cannot
+   * refresh.
    */
   private holdThroughCooldown(entry: PrMonitorEntry, remaining: number): void {
     const now = this.options.monotonicNow();
@@ -903,6 +921,30 @@ export class PrMonitorService {
     const grace = this.graceRemaining(entry, now);
     if (grace !== null) delay = Math.min(delay, Math.max(grace, 1));
     this.scheduleNext(entry, delay);
+    if (entry.timer) entry.cooldownHold = "due";
+  }
+
+  /**
+   * A network hold ended before its deadline (a check in the scope reached
+   * GitHub again). The checks it held would otherwise sleep until the old
+   * deadline, up to `networkHoldMaxMs`: a held check that fell due resumes
+   * with the ordinary resume jitter, a postponed one returns to its background
+   * cadence. Any rate-limit cooldown still running is still waited out.
+   */
+  private resumeNetworkHeldChecks(networkScope: string): void {
+    const now = this.options.monotonicNow();
+    for (const entry of Array.from(this.entries.values())) {
+      const hold = entry.cooldownHold;
+      if (!hold || !entry.timer || !entry.active || entry.checkInProgress) continue;
+      if (networkScopeOf(entry.target) !== networkScope) continue;
+      if (hold === "postponed") {
+        this.scheduleNext(entry);
+        continue;
+      }
+      const remaining = this.cooldownRemaining(entry, now);
+      if (remaining > 0) this.holdThroughCooldown(entry, remaining);
+      else this.scheduleNext(entry, this.resumeJitter());
+    }
   }
 
   /** Time left before a held reading stops counting as confirmed; null when none is held. */
@@ -966,10 +1008,15 @@ export class PrMonitorService {
     );
   }
 
+  /**
+   * Time before a background check may ask GitHub: the longest of the entry's
+   * own rate-limit cooldown, its scope's, and its network scope's hold.
+   */
   private cooldownRemaining(entry: PrMonitorEntry, now: number): number {
     return Math.max(
       entry.cooldownUntil - now,
       this.cooldowns.remaining(this.cooldownScopeOf(entry.target), now),
+      this.networkHolds.remaining(networkScopeOf(entry.target), now),
       0,
     );
   }
@@ -1040,9 +1087,9 @@ export class PrMonitorService {
     if (wake !== "interactive" && policy !== "merge-pending" && policy !== "create-pending") {
       const remaining = this.cooldownRemaining(entry, this.options.monotonicNow());
       if (remaining > 0) {
-        // Rate-limited scope: background and completion checks wait it out
-        // instead of spending another request that would be refused. A later
-        // interactive wake still resets the due time.
+        // Rate-limited or unreachable scope: background and completion checks
+        // wait it out instead of spending another request that would fail too.
+        // A later interactive wake still resets the due time.
         entry.wake = wake;
         this.holdThroughCooldown(entry, remaining);
         return;
@@ -1088,9 +1135,9 @@ export class PrMonitorService {
     if (wake !== "interactive" && policy !== "merge-pending" && policy !== "create-pending") {
       const remaining = this.cooldownRemaining(entry, this.options.monotonicNow());
       if (remaining > 0) {
-        // A rate limit began while this check waited for its slot (another
-        // entry in the scope hit it). Asking now would only be refused too,
-        // and a queue of such checks is what turned one refusal into a burst.
+        // A rate limit or network hold began while this check waited for its
+        // slot (another entry in the scope hit it). Asking now would only fail
+        // too, and a queue of such checks is what turned one refusal into a burst.
         lease.release();
         entry.checkInProgress = false;
         entry.phase = "idle";
@@ -1112,6 +1159,7 @@ export class PrMonitorService {
     try {
       let detection: PrDetection | null = null;
       let failure: PrDetectionFailure | null = null;
+      let unreachable = false;
       const startedAt = this.options.monotonicNow();
       try {
         // A woken check reads the rollup whatever its throttle says. Only a
@@ -1136,6 +1184,7 @@ export class PrMonitorService {
         }
       } catch (error) {
         failure = classifyPrDetectionFailure(error);
+        unreachable = isPrNetworkFailure(error, failure);
         this.warn("monitor.detection-failed", entry.target.environmentId, error);
       } finally {
         // The slot covers the physical `gh`/`docker exec` call only; local
@@ -1152,6 +1201,7 @@ export class PrMonitorService {
         if (failure.kind === "rate-limited") {
           this.startCooldown(entry, detectionTarget, failure, detectionSequence);
         }
+        if (unreachable) this.startNetworkHold(detectionTarget, detectionSequence);
         if (failure.kind === "rate-limited" && grace !== null && grace > 0) {
           // GitHub refused to answer; it did not report a change. The last
           // reading stays confirmed for the grace, counted if it runs out.
@@ -1165,6 +1215,12 @@ export class PrMonitorService {
         entry.deferredRateLimits = 0;
         entry.lastAnsweredAt = startedAt;
         this.clearRateLimitStrikes(entry, detectionTarget);
+        // GitHub answered from this scope, so the network is back.
+        const networkScope = networkScopeOf(detectionTarget);
+        const now = this.options.monotonicNow();
+        if (networkScope && this.networkHolds.release(networkScope, detectionSequence, now)) {
+          this.resumeNetworkHeldChecks(networkScope);
+        }
         entry.lastSuccessfulCheckAt = this.options.now();
         entry.lastSuccessfulCheckStartedAt = checkStartedAt;
         if (detection) transition = await this.applyDetection(entry, detection, generation);
@@ -1271,6 +1327,20 @@ export class PrMonitorService {
     const cooldown = rateLimitCooldown(failure.retryAfterMs, strikes, this.policy);
     entry.cooldownUntil = Math.max(entry.cooldownUntil, now + cooldown);
     if (scope) this.cooldowns.set(scope, now + cooldown, now);
+  }
+
+  /**
+   * GitHub could not be reached from the target's network scope: hold that
+   * scope's background checks instead of letting each entry find the outage
+   * on its own. Checks already in flight when it began (one batch's readers)
+   * are one event and do not lengthen the hold.
+   */
+  private startNetworkHold(target: PrMonitorTarget, detectionSequence: number): void {
+    const scope = networkScopeOf(target);
+    if (!scope) return;
+    const now = this.options.monotonicNow();
+    const strikes = this.networkHolds.strike(scope, detectionSequence, this.detectionSequence);
+    this.networkHolds.set(scope, now + networkHold(strikes, this.policy), now);
   }
 
   private clearRateLimitStrikes(entry: PrMonitorEntry, target: PrMonitorTarget): void {
@@ -1899,6 +1969,32 @@ export class PrMonitorService {
       // Warning reporters are observational; a broken logger must never break
       // the monitoring lifecycle it is supposed to describe.
     }
+  }
+}
+
+/**
+ * Where a target's checks reach GitHub from, and which GitHub host they reach.
+ * Local checks share the host's network; a container's go through its own
+ * network and firewall, so one container's outage holds only that container.
+ * The GitHub host (from the stored PR URL) is part of the scope, because one
+ * host can be unreachable while another answers: a GitHub Enterprise outage
+ * must not hold github.com checks, and a github.com success must not end a
+ * hold on the Enterprise host. A target with no PR URL yet has its own
+ * host-less scope. Container ids are opaque Docker ids, not credentials.
+ */
+function networkScopeOf(target: PrMonitorTarget): string | null {
+  const host = gitHubHostOf(target.prUrl);
+  const suffix = host ? `:${host}` : "";
+  if (target.kind === "local") return `local${suffix}`;
+  return target.containerId ? `container:${target.containerId}${suffix}` : null;
+}
+
+function gitHubHostOf(prUrl: string | null): string | null {
+  if (!prUrl) return null;
+  try {
+    return new URL(prUrl).host.toLowerCase() || null;
+  } catch {
+    return null;
   }
 }
 

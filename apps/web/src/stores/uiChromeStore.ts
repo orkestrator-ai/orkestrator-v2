@@ -53,6 +53,12 @@ export interface UIChromeState {
    * across projects and nodes: the coordinator works the same way everywhere.
    */
   coordinatorIntroDismissed: boolean;
+  /**
+   * Settings → Debug → "Debug button": shows the bottom bar's debug button,
+   * which captures the window and files a pipeline environment for the
+   * environment in front. Per window, like the rest of the chrome.
+   */
+  debugButtonEnabled: boolean;
 
   /** Toggle the left projects/environments panel. */
   toggleSidebar: () => void;
@@ -72,6 +78,7 @@ export interface UIChromeState {
   setPipelineGraphHeight: (height: number | null) => void;
   setDataSaving: (enabled: boolean) => void;
   setCoordinatorIntroDismissed: (dismissed: boolean) => void;
+  setDebugButtonEnabled: (enabled: boolean) => void;
 }
 
 type PersistedUIChrome = Pick<
@@ -85,6 +92,7 @@ type PersistedUIChrome = Pick<
   | "pipelineGraphHeight"
   | "dataSaving"
   | "coordinatorIntroDismissed"
+  | "debugButtonEnabled"
 >;
 
 const PERSISTED_CHROME_FIELDS: readonly (keyof PersistedUIChrome)[] = [
@@ -97,6 +105,7 @@ const PERSISTED_CHROME_FIELDS: readonly (keyof PersistedUIChrome)[] = [
   "pipelineGraphHeight",
   "dataSaving",
   "coordinatorIntroDismissed",
+  "debugButtonEnabled",
 ];
 
 /**
@@ -130,6 +139,7 @@ export const createUIChromeStore = () =>
         pipelineGraphHeight: null,
         dataSaving: false,
         coordinatorIntroDismissed: false,
+        debugButtonEnabled: false,
 
         toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
         setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -146,6 +156,7 @@ export const createUIChromeStore = () =>
         setPipelineGraphHeight: (height) => set({ pipelineGraphHeight: height }),
         setDataSaving: (enabled) => set({ dataSaving: enabled }),
         setCoordinatorIntroDismissed: (dismissed) => set({ coordinatorIntroDismissed: dismissed }),
+        setDebugButtonEnabled: (enabled) => set({ debugButtonEnabled: enabled }),
       }),
       {
         name: windowStorageKey("ui-storage"),

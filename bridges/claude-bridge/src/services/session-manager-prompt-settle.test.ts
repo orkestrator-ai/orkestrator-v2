@@ -29,6 +29,8 @@ describe("settleFailedTurn", () => {
     const { events, stop } = captureEvents();
     try {
       expect(() => settleFailedTurn(turn, error)).toThrow(error);
+      // Never reported by the turn, so the route still logs it as an error.
+      expect((error as { turnFailureReported?: unknown }).turnFailureReported).toBeUndefined();
       expect(captureTurnStartup(session)).toEqual(before);
       expect(session.messages).toEqual(messages);
       expect(session.messages).not.toContain(turn.userMessage);
@@ -129,6 +131,8 @@ describe("settleFailedTurn", () => {
       ]);
       expect(events[1]?.data).toEqual({ error: "Provider failed" });
       expect(log).toHaveBeenCalledWith("[bridge.claude] prompt.failed errorClass=Error");
+      // Marked so the route's completion log does not report it again.
+      expect((error as { turnFailureReported?: unknown }).turnFailureReported).toBe(true);
     } finally {
       stop();
       flush.mockRestore();

@@ -209,6 +209,7 @@ export class SelfImprovementService {
         kind: entry.source === "insights" ? "insight" : "diagnostics",
         status: entry.status,
         ticket: entry.ticket ?? null,
+        ...(entry.projectId ? { projectId: entry.projectId } : {}),
         verdict: entry.observations.at(-1)?.verdict ?? null,
         baseline: entry.baseline?.value ?? null,
         unit: entry.baseline?.unit ?? "",

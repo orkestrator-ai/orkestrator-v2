@@ -9,9 +9,9 @@ import { CommandFailedError } from "./shell.js";
  * A package names its range and the `diffCommand` that reproduces it, and a
  * reviewer normally runs that command. A read-only review turn without the
  * Claude CLI's command sandbox (every container, where the image ships no
- * bubblewrap, and Linux hosts whose bubblewrap cannot run) cannot: its command
- * hook refuses every Git command, because a repository's Git configuration can
- * run helpers. The backend already runs Git in the environment to build the
+ * bubblewrap, and Linux hosts whose bubblewrap cannot run) on a Claude bridge
+ * older than hardened reviewer Git, or another agent's read-only session that
+ * refuses Git, cannot. The backend already runs Git in the environment to build the
  * package, so it writes the same UTF-8 bytes once here and the reviewer reads them.
  * Output containing a replacement character is omitted with a limitation: the
  * text runner may have replaced invalid UTF-8 before this helper received it.

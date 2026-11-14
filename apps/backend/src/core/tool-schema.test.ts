@@ -224,6 +224,49 @@ group("jsonSchemaField", () => {
     expect(decodeSync(schema, { result: { q: 1 } })).toEqual({ result: { q: 1 } });
     expect(decodeResult(schema, { result: { q: "1" } }).success).toBe(false);
   });
+
+  test("a refusal names each field at fault by its path", () => {
+    const json = {
+      type: "object",
+      properties: { q: { type: "integer" } },
+      required: ["q"],
+      additionalProperties: false,
+    };
+    const schema = strictObject({ result: jsonSchemaField(json) });
+    const [refusal] = issues(schema, { result: { q: "1", extra: true } });
+    expect(refusal?.path).toEqual(["result"]);
+    expect(refusal?.message).toContain("$.q:");
+    expect(refusal?.message).toContain("$.extra: Field is not allowed");
+  });
+
+  test("keeps the validator's own text when the contract walker finds nothing", () => {
+    // `pattern` is outside the walker's keyword subset, so only the SDK's
+    // validator refuses this value and its message is the whole refusal.
+    const json = { type: "string", pattern: "^a" };
+    const schema = strictObject({ result: jsonSchemaField(json) });
+    const refused = issues(schema, { result: "b" });
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.path).toEqual(["result"]);
+    expect(refused[0]?.message).not.toContain("$");
+    expect(refused[0]?.message.length).toBeGreaterThan(0);
+    expect(decodeSync(schema, { result: "a" })).toEqual({ result: "a" });
+  });
+
+  test("names at most twelve issues and counts the rest", () => {
+    const fields = Array.from({ length: 15 }, (_, index) => `f${String(index).padStart(2, "0")}`);
+    const json = {
+      type: "object",
+      properties: Object.fromEntries(fields.map((field) => [field, { type: "string" }])),
+      required: fields,
+      additionalProperties: false,
+    };
+    const schema = strictObject({ result: jsonSchemaField(json) });
+    const [refusal] = issues(schema, { result: {} });
+    const message = refusal?.message ?? "";
+    for (const field of fields.slice(0, 12)) expect(message).toContain(`$.${field}:`);
+    for (const field of fields.slice(12)) expect(message).not.toContain(`$.${field}:`);
+    expect(message.endsWith("; and 3 more")).toBe(true);
+  });
 });
 
 group("toolInput", () => {

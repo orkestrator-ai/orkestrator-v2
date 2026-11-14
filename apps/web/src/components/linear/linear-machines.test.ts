@@ -5,7 +5,7 @@ import { linearKeyFingerprint, linearMachineTargets } from "./linear-machines";
 function node(
   nodeId: string,
   displayName: string,
-  projects: Array<{ id: string; hint?: string }>,
+  projects: Array<{ id: string; hint?: string; pathName?: string }>,
   available = true,
 ): NodeSummary {
   return {
@@ -18,6 +18,7 @@ function node(
       name: project.id,
       order: 0,
       ...(project.hint ? { repositoryHint: project.hint } : {}),
+      ...(project.pathName ? { pathName: project.pathName } : {}),
     })),
     environments: [],
   } as unknown as NodeSummary;
@@ -96,6 +97,49 @@ describe("linearMachineTargets", () => {
       { name: "Home server", machine: null, projectId: "home-web", current: false },
       { name: "CI box", machine: "node-ci", projectId: "ci-web", current: false },
     ]);
+  });
+});
+
+describe("linearMachineTargets checkouts", () => {
+  test("a peer's project has a checkout only when its summary names one", () => {
+    const targets = linearMachineTargets({
+      currentNodeId: "node-home",
+      currentRole: "command",
+      projectId: "project-1",
+      gitUrl: "https://github.com/acme/web",
+      commandNodeId: "node-home",
+      commandName: "Home server",
+      commandProjects: [],
+      nodes: [
+        node("node-a", "With checkout", [
+          { id: "a-web", hint: "github.com/acme/web", pathName: "web" },
+        ]),
+        // Remote-only, or a summary read before `pathName` existed.
+        node("node-b", "Remote only", [{ id: "b-web", hint: "github.com/acme/web" }]),
+      ],
+      currentHasCheckout: false,
+    });
+    expect(targets.map(({ name, hasCheckout }) => ({ name, hasCheckout }))).toEqual([
+      { name: "Home server", hasCheckout: false },
+      { name: "With checkout", hasCheckout: true },
+      { name: "Remote only", hasCheckout: false },
+    ]);
+  });
+
+  test("the command node's project has a checkout when it has a local path", () => {
+    const build = (localPath: string | null) =>
+      linearMachineTargets({
+        currentNodeId: "node-laptop",
+        currentRole: "leaf",
+        projectId: "laptop-web",
+        gitUrl: "https://github.com/acme/web",
+        commandNodeId: "node-home",
+        commandName: "Home server",
+        commandProjects: [{ id: "home-web", gitUrl: "https://github.com/acme/web", localPath }],
+        nodes: [],
+      });
+    expect(build("/work/web").map((target) => target.hasCheckout)).toEqual([true, true]);
+    expect(build(null).map((target) => target.hasCheckout)).toEqual([true, false]);
   });
 });
 

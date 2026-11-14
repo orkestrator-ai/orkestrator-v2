@@ -194,30 +194,59 @@ export function withUnattendedOverloadRetry(
 /**
  * Configuration that stops the checkout's own Git config from naming a
  * program for an admitted read: `core.fsmonitor` runs on every `git status`
- * and `git diff`, and a hook path covers the hooks an index refresh can fire.
- * The same keys `SAFE_GIT_CONFIG` sets for the backend's change capture.
+ * and `git diff`, and a hook path covers the hooks an index refresh can fire
+ * (the same two keys `SAFE_GIT_CONFIG` sets for the backend's change
+ * capture). Signature checks (`log.showSignature`, `git tag -v`, a `%G?`
+ * format) run the configured GPG, SSH or X.509 program, so each is pointed at
+ * `false`: the check fails instead of running what the checkout names. Two
+ * rendering defaults are pinned to Git's own because the checkout's value
+ * would run a program no flag on the command reaches: `diff.submodule=diff`
+ * diffs inside each submodule with the submodule's own `diff.external`, and
+ * `log.diffMerges=remerge` makes `-m` re-run merges through the configured
+ * `merge.<driver>.driver`. Git passes these entries on to its submodule
+ * children, so they hold there too.
  */
 export const READ_ONLY_GIT_CONFIG = Object.freeze([
   ["core.fsmonitor", "false"],
   ["core.hooksPath", "/dev/null"],
+  ["diff.submodule", "short"],
+  ["log.diffMerges", "separate"],
+  ["log.showSignature", "false"],
+  ["gpg.program", "false"],
+  ["gpg.openpgp.program", "false"],
+  ["gpg.ssh.program", "false"],
+  ["gpg.x509.program", "false"],
 ] as const);
+
+/**
+ * Environment a read-only turn's Git reads run with. Optional locks off, so
+ * `git status` does not rewrite the index of a checkout the turn may not
+ * write, and no lazy fetch, which in a partial clone runs `git fetch` (and
+ * the checkout's `core.sshCommand`) for a missing object. A Git older than
+ * 2.44 ignores `GIT_NO_LAZY_FETCH`.
+ */
+export const READ_ONLY_GIT_ENV = Object.freeze({
+  GIT_OPTIONAL_LOCKS: "0",
+  GIT_NO_LAZY_FETCH: "1",
+});
 
 /**
  * Adds {@link READ_ONLY_GIT_CONFIG} for a read-only turn (the turn's policy,
  * not the session's) as `GIT_CONFIG_COUNT` entries, which outrank repository
- * and global config and reach every command the CLI runs. Entries already in
- * the environment (a withheld credential's helper resets) are kept, and
- * optional locks are off so `git status` does not rewrite the index of a
- * checkout the turn may not write. Driver commands a repository's attributes
- * name (`diff.<driver>.command`, filters) cannot be listed here; the command
- * sandbox Git requires is what holds those.
+ * and global config and reach every command the CLI runs, plus
+ * {@link READ_ONLY_GIT_ENV}. Entries already in the environment (a withheld
+ * credential's helper resets) are kept. Driver commands a repository's
+ * attributes name (`diff.<driver>.command`, textconv, filters) cannot be
+ * listed here: the command sandbox holds those, or, where a reviewer runs Git
+ * without it, the flags the read-only hook inserts (`HARDENED_GIT_ARGUMENTS`
+ * in `read-only-policy.ts`), which reach every driver but a filter.
  */
 export function withReadOnlyGitConfig(
   turnPolicy: Pick<NativeAgentExecutionPolicy, "id"> | undefined,
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   if (turnPolicy?.id !== "coordinator-read-only") return environment;
-  const next: NodeJS.ProcessEnv = { ...environment, GIT_OPTIONAL_LOCKS: "0" };
+  const next: NodeJS.ProcessEnv = { ...environment, ...READ_ONLY_GIT_ENV };
   const inherited = Number.parseInt(next.GIT_CONFIG_COUNT ?? "", 10);
   let count = Number.isSafeInteger(inherited) && inherited > 0 ? inherited : 0;
   for (const [key, value] of READ_ONLY_GIT_CONFIG) {

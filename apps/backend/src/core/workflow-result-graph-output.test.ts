@@ -203,7 +203,7 @@ describe("graph output slots", () => {
     expect(submitBrief.title).toBe("Submit brief");
     expect(submitBrief.description).toContain("The design you propose for the ticket.");
     expect(submitBrief.description).toContain("design-brief@1");
-    expect(submitBrief.description).toContain("use validate_brief instead");
+    expect(submitBrief.description).toContain("Calling validate_brief first is optional.");
     expect(submitBrief.inputSchema?.properties?.result).toMatchObject({
       type: "object",
       required: ["title", "approach", "risks"],

@@ -1,5 +1,6 @@
 import { createBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NormalizedMessage,
   PermissionMode,
@@ -181,6 +182,18 @@ export interface TurnState {
    * request because the plan allowance is used up. Read only if the turn fails.
    */
   rateLimitRejected: boolean;
+  /**
+   * The SDK's API error code on this turn's latest root assistant message:
+   * the synthetic reply Claude Code writes for a model request that failed.
+   * A later real answer clears it. Read only if the turn fails.
+   */
+  apiErrorCode: SDKAssistantMessageError | undefined;
+  /**
+   * Set by the result handler when the turn failed on the account's or the
+   * service's state (`providerStateApiError`), which it logged as
+   * `query.provider-refused`; the settle logs the failure the same way.
+   */
+  providerStateFailure: SDKAssistantMessageError | undefined;
   lastThinkingTokensEmitAt: number;
   compactedTokensBefore: number | undefined;
   /**
@@ -286,6 +299,8 @@ export function createTurnState(
     settlingResult: false,
     localCommandOutputSeen: false,
     rateLimitRejected: false,
+    apiErrorCode: undefined,
+    providerStateFailure: undefined,
     lastThinkingTokensEmitAt: 0,
     compactedTokensBefore: undefined,
     pendingPlanRejectionFeedback: null,

@@ -326,11 +326,26 @@ describe("withReadOnlyGitConfig", () => {
     expect(withReadOnlyGitConfig({ id: "coordinator-read-only" }, { PATH: "/bin" })).toEqual({
       PATH: "/bin",
       GIT_OPTIONAL_LOCKS: "0",
-      GIT_CONFIG_COUNT: "2",
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_CONFIG_COUNT: "9",
       GIT_CONFIG_KEY_0: "core.fsmonitor",
       GIT_CONFIG_VALUE_0: "false",
       GIT_CONFIG_KEY_1: "core.hooksPath",
       GIT_CONFIG_VALUE_1: "/dev/null",
+      GIT_CONFIG_KEY_2: "diff.submodule",
+      GIT_CONFIG_VALUE_2: "short",
+      GIT_CONFIG_KEY_3: "log.diffMerges",
+      GIT_CONFIG_VALUE_3: "separate",
+      GIT_CONFIG_KEY_4: "log.showSignature",
+      GIT_CONFIG_VALUE_4: "false",
+      GIT_CONFIG_KEY_5: "gpg.program",
+      GIT_CONFIG_VALUE_5: "false",
+      GIT_CONFIG_KEY_6: "gpg.openpgp.program",
+      GIT_CONFIG_VALUE_6: "false",
+      GIT_CONFIG_KEY_7: "gpg.ssh.program",
+      GIT_CONFIG_VALUE_7: "false",
+      GIT_CONFIG_KEY_8: "gpg.x509.program",
+      GIT_CONFIG_VALUE_8: "false",
     });
   });
 

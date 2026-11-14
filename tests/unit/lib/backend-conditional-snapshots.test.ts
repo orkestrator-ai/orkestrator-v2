@@ -180,13 +180,18 @@ describe("conditional backend wrappers", () => {
   test("validates the detail fields of a fingerprinted point read", async () => {
     const record = pipelineRecord("pipeline-1");
     const omitted = {
-      unchanged: false,
+      unchanged: false as const,
       record,
       messagePatches: [],
       detailFingerprint: "d1-held",
-      detailOmitted: true,
+      detailOmitted: true as const,
     };
-    const full = { unchanged: false, record, messagePatches: [], detailFingerprint: "d1-new" };
+    const full = {
+      unchanged: false as const,
+      record,
+      messagePatches: [],
+      detailFingerprint: "d1-new",
+    };
     const malformed = [
       // Detail left out with no fingerprint naming what the caller must hold.
       { unchanged: false, record, messagePatches: [], detailOmitted: true },

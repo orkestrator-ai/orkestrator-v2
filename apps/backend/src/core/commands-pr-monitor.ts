@@ -569,6 +569,18 @@ export async function detectEnvironmentPullRequest(
   }
 }
 
+/**
+ * An environment whose deletion has begun. Deletion takes its worktree and
+ * container apart step by step and untracks the monitor only at the end, so a
+ * check in between ran `gh` in a half-removed checkout or a removed container
+ * and failed. Those were most of the `recurring:pr-detection:failed` signal.
+ */
+export function environmentIsDeleting(
+  environment: Pick<Environment, "deletionRequestedAt" | "lifecycleOperation">,
+): boolean {
+  return !!environment.deletionRequestedAt || environment.lifecycleOperation === "deleting";
+}
+
 export function environmentToPrMonitorTarget(environment: Environment): PrMonitorTarget {
   const kind =
     environment.environmentType === "local" ? ("local" as const) : ("container" as const);
@@ -578,8 +590,9 @@ export function environmentToPrMonitorTarget(environment: Environment): PrMonito
     kind,
     worktreePath: environment.worktreePath,
     containerId: environment.containerId ?? undefined,
-    ready:
-      kind === "local"
+    ready: environmentIsDeleting(environment)
+      ? false
+      : kind === "local"
         ? !!environment.worktreePath
         : environment.status === "running" && !!environment.containerId,
     prUrl: environment.prUrl ?? null,
@@ -613,7 +626,7 @@ export async function projectHomePrTarget(
   return {
     ...environmentToPrMonitorTarget(current),
     defaultBranch: baseBranch,
-    ready: eligible,
+    ready: eligible && !environmentIsDeleting(current),
     ...(!eligible ? { prUrl: null, prState: null } : {}),
   };
 }

@@ -6,7 +6,8 @@ import {
 } from "@orkestrator/protocol/node/claude-linux-sandbox";
 import { READ_ONLY_TURN_POLICY_NOTE } from "@orkestrator/protocol/native-agent";
 import { claudeReportedPolicy } from "./claude-query-config.js";
-import { READ_ONLY_TOOLS } from "./read-only-policy.js";
+import { COORDINATOR_COMMAND_SANDBOX_ENV } from "@orkestrator/protocol/coordinator";
+import { BRIDGE_EXECUTION_POLICY_ENV, READ_ONLY_TOOLS } from "./read-only-policy.js";
 import {
   createSession,
   getSession,
@@ -96,20 +97,36 @@ describe("a read-only turn where the command sandbox cannot run (todo 0190 (reti
       expect(call.options.hooks?.PreToolUse?.length).toBeGreaterThan(0);
       expect(call.options.permissionMode).toBe("default");
       const hook = (call.options.hooks as Options["hooks"])!.PreToolUse![0]!.hooks[0]!;
-      for (const command of [
-        "xxd in.txt -out.txt",
-        "xxd -r dump.txt -out.bin",
-        "git diff",
-        "git --git-dir=.git diff",
-        "git status",
-      ]) {
-        const verdict = await hook(
+      const decide = (command: string) =>
+        hook(
           { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as never,
           undefined as never,
           { signal: new AbortController().signal } as never,
         );
-        expect(verdict).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+      for (const command of [
+        "xxd in.txt -out.txt",
+        "xxd -r dump.txt -out.bin",
+        "git --git-dir=.git diff",
+        "git diff --ext-diff",
+        "git push",
+      ]) {
+        expect(await decide(command)).toMatchObject({
+          hookSpecificOutput: { permissionDecision: "deny" },
+        });
       }
+      // A reviewer still checks the reviewed commit: Git reads run hardened
+      // against the checkout's diff helpers rather than being refused.
+      expect(await decide("git diff abc..def -- a.ts")).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          updatedInput: {
+            command: "git diff --no-ext-diff --no-textconv --submodule=short abc..def -- a.ts",
+          },
+        },
+      });
+      expect(await decide("git status --porcelain")).toEqual({});
+      // The turn's environment outranks the checkout's other Git programs.
+      expect(call.options.env).toMatchObject({ GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" });
 
       const running = getSession(session.id)!;
       expect(running.status).toBe("running");
@@ -162,5 +179,49 @@ describe("a read-only turn where the command sandbox cannot run (todo 0190 (reti
     buildCall.push({ type: "result", subtype: "success" });
     buildCall.finish();
     await build;
+  });
+
+  test("a coordinator's Git stays refused without the sandbox", async () => {
+    // Hardened Git is for reviewers, which read an environment's own
+    // worktree. A coordinator reads the user's checkout and keeps its tier.
+    const saved = {
+      policy: process.env[BRIDGE_EXECUTION_POLICY_ENV],
+      sandbox: process.env[COORDINATOR_COMMAND_SANDBOX_ENV],
+    };
+    process.env[BRIDGE_EXECUTION_POLICY_ENV] = "coordinator-read-only";
+    process.env[COORDINATOR_COMMAND_SANDBOX_ENV] = "unavailable";
+    try {
+      const session = createSession("coordinator without a sandbox");
+      track(session.id);
+      const prompt = sendPrompt(session.id, "Check the branch", { readOnly: true });
+      const call = await nextQueryCall();
+      const hook = (call.options.hooks as Options["hooks"])!.PreToolUse![0]!.hooks[0]!;
+      const verdict = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git diff abc..def" },
+        } as never,
+        undefined as never,
+        { signal: new AbortController().signal } as never,
+      );
+      expect(verdict).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringContaining("Coordinator Git commands require"),
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await prompt;
+    } finally {
+      for (const [name, value] of [
+        [BRIDGE_EXECUTION_POLICY_ENV, saved.policy],
+        [COORDINATOR_COMMAND_SANDBOX_ENV, saved.sandbox],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 });

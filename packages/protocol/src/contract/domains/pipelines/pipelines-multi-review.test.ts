@@ -29,6 +29,7 @@ import {
 } from "../multi-review/index.js";
 import {
   PIPELINES_COMMANDS,
+  createDebugBuildCommand,
   createFeatureBuildCommand,
   getBuildPipelineCommand,
   launchBuildPipelineCommand,
@@ -53,7 +54,7 @@ const INTERNAL = new Set([
 ]);
 
 const DOMAINS = [
-  { domain: pipelinesDomain, commands: PIPELINES_COMMANDS, count: 41 },
+  { domain: pipelinesDomain, commands: PIPELINES_COMMANDS, count: 42 },
   { domain: multiReviewDomain, commands: MULTI_REVIEW_COMMANDS, count: 30 },
 ] as const;
 
@@ -132,6 +133,7 @@ describe("pipelines and multi-review definitions", () => {
 
   it("marks the idempotency key, the chosen environment and delivery policy, and restart selections critical", () => {
     expect(createFeatureBuildCommand.critical).toEqual(["requestId", "deliveryPolicy"]);
+    expect(createDebugBuildCommand.critical).toEqual(["requestId"]);
     expect(launchBuildPipelineCommand.critical).toEqual([
       "existingEnvironmentId",
       "deliveryPolicy",
@@ -179,6 +181,28 @@ describe("pipelines and multi-review results", () => {
     ]) {
       expect(decodeCommandResult(listBuildPipelinesCommand, answer)._tag).toBe("Success");
     }
+  });
+
+  it("create_debug_build keeps its guard-checked arguments and decodes its result", () => {
+    const request = {
+      environmentId: "env-1",
+      problem: "Broken",
+      expectedResult: "Works",
+      screenshot: "AAAA",
+      requestId: "r1",
+    };
+    const args = decodeCommandArgs(createDebugBuildCommand, { ...request, unknown: "dropped" });
+    expect(args._tag).toBe("Success");
+    if (args._tag === "Success") expect(args.success).toEqual(request as never);
+    for (const answer of [
+      { taskId: "t1", pipelineId: "p1", projectId: "project-1" },
+      { taskId: "t1", pipelineId: "p1", projectId: "project-1", environmentId: "env-2" },
+    ]) {
+      const decoded = decodeCommandResult(createDebugBuildCommand, answer);
+      expect(decoded._tag).toBe("Success");
+      if (decoded._tag === "Success") expect(decoded.success).toEqual(answer as never);
+    }
+    expect(validateCommandResult(createDebugBuildCommand, { taskId: 4 })._tag).toBe("Failure");
   });
 
   it("decodes a Multi Review record or unchanged", () => {

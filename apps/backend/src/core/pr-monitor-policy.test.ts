@@ -5,6 +5,8 @@ import {
   backgroundDelay,
   classifyPrDetectionFailure,
   detectionPriority,
+  isPrNetworkFailure,
+  networkHold,
   rateLimitCooldown,
   resolvePrMonitorPolicy,
   type DelayInput,
@@ -111,6 +113,55 @@ describe("PR monitor policy", () => {
       kind: "failed",
     });
     expect(classifyPrDetectionFailure(undefined)).toEqual({ kind: "failed" });
+  });
+
+  test("recognises a check that could not reach GitHub, and nothing else", () => {
+    const network = (error: unknown) =>
+      isPrNetworkFailure(error, classifyPrDetectionFailure(error));
+    expect(
+      network(
+        new CommandFailedError("error connecting to api.github.com", {
+          stderr: "error connecting to api.github.com\ncheck your internet connection",
+          exitCode: 1,
+        }),
+      ),
+    ).toBe(true);
+    expect(network(new Error("dial tcp: lookup api.github.com: i/o timeout"))).toBe(true);
+    expect(network(new CommandFailedError("Command failed", { timedOut: true }))).toBe(true);
+    // Refusals and ordinary failures are not outages.
+    expect(network(new Error("GraphQL: API rate limit exceeded for user"))).toBe(false);
+    expect(network(new Error("HTTP 404: Not Found"))).toBe(false);
+    expect(network(new CommandFailedError("Command failed", { exitCode: 1 }))).toBe(false);
+    expect(network(undefined)).toBe(false);
+  });
+
+  test("a network hold doubles per failure in a row up to its cap", () => {
+    expect(networkHold(0, policy)).toBe(30_000);
+    expect(networkHold(1, policy)).toBe(30_000);
+    expect(networkHold(2, policy)).toBe(60_000);
+    expect(networkHold(4, policy)).toBe(240_000);
+    expect(networkHold(5, policy)).toBe(300_000);
+    expect(networkHold(40, policy)).toBe(300_000);
+    expect(
+      resolvePrMonitorPolicy({ networkHoldMs: 10_000, networkHoldMaxMs: 1 }).networkHoldMaxMs,
+    ).toBe(10_000);
+  });
+
+  test("a scope is released only by a check that started after its latest strike", () => {
+    const scopes = new PrCooldownScopes(4);
+    scopes.strike("local", 3, 5);
+    scopes.set("local", 1_000, 0);
+    expect(scopes.release("local", 5, 0)).toBe(false);
+    expect(scopes.remaining("local", 0)).toBe(1_000);
+    // Reports that a hold still running ended, so its postponed checks resume.
+    expect(scopes.release("local", 6, 0)).toBe(true);
+    expect(scopes.remaining("local", 0)).toBe(0);
+    // With the strike gone, the next failure starts afresh.
+    expect(scopes.strike("local", 7, 7)).toBe(1);
+    // Releasing a scope with no hold, or one already run out, ends nothing.
+    expect(scopes.release("local", 8, 0)).toBe(false);
+    scopes.set("local", 2_000, 1_000);
+    expect(scopes.release("local", 9, 2_000)).toBe(false);
   });
 
   test("invalid policy overrides fall back and the discovery period never undercuts open cadence", () => {

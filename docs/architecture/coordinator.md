@@ -1009,7 +1009,8 @@ What each enforced platform actually does:
   no plugin or skill hook and no skill inline shell (see [Skills](#skills)),
   and a bridge-owned `PreToolUse` hook. The hook is the real boundary for
   shell: it allows a fixed
-  list of reading commands and refuses pipes, redirection, substitution and
+  list of reading commands (also as the stages of a plain pipe, each checked
+  on its own) and refuses redirection, substitution and
   chaining, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
   gawk's in-place and program options), path-qualified programs and the
   network-only `gh`, `curl` and `git ls-remote`. The SDK sandbox's default lets
@@ -1404,18 +1405,40 @@ withheld. A coordinator itself gets nothing from the file: its bridge's
 `CLAUDE_CONFIG_DIR` is the coordinator's private, empty Claude home, and it
 connects with the account token the backend hands it.
 
-Without the sandbox the hook refuses every Git command, because a
-repository's Git configuration can run helpers (an external diff, a
+Without the sandbox a coordinator's hook refuses every Git command, because
+a repository's Git configuration can run helpers (an external diff, a
 textconv, `core.fsmonitor`). A packaged reviewer is told to run the
 package's `diffCommand`, which is Git, so in a container it could not see
-the change at all. The backend therefore seals the reviewed diff as a file
+the change at all, and reviewers fell back to the sealed diff below without
+being able to check files against the reviewed commit. Since 2026-11-14 a
+reviewer's `readOnly` turn outside a coordinator process runs Git reads
+hardened instead: the hook rewrites an admitted `git diff`, `show`, `log`
+or `whatchanged` to carry `--no-ext-diff --no-textconv --submodule=short`
+(blame: `--no-textconv`), and refuses `git status -v`, any user
+`--submodule` and remerge diffs (`--remerge-diff`,
+`--diff-merges=remerge`/`r`). Those three run a program no flag on the
+command reaches: the staged diff, a `git diff` inside each submodule with the
+submodule's own `diff.external`, and the configured `merge.<driver>.driver`.
+The turn's environment already outranks `core.fsmonitor`, hooks, the GPG
+programs and lazy fetches, and pins `diff.submodule=short` and
+`log.diffMerges=separate` so the checkout cannot make a plain `git diff` or
+`git log -m` do the same (`withReadOnlyGitConfig`); Git passes these entries
+on to its submodule children. The rewrite reaches the CLI as a
+decision-less `updatedInput`; `read-only-hardened-git.live.test.ts` proves
+on the pinned CLI that the rewritten command is the one that runs, and
+`read-only-policy-review-git.integration.test.ts` runs every admitted form
+against real Git in a checkout configured with each helper. The residual is a filter driver the checkout's own
+config names, which can run when a command reads worktree files; only the
+environment's own writers can have configured one. A coordinator keeps
+refusing Git, so its tier is unchanged. The backend still seals the reviewed diff as a file
 beside the package when it builds it (`review-diff-artifact.ts`): it runs
 the same `git diff --no-color --no-ext-diff --no-textconv --no-renames
 <base>...<head>` the package names, writes it read-only and Git-excluded as
 `review-diff-<sha256>.patch` in the round's artifact directory, records
 `diffArtifact: { path, bytes, sha256 }` in the package, and checks its bytes
 and digest with the package before each reviewer is dispatched. The
-reviewer instructions say to read that file when the session refuses Git. A
+reviewer instructions say to read that file when the session refuses Git
+(another agent's read-only session, or a Claude bridge older than this). A
 diff over 16 MiB, or one Git or the write could not produce, is left out
 and the package's limitations say so; the review itself never fails for
 it. The runner decodes the output as UTF-8. If it contains a replacement

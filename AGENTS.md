@@ -1077,7 +1077,10 @@ names at all. Three invariants keep it honest:
 - **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
   refuses anything that can become several commands, and a newline counts: the
   shell treats it exactly as `;` does, while a whitespace split would reduce
-  `ls\nrm -rf .` to a harmless-looking `ls`.
+  `ls\nrm -rf .` to a harmless-looking `ls`. A plain pipe is the one
+  exception: with every other metacharacter refused it can only separate
+  stages, so `isReadOnlyShellCommand` splits on it and judges each stage as a
+  command of its own (`git diff a..b | head`), and `||` stays refused.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout
@@ -1098,7 +1101,9 @@ names at all. Three invariants keep it honest:
   launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`) it is left
   off and this allowlist is the whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
-  `git ls-remote` are refused rather than left to the sandbox.
+  `git ls-remote` are refused rather than left to the sandbox. There Git is
+  refused for a coordinator and admitted hardened for a reviewer's `readOnly`
+  turn (`ReadOnlyGitWithoutSandbox`): see `bridges/claude-bridge/AGENTS.md`.
 
 ### Backend
 

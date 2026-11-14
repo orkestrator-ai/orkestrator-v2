@@ -15,7 +15,12 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
+import {
+  kanbanStore,
+  useKanbanStore,
+  type KanbanStatus,
+  type KanbanTask,
+} from "@/stores/kanbanStore";
 import { useConfigStore, useEnvironmentStore, useUIStore, type ProjectBoardTab } from "@/stores";
 import {
   useBuildPipelineStore,
@@ -28,6 +33,7 @@ import { TicketSyncStrip, useTicketSyncLeafStatus, useTicketSyncStatus } from ".
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
+import { resolveOpenTicketRequest } from "./open-ticket-request";
 import { FeaturesView } from "./FeaturesView";
 import { ProjectPullRequestsView } from "@/components/pull-requests";
 import { LinearTicketsView } from "@/components/linear";
@@ -351,6 +357,26 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     },
     [projectTasks, handleClickTask],
   );
+
+  // A ticket opened from outside the board (a tracked ticket in Settings →
+  // Self-improvement) is a request in the board's store. Follow the store, so a
+  // request made while the board is mounted and one that waits for the board to
+  // load the ticket are handled alike. Once the board has loaded and the ticket
+  // is not on it (deleted, or on another board), the request is cleared and the
+  // person is told, so a click never ends silently.
+  const kanbanScopeStore = launchScope.store(kanbanStore);
+  useEffect(() => {
+    return kanbanScopeStore.subscribe((state) => {
+      const resolution = resolveOpenTicketRequest(state, projectId);
+      if (resolution.kind === "open") {
+        state.clearOpenTicketRequest();
+        handleClickTask(resolution.task);
+      } else if (resolution.kind === "missing") {
+        state.clearOpenTicketRequest();
+        toast.error("That ticket is no longer on this board.");
+      }
+    });
+  }, [kanbanScopeStore, projectId, handleClickTask]);
 
   const shareTask = useCallback((task: KanbanTask) => void shareTickets([task.id]), [shareTickets]);
 

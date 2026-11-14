@@ -15,6 +15,7 @@ export {
   type SessionCommandContext,
 } from "./actions-session-commands.js";
 export { sessionPromptMode } from "./actions-sessions.js";
+export { sessionTranscript } from "./actions-transcript.js";
 export { attentionKey, compareAttention, type AttentionPosition } from "./attention-cursor.js";
 export { withPublicAuthority } from "./dispatch.js";
 export { PublicActionError } from "./errors.js";
@@ -57,4 +58,4 @@ export {
 export { stopSessionTurn } from "./session-turn-stop.js";
 export { resolveSession, sessionActivity, type ResolvedSession } from "./sessions.js";
 export { nativeTabsOfLayout, type NativeTabInfo } from "./summaries.js";
-export type { PublicActionHandler } from "./types.js";
+export type { PublicActionContext, PublicActionHandler } from "./types.js";

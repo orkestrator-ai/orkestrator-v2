@@ -19,8 +19,8 @@ the app versions that carry it. It looks in two places:
   you keep repeating, confusion, workarounds, mistakes you have to catch,
   missing features and slow or stuck work.
 
-Diagnostics findings become `[improvement] …` tickets labelled `improvement`.
-Conversation themes become `[insight] …` tickets labelled `insight`.
+Diagnostics findings become tickets labelled `improvement`.
+Conversation themes become tickets labelled `insight`. Neither kind has a title prefix: the label is what tells them apart, and the board card shows it.
 
 ## Using it
 

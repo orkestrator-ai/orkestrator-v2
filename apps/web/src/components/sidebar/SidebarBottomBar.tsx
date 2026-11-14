@@ -1,16 +1,19 @@
 import { useId } from "react";
-import { Bug, Container, FolderGit2, SlidersHorizontal } from "lucide-react";
+import { Bug, BugPlay, Container, FolderGit2, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHostMaintenance } from "@/components/settings/useHostMaintenance";
-import { openBugReport } from "@/lib/bug-report/open-bug-report";
+import { openBugReport, ownBugReportMachineId } from "@/lib/bug-report/open-bug-report";
+import { startDebugCapture } from "@/lib/debug-build/start-debug-capture";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
+import { useDebugBuildStore, type DebugBuildTarget } from "@/stores/debugBuildStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { cn } from "@/lib/utils";
 
 const SETTINGS_LABEL = "Global settings";
@@ -19,6 +22,7 @@ const ENVIRONMENT_SETTINGS_LABEL = "Environment settings";
 const UPDATE_AVAILABLE = "Update available";
 const BUG_REPORT_LABEL = "Report a bug";
 const DRAFT_IN_PROGRESS = "Draft in progress";
+const DEBUG_LABEL = "Debug: start a pipeline environment for this environment";
 
 /** The dot on a bar button that has something waiting behind it. */
 function IndicatorDot({ testId }: { testId: string }) {
@@ -33,7 +37,10 @@ function IndicatorDot({ testId }: { testId: string }) {
 
 /**
  * The static bar under the projects and environments list: global, repository
- * and environment settings on the left, the bug report on the right.
+ * and environment settings on the left, the bug report on the right, and,
+ * while Settings → Debug → "Debug button" is on, the debug button beside it.
+ * The debug button captures the window before its dialog opens
+ * (`startDebugCapture`), for the environment in front.
  *
  * Every button opens a surface that lives outside the sidebar
  * (`GlobalSettingsHost`, `AppDialogHost` and the bug report sheet, which
@@ -73,10 +80,26 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
       : false,
   );
 
+  const debugButtonEnabled = useUIChromeStore((state) => state.debugButtonEnabled);
+  const debugBusy = useDebugBuildStore((state) => state.capturing || state.open);
+
   const hasProject = remote ? !!remote.projectId : hasLocalProject;
   const hasEnvironment = remote
     ? !!remote.projectId && !!remote.environmentId
     : hasLocalEnvironment;
+
+  function debugTarget(): DebugBuildTarget | null {
+    if (remote) {
+      if (!remote.projectId || !remote.environmentId) return null;
+      return {
+        nodeId: remote.nodeId === ownBugReportMachineId() ? null : remote.nodeId,
+        projectId: remote.projectId,
+        environmentId: remote.environmentId,
+      };
+    }
+    if (!hasLocalEnvironment || !selectedProjectId || !selectedEnvironmentId) return null;
+    return { nodeId: null, projectId: selectedProjectId, environmentId: selectedEnvironmentId };
+  }
 
   function openSettings(dialog: "repository-settings" | "environment-settings") {
     if (remote) {
@@ -145,26 +168,45 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
           <Container className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="relative h-7 w-7"
-        // The machine in front: another machine's report opens on its scope.
-        onClick={() => openBugReport()}
-        title={BUG_REPORT_LABEL}
-        aria-label={BUG_REPORT_LABEL}
-        aria-describedby={draftInProgress ? bugDescriptionId : undefined}
-      >
-        <Bug className="h-4 w-4" aria-hidden="true" />
-        {draftInProgress ? (
-          <>
-            <IndicatorDot testId="bug-report-draft-dot" />
-            <span id={bugDescriptionId} className="sr-only">
-              {DRAFT_IN_PROGRESS}
-            </span>
-          </>
+      <div className={cn("flex items-center gap-0.5", stacked && "flex-col")}>
+        {debugButtonEnabled ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            data-testid="debug-build-button"
+            onClick={() => {
+              const target = debugTarget();
+              if (target) void startDebugCapture(target);
+            }}
+            disabled={!hasEnvironment || debugBusy}
+            title={hasEnvironment ? DEBUG_LABEL : "Select an environment first"}
+            aria-label={DEBUG_LABEL}
+          >
+            <BugPlay className="h-4 w-4" aria-hidden="true" />
+          </Button>
         ) : null}
-      </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-7 w-7"
+          // The machine in front: another machine's report opens on its scope.
+          onClick={() => openBugReport()}
+          title={BUG_REPORT_LABEL}
+          aria-label={BUG_REPORT_LABEL}
+          aria-describedby={draftInProgress ? bugDescriptionId : undefined}
+        >
+          <Bug className="h-4 w-4" aria-hidden="true" />
+          {draftInProgress ? (
+            <>
+              <IndicatorDot testId="bug-report-draft-dot" />
+              <span id={bugDescriptionId} className="sr-only">
+                {DRAFT_IN_PROGRESS}
+              </span>
+            </>
+          ) : null}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -20,7 +20,7 @@ describe("the self-improvement board over Kanban storage", () => {
       ).toEqual(["improvement", "insight"]);
 
       const input = {
-        title: "[insight] Agents keep reaching for npm",
+        title: "Agents keep reaching for npm",
         description: "Theme `insight:use-mise-not-npm`.",
         criteria: "No reminders needed.",
         label: "insight",

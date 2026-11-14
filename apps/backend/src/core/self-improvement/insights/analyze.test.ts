@@ -386,8 +386,8 @@ describe("a run with the conversation review", () => {
     const first = await loop(start + 5 * DAY);
     expect(first.conversations).toMatchObject({ read: 4, themes: 3 });
     expect(first.created.map((item) => item.title).sort()).toEqual([
-      "[insight] A third theme",
-      "[insight] Agents keep reaching for npm",
+      "A third theme",
+      "Agents keep reaching for npm",
     ]);
     expect(first.conversations.heldForTomorrow).toBe(1);
     const ticket = board.ticketFor("insight:use-mise-not-npm");

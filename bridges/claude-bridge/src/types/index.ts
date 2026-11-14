@@ -245,6 +245,8 @@ export interface SdkResultMessage extends SdkMessageBase {
   duration_ms?: number;
   duration_api_ms?: number;
   is_error?: boolean;
+  /** The HTTP status of the API error a failed turn ended on; null without a response. */
+  api_error_status?: number | null;
   num_turns?: number;
   ttft_ms?: number;
   errors?: string[];

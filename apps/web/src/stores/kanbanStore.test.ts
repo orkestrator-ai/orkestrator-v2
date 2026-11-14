@@ -489,3 +489,15 @@ describe("kanbanStore task actions", () => {
     expect(appCommandStore(kanbanStore).getState().tasks).toEqual([task()]);
   });
 });
+
+describe("open ticket request", () => {
+  test("is remembered until the board clears it, and a later request replaces it", () => {
+    const state = () => appCommandStore(kanbanStore).getState();
+    state().requestOpenTicket("project-1", "ticket-a");
+    expect(state().openTicketRequest).toEqual({ projectId: "project-1", ticketId: "ticket-a" });
+    state().requestOpenTicket("project-2", "ticket-b");
+    expect(state().openTicketRequest).toEqual({ projectId: "project-2", ticketId: "ticket-b" });
+    state().clearOpenTicketRequest();
+    expect(state().openTicketRequest).toBeNull();
+  });
+});

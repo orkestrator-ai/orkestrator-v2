@@ -25,7 +25,7 @@ const RUN: SelfImprovementRunSummary = {
     {
       ticket: "418",
       signature: "insight:use-mise-not-npm",
-      title: "[insight] Agents keep reaching for npm",
+      title: "Agents keep reaching for npm",
     },
   ],
   linked: [],
@@ -130,8 +130,12 @@ function fakeApi(initial: SelfImprovementStatus) {
   return api;
 }
 
-function render(api: ReturnType<typeof fakeApi>, machine?: string | null) {
-  const props = { api: api as unknown as SelfImprovementSettingsProps["api"] };
+function render(
+  api: ReturnType<typeof fakeApi>,
+  machine?: string | null,
+  openTicket?: SelfImprovementSettingsProps["openTicket"],
+) {
+  const props = { api: api as unknown as SelfImprovementSettingsProps["api"], openTicket };
   return renderInAppCommandScope(
     machine === undefined ? (
       <SelfImprovementSettings {...props} />
@@ -146,7 +150,7 @@ function render(api: ReturnType<typeof fakeApi>, machine?: string | null) {
 describe("Settings → Self-improvement", () => {
   test("shows the last run, tracked tickets and themes", async () => {
     render(fakeApi(status()));
-    expect(await screen.findByText("[insight] Agents keep reaching for npm")).toBeTruthy();
+    expect((await screen.findAllByText("Agents keep reaching for npm")).length).toBeGreaterThan(0);
     expect(screen.getByText("Fixed and confirmed")).toBeTruthy();
     // Tracked problems appear by title, not by signature.
     expect(screen.getAllByText("local-server bridge.exited (codex): SIGKILL").length).toBe(2);
@@ -211,6 +215,74 @@ describe("Settings → Self-improvement", () => {
         selfImprovement: { projectId: "p1", conversationReview: false, dailyRun: true },
       }),
     );
+  });
+
+  test("a tracked ticket opens on the board of the project that holds it", async () => {
+    const openTicket = mock((_projectId: string, _ticketId: string) => {});
+    render(fakeApi(status()), undefined, openTicket);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open ticket: Agents keep reaching for npm" }),
+    );
+    expect(openTicket).toHaveBeenLastCalledWith("p1", "418");
+    // A ticket number in the last run's lists opens it too.
+    fireEvent.click(screen.getByRole("button", { name: /^Open ticket 412:/ }));
+    expect(openTicket).toHaveBeenLastCalledWith("p1", "412");
+  });
+
+  test("a ticket filed under an earlier project opens there, not on the receiving project", async () => {
+    const openTicket = mock((_projectId: string, _ticketId: string) => {});
+    const current = status();
+    render(
+      fakeApi(
+        status({
+          tracked: current.tracked.map((item) =>
+            item.ticket === "418" ? { ...item, projectId: "p2" } : { ...item, projectId: "p1" },
+          ),
+        }),
+      ),
+      undefined,
+      openTicket,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open ticket: Agents keep reaching for npm" }),
+    );
+    expect(openTicket).toHaveBeenLastCalledWith("p2", "418");
+    // The last run's reference finds its project through the tracked problem.
+    fireEvent.click(screen.getByRole("button", { name: /^Open ticket 418:/ }));
+    expect(openTicket).toHaveBeenLastCalledWith("p2", "418");
+    fireEvent.click(screen.getByRole("button", { name: /^Open ticket 412:/ }));
+    expect(openTicket).toHaveBeenLastCalledWith("p1", "412");
+  });
+
+  test("a ticket whose project no longer exists is plain text", async () => {
+    const current = status();
+    render(
+      fakeApi(
+        status({
+          tracked: current.tracked.map((item) =>
+            item.ticket === "418" ? { ...item, projectId: "deleted" } : item,
+          ),
+        }),
+      ),
+    );
+    await screen.findByRole("button", { name: /^Open ticket 412:/ });
+    expect(
+      screen.queryByRole("button", { name: "Open ticket: Agents keep reaching for npm" }),
+    ).toBe(null);
+    expect(screen.queryByRole("button", { name: /^Open ticket 418:/ })).toBe(null);
+  });
+
+  test("tracked tickets are plain text while no project receives them", async () => {
+    render(
+      fakeApi(
+        status({
+          settings: { projectId: null, conversationReview: true, dailyRun: false },
+          project: null,
+        }),
+      ),
+    );
+    expect((await screen.findAllByText("Agents keep reaching for npm")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /Open ticket/ }) === null).toBe(true);
   });
 
   test("on another machine it says where it runs and calls nothing", async () => {

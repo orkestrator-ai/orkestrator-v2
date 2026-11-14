@@ -372,7 +372,6 @@
   },
   "window-orkestrator-direct": {
     "apps/web/src/App.tsx": 7,
-    "apps/web/src/components/bug-report/BugReportSheet.tsx": 2,
     "apps/web/src/components/chat/rich/MediaGallery.tsx": 3,
     "apps/web/src/components/federation/CommandHandoverDialog.tsx": 2,
     "apps/web/src/components/federation/CommandNodeMenu.tsx": 1,
@@ -398,7 +397,7 @@
     "apps/web/src/lib/native/clipboard.ts": 5,
     "apps/web/src/lib/native/process.ts": 3,
     "apps/web/src/lib/native/shell.ts": 1,
-    "apps/web/src/lib/native/window.ts": 2,
+    "apps/web/src/lib/native/window.ts": 3,
     "apps/web/src/lib/pane-layout-authoritative.ts": 6,
     "apps/web/src/lib/pane-layout-persistence.ts": 1,
     "apps/web/src/lib/preview-external.ts": 1,

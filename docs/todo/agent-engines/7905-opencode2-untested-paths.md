@@ -2,14 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-13 against `main` at `17d28238c`.
+Analysed 2026-11-14 against `main` at `dc90609bf`.
 
 ### Tasks
 
-1. **A container runtime without an egress gateway**: run the container OpenCode qualification on a runtime whose firewall stays inside it. Status: open.
-2. **Concurrent sessions on one server**: two OpenCode tabs in one environment take turns at the same time. Status: open.
-3. **A steer racing a permission or form prompt**: a steer sent while the turn waits on a card. Status: open.
-4. **OpenCode steer through the public CLI and the coordinator's deliver-now**: both still refuse OpenCode steer as unqualified. Status: open (depends on 3).
+1. **A container runtime without an egress gateway**: run the container OpenCode qualification on a runtime whose firewall stays inside it. Status: open (needs a container runtime: not runnable on beelink2, whose builds could not reach the Docker socket; run it on a Linux host where they can).
+2. **Concurrent sessions on one server**: two OpenCode tabs in one environment take turns at the same time. Status: done (2026-11-14).
+3. **A steer racing a permission or form prompt**: a steer sent while the turn waits on a card. Status: done (2026-11-14).
+4. **OpenCode steer through the public CLI and the coordinator's deliver-now**: both refused OpenCode steer as unqualified. Status: done (2026-11-14).
 
 ### 1. A container runtime without an egress gateway
 
@@ -17,7 +17,7 @@ Analysed 2026-11-13 against `main` at `17d28238c`.
 
 **Context.** `ORKESTRATOR_EGRESS=in-container` creates new runtimes without a gateway (the root `AGENTS.md`, "Network Isolation"); an image without `egress-gateway=1` does the same. The container qualification is `mise run verify:opencode2:container` against a profile started with `--fixture --fixture-environments local,container --no-agent-credentials --agent-platforms opencode --headless --no-host-seed`, on a disposable rootless daemon with `--host-loopback` on a host whose firewall drops container traffic to the profile ([agent-testing.md](../../development/agent-testing.md)). The scripted model serves on the container's own loopback, which the in-runtime firewall also admits.
 
-**Investigation.** Not run. The fake model, the staged configuration and the rebuild case do not depend on where the firewall runs, so the same task should work unchanged with the variable set for the profile's backend.
+**Investigation.** Not run. The fake model, the staged configuration and the rebuild case do not depend on where the firewall runs, so the same task should work unchanged with the variable set for the profile's backend. On 2026-11-14 the work on tasks 2 to 4 ran on beelink2 (Linux, headless), where builds could not reach the Docker socket, so this task was left for a host where they can. It needs no person: an agent on such a host can run it alone.
 
 **Decisions.**
 
@@ -31,60 +31,65 @@ Analysed 2026-11-13 against `main` at `17d28238c`.
 
 ### 2. Concurrent sessions on one server
 
-**Problem.** Every OpenCode 2 live and real-stack check used one session per server at a time. Two tabs in one environment share one `opencode serve` and its reload gate (`opencode2/reload-gate.ts`), and no check runs their turns together.
+**Problem.** Every OpenCode 2 live and real-stack check used one session per server at a time. Two tabs in one environment share one `opencode serve` and its reload gate (`opencode2/reload-gate.ts`), and no check ran their turns together.
 
-**Context.** The 2.x live set (`mise run verify:opencode2:live`, files under `apps/backend/src/core/opencode2/`) runs a scripted loopback model per test and can hold two providers on one server. The reload gate's own unit tests cover the waiting, not two real turns.
+**Context.** The 2.x live set (`mise run verify:opencode2:live`, files under `apps/backend/src/core/opencode2/`) runs a scripted loopback model per test.
 
-**Investigation.** Recorded as untested in 0008 (retired) "Needs verification" since 2026-11-08.
+**Investigation.** Done on 2026-11-14 by `opencode2-concurrency.live.test.ts` against the pinned 2.2.6 on beelink2 (Linux x86_64): a tab's and a pipeline's provider on one server, three sessions dispatching through the shared gate at once. The server listed all three as running together; each settled on its own reply; a steer to one session reached its run only (`steerStatus` `unknown` on the others, the model saw it once); a reload asked for while a dispatch held the gate answered `busy`; a second round on two sessions settled in order. Passed.
 
-**Decisions.**
-
-- **Where to prove it?**
-  - **A new live test in the 2.x set: two sessions on one server, both dispatching, both settling with their own replies, and a steer to one that does not reach the other (recommended).**
-    - Pros: deterministic, no browser; reuses the live-server support.
-    - Cons: does not show two tabs in the renderer.
-  - **A second tab in the idle-observation spec.**
-    - Pros: the renderer path.
-    - Cons: the spec is already over 2,000 lines and its cases assume one tab.
+**Decisions.** The recommended option: a live test in the 2.x set rather than a second tab in the idle-observation spec, which is already over 2,000 lines and assumes one tab.
 
 ### 3. A steer racing a permission or form prompt
 
-**Problem.** A steer sent while the running turn is parked on a permission or form card has not been tried against the pinned binary. The backend-held steer guard (0008 (retired) task 10) was proved on running and settled turns only.
+**Problem.** A steer sent while the running turn is parked on a permission or form card had not been tried against the pinned binary.
 
-**Context.** `opencode2/steer.ts` holds the guard; `opencode2-steer.live.test.ts` covers a late steer and a reused id. The scripted model can ask for a shell command under an "ask" policy, which parks a permission card.
+**Context.** `opencode2/steer.ts` holds the guard; `opencode2-steer.live.test.ts` covers a late steer and a reused id.
 
-**Investigation.** Not run.
+**Investigation.** Done on 2026-11-14 by `opencode2-steer-cards.live.test.ts` (2.2.6, beelink2). What 2.2.6 does, now pinned: the steer is admitted (`applied`) and waits in the session's inbox; the card stays parked, the session stays `waiting` and the model is not called. Once the card is resolved (a shell permission allowed or denied, a question answered) the tool settles and the steer is delivered at that step boundary in the same run, once. A stop instead leaves the steer in the inbox, and the next prompt's run delivers it before the new prompt; that is [8100](8100-opencode-stop-keeps-pending-steer.md).
 
-**Decisions.**
-
-- **What should the steer do while a card is parked?**
-  - **Prove what 2.2.6 does first, then pin it in a live test (recommended).**
-    - Pros: the behaviour is the binary's; a test records it and fails on a bump that changes it.
-    - Cons: if 2.2.6 drops or reorders the steer, a product change follows.
-  - **Refuse a steer while a card is parked.**
-    - Pros: no race to reason about.
-    - Cons: a user who wants to redirect a waiting turn cannot.
+**Decisions.** The recommended option: prove what 2.2.6 does and pin it. It neither drops nor reorders the steer while a card is parked, so no product change followed for the race itself.
 
 ### 4. OpenCode steer through the public CLI and the coordinator's deliver-now
 
-**Problem.** OpenCode sessions advertise steer, and composer steer is qualified on the real stack in host and container environments (0008 (retired) task 7). The public CLI still reports `steer: false` for OpenCode (`apps/backend/src/core/public-api/providers.ts`), and the coordinator live harness's deliver-now treats OpenCode as unable to steer (`deliverNowApplies` in `apps/desktop/scripts/dev/coordinator-live-deliver-now.ts`), both citing that its steering was not qualified through those paths.
+**Problem.** OpenCode sessions advertise steer, and composer steer was qualified on the real stack, but the public CLI reported `steer: false` for OpenCode (`apps/backend/src/core/public-api/providers.ts`) and the coordinator live harness's deliver-now skipped it (`deliverNowApplies` in `apps/desktop/scripts/dev/coordinator-live-deliver-now.ts`).
 
-**Context.** The public CLI contract allows a capability only for a provider qualified for it ([public-cli.md](../../architecture/public-cli.md)). Its steer goes through the same backend dispatch as the composer's, but under the CLI's request keys and operation records, and a worker's mail injection steers through the coordinator path.
+**Context.** The public CLI contract allows a capability only for a provider qualified for it ([public-cli.md](../../architecture/public-cli.md)).
 
-**Investigation.** Recorded only as code comments until 2026-11-13; no to-do held it. Composer steer evidence: the idle-observation `steer` case on the host (2026-11-11) and in a container (2026-11-13), on scripted models.
+**Investigation.** Done on 2026-11-14. The new `opencode-steer` CLI scenario (`packages/cli/scenarios/opencode-steer.ts`, run with `mise run test:cli:scenarios -- --scenario opencode-steer`) runs the packaged CLI and backend on a scripted loopback model, with the pinned OpenCode installed into the scenario's own data directory and no credentials. It holds the turn's first model request open, steers it by request key, retries the same key (same operation, nothing more sent), reuses the key with other text (`request-conflict`), and checks that the turn ends on the steer's reply and that the model saw the steer once. The steer's operation `succeeded`; the start run ended `unknown` with "The turn ended but its outcome was not recorded", which is the public CLI's documented behaviour for any provider when a steer joins the turn (the outcome is recorded against the turn's latest request). Passed. Both refusals were then lifted in the same change.
 
-**Decisions.**
+**Decisions.** The recommended option: a CLI scenario on a scripted OpenCode model, then lifting both refusals together. Task 3 ran first, as recommended.
 
-- **How to qualify it?**
-  - **A CLI scenario on a scripted OpenCode model: steer a running turn by request key, retry the same key, and check the turn ends on the steer's reply once; then lift both refusals in one change (recommended).**
-    - Pros: no billed turn; the same evidence standard the composer steer met.
-    - Cons: needs a scripted-model OpenCode profile in the CLI scenario harness (`mise run test:cli:scenarios`).
-  - **Lift the refusals on the composer evidence alone.**
-    - Pros: no new harness work.
-    - Cons: the CLI's request keys and retries are not what the composer case proves; the contract requires qualification per provider.
-- **Order relative to task 3.** Do task 3 first: a steer that races a parked card is the case a CLI caller, who cannot see the card, is most likely to hit.
+## Assumptions and decisions
+
+### Task 4: the scenario runs only when named
+
+- **Chose:** mark `opencode-steer` `explicit`, so `mise run test:cli:scenarios` runs it only with `--scenario opencode-steer`.
+- **Why:** it downloads the pinned OpenCode binaries into its data directory on every run, which the default credential-free matrix does not otherwise do.
+
+### Task 4: the start run's `unknown` ending is accepted
+
+- **Chose:** the scenario accepts the start run ending `succeeded` or `unknown` with the "turn ended" reason, and follows the turn through the session's transcript.
+- **Why:** `public-cli.md` says a steer is a receipt, not a run, and the outcome of a turn a steer joined is recorded against the steer's request; requiring `succeeded` would hold OpenCode to a rule no provider meets.
+
+### Task 4: the scenario runs on local environments only
+
+- **Chose:** `opencode-steer` sets `environmentTypes: ["local"]`, and its `prepare` stops the scripted model when a later setup write fails.
+- **Why:** the scripted model listens on the harness host's loopback, which a container cannot reach; a container run needs a container-local model first. The runner learns the undo only from `prepare`'s return value, so a failed write would otherwise leave the model listening.
+
+### Tasks 2, 3 and 4: always-run coverage beside the live evidence
+
+- **Chose:** keep the live tests and the named-only scenario as the qualifying evidence, and add default-run checks of the backend's own side: `opencode2/concurrency.test.ts` on the fake server (three sessions on two providers, the shared gate, a steer reaching only its session, a steer held behind a permission card until the next step boundary and kept by a stop) and an OpenCode steer test in `public-api-sessions.test.ts`.
+- **Why:** the live tests need `RUN_LIVE_OPENCODE2` and the scenario must be named, so without these `mise run test` exercised none of these paths. The fake server now models what the live test pinned for 2.2.6: a steer sent while a card is parked waits in the inbox.
+
+### Task 1: left open
+
+- **Chose:** leave task 1 open with the reason that it needs a container.
+- **Why:** the ticket's constraints for this pass on beelink2 forbid working around an unreachable Docker socket.
 
 ## Related
 
 - 0008 (retired), the OpenCode 2.x migration: its history is in `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`; the container qualification it ended with is summarised in [agent-testing.md](../../development/agent-testing.md).
-- Real-provider OpenCode 2 checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+- 8045 (retired), the turn a backend restart cut short: settled by the OpenCode 2 provider since 2026-11-14 (`apps/backend/src/core/opencode2/restart-cut.ts`); its final state is in Git history at `dc90609bf`.
+- [8100](8100-opencode-stop-keeps-pending-steer.md): a stop leaves a held steer for the next turn.
+- [8101](8101-linux-reaper-skips-orphans-under-subreaper.md): the reaper skips an orphan a subreaper adopted.
+- Real-provider OpenCode 2 checks, including this to-do's tasks 3 and 4 on a real provider, are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).

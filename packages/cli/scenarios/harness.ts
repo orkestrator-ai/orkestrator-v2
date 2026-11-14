@@ -127,6 +127,8 @@ export async function startIsolatedBackend(options: {
   extraArgs?: string[];
   /** The explicitly authorized live provider (see `isolateProviderHomes`). */
   credentialSource?: string;
+  /** A provider whose pinned binaries are installed without its credentials. */
+  toolchainProvider?: string;
 }): Promise<IsolatedBackend> {
   if (
     options.extraArgs?.some(
@@ -147,7 +149,9 @@ export async function startIsolatedBackend(options: {
     root: options.root,
     dataDir,
     packageRoot,
-    ...(options.credentialSource ? { provider: options.credentialSource } : {}),
+    ...(options.credentialSource || options.toolchainProvider
+      ? { provider: (options.credentialSource ?? options.toolchainProvider)! }
+      : {}),
   });
   if (runtime.toolchainTools.length > 0) {
     const install = spawnSync(
@@ -424,6 +428,25 @@ export class CliDriver {
     expectThat(envelope.ok, `[${stage}] envelope not ok`);
     return { result: (envelope as { result: T }).result, envelope };
   }
+}
+
+/**
+ * A scenario's own directories, known before its backend starts: what
+ * `startIsolatedBackend` makes of `root` (`data`, and the disposable home's
+ * XDG configuration from `isolateProviderHomes`).
+ */
+export interface ScenarioPaths {
+  root: string;
+  dataDir: string;
+  xdgConfigHome: string;
+}
+
+export function scenarioPaths(root: string): ScenarioPaths {
+  return {
+    root,
+    dataDir: path.join(root, "data"),
+    xdgConfigHome: path.join(root, "provider-homes", "xdg-config"),
+  };
 }
 
 export interface ScenarioContext {

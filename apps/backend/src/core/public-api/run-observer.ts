@@ -75,7 +75,7 @@ export function observeRun(
     // An ended run with a later turn in its journal observed unchanged stays
     // so while its record and environment do: the later turn can only be
     // appended to, and an ended observation is kept while it runs. The
-    // periodic reconciler pass skips such a run (to-do 7562, task 4).
+    // periodic reconciler pass skips such a run (to-do 7562 (retired), task 4).
     if (patch === null && seen.laterTurn && executionEnded(record.execution)) {
       reconciliations.markRunSettled(record);
     } else {
@@ -462,7 +462,7 @@ async function evaluateRun(
   // again. Without this, every ended run whose outcome had aged out of the
   // session's bounded outcome list went back to `running` with each later
   // turn and to `unknown` when it finished, a record write each way for
-  // every such run (to-do 7562).
+  // every such run (to-do 7562 (retired)).
   if (!ended && laterTurn && executionEnded(record.execution)) return null;
   if (!ended) {
     return settle({ state: activity === "working" || laterTurn ? "running" : "pending" }, accepted);

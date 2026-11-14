@@ -129,7 +129,7 @@ export interface NativeAgentLaunchActivityReconcilerHost {
   withdrawEnvironmentInteractions(environmentId: string): void;
   /**
    * Answer the requests of a session seen `waiting` that an Orkestrator
-   * permission rule covers (todo 0723), so a rule applies with no tab mounted
+   * permission rule covers (todo 0723 (retired)), so a rule applies with no tab mounted
    * and before the waiting edge is announced. `null` when nothing was read.
    */
   applyPermissionRules?(

@@ -6,6 +6,10 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
+import {
+  CODEX_MANAGED_NETWORK_PROBE_HOST,
+  codexManagedNetworkCard,
+} from "@orkestrator/protocol/testing/codex-managed-network-card";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { promptDraftStore } from "@/stores/promptDraftStore";
 import { appCommandStore } from "@/test/app-command-store";
@@ -353,6 +357,55 @@ describe("NativeAgentInteractionCard", () => {
       expiresInMs: 7 * 24 * 60 * 60 * 1_000,
     });
     expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  test("a Codex managed-network approval offers plain approval and no network policy", async () => {
+    // The card the backend projected from the pinned Codex on a managed host
+    // (codex-managed-network-card-live.test.ts, to-do 0723 (retired) task 7).
+    const card = codexManagedNetworkCard();
+    const onResolve = mock(async (resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: resolution.interactionId,
+      sessionId: resolution.sessionId,
+      revision: 3,
+    }));
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard
+        interaction={card}
+        onResolve={onResolve}
+        onApproveAndRemember={mock(async () => ({
+          result: "applied" as const,
+          interactionId: card.id,
+          sessionId: card.sessionId,
+          revision: 3,
+        }))}
+      />,
+    );
+    expect(screen.getByText("Approve network access")).toBeTruthy();
+    const names = screen.getAllByRole("button").map((button) => button.textContent);
+    for (const name of ["Deny", "Cancel turn", "Approve for session", "Approve and remember…"]) {
+      expect(names).toContain(name);
+    }
+    const approve = screen.getByRole("button", { name: /^Approve$/ }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(false);
+    expect(document.body.textContent).not.toMatch(
+      /network policy|command policy|Broader approval/i,
+    );
+
+    // Remembering offers only the exact host, saved as an Orkestrator rule.
+    fireEvent.click(screen.getByRole("button", { name: "Approve and remember…" }));
+    const panel = screen.getByTestId("remember-rule-panel");
+    expect(panel.textContent).toContain(CODEX_MANAGED_NETWORK_PROBE_HOST);
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+
+    // Approve sends the plain allow-once answer the live test sends.
+    fireEvent.click(approve);
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]![0]).toMatchObject({
+      interactionId: card.id,
+      action: "answer",
+      answer: { answers: [] },
+    });
   });
 
   test("explains why a request can't be remembered", () => {

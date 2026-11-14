@@ -27,7 +27,7 @@ import { safeFileTargets } from "./file-targets.js";
 import type { PermissionRuleStore } from "./store.js";
 
 /**
- * Applies Orkestrator's permission rules (todo 0723) to a session's pending
+ * Applies Orkestrator's permission rules (todo 0723 (retired)) to a session's pending
  * requests, and offers "Approve and remember" on the ones a rule could cover.
  *
  * A rule only ever answers a question the session's own policy would put to

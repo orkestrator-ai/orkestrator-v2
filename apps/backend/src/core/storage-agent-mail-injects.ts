@@ -36,11 +36,70 @@ export type PendingAgentMailInject = {
    * for: it may join a batch going to the same mailbox, never start one.
    */
   coalescingUntil?: string;
+  /**
+   * An awareness-only notice, listed only when asked for: it may join a batch
+   * going to the same mailbox, never start one.
+   */
+  rideAlong?: true;
   /** The person pressed Deliver now: steer into a running turn rather than wait for it. */
   steerRequested?: true;
   /** The steer this claim or verification belongs to, when it was one. */
   steerRequestId?: string;
 };
+
+/**
+ * How long a notice that only rides along waits for a batch to ride in. Awareness
+ * of an account switch is stale after a day, and a coordinator that never wakes
+ * must not collect them without bound.
+ */
+export const RIDE_ALONG_MAX_AGE_MS = 24 * 60 * 60_000;
+
+/**
+ * How many riders one mailbox's listing carries beside its waking mail. A batch
+ * holds at most ten messages, so this is more than one batch can take.
+ */
+const RIDE_ALONG_MAX_LISTED_PER_MAILBOX = 20;
+
+/**
+ * Awareness only: it may join a batch another message starts, never start one.
+ * A person's Deliver now (`userReleasedAt`) makes it an ordinary delivery.
+ */
+export function isRideAlongMessage(
+  message: Pick<AgentMailMessage, "rideAlong" | "userReleasedAt">,
+): boolean {
+  return message.rideAlong === true && !message.userReleasedAt;
+}
+
+function rideAlongExpired(createdAt: string | undefined, now: number): boolean {
+  const created = createdAt ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(created) && now - created > RIDE_ALONG_MAX_AGE_MS;
+}
+
+/**
+ * Drop ride-along notices that outlived their wait, as `expired`: this
+ * mailbox's, or every mailbox's when `mailboxId` is omitted. A notice whose
+ * dispatch is still being confirmed stays until its journal answers. Returns
+ * the mailboxes that changed.
+ */
+export function expireStaleRiders(store: PersistedAgentMailStore, mailboxId?: string): string[] {
+  const now = Date.now();
+  const changed = new Set<string>();
+  store.pendingInject = store.pendingInject.filter((entry) => {
+    if (mailboxId !== undefined && entry.mailboxId !== mailboxId) return true;
+    if (entry.verifyRequestId) return true;
+    const mailbox = store.mailboxes[entry.mailboxId];
+    const message = mailbox?.messages.find((candidate) => candidate.id === entry.messageId);
+    if (!mailbox || !message || message.placement !== "pending-inject") return true;
+    if (!isRideAlongMessage(message) || !rideAlongExpired(message.createdAt, now)) return true;
+    message.placement = "expired";
+    message.discardedAt = new Date(now).toISOString();
+    message.revision += 1;
+    mailbox.revision += 1;
+    changed.add(entry.mailboxId);
+    return false;
+  });
+  return Array.from(changed);
+}
 
 /**
  * Delay before retrying a failed delivery: quick at first, then settling at a
@@ -515,6 +574,16 @@ export class AgentMailInjects {
     ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const pending: PendingAgentMailInject[] = [];
+    const max = Math.max(1, Math.min(limit, AGENT_MAIL_MAX_PENDING_INJECTS));
+    /*
+     * Riders are gathered apart from the limit, and listed only for a mailbox
+     * that also has mail able to start its batch. Counting them against the
+     * limit would let a hundred waiting notices fill every snapshot, so the
+     * drain would never reach the mail behind them; listing them for a mailbox
+     * with nothing else would offer a turn that only acknowledges them.
+     */
+    const riders = new Map<string, PendingAgentMailInject[]>();
+    const starters = new Set<string>();
     const now = Date.now();
     const entries = store.pendingInject.toSorted((a, b) => {
       const aDeferred = a.nextAttemptAt && Date.parse(a.nextAttemptAt) > now ? 1 : 0;
@@ -540,7 +609,13 @@ export class AgentMailInjects {
       const mailbox = store.mailboxes[mailboxId];
       const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
       if (!mailbox || !message || message.placement !== "pending-inject") continue;
-      pending.push({
+      // A rider whose dispatch is unconfirmed is listed like any other entry:
+      // confirming it against the journal starts no turn.
+      const rideAlong = isRideAlongMessage(message) && !verifyRequestId;
+      if (rideAlong && !options.includeCoalescing) continue;
+      if (rideAlong && rideAlongExpired(message.createdAt, now)) continue;
+      if (!rideAlong && pending.length >= max) continue;
+      const entry: PendingAgentMailInject = {
         mailbox: this.repos.agentMailboxes.descriptor(mailbox, settings.defaultInjectPolicy),
         message,
         ...(deferred && nextAttemptAt ? { deferredUntil: nextAttemptAt } : {}),
@@ -548,12 +623,59 @@ export class AgentMailInjects {
         ...(retryAttempts ? { retryAttempts } : {}),
         ...(verificationAttempts ? { verificationAttempts } : {}),
         ...(held && retryAt ? { coalescingUntil: retryAt } : {}),
+        ...(rideAlong ? { rideAlong: true as const } : {}),
         ...(steerRequested ? { steerRequested } : {}),
         ...(steerRequestId ? { steerRequestId } : {}),
-      });
-      if (pending.length >= Math.max(1, Math.min(limit, AGENT_MAIL_MAX_PENDING_INJECTS))) break;
+      };
+      if (rideAlong) {
+        const waiting = riders.get(mailboxId) ?? [];
+        if (waiting.length < RIDE_ALONG_MAX_LISTED_PER_MAILBOX) waiting.push(entry);
+        riders.set(mailboxId, waiting);
+        continue;
+      }
+      pending.push(entry);
+      // Only mail that can start a batch lets its mailbox's riders be listed.
+      if (!held && !verifyRequestId) starters.add(mailboxId);
     }
+    for (const mailboxId of starters) pending.push(...(riders.get(mailboxId) ?? []));
     return pending;
+  }
+
+  /**
+   * Expire every ride-along notice that waited longer than
+   * `RIDE_ALONG_MAX_AGE_MS`, so a lapsed one stops counting as pending even
+   * when no later notice arrives to sweep it. Writes only when one lapsed.
+   */
+  async expireStaleAgentMailRiders(): Promise<number> {
+    const snapshot = await this.store.snapshot();
+    const now = Date.now();
+    const stale = snapshot.pendingInject.some((entry) => {
+      if (entry.verifyRequestId) return false;
+      const message = snapshot.mailboxes[entry.mailboxId]?.messages.find(
+        (candidate) => candidate.id === entry.messageId,
+      );
+      return (
+        message?.placement === "pending-inject" &&
+        isRideAlongMessage(message) &&
+        rideAlongExpired(message.createdAt, now)
+      );
+    });
+    if (!stale) return 0;
+    return this.store.enqueue(async () => {
+      const store = await this.store.load();
+      const changed = expireStaleRiders(store);
+      if (changed.length === 0) return 0;
+      store.revision += 1;
+      await this.store.save(store);
+      for (const mailboxId of changed)
+        this.context.changes.announce(
+          "agent-mail",
+          mailboxId,
+          store.mailboxes[mailboxId]?.projectId,
+        );
+      this.context.changes.announce("agent-mail-summary", "all");
+      return changed.length;
+    });
   }
 
   /** Activity edges clear held delivery backoff in writer order. */
@@ -684,6 +806,8 @@ export class AgentMailInjects {
       );
       if (
         pendingEntry?.verifyRequestId !== verificationRequestId ||
+        // A rider never starts a dispatch; confirming an earlier one is not a start.
+        (isRideAlongMessage(message) && !options.joinCoalescing && !verificationRequestId) ||
         (pendingEntry?.retryAt &&
           Date.parse(pendingEntry.retryAt) > Date.now() &&
           !(options.joinCoalescing && pendingEntry.coalescing)) ||

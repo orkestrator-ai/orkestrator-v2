@@ -53,7 +53,7 @@ Complete owner reruns:
 | `apps/backend/src/core/native-agent-service-reconciliation.test.ts` | Shared observations fixture received zero HTTP requests | Passed, 15.3 s; tracked in 0672 |
 | `apps/backend/src/core/public-api/test-support.test.ts` | Restart case exceeded 5 s | Passed, 6.2 s; tracked in 1240/1245 |
 | `apps/backend/tests/standalone-ready.test.ts` | Observed SIGKILL before the first grace-period assertion (136.57 ms) | Passed, 0.9 s; tracked in 0491 |
-| `apps/backend/src/core/feature-planning.test.ts` | Dispatch-time timeout case saw `failed` instead of `running` (222.85 ms) | Passed, 9.6 s |
+| `apps/backend/src/core/features/planning.test.ts` | Dispatch-time timeout case saw `failed` instead of `running` (222.85 ms) | Passed, 9.6 s |
 | `tests/unit/disk-report.test.ts` | Isolated checkout report/fix case exceeded 5 s | Passed, 6.4 s |
 
 Owner commands use `bun test --cwd <package> ./<owner> --parallel=1

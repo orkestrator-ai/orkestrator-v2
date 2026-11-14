@@ -167,6 +167,14 @@ export type Options = BusyOptions & {
    * launcher predates both flags (it shows the window).
    */
   window: "hidden" | "visible" | "launcher-default";
+  /**
+   * `--host-seed`: let `dev:test` seed toolchains and model caches from the
+   * host's installation. Off by default, so the profile passes
+   * `--no-host-seed` and reads nothing from the production data directory;
+   * a launcher older than that flag needs `--host-seed` (it then passes
+   * neither).
+   */
+  hostSeed: boolean;
 };
 
 export function parseOptions(argv: string[]): Options {
@@ -188,6 +196,7 @@ export function parseOptions(argv: string[]): Options {
     soakSessions: 0,
     soakReaders: 0,
     window: "hidden",
+    hostSeed: false,
     ...BUSY_DEFAULTS,
   };
   const value = (index: number, name: string) => {
@@ -218,6 +227,7 @@ export function parseOptions(argv: string[]): Options {
       options.readyTimeoutMs = positive(value(index++, name), name);
     else if (name === "--out") options.out = value(index++, name);
     else if (name === "--keep-profiles") options.keepProfiles = true;
+    else if (name === "--host-seed") options.hostSeed = true;
     else if (name === "--soak-cycles") options.soakCycles = positive(value(index++, name), name);
     else if (name === "--soak-cycle-gap-ms")
       options.soakCycleGapMs = positive(value(index++, name), name);
@@ -1034,6 +1044,8 @@ export function profileArguments(profile: string, options: Options): string[] {
       : options.window === "visible"
         ? ["--no-headless"]
         : []),
+    // Read nothing from the host's own installation unless asked to.
+    ...(options.hostSeed ? [] : ["--no-host-seed"]),
     ...(options.agentPlatforms ? ["--agent-platforms", options.agentPlatforms] : []),
   ];
 }

@@ -20,7 +20,7 @@ import {
 import { listExternalPermissionRules, type PermissionRuleStore } from "./permission-rules/index.js";
 
 /**
- * Orkestrator's own permission rules (todo 0723): list and remove them, and
+ * Orkestrator's own permission rules (todo 0723 (retired)): list and remove them, and
  * the card's "Approve and remember".
  *
  * Rule creation is deliberately only `approve_native_agent_interaction_and_remember`,

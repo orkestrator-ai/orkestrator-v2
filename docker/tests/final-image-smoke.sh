@@ -54,8 +54,8 @@ done
 docker exec "$RUN" bash -c '
     test "$(stat -c %U "/proc/$(cat /run/orkestrator/keepalive.pid)")" = node &&
     test "$(cat /etc/orkestrator/network-mode)" = full &&
-    test -f /tmp/.entrypoint-complete
-' || fail "entrypoint did not drop privileges or complete setup"
+    test ! -e /tmp/.environment-ready && test ! -e /tmp/.entrypoint-complete
+' || fail "entrypoint did not drop privileges, or wrote a retired readiness marker"
 echo "ok   entrypoint ready (node)"
 
 in_container() {

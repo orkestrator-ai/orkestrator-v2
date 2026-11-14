@@ -312,7 +312,7 @@ export class NativeAgentService {
   private readonly settledTurnUsage = new SettledTurnUsage({
     observe: (session, usage) => this.projections.observeSessionUsage(session, usage),
   });
-  /** Orkestrator's permission rules (todo 0723); absent with a narrow storage double. */
+  /** Orkestrator's permission rules (todo 0723 (retired)); absent with a narrow storage double. */
   private readonly permissionRules: PermissionRuleEnforcer | undefined;
   /** Pending approvals and questions: observation records and the monitor sweep. */
   private readonly interactions: NativeAgentInteractionTracker;

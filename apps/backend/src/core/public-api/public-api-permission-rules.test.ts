@@ -3,7 +3,7 @@ import type { PublicPermissionRuleList } from "@orkestrator/protocol/public-api-
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 /**
- * `permission.rule.*` over the real registry and storage (todo 0723): rules
+ * `permission.rule.*` over the real registry and storage (todo 0723 (retired)): rules
  * are listed and removed, with the usual request-key admission on removal.
  * Nothing here can create one.
  */

@@ -1,5 +1,5 @@
 /**
- * The card's "Approve and remember…" panel (todo 0723, task 5) on Codex
+ * The card's "Approve and remember…" panel (todo 0723 (retired), task 5) on Codex
  * approvals, rendered in a real browser at phone and desktop widths.
  *
  * The cards come from the payloads codex-bridge forwards, read by the real
@@ -117,4 +117,26 @@ test("a piped Codex command explains why it can't be remembered and saves nothin
   await panel.getByRole("button", { name: "Close" }).click();
   await expect(panel).toBeHidden();
   await expect(page.getByTestId("saved-codex-pipe")).toHaveCount(0);
+});
+
+test("the Codex managed-network card offers plain approval, no network policy, and the exact host", async ({
+  page,
+}) => {
+  const card = page.getByTestId("card-codex-network");
+  await expect(card).toContainText("Approve network access");
+  await expect(card.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
+  for (const name of ["Deny", "Cancel turn", "Approve for session", "Approve and remember…"]) {
+    await expect(card.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  await expect(card.getByText(/network policy|command policy|Broader approval/i)).toHaveCount(0);
+  expect(await fitsViewport(page)).toBe(true);
+  await card.screenshot({ path: test.info().outputPath("codex-network-card.png") });
+
+  const panel = await openPanel(page, "codex-network");
+  expect(await patterns(panel)).toEqual([{ pattern: "probe-host.example.test", checked: true }]);
+  await card.screenshot({ path: test.info().outputPath("codex-network-panel.png") });
+  await panel.getByRole("button", { name: "Approve and remember", exact: true }).click();
+  await expect(page.getByTestId("saved-codex-network")).toHaveText(
+    JSON.stringify({ pattern: "probe-host.example.test", scope: "project", anyProvider: false }),
+  );
 });

@@ -11,7 +11,7 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
  * The specs point the profile's own Pi and OpenCode at
  * `suborks-fake-model.ts` on loopback. It runs `suborks-live.spec.ts` (each
  * provider asks itself and the other) and then `suborks-restart-live.spec.ts`
- * (an OpenCode caller's call to Pi across a killed backend, which restarts
+ * (an OpenCode caller's call to Pi and OpenCode across a killed backend, which restarts
  * the profile), then stops and resets the profile. Nothing logs in and nothing is billed; it is still
  * not part of `mise run test`, because it boots a whole profile.
  */

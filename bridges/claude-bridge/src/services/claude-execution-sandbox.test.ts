@@ -81,7 +81,7 @@ describe("Claude sandbox refusal", () => {
     ).toBeUndefined();
   });
 
-  test("a read-only review turn in an ordinary bridge is never refused (todo 0190)", () => {
+  test("a read-only review turn in an ordinary bridge is never refused (todo 0190 (retired))", () => {
     // It runs on the hook alone instead; see `claudeReadOnlyCommandSandbox`.
     for (const policy of [coordinatorProcessPolicy(), READ_ONLY_TURN_POLICY]) {
       expect(
@@ -103,7 +103,7 @@ describe("Claude sandbox refusal", () => {
   });
 });
 
-describe("read-only command sandbox (todo 0190)", () => {
+describe("read-only command sandbox (todo 0190 (retired))", () => {
   const ordinary = { commandSandbox: undefined, coordinatorProcess: false } as const;
 
   test("an ordinary bridge on Linux follows the probe, with its reason", () => {

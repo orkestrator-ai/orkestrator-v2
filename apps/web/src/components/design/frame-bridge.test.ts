@@ -49,6 +49,23 @@ describe("DesignFrameBridge lifecycle", () => {
     }
   });
 
+  test("close() lets go of the frame's window while the bridge itself is still held", () => {
+    // A stale render can keep a closed bridge reachable (to-do 7820 (retired)); the
+    // window, and with it the culled frame, must not stay with it.
+    let bridge: DesignFrameBridge | null = null;
+    const watched = (() => {
+      const target = { postMessage() {} } as unknown as Window;
+      bridge = new DesignFrameBridge(target, 1000).open();
+      return new WeakRef(target);
+    })();
+    Bun.gc(true);
+    expect(watched.deref()).toBeDefined();
+    bridge!.close();
+    Bun.gc(true);
+    expect(watched.deref()).toBeUndefined();
+    expect(bridge!.closed).toBe(true);
+  });
+
   test("asks after close reject immediately and generations are distinct", async () => {
     const target = { postMessage() {} } as unknown as Window;
     const first = new DesignFrameBridge(target, 1000).open();

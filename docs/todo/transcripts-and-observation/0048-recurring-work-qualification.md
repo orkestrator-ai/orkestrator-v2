@@ -50,7 +50,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 
 ### Tasks
 
-1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in [7202](7202-busy-profile-follow-ups.md)).
+1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in 7202 (retired 2026-11-14; both done or closed, see [Related](#related))).
 2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux); the four PR rows need live GitHub and moved to task 5, decision W3, now in 7568) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, 7201; turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 (now in 7568) and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
@@ -1633,8 +1633,8 @@ Starts over the busy phase (from the round-boundary samples), per round:
   validation worker: queued 4 to 13 ms in the host-wide test scheduler,
   1.07 to 1.18 s a run (the client run: 4 to 18 ms, 1.08 to 1.19 s). The
   first smoke run's first review waited 210 s after its plan; not seen again
-  in 33 reviews ([7202](7202-busy-profile-follow-ups.md)
-  task 2).
+  in 33 reviews (7202 (retired) task 2, closed on 2026-11-14 as a wait in
+  the host test queue; see [Related](#related)).
 - **Clients.** The two-client rounds cut the second client's link (`reset`)
   from just after the mail to the end of the review; it converged in
   4.4 to 12.5 s after the link returned (1.1 to 7.5 s in the client run), the reconnect ladder of
@@ -1642,7 +1642,7 @@ Starts over the busy phase (from the round-boundary samples), per round:
   rounds hid the document for the same span; it converged in at most 176 ms.
   Burst rows have one sample per environment per client.
 - **Harness notes.** Approving from the CLI is refused for an approval with
-  no questions ([7202](7202-busy-profile-follow-ups.md) task 1). A Pi session
+  no questions (7202 (retired) task 1; fixed on 2026-11-10). A Pi session
   keeps the model URL it was created with, so the fake model must outlive
   every session that uses it (it does: one per busy phase).
 
@@ -2771,9 +2771,9 @@ collide with other tasks' decisions.
   approval that has no questions (`--action answer needs --choose or
   --text`), so the driver answers through the public action
   `session.interaction.resolve` with `action: "answer"`, which the contract
-  documents as approving. Options for the CLI gap are in
-  [7202](7202-busy-profile-follow-ups.md) task 1; not fixed here because
-  this change qualifies.
+  documents as approving. The CLI gap was 7202 (retired) task 1, fixed on
+  2026-11-10 (`--action answer` with no answers approves); not fixed here
+  because this change qualifies.
 - **B5 The outage and the client resume (task 1).** Options: wait for 0051's
   outage workload (retired with 0051); drop the link for real (forbidden
   here, and task 16); cut one client with the in-process outage link of
@@ -2838,9 +2838,10 @@ collide with other tasks' decisions.
   screenshot of a client that cannot open its view, and records a round that
   throws instead of losing the arm (`recurring-live-ab-busy.test.ts`, "a
   round that throws is recorded and the next round still runs"). The first
-  smoke run's 210 s review stall is unexplained ([7202](7202-busy-profile-follow-ups.md)
-  task 2); each validation run's queue time is now recorded so a recurrence
-  can be attributed.
+  smoke run's 210 s review stall was unexplained at the time (7202
+  (retired) task 2); each validation run's queue time is now recorded so a
+  recurrence can be attributed, and the 2026-11-11 recurrence was (see
+  [Related](#related)).
 
 ## Related
 
@@ -2848,9 +2849,23 @@ collide with other tasks' decisions.
 - 7745 (retired 2026-11-11): an interactive tmux terminal no client detached
   kept capturing (task 12, decision C5); now leased, row B19 of
   [recurring-work.md](../../architecture/recurring-work.md).
-- [7202-busy-profile-follow-ups.md](7202-busy-profile-follow-ups.md): what
-  task 1's busy profile found (approving from the CLI, one unexplained
-  review stall).
+- 7202 (retired 2026-11-14; `git show 0c1120560:docs/todo/transcripts-and-observation/7202-busy-profile-follow-ups.md`): what
+  task 1's busy profile found. Task 1, approving from the CLI, was fixed on
+  2026-11-10. Task 2, one review that waited 210 s after its validation
+  plan, was closed on 2026-11-14 as a wait in the host-wide test queue: in
+  its 2026-11-11 recurrence (150 busy rounds on beelink2 at `83731af28`,
+  during 7562's reproduction) the waiting validation run spent 623,450 ms
+  of 624,533 ms queued and 16 ms running its command, and the profile's
+  backend log had nothing about the review. It recurred again on
+  2026-11-14 on macOS (40 busy rounds on mini at `dc90609bf`, during
+  7562's APFS run): one of 40 validation runs spent 520,285 ms queued and
+  18 ms running its command, with no slow command or stall line in the
+  backend log. A missed wake cannot hide
+  there: the review validation worker polls the scheduler every 100 ms,
+  and each poll reaps finished and dead jobs and re-runs admission
+  (`review-validation-worker.ts`, `host-test-scheduler.ts`), so a queued
+  command waits only while other jobs hold the host's slots, memory or an
+  exclusive resource.
 - to-do 7200 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)): the
   reader gaps task 20 found, two fixed.
 - to-do 7201 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)):

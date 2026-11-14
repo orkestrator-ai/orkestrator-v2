@@ -60,6 +60,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A bridge's steer qualification failed or answered non-OK, so steering is not offered. Agent and status code or error class only.",
       "steer.capability-cleared":
         "A projection cleared `actions.steer` because its bridge did not qualify. Identifiers and turn status only.",
+      "queue.turn-not-running":
+        "A projection holds queued prompts while its turn is not `running`; once per change of phase. Identifiers, phase and queue length only.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

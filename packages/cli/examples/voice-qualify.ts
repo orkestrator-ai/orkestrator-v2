@@ -2,7 +2,8 @@
 /**
  * Control MCP voice qualification harness.
  *
- * Runs the qualification script from docs/todo/mcp/0041-control-mcp-voice-surface.md
+ * Runs the qualification script from docs/architecture/control-mcp-voice.md
+ * ("Qualifying a voice runtime"; to-do 0041, retired 2026-11-14)
  * against a running Orkestrator with a voice credential, the way a voice
  * runtime would call it, and reports what can be measured without a person:
  *

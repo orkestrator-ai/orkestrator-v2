@@ -1027,8 +1027,11 @@ or the `recurringWork` block of `/__orkestrator/metrics`.
 `scripts/recurring-live-ab.ts` is the committed form of the live idle A/B.
 Per arm and repeat it starts a disposable credential-free profile
 (`dev:test --fixture --fixture-environments local,container
---no-agent-credentials --headless`, with `DISPLAY` and `WAYLAND_DISPLAY`
-unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), waits for `ready`, settles for 60 s, and then samples
+--no-agent-credentials --headless --no-host-seed`, with `DISPLAY` and
+`WAYLAND_DISPLAY` unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; pass
+`--host-seed` to seed toolchains and model caches from the host's
+installation instead, or for a `--checkout` whose launcher predates
+`--no-host-seed`), waits for `ready`, settles for 60 s, and then samples
 `recurringWork` plus the backend and Electron processes' CPU time and RSS
 every 30 s over a 6-minute window (longer than the 5-minute container fetch
 cooldown). It then times edit-to-detection: it appends to a tracked file in
@@ -1582,6 +1585,25 @@ When either fires, the runner sends `SIGTERM` to the command's process group and
 then `SIGKILL` after one second. That cleans up Bun workers, Turbo children, and
 spawned fixtures rather than leaving them to slow later runs. The failure
 summary records `timeoutReason` as `no-progress` or `absolute`.
+
+A process that starts its own process group is out of that signal's reach.
+Playwright's `webServer` is one: Playwright launches it detached, and its runner
+shuts down (stopping the server) only on `SIGINT`, so a plain `SIGTERM` used to
+leave the component suite's Vite fixture server listening after the run had
+gone (to-do 8040 (retired), 2026-11-14). Every Playwright config that declares
+a `webServer` (`e2e/playwright.config.ts`, `e2e/public-site/playwright.config.ts`)
+therefore calls `installPlaywrightRunnerSigterm()` from
+`tests/playwright-runner-sigterm.ts`. In the runner only (never in a worker or
+the loader, which ignore `SIGTERM` on purpose) it turns `SIGTERM` into
+Playwright's own `SIGINT` shutdown, and exits after 500 ms if that has not
+finished, so Playwright's `exit` handler SIGKILLs the server's group by the PID
+it recorded at spawn, inside the one-second grace. Add the call to any new
+config with a `webServer`. `tests/unit/playwright-sigterm-webserver.integration.test.ts`
+(slow tier) runs both configs through the real `terminate` and checks that the
+server's process group is gone, once through Playwright's `SIGINT` teardown
+(runner exit 130) and once with a global teardown that never settles, so only
+the 500 ms exit (status 143) can stop the server. Its server is a grandchild of
+a shell that leads the group, as the production `bunx vite` commands are.
 
 Because each group runs in its own process group, the terminal's Ctrl+C reaches
 the runner and nothing else. The runner relays it: on `SIGINT`, `SIGTERM`, or

@@ -33,6 +33,11 @@ const environmentFor = (id: string) => {
   const index = Number(id.slice("env-".length));
   return { id, environmentType: "local", worktreePath: roots[index] };
 };
+/** What each write told the diff service, in order. */
+const diffNotices: string[] = [];
+afterEach(() => {
+  diffNotices.length = 0;
+});
 const context = {
   storage: {
     loadEnvironments: async () => roots.map((_, index) => environmentFor(`env-${index}`)),
@@ -41,6 +46,13 @@ const context = {
   runtime: {
     environments: {
       fence: { beginWorktreeMutation: () => () => undefined, beginMutation: () => () => undefined },
+    },
+    diffStats: {
+      service: {
+        invalidateChanges: ({ worktreePath }: { worktreePath: string }) =>
+          diffNotices.push(`invalidate ${worktreePath}`),
+        refresh: (environmentId: string) => diffNotices.push(`refresh ${environmentId}`),
+      },
     },
   },
 } as unknown as CommandContext;
@@ -116,6 +128,29 @@ describe("write_local_file with a precondition", () => {
     expect(await fs.readFile(path.join(root, "a.txt"), "utf8")).toBe("mine");
   });
 
+  // The tree and Changes must not depend on a watcher hint for a write the
+  // backend made itself: a saturated fseventsd can withhold it for minutes.
+  test("announces every write it attempted to the diff service, a refused one included", async () => {
+    const root = await worktree();
+    const environmentId = `env-${roots.indexOf(root)}`;
+    await write({ worktreePath: root, filePath: "new.txt", base64Data: b64("new") }, context);
+    expect(diffNotices).toEqual([`invalidate ${root}`, `refresh ${environmentId}`]);
+    diffNotices.length = 0;
+    const error = await rejection(() =>
+      write(
+        {
+          worktreePath: root,
+          filePath: "new.txt",
+          base64Data: b64("edited"),
+          expected: { sha256: fileContentSha256("stale") },
+        },
+        context,
+      ),
+    );
+    expect(isFileWriteConflict(error)).toBe(true);
+    expect(diffNotices).toEqual([`invalidate ${root}`, `refresh ${environmentId}`]);
+  });
+
   test("a malformed precondition is rejected before anything is written", async () => {
     const root = await worktree();
     await expect(
@@ -125,6 +160,7 @@ describe("write_local_file with a precondition", () => {
       ),
     ).rejects.toThrow("sha256");
     await expect(fs.access(path.join(root, "a.txt"))).rejects.toThrow();
+    expect(diffNotices).toEqual([]);
   });
 
   test("a directory no environment is registered at is refused", async () => {

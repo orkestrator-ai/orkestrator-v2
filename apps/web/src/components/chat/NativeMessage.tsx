@@ -48,6 +48,7 @@ import { CompactionPart, RetryPart } from "./NativeMessage.notice-parts";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
+import { AccountSwitchNotice } from "./AccountSwitchNotice";
 import { PullRequestUpdateNotice } from "./PullRequestUpdateNotice";
 import { GoalStatusRow, GoalTurnTile } from "./GoalTile";
 import { SuborkGroup } from "./SuborkGroup";
@@ -208,6 +209,15 @@ export const NativeMessage = memo(function NativeMessage({
     if (mail.notice?.resource.kind === "watched-pull-request") {
       return (
         <PullRequestUpdateNotice
+          mail={mail}
+          timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
+        />
+      );
+    }
+    // An automatic account switch is awareness only too: old account to new, one line.
+    if (mail.notice?.resource.kind === "account-switch") {
+      return (
+        <AccountSwitchNotice
           mail={mail}
           timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
         />

@@ -197,8 +197,8 @@ authenticated channel and forwards them to `http://127.0.0.1:34122/mcp` with
 the voice credential's token. Keep the token on the local machine, give the
 relay a voice (not full) credential, and revoke it in Settings → MCP when the
 relay is retired. Exposing the remote (Tailscale) gateway to Control MCP was
-considered and declined; see the decisions in
-[0041-control-mcp-voice-surface.md](../todo/mcp/0041-control-mcp-voice-surface.md#assumptions-and-decisions).
+considered and declined; see D12 in to-do 0041 (retired 2026-11-14;
+`git show dc90609bf:docs/todo/mcp/0041-control-mcp-voice-surface.md`, "Assumptions and decisions").
 
 ## Qualifying a voice runtime
 

@@ -58,6 +58,7 @@ describe("remote gateway", () => {
       "replay",
       "recurringWork",
       "compatibilityPaths",
+      "coordinatorEnvironmentRefusals",
       "eventLoop",
       "consoleOutput",
     ]) {

@@ -12,7 +12,7 @@ Analysed 2026-11-14 against `main` at `dc90609bf`. Found by to-do 7562
 
 ### 1. Find why a burst is not rescanned within a minute on mini
 
-**Problem.** In 7562 task 5's complete busy run on mini (macOS 27.2, 40
+**Problem.** In 7562 (retired) task 5's complete busy run on mini (macOS 27.2, 40
 rounds, no clients, 10 local environments, `dc90609bf`), 39 of the 40
 `burst-backend` waits ran out at 60 s. Each round writes 2,500 one-line
 files into every environment at once and waits until the backend's diff

@@ -162,7 +162,7 @@ means a missed wake.
 
 ### Task 2: a recurrence on 2026-11-11
 
-Recorded during to-do 7562's reproduction run, not a run for this task:
+Recorded during to-do 7562 (retired)'s reproduction run, not a run for this task:
 150 busy rounds (0 to 2 clients, 10 environments, 2,500-file bursts) on
 beelink2 at `83731af28`, with `--keep-profiles`, on a host shared with other
 worktrees' builds. Two of its 150 reviews waited: one review's validation

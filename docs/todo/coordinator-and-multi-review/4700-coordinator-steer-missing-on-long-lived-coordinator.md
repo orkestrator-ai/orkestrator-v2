@@ -38,7 +38,7 @@ Re-checked 2026-11-05 against `41f9eb638`, reading the code rather than a live r
 
 **Problem.** Whatever made the row unsteerable is still unknown.
 
-**Context.** Since this change, a row that cannot be steered while the turn runs says why under its text: the provider cannot steer, an earlier message is still being confirmed, attachments, a command, or the steer refusal itself (`queuedSteerNote` in `auto-steer.ts`). These notes expose only the listed blockers. If the renderer does not see the turn as running, an unparked row has no note and no Steer; a bare row therefore does not identify the cause. Qualification logging from task 1 now covers the provider blocker; the renderer's own view is carried to [6640](6640-queued-row-turn-not-running-evidence.md).
+**Context.** Since this change, a row that cannot be steered while the turn runs says why under its text: the provider cannot steer, an earlier message is still being confirmed, attachments, a command, or the steer refusal itself (`queuedSteerNote` in `auto-steer.ts`). These notes expose only the listed blockers. If the renderer does not see the turn as running, an unparked row has no note and no Steer; a bare row therefore does not identify the cause. Qualification logging from task 1 now covers the provider blocker. For a bare row, 6640 (retired 2026-11-14; `git show dc90609bf:docs/todo/coordinator-and-multi-review/6640-queued-row-turn-not-running-evidence.md`) added a backend debug line, `queue.turn-not-running`, which says whether the backend itself saw the turn as running; see [Current state](#current-state).
 
 **Investigation.** Not started; it waits for the user's report of an occurrence (the row, the time and the matching log lines; on the manual-test checklist), read with [Current state](#current-state).
 
@@ -58,12 +58,12 @@ The next occurrence can be read from the saved log, under these conditions:
 
 - The release must contain these lines (added after `41f9eb638`).
 - The warning reaches disk only while **Save Logs to Disk** is on. It is not an essential event, so `logs/essential/` does not hold it. Saving was on for the 2026-11-04 log.
-- The debug line needs **Log Detail** at `native-agent=debug` as well, set before the occurrence. Without it, only the warning is available.
+- The debug lines (`steer.capability-cleared`, and `queue.turn-not-running` from releases after `dc90609bf`) need **Log Detail** at `native-agent=debug` as well, set before the occurrence. Without it, only the warning is available.
 
 **Start from the row, then the time.** Note what the row showed and when, then search the daily log for that window:
 
 ```bash
-grep -E 'steer\.qualification-failed|steer\.capability-cleared' <daily log file>
+grep -E 'steer\.qualification-failed|steer\.capability-cleared|queue\.turn-not-running' <daily log file>
 ```
 
 | What the row showed | What it means |
@@ -71,7 +71,7 @@ grep -E 'steer\.qualification-failed|steer\.capability-cleared' <daily log file>
 | "cannot be steered here" | `actions.steer` was false: read the lines below for why. |
 | "Waiting for the earlier message to be resolved" | A dispatch was parked. Qualification is not the cause. |
 | A note about attachments, a command or a refused steer | That blocker. Qualification is not the cause. |
-| No note and no Steer | The renderer did not see the turn as running: [6640](6640-queued-row-turn-not-running-evidence.md). |
+| No note and no Steer | The renderer did not see the turn as running. Read the `queue.turn-not-running` lines for that environment: see [A bare row](#a-bare-row). |
 
 **The warning says why qualification failed.** These lines are real output from fake bridges:
 
@@ -93,6 +93,28 @@ grep -E 'steer\.qualification-failed|steer\.capability-cleared' <daily log file>
 | `throttle.suppressed site=steer.qualification-failed` | The same fault repeated, counted once per minute. |
 | `throttle.recovered site=steer.qualification-failed` | Qualification succeeded again. `faultSeconds` is how long this fault lasted. |
 | `steer.capability-cleared` (debug) | A projection took steering away. `environmentId` names the environment and `status` the provider's turn status at that moment. |
+
+### A bare row
+
+A queued row with no note and no Steer means the renderer did not see the turn as `running`. The backend writes one debug line each time a session's projection holds queued prompts while its turn phase is anything but `running`, and again on each change of that phase (`QueuedTurnPhaseLog`, `native-agent-queued-turn-log.ts`). Real output from the logger:
+
+```text
+[native-agent] queue.turn-not-running agent=claude environmentId=env-1 phase=recovering queued=1
+[native-agent] queue.turn-not-running agent=claude environmentId=env-1 phase=idle queued=2
+```
+
+The line is written once per change of phase, not once per read. A phase that stays the same writes nothing more however long it lasts, and a turn that goes back to `running`, or a queue that empties, re-arms it without writing anything. So the lines near the row do not show the backend's phase at that moment. Read back from the row to the time **Log Detail** was set, and take the most recent line for the environment:
+
+| The most recent line for the environment, at or before the row | Reads as |
+| --- | --- |
+| `phase=recovering`, `cancelling`, `error` or `blocked` | Either the backend still held that phase when the row was seen, or it returned to `running` (or the queue emptied) silently after the line. The line alone cannot tell which. A backend or bridge cause is likely when the line is recent and no later turn ran in the environment; when a later turn did run, treat it as inconclusive. |
+| `phase=idle` | The backend saw the turn finished with prompts still queued. If it repeats at every turn's end, that is a queue draining normally; one that the row outlived means the queue did not drain. The same silent re-arm applies: a later turn may have run since. |
+| None since **Log Detail** was set | At every read since then, the backend saw the turn as `running` or held no queued item, so it never held the queue in a non-running phase. The renderer's view differed from the backend's: a renderer cause. Check that the setting was in force before the row appeared, because a phase already in force is written only at the next read after the setting is raised. |
+| A line, but only well before the window | Not evidence either way. It describes the phase when it was written, not when the row was seen. |
+
+An empty window is therefore never enough on its own: a backend that entered `recovering` an hour before the row and stayed there writes nothing in the window. Only the absence of any line since **Log Detail** was set points at the renderer.
+
+The line carries the agent, the environment id, the phase and the number of queued items only. It never carries a prompt, a queued item, a provider session id or the tab's session key, so two tabs in one environment are not told apart: a line may belong to a different tab from the one showing the bare row. The backend remembers the last phase of at most 256 sessions, so a session pushed out of that set may write its current phase again.
 
 **Limits of the reading:**
 
@@ -117,7 +139,11 @@ Evidence is from fake bridges only: no real occurrence has been read yet.
 
 ### Task 1: the renderer's own view
 
-A turn the renderer does not see as running cannot be logged cheaply. `isRunning` exists only in the renderer, and renderer logger lines stay in the browser console rather than reaching the saved log (`docs/architecture/logging.md`, "What stays out of the persistent log"). Carried to [6640](6640-queued-row-turn-not-running-evidence.md).
+A turn the renderer does not see as running cannot be logged cheaply. `isRunning` exists only in the renderer, and renderer logger lines stay in the browser console rather than reaching the saved log (`docs/architecture/logging.md`, "What stays out of the persistent log"). Carried to 6640 (retired 2026-11-14; `git show dc90609bf:docs/todo/coordinator-and-multi-review/6640-queued-row-turn-not-running-evidence.md`), which added the backend's side on 2026-11-14 ([A bare row](#a-bare-row)).
+
+### Task 1: reading the bare-row line from its last change (2026-11-14)
+
+The [A bare row](#a-bare-row) table reads the most recent `queue.turn-not-running` line since **Log Detail** was set, not the lines near the row. The line is written once per change of phase, so a backend that stayed `recovering` writes nothing near a row seen later, and reading an empty window as a renderer cause would blame the renderer for a backend fault. Only the absence of any line since the setting points at the renderer; an old non-running line is reported as likely or inconclusive, because a return to `running` re-arms silently. Logging a heartbeat while a phase lasts would make the window readable, but it adds a line per read for every waiting session and the ticket asked for a line per change; the reading was fixed instead.
 
 ### Task 1: diagnostic limits
 
@@ -133,7 +159,7 @@ Current provider and item blockers now take priority over historical refusals, a
 
 ## Related
 
-- [6640-queued-row-turn-not-running-evidence.md](6640-queued-row-turn-not-running-evidence.md) (the renderer's own view of the turn).
+- 6640 (retired 2026-11-14; `git show dc90609bf:docs/todo/coordinator-and-multi-review/6640-queued-row-turn-not-running-evidence.md`): the backend's phase line for a queued row whose turn is not running ([A bare row](#a-bare-row)). Reading it at a real occurrence is on the manual-test checklist (7568: 6640 (retired) task 1).
 - Ticket cdc7a75f-3633-4353-8d86-112fd74654f1 (Coordinator chat auto-steer and Steer button).
 - to-do 0740 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#course-corrections-with-delivernow)) (mail steered into running turns).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: reporting the next occurrence with its saved-log lines) moved there on 2026-11-10.

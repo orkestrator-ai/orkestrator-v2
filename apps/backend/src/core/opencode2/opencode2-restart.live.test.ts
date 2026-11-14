@@ -94,12 +94,23 @@ for (const scenario of [
       const prompt = scenario.signal === "SIGTERM" ? "HOLD_THIS_TURN please" : "RUN_BASH:sleep 60";
       await before.send(id, prompt, { requestId: `${scenario.signal}-cut` });
       await until(async () => ((await before.activity(id)) === "working" ? true : undefined));
-      const callsBefore = fixture!.model.calls.length;
+      const cutCalls = () =>
+        fixture!.model.calls.filter((call) => call.userTexts.includes(prompt)).length;
+      const callsBefore = cutCalls();
 
       await fixture!.restart({ signal: scenario.signal });
       holding = false;
       for (const release of held.splice(0)) release();
-      await Bun.sleep(3_000);
+      // A positive boundary rather than a fixed wait: the restarted server has
+      // finished starting and run a whole turn of its own (a model round trip
+      // and its closing `idle`), so a resumption it scheduled at startup would
+      // already show below.
+      const probe = generation();
+      const probeId = await probe.createSession("build", "probe", { model: "fixture/fixture" });
+      await probe.send(probeId, `a probe turn (${scenario.signal})`, {
+        requestId: `${scenario.signal}-probe`,
+      });
+      await idle(probe, probeId);
 
       // What 2.2.6 leaves: no active run, no resumption, no closing `idle`.
       const raw = client();
@@ -109,7 +120,7 @@ for (const scenario of [
       expect(session.outcome).toBe("succeeded");
       const rows = (await raw.listMessages(id, { limit: 20, order: "desc" })).messages;
       expect(rows[0]?.type).not.toBe("idle");
-      expect(fixture!.model.calls.length).toBe(callsBefore);
+      expect(cutCalls()).toBe(callsBefore);
 
       // The next server generation's provider, as a restarted backend builds it.
       const after = generation();

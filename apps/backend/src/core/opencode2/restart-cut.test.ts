@@ -40,10 +40,18 @@ describe("openCode2SessionRunUnsettledSince", () => {
 });
 
 describe("openCode2CutRun", () => {
-  test("names the open run's first Orkestrator request", () => {
+  test("names the open run's newest Orkestrator request", () => {
     const rows = [user("u1", 10, "r1"), assistant("a1"), idle("i1"), user("u2", 20, "r2")];
     expect(openCode2OpenRun(rows)?.map((row) => row.id)).toEqual(["u2"]);
     expect(openCode2CutRun([...rows, assistant("a2")], 100)).toEqual({ requestId: "r2" });
+    // A continuation that joined a cut run (no `idle` between them), then a
+    // terminal input with no request id after it.
+    expect(
+      openCode2CutRun(
+        [user("u1", 10, "r1"), assistant("a1"), user("u2", 20, "r2"), user("u3", 30)],
+        100,
+      ),
+    ).toEqual({ requestId: "r2" });
     // Input typed in a terminal carries no request id.
     expect(openCode2CutRun([user("u", 10)], 100)).toEqual({});
   });
@@ -108,6 +116,34 @@ describe("a run a server stop cut short (to-do 8045 (retired))", () => {
       turnSettled: true,
     });
     expect(await after.settleTurn(id, "req-cut")).toBe(true);
+  });
+
+  test("a continuation cut by a second restart names the continuation, not the first cut", async () => {
+    server = new FakeOpenCode2Server();
+    const first = await generation(server);
+    const id = await first.createSession("build", "twice");
+    await first.send(id, "work", { requestId: "req-cut" });
+    server.stopMidRun(id);
+
+    const second = await generation(server);
+    second.registerSession(id);
+    expect(await second.settleTurn(id, "req-cut")).toBe(true);
+    // 2.2.6 writes no `idle` for the cut run, so the continuation joins its open run.
+    await second.send(id, "continue", { requestId: "req-continue" });
+    expect(await second.status(id)).toBe("running");
+    server.stopMidRun(id);
+
+    const third = await generation(server);
+    third.registerSession(id);
+    expect(await third.activity(id)).toBe("idle");
+    expect(await readProviderStatus(third, id, "req-continue")).toMatchObject({
+      status: "error",
+      interruption: "restart",
+      interruptedRequestId: "req-continue",
+      turnSettled: true,
+      error: OPENCODE2_RESTART_CUT_MESSAGE,
+    });
+    expect(await third.settleTurn(id, "req-cut")).toBe(true);
   });
 
   test("a continuation admitted before its run marked the session busy is not cut", async () => {

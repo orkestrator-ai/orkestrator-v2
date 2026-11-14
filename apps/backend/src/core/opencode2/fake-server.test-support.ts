@@ -214,6 +214,16 @@ export class FakeOpenCode2Server {
    * active, its response ends `aborted`, no `idle` row is written, and the
    * session keeps a `time.busy` newer than its `time.idle`.
    */
+  /**
+   * The running run reaches a step boundary: once no card is parked, the
+   * steers held behind one join the run, in the order they were sent.
+   */
+  stepBoundary(sessionId: string): void {
+    const session = this.sessions.get(sessionId)!;
+    if (!session.running || this.hasParkedCard(session)) return;
+    for (const held of this.takeHeldSteers(session)) this.drainOne(session, held);
+  }
+
   stopMidRun(sessionId: string): void {
     const session = this.sessions.get(sessionId)!;
     session.rows.push({
@@ -706,12 +716,17 @@ export class FakeOpenCode2Server {
       }
       if (session.running) {
         // Steer delivers at the next step boundary; queue waits for the run's end.
-        if (body!.delivery === "steer") this.drainOne(session, item);
-        else session.inbox.push(item);
+        // A run parked on a card reaches no boundary, so its steer waits in the
+        // inbox until {@link stepBoundary} (2.2.6, `opencode2-steer-cards.live.test.ts`).
+        if (body!.delivery !== "steer") session.inbox.push(item);
+        else if (this.hasParkedCard(session)) session.inbox.push({ ...item, heldBehindCard: true });
+        else this.drainOne(session, item);
       } else {
-        // Both deliveries wake an idle session (2.2.6).
+        // Both deliveries wake an idle session (2.2.6); a steer a stop left
+        // held is delivered first.
         session.running = true;
         session.busy = { ...session.busy, busy: Date.now() };
+        for (const held of this.takeHeldSteers(session)) this.drainOne(session, held);
         this.drainOne(session, item);
         this.emit(session.id, "session.execution.started");
         this.onRunStarted?.(session.id, String((item.payload as { text?: unknown }).text ?? ""));
@@ -785,7 +800,10 @@ export class FakeOpenCode2Server {
     if (rest === "interrupt") {
       this.interrupts.push(session.id);
       const interrupted = session.running;
+      // A stop leaves a steer held behind a card in the inbox (to-do 8100).
+      const held = this.takeHeldSteers(session);
       if (interrupted) this.finishRun(session.id, "interrupted");
+      session.inbox.push(...held);
       // Bare, like the real route.
       return Response.json({ interrupted });
     }
@@ -872,6 +890,19 @@ export class FakeOpenCode2Server {
       return new Response(null, { status: 204 });
     }
     return undefined;
+  }
+
+  private hasParkedCard(session: FakeOpenCode2Session): boolean {
+    return (
+      session.permissions.some((p) => p.sessionID === session.id) ||
+      session.forms.some((f) => f.sessionID === session.id)
+    );
+  }
+
+  private takeHeldSteers(session: FakeOpenCode2Session): Row[] {
+    const held = session.inbox.filter((item) => item.heldBehindCard === true);
+    if (held.length > 0) session.inbox = session.inbox.filter((item) => !item.heldBehindCard);
+    return held;
   }
 
   private drainOne(session: FakeOpenCode2Session, item: Row): void {

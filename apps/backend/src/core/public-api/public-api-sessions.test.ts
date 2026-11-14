@@ -8,6 +8,7 @@ import {
 } from "@orkestrator/protocol/public-api-resources";
 import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { providerCapabilities } from "./providers.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";
 import { deferred } from "../recurring-test-support.js";
@@ -842,6 +843,43 @@ describe("controls and interactions", () => {
     );
     expect(replay.receipt?.replayed).toBe(true);
     expect(stub.resolutions).toHaveLength(1);
+  });
+
+  // The always-run half of to-do 7905 task 4: the `opencode-steer` CLI
+  // scenario qualifies OpenCode steer on a real server but runs only by name.
+  test("an OpenCode session is steerable through the public API", async () => {
+    expect(providerCapabilities("opencode").steer).toBe(true);
+    const { harness, stub } = await setup("opencode");
+    await harness.storage.updateGlobalConfig({
+      ...(await harness.storage.loadConfig()).global,
+      enabledAgentPlatforms: ["claude", "codex", "opencode", "grok"],
+    });
+    const actions: Array<{ kind: string; requestId: string }> = [];
+    Object.assign(stub.provider, {
+      activeSteerRun: async () => ({ state: "running", runId: "provider-turn" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "dispatched",
+      performSessionAction: async (
+        _sessionId: string,
+        action: { kind: string; requestId: string },
+      ) => {
+        actions.push(action);
+        return { outcome: "applied" };
+      },
+    });
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "opencode", prompt: "task" },
+      { requestId: "steer-opencode-start" },
+    );
+    if (!started.ok) throw new Error(`start failed: ${started.error.message}`);
+    const steer = await harness.call(
+      "session.steer",
+      { sessionId: started.result.sessionId, text: "change course" },
+      { requestId: "steer-opencode" },
+    );
+    if (!steer.ok) throw new Error(`steer failed: ${steer.error.code} ${steer.error.message}`);
+    expect(actions.map((action) => action.kind)).toEqual(["steer"]);
   });
 
   // Grok is the provider that cannot steer (ACP v1 has no mid-turn input);

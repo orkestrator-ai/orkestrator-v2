@@ -153,13 +153,41 @@ describe("buildOpenCode2CredentialPluginSource", () => {
   type Hook = (event: { env: Record<string, string | undefined> }) => unknown;
 
   /**
+   * Stand-in interval timers for the plugin module. The parent watch's probe
+   * then runs only when a test calls {@link tick}, so each assertion follows a
+   * probe that has run, never a wall-clock wait.
+   */
+  class FakeIntervals {
+    readonly live = new Map<object, () => void>();
+    armed = 0;
+    readonly setInterval = (callback: () => void, _ms?: number) => {
+      const handle = { unref: () => handle };
+      this.live.set(handle, callback);
+      this.armed += 1;
+      return handle;
+    };
+    readonly clearInterval = (handle: object) => {
+      this.live.delete(handle);
+    };
+    /** Run every live interval once. */
+    tick() {
+      for (const callback of Array.from(this.live.values())) callback();
+    }
+  }
+
+  /**
    * Run a plugin source's `setup` against a stand-in context and process. The
-   * module's own `process` is shadowed, so the test process is never changed.
+   * module's own `process` and interval timers are shadowed, so the test
+   * process and its clock are never changed.
    */
   async function runSetup(
     source: string,
     platform: string,
-    extra: { env?: Record<string, string>; kill?: (pid: number, signal: unknown) => void } = {},
+    extra: {
+      env?: Record<string, string>;
+      kill?: (pid: number, signal: unknown) => void;
+      timers?: FakeIntervals;
+    } = {},
   ) {
     const dir = await mkdtemp(path.join(tmpdir(), "ork-opencode2-plugin-"));
     dirs.push(dir);
@@ -176,12 +204,17 @@ describe("buildOpenCode2CredentialPluginSource", () => {
       kill: extra.kill ?? (() => true),
     };
     const key = `__orkPluginProcess${Math.random().toString(36).slice(2)}`;
-    (globalThis as Record<string, unknown>)[key] = fakeProcess;
+    const timers = extra.timers ?? new FakeIntervals();
+    (globalThis as Record<string, unknown>)[key] = {
+      process: fakeProcess,
+      setInterval: timers.setInterval,
+      clearInterval: timers.clearInterval,
+    };
     const file = path.join(dir, "index.ts");
     // A library that cannot load stands for a kernel that refuses the flag.
     await Bun.write(
       file,
-      `const process = globalThis[${JSON.stringify(key)}];\n${source.replace('"libc.so.6"', '"/nonexistent/libc.so.6"')}`,
+      `const { process, setInterval, clearInterval } = globalThis[${JSON.stringify(key)}];\n${source.replace('"libc.so.6"', '"/nonexistent/libc.so.6"')}`,
     );
     const hooks: Record<string, Hook[]> = {};
     const hook = (domain: string) => async (name: string, callback: Hook) => {
@@ -223,28 +256,53 @@ describe("buildOpenCode2CredentialPluginSource", () => {
         throw Object.assign(new Error("gone"), { code: "ESRCH" });
       }
     };
+    const timers = new FakeIntervals();
     try {
       await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
         env: { ORKESTRATOR_PARENT_PID: String(fakePid(2)) },
         kill,
+        timers,
       });
       // A second location loading the plugin arms no second watch.
       await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
         env: { ORKESTRATOR_PARENT_PID: String(fakePid(2)) },
         kill,
+        timers,
       });
-      await Bun.sleep(1_200);
-      expect(signals.filter(([, signal]) => signal === "SIGTERM")).toEqual([]);
-      expect(signals.length).toBeGreaterThan(0);
+      expect(timers.armed).toBe(1);
+      timers.tick();
+      // A live parent is probed and left alone.
+      expect(signals).toEqual([[fakePid(2), 0]]);
       parentAlive = false;
-      await Bun.sleep(1_200);
-      expect(signals.filter(([, signal]) => signal === "SIGTERM")).toEqual([
+      timers.tick();
+      expect(signals).toEqual([
+        [fakePid(2), 0],
+        [fakePid(2), 0],
         [fakePid(1), "SIGTERM"],
       ]);
-      const probes = signals.length;
-      await Bun.sleep(1_200);
       // The watch stopped once it had acted.
-      expect(signals.length).toBe(probes);
+      expect(timers.live.size).toBe(0);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__orkestratorParentWatch;
+    }
+  });
+
+  test("the host form treats a parent it may not signal as alive", async () => {
+    const signals: unknown[] = [];
+    const timers = new FakeIntervals();
+    try {
+      await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
+        env: { ORKESTRATOR_PARENT_PID: String(fakePid(2)) },
+        kill: (_pid, signal) => {
+          signals.push(signal);
+          throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+        },
+        timers,
+      });
+      timers.tick();
+      timers.tick();
+      expect(signals).toEqual([0, 0]);
+      expect(timers.live.size).toBe(1);
     } finally {
       delete (globalThis as Record<string, unknown>).__orkestratorParentWatch;
     }
@@ -252,14 +310,16 @@ describe("buildOpenCode2CredentialPluginSource", () => {
 
   test("the host form watches nothing without a parent to watch", async () => {
     const signals: unknown[] = [];
+    const timers = new FakeIntervals();
     for (const parent of [undefined, "1", "not-a-pid"]) {
       await runSetup(buildOpenCode2CredentialPluginSource(), "linux", {
         ...(parent ? { env: { ORKESTRATOR_PARENT_PID: parent } } : {}),
         kill: (_pid, signal) => signals.push(signal),
+        timers,
       });
     }
-    expect((globalThis as Record<string, unknown>).__orkestratorParentWatch).toBeUndefined();
-    await Bun.sleep(1_100);
+    expect((globalThis as Record<string, unknown>).__orkestratorParentWatch).toBe(undefined);
+    expect(timers.armed).toBe(0);
     expect(signals).toEqual([]);
   });
 

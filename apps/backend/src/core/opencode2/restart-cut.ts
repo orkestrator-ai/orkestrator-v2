@@ -70,8 +70,14 @@ function rowRequestId(row: OpenCode2Message): string | undefined {
 /**
  * The cut run's verdict from its history: undefined when the history shows
  * the run is not dead (it settled, or input admitted at or after
- * `providerStartedAt` is in it), else the request id of the run's first
+ * `providerStartedAt` is in it), else the request id of the run's newest
  * Orkestrator input, when it has one.
+ *
+ * Newest, because 2.2.6 writes no `idle` row for a cut run: the continuation
+ * the runner sends joins that open run, so when a second restart cuts the
+ * continuation too, the open run holds both inputs and the one interrupted is
+ * the continuation. A steer that joined a run is newest for the same reason;
+ * the turn's outcome is recorded against its latest request.
  */
 export function openCode2CutRun(
   rowsOldestFirst: readonly OpenCode2Message[],
@@ -81,6 +87,6 @@ export function openCode2CutRun(
   if (!open) return undefined;
   const users = open.filter((row) => row.type === "user");
   if (users.some((row) => (row.time?.created ?? 0) >= providerStartedAt)) return undefined;
-  const requestId = users.map(rowRequestId).find((id) => id !== undefined);
+  const requestId = users.map(rowRequestId).findLast((id) => id !== undefined);
   return requestId ? { requestId } : {};
 }

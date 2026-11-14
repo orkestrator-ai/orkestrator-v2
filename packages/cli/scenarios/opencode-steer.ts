@@ -11,7 +11,12 @@ import {
   receiptOf,
   type ScenarioDefinition,
 } from "./cases.js";
-import { configureConnection, expectThat, type ScenarioContext } from "./harness.js";
+import {
+  configureConnection,
+  expectThat,
+  type ScenarioContext,
+  type ScenarioPaths,
+} from "./harness.js";
 
 /**
  * OpenCode steer through the public CLI on a scripted model (to-do 7905
@@ -68,11 +73,40 @@ async function steer(context: ScenarioContext, sessionId: string, text: string, 
   );
 }
 
+/** The scenario backend's OpenCode configuration and Orkestrator settings. */
+async function writeScenarioConfiguration(
+  paths: Pick<ScenarioPaths, "xdgConfigHome" | "dataDir">,
+  origin: string,
+): Promise<void> {
+  const configFile = path.join(paths.xdgConfigHome, "opencode", "opencode.json");
+  await mkdir(path.dirname(configFile), { recursive: true, mode: 0o700 });
+  await writeFile(
+    configFile,
+    mergeOpenCodeFakeProvider(undefined, { ...FAKE, baseUrl: `${origin}/v1` }),
+    { mode: 0o600 },
+  );
+  // A connected provider outside Orkestrator's allowlist does not count as
+  // signed in; a user with a custom provider adds it the same way.
+  const config = defaultConfig();
+  config.global.openCodeModelProviders = [
+    ...(config.global.openCodeModelProviders ?? []),
+    FAKE.provider,
+  ];
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  await writeFile(path.join(paths.dataDir, "config.json"), `${JSON.stringify(config, null, 2)}\n`, {
+    mode: 0o600,
+  });
+}
+
 export const OPENCODE_STEER_SCENARIO: ScenarioDefinition = {
   name: "opencode-steer",
   description:
     "Credential-free: steer a running OpenCode turn on a scripted model, retry its key, and see the turn end on the steer's reply once.",
   explicit: true,
+  // The scripted model listens on the harness host's loopback, which a
+  // container's own loopback cannot reach; a container run would need a
+  // container-local model and its configuration.
+  environmentTypes: ["local"],
   toolchainProvider: "opencode",
   async prepare(paths) {
     model = new ScriptedModel();
@@ -86,33 +120,22 @@ export const OPENCODE_STEER_SCENARIO: ScenarioDefinition = {
             };
           })
         : undefined;
-    const origin = model.start();
-    const configFile = path.join(paths.xdgConfigHome, "opencode", "opencode.json");
-    await mkdir(path.dirname(configFile), { recursive: true, mode: 0o700 });
-    await writeFile(
-      configFile,
-      mergeOpenCodeFakeProvider(undefined, { ...FAKE, baseUrl: `${origin}/v1` }),
-      { mode: 0o600 },
-    );
-    // A connected provider outside Orkestrator's allowlist does not count as
-    // signed in; a user with a custom provider adds it the same way.
-    const config = defaultConfig();
-    config.global.openCodeModelProviders = [
-      ...(config.global.openCodeModelProviders ?? []),
-      FAKE.provider,
-    ];
-    await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
-    await writeFile(
-      path.join(paths.dataDir, "config.json"),
-      `${JSON.stringify(config, null, 2)}\n`,
-      { mode: 0o600 },
-    );
-    return async () => {
+    const undo = async () => {
       release?.();
       model?.stop();
       model = undefined;
       release = undefined;
     };
+    const origin = model.start();
+    try {
+      await writeScenarioConfiguration(paths, origin);
+    } catch (error) {
+      // The runner learns the undo only from a returned value, so a failed
+      // write would otherwise leave the model listening for the whole run.
+      await undo();
+      throw error;
+    }
+    return undo;
   },
   async run(context) {
     await configureConnection(context);

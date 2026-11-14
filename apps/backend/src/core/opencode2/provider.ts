@@ -393,7 +393,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   /**
    * The session's newest run, when a stop of the server cut it short and
    * plain `opencode serve` will never resume it (`restart-cut.ts`); its
-   * first Orkestrator request id when it has one. Costs nothing beyond the
+   * newest Orkestrator request id when it has one. Costs nothing beyond the
    * session read unless the session record already says so.
    */
   private async restartCut(

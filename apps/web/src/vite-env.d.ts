@@ -167,6 +167,12 @@ interface Window {
       connect(
         input: import("@orkestrator/protocol/connections").ConnectToRemoteInput,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      /**
+       * iOS app only: opens the app's own server editor, so the address and
+       * token are typed natively and never into this page. Resolves once the
+       * editor is shown; the app saves and opens the server itself.
+       */
+      addInNativeEditor?(): Promise<boolean>;
       updateToken(
         connectionId: string,
         token: string,

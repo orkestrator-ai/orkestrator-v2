@@ -772,6 +772,8 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             ),
             state: binding
         )
+        // These tests are about what an approved request does (to-do 5600 (retired)).
+        coordinator.consentGate.presenter = ScriptedConsentPresenter(.approve)
         if stubAuthentication {
             coordinator.authenticationStarter = { [weak coordinator] connection in
                 coordinator?.beginAuthenticationState(for: connection)

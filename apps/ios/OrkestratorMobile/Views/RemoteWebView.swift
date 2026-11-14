@@ -98,6 +98,8 @@ struct RemoteWebView: UIViewRepresentable {
             list: () => call("list"),
             probe: (connectionId) => call("probe", { connectionId }),
             connect: (input) => call("connect", input || {}),
+            // Opens the app's own editor, so a token is never typed into a page.
+            addInNativeEditor: () => call("open-editor"),
             rename: (connectionId, nickname) => call("rename", { connectionId, nickname }),
             use: (connectionId) => call("use", { connectionId }),
             forget: (connectionId) => call("forget", { connectionId }),
@@ -165,6 +167,13 @@ struct RemoteWebView: UIViewRepresentable {
             #"window.dispatchEvent(new Event("orkestrator:memory-warning"));"#
 
         private var memoryWarningObserver: NSObjectProtocol?
+
+        /// Asks the user before a page adds, replaces, switches to or forgets a
+        /// saved server (docs/architecture/renderer-security.md, iOS app). Tests
+        /// replace its presenter.
+        lazy var consentGate = BridgeConsentGate(
+            presenter: AlertBridgeConsentPresenter { [weak self] in self?.webView }
+        )
 
         init(model: ConnectionModel, state: Binding<WebViewState>) {
             self.model = model
@@ -282,6 +291,7 @@ struct RemoteWebView: UIViewRepresentable {
                 NotificationCenter.default.removeObserver(memoryWarningObserver)
             }
             memoryWarningObserver = nil
+            consentGate.cancelPending()
             authenticationGeneration = UUID()
             authenticationTask?.cancel()
             invalidateReadiness()
@@ -422,6 +432,8 @@ struct RemoteWebView: UIViewRepresentable {
 
         func navigationDidCommit() {
             setInspectable(false)
+            // The document that asked is gone, so its question is withdrawn.
+            consentGate.cancelPending()
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -706,6 +718,16 @@ struct RemoteWebView: UIViewRepresentable {
                     }
                     // `select: false` saves the machine without switching the command node.
                     let selects = (select as? Bool) ?? true
+                    let normalizedAddress = try model.normalizedConnectAddress(
+                        address: address,
+                        token: token,
+                        nickname: nickname as? String
+                    )
+                    if let saved = model.vault.connections.first(where: { $0.address == normalizedAddress }) {
+                        try await requireConsent(.replaceToken(saved, switches: selects))
+                    } else {
+                        try await requireConsent(.save(address: normalizedAddress, switches: selects))
+                    }
                     if selects { isSwitchingThroughBridge = true }
                     let result = try await model.connect(
                         address: address,
@@ -719,6 +741,17 @@ struct RemoteWebView: UIViewRepresentable {
                     guard let connectionID = body["connectionId"] as? String else {
                         throw ConnectionBridgeError.invalidInput
                     }
+                    let target = try model.savedConnection(connectionID: connectionID)
+                    if target.id == model.activeConnection?.id {
+                        // The server already open needs no question because
+                        // nothing changes: answer without calling `model.use`.
+                        // Its network check would let this unprompted request
+                        // commit after a switch the user approved meanwhile,
+                        // and quietly switch back.
+                        try await reply(id: requestID, result: model.connectionListPayload())
+                        return
+                    }
+                    try await requireConsent(.switchTo(target))
                     isSwitchingThroughBridge = true
                     let result = try await model.use(connectionID: connectionID)
                     defer { finishBridgeSwitch() }
@@ -735,6 +768,11 @@ struct RemoteWebView: UIViewRepresentable {
                         nickname: nickname as? String
                     )
                     try await reply(id: requestID, result: result)
+                case "open-editor":
+                    // The user types the address and token into the native editor,
+                    // which saves and opens the server itself; the page only asks.
+                    if !model.isShowingConnectionEditor { model.showConnectionEditor() }
+                    try await reply(id: requestID, result: true)
                 case "set-inspectable":
                     guard let enabled = body["enabled"] as? Bool else {
                         throw ConnectionBridgeError.invalidInput
@@ -746,6 +784,7 @@ struct RemoteWebView: UIViewRepresentable {
                         throw ConnectionBridgeError.invalidInput
                     }
                     let forgotten = try? model.savedConnection(connectionID: connectionID)
+                    if let forgotten { try await requireConsent(.forget(forgotten)) }
                     let result = try model.forget(connectionID: connectionID)
                     if let forgotten { endSession(of: forgotten) }
                     try await reply(id: requestID, result: result)
@@ -755,6 +794,15 @@ struct RemoteWebView: UIViewRepresentable {
             } catch {
                 isSwitchingThroughBridge = false
                 await reply(id: requestID, error: error.localizedDescription)
+            }
+        }
+
+        private func requireConsent(_ request: BridgeConsentRequest) async throws {
+            switch await consentGate.ask(request) {
+            case .approved: return
+            case .declined: throw ConnectionBridgeError.declined
+            case .timedOut: throw ConnectionBridgeError.consentTimedOut
+            case .busy: throw ConnectionBridgeError.consentBusy
             }
         }
 
@@ -895,12 +943,18 @@ enum ConnectionBridgeError: LocalizedError {
     case invalidInput
     case unsupportedAction
     case encodingFailed
+    case declined
+    case consentTimedOut
+    case consentBusy
 
     var errorDescription: String? {
         switch self {
         case .invalidInput: return "The connection details were incomplete."
         case .unsupportedAction: return "That connection action is not supported."
         case .encodingFailed: return "The saved connections could not be encoded."
+        case .declined: return "Nothing was changed: the request was declined in the app."
+        case .consentTimedOut: return "Nothing was changed: the request was not answered in the app in time."
+        case .consentBusy: return "Another request is waiting for an answer in the app."
         }
     }
 }

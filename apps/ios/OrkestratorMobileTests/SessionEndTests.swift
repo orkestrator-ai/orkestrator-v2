@@ -150,6 +150,7 @@ final class SessionEndTests: XCTestCase {
             model: model,
             state: Binding(get: { .ready }, set: { _ in })
         )
+        coordinator.consentGate.presenter = ScriptedConsentPresenter(.approve)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -624,6 +625,7 @@ final class GatewayLogoutClientTests: XCTestCase {
             model: ConnectionModel(credentialStore: store, validator: MockValidator()),
             state: Binding(get: { .ready }, set: { _ in })
         )
+        coordinator.consentGate.presenter = ScriptedConsentPresenter(.approve)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: configuration)

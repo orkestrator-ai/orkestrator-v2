@@ -199,13 +199,33 @@ backend serves in a `WKWebView`. What it guarantees, and must keep:
   CSP-sandboxed main frame (empty origin) are refused. No bridge action
   returns a token. A main-frame navigation to another origin opens in Safari
   (`navigationDisposition`).
+- **Changes to saved servers ask natively.** A page's `connect`, `use` of a
+  server other than the one open, and `forget` wait for a native alert
+  (`BridgeConsentGate`, `BridgeConsent.swift`) before anything is saved,
+  switched, removed or contacted. The alert shows only native data: the saved
+  server's nickname and address, or the normalised address `connect` would
+  save; the page's own wording never appears. Input `connect` would refuse is
+  refused before asking. One question is shown at a time and a second is
+  refused, not queued, so a page cannot stack alerts. Cancel, no answer within
+  60 seconds, a committed navigation, the web view's teardown and an alert
+  that cannot be shown all refuse; nothing approves by default. `list`,
+  `probe`, `rename` and `set-inspectable` do not ask.
+- **Tokens for another server are typed natively.** The mobile sidebar's
+  New connection calls the bridge's `addInNativeEditor` (action
+  `open-editor`), which opens the app's own editor; the app saves and opens
+  the server itself, and the page sees no address or token. An older app has
+  no such action, and the sidebar then falls back to its own form, whose
+  `connect` still asks natively. The Settings → Machines forms still take a
+  token in the page on iOS (to-do 8000); each of their saves asks natively.
 - **Privacy cover.** `PrivacyCover` (`RootView.swift`) covers the root view
   and the connection editor whenever `scenePhase` is not `.active`, so the
   app-switcher snapshot does not show the screen. Views WebKit presents itself
   (a file picker, a link preview) and the keyboard are outside it.
-- **Release settings.** No entitlements file, no URL types,
-  `NSAllowsArbitraryLoads` false, and `isInspectable` never set; a signed
-  archive must keep `get-task-allow` false.
+- **Release settings.** No entitlements file, no URL types and
+  `NSAllowsArbitraryLoads` false; a signed archive must keep `get-task-allow`
+  false. `isInspectable` is set only while the page's renderer debug logging
+  is on, and every committed navigation clears it
+  ([logging, the renderer](logging.md#the-renderer)).
 - **Checks.** Device and release checks run the gateway side on an isolated
   `dev:test` profile, never a production instance, and their screenshots and
   notes must not contain the gateway token.

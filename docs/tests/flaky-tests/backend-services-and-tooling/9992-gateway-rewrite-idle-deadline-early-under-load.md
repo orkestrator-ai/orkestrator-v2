@@ -1,6 +1,6 @@
 # Rewrite idle deadline ends the body 342 ms after the last chunk, under load (`apps/backend/tests/gateway-proxy-idle-timers.test.ts`)
 
-- **ID:** 9993
+- **ID:** 9992
 - **Status:** open
 - **Date observed:** 2026-11-13
 - **Base:** `263eea27df362cf541cb9bde9adf7ec4fec1f5fd`.

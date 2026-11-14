@@ -6,7 +6,7 @@ import {
 import type { PermissionRuleRequestDetail } from "../agent-provider-contract.js";
 
 /**
- * What an Orkestrator permission rule (todo 0723) may match, read from each
+ * What an Orkestrator permission rule (todo 0723 (retired)) may match, read from each
  * bridge's own approval payload.
  *
  * Every reader fails closed: a request the bridge did not mark `ruleEligible`

@@ -106,7 +106,7 @@ pins undercut one of them is it raised below (task 1).
 
 Rechecked 2026-11-02 at SDK `0.3.314`: all three symbols are still there, and
 `canUseTool`'s third argument carries `mcpServer: { name, source }` for
-`mcp__*` tools. Since the analysis, the permission-rules work (todo 0723)
+`mcp__*` tools. Since the analysis, the permission-rules work (todo 0723 (retired))
 started reading `mcpServer.name` in
 `bridges/claude-bridge/src/services/session-manager-parked-interactions.ts`
 and forwarding it as `mcpServer` (it makes an MCP request rule-eligible), and

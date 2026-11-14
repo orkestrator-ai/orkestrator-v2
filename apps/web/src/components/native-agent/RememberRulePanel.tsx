@@ -21,7 +21,7 @@ function expiryLabel(ms: number): string {
 }
 
 /**
- * The card's "Approve and remember" panel (todo 0723): the exact pattern and
+ * The card's "Approve and remember" panel (todo 0723 (retired)): the exact pattern and
  * scope are shown before anything is saved, narrowest first, and the rule is
  * Orkestrator's own — never written into the provider's settings.
  */

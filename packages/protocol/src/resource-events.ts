@@ -52,7 +52,7 @@ export const RESOURCE_KINDS = [
    */
   "human-prompt",
   /**
-   * An Orkestrator permission rule was saved, removed or used (todo 0723).
+   * An Orkestrator permission rule was saved, removed or used (todo 0723 (retired)).
    * The id is the rule id; clients re-read `list_permission_rules`. A hint
    * only, like `scheduled-job`.
    */

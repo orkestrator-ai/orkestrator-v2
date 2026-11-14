@@ -11,7 +11,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
 /**
- * Settings → Permissions against the real backend (todo 0723): a rule the
+ * Settings → Permissions against the real backend (todo 0723 (retired)): a rule the
  * backend holds is listed with its pattern, scope and use, and removing it
  * from the page removes it from the backend's store. Rules are staged straight
  * into the profile's database because only an approval card can create one,

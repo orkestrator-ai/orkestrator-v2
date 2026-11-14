@@ -1122,7 +1122,8 @@ server as loaded; the address is never contacted.
 - [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing):
   the OpenCode abort and session-grant rules from todo 0162 (the interaction
   test gaps, split out on 2026-10-25 and retired on 2026-10-29).
-- [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md)
+- 0723 (retired; `git show dc90609bf:docs/todo/agent-engines/0723-orkestrator-permission-rules.md`), now
+  [permission-rules.md](../../architecture/permission-rules.md)
   (Orkestrator-owned "always allow" rules, applied as allow-once; meets decision 1's
   list-and-revoke constraint without a provider rule).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).

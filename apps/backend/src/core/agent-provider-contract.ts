@@ -159,7 +159,7 @@ export interface AgentInteractionProviderCapability {
   ): Promise<AgentInteractionApplyOutcome>;
   /**
    * What an Orkestrator permission rule may match for one pending request
-   * (todo 0723), read from the provider's own payload when the request was last
+   * (todo 0723 (retired)), read from the provider's own payload when the request was last
    * listed. `null` when the request is not one a rule may answer: the bridge
    * did not mark it exact, a detail was truncated, or no allow-once answer
    * exists. Absent on adapters with nothing a rule could answer.

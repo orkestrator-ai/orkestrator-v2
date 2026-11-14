@@ -160,8 +160,9 @@ const log = createLogger("build-pipeline");
 
 /**
  * What one supervisor pass's reviewer prompts read, counts only: the prompts
- * it built, and how often building them read the review instruction and the
- * project notes (`reviewContext`). BG-11 made the reads once per pass rather
+ * it built (a request whose build failed is not one), and how often building
+ * them read the review instruction and the project notes (`reviewContext`),
+ * failed reads included. BG-11 made the reads once per pass rather
  * than once per prompt; the debug line below is how a live run counts them
  * (to-do 7566 (retired); `test:agent:auto-pipeline --reviewers 4`).
  */
@@ -175,9 +176,13 @@ function emptyReviewPromptReads(): ReviewPromptReads {
   return { prompts: 0, instructionReads: 0, notesReads: 0 };
 }
 
-/** One debug line for a pass that built reviewer prompts; nothing otherwise. */
+/**
+ * One debug line for a pass that built, or tried to build, reviewer prompts;
+ * nothing otherwise. A pass whose only build failed logs `prompts=0` with its
+ * reads, so a failed build is visible rather than missing.
+ */
 function logReviewPromptReads(reads: ReviewPromptReads): void {
-  if (reads.prompts === 0) return;
+  if (reads.prompts + reads.instructionReads + reads.notesReads === 0) return;
   log.debug("review.prompt-reads", () => ({ ...reads }));
 }
 
@@ -843,7 +848,6 @@ export class BuildPipelineReviewFanout {
         });
       },
       reviewerPrompt: async (index, count, reviewer) => {
-        reads.prompts += 1;
         const reviewPackage = pipeline.reviewPackage;
         if (!reviewPackage) {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
@@ -851,13 +855,17 @@ export class BuildPipelineReviewFanout {
         // Shared package prompt first so every reviewer's prefix is identical;
         // the panel position, the reviewer's lens and its own instructions are
         // the only per-reviewer text, and they come last, in that order.
-        return withBuildStepInstructions(
+        const prompt = withBuildStepInstructions(
           [
             await sharedReviewerPrompt(reviewPackage),
             reviewerPanelTail(index + 1, count, reviewer.lens),
           ].join("\n\n"),
           pipelineReviewerInstructions(pipeline, index),
         );
+        // Counted once built: a request whose shared build rejected built no
+        // prompt, though its reads are still counted above.
+        reads.prompts += 1;
+        return prompt;
       },
       resolveUnattendedInteractions: (provider, providerSessionId) =>
         resolveUnattendedReviewerInteractions(provider, providerSessionId, async () => {}),

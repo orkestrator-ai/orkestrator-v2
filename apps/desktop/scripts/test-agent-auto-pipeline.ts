@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { autoPipelineLogLevel, parseAutoPipelineArguments } from "./dev/auto-pipeline-arguments.js";
 import { runIsolatedBrowser } from "./dev/isolated-browser.js";
 import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/owner-supervisor.js";
 
@@ -22,17 +23,10 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
 
 installFatalRejectionGuard({ label: "[auto-pipeline-live]" });
 
-const args = process.argv.slice(2);
-const supervised = args[0] === SUPERVISED_FLAG;
-if (supervised) args.shift();
-let reviewers = "1";
-if (args[0] === "--reviewers") {
-  reviewers = args[1] ?? "";
-  args.splice(0, 2);
-}
-if (!/^[1-4]$/.test(reviewers)) throw new Error("--reviewers takes a count from 1 to 4");
-if (args.length > 0)
-  throw new Error(`test:agent:auto-pipeline takes only --reviewers <n> (got ${args[0]})`);
+const { supervised, reviewers } = parseAutoPipelineArguments(
+  process.argv.slice(2),
+  SUPERVISED_FLAG,
+);
 
 if (supervised) {
   const owner = ownerAbortSignal();
@@ -46,9 +40,7 @@ if (supervised) {
         ...process.env,
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
         // Counts only: the review fan-out's per-pass prompt reads.
-        ORKESTRATOR_LOG_LEVEL: [process.env.ORKESTRATOR_LOG_LEVEL, "build-pipeline=debug"]
-          .filter(Boolean)
-          .join(","),
+        ORKESTRATOR_LOG_LEVEL: autoPipelineLogLevel(process.env.ORKESTRATOR_LOG_LEVEL),
       },
       suite: {
         label: "Auto-pipeline fake-model flow",

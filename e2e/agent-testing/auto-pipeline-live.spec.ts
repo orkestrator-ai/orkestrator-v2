@@ -33,13 +33,14 @@
  * `build-pipeline` area at debug, as the runner arranges, the spec also counts
  * every review pass's prompt-context reads from the profile's log (BG-11's
  * live count, to-do 7566 (retired)): one `review.prompt-reads` line per
- * review fan-out pass that built reviewer prompts. Only a panel of two or
+ * review fan-out pass that built, or tried to build, reviewer prompts
+ * (`auto-pipeline-prompt-reads.ts`). Only a panel of two or
  * more uses the fan-out. Counts only, written to `prompt-reads.json` beside
  * the suite's results.
  */
 import { expect, test, type Page } from "./browser-test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -55,6 +56,7 @@ import {
   type Project,
   type Status,
 } from "./slash-command-live-support";
+import { promptReadsFromLogs } from "./auto-pipeline-prompt-reads";
 import {
   FAKE_DRAFT_TITLE,
   FIXTURE_FILE_TEXT,
@@ -192,35 +194,6 @@ function pointPiAt(status: Status, baseUrl: string): () => void {
   };
   writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return restore;
-}
-
-type PromptReads = { prompts: number; instructionReads: number; notesReads: number };
-
-const PROMPT_READS_LINE =
-  /review\.prompt-reads\b.*?prompts\W{1,3}(\d+).*?instructionReads\W{1,3}(\d+).*?notesReads\W{1,3}(\d+)/;
-
-/**
- * Every `review.prompt-reads` line in the profile's logs, one per review pass
- * that built prompts. The relay copies a backend record into more than one
- * file, so the file holding the most lines is the one counted.
- */
-function promptReadsFromLogs(logDir: string): { file: string | null; passes: PromptReads[] } {
-  let best: { file: string | null; passes: PromptReads[] } = { file: null, passes: [] };
-  for (const name of readdirSync(logDir)) {
-    if (!name.endsWith(".log")) continue;
-    const passes: PromptReads[] = [];
-    for (const line of readFileSync(path.join(logDir, name), "utf8").split("\n")) {
-      const match = PROMPT_READS_LINE.exec(line);
-      if (match)
-        passes.push({
-          prompts: Number(match[1]),
-          instructionReads: Number(match[2]),
-          notesReads: Number(match[3]),
-        });
-    }
-    if (passes.length > best.passes.length) best = { file: name, passes };
-  }
-  return best;
 }
 
 async function startEnvironment(invoke: Invoke, projectId: string, name: string) {

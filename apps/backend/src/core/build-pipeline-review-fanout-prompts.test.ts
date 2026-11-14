@@ -103,7 +103,8 @@ test("a dispatching pass logs its prompt count and one read of each input", asyn
 });
 
 // Exercise one host directly: constructing another host would start a new pass
-// and could hide a rejected promise retained by the first one.
+// and could hide a rejected promise retained by the first one. The pass's
+// counts are checked too: a rejected request is not a prompt built.
 test.each(["reviewInstruction", "reviewContext"] as const)(
   "a rejected %s build is evicted within the same pass",
   async (failingRead) => {
@@ -121,16 +122,29 @@ test.each(["reviewInstruction", "reviewContext"] as const)(
         reviewInstruction: instruction,
         reviewContext: context,
       } as unknown as ConstructorParameters<typeof BuildPipelineReviewFanout>[0]);
-      const host = fanout["reviewHost"](pipeline, "main");
+      const reads = { prompts: 0, instructionReads: 0, notesReads: 0 };
+      const host = fanout["reviewHost"](pipeline, "main", reads);
       const reviewer = pipeline.reviewFanout!.reviewers[0]!;
       await expect(host.reviewerPrompt!(0, 4, reviewer)).rejects.toThrow(
         "transient prompt read failure",
       );
+      // The rejected request built no prompt, though its reads happened.
+      expect(reads).toEqual({
+        prompts: 0,
+        instructionReads: 1,
+        notesReads: failingRead === "reviewContext" ? 1 : 0,
+      });
       const recovered = await host.reviewerPrompt!(1, 4, reviewer);
       expect(recovered).toContain("Review carefully");
       await host.reviewerPrompt!(2, 4, reviewer);
       expect(instruction).toHaveBeenCalledTimes(2);
       expect(context).toHaveBeenCalledTimes(failingRead === "reviewContext" ? 2 : 1);
+      // The debug line counts the two prompts built, and every read, failed or not.
+      expect(reads).toEqual({
+        prompts: 2,
+        instructionReads: 2,
+        notesReads: failingRead === "reviewContext" ? 2 : 1,
+      });
     });
   },
 );

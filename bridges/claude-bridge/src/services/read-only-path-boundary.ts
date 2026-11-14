@@ -92,11 +92,17 @@ export function shellCommandRefused(
 ): boolean {
   const [program, ...tokens] = command.trim().split(/\s+/);
   if (options.traversal) {
-    // These programs can take filenames from file contents; their operands
-    // alone cannot prove which files they will open. GNU long options also
-    // accept unambiguous prefixes (including before '=').
+    // These programs can take filenames from file contents or stdin; their
+    // operands alone cannot prove which files they will open. Since a plain
+    // pipe is admitted, stdin is the model's to write (`echo <hex> | xxd -r -p
+    // | du --files0-from=-`), so a path never has to appear as a token. GNU
+    // long options also accept unambiguous prefixes (including before '=').
+    // find's `-files0-from` is a single-dash primary, matched exactly below.
+    if (program === "find" && tokens.some((token) => /^--?files0-from(?:=|$)/.test(token))) {
+      return true;
+    }
     const indirectOption =
-      program === "sort" || program === "wc"
+      program === "sort" || program === "wc" || program === "du"
         ? "--files0-from"
         : program === "file"
           ? "--files-from"

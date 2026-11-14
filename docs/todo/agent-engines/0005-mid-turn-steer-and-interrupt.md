@@ -12,7 +12,8 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
 task 10 added and built 2026-11-08 against `02f55ea9b`; task 8 built and run
 2026-11-10 against `c98b20e6f` at Agent SDK and CLI `0.3.319` / `2.1.319`;
 task 7 built and run 2026-11-13 against `17d28238c`; task 10 checked live on
-the real bridges 2026-11-14 against `dc90609bf`.
+the real bridges 2026-11-14 against `dc90609bf`, and its review round 1 fixed
+and rerun the same day on top of `b392ecead`.
 
 ### Tasks
 
@@ -1036,7 +1037,67 @@ and the real Cursor bridge over its fake SDK (the task 7 entry swap).
 - **Not covered.** Real logins and models (billed), container environments,
   and the composer's own `/steer` path in the browser. A stop of a sub-agent
   task (rather than a Bash command) on the real CLI was not run; the bridge
-  test covers the same edges for any task.
+  tests cover the same edges for any task, and since review round 1 the
+  sub-agent's own `SubagentStop` hook path too (see the next entry).
+
+### Task 10 check, review round 1 (2026-11-14, task 10)
+
+Multi Review of `b392ecead` reported two defects in the new spec and four
+coverage gaps; one gap led to a bridge fix.
+
+- **The replaced-turn step accepted a dropped steer.** On Claude, Codex and
+  Pi it checked only that at most one transcript row carried the steer, so a
+  steer the bridge dropped passed. Options: (a) have the scripted models count
+  the steer's marker in what they are sent; (b) read each bridge's dispatch
+  journal; (c) require a transcript row. Chose (a): the three models already
+  sit on the delivery path. A route on each (`MARKER_WATCH_PATH` in
+  `idle-observation-fake-claude.ts`, served by the Codex and Pi fakes too)
+  counts, per request, how often a watched marker appears in user-role items,
+  and keeps only those counts. Both steps now require `maxUserOccurrences`
+  to be 1: a dropped steer reads 0 and a doubled one 2. (b) needs a different
+  read per bridge and only says the bridge sent it. (c) fails on Claude, where
+  a steer beside a tool result has no row of its own. The limit of (a): Codex
+  continues responses with `previous_response_id`, so a steer delivered twice
+  in two different requests would still read 1 there.
+- **Cleanup was skipped when the evidence write failed.** Both finalizers
+  wrote the evidence before cleaning up. They now go through `finishCase`,
+  whose `finally` always runs the harness cleanup (environment, scripted
+  model, Cursor's bridge entry and its lock).
+- **A natural ending during the stop could lose its continuation (bridge
+  fix).** The reviewers' hook-path gap, made into a test, failed. If a
+  task's `TaskCompleted` or `SubagentStop` hook came first while the bridge's
+  stop was in flight, the hook saw the mark (it carries no status), skipped
+  the wait and released the task. When the `task_notification` then reported
+  a natural `completed`, it found no owner and did not wait for the
+  continuation the CLI starts for that ending, so input could close under it.
+  Options: (a) let the notification take its owner from the CLI that held the
+  mark; (b) make the hook wait whenever a mark exists. Chose (a)
+  (`handleTaskNotification`): marks live only on the current CLI and release
+  clears them, so that CLI is the owner. (b) would bring back the original
+  defect for a stopped sub-agent whose hook fires.
+- **Tests added** in `session-manager-runtime-idle.test.ts` ("a stop the
+  bridge issued"): for a sub-agent (`SubagentStop`) and a Bash task
+  (`TaskCompleted`), a hook ahead of a `stopped` edge owes nothing and a
+  launch-only change replaces the CLI, and a hook ahead of a natural ending
+  still owes its continuation (both of those failed before the fix); a level
+  signal (`background_tasks_changed`) ahead of the edge, stopped and natural;
+  the mark bound (past it a new stop is not marked, and a marked task keeps
+  its mark); and a mark no edge consumed being cleared when the CLI exits and
+  when `takeQueryControls` takes the controls. Marker-watch tests are in the
+  Claude, Codex, Pi and fake-models test files.
+- **Run.** Same host, profile `msteer10r1` (same flags as above), with the
+  bridge built from the fix. `ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES=1`
+  was set because only `bridges/claude-bridge/AGENTS.md` changed after the
+  profile started; the built bridge contained the fix. All five cases passed. Claude, Codex and Pi each read
+  `maxUserOccurrences` 1 for both the missed and the joined steer. Pi's joined
+  steer answered `unknown` and was then delivered once. Cursor's fake SDK
+  recorded one steer. The Claude stop case released the CLI 267 ms after the
+  stop, with no refusal. The generation went 1, 1, 2, and the stop after
+  release got `no_control_channel`. The profile was stopped and reset
+  afterwards.
+- **Still not run live:** stopping a real background sub-agent. The scripted
+  Claude model delegates only a foreground sub-agent, and the bridge tests
+  above drive that path's edges.
 
 ### Task 5: OpenCode steer recorded as built for 2.x (2026-11-10 housekeeping)
 

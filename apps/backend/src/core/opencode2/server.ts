@@ -58,6 +58,45 @@ export const OPENCODE2_FLAGS = "todo,-schedules,-background_compaction,-artifact
 export const OPENCODE2_DISABLE_FILEWATCHER = { OPENCODE_DISABLE_FILEWATCHER: "1" } as const;
 
 /**
+ * The host plugin's parent watch (to-do 8045 (retired)): the server stops
+ * itself, gracefully, once the backend that started it is gone, as every
+ * bridge does through `ORKESTRATOR_PARENT_PID` (`@orkestrator/protocol`'s
+ * `parent-watchdog.ts`; same one-second probe, same rule that PID 1 or an
+ * unparseable value means no parent to watch).
+ *
+ * `opencode serve` has no watch of its own. A killed backend's server used
+ * to be stopped only by the next backend's reaper, which skips a process
+ * whose parent is alive; on Linux an orphan is adopted by a live subreaper
+ * (`systemd --user`), so the reaper skipped it and the old server ran on
+ * beside the new one, on the same database, finishing a turn the restarted
+ * backend had already given its continuation. Stopping on SIGTERM lets 2.2.6
+ * suspend the run exactly as the reaper's SIGTERM did, which the provider
+ * then reports as a restart interruption (`restart-cut.ts`).
+ *
+ * 2.2.6 loads a plugin when a location first runs a turn, so a server that
+ * never ran one is still left to the reaper; it holds no turn to lose. The
+ * watch is armed once per process however many locations load the plugin.
+ */
+const OPENCODE2_PARENT_WATCH_SOURCE = `
+function watchOrkestratorParent() {
+  if (globalThis.__orkestratorParentWatch) return;
+  const parent = Number.parseInt(process.env.ORKESTRATOR_PARENT_PID ?? "", 10);
+  if (!Number.isInteger(parent) || parent <= 1) return;
+  globalThis.__orkestratorParentWatch = true;
+  const timer = setInterval(() => {
+    try {
+      process.kill(parent, 0);
+    } catch (error) {
+      if (error && error.code === "EPERM") return;
+      clearInterval(timer);
+      process.kill(process.pid, "SIGTERM");
+    }
+  }, 1000);
+  timer.unref?.();
+}
+`;
+
+/**
  * A 2.x plugin needs only `{ id, setup }`; `Plugin.define` from
  * `@opencode/plugin` is a typed identity, so the source imports nothing and
  * no package has to be installed beside it. Verified on 2.2.6.
@@ -75,10 +114,11 @@ export function buildOpenCode2CredentialPluginSource(
   if (!options.hardened) {
     return `// Written by Orkestrator. Keeps the server password from this server's tools.
 const NAMES = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"];
-
+${OPENCODE2_PARENT_WATCH_SOURCE}
 export default {
   id: ${JSON.stringify(OPENCODE2_CREDENTIAL_PLUGIN_ID)},
   async setup(ctx) {
+    watchOrkestratorParent();
     for (const name of NAMES) delete process.env[name];
     await ctx.shell.hook("create.before", (event) => {
       for (const name of NAMES) delete event.env[name];

@@ -395,8 +395,9 @@ at-most-once dispatch.
   2026-11-11, so every OpenCode session can. Its live qualification is
   0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`) task 7 (host environments done
   2026-11-11, containers 2026-11-13). Steer through the public CLI and the
-  coordinator's deliver-now is still refused for OpenCode:
-  [7905](7905-opencode2-untested-paths.md) task 4.
+  coordinator's deliver-now was allowed for OpenCode on 2026-11-14, once a
+  scripted-model CLI scenario qualified it
+  ([7905](7905-opencode2-untested-paths.md) task 4).
 - **Grok steer** stays off. ACP v1 has no mid-turn input, and the Grok
   interjection extension stays behind its unsafe flag until an ACP equivalent
   exists.

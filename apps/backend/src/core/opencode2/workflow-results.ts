@@ -200,12 +200,14 @@ export class OpenCode2WorkflowTurns {
     sessionId: string,
     requestId: string,
     history: () => Promise<readonly OpenCode2Message[]>,
+    /** True when the session's open run was cut short by a server stop (`restart-cut.ts`). */
+    cutByStop?: () => Promise<boolean>,
   ): Promise<boolean> {
     return this.grants.runExclusive(sessionId, async () => {
       const owner = await this.grants.owner(sessionId);
       const holdsGrant = owner?.requestId === requestId && !owner.settled;
       const run = openCode2RequestRun(await history(), requestId);
-      if (run ? !run.idle : holdsGrant) return false;
+      if (run ? !run.idle && !(await cutByStop?.()) : holdsGrant) return false;
       if (holdsGrant) await this.grants.settle(sessionId, requestId);
       return true;
     });

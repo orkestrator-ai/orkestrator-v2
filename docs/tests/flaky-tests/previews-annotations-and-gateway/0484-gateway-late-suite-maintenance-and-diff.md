@@ -1,7 +1,7 @@
 # Gateway maintenance navigation and diff tooltip fail late in the suite
 
 - **ID:** 0484
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Tests:** `host maintenance rehydrates task completion while Settings is closed (390px)` and `persisted diff baselines keep Files, the badge and diff tabs aligned after background changes and reload`.
 - **File:** `e2e/agent-testing/browser-gateway.spec.ts:2013`, `:2091`.
@@ -54,3 +54,42 @@ the branch (its only Settings change is wording in `RendererDebugSettings.tsx`).
 
 Both profiles were stopped and reset. No source, assertion, timeout or skip
 changed.
+
+## Causes and fixes on macOS — 2026-11-14 (resolved)
+
+Found and fixed by to-do 8015 (retired 2026-11-14) task 2 on `arktech-mini`
+(macOS 27.2), base `dc90609bf`, credential-free profile `t8015-mac`
+(`ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile t8015-mac
+--fixture --no-agent-credentials --no-host-seed --headless --agent-platforms codex`).
+
+- **Narrow maintenance case: the hypothesis above was right.** The `toPass`
+  body was not idempotent: when an attempt's click opened **Settings** after its
+  1 s check gave up, every later attempt tried to open the drawer under the open
+  dialog. The body now returns at once when **Settings** is already visible, so a
+  late open counts and the case still opens Settings from the drawer and checks
+  the same Updates states.
+- **Persisted-diff case: the baseline only moves when a scan of the worker's
+  worktree runs, and its background scans follow watcher hints.** On this Mac
+  `fseventsd` ran at about 160% CPU (load average about 13) and a fresh
+  `fs.watch`, Bun or Node, recursive or not, delivered no event within 60 s, so
+  no hint came and the 15 s polls for the baseline moving to the tip (and back to
+  `null` after `git reset --hard`) ran out. One of four repeats failed that way
+  on a fresh profile before the fix. The backend's backstop is its safety tick
+  (`DIFF_SAFETY_NET_INTERVAL_MS`, 120 s, skipped when a scan ran within half of
+  it), so both polls now wait 1.5 intervals plus 30 s and the test's timeout
+  covers two of them. The expected values are unchanged. See
+  [git-scan-caches.md, "Lost events on macOS"](../../../architecture/git-scan-caches.md#lost-events-on-macos).
+- **Verification.** Before the fixes, on a fresh profile: the three cases
+  (both maintenance widths and the diff case) passed once, then
+  `--repeat-each=4` gave 11 passed, 1 failed (the diff case, at the `null`
+  poll after `git reset --hard`). After them, `ORKESTRATOR_AGENT_TEST_PROFILE=t8015-mac
+  ORKESTRATOR_AGENT_TEST_RUN_ID=t8015-f mise run test:logged -- --name t8015-all
+  -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts
+  browser-gateway.spec.ts terminal-input-resume.spec.ts container-rebuild-cycle.spec.ts
+  -g "host maintenance rehydrates|persisted diff baselines|lost terminal write|Global settings opens the Docker tab"
+  --workers=1 --repeat-each=3` passed all 15 runs (686 s): both maintenance
+  widths three times each (9–11 s), the diff case three times (140 s, 256 s and
+  150 s: each waited on the safety tick, which the old 15 s poll would have
+  failed). Not rerun on Linux, where the earlier observations came from; a
+  recurrence there would reopen this case.
+

@@ -12,11 +12,13 @@ import {
   type ContainerExec,
   type FakeModelHandle,
   bundleOpenCodeFake,
+  fakeModelMarkerSighting,
   fakeModelSettingsFile,
   installContainerFakeOpenCode,
   pointProfileOpenCodeAtContainerFake,
   startLocalFakeModel,
   startModel,
+  watchFakeModelMarker,
   withFakeModelCleanup,
 } from "./idle-observation-fake-models";
 
@@ -271,4 +273,31 @@ test("the OpenCode fake bundles into one file the container can run alone", () =
   expect(source).not.toMatch(/from\s+["']\.{1,2}\//);
   expect(source).toContain("chat/completions");
   expect(source).toContain("--port");
+});
+
+test("the marker-watch client asks the model's own route, from the origin it printed", async () => {
+  const requests: Array<{ url: string; method: string }> = [];
+  let status = 200;
+  const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+    requests.push({ url: String(url), method: init?.method ?? "GET" });
+    return Response.json({ requests: 1, maxUserOccurrences: 1 }, { status });
+  }) as typeof fetch;
+  // Codex and Pi print a base URL ending in /v1; the route is at the root.
+  await watchFakeModelMarker("http://127.0.0.1:5/v1", "JOINED-1", fetcher);
+  expect(await fakeModelMarkerSighting("http://127.0.0.1:5", "JOINED-1", fetcher)).toEqual({
+    requests: 1,
+    maxUserOccurrences: 1,
+  });
+  expect(requests).toEqual([
+    { url: "http://127.0.0.1:5/__orkestrator-qa/marker-watch?marker=JOINED-1", method: "POST" },
+    { url: "http://127.0.0.1:5/__orkestrator-qa/marker-watch?marker=JOINED-1", method: "GET" },
+  ]);
+  status = 404;
+  await expect(fakeModelMarkerSighting("http://127.0.0.1:5", "JOINED-1", fetcher)).rejects.toThrow(
+    /no count/,
+  );
+  status = 400;
+  await expect(watchFakeModelMarker("http://127.0.0.1:5", "JOINED-1", fetcher)).rejects.toThrow(
+    /refused/,
+  );
 });

@@ -21,6 +21,7 @@ export default defineConfig({
   testMatch: [
     "browser-gateway.spec.ts",
     "steer-inactive-live.spec.ts",
+    "steer-missed-live.spec.ts",
     "pipeline-delete.spec.ts",
     "environment-delete-retry.spec.ts",
     "headless-profile.spec.ts",
